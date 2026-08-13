@@ -6,6 +6,7 @@ using Microsoft.DurableTask;
 using Microsoft.DurableTask.Client;
 using Microsoft.DurableTask.Worker;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace Cohesive.Adapters.DurableTask;
 
@@ -57,7 +58,7 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
 {
     /// <summary>Adds the initial canonical Process executable slice to a standalone Durable Task worker.</summary>
     /// <remarks>
-    /// The application must also register one <see cref="IProcessReferenceHost"/> for bounded activities. This method
+    /// The application must also register one <see cref="IAsyncProcessReferenceHost"/> for bounded activities. This method
     /// registers the immutable plan catalog and the same portable data converter for the worker and a client built
     /// from the same service collection unless the application supplied one explicitly.
     /// </remarks>
@@ -409,29 +410,41 @@ public sealed class DurableTaskDurableOperationReconciliationActivity
 public sealed class DurableTaskProcessHostOperationActivity
     : TaskActivity<DurableTaskProcessHostOperation, ProcessOperationResult>
 {
-    readonly IProcessReferenceHost host;
+    readonly IAsyncProcessReferenceHost host;
+    readonly IHostApplicationLifetime applicationLifetime;
 
     /// <summary>Creates an activity over the application's canonical Process host.</summary>
-    /// <param name="host">Host that resolves exact Transition and Relation/Query operations.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="host"/> is <see langword="null"/>.</exception>
-    public DurableTaskProcessHostOperationActivity(IProcessReferenceHost host) =>
+    /// <param name="host">Asynchronous host that resolves exact Transition and Relation/Query operations.</param>
+    /// <param name="applicationLifetime">Worker lifetime supplying physical shutdown cancellation.</param>
+    /// <exception cref="ArgumentNullException">Either dependency is <see langword="null"/>.</exception>
+    public DurableTaskProcessHostOperationActivity(
+        IAsyncProcessReferenceHost host,
+        IHostApplicationLifetime applicationLifetime)
+    {
         this.host = host ?? throw new ArgumentNullException(nameof(host));
+        this.applicationLifetime = applicationLifetime
+            ?? throw new ArgumentNullException(nameof(applicationLifetime));
+    }
 
     /// <inheritdoc />
-    public override Task<ProcessOperationResult> RunAsync(
+    public override async Task<ProcessOperationResult> RunAsync(
         TaskActivityContext context,
         DurableTaskProcessHostOperation input)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(input);
+        var operationContext = DurableTaskActivityOperationContext.Create(applicationLifetime);
+        operationContext.ThrowIfCancellationRequested();
         var result = input.Kind switch
         {
-            DurableTaskProcessHostOperationKind.Transition => host.InvokeTransition(input.Transition!),
-            DurableTaskProcessHostOperationKind.RelationQuery => host.EvaluateRelation(input.RelationQuery!),
+            DurableTaskProcessHostOperationKind.Transition =>
+                await host.InvokeTransitionAsync(operationContext, input.Transition!).ConfigureAwait(false),
+            DurableTaskProcessHostOperationKind.RelationQuery =>
+                await host.EvaluateRelationAsync(operationContext, input.RelationQuery!).ConfigureAwait(false),
             _ => throw new ArgumentOutOfRangeException(nameof(input), input.Kind, "Unsupported host operation kind.")
         };
-        return Task.FromResult(result
-            ?? throw new InvalidOperationException("The Process host returned null operation evidence."));
+        return result ?? throw new InvalidOperationException(
+            "The asynchronous Process host returned null operation evidence.");
     }
 }
 
@@ -440,24 +453,45 @@ public sealed class DurableTaskProcessHostOperationActivity
 public sealed class DurableTaskProcessSignalTargetActivity
     : TaskActivity<ProcessSignalTargetResolution, ProcessSignalTargetResult>
 {
-    readonly IProcessReferenceHost host;
+    readonly IAsyncProcessReferenceHost host;
+    readonly IHostApplicationLifetime applicationLifetime;
 
     /// <summary>Creates a Signal-target activity over the application's canonical Process host.</summary>
-    /// <param name="host">Host that resolves portable values into the closed canonical interaction-target union.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="host"/> is <see langword="null"/>.</exception>
-    public DurableTaskProcessSignalTargetActivity(IProcessReferenceHost host) =>
+    /// <param name="host">Asynchronous host that resolves portable values into the closed canonical interaction-target union.</param>
+    /// <param name="applicationLifetime">Worker lifetime supplying physical shutdown cancellation.</param>
+    /// <exception cref="ArgumentNullException">Either dependency is <see langword="null"/>.</exception>
+    public DurableTaskProcessSignalTargetActivity(
+        IAsyncProcessReferenceHost host,
+        IHostApplicationLifetime applicationLifetime)
+    {
         this.host = host ?? throw new ArgumentNullException(nameof(host));
+        this.applicationLifetime = applicationLifetime
+            ?? throw new ArgumentNullException(nameof(applicationLifetime));
+    }
 
     /// <inheritdoc />
-    public override Task<ProcessSignalTargetResult> RunAsync(
+    public override async Task<ProcessSignalTargetResult> RunAsync(
         TaskActivityContext context,
         ProcessSignalTargetResolution input)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(input);
-        var result = host.ResolveSignalTarget(input)
-            ?? throw new InvalidOperationException("The Process host returned null Signal-target evidence.");
-        return Task.FromResult(result);
+        var operationContext = DurableTaskActivityOperationContext.Create(applicationLifetime);
+        operationContext.ThrowIfCancellationRequested();
+        return await host.ResolveSignalTargetAsync(operationContext, input).ConfigureAwait(false)
+            ?? throw new InvalidOperationException(
+                "The asynchronous Process host returned null Signal-target evidence.");
+    }
+}
+
+static class DurableTaskActivityOperationContext
+{
+    internal static OperationContext Create(IHostApplicationLifetime applicationLifetime)
+    {
+        ArgumentNullException.ThrowIfNull(applicationLifetime);
+        return OperationContext.Create(
+            traceContext: System.Diagnostics.Activity.Current?.Context,
+            cancellationToken: applicationLifetime.ApplicationStopping);
     }
 }
 

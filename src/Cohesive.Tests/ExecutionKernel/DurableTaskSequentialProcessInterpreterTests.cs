@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Threading.Channels;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
@@ -7,10 +8,12 @@ using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
 using Cohesive.Processes.Runtime;
+using Microsoft.DurableTask;
 using Microsoft.DurableTask.Client;
 using Microsoft.DurableTask.Client.AzureManaged;
 using Microsoft.DurableTask.Worker;
 using Microsoft.DurableTask.Worker.AzureManaged;
+using Microsoft.Extensions.Hosting;
 using CanonicalProcessDefinition = Cohesive.Processes.IR.ProcessDefinition;
 
 namespace Cohesive.Tests.ExecutionKernel;
@@ -109,6 +112,149 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.Equal(
             Serialize(DurableTaskProcessStatus.Project(actual)),
             Serialize(DurableTaskProcessStatus.Project(replay)));
+    }
+
+    [Fact]
+    public async Task HostOperationActivity_AwaitsNaturallyAsyncHostAndProjectsPhysicalContext()
+    {
+        var query = HostedQueryHandlerCatalogTests.Query();
+        var evaluation = HostedQueryHandlerCatalogTests.Evaluation(
+            query,
+            new HostedQueryHandlerCatalogTests.QueryInput("source/durable-task"));
+        using var lifetime = new TestHostApplicationLifetime();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<ProcessOperationResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        OperationContext? capturedContext = null;
+        ProcessRelationEvaluation? capturedEvaluation = null;
+        var host = new DelegateAsyncProcessHost(evaluateRelation: (context, invocation) =>
+        {
+            capturedContext = context;
+            capturedEvaluation = invocation;
+            entered.SetResult();
+            return new(completion.Task);
+        });
+        var activity = new DurableTaskProcessHostOperationActivity(host, lifetime);
+        using var trace = new Activity("tests.durable-task.async-host").Start();
+
+        var execution = activity.RunAsync(
+            new TestTaskActivityContext("instance/async-host"),
+            DurableTaskProcessHostOperation.For(evaluation));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(execution.IsCompleted);
+        Assert.Equal(evaluation, capturedEvaluation);
+        Assert.Equal(trace.Context, capturedContext?.TraceContext);
+        Assert.Equal(lifetime.ApplicationStopping, capturedContext?.CancellationToken);
+
+        var result = ProcessOperationResult.Completed(evaluation.Input);
+        completion.SetResult(result);
+
+        Assert.Equal(result, await execution);
+    }
+
+    [Fact]
+    public async Task HostOperationActivity_WorkerShutdownCancelsPhysicalHostWithoutSemanticCancellation()
+    {
+        var query = HostedQueryHandlerCatalogTests.Query();
+        var evaluation = HostedQueryHandlerCatalogTests.Evaluation(
+            query,
+            new HostedQueryHandlerCatalogTests.QueryInput("source/cancelled-worker"));
+        using var lifetime = new TestHostApplicationLifetime();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        OperationContext? capturedContext = null;
+        var host = new DelegateAsyncProcessHost(evaluateRelation: (context, _) =>
+        {
+            capturedContext = context;
+            entered.SetResult();
+            return new(WaitForCancellation(context.CancellationToken));
+        });
+        var activity = new DurableTaskProcessHostOperationActivity(host, lifetime);
+        var execution = activity.RunAsync(
+            new TestTaskActivityContext("instance/cancelled-worker"),
+            DurableTaskProcessHostOperation.For(evaluation));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        lifetime.StopApplication();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
+        Assert.True(capturedContext?.CancellationToken.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task SignalTargetActivity_AwaitsNaturallyAsyncResolutionWithoutChangingCanonicalPayload()
+    {
+        var query = HostedQueryHandlerCatalogTests.Query();
+        var evaluation = HostedQueryHandlerCatalogTests.Evaluation(
+            query,
+            new HostedQueryHandlerCatalogTests.QueryInput("route/durable-task"));
+        var resolution = new ProcessSignalTargetResolution(
+            evaluation.Input,
+            evaluation.Continuation,
+            evaluation.Activation,
+            evaluation.Token,
+            evaluation.Node,
+            evaluation.Occurrence,
+            evaluation.ObservedAtUtc,
+            evaluation.Context);
+        var target = new ProcessTokenInteractionTarget(evaluation.Continuation, evaluation.Token);
+        using var lifetime = new TestHostApplicationLifetime();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<ProcessSignalTargetResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        ProcessSignalTargetResolution? capturedResolution = null;
+        var host = new DelegateAsyncProcessHost(resolveSignalTarget: (_, invocation) =>
+        {
+            capturedResolution = invocation;
+            entered.SetResult();
+            return new(completion.Task);
+        });
+        var activity = new DurableTaskProcessSignalTargetActivity(host, lifetime);
+
+        var execution = activity.RunAsync(
+            new TestTaskActivityContext("instance/async-signal"),
+            resolution);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(execution.IsCompleted);
+        Assert.Equal(resolution, capturedResolution);
+
+        var result = ProcessSignalTargetResult.Resolved(target);
+        completion.SetResult(result);
+
+        Assert.Equal(result, await execution);
+    }
+
+    [Fact]
+    public async Task DuplicateHostActivityDelivery_PreservesExactOccurrenceAndStructuredEvidence()
+    {
+        var query = HostedQueryHandlerCatalogTests.Query();
+        var evaluation = HostedQueryHandlerCatalogTests.Evaluation(
+            query,
+            new HostedQueryHandlerCatalogTests.QueryInput("source/duplicate-delivery"));
+        var failure = ProcessOperationResult.Failed(new DocumentValidationDiagnostic(
+            ProcessExecutionDiagnosticCodes.OperationFailed,
+            DiagnosticSeverity.Error,
+            "Synthetic durable activity failure.",
+            "/operation"));
+        using var lifetime = new TestHostApplicationLifetime();
+        var relations = new ConcurrentQueue<ProcessRelationEvaluation>();
+        var host = new DelegateAsyncProcessHost(evaluateRelation: (context, invocation) =>
+        {
+            context.ThrowIfCancellationRequested();
+            relations.Enqueue(invocation);
+            return ValueTask.FromResult(failure);
+        });
+        var activity = new DurableTaskProcessHostOperationActivity(host, lifetime);
+        var request = DurableTaskProcessHostOperation.For(evaluation);
+        var context = new TestTaskActivityContext("instance/duplicate-delivery");
+
+        var first = await activity.RunAsync(context, request);
+        var duplicate = await activity.RunAsync(context, request);
+
+        Assert.Equal(failure, first);
+        Assert.Equal(first, duplicate);
+        Assert.Equal([evaluation, evaluation], relations);
     }
 
     [Fact]
@@ -2915,6 +3061,9 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     {
         var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder();
         builder.Services.AddSingleton(processHost);
+        builder.Services.AddSingleton<IAsyncProcessReferenceHost>(services =>
+            new SynchronousProcessReferenceHostAdapter(
+                services.GetRequiredService<IProcessReferenceHost>()));
         if (durableOperationAdapter is not null)
         {
             builder.Services.AddSingleton<IDurableOperationAdapterResolver>(
@@ -4334,6 +4483,68 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     static string Format(IEnumerable<ProcessInterpreterRealizationDiagnostic> diagnostics) => string.Join(
         Environment.NewLine,
         diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
+
+    sealed class TestTaskActivityContext(string instanceId) : TaskActivityContext
+    {
+        public override TaskName Name => DurableTaskSequentialProcessNames.HostOperationActivity;
+
+        public override string InstanceId { get; } = instanceId;
+
+        public override string Version => string.Empty;
+    }
+
+    sealed class TestHostApplicationLifetime : IHostApplicationLifetime, IDisposable
+    {
+        readonly CancellationTokenSource started = new();
+        readonly CancellationTokenSource stopping = new();
+        readonly CancellationTokenSource stopped = new();
+
+        public CancellationToken ApplicationStarted => started.Token;
+
+        public CancellationToken ApplicationStopping => stopping.Token;
+
+        public CancellationToken ApplicationStopped => stopped.Token;
+
+        public void StopApplication() => stopping.Cancel();
+
+        public void Dispose()
+        {
+            started.Dispose();
+            stopping.Dispose();
+            stopped.Dispose();
+        }
+    }
+
+    static async Task<ProcessOperationResult> WaitForCancellation(CancellationToken cancellationToken)
+    {
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        throw new InvalidOperationException("A cancelled activity host unexpectedly continued.");
+    }
+
+    sealed class DelegateAsyncProcessHost(
+        Func<OperationContext, ProcessTransitionInvocation, ValueTask<ProcessOperationResult>>? invokeTransition = null,
+        Func<OperationContext, ProcessRelationEvaluation, ValueTask<ProcessOperationResult>>? evaluateRelation = null,
+        Func<OperationContext, ProcessSignalTargetResolution, ValueTask<ProcessSignalTargetResult>>? resolveSignalTarget = null)
+        : IAsyncProcessReferenceHost
+    {
+        public ValueTask<ProcessOperationResult> InvokeTransitionAsync(
+            OperationContext context,
+            ProcessTransitionInvocation invocation) =>
+            invokeTransition?.Invoke(context, invocation)
+            ?? throw new InvalidOperationException("Unexpected Transition invocation.");
+
+        public ValueTask<ProcessOperationResult> EvaluateRelationAsync(
+            OperationContext context,
+            ProcessRelationEvaluation evaluation) =>
+            evaluateRelation?.Invoke(context, evaluation)
+            ?? throw new InvalidOperationException("Unexpected Relation/Query evaluation.");
+
+        public ValueTask<ProcessSignalTargetResult> ResolveSignalTargetAsync(
+            OperationContext context,
+            ProcessSignalTargetResolution resolution) =>
+            resolveSignalTarget?.Invoke(context, resolution)
+            ?? throw new InvalidOperationException("Unexpected Signal-target resolution.");
+    }
 
     sealed class EchoHost : IProcessReferenceHost
     {
