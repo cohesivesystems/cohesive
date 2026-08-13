@@ -168,6 +168,35 @@ It may declare:
 
 Queries are useful for retrieval, search, reporting, exploration, and aggregation across one or more sources.
 
+### Hosted Queries
+
+A hosted Query is used when invocation semantics include acquisition or policy that cannot be expressed by the
+portable logical graph alone. For example, an invocation may select a tenant partition, verify an admitted event
+against persisted state, and then evaluate a portable projection Relation over the acquired snapshot.
+
+```csharp
+var byEvent = HostedQuery<NormalizationStart, PinnedSource>.Create(
+    definitionId: new("query/training/event-source/schema-mapping"),
+    revisionId: new("1"),
+    implementation: new("training.event-source", "1"),
+    configuration: new EventSourcePolicy("schema-mapping", "tenant-and-payload-exact"),
+    provenance: provenance,
+    dependencies:
+    [
+        schemaMappingProjection.AsHostedQueryDependency("projection")
+    ]);
+```
+
+The shared `ExecutionDefinitionDocument` is authoritative for the hosted Query's input/result contracts, exact
+implementation family and version, role-named exact dependencies, portable configuration, provenance, and
+fingerprint. The typed handle is only an immutable C# projection of that document. Executable handlers,
+repositories, credentials, service instances, deployment choices, and ambient configuration are runtime
+registration concerns and never enter canonical content.
+
+A hosted Query is not a substitute for a portable Relation or Query. Its dependency can point to the portable
+Relation that performs deterministic projection after acquisition, while its own distinct fingerprint truthfully
+attests to the external invocation contract and acquisition policy.
+
 ## Relations and Queries
 
 Relations and queries use the same logical operators because both describe relational computation:

@@ -1439,6 +1439,83 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
     }
 
     [Fact]
+    public void Generator_LowersTypedHostedQueryHandleToItsExactReference()
+    {
+        var source = """
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Relations.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class TypedHostedQueryProcess
+                     {
+                         private static HostedQuery<Input, Result> Acquire => null!;
+
+                         private static async ProcessTask<Result> Run(ProcessContext process, Input input)
+                         {
+                             var result = await process.Read(Acquire, input);
+                             return result;
+                         }
+                     }
+
+                     public sealed record Input(string Value);
+                     public sealed record Result(string Value);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        Assert.DoesNotContain(
+            compilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.Contains("__builder.EvaluateRelation", generated);
+        Assert.Contains("(Acquire).Reference", generated);
+    }
+
+    [Fact]
+    public void CSharpRejectsTypedHostedQueryInputMismatch()
+    {
+        var source = """
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Relations.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class TypedHostedQueryProcess
+                     {
+                         private static HostedQuery<ExpectedInput, Result> Acquire => null!;
+
+                         private static async ProcessTask<Result> Run(ProcessContext process, ActualInput input)
+                         {
+                             var result = await process.Read(Acquire, input);
+                             return result;
+                         }
+                     }
+
+                     public sealed record ExpectedInput(string Value);
+                     public sealed record ActualInput(string Value);
+                     public sealed record Result(string Value);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        RunGenerator(compilation, out var outputCompilation);
+
+        Assert.Contains(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Id == "CS0411"
+                || diagnostic.Id == "CS1503");
+    }
+
+    [Fact]
     public void CSharpRequiresEveryTypedChildSemanticHandler()
     {
         var source = """

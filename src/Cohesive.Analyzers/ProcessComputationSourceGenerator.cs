@@ -4022,7 +4022,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
         bool TryEmitRelation(AwaitFlow awaited, string successor)
         {
-            var relation = Argument(awaited.Invocation, "relation");
+            var relation = Argument(awaited.Invocation, "relation")
+                ?? Argument(awaited.Invocation, "query");
             var input = Argument(awaited.Invocation, "input");
             if (relation is null || input is null || !TryEmitValue(input.Value, input.Value.Type!, awaited.Source, out var inputValue))
             {
@@ -4035,7 +4036,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return false;
             }
 
-            if (IsTypedCanonicalRelation(relation.Parameter?.Type))
+            if (IsTypedCanonicalRelationQueryHandle(relation.Parameter?.Type))
                 relationReference = $"{relationReference}.Reference";
 
             builderStatements.Add(
@@ -4043,10 +4044,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             return true;
         }
 
-        static bool IsTypedCanonicalRelation(ITypeSymbol? type) =>
+        static bool IsTypedCanonicalRelationQueryHandle(ITypeSymbol? type) =>
             type is INamedTypeSymbol
             {
-                Name: "Relation",
+                Name: "Relation" or "HostedQuery",
                 Arity: 2
             } named
             && named.ContainingNamespace.ToDisplayString() == "Cohesive.Relations.Authoring";
