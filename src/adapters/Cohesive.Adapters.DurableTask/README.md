@@ -207,7 +207,7 @@ var catalog = new DurableTaskSequentialProcessPlanCatalog(
     new ApplicationDurableRequestBindingResolver(),
     new ApplicationDomainEventPublisherResolver());
 
-services.AddSingleton<IProcessReferenceHost, ApplicationProcessHost>();
+services.AddSingleton<IAsyncProcessReferenceHost, ApplicationProcessHost>();
 services.AddSingleton<IDurableOperationAdapterResolver, ApplicationDurableOperationAdapterResolver>();
 // Register a provider-aware IDurableOperationExceptionClassifier here when available.
 services.AddDurableTaskWorker(worker =>
@@ -217,6 +217,20 @@ services.AddDurableTaskWorker(worker =>
 });
 services.AddDurableTaskClient(client => client.UseDurableTaskScheduler(connectionString));
 ```
+
+`IAsyncProcessReferenceHost` is the physical worker port for Transition, Relation/Query, and Signal-target
+activities. Naturally asynchronous implementations must implement it directly. A bounded legacy synchronous host
+remains available only through the named compatibility projection:
+
+```csharp
+services.AddSingleton<IProcessReferenceHost, BoundedSynchronousProcessHost>();
+services.AddSingleton<IAsyncProcessReferenceHost>(provider =>
+    new SynchronousProcessReferenceHostAdapter(
+        provider.GetRequiredService<IProcessReferenceHost>()));
+```
+
+The compatibility adapter checks cancellation before entering the synchronous call but cannot interrupt it after
+entry. Do not use it for asynchronous I/O or unbounded work.
 
 `IDomainEventPublisherResolver` is deployment policy keyed by the exact `DomainEventContractReference`. Every
 resolved `IDomainEventPublisher` declares the exact contracts for which its target durably suppresses redelivery by
@@ -254,8 +268,15 @@ DurableTaskProcessScheduleResult scheduled =
 
 The physical instance ID is deterministic for the authority scope and canonical Process instance. A duplicate,
 byte-equivalent start reuses the instance; conflicting start evidence is rejected. Each Transition or Relation/Query
-invocation runs as a bounded activity and is materialized back into the reference interpreter. Durable Task replay
-then reuses activity history instead of committing that logical operation again.
+invocation runs as a bounded activity, awaits `IAsyncProcessReferenceHost` without blocking, and is materialized back
+into the reference interpreter. The activity creates an `OperationContext` with the active worker trace and
+`IHostApplicationLifetime.ApplicationStopping` token. Durable Task replay then reuses activity history instead of
+committing that logical operation again.
+
+Durable Task activity delivery is at-least-once: an ambiguous worker failure can deliver the same complete canonical
+invocation again. Its continuation, attempt, activation, token, node, and occurrence identity remain unchanged, and
+the host must use that identity to provide idempotent or target-deduplicated evidence. The adapter does not invent a
+second physical identity or silently cache handler results outside Durable Task history.
 
 ### Lifecycle control
 
@@ -301,8 +322,11 @@ that an external activity or child was recalled. Complete durable Request retry/
 external cleanup, lifecycle Signal qualification, and exhaustive crash/race closure remain the follow-up
 qualification scope tracked by ARI-302.
 
-Transport cancellation tokens cancel only scheduling or event delivery. Worker shutdown and SDK task cancellation
-never become `CancelProcessCommand` and cannot produce semantic cancellation evidence.
+Transport cancellation tokens cancel only scheduling or event delivery. Worker shutdown cancels the activity
+`OperationContext` through `ApplicationStopping`; the resulting `OperationCanceledException` is physical failure
+and never becomes `CancelProcessCommand` or semantic cancellation evidence. The current standalone .NET Durable
+Task activity context exposes no per-activity cancellation token, and terminating an orchestration does not recall an
+already-running activity, so host implementations must also honor their exact-operation idempotency boundary.
 
 A Request without an exact binding still emits canonical evidence and waits for a canonical
 `ProcessActivationInput` external event; use `RaiseCohesiveProcessInteractionAsync` for that deliberately external
@@ -354,7 +378,7 @@ canonical `ProcessActivationInput` evidence for external inputs and addressed Si
 outside this executable slice.
 
 `SendSignalProcessNode` target evaluation stays inside the canonical reference interpreter. When materialization is
-required, a replayable activity asks the registered `IProcessReferenceHost` for the existing closed
+required, a replayable activity asynchronously asks the registered `IAsyncProcessReferenceHost` for the existing closed
 `ProcessSignalTargetResult`; no Durable Task target DTO or second resolution policy exists. The interpreter then
 authors the exact `SignalEnvelope`, including contract, target, correlation, delivery, ordering, origin, occurrence,
 and provenance. The orchestrator routes that envelope unchanged inside a `ProcessActivationInput` external event to
@@ -377,6 +401,17 @@ into semantic cancellation or invent timeout/escalation values.
 `Return` completes the orchestration. An authored root `Fail` produces canonical failure evidence and a failed
 physical orchestration; child failure remains a semantic child result for its parent. A canonical Durable Cut closes
 one finite activation and resumes with exact continuation evidence, using Continue-as-new in the SDK realization.
+
+### Why the orchestration keeps a target-local suspension driver
+
+The physical activity boundary and the target-neutral `ProcessReferenceInterpreter.ActivateAsync` share the same
+canonical operation payloads, asynchronous host contract, result validation, and occurrence identity. The Durable
+Task orchestrator deliberately retains its small suspension/materialization loop because it must await only
+Durable-Task-created tasks on the deterministic orchestration scheduler and, while one host activity is in flight,
+race the lifecycle-control event stream so Terminate can abandon result admission. The target-neutral driver owns
+neither scheduler affinity nor control-event arbitration. Replacing the loop with it would either hide target policy
+in the core interpreter or weaken Durable Task replay/control semantics. Differential and restart tests keep the two
+drivers aligned around the unchanged pure `ProcessReferenceInterpreter.Activate` reducer.
 
 ## Validation
 
@@ -405,7 +440,9 @@ emulator reads the safe `ExecutionStatus` custom-status projection directly and 
 status as a hidden continuation, inbox, outbox, or control-receipt channel. It also proves both AwaitMatch
 interaction and timer winners. Deterministic conformance tests additionally cover
 lifecycle authorization and revision fences, deferred safe-point control during active host work,
-replacement-attempt lineage, operational/semantic cancellation separation, exact Signal target and envelope
+replacement-attempt lineage, naturally asynchronous host awaiting, worker-shutdown cancellation projection,
+duplicate activity delivery, structured host-failure retention, operational/semantic cancellation separation,
+exact Signal target and envelope
 preservation, recipient missing/stale/duplicate/consumed dispositions, the
 interaction/timer priority and tie-break matrix, early and policy-disposition evidence, multiple timer clauses,
 concurrent fork Requests, Join selection, timer replay and competing-wait cancellation, child lineage and
