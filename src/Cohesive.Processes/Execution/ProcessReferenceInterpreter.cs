@@ -56,7 +56,7 @@ public static class ProcessExecutionDiagnosticCodes
 /// semantic continuation and explicit activation evidence to replacement state and interaction intents. Physical
 /// atomic checkpoint, inbox, and outbox persistence belongs to a separate runtime interpretation.
 /// </remarks>
-public static class ProcessReferenceInterpreter
+public static partial class ProcessReferenceInterpreter
 {
     /// <summary>Creates initial execution state from durable Process-start acceptance evidence.</summary>
     /// <param name="plan">Successfully compiled canonical Process plan.</param>

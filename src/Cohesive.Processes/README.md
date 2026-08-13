@@ -224,6 +224,31 @@ canonical definitions with `Cohesive.Storage.Processes.ProcessDurableRuntime` an
 interpreters and adapters must declare supported capabilities and preserve the canonical semantics or emit precise
 diagnostics.
 
+The synchronous `IProcessReferenceHost` remains the evidence port used by the pure reducer. Infrastructure that
+performs naturally asynchronous work implements `IAsyncProcessReferenceHost` and invokes the same semantic
+authority through `ProcessReferenceInterpreter.ActivateAsync`. That driver suspends on an unmaterialized exact
+host occurrence, awaits physical execution with `OperationContext` cancellation, retains the evidence by
+continuation/attempt/activation/token/node/occurrence, and re-enters the unchanged synchronous reducer. Physical
+cancellation returns no partial Process decision and is distinct from authored semantic cancellation.
+
+Hosted Queries bind their runtime handlers separately from their canonical documents:
+
+```csharp
+var handlers = new HostedQueryHandlerCatalog([
+    HostedQueryHandlerRegistration.Create(
+        EventSourceQueries.SchemaMapping,
+        async (context, evaluation, start) =>
+            await repository.ReadPinnedAsync(start, context.CancellationToken))
+]);
+```
+
+The immutable catalog dispatches only by complete definition identity, revision, and fingerprint, validates the
+portable input and output contracts, and passes the complete `ProcessRelationEvaluation` to the handler unchanged.
+A change to contracts, implementation version, dependencies, or portable configuration changes the document
+fingerprint and cannot silently reach the old handler. Handler delegates, repositories, credentials, and deployment
+state never enter canonical content. `SynchronousProcessReferenceHostAdapter` is the explicit bounded compatibility
+path; it checks cancellation before invocation but cannot interrupt a synchronous call already in progress.
+
 `IProcessExecutionTraceRepository` is the opt-in runtime boundary for reading retained payload-safe traces without
 adding them to ordinary execution status or listing records. Its result distinguishes not found, in-progress,
 available, and terminal-without-artifact executions. Application reads use trusted authority scope plus logical

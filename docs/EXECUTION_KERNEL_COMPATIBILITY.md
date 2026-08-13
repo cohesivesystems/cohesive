@@ -463,9 +463,14 @@ Fork/Join membership and branch dispositions, replay-stable child invocations, b
 progress, computed timer deadlines, active waits and tombstones with their exact token-step identity basis, early inputs, input-disposition receipts,
 outstanding logical Requests, terminal outcome, and exact Process fingerprint. It is
 the semantic input to the Storage-owned durable checkpoint, not itself a claim of physical durability. The
-synchronous host port supplies explicit
-Transition, Relation/Query, and Signal-target evidence, while cancellation is observed only at an activation safe
-point; no `CancellationToken`, task, repository, clock, or provider type enters canonical state.
+synchronous host port supplies explicit Transition, Relation/Query, and Signal-target evidence to the pure reducer,
+while semantic cancellation is observed only at an activation safe point; no `CancellationToken`, task, repository,
+clock, or provider type enters canonical state. A target-neutral asynchronous host port is a physical execution
+interpretation of that same evidence boundary. `ProcessReferenceInterpreter.ActivateAsync` suspends on one exact
+unmaterialized occurrence, awaits it with an `OperationContext`, and re-enters the unchanged reducer with the
+retained result. Caller cancellation aborts physical execution without manufacturing a semantic decision. Typed
+hosted-Query handler catalogs remain runtime deployment projections and require the exact canonical definition
+identity, revision, and fingerprint.
 
 Presented inputs are grouped by logical emission identity before state mutation, so conflicting same-batch evidence
 cannot acquire caller-order authority. Every admission receipt and `InputAdmitted` trace separates the closed
