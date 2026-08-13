@@ -79,6 +79,26 @@ be supplied explicitly when they are part of an established compatibility contra
 `ContinueAttempt` recovery can author this protocol, matching the exact-attempt join semantics enforced during
 Process linking.
 
+Within a Process computation, the typed protocol removes the repeated child reference, Request reference, outcome
+mapping, and explicit outcome identities. The four named handlers are required and all receive the protocol's
+`TResult`:
+
+```csharp
+await process.InvokeProcess(
+    protocol: childProtocol,
+    input: source,
+    purpose: ProcessChildPurpose.Work,
+    cancellation: ProcessChildCancellationPolicy.Propagate,
+    completed: Completed,
+    failed: Failed,
+    cancelled: Cancelled,
+    terminated: Terminated);
+```
+
+`purpose` and `cancellation` remain explicit because they describe this invocation occurrence, not the reusable
+protocol. The raw exact-reference overload remains available to generators and importers. Both forms lower to the
+same canonical `InvokeProcessProcessNode` and therefore have identical interpreter and replay behavior.
+
 Typed durable races bind a closed source-only result family and consume it with an immediately following exhaustive
 type switch:
 

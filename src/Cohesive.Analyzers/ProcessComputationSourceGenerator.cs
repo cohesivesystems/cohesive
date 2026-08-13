@@ -893,39 +893,95 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             var requestIdentity = NextIdentity(
                 kind == RequestAuthoringKind.ChildProcess ? "invoke-process" : "request",
                 structuralPath);
-            var declarations = CollectionArguments(invocation, "outcomes");
-            if (declarations.IsEmpty)
+            List<(
+                IArgumentOperation Branch,
+                IInvocationOperation? Declaration,
+                string? ChildTerminalMember,
+                SyntaxNode Syntax)> declarations = [];
+            var protocol = Argument(invocation, "protocol");
+            if (kind == RequestAuthoringKind.ChildProcess && protocol is not null)
+            {
+                foreach (var (parameter, member) in new[]
+                {
+                    ("completed", "Completed"),
+                    ("failed", "Failed"),
+                    ("cancelled", "Cancelled"),
+                    ("terminated", "Terminated")
+                })
+                {
+                    var branch = Argument(invocation, parameter);
+                    if (branch is null)
+                    {
+                        return StatementFailure(
+                            statement,
+                            $"typed InvokeProcess outcomes require the {parameter} branch");
+                    }
+                    declarations.Add((branch, null, member, branch.Syntax));
+                }
+            }
+            else
+            {
+                var authoredOutcomes = CollectionArguments(invocation, "outcomes");
+                if (authoredOutcomes.IsEmpty)
+                {
+                    return StatementFailure(statement, "a multi-outcome Request requires at least one terminal outcome");
+                }
+                if (kind == RequestAuthoringKind.ChildProcess && authoredOutcomes.Length != 4)
+                {
+                    return StatementFailure(
+                        statement,
+                        "InvokeProcess requires exactly one branch for each completed, failed, cancelled, and terminated child outcome");
+                }
+
+                foreach (var authoredOutcome in authoredOutcomes)
+                {
+                    var declaration = Strip(authoredOutcome);
+                    if (declaration is not IInvocationOperation outcomeDeclaration
+                        || outcomeDeclaration.TargetMethod.Name != "Outcome"
+                        || !SymbolEqualityComparer.Default.Equals(
+                            outcomeDeclaration.TargetMethod.ContainingType,
+                            contextParameter.Type))
+                    {
+                        return StatementFailure(
+                            authoredOutcome.Syntax,
+                            "every Request outcome must be declared with process.Outcome");
+                    }
+                    var branch = Argument(outcomeDeclaration, "branch");
+                    if (branch is null)
+                    {
+                        return StatementFailure(
+                            outcomeDeclaration.Syntax,
+                            "a Request outcome requires one named local branch");
+                    }
+                    declarations.Add((branch, outcomeDeclaration, null, outcomeDeclaration.Syntax));
+                }
+            }
+
+            if (declarations.Count == 0)
             {
                 return StatementFailure(statement, "a multi-outcome Request requires at least one terminal outcome");
-            }
-            if (kind == RequestAuthoringKind.ChildProcess && declarations.Length != 4)
-            {
-                return StatementFailure(
-                    statement,
-                    "InvokeProcess requires exactly one branch for each completed, failed, cancelled, and terminated child outcome");
             }
 
             List<RequestOutcomeFlow> outcomes = [];
             HashSet<IMethodSymbol> observed = new(SymbolEqualityComparer.Default);
-            for (var index = 0; index < declarations.Length; index++)
+            foreach (var declaration in declarations)
             {
-                var declaration = Strip(declarations[index]);
-                if (declaration is not IInvocationOperation outcomeDeclaration
-                    || outcomeDeclaration.TargetMethod.Name != "Outcome"
-                    || !SymbolEqualityComparer.Default.Equals(outcomeDeclaration.TargetMethod.ContainingType, contextParameter.Type))
+                var branch = declaration.Branch;
+                if (!TryGetNamedLocalBranch(
+                        branch.Value,
+                        observed,
+                        parameterCount: 1,
+                        out var branchMethod,
+                        out var localFunction)
+                    && !TryGetNamedLocalBranch(
+                        branch.Value,
+                        observed,
+                        parameterCount: 0,
+                        out branchMethod,
+                        out localFunction))
                 {
                     return StatementFailure(
-                        declarations[index].Syntax,
-                        "every Request outcome must be declared with process.Outcome");
-                }
-
-                var branch = Argument(outcomeDeclaration, "branch");
-                if (branch is null
-                    || (!TryGetNamedLocalBranch(branch.Value, observed, parameterCount: 1, out var branchMethod, out var localFunction)
-                        && !TryGetNamedLocalBranch(branch.Value, observed, parameterCount: 0, out branchMethod, out localFunction)))
-                {
-                    return StatementFailure(
-                        branch?.Syntax ?? outcomeDeclaration.Syntax,
+                        branch.Syntax,
                         "a Request outcome branch must name a unique local async ProcessTask function with zero or one typed outcome parameter");
                 }
 
@@ -952,7 +1008,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         outcomeIdentity,
                         "result",
                         $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
-                        outcomeDeclaration,
+                        declaration.Declaration,
                         SourceLocation(localFunction));
                     authoredOutputs.Add(output);
                 }
@@ -961,9 +1017,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     branchMethod.Name,
                     body,
                     parameter,
-                    outcomeDeclaration,
-                    SourceLocation(outcomeDeclaration.Syntax),
-                    outcomeDeclaration.Syntax));
+                    declaration.Declaration,
+                    declaration.ChildTerminalMember,
+                    SourceLocation(declaration.Syntax),
+                    declaration.Syntax));
             }
 
             flow = new(
@@ -2628,7 +2685,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     {
                         if (!TryDeclareOwnedIdentity(
                                 outcome.Identity,
-                                Argument(outcome.Declaration, "id"),
+                                outcome.Declaration is null ? null : Argument(outcome.Declaration, "id"),
                                 request.Identity,
                                 outcome.Identity.PathSegment,
                                 outcome.Syntax,
@@ -3333,14 +3390,38 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
         bool TryEmitRequest(RequestFlow request, string? successor)
         {
-            var contract = Argument(request.Invocation, "contract");
             var input = Argument(request.Invocation, "input");
-            if (contract is null
-                || input is null
-                || !TryEmitExactArgument(contract, request.Syntax, out var requestContract)
+            if (input is null
                 || !TryEmitValue(input.Value, input.Value.Type!, request.Source, out var payload))
             {
-                return StatementFailure(request.Syntax, "a multi-outcome Request requires an exact contract and portable payload");
+                return StatementFailure(request.Syntax, "a multi-outcome Request requires a portable payload");
+            }
+
+            string requestContract;
+            string? protocolExpression = null;
+            var protocol = Argument(request.Invocation, "protocol");
+            if (request.Kind == RequestAuthoringKind.ChildProcess && protocol is not null)
+            {
+                if (!TryEmitExactArgument(protocol, request.Syntax, out protocolExpression))
+                {
+                    return false;
+                }
+                var protocolVariable =
+                    $"__protocol_{request.Identity.Variable.Substring("__node_".Length)}";
+                builderStatements.Add($"var {protocolVariable} = {protocolExpression};");
+                protocolExpression = protocolVariable;
+                requestContract = $"{protocolExpression}.Request";
+            }
+            else
+            {
+                var contract = Argument(request.Invocation, "contract");
+                if (contract is null
+                    || !TryEmitExactArgument(contract, request.Syntax, out requestContract))
+                {
+                    return StatementFailure(
+                        request.Syntax,
+                        "a multi-outcome Request requires an exact contract");
+                }
             }
 
             List<string> outcomes = [];
@@ -3350,16 +3431,51 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     return StatementFailure(outcome.Syntax, $"Request outcome '{outcome.Name}' requires a reachable continuation");
                 }
-                var terminalOutcome = Argument(outcome.Declaration, "outcome");
-                if (terminalOutcome is null
-                    || !TryEmitExactArgument(terminalOutcome, outcome.Syntax, out var terminalOutcomeExpression)
-                    || !TryEmitRole(outcome.Declaration, "role", "next", outcome.Syntax, out var role)
-                    || !TryEmitOptionalExact(
-                        outcome.Declaration,
-                        "edgeOwner",
-                        outcome.Identity.Variable,
-                        outcome.Syntax,
-                        out var edgeOwner))
+
+                string terminalOutcomeExpression;
+                string role;
+                string edgeOwner;
+                if (outcome.ChildTerminalMember is not null)
+                {
+                    if (protocolExpression is null)
+                    {
+                        return StatementFailure(
+                            outcome.Syntax,
+                            "semantic child outcomes require a typed invocation protocol");
+                    }
+                    terminalOutcomeExpression =
+                        $"{protocolExpression}.OutcomeMapping.{outcome.ChildTerminalMember}";
+                    role = "\"next\"";
+                    edgeOwner = outcome.Identity.Variable;
+                }
+                else
+                {
+                    var terminalOutcome = outcome.Declaration is null
+                        ? null
+                        : Argument(outcome.Declaration, "outcome");
+                    if (terminalOutcome is null
+                        || !TryEmitExactArgument(
+                            terminalOutcome,
+                            outcome.Syntax,
+                            out terminalOutcomeExpression)
+                        || !TryEmitRole(
+                            outcome.Declaration!,
+                            "role",
+                            "next",
+                            outcome.Syntax,
+                            out role)
+                        || !TryEmitOptionalExact(
+                            outcome.Declaration!,
+                            "edgeOwner",
+                            outcome.Identity.Variable,
+                            outcome.Syntax,
+                            out edgeOwner))
+                    {
+                        return false;
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(terminalOutcomeExpression))
                 {
                     return false;
                 }
@@ -3379,22 +3495,41 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return true;
             }
 
-            var process = Argument(request.Invocation, "process");
-            var outcomeMapping = Argument(request.Invocation, "outcomeMapping");
             var purpose = Argument(request.Invocation, "purpose");
             var cancellation = Argument(request.Invocation, "cancellation");
-            if (process is null
-                || outcomeMapping is null
-                || purpose is null
+            if (purpose is null
                 || cancellation is null
-                || !TryEmitExactArgument(process, request.Syntax, out var processExpression)
-                || !TryEmitExactArgument(outcomeMapping, request.Syntax, out var outcomeMappingExpression)
                 || !TryEmitExactArgument(purpose, request.Syntax, out var purposeExpression)
                 || !TryEmitExactArgument(cancellation, request.Syntax, out var cancellationExpression))
             {
                 return StatementFailure(
                     request.Syntax,
                     "InvokeProcess requires exact child definition, outcome mapping, purpose, and cancellation policy");
+            }
+
+            string processExpression;
+            string outcomeMappingExpression;
+            if (protocolExpression is not null)
+            {
+                processExpression = $"{protocolExpression}.Process.Reference";
+                outcomeMappingExpression = $"{protocolExpression}.OutcomeMapping";
+            }
+            else
+            {
+                var process = Argument(request.Invocation, "process");
+                var outcomeMapping = Argument(request.Invocation, "outcomeMapping");
+                if (process is null
+                    || outcomeMapping is null
+                    || !TryEmitExactArgument(process, request.Syntax, out processExpression)
+                    || !TryEmitExactArgument(
+                        outcomeMapping,
+                        request.Syntax,
+                        out outcomeMappingExpression))
+                {
+                    return StatementFailure(
+                        request.Syntax,
+                        "InvokeProcess requires an exact child definition and outcome mapping");
+                }
             }
 
             builderStatements.Add(
@@ -5099,7 +5234,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         string Name,
         FlowBlock Body,
         IParameterSymbol? Input,
-        IInvocationOperation Declaration,
+        IInvocationOperation? Declaration,
+        string? ChildTerminalMember,
         SourceReference Source,
         SyntaxNode Syntax);
 

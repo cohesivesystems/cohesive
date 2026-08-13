@@ -189,6 +189,38 @@ public sealed class ProcessContext
         ExecutionNodeId? edgeOwner = null) =>
         throw SyntaxOnly();
 
+    /// <summary>Declares one exact typed child Process invocation through its canonical Request/Reply protocol.</summary>
+    /// <remarks>
+    /// The protocol supplies the exact child definition, Request contract, and total terminal mapping. Purpose and
+    /// cancellation remain explicit because they belong to this invocation occurrence. Every outcome branch must
+    /// be a distinct named local <c>async ProcessTask</c> function; the generator lowers the call to the existing
+    /// <see cref="InvokeProcessProcessNode"/> and erases the CLR protocol handle and branch functions.
+    /// </remarks>
+    /// <typeparam name="TInput">Portable child input type declared by the protocol's canonical Process.</typeparam>
+    /// <typeparam name="TResult">Portable child terminal-result type supplied to every semantic branch.</typeparam>
+    /// <param name="protocol">Typed exact child Process and Request/Reply invocation protocol.</param>
+    /// <param name="input">Pure child input and Request payload fused into the canonical invocation.</param>
+    /// <param name="purpose">Explicit work, compensation, or reconciliation purpose.</param>
+    /// <param name="cancellation">Explicit parent-to-child cancellation behavior.</param>
+    /// <param name="completed">Named source-only branch selected when the child completes successfully.</param>
+    /// <param name="failed">Named source-only branch selected when the child fails.</param>
+    /// <param name="cancelled">Named source-only branch selected when the child is cancelled.</param>
+    /// <param name="terminated">Named source-only branch selected when the child is forcibly terminated.</param>
+    /// <param name="id">Optional explicit canonical node identity.</param>
+    /// <returns>A syntax-only task representing completion of the selected child terminal branch.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask InvokeProcess<TInput, TResult>(
+        ProcessInvocationProtocol<TInput, TResult> protocol,
+        TInput input,
+        ProcessChildPurpose purpose,
+        ProcessChildCancellationPolicy cancellation,
+        ProcessOutcomeBranch<TResult> completed,
+        ProcessOutcomeBranch<TResult> failed,
+        ProcessOutcomeBranch<TResult> cancelled,
+        ProcessOutcomeBranch<TResult> terminated,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
     /// <summary>Declares one exact child Process invocation through the canonical Request/Reply protocol.</summary>
     /// <remarks>
     /// Every outcome branch must be a named local <c>async ProcessTask</c> function. The generator lowers the
