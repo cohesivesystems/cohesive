@@ -49,6 +49,79 @@ public delegate ValueTask<TResult> HostedQueryHandler<TInput, TResult>(
     where TInput : notnull
     where TResult : notnull;
 
+/// <summary>Closed typed success or structured semantic failure from a hosted-Query handler.</summary>
+/// <typeparam name="TResult">CLR projection of the canonical singular result contract.</typeparam>
+/// <remarks>
+/// This outcome is runtime evidence rather than canonical Query content. Use failure for an expected inability to
+/// produce the declared result after typed input admission. Throwing remains reserved for physical execution
+/// failure, and cancellation remains observable through the operation context.
+/// </remarks>
+public sealed class HostedQueryHandlerOutcome<TResult>
+    where TResult : notnull
+{
+    readonly TResult? value;
+
+    HostedQueryHandlerOutcome(bool isSuccessful, TResult? value, DocumentValidationDiagnostic? failure)
+    {
+        IsSuccessful = isSuccessful;
+        this.value = value;
+        Failure = failure;
+    }
+
+    /// <summary>Typed singular value from a successful handler outcome.</summary>
+    /// <exception cref="InvalidOperationException">This is a failed outcome.</exception>
+    public TResult Value => IsSuccessful
+        ? value!
+        : throw new InvalidOperationException("A failed hosted-Query outcome has no result value.");
+
+    /// <summary>Structured error evidence when the handler cannot produce its declared value.</summary>
+    public DocumentValidationDiagnostic? Failure { get; }
+
+    /// <summary>Whether this outcome contains one typed singular value.</summary>
+    public bool IsSuccessful { get; }
+
+    /// <summary>Creates a successful typed outcome.</summary>
+    /// <param name="value">Non-null typed value to validate against the canonical result contract.</param>
+    /// <returns>A closed successful outcome.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
+    public static HostedQueryHandlerOutcome<TResult> Completed(TResult value) =>
+        new(
+            isSuccessful: true,
+            value ?? throw new ArgumentNullException(nameof(value)),
+            failure: null);
+
+    /// <summary>Creates a structured semantic failure with no result value.</summary>
+    /// <param name="failure">One error diagnostic describing why no declared result can be produced.</param>
+    /// <returns>A closed failed outcome.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="failure"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="failure"/> is not an error diagnostic.</exception>
+    public static HostedQueryHandlerOutcome<TResult> Failed(DocumentValidationDiagnostic failure)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+        if (failure.Severity != DiagnosticSeverity.Error)
+            throw new ArgumentException("A failed hosted-Query outcome requires an error diagnostic.", nameof(failure));
+        return new(isSuccessful: false, value: default, failure);
+    }
+}
+
+/// <summary>Executes one typed exact hosted-Query evaluation with an explicit semantic outcome.</summary>
+/// <typeparam name="TInput">CLR projection of the canonical invocation contract.</typeparam>
+/// <typeparam name="TResult">CLR projection of the canonical singular result contract.</typeparam>
+/// <param name="context">Physical operation context carrying cancellation and infrastructure attribution.</param>
+/// <param name="evaluation">Complete canonical Process evaluation context, unchanged from the Process node.</param>
+/// <param name="input">Typed concrete invocation value decoded from <paramref name="evaluation"/>.</param>
+/// <returns>One typed success or structured semantic failure.</returns>
+/// <remarks>
+/// Throwing represents physical execution failure. Expected inability to produce the declared result is returned as
+/// <see cref="HostedQueryHandlerOutcome{TResult}.Failed"/>.
+/// </remarks>
+public delegate ValueTask<HostedQueryHandlerOutcome<TResult>> HostedQueryOutcomeHandler<TInput, TResult>(
+    OperationContext context,
+    ProcessRelationEvaluation evaluation,
+    TInput input)
+    where TInput : notnull
+    where TResult : notnull;
+
 /// <summary>Runtime-only binding between one exact canonical hosted Query and its typed executable handler.</summary>
 /// <remarks>
 /// The retained canonical document is the definition authority. The handler is deployment state and never enters
@@ -99,14 +172,52 @@ public abstract class HostedQueryHandlerRegistration
     {
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(handler);
+        RequireValid(query);
+        return new TypedHostedQueryHandlerRegistration<TInput, TResult>(
+            query,
+            (context, evaluation, input) => AsOutcome(handler(context, evaluation, input)));
+    }
+
+    /// <summary>Creates one runtime-only typed handler registration with explicit semantic failure outcomes.</summary>
+    /// <typeparam name="TInput">CLR projection of the canonical invocation contract.</typeparam>
+    /// <typeparam name="TResult">CLR projection of the canonical singular result contract.</typeparam>
+    /// <param name="query">Valid canonical hosted Query whose exact document governs dispatch.</param>
+    /// <param name="handler">
+    /// Naturally asynchronous typed handler returning either the declared result or structured Process failure
+    /// evidence.
+    /// </param>
+    /// <returns>An immutable runtime registration suitable for an exact handler catalog.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="query"/> or <paramref name="handler"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="query"/> is not canonically valid.</exception>
+    public static HostedQueryHandlerRegistration CreateOutcome<TInput, TResult>(
+        HostedQuery<TInput, TResult> query,
+        HostedQueryOutcomeHandler<TInput, TResult> handler)
+        where TInput : notnull
+        where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(handler);
+        RequireValid(query);
+        return new TypedHostedQueryHandlerRegistration<TInput, TResult>(query, handler);
+    }
+
+    static void RequireValid<TInput, TResult>(HostedQuery<TInput, TResult> query)
+        where TInput : notnull
+        where TResult : notnull
+    {
         if (!query.IsValid)
         {
             throw new ArgumentException(
                 "A hosted-Query handler requires a canonically valid exact definition.",
                 nameof(query));
         }
-        return new TypedHostedQueryHandlerRegistration<TInput, TResult>(query, handler);
     }
+
+    static async ValueTask<HostedQueryHandlerOutcome<TResult>> AsOutcome<TResult>(ValueTask<TResult> pending)
+        where TResult : notnull =>
+        HostedQueryHandlerOutcome<TResult>.Completed(await pending.ConfigureAwait(false));
 
     internal abstract ValueTask<ProcessOperationResult> EvaluateAsync(
         OperationContext context,
@@ -117,11 +228,11 @@ public abstract class HostedQueryHandlerRegistration
         where TResult : notnull
     {
         static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
-        readonly HostedQueryHandler<TInput, TResult> handler;
+        readonly HostedQueryOutcomeHandler<TInput, TResult> handler;
 
         internal TypedHostedQueryHandlerRegistration(
             HostedQuery<TInput, TResult> query,
-            HostedQueryHandler<TInput, TResult> handler)
+            HostedQueryOutcomeHandler<TInput, TResult> handler)
             : base(query.Document, query.InputContract, query.ResultContract) =>
             this.handler = handler;
 
@@ -166,14 +277,18 @@ public abstract class HostedQueryHandlerRegistration
                     "/input/value");
             }
 
-            var result = await handler(context, evaluation, input).ConfigureAwait(false);
-            if (result is null)
+            var outcome = await handler(context, evaluation, input).ConfigureAwait(false);
+            if (outcome is null)
             {
                 return Failed(
                     HostedQueryHandlerDiagnosticCodes.ResultValueInvalid,
-                    "The typed hosted-Query handler returned null for a non-null singular result contract.",
+                    "The typed hosted-Query handler returned a null outcome.",
                     "/result");
             }
+            if (!outcome.IsSuccessful)
+                return ProcessOperationResult.Failed(outcome.Failure!);
+
+            var result = outcome.Value;
 
             PortableValue portable;
             try
