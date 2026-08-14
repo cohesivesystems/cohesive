@@ -69,9 +69,15 @@ public sealed class Relation<TInput, TResult>
     /// <summary>Exact relationship catalog captured when the canonical Relation terminal was committed.</summary>
     public RelationshipCatalogDocument RelationshipCatalog { get; }
 
-    /// <summary>Portable rooted input contract proven against <typeparamref name="TInput"/>.</summary>
+    /// <summary>
+    /// Portable structural CLR input contract proven against the graph-qualified Relation root and
+    /// <typeparamref name="TInput"/>.
+    /// </summary>
     public ValueContract InputContract { get; }
 
-    /// <summary>Portable singular output contract proven against <typeparamref name="TResult"/>.</summary>
+    /// <summary>
+    /// Portable structural CLR result contract proven against the graph-qualified Relation output and
+    /// <typeparamref name="TResult"/>.
+    /// </summary>
     public ValueContract ResultContract { get; }
 }

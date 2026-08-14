@@ -1,4 +1,6 @@
 using Cohesive.Execution;
+using Cohesive.Model;
+using Cohesive.Model.Authoring;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Serialization;
 
@@ -6,6 +8,8 @@ namespace Cohesive.Relations.Authoring;
 
 public sealed partial class RelationQueryExpressionAuthoring
 {
+    static readonly IClrTypeRefMapper CanonicalRelationTypeMapper = new DefaultClrTypeRefMapper();
+
     /// <summary>Projects one successfully authored exactly-one Relation into a typed canonical handle.</summary>
     /// <typeparam name="TInput">CLR type represented by the Relation root.</typeparam>
     /// <typeparam name="TOutputNode">Canonical logical-node type producing the Relation output.</typeparam>
@@ -100,7 +104,7 @@ public sealed partial class RelationQueryExpressionAuthoring
             authored.Validation,
             snapshot.ShapeDocuments,
             RelationshipCatalogDocument.FromCatalog(snapshot.RelationshipCatalog),
-            new(input.Binding.Type),
-            new(result.Binding.Type));
+            new(CanonicalRelationTypeMapper.Map(typeof(TInput), null)),
+            new(CanonicalRelationTypeMapper.Map(typeof(TResult), null)));
     }
 }
