@@ -470,7 +470,9 @@ interpretation of that same evidence boundary. `ProcessReferenceInterpreter.Acti
 unmaterialized occurrence, awaits it with an `OperationContext`, and re-enters the unchanged reducer with the
 retained result. Caller cancellation aborts physical execution without manufacturing a semantic decision. Typed
 hosted-Query handler catalogs remain runtime deployment projections and require the exact canonical definition
-identity, revision, and fingerprint.
+identity, revision, and fingerprint. Outcome-aware typed registrations preserve the declared CLR result on success
+and may return one structured error diagnostic when an admitted Query cannot semantically produce that result;
+thrown exceptions remain physical failures rather than Process evidence.
 
 Presented inputs are grouped by logical emission identity before state mutation, so conflicting same-batch evidence
 cannot acquire caller-order authority. Every admission receipt and `InputAdmitted` trace separates the closed

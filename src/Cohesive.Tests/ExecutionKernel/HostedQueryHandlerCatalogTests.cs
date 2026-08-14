@@ -47,6 +47,94 @@ public sealed class HostedQueryHandlerCatalogTests
     }
 
     [Fact]
+    public async Task OutcomeHandler_ReturnsStructuredSemanticFailureWithoutThrowing()
+    {
+        var query = Query();
+        var failure = new DocumentValidationDiagnostic(
+            "tests.hostedQuery.source.missing",
+            DiagnosticSeverity.Error,
+            "The admitted source no longer exists.",
+            "/source");
+        var outcome = HostedQueryHandlerOutcome<QueryResult>.Failed(failure);
+        var catalog = new HostedQueryHandlerCatalog([
+            HostedQueryHandlerRegistration.CreateOutcome(
+                query,
+                (context, evaluation, input) => ValueTask.FromResult(outcome))
+        ]);
+
+        var result = await catalog.EvaluateAsync(
+            OperationContext.Create(),
+            Evaluation(query, new QueryInput("source/42")));
+
+        Assert.False(result.IsSuccessful);
+        Assert.Equal(failure, result.Failure);
+        Assert.Null(result.Value);
+        Assert.Empty(result.Emissions);
+        Assert.Throws<InvalidOperationException>(() => outcome.Value);
+    }
+
+    [Fact]
+    public async Task OutcomeHandler_SuccessUsesTheSameCanonicalResultValidation()
+    {
+        var query = Query();
+        var catalog = new HostedQueryHandlerCatalog([
+            HostedQueryHandlerRegistration.CreateOutcome(
+                query,
+                (context, evaluation, input) => ValueTask.FromResult(
+                    HostedQueryHandlerOutcome<QueryResult>.Completed(
+                        new(input.Id, "resolved"))))
+        ]);
+
+        var result = await catalog.EvaluateAsync(
+            OperationContext.Create(),
+            Evaluation(query, new QueryInput("source/42")));
+
+        Assert.True(result.IsSuccessful);
+        Assert.Equal(query.ResultContract, result.Value!.Contract);
+        Assert.Equal(
+            ObservationValue.FromObject(new QueryResult("source/42", "resolved")),
+            result.Value.Value);
+    }
+
+    [Fact]
+    public void Outcome_RejectsNullSuccessAndNonErrorFailure()
+    {
+        Assert.Throws<ArgumentNullException>(() =>
+            HostedQueryHandlerOutcome<QueryResult>.Completed(null!));
+        Assert.Throws<ArgumentException>(() =>
+            HostedQueryHandlerOutcome<QueryResult>.Failed(new(
+                "tests.hostedQuery.warning",
+                DiagnosticSeverity.Warning,
+                "Warnings cannot replace a declared result.")));
+    }
+
+    [Fact]
+    public async Task OutcomeHandler_ObservesCallerCancellationWithoutManufacturingFailure()
+    {
+        var query = Query();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var catalog = new HostedQueryHandlerCatalog([
+            HostedQueryHandlerRegistration.CreateOutcome(
+                query,
+                async (context, evaluation, input) =>
+                {
+                    entered.SetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken);
+                    return HostedQueryHandlerOutcome<QueryResult>.Completed(new(input.Id, "unreachable"));
+                })
+        ]);
+        using var cancellation = new CancellationTokenSource();
+        var pending = catalog.EvaluateAsync(
+            OperationContext.Create(cancellationToken: cancellation.Token),
+            Evaluation(query, new QueryInput("source/42"))).AsTask();
+        await entered.Task;
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+    }
+
+    [Fact]
     public async Task ChangedDefinitionFingerprint_CannotReachRegisteredHandler()
     {
         var deployed = Query(policy: "exact");

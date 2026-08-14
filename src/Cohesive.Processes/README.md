@@ -235,10 +235,18 @@ Hosted Queries bind their runtime handlers separately from their canonical docum
 
 ```csharp
 var handlers = new HostedQueryHandlerCatalog([
-    HostedQueryHandlerRegistration.Create(
+    HostedQueryHandlerRegistration.CreateOutcome(
         EventSourceQueries.SchemaMapping,
         async (context, evaluation, start) =>
-            await repository.ReadPinnedAsync(start, context.CancellationToken))
+        {
+            var source = await repository.ReadPinnedAsync(start, context.CancellationToken);
+            return source is null
+                ? HostedQueryHandlerOutcome<PinnedSource>.Failed(new(
+                    "source.missing",
+                    DiagnosticSeverity.Error,
+                    "The admitted source no longer exists."))
+                : HostedQueryHandlerOutcome<PinnedSource>.Completed(source);
+        })
 ]);
 ```
 
@@ -246,8 +254,10 @@ The immutable catalog dispatches only by complete definition identity, revision,
 portable input and output contracts, and passes the complete `ProcessRelationEvaluation` to the handler unchanged.
 A change to contracts, implementation version, dependencies, or portable configuration changes the document
 fingerprint and cannot silently reach the old handler. Handler delegates, repositories, credentials, and deployment
-state never enter canonical content. `SynchronousProcessReferenceHostAdapter` is the explicit bounded compatibility
-path; it checks cancellation before invocation but cannot interrupt a synchronous call already in progress.
+state never enter canonical content. `CreateOutcome` preserves a statically typed success while allowing an expected
+inability to produce that value to become structured Process failure evidence. Thrown exceptions remain physical
+execution failures. `SynchronousProcessReferenceHostAdapter` is the explicit bounded compatibility path; it checks
+cancellation before invocation but cannot interrupt a synchronous call already in progress.
 
 `IProcessExecutionTraceRepository` is the opt-in runtime boundary for reading retained payload-safe traces without
 adding them to ordinary execution status or listing records. Its result distinguishes not found, in-progress,
