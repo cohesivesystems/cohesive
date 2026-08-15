@@ -21,6 +21,55 @@ dotnet add package Cohesive.Adapters.Cosmos
 - You need an exact supported slice of canonical relation/query IR compiled to parameterized Cosmos SQL.
 - You want a safe standalone builder for hand-crafted Cosmos SQL without constructing canonical relation/query IR.
 - You want Cosmos-backed vector storage or process outbox persistence.
+- You need a durable target-deduplicating inbox for canonical domain-event publication.
+
+## Canonical Domain-Event Inbox
+
+`CosmosDomainEventInbox` is both an `IDomainEventPublisher` and an addressable `IDomainEventInbox`. It retains the
+canonical event envelope unchanged and uses the complete `DomainEventPublicationDeduplicationKey` as publication
+identity. The Cosmos container must use `/partitionKey`; one SHA-256 partition projection isolates each exact
+authority/tenant scope, while a second exact-key projection identifies the item within that boundary. The original
+authority, tenant, contract identity/revision/fingerprint, and idempotency key remain explicit document fields.
+
+```csharp
+var inbox = new CosmosDomainEventInbox(
+    container,
+    interactionContracts,
+    [OrderApproved.Contract.Reference]);
+
+await inbox.ValidateAsync(operationContext);
+
+DomainEventPublicationAcknowledgement acknowledgement = await inbox.PublishAsync(
+    operationContext,
+    DomainEventPublicationInvocation.From(domainEvent));
+
+DomainEventInboxEntry? retained = await inbox.TryReadAsync(
+    operationContext,
+    DomainEventPublicationDeduplicationKey.From(domainEvent));
+```
+
+The first create establishes the acceptance time and stable receipt. Repeating the exact invocation—including
+after publisher restart—returns that original receipt. Reusing the same scoped key for different canonical
+envelope content fails with `cosmos.domainEventInbox.identity.conflict`; the adapter never overwrites the retained
+entry. Configured capability references must resolve as exact domain-event contracts in the supplied canonical
+interaction catalog before any I/O.
+
+`ValidateAsync` point-reads the container metadata and rejects an unavailable container, a partition path other
+than `/partitionKey`, or a positive default TTL that would erase deduplication evidence. Complete this admission
+check before starting publishers or Process workers. A null TTL or `-1` is compatible because inbox documents do
+not set an item TTL.
+
+The inbox is a durable handoff and downstream-routing source, not another domain-event definition authority.
+Retention, downstream settlement/checkpoint policy, and transport projection remain application deployment policy.
+
+The opt-in emulator test creates and removes an isolated database and proves first publication, exact replay across
+publisher restart, point read, conflicting-content rejection, and container admission:
+
+```bash
+COSMOS_DOMAIN_EVENT_INBOX_CONNECTION_STRING='AccountEndpoint=https://localhost:8081/;AccountKey=...;' \
+  dotnet test src/Cohesive.Tests/Cohesive.Tests.csproj \
+  --filter FullyQualifiedName~Cosmos_TargetPersistsExactReplayAcrossPublisherRestartAndRejectsIdentityConflict
+```
 
 ## Standalone Cosmos SQL Construction
 
