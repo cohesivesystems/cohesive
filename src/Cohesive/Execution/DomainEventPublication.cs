@@ -128,6 +128,69 @@ public sealed record DomainEventPublicationAcknowledgement
     public PortableValue? Evidence { get; }
 }
 
+/// <summary>One canonical domain event durably admitted by a target-deduplicating inbox.</summary>
+public sealed record DomainEventInboxEntry
+{
+    /// <summary>Creates immutable retained inbox evidence.</summary>
+    /// <param name="deduplicationKey">Complete scoped target-deduplication identity.</param>
+    /// <param name="domainEvent">Canonical retained event envelope.</param>
+    /// <param name="contentFingerprint">Fingerprint of the complete canonical envelope bytes.</param>
+    /// <param name="acceptedAtUtc">UTC time at which the target first admitted the entry.</param>
+    /// <param name="acknowledgement">Stable materialized target receipt returned on first write and replay.</param>
+    /// <exception cref="ArgumentNullException">A reference argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The key does not belong to the envelope, the fingerprint does not match, or the accepted time is not UTC.
+    /// </exception>
+    [JsonConstructor]
+    public DomainEventInboxEntry(
+        DomainEventPublicationDeduplicationKey deduplicationKey,
+        DomainEventEnvelope domainEvent,
+        InteractionEnvelopeContentFingerprint contentFingerprint,
+        DateTimeOffset acceptedAtUtc,
+        DomainEventPublicationAcknowledgement acknowledgement)
+    {
+        DeduplicationKey = Guard.RequireNotNull(deduplicationKey);
+        DomainEvent = Guard.RequireNotNull(domainEvent);
+        ContentFingerprint = contentFingerprint;
+        Acknowledgement = Guard.RequireNotNull(acknowledgement);
+        if (deduplicationKey != DomainEventPublicationDeduplicationKey.From(domainEvent))
+        {
+            throw new ArgumentException(
+                "A domain-event inbox key must belong to its retained canonical envelope.",
+                nameof(deduplicationKey));
+        }
+        if (contentFingerprint != InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(domainEvent))
+        {
+            throw new ArgumentException(
+                "A domain-event inbox fingerprint must match its retained canonical envelope.",
+                nameof(contentFingerprint));
+        }
+        if (acceptedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException(
+                "A domain-event inbox acceptance time must use the UTC offset.",
+                nameof(acceptedAtUtc));
+        }
+
+        AcceptedAtUtc = acceptedAtUtc;
+    }
+
+    /// <summary>Complete scoped target-deduplication identity.</summary>
+    public DomainEventPublicationDeduplicationKey DeduplicationKey { get; }
+
+    /// <summary>Canonical retained event envelope.</summary>
+    public DomainEventEnvelope DomainEvent { get; }
+
+    /// <summary>Fingerprint of the complete canonical envelope bytes.</summary>
+    public InteractionEnvelopeContentFingerprint ContentFingerprint { get; }
+
+    /// <summary>UTC time at which the target first admitted the entry.</summary>
+    public DateTimeOffset AcceptedAtUtc { get; }
+
+    /// <summary>Stable materialized target receipt returned on first write and replay.</summary>
+    public DomainEventPublicationAcknowledgement Acknowledgement { get; }
+}
+
 /// <summary>Exact domain-event contracts one publisher durably deduplicates by canonical publication key.</summary>
 public sealed record DomainEventPublisherCapabilities
 {
@@ -220,6 +283,35 @@ public interface IDomainEventPublisher
         DomainEventPublicationInvocation invocation);
 }
 
+/// <summary>Durable target-deduplicating publisher whose retained canonical entries are addressable by exact key.</summary>
+/// <remarks>
+/// The inbox is a publication target and durable handoff boundary, not a competing domain-event authority. It must
+/// retain the supplied canonical envelope unchanged. Repeating an exact invocation returns the original stable
+/// acknowledgement; reusing the same key for different canonical content fails closed.
+/// </remarks>
+public interface IDomainEventInbox : IDomainEventPublisher
+{
+    /// <summary>Validates that the physical target is available and preserves the declared durable semantics.</summary>
+    /// <param name="context">Explicit cancellation, time, identity, and tracing context.</param>
+    /// <returns>A task that completes only when the target is ready and semantically compatible.</returns>
+    /// <exception cref="OperationCanceledException"><paramref name="context"/> requests cancellation.</exception>
+    /// <remarks>
+    /// Applications should complete this admission check before starting a worker that can publish to the inbox.
+    /// Implementations throw a provider or configuration exception when availability, identity, or retention cannot
+    /// preserve <see cref="IDomainEventPublisher.Capabilities"/>.
+    /// </remarks>
+    ValueTask ValidateAsync(OperationContext context);
+
+    /// <summary>Point-reads one retained canonical event by its complete scoped publication key.</summary>
+    /// <param name="context">Explicit cancellation, time, identity, and tracing context.</param>
+    /// <param name="deduplicationKey">Complete target-deduplication identity.</param>
+    /// <returns>The retained entry, or <see langword="null"/> when the exact key is absent.</returns>
+    /// <exception cref="OperationCanceledException"><paramref name="context"/> requests cancellation.</exception>
+    ValueTask<DomainEventInboxEntry?> TryReadAsync(
+        OperationContext context,
+        DomainEventPublicationDeduplicationKey deduplicationKey);
+}
+
 /// <summary>Resolves one publisher for an exact canonical domain-event contract.</summary>
 /// <remarks>
 /// Resolution is deployment policy. A replaying runtime must resolve the same effective publisher capabilities for
@@ -233,6 +325,60 @@ public interface IDomainEventPublisherResolver
     /// <returns><see langword="true"/> when exactly one publisher is available.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="contract"/> is <see langword="null"/>.</exception>
     bool TryResolve(DomainEventContractReference contract, out IDomainEventPublisher? publisher);
+}
+
+/// <summary>Immutable exact-contract resolver derived from publisher capability declarations.</summary>
+/// <remarks>
+/// Publisher capabilities are the sole registration authority. The catalog rejects overlapping declarations so
+/// resolution remains deterministic without a parallel application-maintained contract-to-publisher map.
+/// </remarks>
+public sealed class DomainEventPublisherCatalog : IDomainEventPublisherResolver
+{
+    readonly ImmutableDictionary<DomainEventContractReference, IDomainEventPublisher> publishers;
+
+    /// <summary>Builds one exact resolver from publisher capability declarations.</summary>
+    /// <param name="publishers">Publishers whose exact supported contracts form the catalog.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="publishers"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// A publisher or its capabilities are null, or multiple publishers declare the same exact contract.
+    /// </exception>
+    public DomainEventPublisherCatalog(IEnumerable<IDomainEventPublisher> publishers)
+    {
+        ArgumentNullException.ThrowIfNull(publishers);
+        var catalog = ImmutableDictionary.CreateBuilder<DomainEventContractReference, IDomainEventPublisher>();
+        foreach (var publisher in publishers)
+        {
+            if (publisher is null)
+                throw new ArgumentException("A domain-event publisher catalog cannot contain null entries.", nameof(publishers));
+            if (publisher.Capabilities is null)
+                throw new ArgumentException("A domain-event publisher catalog requires explicit capabilities.", nameof(publishers));
+
+            foreach (var contract in publisher.Capabilities.TargetDeduplicatedContracts)
+            {
+                if (!catalog.TryAdd(contract, publisher))
+                {
+                    throw new ArgumentException(
+                        $"Exact domain-event contract '{Describe(contract)}' is declared by multiple publishers.",
+                        nameof(publishers));
+                }
+            }
+        }
+
+        this.publishers = catalog.ToImmutable();
+    }
+
+    /// <summary>Number of exact contract registrations derived from publisher capabilities.</summary>
+    public int Count => publishers.Count;
+
+    /// <inheritdoc />
+    public bool TryResolve(DomainEventContractReference contract, out IDomainEventPublisher? publisher)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        return publishers.TryGetValue(contract, out publisher);
+    }
+
+    static string Describe(DomainEventContractReference contract) =>
+        $"{contract.Definition.DefinitionId.Value}@{contract.Definition.RevisionId.Value}#{contract.Definition.Fingerprint.Value}";
 }
 
 /// <summary>Publisher resolver that deliberately supports no domain-event contract.</summary>
