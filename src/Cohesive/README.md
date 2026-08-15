@@ -84,6 +84,12 @@ explicit idempotency evidence, one exact Reply contract for every terminal outco
 targets required for reconciliation or escalation. The binding does not repeat the authored response obligation
 and contains no handler, repository, transaction, clock, or provider object.
 
+`ProcessInvocationProtocol<TInput, TResult>.BindDurably` derives the child Request and all four terminal Reply
+mappings from the canonical invocation protocol, leaving only physical attempt, lease, timeout, idempotency, and
+recovery policy explicit. `DurableRequestBindingCatalog` is the immutable exact-reference deployment projection:
+it rejects duplicate bindings and conflicting fingerprints while preserving the individual binding as semantic
+authority.
+
 `DurableOperationState` is portable semantic state for one logical Request. It retains monotonically fenced
 claims, ordered immutable attempt snapshots with append-only attempt allocation, fenced reconciliation evidence,
 explicit pre-call, in-call, post-call/pre-commit, and post-commit/pre-acknowledgement failure evidence, the single

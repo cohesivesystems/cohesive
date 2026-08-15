@@ -186,6 +186,52 @@ public sealed class ProcessInvocationProtocol<TInput, TResult>
 
     /// <summary>Validated exact-reference catalog containing every generated interaction document.</summary>
     public InteractionContractCatalog Catalog { get; }
+
+    /// <summary>Derives a durable execution binding from this exact child-Process invocation protocol.</summary>
+    /// <remarks>
+    /// The Request, terminal outcome identities, and Reply contracts are projected from this protocol. Only
+    /// physical execution and recovery policy remains explicit at the call site.
+    /// </remarks>
+    /// <param name="maxAttempts">Maximum physical execution attempts, including the first attempt.</param>
+    /// <param name="claimLease">Positive ownership-lease duration for each physical attempt.</param>
+    /// <param name="idempotencyEvidence">Evidence supporting repeated physical execution.</param>
+    /// <param name="timeoutAfter">Optional positive semantic timeout measured from operation creation.</param>
+    /// <param name="terminalFailureOutcome">Exact typed failure used by terminal-failure resolution policy.</param>
+    /// <param name="reconciliationTarget">Exact semantic path required by reconciliation policy.</param>
+    /// <param name="escalationTarget">Exact semantic path required by escalation policy.</param>
+    /// <returns>
+    /// A normalized durable binding whose Request and four terminal Reply mappings are derived from this protocol.
+    /// </returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="maxAttempts"/> or <paramref name="claimLease"/> is not positive;
+    /// <paramref name="timeoutAfter"/> is present but not positive; or <paramref name="idempotencyEvidence"/> is
+    /// unspecified or unsupported.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="terminalFailureOutcome"/> is present but default.
+    /// </exception>
+    public DurableRequestBinding BindDurably(
+        int maxAttempts,
+        TimeSpan claimLease,
+        DurableOperationIdempotencyEvidence idempotencyEvidence,
+        TimeSpan? timeoutAfter = null,
+        RequestTerminalOutcomeId? terminalFailureOutcome = null,
+        DurableOperationResolutionTarget? reconciliationTarget = null,
+        DurableOperationResolutionTarget? escalationTarget = null) => new(
+        Request,
+        [
+            new(OutcomeMapping.Completed, CompletedReply),
+            new(OutcomeMapping.Failed, FailedReply),
+            new(OutcomeMapping.Cancelled, CancelledReply),
+            new(OutcomeMapping.Terminated, TerminatedReply)
+        ],
+        maxAttempts,
+        claimLease,
+        timeoutAfter,
+        idempotencyEvidence,
+        terminalFailureOutcome,
+        reconciliationTarget,
+        escalationTarget);
 }
 
 /// <summary>Authors canonical child-Process invocation protocols from typed Process handles.</summary>
