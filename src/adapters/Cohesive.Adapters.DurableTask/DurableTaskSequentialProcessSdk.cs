@@ -111,7 +111,9 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
         }
 
         var converter = DurableTaskProcessDataConverter.Create();
+        var orchestratorActivation = new DurableTaskSequentialProcessOrchestratorActivation();
         builder.Services.AddSingleton(catalogFactory);
+        builder.Services.AddSingleton(orchestratorActivation);
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService,
             DurableTaskSequentialProcessPlanCatalogAdmissionHostedService>());
         builder.Services.TryAddSingleton(converter);
@@ -122,7 +124,12 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
         builder.Configure(options => options.DataConverter = converter);
         return builder.AddTasks(tasks =>
         {
-            tasks.AddOrchestrator<DurableTaskSequentialProcessOrchestrator>();
+            // Standalone Durable Task resolves activities through the service provider, but type-based orchestrator
+            // activation uses Activator.CreateInstance and therefore cannot perform constructor injection. The SDK
+            // factory closes over this worker registration's admitted catalog without introducing ambient state.
+            tasks.AddOrchestrator(
+                DurableTaskSequentialProcessNames.Orchestration,
+                orchestratorActivation.Create);
             tasks.AddActivity<DurableTaskProcessHostOperationActivity>();
             tasks.AddActivity<DurableTaskProcessSignalTargetActivity>();
             tasks.AddActivity<DurableTaskDomainEventPublicationActivity>();
@@ -133,18 +140,43 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
 }
 
 sealed class DurableTaskSequentialProcessPlanCatalogAdmissionHostedService(
-    DurableTaskSequentialProcessPlanCatalog catalog) : IHostedService
+    DurableTaskSequentialProcessPlanCatalog catalog,
+    DurableTaskSequentialProcessOrchestratorActivation orchestratorActivation) : IHostedService
 {
     readonly DurableTaskSequentialProcessPlanCatalog catalog =
         catalog ?? throw new ArgumentNullException(nameof(catalog));
+    readonly DurableTaskSequentialProcessOrchestratorActivation orchestratorActivation =
+        orchestratorActivation ?? throw new ArgumentNullException(nameof(orchestratorActivation));
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _ = catalog.Count;
+        orchestratorActivation.Admit(catalog);
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+sealed class DurableTaskSequentialProcessOrchestratorActivation
+{
+    DurableTaskSequentialProcessPlanCatalog? admittedCatalog;
+
+    public void Admit(DurableTaskSequentialProcessPlanCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        var existing = Interlocked.CompareExchange(ref admittedCatalog, catalog, null);
+        if (existing is not null && !ReferenceEquals(existing, catalog))
+        {
+            throw new InvalidOperationException(
+                "The Durable Task Process worker cannot replace its admitted exact plan catalog.");
+        }
+    }
+
+    public ITaskOrchestrator Create() => new DurableTaskSequentialProcessOrchestrator(
+        Volatile.Read(ref admittedCatalog)
+        ?? throw new InvalidOperationException(
+            "The Durable Task Process worker attempted orchestrator activation before exact plan catalog admission."));
 }
 
 /// <summary>Generic standalone Durable Task orchestration over one exact canonical Process plan.</summary>
