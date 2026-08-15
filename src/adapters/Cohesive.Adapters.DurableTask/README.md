@@ -226,7 +226,7 @@ services.AddDurableTaskClient(client => client.UseDurableTaskScheduler(connectio
 
 When the exact deployment catalog depends on application services, compose it as a singleton through the worker
 registration factory. Catalog construction and admission run while the host constructs its hosted services, before
-the worker starts processing, and the same immutable instance is injected into the orchestrator and activities:
+the worker starts processing, and the same immutable instance reaches the orchestrator and activities:
 
 ```csharp
 services.AddDurableTaskWorker(worker =>
@@ -241,6 +241,10 @@ services.AddDurableTaskWorker(worker =>
 
 One worker registration has exactly one catalog composition authority. Registering a separate catalog and also
 supplying a factory is rejected instead of allowing the orchestrator and activities to observe different catalogs.
+Standalone Durable Task does not resolve orchestrator constructors through application dependency injection, so the
+adapter registers an SDK orchestrator factory closed over a host-scoped activation slot. The catalog admission hosted
+service fills that slot before the worker starts; activation before admission or replacement after admission fails
+closed. The slot is scoped to one service collection and is not ambient or process-global state.
 
 `IAsyncProcessReferenceHost` is the physical worker port for Transition, Relation/Query, and Signal-target
 activities. Naturally asynchronous implementations must implement it directly. A bounded legacy synchronous host

@@ -15,6 +15,7 @@ using Microsoft.DurableTask.Worker;
 using Microsoft.DurableTask.Worker.AzureManaged;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using CanonicalProcessDefinition = Cohesive.Processes.IR.ProcessDefinition;
 
 namespace Cohesive.Tests.ExecutionKernel;
@@ -2226,13 +2227,25 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         });
 
         await using var provider = services.BuildServiceProvider();
-        _ = provider.GetServices<IHostedService>().ToArray();
+        var registry = provider.GetRequiredService<IOptions<DurableTaskRegistry>>().Value;
+        var orchestratorRegistration = Assert.Single(registry.GetOrchestrators(), static registration =>
+            registration.Key == DurableTaskSequentialProcessNames.Orchestration);
+        var earlyActivation = Assert.Throws<InvalidOperationException>(() =>
+            orchestratorRegistration.Value(provider));
+
+        Assert.Contains("before exact plan catalog admission", earlyActivation.Message, StringComparison.Ordinal);
+
+        var hostedServices = provider.GetServices<IHostedService>().ToArray();
+        var admission = Assert.Single(hostedServices, static service =>
+            service.GetType().Name == "DurableTaskSequentialProcessPlanCatalogAdmissionHostedService");
+        await admission.StartAsync(CancellationToken.None);
         var first = provider.GetRequiredService<DurableTaskSequentialProcessPlanCatalog>();
         var second = provider.GetRequiredService<DurableTaskSequentialProcessPlanCatalog>();
 
         Assert.Same(expected, first);
         Assert.Same(first, second);
         Assert.Equal(1, factoryInvocations);
+        Assert.IsType<DurableTaskSequentialProcessOrchestrator>(orchestratorRegistration.Value(provider));
     }
 
     [Fact]
