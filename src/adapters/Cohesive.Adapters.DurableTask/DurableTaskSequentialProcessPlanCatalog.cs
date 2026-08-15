@@ -1,8 +1,19 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
+using Cohesive.Model.Serialization;
 using Cohesive.Processes.IR;
 
 namespace Cohesive.Adapters.DurableTask;
+
+/// <summary>Stable diagnostics emitted while admitting Process plans to a Durable Task worker.</summary>
+public static class DurableTaskProcessPlanAdmissionDiagnosticCodes
+{
+    /// <summary>An executable child Process node has no exact concrete durable Request binding.</summary>
+    public const string ChildRequestBindingMissing = "processes.durableTask.admission.childRequestBinding.missing";
+
+    /// <summary>An executable child Process node has a binding incompatible with its exact interaction catalog.</summary>
+    public const string ChildRequestBindingInvalid = "processes.durableTask.admission.childRequestBinding.invalid";
+}
 
 /// <summary>Immutable exact-reference catalog of precompiled Process plans admitted for bounded execution.</summary>
 /// <remarks>
@@ -17,9 +28,9 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
 
     /// <summary>Creates an immutable catalog from executable-qualified canonical Processes.</summary>
     /// <param name="plans">Exact Durable Task realization plans deployed to this worker.</param>
-    /// <param name="bindingResolver">
-    /// Deterministic exact Request binding resolver used during orchestration replay. The default leaves Requests
-    /// as external interactions instead of automatically dispatching them.
+    /// <param name="requestBindings">
+    /// Concrete durable Request bindings deployed to this worker. Bindings remain optional for ordinary external
+    /// Requests, but every child Process Request in <paramref name="plans"/> requires one exact compatible binding.
     /// </param>
     /// <param name="domainEventPublisherResolver">
     /// Deterministic exact domain-event publisher resolver. Plans that directly emit an event require a publisher
@@ -28,14 +39,16 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
     /// <exception cref="ArgumentNullException"><paramref name="plans"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// An entry is null, repeats an exact reference, has a conflicting fingerprint, or was not compiled against the
-    /// exact executable profile; or a directly emitted event lacks an exact target-deduplicating publisher.
+    /// exact executable profile; a child Process Request lacks one exact compatible binding; or a directly emitted
+    /// event lacks an exact target-deduplicating publisher.
     /// </exception>
     public DurableTaskSequentialProcessPlanCatalog(
         IEnumerable<DurableTaskProcessRealizationPlan> plans,
-        IDurableRequestBindingResolver? bindingResolver = null,
+        IEnumerable<DurableRequestBinding>? requestBindings = null,
         IDomainEventPublisherResolver? domainEventPublisherResolver = null)
     {
         ArgumentNullException.ThrowIfNull(plans);
+        var bindingCatalog = new DurableRequestBindingCatalog(requestBindings ?? []);
         this.domainEventPublisherResolver = domainEventPublisherResolver
             ?? EmptyDomainEventPublisherResolver.Instance;
         var builder = ImmutableDictionary.CreateBuilder<ExecutionDefinitionReference, DurableTaskProcessRealizationPlan>();
@@ -57,6 +70,7 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
                     + $"{nameof(DurableTaskProcessRealizationCompiler)}.{nameof(DurableTaskProcessRealizationCompiler.CompileExecutable)}.",
                     nameof(plans));
             }
+            RequireChildProcessBindings(plan, bindingCatalog, nameof(requestBindings));
             foreach (var domainEvent in plan.CanonicalPlan.Definition.Nodes.OfType<EmitEventProcessNode>())
             {
                 _ = ResolveDomainEventPublisher(domainEvent.Contract, nameof(plans));
@@ -81,13 +95,69 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
         }
 
         this.plans = builder.ToImmutable();
-        BindingResolver = bindingResolver ?? EmptyDurableRequestBindingResolver.Instance;
+        BindingResolver = bindingCatalog;
     }
 
     /// <summary>Number of exact Process plans deployed to the worker.</summary>
     public int Count => plans.Count;
 
     internal IDurableRequestBindingResolver BindingResolver { get; }
+
+    static void RequireChildProcessBindings(
+        DurableTaskProcessRealizationPlan plan,
+        DurableRequestBindingCatalog bindings,
+        string parameterName)
+    {
+        var contracts = plan.CanonicalPlan.ValidationContext.InteractionContracts;
+        DurableOperationReferenceExecutor? validator = contracts is null
+            ? null
+            : new(contracts);
+        foreach (var node in plan.CanonicalPlan.Definition.Nodes)
+        {
+            var request = node switch
+            {
+                InvokeProcessProcessNode invoke => invoke.Contract,
+                ForEachPartitionProcessNode partition => partition.Contract,
+                _ => null
+            };
+            if (request is null)
+            {
+                continue;
+            }
+
+            var source = $"Process '{Describe(plan.Definition)}' node '{node.Id.Value}'";
+            if (!bindings.TryResolve(request, out var binding) || binding is null)
+            {
+                throw new ArgumentException(
+                    $"{DurableTaskProcessPlanAdmissionDiagnosticCodes.ChildRequestBindingMissing}: {source} "
+                    + $"invokes a child through exact Request '{Describe(request)}', but no concrete durable "
+                    + "binding was deployed. Register the binding derived from the child invocation protocol.",
+                    parameterName);
+            }
+            if (validator is null)
+            {
+                throw new ArgumentException(
+                    $"{DurableTaskProcessPlanAdmissionDiagnosticCodes.ChildRequestBindingInvalid}: {source} "
+                    + "cannot validate its child Request binding because the compiled interaction catalog is absent.",
+                    parameterName);
+            }
+
+            var validation = validator.ValidateBinding(binding);
+            if (!validation.IsValid)
+            {
+                throw new ArgumentException(
+                    $"{DurableTaskProcessPlanAdmissionDiagnosticCodes.ChildRequestBindingInvalid}: {source} "
+                    + $"has an incompatible binding for exact Request '{Describe(request)}': "
+                    + Format(validation),
+                    parameterName);
+            }
+        }
+
+        static string Format(DocumentValidationResult validation) => string.Join(
+            "; ",
+            validation.Diagnostics.Select(static diagnostic =>
+                $"{diagnostic.Code} at {diagnostic.Location}: {diagnostic.Message}"));
+    }
 
     internal IDomainEventPublisher ResolveDomainEventPublisher(
         DomainEventContractReference contract,
@@ -149,4 +219,9 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
                 + $"'{definition.DefinitionId.Value}' revision '{definition.RevisionId.Value}' fingerprint "
                 + $"'{definition.Fingerprint.Value}'.");
     }
+
+    static string Describe(ExecutionDefinitionReference definition) =>
+        $"{definition.DefinitionId.Value}@{definition.RevisionId.Value}#{definition.Fingerprint.Value}";
+
+    static string Describe(RequestContractReference request) => Describe(request.Definition);
 }

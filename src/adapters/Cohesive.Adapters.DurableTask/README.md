@@ -190,8 +190,9 @@ cannot imply support.
 
 Qualify every deployed definition against the executable profile, retain its exact physical plan, and register one
 canonical host for bounded I/O. Unsupported requirements produce source-attributed realization diagnostics before a
-plan can enter the catalog. To dispatch Requests automatically, also supply deterministic exact binding and adapter
-resolvers:
+plan can enter the catalog. To dispatch Requests automatically, also supply exact concrete bindings and an adapter
+resolver. Child invocation protocols derive their Request and terminal Reply mappings; deployment code declares
+only physical attempt, lease, idempotency, timeout, and recovery policy:
 
 ```csharp
 DurableTaskProcessPlanningResult executable =
@@ -202,9 +203,14 @@ if (!executable.IsSuccessful)
 }
 
 DurableTaskProcessRealizationPlan physicalPlan = executable.Plan!;
+DurableRequestBinding childBinding = childInvocationProtocol.BindDurably(
+    maxAttempts: 3,
+    claimLease: TimeSpan.FromMinutes(2),
+    DurableOperationIdempotencyEvidence.TargetDeduplication,
+    reconciliationTarget: childReconciliationTarget);
 var catalog = new DurableTaskSequentialProcessPlanCatalog(
     [physicalPlan],
-    new ApplicationDurableRequestBindingResolver(),
+    [childBinding],
     new ApplicationDomainEventPublisherResolver());
 
 services.AddSingleton<IAsyncProcessReferenceHost, ApplicationProcessHost>();
@@ -247,10 +253,12 @@ fingerprint, UTC acknowledgement time, and optional bounded target receipt. That
 Continue-as-new. This profile does not claim physical exactly-once delivery, atomic-with-origin publication, an
 adapter-owned retry policy, or ordering beyond the canonical envelope requirements that the publisher must honor.
 
-Register application resolvers before `AddCohesiveSequentialProcesses`; the worker method installs empty,
-fail-closed defaults only when the application has not supplied them. `IDurableRequestBindingResolver`,
-`IDurableOperationAdapterResolver`, and `IDurableOperationExceptionClassifier` are shared execution ports used by
-both native Storage and Durable Task interpretations, rather than target-specific copies.
+Register application operation resolvers before `AddCohesiveSequentialProcesses`; the worker method installs
+empty, fail-closed defaults only when the application has not supplied them. The immutable
+`DurableRequestBindingCatalog` is built directly from the worker catalog's bindings and is reused during replay.
+`IDurableRequestBindingResolver`, `IDurableOperationAdapterResolver`, and
+`IDurableOperationExceptionClassifier` remain shared execution ports used by both native Storage and Durable Task
+interpretations, rather than target-specific copies.
 
 The worker catalog is a deployment projection, not a mutable definition registry. It admits only plans carrying the
 exact executable profile identity; planning evidence cannot authorize execution. Each lookup requires the full
@@ -328,10 +336,12 @@ and never becomes `CancelProcessCommand` or semantic cancellation evidence. The 
 Task activity context exposes no per-activity cancellation token, and terminating an orchestration does not recall an
 already-running activity, so host implementations must also honor their exact-operation idempotency boundary.
 
-A Request without an exact binding still emits canonical evidence and waits for a canonical
+A non-child Request without an exact binding still emits canonical evidence and waits for a canonical
 `ProcessActivationInput` external event; use `RaiseCohesiveProcessInteractionAsync` for that deliberately external
-boundary. A bound Request creates the canonical `DurableOperationState`, crosses explicit before/after dispatch and
-acknowledgement/admission history cuts, and dispatches through an activity. The canonical
+boundary. `InvokeProcess` and `ForEachPartition` are different: worker catalog admission inventories their exact
+Request contracts and rejects a missing, duplicate, fingerprint-drifted, or interaction-incompatible concrete
+binding before orchestration starts. A bound Request creates the canonical `DurableOperationState`, crosses explicit
+before/after dispatch and acknowledgement/admission history cuts, and dispatches through an activity. The canonical
 `DurableOperationReferenceExecutor` alone decides claims, bounded retries, ambiguity, reconciliation,
 acknowledgement, and Reply admission. Activity and orchestration replay retain the Request emission, scoped target
 deduplication key, attempt IDs, fences, and Reply IDs.

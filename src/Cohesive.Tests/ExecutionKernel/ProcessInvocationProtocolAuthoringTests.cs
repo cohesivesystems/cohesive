@@ -94,6 +94,45 @@ public sealed class ProcessInvocationProtocolAuthoringTests
     }
 
     [Fact]
+    public void TypedProtocol_DerivesExactDurableReplyMappingsWhileKeepingPhysicalPolicyExplicit()
+    {
+        var protocol = ChildProcess().InvocationProtocol(
+            RequestId,
+            RevisionId,
+            ProcessInvocationResponsePolicy.ReconciledJoin(TimeSpan.FromDays(7)),
+            Provenance(),
+            outcomeMapping: CustomMapping);
+        var reconciliation = new DurableOperationResolutionTarget(
+            protocol.Process.Reference,
+            new("reconcile"));
+
+        var binding = protocol.BindDurably(
+            maxAttempts: 3,
+            claimLease: TimeSpan.FromMinutes(2),
+            DurableOperationIdempotencyEvidence.TargetDeduplication,
+            reconciliationTarget: reconciliation);
+
+        Assert.Equal(protocol.Request, binding.Request);
+        Assert.Equal(3, binding.MaxAttempts);
+        Assert.Equal(TimeSpan.FromMinutes(2), binding.ClaimLease);
+        Assert.Equal(DurableOperationIdempotencyEvidence.TargetDeduplication, binding.IdempotencyEvidence);
+        Assert.Equal(reconciliation, binding.ReconciliationTarget);
+        Assert.Equal(
+            new(CustomMapping.Completed, protocol.CompletedReply),
+            binding.FindReply(CustomMapping.Completed));
+        Assert.Equal(
+            new(CustomMapping.Failed, protocol.FailedReply),
+            binding.FindReply(CustomMapping.Failed));
+        Assert.Equal(
+            new(CustomMapping.Cancelled, protocol.CancelledReply),
+            binding.FindReply(CustomMapping.Cancelled));
+        Assert.Equal(
+            new(CustomMapping.Terminated, protocol.TerminatedReply),
+            binding.FindReply(CustomMapping.Terminated));
+        Assert.True(new DurableOperationReferenceExecutor(protocol.Catalog).ValidateBinding(binding).IsValid);
+    }
+
+    [Fact]
     public void TypedProtocol_RejectsAProcessThatCannotBeJoinedAsAnExactChildAttempt()
     {
         var process = ChildProcess(ProcessRecoveryPolicy.RestartAttempt);

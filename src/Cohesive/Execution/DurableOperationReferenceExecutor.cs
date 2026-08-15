@@ -980,24 +980,11 @@ public sealed class DurableOperationReferenceExecutor
                 "/binding/request"));
         }
 
-        RequestContractDefinition? requestDefinition = null;
-        if (!contracts.TryResolve(request.Contract, out var resolved)
-            || resolved is not RequestContractDefinition typedRequest)
-        {
-            diagnostics.Add(Error(
-                DurableOperationDiagnosticCodes.RequestInvalid,
-                "The exact Request contract cannot be resolved as a canonical Request definition.",
-                "/request/contract"));
-        }
-        else
-        {
-            requestDefinition = typedRequest;
-            ValidateBinding(binding, typedRequest.Response, diagnostics);
-        }
+        diagnostics.AddRange(ValidateBinding(binding).Diagnostics);
 
         diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
         var validation = DocumentValidationResult.FromDiagnostics(diagnostics);
-        state = validation.IsValid && requestDefinition is not null
+        state = validation.IsValid
             ? new(
                 DurableOperationState.CurrentSchemaVersion,
                 request,
@@ -1005,6 +992,34 @@ public sealed class DurableOperationReferenceExecutor
                 createdAtUtc)
             : null;
         return validation;
+    }
+
+    /// <summary>Validates one durable execution binding against exact canonical Request and Reply contracts.</summary>
+    /// <param name="binding">Portable bounded execution refinement to validate.</param>
+    /// <returns>
+    /// Deterministically ordered diagnostics for Request resolution, terminal Reply coverage, retry, timeout, and
+    /// recovery policy compatibility.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="binding"/> is <see langword="null"/>.</exception>
+    public DocumentValidationResult ValidateBinding(DurableRequestBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        List<DocumentValidationDiagnostic> diagnostics = [];
+        if (!contracts.TryResolve(binding.Request, out var resolved)
+            || resolved is not RequestContractDefinition request)
+        {
+            diagnostics.Add(Error(
+                DurableOperationDiagnosticCodes.RequestInvalid,
+                "The exact Request contract cannot be resolved as a canonical Request definition.",
+                "/binding/request"));
+        }
+        else
+        {
+            ValidateBindingCore(binding, request.Response, diagnostics);
+        }
+
+        diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
+        return DocumentValidationResult.FromDiagnostics(diagnostics);
     }
 
     /// <summary>Claims or idempotently replays ownership of one physical attempt.</summary>
@@ -1967,7 +1982,7 @@ public sealed class DurableOperationReferenceExecutor
         return new(replacement, DurableOperationAdmissionResultKind.Dispositioned, admission);
     }
 
-    void ValidateBinding(
+    void ValidateBindingCore(
         DurableRequestBinding binding,
         RequestResponseObligation response,
         ICollection<DocumentValidationDiagnostic> diagnostics)

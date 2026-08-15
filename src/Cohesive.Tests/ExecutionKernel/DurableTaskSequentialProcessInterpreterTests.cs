@@ -1549,7 +1549,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
             fixture.Parent,
             start,
-            new BindingResolver(fixture.Binding),
+            new DurableRequestBindingCatalog([fixture.Binding]),
             UnexpectedOperation,
             UnexpectedDurableOperation,
             invocation =>
@@ -1610,7 +1610,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
             fixture.Parent,
             start,
-            new BindingResolver(fixture.Binding),
+            new DurableRequestBindingCatalog([fixture.Binding]),
             UnexpectedOperation,
             UnexpectedDurableOperation,
             invocation =>
@@ -2155,6 +2155,157 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
+    public void ExecutableQualification_AllowsAnUnboundDeliberatelyExternalRequest()
+    {
+        var (plan, _) = CompileRequestPlan("process/durable-task-external-request-admission");
+
+        var catalog = new DurableTaskSequentialProcessPlanCatalog([Physical(plan)]);
+
+        Assert.Equal(1, catalog.Count);
+    }
+
+    [Fact]
+    public void ExecutableQualification_FailsClosedWhenAChildRequestBindingIsMissing()
+    {
+        var fixture = CompileChildParentPlan();
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            new DurableTaskSequentialProcessPlanCatalog([
+                Physical(fixture.Parent),
+                Physical(fixture.Child)
+            ]));
+
+        Assert.Contains(
+            DurableTaskProcessPlanAdmissionDiagnosticCodes.ChildRequestBindingMissing,
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            fixture.Parent.DefinitionReference.Fingerprint.Value,
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("node 'child'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            fixture.Binding.Request.Definition.Fingerprint.Value,
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DurableRequestBindingCatalog_RejectsMultipleBindingsForOneExactRequest()
+    {
+        var binding = CompileChildParentPlan().Binding;
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            new DurableRequestBindingCatalog([binding, binding]));
+
+        Assert.Contains("bound more than once", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(binding.Request.Definition.Fingerprint.Value, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DurableRequestBindingCatalog_RejectsConflictingFingerprintsForOneRequestRevision()
+    {
+        var binding = CompileChildParentPlan().Binding;
+        var request = binding.Request.Definition;
+        var changedRequest = new RequestContractReference(new(
+            request.DefinitionId,
+            request.RevisionId,
+            new(
+                ExecutionDefinitionFingerprinter.Algorithm,
+                ExecutionDefinitionFingerprinter.Canonicalization,
+                new string('9', 64))));
+        var changedBinding = BindingWithRequest(binding, changedRequest);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            new DurableRequestBindingCatalog([binding, changedBinding]));
+
+        Assert.Contains("conflicting fingerprints", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(request.Fingerprint.Value, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(changedRequest.Definition.Fingerprint.Value, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExecutableQualification_RequiresTheExactChildRequestFingerprint()
+    {
+        var fixture = CompileChildParentPlan();
+        var request = fixture.Binding.Request.Definition;
+        var changedRequest = new RequestContractReference(new(
+            request.DefinitionId,
+            request.RevisionId,
+            new(
+                ExecutionDefinitionFingerprinter.Algorithm,
+                ExecutionDefinitionFingerprinter.Canonicalization,
+                new string('9', 64))));
+        var changedBinding = BindingWithRequest(fixture.Binding, changedRequest);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            new DurableTaskSequentialProcessPlanCatalog(
+                [Physical(fixture.Parent), Physical(fixture.Child)],
+                [changedBinding]));
+
+        Assert.Contains(
+            DurableTaskProcessPlanAdmissionDiagnosticCodes.ChildRequestBindingMissing,
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(request.Fingerprint.Value, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExecutableQualification_RejectsAnIncompatibleChildReplyFingerprint()
+    {
+        var fixture = CompileChildParentPlan();
+        var changedReplies = fixture.Binding.Replies.ToBuilder();
+        var original = changedReplies[0];
+        var reply = original.Reply.Definition;
+        changedReplies[0] = new(
+            original.Outcome,
+            new(new(
+                reply.DefinitionId,
+                reply.RevisionId,
+                new(
+                    ExecutionDefinitionFingerprinter.Algorithm,
+                    ExecutionDefinitionFingerprinter.Canonicalization,
+                    new string('8', 64)))));
+        var changedBinding = new DurableRequestBinding(
+            fixture.Binding.Request,
+            changedReplies.ToImmutable(),
+            fixture.Binding.MaxAttempts,
+            fixture.Binding.ClaimLease,
+            fixture.Binding.TimeoutAfter,
+            fixture.Binding.IdempotencyEvidence,
+            fixture.Binding.TerminalFailureOutcome,
+            fixture.Binding.ReconciliationTarget,
+            fixture.Binding.EscalationTarget);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            new DurableTaskSequentialProcessPlanCatalog(
+                [Physical(fixture.Parent), Physical(fixture.Child)],
+                [changedBinding]));
+
+        Assert.Contains(
+            DurableTaskProcessPlanAdmissionDiagnosticCodes.ChildRequestBindingInvalid,
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            DurableOperationDiagnosticCodes.ReplyBindingInvalid,
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("node 'child'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExecutableQualification_AdmitsForkedChildrenWithOneExactSharedBinding()
+    {
+        var fixture = CompileForkChildPlan(ProcessChildCancellationPolicy.Propagate);
+
+        var catalog = new DurableTaskSequentialProcessPlanCatalog(
+            [Physical(fixture.Parent), Physical(fixture.Child)],
+            [fixture.Binding]);
+
+        Assert.Equal(2, catalog.Count);
+    }
+
+    [Fact]
     public void ExecutableQualification_AdmitsEmitEventOnlyWithAnExactTargetDeduplicatingPublisher()
     {
         var timerPlan = CompileTimerPlan(
@@ -2637,7 +2788,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             Physical(selfSignalFixture.Plan),
             Physical(eventPlan)
         ],
-        new BindingResolver(durableBinding, childFixture.Binding, forkChildFixture.Binding),
+        [durableBinding, childFixture.Binding, forkChildFixture.Binding],
         new DomainEventPublisherResolver(eventPublisher));
         var operations = new CountingEchoHost();
         var durableOperations = new CountingDurableOperationAdapter(durableBinding.Request);
@@ -3189,7 +3340,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         DurableTaskSequentialProcessInterpreter.RunAsync(
             plan,
             start,
-            new BindingResolver(binding),
+            new DurableRequestBindingCatalog([binding]),
             UnexpectedOperation,
             invocation => Task.FromResult(execute(invocation)),
             UnexpectedChildProcess,
@@ -3207,7 +3358,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         DurableTaskSequentialProcessInterpreter.RunAsync(
             plan,
             start,
-            new BindingResolver(binding),
+            new DurableRequestBindingCatalog([binding]),
             UnexpectedOperation,
             execute,
             UnexpectedChildProcess,
@@ -3224,7 +3375,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         DurableTaskSequentialProcessInterpreter.RunAsync(
             plan,
             start,
-            new BindingResolver(binding),
+            new DurableRequestBindingCatalog([binding]),
             UnexpectedOperation,
             UnexpectedDurableOperation,
             execute,
@@ -3260,6 +3411,19 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 DefinitionReference("process/escalate", '8'),
                 new("node/escalate")));
     }
+
+    static DurableRequestBinding BindingWithRequest(
+        DurableRequestBinding binding,
+        RequestContractReference request) => new(
+        request,
+        binding.Replies,
+        binding.MaxAttempts,
+        binding.ClaimLease,
+        binding.TimeoutAfter,
+        binding.IdempotencyEvidence,
+        binding.TerminalFailureOutcome,
+        binding.ReconciliationTarget,
+        binding.EscalationTarget);
 
     static Task<ProcessOperationResult> UnexpectedOperation(DurableTaskProcessHostOperation operation) =>
         throw new InvalidOperationException($"Unexpected host operation '{operation.Kind}'.");
@@ -4589,24 +4753,6 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             return signalTargets.TryGetValue(route, out var target)
                 ? ProcessSignalTargetResult.Resolved(target)
                 : throw new InvalidOperationException($"No Scheduler Signal target is registered for '{route}'.");
-        }
-    }
-
-    sealed class BindingResolver : IDurableRequestBindingResolver
-    {
-        readonly ImmutableArray<DurableRequestBinding> bindings;
-
-        internal BindingResolver(params DurableRequestBinding[] bindings)
-        {
-            ArgumentNullException.ThrowIfNull(bindings);
-            this.bindings = [.. bindings];
-        }
-
-        public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? resolved)
-        {
-            ArgumentNullException.ThrowIfNull(request);
-            resolved = bindings.SingleOrDefault(binding => request.Contract == binding.Request);
-            return resolved is not null;
         }
     }
 
