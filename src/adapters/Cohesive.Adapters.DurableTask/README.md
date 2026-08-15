@@ -224,6 +224,24 @@ services.AddDurableTaskWorker(worker =>
 services.AddDurableTaskClient(client => client.UseDurableTaskScheduler(connectionString));
 ```
 
+When the exact deployment catalog depends on application services, compose it as a singleton through the worker
+registration factory. Catalog construction and admission run while the host constructs its hosted services, before
+the worker starts processing, and the same immutable instance is injected into the orchestrator and activities:
+
+```csharp
+services.AddDurableTaskWorker(worker =>
+{
+    worker.AddCohesiveSequentialProcesses(serviceProvider =>
+        ApplicationProcessDeploymentCatalog.Create(
+            serviceProvider.GetRequiredService<ApplicationProcessDefinitions>(),
+            serviceProvider.GetRequiredService<IDomainEventPublisherResolver>()));
+    worker.UseDurableTaskScheduler(connectionString);
+});
+```
+
+One worker registration has exactly one catalog composition authority. Registering a separate catalog and also
+supplying a factory is rejected instead of allowing the orchestrator and activities to observe different catalogs.
+
 `IAsyncProcessReferenceHost` is the physical worker port for Transition, Relation/Query, and Signal-target
 activities. Naturally asynchronous implementations must implement it directly. A bounded legacy synchronous host
 remains available only through the named compatibility projection:

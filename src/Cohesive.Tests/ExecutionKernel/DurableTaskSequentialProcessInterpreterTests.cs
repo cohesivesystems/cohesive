@@ -13,6 +13,7 @@ using Microsoft.DurableTask.Client;
 using Microsoft.DurableTask.Client.AzureManaged;
 using Microsoft.DurableTask.Worker;
 using Microsoft.DurableTask.Worker.AzureManaged;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using CanonicalProcessDefinition = Cohesive.Processes.IR.ProcessDefinition;
 
@@ -2200,6 +2201,58 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 
         Assert.Contains("bound more than once", exception.Message, StringComparison.Ordinal);
         Assert.Contains(binding.Request.Definition.Fingerprint.Value, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WorkerRegistration_ComposesOneExactCatalogThroughDependencyInjection()
+    {
+        var fixture = CompileChildParentPlan();
+        var expected = new DurableTaskSequentialProcessPlanCatalog(
+            [Physical(fixture.Parent), Physical(fixture.Child)],
+            [fixture.Binding]);
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(new WorkerCatalogDependency(expected));
+        var factoryInvocations = 0;
+        services.AddDurableTaskWorker(worker =>
+        {
+            worker.AddCohesiveSequentialProcesses(sp =>
+            {
+                factoryInvocations++;
+                return sp.GetRequiredService<WorkerCatalogDependency>().Catalog;
+            });
+            worker.UseDurableTaskScheduler(
+                "Endpoint=http://localhost:8080;TaskHub=default;Authentication=None");
+        });
+
+        await using var provider = services.BuildServiceProvider();
+        _ = provider.GetServices<IHostedService>().ToArray();
+        var first = provider.GetRequiredService<DurableTaskSequentialProcessPlanCatalog>();
+        var second = provider.GetRequiredService<DurableTaskSequentialProcessPlanCatalog>();
+
+        Assert.Same(expected, first);
+        Assert.Same(first, second);
+        Assert.Equal(1, factoryInvocations);
+    }
+
+    [Fact]
+    public async Task WorkerRegistration_PropagatesCatalogAdmissionFailureBeforeWorkerStart()
+    {
+        var marker = "exact catalog admission failed";
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDurableTaskWorker(worker =>
+        {
+            worker.AddCohesiveSequentialProcesses(_ => throw new InvalidOperationException(marker));
+            worker.UseDurableTaskScheduler(
+                "Endpoint=http://localhost:8080;TaskHub=default;Authentication=None");
+        });
+
+        await using var provider = services.BuildServiceProvider();
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            provider.GetServices<IHostedService>().ToArray());
+
+        Assert.Equal(marker, exception.Message);
     }
 
     [Fact]
@@ -4823,6 +4876,8 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     sealed class SimulatedCrashException : Exception;
+
+    sealed record WorkerCatalogDependency(DurableTaskSequentialProcessPlanCatalog Catalog);
 
     sealed record ForkRequestFixture(
         CompiledProcessPlan Plan,

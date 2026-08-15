@@ -5,6 +5,7 @@ using DurableTask.Core.Exceptions;
 using Microsoft.DurableTask;
 using Microsoft.DurableTask.Client;
 using Microsoft.DurableTask.Worker;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
@@ -72,10 +73,47 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
         this IDurableTaskWorkerBuilder builder,
         DurableTaskSequentialProcessPlanCatalog catalog)
     {
-        ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(catalog);
+        return AddCohesiveSequentialProcesses(builder, _ => catalog);
+    }
+
+    /// <summary>
+    /// Adds the canonical Process executable slice with one immutable plan catalog composed by dependency injection.
+    /// </summary>
+    /// <remarks>
+    /// The factory is registered as a singleton and is evaluated when the host constructs its hosted services.
+    /// Catalog construction and admission therefore complete before any worker starts processing. The same resolved
+    /// catalog instance is constructor-injected into the orchestrator and every activity.
+    /// </remarks>
+    /// <param name="builder">Standalone Durable Task worker builder.</param>
+    /// <param name="catalogFactory">
+    /// Application composition factory for the exact worker catalog. It may resolve exact operation and publication
+    /// adapters from <see cref="IServiceProvider"/> but must return a complete immutable admitted catalog.
+    /// </param>
+    /// <returns><paramref name="builder"/> for composition.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="builder"/> or <paramref name="catalogFactory"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// A plan catalog was already registered. One worker must have exactly one catalog composition authority.
+    /// </exception>
+    public static IDurableTaskWorkerBuilder AddCohesiveSequentialProcesses(
+        this IDurableTaskWorkerBuilder builder,
+        Func<IServiceProvider, DurableTaskSequentialProcessPlanCatalog> catalogFactory)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(catalogFactory);
+        if (builder.Services.Any(static descriptor =>
+                descriptor.ServiceType == typeof(DurableTaskSequentialProcessPlanCatalog)))
+        {
+            throw new InvalidOperationException(
+                "A Durable Task Process worker can register exactly one plan catalog composition authority.");
+        }
+
         var converter = DurableTaskProcessDataConverter.Create();
-        builder.Services.TryAddSingleton(catalog);
+        builder.Services.AddSingleton(catalogFactory);
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService,
+            DurableTaskSequentialProcessPlanCatalogAdmissionHostedService>());
         builder.Services.TryAddSingleton(converter);
         builder.Services.TryAddSingleton<IDurableOperationAdapterResolver>(
             EmptyDurableOperationAdapterResolver.Instance);
@@ -84,7 +122,7 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
         builder.Configure(options => options.DataConverter = converter);
         return builder.AddTasks(tasks =>
         {
-            tasks.AddOrchestrator(new DurableTaskSequentialProcessOrchestrator(catalog));
+            tasks.AddOrchestrator<DurableTaskSequentialProcessOrchestrator>();
             tasks.AddActivity<DurableTaskProcessHostOperationActivity>();
             tasks.AddActivity<DurableTaskProcessSignalTargetActivity>();
             tasks.AddActivity<DurableTaskDomainEventPublicationActivity>();
@@ -92,6 +130,21 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
             tasks.AddActivity<DurableTaskDurableOperationReconciliationActivity>();
         });
     }
+}
+
+sealed class DurableTaskSequentialProcessPlanCatalogAdmissionHostedService(
+    DurableTaskSequentialProcessPlanCatalog catalog) : IHostedService
+{
+    readonly DurableTaskSequentialProcessPlanCatalog catalog =
+        catalog ?? throw new ArgumentNullException(nameof(catalog));
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        _ = catalog.Count;
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 /// <summary>Generic standalone Durable Task orchestration over one exact canonical Process plan.</summary>
