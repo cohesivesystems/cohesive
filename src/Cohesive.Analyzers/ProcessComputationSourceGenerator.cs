@@ -853,6 +853,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     return true;
 
                 case "Timer":
+                case "EmitEvent":
+                case "SendSignal":
                 case "Reply":
                 case "Transition":
                 case "ContinueAt":
@@ -861,14 +863,22 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     var kind = invocation.TargetMethod.Name switch
                     {
                         "Timer" => ActionKind.Timer,
+                        "EmitEvent" => ActionKind.EmitEvent,
+                        "SendSignal" => ActionKind.SendSignal,
                         "Reply" => ActionKind.Reply,
                         "Transition" => ActionKind.Transition,
                         "ContinueAt" => ActionKind.ContinueAt,
                         "Succeed" => ActionKind.Succeed,
                         _ => ActionKind.Terminate
                     };
+                    var identityRole = kind switch
+                    {
+                        ActionKind.EmitEvent => "emit-event",
+                        ActionKind.SendSignal => "send-signal",
+                        _ => invocation.TargetMethod.Name.ToLowerInvariant()
+                    };
                     flow = new ActionFlow(
-                        NextIdentity(invocation.TargetMethod.Name.ToLowerInvariant(), structuralPath),
+                        NextIdentity(identityRole, structuralPath),
                         kind,
                         invocation,
                         SourceLocation(statement),
@@ -3302,6 +3312,60 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         $"__builder.Reply(id: {action.Identity.Variable}, contract: {replyContract}, request: {obligation}, payload: {replyPayload}, next: __builder.Edge(owner: {action.Identity.Variable}, role: \"next\", target: {successor}, {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)});");
                     return true;
 
+                case ActionKind.EmitEvent:
+                    if (successor is null)
+                    {
+                        return StatementFailure(action.Syntax, "EmitEvent requires a following operation or terminal");
+                    }
+                    var eventContract = Argument(action.Invocation, "contract");
+                    var eventPayload = Argument(action.Invocation, "payload");
+                    if (eventContract is null || eventPayload is null)
+                    {
+                        return StatementFailure(
+                            action.Syntax,
+                            "EmitEvent requires an exact domain-event contract and a portable payload");
+                    }
+                    if (!TryEmitExactArgument(eventContract, action.Syntax, out var eventContractReference)
+                        || !TryEmitValue(eventPayload.Value, eventPayload.Value.Type!, action.Source, out var eventPayloadValue)
+                        || !TryEmitRole(action.Invocation, "nextRole", "next", action.Syntax, out var eventNextRole))
+                    {
+                        return false;
+                    }
+                    builderStatements.Add(
+                        $"__builder.EmitEvent(id: {action.Identity.Variable}, contract: {eventContractReference}, payload: {eventPayloadValue}, next: __builder.Edge(owner: {action.Identity.Variable}, role: {eventNextRole}, target: {successor}, {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)});");
+                    return true;
+
+                case ActionKind.SendSignal:
+                    if (successor is null)
+                    {
+                        return StatementFailure(action.Syntax, "SendSignal requires a following operation or terminal");
+                    }
+                    var signalContract = Argument(action.Invocation, "contract");
+                    var signalTarget = Argument(action.Invocation, "target");
+                    var signalPayload = Argument(action.Invocation, "payload");
+                    if (signalContract is null || signalTarget is null || signalPayload is null)
+                    {
+                        return StatementFailure(
+                            action.Syntax,
+                            "SendSignal requires an exact Signal contract and portable target and payload expressions");
+                    }
+                    if (Strip(signalTarget.Value).ConstantValue is { HasValue: true, Value: null })
+                    {
+                        return StatementFailure(
+                            signalTarget.Syntax,
+                            "SendSignal requires a non-null semantic target expression");
+                    }
+                    if (!TryEmitExactArgument(signalContract, action.Syntax, out var signalContractReference)
+                        || !TryEmitValue(signalTarget.Value, signalTarget.Value.Type!, action.Source, out var signalTargetValue)
+                        || !TryEmitValue(signalPayload.Value, signalPayload.Value.Type!, action.Source, out var signalPayloadValue)
+                        || !TryEmitRole(action.Invocation, "nextRole", "next", action.Syntax, out var signalNextRole))
+                    {
+                        return false;
+                    }
+                    builderStatements.Add(
+                        $"__builder.SendSignal(id: {action.Identity.Variable}, contract: {signalContractReference}, target: {signalTargetValue}, payload: {signalPayloadValue}, next: __builder.Edge(owner: {action.Identity.Variable}, role: {signalNextRole}, target: {successor}, {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)});");
+                    return true;
+
                 case ActionKind.Transition:
                     if (successor is null)
                     {
@@ -5382,7 +5446,9 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         Transition = 3,
         ContinueAt = 4,
         Succeed = 5,
-        Terminate = 6
+        Terminate = 6,
+        EmitEvent = 7,
+        SendSignal = 8
     }
 
     enum AwaitClauseKind

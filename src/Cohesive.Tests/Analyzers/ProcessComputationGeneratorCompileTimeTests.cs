@@ -93,6 +93,156 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
     }
 
     [Fact]
+    public void Generator_LowersTypedOutboundInteractionsWithoutCallbacks()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class OutboundInteractionProcess
+                     {
+                         private static DomainEventContractReference Event => null!;
+                         private static SignalContractReference Signal => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, Input input)
+                         {
+                             await process.EmitEvent(
+                                 Event,
+                                 input.Value,
+                                 nextRole: "published");
+                             await process.SendSignal(
+                                 Signal,
+                                 input.Target,
+                                 input.Value,
+                                 nextRole: "sent");
+                             return input.Value;
+                         }
+                     }
+
+                     public sealed record Input(string Target, string Value);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Contains("__builder.EmitEvent", generated);
+        Assert.Contains("__builder.SendSignal", generated);
+        Assert.Contains("emit-event-0", generated);
+        Assert.Contains("send-signal-0", generated);
+        Assert.Contains("\"published\"", generated);
+        Assert.Contains("\"sent\"", generated);
+        Assert.DoesNotContain("System.Func", generated);
+        Assert.DoesNotContain("async", generated);
+    }
+
+    [Fact]
+    public void Generator_RejectsRuntimeBoundInteractionContractsAtTheCallSite()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class RuntimeContractProcess
+                     {
+                         private static async ProcessTask<string> Run(ProcessContext process, Input input)
+                         {
+                             await process.EmitEvent(input.Contract, input.Value);
+                             return input.Value;
+                         }
+                     }
+
+                     public sealed record Input(DomainEventContractReference Contract, string Value);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("exact semantic arguments", diagnostic.GetMessage());
+        Assert.Equal(11, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
+    public void Generator_RejectsNonPortableSignalTargetsAtTheCallSite()
+    {
+        var source = """
+                     using System;
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class NonPortableSignalTargetProcess
+                     {
+                         private static SignalContractReference Signal => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             await process.SendSignal(Signal, Guid.NewGuid(), input);
+                             return input;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC004");
+
+        Assert.Contains("Guid.NewGuid", diagnostic.GetMessage());
+        Assert.Equal(14, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
+    public void Generator_RejectsMissingSignalTargetSemanticsAtTheArgument()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class MissingSignalTargetProcess
+                     {
+                         private static SignalContractReference Signal => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, string input)
+                         {
+                             await process.SendSignal(Signal, (string?)null, input);
+                             return input;
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("non-null semantic target", diagnostic.GetMessage());
+        Assert.Equal(13, diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1);
+    }
+
+    [Fact]
     public void Generator_ReportsUnsupportedPureComputationAtItsSource()
     {
         var source = """
