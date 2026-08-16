@@ -200,7 +200,7 @@ public sealed class DurableTaskSequentialProcessOrchestrator
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(input);
         var physical = catalog.GetExact(input.Receipt.Request.Definition);
-        Func<Task<ProcessChildCancellationIntent>>? waitForChildCancellation = context.Parent is null
+        Func<Task<ProcessChildCancellationIntent>>? waitForChildCancellation = input.ChildRequest is null
             ? null
             : () => context.WaitForExternalEvent<ProcessChildCancellationIntent>(
                 DurableTaskSequentialProcessNames.ChildCancellationEvent);
@@ -261,7 +261,7 @@ public sealed class DurableTaskSequentialProcessOrchestrator
                 blockedOperation.State.Status,
                 DurableOperationReferenceExecutor.GetRecoveryIntent(blockedOperation.State));
         }
-        if (result.Disposition == ProcessActivationDisposition.Failed && context.Parent is null)
+        if (result.Disposition == ProcessActivationDisposition.Failed && input.ChildRequest is null)
         {
             var detail = result.Diagnostics.IsEmpty
                 ? "Canonical Process execution reached a failed terminal."
@@ -295,7 +295,8 @@ public sealed class DurableTaskSequentialProcessOrchestrator
                 request.Context.Delivery,
                 child.Document.Metadata.Provenance,
                 causationId: request.Context.EmissionId,
-                ordering: request.Context.Ordering));
+                ordering: request.Context.Ordering),
+            childRequest: request);
         var result = await context.CallSubOrchestratorAsync<DurableTaskSequentialProcessResult>(
             DurableTaskSequentialProcessNames.Orchestration,
             start,

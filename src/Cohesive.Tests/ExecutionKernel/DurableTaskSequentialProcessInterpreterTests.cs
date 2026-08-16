@@ -2765,6 +2765,67 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
+    public async Task PortableSdkConverter_ValidatesAndRoundTripsExactChildStartEvidence()
+    {
+        var fixture = CompileChildParentPlan();
+        RequestEnvelope? captured = null;
+        _ = await RunChildRequest(
+            fixture.Parent,
+            Start(fixture.Parent, "child-input", "instance/portable-child-parent"),
+            fixture.Binding,
+            invocation =>
+            {
+                captured = invocation.Request;
+                return Task.FromResult(CompletedChild(
+                    invocation.Request.Context.EmissionId,
+                    Assert.IsType<ProcessChildRequestTarget>(invocation.Request.ChildTarget)));
+            });
+        var request = Assert.IsType<RequestEnvelope>(captured);
+        var target = Assert.IsType<ProcessChildRequestTarget>(request.ChildTarget);
+        var acceptedAtUtc = StartedAtUtc.AddMinutes(2);
+        var authorization = new ProcessControlAuthorizationContext(
+            "tests.durable-task.child-start",
+            request.Context.AuthorityScope,
+            "authorization/portable-child");
+        var receipt = ProcessChildStartProjection.Create(request, target, authorization, acceptedAtUtc);
+        var activation = new ProcessActivationContext(
+            request.Context.AuthorityScope,
+            request.Context.CorrelationId,
+            request.Context.Delivery,
+            fixture.Child.Document.Metadata.Provenance,
+            request.Context.EmissionId,
+            request.Context.Ordering);
+        var start = new DurableTaskSequentialProcessStart(
+            receipt,
+            activation,
+            childRequest: request);
+        var converter = DurableTaskProcessDataConverter.Create();
+
+        var restored = Assert.IsType<DurableTaskSequentialProcessStart>(converter.Deserialize(
+            converter.Serialize(start),
+            typeof(DurableTaskSequentialProcessStart)));
+
+        Assert.Equal(Serialize(start), Serialize(restored));
+        Assert.Equal(request, restored.ChildRequest);
+        var mismatchedStart = Start(fixture.Child, "child-input", "instance/not-the-projected-child");
+        Assert.Throws<ArgumentException>(() => new DurableTaskSequentialProcessStart(
+            mismatchedStart.Receipt,
+            activation,
+            childRequest: request));
+        var wrongCausation = new ProcessActivationContext(
+            activation.AuthorityScope,
+            activation.CorrelationId,
+            activation.Delivery,
+            activation.Provenance,
+            new("emission/not-the-parent-request"),
+            activation.Ordering);
+        Assert.Throws<ArgumentException>(() => new DurableTaskSequentialProcessStart(
+            receipt,
+            wrongCausation,
+            childRequest: request));
+    }
+
+    [Fact]
     public void TraceRetention_FailsClosedWithCanonicalProjectionDiagnostics()
     {
         var failure = ExecutionTraceProjectionResult.Failure(
@@ -3009,6 +3070,80 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.Equal(
             ProcessActivationDisposition.Completed,
             replacementInstance?.ReadOutputAs<DurableTaskSequentialProcessResult>()?.Disposition);
+
+        await worker.StopAsync(timeout.Token);
+    }
+
+    [DurableTaskSchedulerFact]
+    public async Task SchedulerEmulator_AdmitsFailedChildReplyWhileTopLevelFailureRemainsPhysical()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
+            ?? throw new InvalidOperationException(
+                "The Durable Task Scheduler connection string disappeared after test discovery.");
+        var fixture = CompileFailingChildParentPlan();
+        var catalog = new DurableTaskSequentialProcessPlanCatalog(
+            [Physical(fixture.Parent), Physical(fixture.Child)],
+            [fixture.Binding]);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var worker = SchedulerHost(connectionString, catalog, RejectingHost.Instance);
+        await worker.StartAsync(timeout.Token);
+        var client = worker.Services.GetRequiredService<DurableTaskClient>();
+
+        var parentStart = Start(
+            fixture.Parent,
+            "failed-child-input",
+            $"instance/scheduler-failed-child-parent/{Guid.NewGuid():N}");
+        var parentSchedule = await client.ScheduleCohesiveProcessAsync(parentStart, timeout.Token);
+        var parentInstance = await client.WaitForInstanceCompletionAsync(
+            parentSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, parentInstance.RuntimeStatus);
+        var parent = Assert.IsType<DurableTaskSequentialProcessResult>(
+            parentInstance.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(ProcessActivationDisposition.Completed, parent.Disposition);
+        Assert.Equal(StringValue("parent-observed-child-failure"), parent.State.Terminal.Detail?.Value);
+        Assert.Equal(ProcessChildDisposition.Failed, Assert.Single(parent.State.Children).Disposition);
+        var operation = Assert.Single(parent.DurableOperations);
+        Assert.Equal(DurableTaskDurableOperationDisposition.ReplyReady, operation.Disposition);
+        Assert.Equal(DurableOperationStatus.Dispositioned, operation.State.Status);
+        var attempt = Assert.Single(operation.State.Attempts);
+        Assert.Equal(DurableOperationAttemptStage.Acknowledged, attempt.Stage);
+        var acknowledgement = Assert.IsType<DurableOperationAcknowledgement>(operation.State.Acknowledgement);
+        Assert.Equal(ChildOutcomeMapping.Failed, Assert.IsType<RequestFailureOutcome>(acknowledgement.Outcome).Id);
+        Assert.Equal(attempt.Claim.AttemptId, acknowledgement.AttemptId);
+        Assert.Null(acknowledgement.RecoveryIdentity);
+        var childTarget = Assert.IsType<ProcessChildRequestTarget>(operation.State.Request.ChildTarget);
+        var origin = Assert.IsType<ProcessInteractionOrigin>(acknowledgement.ReplyOrigin);
+        Assert.Equal(childTarget.Definition, origin.Definition);
+        Assert.Equal(childTarget.Continuation, origin.Continuation);
+        Assert.Equal(DurableOperationAdmissionDisposition.Accepted, operation.State.Admission?.Disposition);
+
+        var childInstance = await client.GetInstanceAsync(
+            DurableTaskSequentialProcessIdentities.OrchestrationInstance(
+                parentStart.ActivationContext.AuthorityScope,
+                childTarget.Continuation.ProcessInstanceId),
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, childInstance?.RuntimeStatus);
+        var child = Assert.IsType<DurableTaskSequentialProcessResult>(
+            childInstance!.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(ProcessActivationDisposition.Failed, child.Disposition);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Failed, child.State.Terminal.Kind);
+        Assert.Equal(childTarget.Definition, child.State.Definition);
+        Assert.Equal(childTarget.Continuation, child.State.Continuation);
+
+        var topLevelStart = Start(
+            fixture.Child,
+            "top-level-failure",
+            $"instance/scheduler-top-level-failure/{Guid.NewGuid():N}");
+        var topLevelSchedule = await client.ScheduleCohesiveProcessAsync(topLevelStart, timeout.Token);
+        var topLevel = await client.WaitForInstanceCompletionAsync(
+            topLevelSchedule.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Failed, topLevel.RuntimeStatus);
+        Assert.Contains(nameof(DurableTaskProcessFailedException), topLevel.FailureDetails?.ErrorType);
 
         await worker.StopAsync(timeout.Token);
     }
@@ -4197,6 +4332,47 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 [],
                 child.Definition.RecoveryPolicy)],
             "process/durable-task-child-parent");
+        return new(parent, child, interactions.Binding);
+    }
+
+    static ChildProcessFixture CompileFailingChildParentPlan()
+    {
+        var child = Compile(
+            Definition("fail", [new FailProcessNode(new("fail"), Expr.BoundValue(ProcessBindingIds.Input))]),
+            definitionId: "process/durable-task-failing-child");
+        var interactions = RequestContracts(
+            "failing-child",
+            "completed",
+            "failed",
+            "cancelled",
+            "terminated");
+        var parent = Compile(
+            Definition(
+                "child",
+                [
+                    new InvokeProcessProcessNode(
+                        new("child"),
+                        child.DefinitionReference,
+                        interactions.Request,
+                        ChildOutcomeMapping,
+                        Expr.BoundValue(ProcessBindingIds.Input),
+                        ProcessChildPurpose.Work,
+                        ProcessChildCancellationPolicy.Propagate,
+                        ChildOutcomes()),
+                    new ReturnProcessNode(new("completed"), Expr.Const("unexpected-child-completion")),
+                    new ReturnProcessNode(new("failed"), Expr.Const("parent-observed-child-failure")),
+                    new ReturnProcessNode(new("cancelled"), Expr.Const("unexpected-child-cancellation")),
+                    new ReturnProcessNode(new("terminated"), Expr.Const("unexpected-child-termination"))
+                ]),
+            interactions.Catalog,
+            [new(
+                child.DefinitionReference,
+                ProcessDefinitionLinkKind.Process,
+                child.Definition.Input,
+                child.Definition.Result,
+                [],
+                child.Definition.RecoveryPolicy)],
+            "process/durable-task-failing-child-parent");
         return new(parent, child, interactions.Binding);
     }
 
