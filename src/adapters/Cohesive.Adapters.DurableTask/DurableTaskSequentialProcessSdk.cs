@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Cohesive.Execution;
+using Cohesive.Model;
 using Cohesive.Processes.Execution;
 using DurableTask.Core.Exceptions;
 using Microsoft.DurableTask;
@@ -302,10 +303,12 @@ public sealed class DurableTaskSequentialProcessOrchestrator
             start,
             new TaskOptions().WithInstanceId(
                 DurableTaskSequentialProcessIdentities.OrchestrationInstance(start))).ConfigureAwait(true);
-        return ProjectChildTerminal(child, target, result);
+        return ProjectChildTerminal(catalog, request, child, target, result);
     }
 
     static DurableTaskDurableOperationAttemptResult ProjectChildTerminal(
+        DurableTaskSequentialProcessPlanCatalog catalog,
+        RequestEnvelope request,
         Cohesive.Processes.Compilation.CompiledProcessPlan child,
         ProcessChildRequestTarget target,
         DurableTaskSequentialProcessResult result)
@@ -323,13 +326,6 @@ public sealed class DurableTaskSequentialProcessOrchestrator
             throw new InvalidOperationException(
                 "A child sub-orchestration did not return a materializable terminal outcome.");
         }
-        var value = terminal.Detail?.Value ?? PortableValue.Missing(child.Definition.Result);
-        if (value.Contract != child.Definition.Result
-            || value.State is PortableValueState.Unknown or PortableValueState.Failed)
-        {
-            throw new InvalidOperationException(
-                "A child sub-orchestration returned terminal detail outside its exact result contract.");
-        }
         var terminalEvidence = result.Evidence
             .Where(evidence => evidence.Definition == target.Definition)
             .Reverse()
@@ -340,9 +336,24 @@ public sealed class DurableTaskSequentialProcessOrchestrator
         var terminalTrace = terminalEvidence.Trace.Last(trace => trace.Kind is
             ProcessTraceEventKind.TerminalReached or ProcessTraceEventKind.CancellationApplied);
         var outcomeId = target.OutcomeMapping.For(terminal.Kind);
-        RequestTerminalOutcome outcome = terminal.Kind == ExecutionTerminalOutcomeKind.Completed
-            ? new RequestResultOutcome(outcomeId, value)
-            : new RequestFailureOutcome(outcomeId, value);
+        var outcomeContract = ResolveChildOutcomeContract(catalog, request, outcomeId);
+        RequestTerminalOutcome outcome = terminal.Kind switch
+        {
+            ExecutionTerminalOutcomeKind.Completed => new RequestResultOutcome(
+                outcomeId,
+                RequireCompletedChildResult(child, terminal, outcomeContract)),
+            ExecutionTerminalOutcomeKind.Failed => new RequestFailureOutcome(
+                outcomeId,
+                PortableValue.Concrete(
+                    outcomeContract,
+                    ObservationValue.FromObject(new ProcessChildFailure(terminalTrace.Node, result.Diagnostics)))),
+            ExecutionTerminalOutcomeKind.Cancelled or ExecutionTerminalOutcomeKind.Terminated =>
+                new RequestFailureOutcome(
+                    outcomeId,
+                    PortableValue.Concrete(outcomeContract, ObservationValue.FromObject(terminal.Kind))),
+            _ => throw new InvalidOperationException(
+                "A child sub-orchestration returned an unsupported terminal outcome.")
+        };
         var origin = new ProcessInteractionOrigin(
             target.Definition,
             terminalTrace.Node,
@@ -353,6 +364,48 @@ public sealed class DurableTaskSequentialProcessOrchestrator
         return new(
             new DurableOperationOutcomeObservation(outcome, replyOrigin: origin),
             deadlineElapsed: false);
+    }
+
+    static ValueContract ResolveChildOutcomeContract(
+        DurableTaskSequentialProcessPlanCatalog catalog,
+        RequestEnvelope request,
+        RequestTerminalOutcomeId outcome)
+    {
+        if (request.Context.Origin is not ProcessInteractionOrigin parentOrigin)
+        {
+            throw new InvalidOperationException(
+                "A child sub-orchestration Request requires an exact parent Process origin.");
+        }
+        var parent = catalog.GetExact(parentOrigin.Definition).CanonicalPlan;
+        var contracts = parent.ValidationContext.InteractionContracts
+            ?? throw new InvalidOperationException(
+                "A child sub-orchestration parent has no exact interaction-contract catalog.");
+        if (!contracts.TryResolve(request.Contract, out var definition)
+            || definition is not RequestContractDefinition requestDefinition
+            || requestDefinition.Response.Find(outcome) is not { } declared)
+        {
+            throw new InvalidOperationException(
+                "A child sub-orchestration terminal outcome is absent from its exact parent Request contract.");
+        }
+        return declared.Schema.Contract;
+    }
+
+    static PortableValue RequireCompletedChildResult(
+        Cohesive.Processes.Compilation.CompiledProcessPlan child,
+        ExecutionTerminalOutcome terminal,
+        ValueContract outcomeContract)
+    {
+        var value = terminal.Detail?.Value
+            ?? throw new InvalidOperationException(
+                "A completed child sub-orchestration did not return materializable terminal detail.");
+        if (outcomeContract != child.Definition.Result
+            || value.Contract != outcomeContract
+            || value.State is PortableValueState.Unknown or PortableValueState.Failed)
+        {
+            throw new InvalidOperationException(
+                "A completed child sub-orchestration returned terminal detail outside its exact result contract.");
+        }
+        return value;
     }
 
     static DateTimeOffset ToUtc(DateTime value) => new(

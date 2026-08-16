@@ -925,13 +925,6 @@ public static class ProcessDefinitionValidator
                     observed: Describe(request.Payload.Contract));
             }
 
-            if (outcomeMapping is not null)
-            {
-                ValidateMappedChildResultContract(outcomeMapping.Failed, "failed");
-                ValidateMappedChildResultContract(outcomeMapping.Cancelled, "cancelled");
-                ValidateMappedChildResultContract(outcomeMapping.Terminated, "terminated");
-            }
-
             var resultCount = 0;
             foreach (var outcome in request.Response.TerminalOutcomes)
             {
@@ -960,25 +953,6 @@ public static class ProcessDefinitionValidator
                     subject: owner.Value,
                     expected: Describe(childLink.Result),
                     observed: "no Request result outcome");
-            }
-
-            void ValidateMappedChildResultContract(
-                RequestTerminalOutcomeId outcome,
-                string mappingName)
-            {
-                if (request.Response.Find(outcome) is not RequestFailureDefinition mappedFailure
-                    || childLink.Result == mappedFailure.Schema.Contract)
-                {
-                    return;
-                }
-
-                Error(
-                    ProcessDefinitionDiagnosticCodes.ChildRequestResultContractMismatch,
-                    $"Mapped child terminal outcome '{mappedFailure.Id.Value}' must carry the exact child Process result contract.",
-                    Child(mappingLocation, mappingName),
-                    subject: owner.Value,
-                    expected: Describe(childLink.Result),
-                    observed: Describe(mappedFailure.Schema.Contract));
             }
 
             void ValidateMappedChildOutcome(

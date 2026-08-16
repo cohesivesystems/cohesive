@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
+using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
+using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
 
 namespace Cohesive.Processes.Authoring;
@@ -130,7 +132,7 @@ public sealed class ProcessInvocationResponsePolicy
 /// typed projections used by Process authoring, linking, and host registration.
 /// </remarks>
 /// <typeparam name="TInput">CLR authoring type of the child Process input.</typeparam>
-/// <typeparam name="TResult">CLR authoring type of the child Process terminal result.</typeparam>
+/// <typeparam name="TResult">CLR authoring type of the child Process successful result.</typeparam>
 public sealed class ProcessInvocationProtocol<TInput, TResult>
 {
     internal ProcessInvocationProtocol(
@@ -237,9 +239,11 @@ public sealed class ProcessInvocationProtocol<TInput, TResult>
 /// <summary>Authors canonical child-Process invocation protocols from typed Process handles.</summary>
 public static class ProcessInvocationProtocolAuthoring
 {
+    static readonly IClrTypeRefMapper TypeMapper = new DefaultClrTypeRefMapper();
+
     /// <summary>Authors the Request/Reply protocol for invoking an exact canonical child Process.</summary>
     /// <typeparam name="TInput">CLR authoring type of the child Process input.</typeparam>
-    /// <typeparam name="TResult">CLR authoring type of the child Process terminal result.</typeparam>
+    /// <typeparam name="TResult">CLR authoring type of the child Process successful result.</typeparam>
     /// <param name="process">Exact valid child Process using continue-attempt recovery.</param>
     /// <param name="requestDefinitionId">Stable identity shared by revisions of the invocation Request.</param>
     /// <param name="requestRevisionId">Exact semantic revision of the invocation Request.</param>
@@ -258,6 +262,18 @@ public static class ProcessInvocationProtocolAuthoring
     /// Optional stable Reply identity prefix; defaults to the Request identity followed by <c>/reply</c>.
     /// </param>
     /// <param name="replyRevisionId">Optional Reply revision; defaults to the Request revision.</param>
+    /// <param name="failureSchemaRevision">
+    /// Optional joined execution-failure schema revision; defaults deterministically from the Request identity and
+    /// revision.
+    /// </param>
+    /// <param name="cancelledSchemaRevision">
+    /// Optional joined cancellation-evidence schema revision; defaults deterministically from the Request identity
+    /// and revision.
+    /// </param>
+    /// <param name="terminatedSchemaRevision">
+    /// Optional joined termination-evidence schema revision; defaults deterministically from the Request identity
+    /// and revision.
+    /// </param>
     /// <returns>
     /// A typed handle containing the exact child Process, canonical interaction documents, references, mapping,
     /// and validated interaction catalog.
@@ -285,7 +301,10 @@ public static class ProcessInvocationProtocolAuthoring
         InteractionValueSchemaRevision? resultSchemaRevision = null,
         ProcessChildOutcomeMapping? outcomeMapping = null,
         ExecutionDefinitionId? replyDefinitionPrefix = null,
-        ExecutionRevisionId? replyRevisionId = null)
+        ExecutionRevisionId? replyRevisionId = null,
+        InteractionValueSchemaRevision? failureSchemaRevision = null,
+        InteractionValueSchemaRevision? cancelledSchemaRevision = null,
+        InteractionValueSchemaRevision? terminatedSchemaRevision = null)
     {
         ArgumentNullException.ThrowIfNull(process);
         ArgumentNullException.ThrowIfNull(responsePolicy);
@@ -316,12 +335,23 @@ public static class ProcessInvocationProtocolAuthoring
         var resultSchema = new InteractionValueSchema(
             definition.Result,
             resultSchemaRevision ?? new($"{requestDefinitionId.Value}/result/{requestRevisionId.Value}"));
+        var failureContract = new ValueContract(TypeMapper.Map(typeof(ProcessChildFailure), null));
+        var terminalKindContract = new ValueContract(TypeMapper.Map(typeof(ExecutionTerminalOutcomeKind), null));
+        var failureSchema = new InteractionValueSchema(
+            failureContract,
+            failureSchemaRevision ?? new($"{requestDefinitionId.Value}/failure/{requestRevisionId.Value}"));
+        var cancelledSchema = new InteractionValueSchema(
+            terminalKindContract,
+            cancelledSchemaRevision ?? new($"{requestDefinitionId.Value}/cancelled/{requestRevisionId.Value}"));
+        var terminatedSchema = new InteractionValueSchema(
+            terminalKindContract,
+            terminatedSchemaRevision ?? new($"{requestDefinitionId.Value}/terminated/{requestRevisionId.Value}"));
         ImmutableArray<RequestTerminalOutcomeDefinition> terminalOutcomes =
         [
             new RequestResultDefinition(mapping.Completed, resultSchema),
-            new RequestFailureDefinition(mapping.Failed, resultSchema),
-            new RequestFailureDefinition(mapping.Cancelled, resultSchema),
-            new RequestFailureDefinition(mapping.Terminated, resultSchema)
+            new RequestFailureDefinition(mapping.Failed, failureSchema),
+            new RequestFailureDefinition(mapping.Cancelled, cancelledSchema),
+            new RequestFailureDefinition(mapping.Terminated, terminatedSchema)
         ];
         var requestDocument = InteractionContractDocuments.Create(
             requestDefinitionId,

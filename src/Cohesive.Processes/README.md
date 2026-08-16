@@ -100,15 +100,18 @@ var childProtocol = ChildProcess.Define(metadata).InvocationProtocol(
 ```
 
 The child Process remains authoritative for its exact definition reference and portable input/result contracts.
-The invocation protocol owns the Request identity, response policy, terminal mapping, and generated Request/Reply
-documents. Schema revisions, outcome identities, and the Reply identity prefix have deterministic defaults and can
-be supplied explicitly when they are part of an established compatibility contract. Only a valid child using
-`ContinueAttempt` recovery can author this protocol, matching the exact-attempt join semantics enforced during
-Process linking.
+The invocation protocol owns the Request identity, response policy, terminal mapping, generated Request/Reply
+documents, and the non-success evidence schemas. Successful completion carries the child's exact `TResult`.
+Unhandled child execution failure carries `ProcessChildFailure`, a portable projection of the child's canonical
+terminal node and retained diagnostics. Cancellation and forced termination carry the canonical terminal kind but
+do not fabricate a child result. Schema revisions, outcome identities, and the Reply identity prefix have
+deterministic defaults and can be supplied explicitly when they are part of an established compatibility contract.
+Only a valid child using `ContinueAttempt` recovery can author this protocol, matching the exact-attempt join
+semantics enforced during Process linking.
 
 Within a Process computation, the typed protocol removes the repeated child reference, Request reference, outcome
-mapping, and explicit outcome identities. The four named handlers are required and all receive the protocol's
-`TResult`:
+mapping, and explicit outcome identities. The four named handlers remain exhaustive, but only successful completion
+receives the protocol's `TResult`:
 
 ```csharp
 await process.InvokeProcess(
@@ -120,11 +123,18 @@ await process.InvokeProcess(
     failed: Failed,
     cancelled: Cancelled,
     terminated: Terminated);
+
+async ProcessTask Completed(NormalizedCustomer result) { }
+async ProcessTask Failed(ProcessChildFailure failure) { }
+async ProcessTask Cancelled() { }
+async ProcessTask Terminated() { }
 ```
 
 `purpose` and `cancellation` remain explicit because they describe this invocation occurrence, not the reusable
-protocol. The raw exact-reference overload remains available to generators and importers. Both forms lower to the
-same canonical `InvokeProcessProcessNode` and therefore have identical interpreter and replay behavior.
+protocol. A domain rejection that is part of ordinary child behavior remains an authored result rather than being
+reclassified as an operational failure. The raw exact-reference overload remains available to generators and
+importers. Both forms lower to the same canonical `InvokeProcessProcessNode` and therefore have identical
+interpreter and replay behavior.
 
 Typed durable races bind a closed source-only result family and consume it with an immediately following exhaustive
 type switch:
