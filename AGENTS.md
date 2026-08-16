@@ -29,6 +29,36 @@ The semantic surface should lead; infrastructure concerns should attach to that 
 Cohesive should not collapse to the lowest common denominator of the infrastructure it integrates with.
 Instead, it should model the capability closure of supported targets and expose a first-class capability model so higher-level semantics can use what the underlying systems can actually do.
 
+### Code Quality and Optimization Protocol
+
+Optimal code is contextual. Do not optimize for a single metric, minimum line count, maximum reuse, or speculative generality. Follow the normative [Cohesive Code Quality and Optimization Model](docs/quality/code-quality.md).
+
+By default, prefer the implementation that:
+
+1. Preserves intended semantics and makes invalid or unsupported states explicit.
+2. Maintains one identifiable source of truth for each concept.
+3. Introduces the fewest independent concepts needed to express the design.
+4. Makes ownership, guarantees, failure behavior, and target differences inspectable.
+5. Is easy to verify, diagnose, and change.
+6. Meets demonstrated performance and operational requirements.
+7. Avoids complexity justified only by hypothetical future requirements.
+
+"Small" means a small conceptual surface, not merely fewer lines or types. Syntactic duplication may be acceptable; duplication of semantic authority is not.
+
+For a nontrivial change, identify the semantic authority, invariants, explicit constraints, likely change axes, and relevant sibling implementations before choosing a design. If viable designs differ materially in semantics, performance, conceptual complexity, extensibility, or reversibility, state the tradeoff and the priority being applied. Ask for direction when that priority depends on unavailable product or architectural intent.
+
+Before completing a nontrivial change, audit semantic preservation, authority, abstractions, types, performance, verification, and explainability. Report material tradeoffs and intentionally deferred improvements. Metrics such as cyclomatic complexity, coverage, allocations, dependency count, or line count are evidence that may prompt investigation; they are not standalone definitions of quality.
+
+### Agentic Authoring and Evolution Protocol
+
+Cohesive is designed for agent-first production and evolution, human-centered expression and review, and human-governed acceptance. Agents and tools should produce semantic models through authoritative, inspectable interfaces and human-legible authoring projections rather than make opaque generated output authoritative.
+
+When adding or changing a semantic construct, determine how an agent can inspect, author or patch, validate, explain, compare, and reconcile it with source intent. Preserve stable identity, exact revisions, deterministic serialization and fingerprints, provenance, source maps, structured diagnostics, and bounded context retrieval where the owning layer can support them. A construct available only through handwritten host-language code is incomplete unless that limitation is explicit and temporary.
+
+In C#, prefer typed expression-based fluent builders as the human-reviewable authoring projection when they faithfully cover the semantics. Builders are producers, not semantic authorities. Given fixed authoring input, referenced contracts, producer/compiler version, convention profile, and explicit configuration, lowering must be deterministic. No callback, closure, ambient service, reflection behavior, or arbitrary host-language executable dependency may survive into canonical IR. Validation, compilation, and interpretation consume the materialized IR, and representative fluent/direct-IR equivalence should be tested where practical.
+
+Preserve evolution latitude while the complete Change IR is still being distilled. Prefer immutable, comparable revisions and explicit domain-owned operations over destructive in-place mutation or a speculative universal patch framework. Do not conflate intent, semantic change, realization, deployment, and runtime observation. Treat OpenSpec and other specification formats as attributable producers of intent, drafts, and proposed changes through adapters; they do not become parallel executable authorities.
+
 ### Portable Semantic IR and Multiple Interpretations
 
 Cohesive semantic IRs are portable, durable system models rather than temporary compiler data structures. An IR may be authored through a host-language DSL, inferred by an engine such as ARI, imported from another representation, or produced by tooling. These are producers of the IR, not independent sources of semantic truth. Once materialized, the IR should be explicitly persisted, versioned, managed, and available for inspection.
@@ -192,6 +222,13 @@ Performance techniques for hot paths:
 ## C# Performance Guidelines
 
 Don't optimize prematurely but avoid design decisions that are likely to be costly to change later.
+Prefer clear, intent-revealing implementations on paths not demonstrated to be hot, while preserving
+optimization latitude: keep operation boundaries, data ownership, evaluation behavior, and side
+effects explicit enough to substitute a more efficient realization without changing semantics or
+unrelated callers. LINQ is appropriate when it best expresses intent on a non-hot path; if evidence
+later identifies the path as hot, keep the operation coherent enough to replace it with a fused loop,
+span-based implementation, batching, or another measured strategy. Do not build speculative
+abstractions merely to make hypothetical optimization possible.
 
 ### Memory
 - Minimize allocations and object lifetimes.

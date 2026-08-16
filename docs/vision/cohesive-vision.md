@@ -4,7 +4,7 @@ status: accepted
 authority: cohesive.vision
 owners: [cohesive-core]
 applies_to: [cohesive]
-last_verified: 2026-08-03
+last_verified: 2026-08-12
 supersedes: []
 ---
 
@@ -81,6 +81,15 @@ calibrate intent, examine alternatives, understand consequences, and judge evide
 does not mean primarily human-authored: canonical IR should be readable and navigable by people, but
 agents, inference systems, importers, and other tools are expected to author and transform it.
 
+Cohesive is therefore agent-first in production and evolution, human-centered in expression and
+review, and human-governed in acceptance. Agents and tools should usually produce semantic models
+through attributable authoring projections that people can inspect and discuss. In C# today, typed
+expression-based fluent builders are the preferred projection where they express the semantics
+faithfully: they preserve domain vocabulary, generated contracts, IDE navigation, and readable
+source review without becoming a second semantic authority. Direct IR construction, structured
+patches, importers, inference systems, and future authoring environments remain equally valid
+producers of the same canonical model.
+
 The current compilers and reference interpreters make semantics concrete, executable, testable, and
 falsifiable. They are reference implementations and verification oracles, not a claim that future
 systems must lower through the same phases or emit the same kinds of code. Agent synthesis, learned
@@ -94,6 +103,22 @@ Cohesive makes semantics first-class, portable, persisted values. A semantic mod
 by a coding agent, authored through a host-language DSL, inferred by a system such as Ari, imported
 from another representation, synthesized from examples or observations, or transformed by tooling.
 These are producers of canonical IR, not independent semantic authorities.
+
+Authoring and authority therefore form a deliberate boundary:
+
+```text
+human- and agent-legible authoring projections
+    -> deterministic lowering and acceptance
+    -> canonical persisted IR
+    -> execution and non-execution interpretations
+```
+
+Given the same authoring input, referenced semantic contracts, producer/compiler version,
+convention profile, and explicit configuration, lowering should produce semantically identical
+normalized IR, stable identities, deterministic serialization, and the same semantic fingerprint.
+No arbitrary host callback, closure, ambient service, reflection behavior, or producer-specific
+executable dependency may survive as canonical meaning. Validation and interpretation consume the
+materialized IR rather than re-executing its authoring projection.
 
 Once materialized, the IR can support multiple interpretations:
 
@@ -156,6 +181,21 @@ The lifecycle is a feedback loop rather than a one-way compilation pipeline. Pro
 human corrections, incidents, evaluation results, and discovered constraints can produce new
 proposals. Agents should be able to operate on explicit semantic changes and evidence instead of
 reconstructing the change from a diff of unrelated generated artifacts.
+
+Cohesive should preserve **evolution latitude** while its complete change model is distilled from
+concrete language, migration, reconciliation, and operational use cases. Current designs should
+retain stable semantic identities, immutable exact revisions, deterministic fingerprints,
+provenance, source relationships, and attributable interpretation decisions. They should not
+require destructive in-place mutation, treat textual diffs as semantic authority, or conflate
+requested intent, proposed change, accepted revision, physical realization, deployment, and runtime
+observation. These commitments make richer change interpretations possible without prematurely
+fixing one universal patch algebra, merge model, workflow, or persistence format.
+
+External specifications complement rather than replace the semantic model. OpenSpec, Markdown,
+Notion, issues, and future specification formats should attach through producer-neutral importers
+or adapters that preserve requirements, acceptance criteria, unresolved decisions, and source
+evidence. Imported intent initially produces a draft or proposed semantic change; acceptance and
+reconciliation determine how that intent relates to canonical IR and its realized implementation.
 
 ## Semantic surface before infrastructure
 
@@ -291,6 +331,8 @@ Cohesive should make systems:
 - **adoptable:** individual blocks work in ordinary applications; and
 - **agent-native:** agents can produce and transform IR, reason from bounded semantic evidence, and
   verify their work without making opaque agent output authoritative.
+- **human-governed:** people can calibrate intent, compare alternatives, and accept agent-produced
+  semantic changes through legible projections and attributable evidence.
 
 ## Non-goals
 
@@ -302,8 +344,10 @@ Cohesive is not intended to:
 - make every application declarative or prohibit direct infrastructure access;
 - treat generated code as the source of truth;
 - require people to hand-author canonical IR as the normal development workflow;
+- require every producer or host language to use the same authoring syntax;
 - preserve the current compiler architecture or conventional generated code as permanent machinery;
 - make inference output authoritative without validation and acceptance;
+- freeze a universal change operation algebra before stable common meaning emerges across domains;
 - create a new abstraction for every compiler phase or target; or
 - require complete adoption before providing value.
 
