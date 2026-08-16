@@ -227,7 +227,8 @@ deferred action, replacement attempts retain exact lineage, cooperative cancella
 activation, and termination retains its canonical terminal control result instead of invoking the similarly named
 physical Scheduler operation. Differential tests cover canonical decisions and evidence; a pinned Scheduler
 emulator proves the lifecycle command sequence and replay, completion, bound Request activity dispatch and Reply admission, cross-instance and self-Signal
-delivery, child sub-orchestration, recurrence Continue-as-new, authored failure, duplicate start admission, and
+delivery, child sub-orchestration including exact failed-Reply admission, recurrence Continue-as-new, authored
+top-level failure, duplicate start admission, and
 worker restart at active host work and at unbound Request, Timer, and AwaitMatch boundaries. Shutdown-attributable
 activity cancellation has one adapter-owned physical failure identity and is the only host failure retried by the
 orchestrator; it does not author semantic cancellation, failure, or attempt lineage. Restart does not re-invoke an

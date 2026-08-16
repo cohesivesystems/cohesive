@@ -45,7 +45,9 @@ public static class DurableTaskSequentialProcessNames
 /// The Process document is not copied into this transport value. The receipt pins its exact identity, revision, and
 /// fingerprint, which must resolve to a precompiled plan in the worker's immutable plan catalog. A target-owned
 /// <see cref="Resume"/> snapshot may carry the complete canonical continuation across Continue-as-new history
-/// rollover; it is derived evidence and never replaces the pinned plan as semantic authority.
+/// rollover. <see cref="ChildRequest"/> retains the exact canonical parent Request only for child executions so
+/// the adapter does not depend on optional backend parent metadata. Both are derived execution evidence and never
+/// replace the pinned plan or Request as semantic authority.
 /// </remarks>
 public sealed record DurableTaskSequentialProcessStart
 {
@@ -53,15 +55,23 @@ public sealed record DurableTaskSequentialProcessStart
     /// <param name="receipt">Durably admitted canonical Process-start evidence.</param>
     /// <param name="activationContext">Explicit authority, correlation, delivery, and provenance for emissions.</param>
     /// <param name="resume">Optional exact canonical state retained across one target history rollover.</param>
+    /// <param name="childRequest">
+    /// Optional exact parent Request from which this child start was projected; absent for top-level starts.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="receipt"/> or <paramref name="activationContext"/> is <see langword="null"/>.
     /// </exception>
-    /// <exception cref="ArgumentException">The start and activation contexts have different authority scopes.</exception>
+    /// <exception cref="ArgumentException">
+    /// The start and activation contexts have different authority scopes; child evidence is not an exact projection
+    /// of the supplied Request; or child activation context does not retain its Request correlation, causation,
+    /// delivery, and ordering evidence.
+    /// </exception>
     [JsonConstructor]
     public DurableTaskSequentialProcessStart(
         ProcessStartReceipt receipt,
         ProcessActivationContext activationContext,
-        DurableTaskSequentialProcessResume? resume = null)
+        DurableTaskSequentialProcessResume? resume = null,
+        RequestEnvelope? childRequest = null)
     {
         Receipt = receipt ?? throw new ArgumentNullException(nameof(receipt));
         ActivationContext = activationContext ?? throw new ArgumentNullException(nameof(activationContext));
@@ -70,6 +80,32 @@ public sealed record DurableTaskSequentialProcessStart
             throw new ArgumentException(
                 "Process-start and activation contexts must have the same authority scope.",
                 nameof(activationContext));
+        }
+        if (childRequest is not null)
+        {
+            var target = childRequest.ChildTarget
+                ?? throw new ArgumentException(
+                    "Durable Task child-start evidence requires a canonical Request with an exact child target.",
+                    nameof(childRequest));
+            if (!ProcessChildStartProjection.Matches(
+                    receipt,
+                    childRequest,
+                    target,
+                    receipt.Request.Context.Authorization))
+            {
+                throw new ArgumentException(
+                    "Durable Task child-start evidence does not match the exact projected Process start.",
+                    nameof(childRequest));
+            }
+            if (activationContext.CorrelationId != childRequest.Context.CorrelationId
+                || activationContext.CausationId != childRequest.Context.EmissionId
+                || activationContext.Delivery != childRequest.Context.Delivery
+                || activationContext.Ordering != childRequest.Context.Ordering)
+            {
+                throw new ArgumentException(
+                    "Durable Task child activation must retain the parent Request correlation, causation, delivery, and ordering evidence.",
+                    nameof(activationContext));
+            }
         }
         if (resume is not null)
         {
@@ -97,6 +133,7 @@ public sealed record DurableTaskSequentialProcessStart
             }
         }
         Resume = resume;
+        ChildRequest = childRequest;
     }
 
     /// <summary>Durably admitted exact Process-start evidence.</summary>
@@ -108,8 +145,14 @@ public sealed record DurableTaskSequentialProcessStart
     /// <summary>Optional complete canonical result retained at the preceding target history boundary.</summary>
     public DurableTaskSequentialProcessResume? Resume { get; }
 
+    /// <summary>
+    /// Exact canonical parent Request from which this child start was projected, or <see langword="null"/> for a
+    /// top-level Process start.
+    /// </summary>
+    public RequestEnvelope? ChildRequest { get; }
+
     internal DurableTaskSequentialProcessStart ContinueFrom(DurableTaskSequentialProcessResult result) =>
-        new(Receipt, ActivationContext, new(result));
+        new(Receipt, ActivationContext, new(result), ChildRequest);
 }
 
 /// <summary>Target-owned carrier for exact canonical state across Durable Task Continue-as-new.</summary>

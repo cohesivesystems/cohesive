@@ -404,7 +404,11 @@ flight. Ambiguous outcomes invoke the exact adapter reconciliation path before r
 Fork branches retain canonical tokens and lineage while bound Requests are scheduled concurrently. The canonical
 Join alone selects winning branches and applies its authored cancellation policy. A child invocation becomes a
 sub-orchestration with the interpreter-derived child instance and attempt; its terminal status is mapped through the
-authored child outcome mapping rather than through physical task success or failure. `Propagate` sends the portable
+authored child outcome mapping rather than through physical task success or failure. The child start retains and
+validates the exact parent Request projection so canonical child failure and cancellation behavior do not depend on
+optional Scheduler parent metadata. A failed child therefore physically completes with its canonical failed result,
+allowing the parent's durable Request to acknowledge and admit the declared failed Reply; the same Process started
+at the top level still fails physically with `DurableTaskProcessFailedException`. `Propagate` sends the portable
 `ProcessChildCancellationIntent` to the exact child instance. The child validates the exact definition and
 continuation, deterministically lowers the intent to a canonical `CancelProcessCommand`, and closes its control
 attempt and continuation through the same receipt and cancellation-activation protocol; the parent waits for that
