@@ -193,6 +193,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             invocation.Occurrence);
         var request = new EntityTransitionOperationRequest(
             operation,
+            invocation.Context.AuthorityScope,
             invocation.Definition,
             subject,
             invocation.Input);
@@ -227,6 +228,15 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
         {
             // Prefer exact handoff evidence if the same operation won a race after the first lookup.
             lookup = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
+            if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
+            {
+                return Result(lookup);
+            }
+
+            // A replacement Process attempt has a fresh exact occurrence, but unique-subject creation is naturally
+            // idempotent when the retained authority, Transition, subject, and input are identical. Replaying the
+            // original receipt also preserves its canonical envelopes and target-deduplication identities.
+            lookup = await binding.Repository.TryGetCreationTransitionOperation(context, request).ConfigureAwait(false);
             if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
             {
                 return Result(lookup);

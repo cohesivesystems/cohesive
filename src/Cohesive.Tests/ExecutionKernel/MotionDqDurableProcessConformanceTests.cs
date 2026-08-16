@@ -108,6 +108,7 @@ public sealed class MotionDqDurableProcessConformanceTests
                     crashedInvocation.Token,
                     crashedInvocation.Node,
                     crashedInvocation.Occurrence),
+                crashedInvocation.Context.AuthorityScope,
                 crashedInvocation.Definition,
                 subject,
                 crashedInvocation.Input));
