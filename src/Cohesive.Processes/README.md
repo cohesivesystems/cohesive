@@ -78,6 +78,30 @@ Generation still emits the unchanged canonical `EvaluateRelationProcessNode`, an
 `CreateProcessDefinitionLink()` derives validation evidence from that one authority. Runtime registration is a
 separate interpretation of the exact hosted-Query document.
 
+Processes can also emit canonical one-way interactions directly. The typed calls accept exact contract references
+and portable C# expressions, then lower to the existing event and Signal nodes:
+
+```csharp
+await process.EmitEvent(
+    TrainingDatasetMaterializationsGenerated.Contract,
+    generated,
+    id: new("dataset/publish-completed"),
+    nextRole: "published");
+
+await process.SendSignal(
+    TrainingSignals.Refresh,
+    input.OperatorTarget,
+    generated,
+    id: new("dataset/signal-operator"),
+    nextRole: "sent");
+```
+
+These calls create no host callback or parallel messaging model. The exact contract, portable payload and target
+expressions, stable node and edge identities, and source attribution are retained in canonical IR. At execution,
+the Process continuation and activation derive the envelope's emission, correlation, causation, idempotency,
+authority, delivery, and provenance evidence. The selected interpreter must still satisfy its declared publication
+and Signal-delivery capability requirements.
+
 The same syntax supports typed Transition results, Requests/effects, entity reads represented by Relations,
 `if`/`else`, exact `switch`, explicit Choice/Match policies, durable waits, tuple-valued Fork/Join, bounded admission,
 child Processes, partition work, and recurrence. Use the executable
@@ -219,8 +243,11 @@ completion and cancellation, admission limits, child cancellation, recurrence bo
 canonical facts. The C# frontend does not infer weaker guarantees or hide those policies behind convenient syntax.
 
 `Read` is an authoring alias for exact Relation/Query evaluation; it does not create a second entity-read execution
-model. `Effect` lowers to a typed durable Request and selected terminal outcome. Referenced Processes, Transitions,
-Relations/Queries, and interaction contracts use exact definition identity, revision, and fingerprint evidence.
+model. `Effect` lowers to a typed durable Request and selected terminal outcome. `EmitEvent` and `SendSignal` lower
+to the existing canonical one-way interaction nodes; their target and payload values must remain within the portable
+expression closure, and a Signal requires an explicit non-null semantic target expression. Referenced Processes,
+Transitions, Relations/Queries, and interaction contracts use exact definition identity, revision, and fingerprint
+evidence.
 
 ## Canonical validation and execution
 

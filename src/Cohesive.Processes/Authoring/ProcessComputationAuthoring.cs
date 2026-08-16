@@ -337,6 +337,39 @@ public sealed class ProcessContext
         ExecutionNodeId? id = null) =>
         throw SyntaxOnly();
 
+    /// <summary>Declares one typed domain-event emission without creating a response obligation.</summary>
+    /// <typeparam name="TPayload">Portable CLR type of the exact domain-event payload.</typeparam>
+    /// <param name="contract">Exact typed domain-event contract.</param>
+    /// <param name="payload">Pure portable event payload expression.</param>
+    /// <param name="id">Optional explicit canonical node and logical-emission identity basis.</param>
+    /// <param name="nextRole">Stable semantic role of the continuation edge after emission acceptance.</param>
+    /// <returns>A syntax-only task representing acceptance of the domain-event emission intent.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask EmitEvent<TPayload>(
+        DomainEventContractReference contract,
+        TPayload payload,
+        ExecutionNodeId? id = null,
+        string nextRole = "next") =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares one typed Signal send to an explicitly computed semantic target.</summary>
+    /// <typeparam name="TTarget">Portable CLR type of the Signal target expression.</typeparam>
+    /// <typeparam name="TPayload">Portable CLR type of the exact Signal payload.</typeparam>
+    /// <param name="contract">Exact typed Signal contract.</param>
+    /// <param name="target">Pure portable expression identifying the semantic Signal target.</param>
+    /// <param name="payload">Pure portable Signal payload expression.</param>
+    /// <param name="id">Optional explicit canonical node and logical-emission identity basis.</param>
+    /// <param name="nextRole">Stable semantic role of the continuation edge after send acceptance.</param>
+    /// <returns>A syntax-only task representing acceptance of the Signal send intent.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessTask SendSignal<TTarget, TPayload>(
+        SignalContractReference contract,
+        TTarget target,
+        TPayload payload,
+        ExecutionNodeId? id = null,
+        string nextRole = "next") =>
+        throw SyntaxOnly();
+
     /// <summary>Declares a durable absolute-time wait.</summary>
     /// <param name="dueAt">Pure expression yielding the absolute due instant.</param>
     /// <param name="id">Optional explicit canonical timer identity.</param>

@@ -46,6 +46,137 @@ public sealed class ProcessComputationAuthoringTests
     }
 
     [Fact]
+    public void OutboundInteractionComputation_IsCanonicalRoundTripsAndExecutesWithStableEvidence()
+    {
+        var metadata = OutboundInteractionMetadata();
+        var generated = GeneratedOutboundInteractionProcess.Define(metadata);
+        var emitted = Assert.Single(generated.Definition.Nodes.OfType<EmitEventProcessNode>());
+        var signalled = Assert.Single(generated.Definition.Nodes.OfType<SendSignalProcessNode>());
+        var returned = Assert.Single(generated.Definition.Nodes.OfType<ReturnProcessNode>());
+        var lowLevel = ProcessAuthoring.Create<OutboundInteractionInput, string>(
+            metadata.WithEntry(emitted.Id),
+            process =>
+            {
+                var target = process.Input.Field(static input => input.Target);
+                var payload = process.Input.Field(static input => input.Value);
+
+                process.EmitEvent(
+                    emitted.Id,
+                    GeneratedOutboundInteractionProcess.Event,
+                    payload,
+                    process.Edge(emitted.Id, "published", signalled.Id));
+                process.SendSignal(
+                    signalled.Id,
+                    GeneratedOutboundInteractionProcess.Signal,
+                    target,
+                    payload,
+                    process.Edge(signalled.Id, "sent", returned.Id));
+                process.Return(returned.Id, payload);
+            });
+
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        Assert.True(lowLevel.IsValid, Format(lowLevel.Validation));
+        Assert.Equal(new ExecutionNodeId("interaction/event"), emitted.Id);
+        Assert.Equal(new ExecutionNodeId("interaction/signal"), signalled.Id);
+        Assert.Equal(ProcessAuthoringIdentities.EdgeFor(emitted.Id, "published"), emitted.Next.Id);
+        Assert.Equal(ProcessAuthoringIdentities.EdgeFor(signalled.Id, "sent"), signalled.Next.Id);
+        Assert.Equal(lowLevel.Definition, generated.Definition);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(lowLevel.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(generated.Document));
+
+        var canonical = ExecutionDefinitionJsonSerializer.GetCanonicalBytes(generated.Document);
+        var restoration = ProcessDefinitionDocuments.TryDeserialize(
+            Encoding.UTF8.GetString(canonical),
+            out var restoredDocument,
+            out var restoredDefinition);
+        Assert.True(restoration.IsValid, Format(restoration));
+        Assert.Equal(generated.Definition, restoredDefinition);
+        Assert.Equal(canonical, ExecutionDefinitionJsonSerializer.GetCanonicalBytes(restoredDocument!));
+
+        var catalogValidation = InteractionContractCatalog.TryCreate(
+            [
+                GeneratedOutboundInteractionProcess.EventDocument,
+                GeneratedOutboundInteractionProcess.SignalDocument
+            ],
+            out var catalog);
+        Assert.True(catalogValidation.IsValid, Format(catalogValidation));
+        var context = new ProcessDefinitionValidationContext(
+            interactionContracts: Assert.IsType<InteractionContractCatalog>(catalog));
+        var compilation = generated.Compile(context);
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        var plan = Assert.IsType<CompiledProcessPlan>(compilation.Plan);
+
+        var physical = DurableTaskProcessRealizationCompiler.CompileExecutable(plan);
+        Assert.True(
+            physical.IsSuccessful,
+            string.Join(Environment.NewLine, physical.Realization.Diagnostics.Select(static diagnostic =>
+                $"{diagnostic.Code}: {diagnostic.Message}")));
+        var realization = Assert.IsType<DurableTaskProcessRealizationPlan>(physical.Plan);
+        Assert.Equal(
+            CapabilityRealizationKind.Constrained,
+            Assert.Single(
+                realization.Requirements,
+                static requirement => requirement.Requirement.Key
+                    == ProcessInterpreterRequirementKey.ForConstruct(ProcessWireNames.EmitEventNode))
+                .Decision.Realization);
+        Assert.Equal(
+            CapabilityRealizationKind.Composed,
+            Assert.Single(
+                realization.Requirements,
+                static requirement => requirement.Requirement.Key
+                    == ProcessInterpreterRequirementKey.ForConstruct(ProcessWireNames.SendSignalNode))
+                .Decision.Realization);
+
+        var continuation = new ProcessContinuationIdentity(
+            new("process-instance/outbound-interactions"),
+            new("attempt/1"));
+        var input = PortableValue.Concrete(
+            plan.Definition.Input,
+            ObservationValue.FromObject(new OutboundInteractionInput("reviewer/42", "approved")));
+        var activation = Activation(
+            plan,
+            continuation,
+            id: "activation/outbound-interactions",
+            cause: ProcessActivationCause.Start,
+            observedAtUtc: new(2026, 8, 17, 10, 0, 0, TimeSpan.Zero),
+            causationId: new("emission/source"));
+        var host = new ResolvingSignalHost();
+        var decision = ProcessReferenceInterpreter.Activate(
+            plan,
+            ProcessReferenceInterpreter.Create(plan, continuation, input),
+            activation,
+            host);
+
+        Assert.Equal(ProcessActivationDisposition.Completed, decision.Disposition);
+        var domainEvent = Assert.IsType<DomainEventEnvelope>(decision.Emissions[0]);
+        var signal = Assert.IsType<SignalEnvelope>(decision.Emissions[1]);
+        Assert.Equal(GeneratedOutboundInteractionProcess.Event, domainEvent.Contract);
+        Assert.Equal(GeneratedOutboundInteractionProcess.Signal, signal.Contract);
+        Assert.Equal("approved", domainEvent.Payload.Value?.String);
+        Assert.Equal("approved", signal.Payload.Value?.String);
+        Assert.Equal(domainEvent.Context.CorrelationId, signal.Context.CorrelationId);
+        Assert.Equal(new EmissionId("emission/source"), domainEvent.Context.CausationId);
+        Assert.Equal(domainEvent.Context.CausationId, signal.Context.CausationId);
+        Assert.Equal(domainEvent.Context.AuthorityScope, signal.Context.AuthorityScope);
+        Assert.Equal(domainEvent.Context.Delivery, signal.Context.Delivery);
+        Assert.NotEqual(domainEvent.Context.EmissionId, signal.Context.EmissionId);
+        Assert.NotEqual(domainEvent.Context.IdempotencyKey, signal.Context.IdempotencyKey);
+        Assert.Equal("reviewer/42", Assert.Single(host.Resolutions).Value.Value?.String);
+        Assert.Equal(host.Target, signal.Target);
+
+        var replay = ProcessReferenceInterpreter.Activate(
+            plan,
+            ProcessReferenceInterpreter.Create(plan, continuation, input),
+            activation,
+            new ResolvingSignalHost());
+        var envelopeOptions = InteractionEnvelopeJsonSerializer.CreateOptions();
+        Assert.Equal(
+            JsonSerializer.Serialize(decision.Emissions, envelopeOptions),
+            JsonSerializer.Serialize(replay.Emissions, envelopeOptions));
+    }
+
+    [Fact]
     public void TypedForkComputation_IsByteEquivalentToCanonicalBuilderAuthoring()
     {
         var fork = Node("fork-0");
@@ -1140,6 +1271,15 @@ public sealed class ProcessComputationAuthoringTests
             new("tests/ari-228/durable-wait"),
             DocumentOrigin.User));
 
+    static ProcessAuthoringMetadata OutboundInteractionMetadata() => new(
+        new("process/generated-outbound-interactions"),
+        new("1"),
+        ProcessRecoveryPolicy.ContinueAttempt,
+        new(
+            new("tests.process-computation", "1"),
+            new("tests/ari-336/outbound-interactions"),
+            DocumentOrigin.User));
+
     static ProcessAuthoringMetadata SignalTimerMetadata() => new(
         new("process/generated-signal-timer-wait"),
         new("1"),
@@ -1792,17 +1932,19 @@ public sealed class ProcessComputationAuthoringTests
         ProcessContinuationIdentity continuation,
         string id,
         ProcessActivationCause cause,
-        DateTimeOffset observedAtUtc) => new(
+        DateTimeOffset observedAtUtc,
+        EmissionId? causationId = null) => new(
         id: new(id),
         cause: cause,
         observedAtUtc: observedAtUtc,
         context: new(
             authorityScope: new("authority/tests", "tenant/cohesive"),
             correlationId: new("correlation/signal-wait"),
-            delivery: new(
-                InteractionDurabilityDemand.Durable,
-                InteractionVisibilityDemand.AfterOriginCommit),
-            provenance: plan.Document.Metadata.Provenance));
+                    delivery: new(
+                        InteractionDurabilityDemand.Durable,
+                        InteractionVisibilityDemand.AfterOriginCommit),
+                    provenance: plan.Document.Metadata.Provenance,
+                    causationId: causationId));
 
     sealed class EchoRelationHost : IProcessReferenceHost
     {
@@ -1839,6 +1981,26 @@ public sealed class ProcessComputationAuthoringTests
 
         public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
             throw new InvalidOperationException($"Unexpected Signal resolution at '{resolution.Node.Value}'.");
+    }
+
+    sealed class ResolvingSignalHost : IProcessReferenceHost
+    {
+        internal List<ProcessSignalTargetResolution> Resolutions { get; } = [];
+
+        internal ProcessTokenInteractionTarget? Target { get; private set; }
+
+        public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation) =>
+            throw new InvalidOperationException($"Unexpected Transition invocation at '{invocation.Node.Value}'.");
+
+        public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) =>
+            throw new InvalidOperationException($"Unexpected Relation evaluation at '{evaluation.Node.Value}'.");
+
+        public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution)
+        {
+            Resolutions.Add(resolution);
+            Target = new(resolution.Continuation, resolution.Token);
+            return ProcessSignalTargetResult.Resolved(Target);
+        }
     }
 
     static string Format(DocumentValidationResult validation) => string.Join(
@@ -1886,6 +2048,64 @@ public static partial class CustomerQueryProcessWithPureLocal
         return row;
     }
 }
+
+/// <summary>Representative generated Process that emits one event and sends one addressed Signal.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedOutboundInteractionProcess
+{
+    static readonly ValueContract StringContract = new(new ScalarTypeRef(ScalarTypeKind.String));
+
+    /// <summary>Canonical domain-event document used by the generated Process.</summary>
+    public static ExecutionDefinitionDocument EventDocument { get; } = InteractionContractDocuments.Create(
+        new("event/generated-outbound"),
+        new("1"),
+        new DomainEventContractDefinition(new(StringContract, new("event/generated-outbound/payload/v1"))),
+        Provenance("event"));
+
+    /// <summary>Canonical Signal document used by the generated Process.</summary>
+    public static ExecutionDefinitionDocument SignalDocument { get; } = InteractionContractDocuments.Create(
+        new("signal/generated-outbound"),
+        new("1"),
+        new SignalContractDefinition(new(StringContract, new("signal/generated-outbound/payload/v1"))),
+        Provenance("signal"));
+
+    /// <summary>Exact typed domain-event reference.</summary>
+    public static DomainEventContractReference Event { get; } = new(Reference(EventDocument));
+
+    /// <summary>Exact typed Signal reference.</summary>
+    public static SignalContractReference Signal { get; } = new(Reference(SignalDocument));
+
+    static async ProcessTask<string> Run(ProcessContext process, OutboundInteractionInput input)
+    {
+        await process.EmitEvent(
+            Event,
+            input.Value,
+            id: new("interaction/event"),
+            nextRole: "published");
+        await process.SendSignal(
+            Signal,
+            input.Target,
+            input.Value,
+            id: new("interaction/signal"),
+            nextRole: "sent");
+        return input.Value;
+    }
+
+    static ExecutionDefinitionReference Reference(ExecutionDefinitionDocument document) => new(
+        document.Metadata.DefinitionId,
+        document.Metadata.RevisionId,
+        document.Metadata.Fingerprint);
+
+    static ExecutionProvenance Provenance(string role) => new(
+        new("tests.process-computation", "1"),
+        new($"tests/ari-336/outbound-interactions/{role}"),
+        DocumentOrigin.Generated);
+}
+
+/// <summary>Portable input to the representative outbound-interaction Process.</summary>
+/// <param name="Target">Semantic Signal target resolved by the execution host.</param>
+/// <param name="Value">Typed event and Signal payload.</param>
+public sealed record OutboundInteractionInput(string Target, string Value);
 
 /// <summary>Representative generated typed Fork with bounded canonical admission.</summary>
 [GenerateProcessDefinition(nameof(Run))]
