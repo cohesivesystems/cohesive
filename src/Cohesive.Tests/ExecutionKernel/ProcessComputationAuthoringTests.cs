@@ -2284,9 +2284,9 @@ public static partial class GeneratedTypedChildInvocationProcess
         return input;
 
         async ProcessTask Completed(string result) { }
-        async ProcessTask Failed(string result) { }
-        async ProcessTask Cancelled(string result) { }
-        async ProcessTask Terminated(string result) { }
+        async ProcessTask Failed(ProcessChildFailure failure) { }
+        async ProcessTask Cancelled() { }
+        async ProcessTask Terminated() { }
     }
 }
 
@@ -2308,13 +2308,13 @@ public static partial class GeneratedRawProtocolChildInvocationProcess
                 process.Outcome<string>(
                     GeneratedTypedChildInvocationProtocol.Protocol.OutcomeMapping.Completed,
                     Completed),
-                process.Outcome<string>(
+                process.Outcome<ProcessChildFailure>(
                     GeneratedTypedChildInvocationProtocol.Protocol.OutcomeMapping.Failed,
                     Failed),
-                process.Outcome<string>(
+                process.Outcome(
                     GeneratedTypedChildInvocationProtocol.Protocol.OutcomeMapping.Cancelled,
                     Cancelled),
-                process.Outcome<string>(
+                process.Outcome(
                     GeneratedTypedChildInvocationProtocol.Protocol.OutcomeMapping.Terminated,
                     Terminated)
             ],
@@ -2322,9 +2322,9 @@ public static partial class GeneratedRawProtocolChildInvocationProcess
         return input;
 
         async ProcessTask Completed(string result) { }
-        async ProcessTask Failed(string result) { }
-        async ProcessTask Cancelled(string result) { }
-        async ProcessTask Terminated(string result) { }
+        async ProcessTask Failed(ProcessChildFailure failure) { }
+        async ProcessTask Cancelled() { }
+        async ProcessTask Terminated() { }
     }
 }
 

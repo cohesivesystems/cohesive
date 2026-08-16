@@ -107,7 +107,7 @@ construct. `Composed` combines Durable Task facilities with canonical interprete
 | `TimerProcessNode` | Absolute due instant, stable timer occurrence and durable resumption | Native durable timer plus canonical timer identity and continuation evidence | Composed |
 | `ReplyProcessNode` | Exact inbound Request discharge, typed Reply and correlation | Reply envelope publication or child completion plus canonical obligation evidence | Composed |
 | `DurableCutProcessNode` | End one finite activation and resume at the exact canonical edge | Durable Task history boundary plus canonical continuation and activation evidence | Composed |
-| `InvokeProcessProcessNode` | Exact child definition, start/join protocol, purpose, outcome mapping and cancellation | Sub-orchestration plus canonical child Request/Reply protocol and identity derivation | Composed |
+| `InvokeProcessProcessNode` | Exact child definition, start/join protocol, purpose, outcome mapping and cancellation; `TResult` only on completion and typed operational evidence on failure | Sub-orchestration plus canonical child Request/Reply protocol, identity derivation, and exact projection of the terminal node and retained failure diagnostics | Composed |
 | `ForEachPartitionProcessNode` | Finite partition identity, bounds, capacity, failure and cancellation policy | Bounded sub-orchestration fan-out with validated target and payload limits | Constrained |
 | `RepeatAcrossActivationProcessNode` | Durable recurrence, occurrence bound, progress proof, exhausted and stalled outcomes | Durable reactivation or continue-as-new while retaining canonical recurrence evidence | Composed |
 | `ReturnProcessNode` | Typed successful terminal result and exact terminal trace | Complete orchestration with canonical result evidence | Native |
@@ -302,7 +302,10 @@ durable Request pause/retry/reconciliation races, complete observability, and th
 matrix remain outside the current slice. RestartAttempt and Terminate currently accept only `RetainEvidence`; stronger cleanup
 demands fail before canonical admission. Higher-order execution retains
 canonical branch selection and lineage, schedules bounded branch work concurrently, maps exact child terminal status
-through the authored Request contract, and enforces partition and recurrence bounds without truncation. Parent child
+through the authored Request contract, and enforces partition and recurrence bounds without truncation. Joined child
+completion carries the exact declared Process result. Failure instead projects the canonical terminal node and
+retained diagnostics as `ProcessChildFailure`; cancellation and termination project their canonical terminal kind,
+so the runtime never fabricates a successful child result for a non-successful outcome. Parent child
 `Propagate` and `Detach` policies are realized explicitly: propagated cancellation is delivered as an exact portable
 intent, lowered deterministically at the child to a canonical `CancelProcessCommand`, applied through the same
 control receipt and cancellation activation, and awaited, while detached child work remains independently active.

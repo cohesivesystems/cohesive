@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
+using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Authoring;
+using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
 
 namespace Cohesive.Tests.ExecutionKernel;
@@ -89,6 +91,18 @@ public sealed class ProcessInvocationProtocolAuthoringTests
             "request/tests/child-invocation/result/revision/7",
             request.Response.Find(first.OutcomeMapping.Completed)!.Schema.Revision.Value);
         Assert.Equal(
+            "request/tests/child-invocation/failure/revision/7",
+            request.Response.Find(first.OutcomeMapping.Failed)!.Schema.Revision.Value);
+        Assert.Equal(
+            new ValueContract(new DefaultClrTypeRefMapper().Map(typeof(ProcessChildFailure), null)),
+            request.Response.Find(first.OutcomeMapping.Failed)!.Schema.Contract);
+        Assert.Equal(
+            new ValueContract(new DefaultClrTypeRefMapper().Map(typeof(ExecutionTerminalOutcomeKind), null)),
+            request.Response.Find(first.OutcomeMapping.Cancelled)!.Schema.Contract);
+        Assert.Equal(
+            request.Response.Find(first.OutcomeMapping.Cancelled)!.Schema.Contract,
+            request.Response.Find(first.OutcomeMapping.Terminated)!.Schema.Contract);
+        Assert.Equal(
             first.Documents.Select(static document => document.Metadata.Fingerprint),
             second.Documents.Select(static document => document.Metadata.Fingerprint));
     }
@@ -147,6 +161,27 @@ public sealed class ProcessInvocationProtocolAuthoringTests
         Assert.Contains(nameof(ProcessRecoveryPolicy.RestartAttempt), exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ProcessChildFailure_RequiresTerminalNodeAndRetainsOptionalDiagnosticsStructurally()
+    {
+        var diagnostic = new DocumentValidationDiagnostic(
+            ProcessExecutionDiagnosticCodes.OperationFailed,
+            DiagnosticSeverity.Error,
+            "Child operation failed.",
+            "/operation");
+        var first = new ProcessChildFailure(new("relation"), [diagnostic]);
+        var second = new ProcessChildFailure(new("relation"), [diagnostic]);
+        var authoredFailure = new ProcessChildFailure(new("fail"), default);
+
+        Assert.Equal(first, second);
+        Assert.Equal(first.GetHashCode(), second.GetHashCode());
+        Assert.Empty(authoredFailure.Diagnostics);
+        Assert.Throws<ArgumentException>(() => new ProcessChildFailure(default, []));
+        Assert.Throws<ArgumentException>(() => new ProcessChildFailure(
+            new("fail"),
+            ImmutableArray.CreateRange<DocumentValidationDiagnostic>([null!])));
+    }
+
     static Process<string, string> ChildProcess(
         ProcessRecoveryPolicy recoveryPolicy = ProcessRecoveryPolicy.ContinueAttempt) =>
         ProcessAuthoring.Create<string, string>(
@@ -164,12 +199,22 @@ public sealed class ProcessInvocationProtocolAuthoringTests
     {
         var input = new InteractionValueSchema(process.Definition.Input, InputRevision);
         var result = new InteractionValueSchema(process.Definition.Result, ResultRevision);
+        var mapper = new DefaultClrTypeRefMapper();
+        var failure = new InteractionValueSchema(
+            new ValueContract(mapper.Map(typeof(ProcessChildFailure), null)),
+            new($"{RequestId.Value}/failure/{RevisionId.Value}"));
+        var cancelled = new InteractionValueSchema(
+            new ValueContract(mapper.Map(typeof(ExecutionTerminalOutcomeKind), null)),
+            new($"{RequestId.Value}/cancelled/{RevisionId.Value}"));
+        var terminated = new InteractionValueSchema(
+            new ValueContract(mapper.Map(typeof(ExecutionTerminalOutcomeKind), null)),
+            new($"{RequestId.Value}/terminated/{RevisionId.Value}"));
         ImmutableArray<RequestTerminalOutcomeDefinition> outcomes =
         [
             new RequestResultDefinition(CustomMapping.Completed, result),
-            new RequestFailureDefinition(CustomMapping.Failed, result),
-            new RequestFailureDefinition(CustomMapping.Cancelled, result),
-            new RequestFailureDefinition(CustomMapping.Terminated, result)
+            new RequestFailureDefinition(CustomMapping.Failed, failure),
+            new RequestFailureDefinition(CustomMapping.Cancelled, cancelled),
+            new RequestFailureDefinition(CustomMapping.Terminated, terminated)
         ];
         var requestDocument = InteractionContractDocuments.Create(
             RequestId,

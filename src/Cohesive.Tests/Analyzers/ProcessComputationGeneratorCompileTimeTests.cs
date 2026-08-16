@@ -1217,6 +1217,7 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
         var source = """
                      using Cohesive.Execution;
                      using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.Execution;
                      using Cohesive.Processes.IR;
 
                      namespace Sample;
@@ -1241,9 +1242,9 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
                              return new Result(input);
 
                              async ProcessTask Completed(Result result) { }
-                             async ProcessTask Failed(Result result) { }
-                             async ProcessTask Cancelled(Result result) { }
-                             async ProcessTask Terminated(Result result) { }
+                             async ProcessTask Failed(ProcessChildFailure failure) { }
+                             async ProcessTask Cancelled() { }
+                             async ProcessTask Terminated() { }
                          }
                      }
 
@@ -1278,6 +1279,7 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
         var source = """
                      using Cohesive.Execution;
                      using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.Execution;
                      using Cohesive.Processes.IR;
 
                      namespace Sample;
@@ -1290,8 +1292,8 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
                          private static async ProcessTask<string> Run(ProcessContext process, string input)
                          {
                              async ProcessTask Completed(string result) { }
-                             async ProcessTask Failed(string result) { }
-                             async ProcessTask Cancelled(string result) { }
+                             async ProcessTask Failed(ProcessChildFailure failure) { }
+                             async ProcessTask Cancelled() { }
                              await process.InvokeProcess(
                                  Protocol,
                                  input,
@@ -1521,6 +1523,7 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
         var source = """
                      using Cohesive.Execution;
                      using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.Execution;
                      using Cohesive.Processes.IR;
 
                      namespace Sample;
@@ -1533,8 +1536,8 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
                          private static async ProcessTask<string> Run(ProcessContext process, string input)
                          {
                              async ProcessTask Completed(string result) { }
-                             async ProcessTask Failed(string result) { }
-                             async ProcessTask Cancelled(string result) { }
+                             async ProcessTask Failed(ProcessChildFailure failure) { }
+                             async ProcessTask Cancelled() { }
                              await process.InvokeProcess(
                                  protocol: Protocol,
                                  input: input,

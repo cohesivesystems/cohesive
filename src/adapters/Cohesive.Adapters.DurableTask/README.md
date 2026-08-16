@@ -406,9 +406,12 @@ Join alone selects winning branches and applies its authored cancellation policy
 sub-orchestration with the interpreter-derived child instance and attempt; its terminal status is mapped through the
 authored child outcome mapping rather than through physical task success or failure. The child start retains and
 validates the exact parent Request projection so canonical child failure and cancellation behavior do not depend on
-optional Scheduler parent metadata. A failed child therefore physically completes with its canonical failed result,
-allowing the parent's durable Request to acknowledge and admit the declared failed Reply; the same Process started
-at the top level still fails physically with `DurableTaskProcessFailedException`. `Propagate` sends the portable
+optional Scheduler parent metadata. A failed child sub-orchestration therefore completes physically with a canonical
+failed disposition, while the parent projects the child's terminal node and retained diagnostics into the exact
+declared `ProcessChildFailure` contract and admits the failed Reply. It never fabricates the child's successful
+result type. Cancellation and termination similarly project their canonical terminal kind through their declared
+contracts. The same Process started at the top level still fails physically with
+`DurableTaskProcessFailedException`. `Propagate` sends the portable
 `ProcessChildCancellationIntent` to the exact child instance. The child validates the exact definition and
 continuation, deterministically lowers the intent to a canonical `CancelProcessCommand`, and closes its control
 attempt and continuation through the same receipt and cancellation-activation protocol; the parent waits for that
@@ -461,8 +464,9 @@ repository/explain slice owns supported retrieval of that evidence. The runtime 
 into semantic cancellation or invent timeout/escalation values.
 
 `Return` completes the orchestration. An authored root `Fail` produces canonical failure evidence and a failed
-physical orchestration; child failure remains a semantic child result for its parent. A canonical Durable Cut closes
-one finite activation and resumes with exact continuation evidence, using Continue-as-new in the SDK realization.
+physical orchestration; a joined child failure becomes a typed failed Reply for its parent, with the child execution
+record remaining authoritative for its terminal state and full evidence. A canonical Durable Cut closes one finite
+activation and resumes with exact continuation evidence, using Continue-as-new in the SDK realization.
 
 ### Why the orchestration keeps a target-local suspension driver
 

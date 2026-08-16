@@ -601,8 +601,8 @@ public sealed class ProcessDefinitionValidatorTests
     [InlineData("failed")]
     [InlineData("cancelled")]
     [InlineData("terminated")]
-    public void Validate_MappedChildTerminalFailureMustCarryTheExactChildProcessResultContract(
-        string mismatchedOutcome)
+    public void Validate_MappedChildTerminalFailuresMayCarryProtocolSpecificEvidenceContracts(
+        string distinctOutcome)
     {
         var child = DefinitionReference("process/review-child-failure");
         var requestDocument = InteractionDocument(
@@ -661,13 +661,10 @@ public sealed class ProcessDefinitionValidatorTests
 
         var validation = ProcessDefinitionValidator.Validate(definition, context);
 
-        AssertDiagnostic(
-            validation,
-            ProcessDefinitionDiagnosticCodes.ChildRequestResultContractMismatch,
-            $"/nodes/0/outcomeMapping/{mismatchedOutcome}");
+        Assert.True(validation.IsValid, FormatDiagnostics(validation));
 
         InteractionValueSchema FailureSchema(string outcome) =>
-            string.Equals(outcome, mismatchedOutcome, StringComparison.Ordinal)
+            string.Equals(outcome, distinctOutcome, StringComparison.Ordinal)
                 ? BooleanSchema()
                 : StringSchema();
     }

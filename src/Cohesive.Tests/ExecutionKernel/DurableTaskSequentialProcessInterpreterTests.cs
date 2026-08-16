@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Threading.Channels;
 using Cohesive.Execution;
+using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
@@ -3085,7 +3086,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             [Physical(fixture.Parent), Physical(fixture.Child)],
             [fixture.Binding]);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        using var worker = SchedulerHost(connectionString, catalog, RejectingHost.Instance);
+        using var worker = SchedulerHost(connectionString, catalog, FailingRelationHost.Instance);
         await worker.StartAsync(timeout.Token);
         var client = worker.Services.GetRequiredService<DurableTaskClient>();
 
@@ -3098,7 +3099,9 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             parentSchedule.InstanceId,
             getInputsAndOutputs: true,
             timeout.Token);
-        Assert.Equal(OrchestrationRuntimeStatus.Completed, parentInstance.RuntimeStatus);
+        Assert.True(
+            parentInstance.RuntimeStatus == OrchestrationRuntimeStatus.Completed,
+            $"Parent physical failure: {parentInstance.FailureDetails}");
         var parent = Assert.IsType<DurableTaskSequentialProcessResult>(
             parentInstance.ReadOutputAs<DurableTaskSequentialProcessResult>());
         Assert.Equal(ProcessActivationDisposition.Completed, parent.Disposition);
@@ -3110,7 +3113,8 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var attempt = Assert.Single(operation.State.Attempts);
         Assert.Equal(DurableOperationAttemptStage.Acknowledged, attempt.Stage);
         var acknowledgement = Assert.IsType<DurableOperationAcknowledgement>(operation.State.Acknowledgement);
-        Assert.Equal(ChildOutcomeMapping.Failed, Assert.IsType<RequestFailureOutcome>(acknowledgement.Outcome).Id);
+        var failureOutcome = Assert.IsType<RequestFailureOutcome>(acknowledgement.Outcome);
+        Assert.Equal(ChildOutcomeMapping.Failed, failureOutcome.Id);
         Assert.Equal(attempt.Claim.AttemptId, acknowledgement.AttemptId);
         Assert.Null(acknowledgement.RecoveryIdentity);
         var childTarget = Assert.IsType<ProcessChildRequestTarget>(operation.State.Request.ChildTarget);
@@ -3132,6 +3136,12 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.Equal(ExecutionTerminalOutcomeKind.Failed, child.State.Terminal.Kind);
         Assert.Equal(childTarget.Definition, child.State.Definition);
         Assert.Equal(childTarget.Continuation, child.State.Continuation);
+        Assert.Contains(child.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Equal(
+            PortableValue.Concrete(
+                ProcessChildFailureContract(),
+                ObservationValue.FromObject(new ProcessChildFailure(origin.Node, child.Diagnostics))),
+            failureOutcome.Value);
 
         var topLevelStart = Start(
             fixture.Child,
@@ -4337,15 +4347,21 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 
     static ChildProcessFixture CompileFailingChildParentPlan()
     {
+        var relation = DefinitionReference("relation/durable-task-failing-child", '6');
         var child = Compile(
-            Definition("fail", [new FailProcessNode(new("fail"), Expr.BoundValue(ProcessBindingIds.Input))]),
+            Definition(
+                "relation",
+                [
+                    new EvaluateRelationProcessNode(
+                        new("relation"),
+                        relation,
+                        Expr.BoundValue(ProcessBindingIds.Input),
+                        new(Edge("edge/relation-return", "return"))),
+                    new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))
+                ]),
+            definitions: [new(relation, ProcessDefinitionLinkKind.RelationQuery, StringContract, StringContract)],
             definitionId: "process/durable-task-failing-child");
-        var interactions = RequestContracts(
-            "failing-child",
-            "completed",
-            "failed",
-            "cancelled",
-            "terminated");
+        var interactions = JoinedChildRequestContracts("failing-child");
         var parent = Compile(
             Definition(
                 "child",
@@ -4622,7 +4638,29 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     static RequestContractFixture RequestContracts(
         string name,
         ValueContract payloadContract,
-        params string[] outcomes)
+        params string[] outcomes) => RequestContracts(
+        name,
+        payloadContract,
+        outcomes,
+        static _ => StringContract);
+
+    static RequestContractFixture JoinedChildRequestContracts(string name) => RequestContracts(
+        name,
+        StringContract,
+        ["completed", "failed", "cancelled", "terminated"],
+        outcome => outcome switch
+        {
+            "completed" => StringContract,
+            "failed" => ProcessChildFailureContract(),
+            "cancelled" or "terminated" => ExecutionTerminalOutcomeKindContract(),
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unknown child outcome.")
+        });
+
+    static RequestContractFixture RequestContracts(
+        string name,
+        ValueContract payloadContract,
+        IReadOnlyList<string> outcomes,
+        Func<string, ValueContract> outcomeContract)
     {
         var requestDocument = InteractionDocument(
             $"interaction/request/durable-task-{name}",
@@ -4632,10 +4670,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                     [.. outcomes.Select(outcome => outcome is "failed" or "cancelled" or "terminated"
                         ? (RequestTerminalOutcomeDefinition)new RequestFailureDefinition(
                             new(outcome),
-                            new(StringContract, new($"{outcome}/v1")))
+                            new(outcomeContract(outcome), new($"{outcome}/v1")))
                         : new RequestResultDefinition(
                             new(outcome),
-                            new(StringContract, new($"{outcome}/v1"))))],
+                            new(outcomeContract(outcome), new($"{outcome}/v1"))))],
                     RequestOptionalTerminalSemantics.Unsupported,
                     RequestOptionalTerminalSemantics.Unsupported,
                     RequestResultDisposition.Observe,
@@ -4669,6 +4707,12 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 new("node/escalate")));
         return new(request, catalog, binding);
     }
+
+    static ValueContract ProcessChildFailureContract() => new(
+        new DefaultClrTypeRefMapper().Map(typeof(ProcessChildFailure), null));
+
+    static ValueContract ExecutionTerminalOutcomeKindContract() => new(
+        new DefaultClrTypeRefMapper().Map(typeof(ExecutionTerminalOutcomeKind), null));
 
     static DurableTaskDurableOperationAttemptResult CompletedChild(
         EmissionId request,
@@ -5481,6 +5525,24 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 
         public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) =>
             throw new InvalidOperationException("Unexpected Relation evaluation.");
+
+        public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
+            throw new InvalidOperationException("Unexpected Signal target resolution.");
+    }
+
+    sealed class FailingRelationHost : IProcessReferenceHost
+    {
+        internal static FailingRelationHost Instance { get; } = new();
+
+        public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation) =>
+            throw new InvalidOperationException("Unexpected Transition invocation.");
+
+        public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) =>
+            ProcessOperationResult.Failed(new DocumentValidationDiagnostic(
+                ProcessExecutionDiagnosticCodes.OperationFailed,
+                DiagnosticSeverity.Error,
+                "Synthetic joined child Relation failure.",
+                "/operation/relation"));
 
         public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
             throw new InvalidOperationException("Unexpected Signal target resolution.");

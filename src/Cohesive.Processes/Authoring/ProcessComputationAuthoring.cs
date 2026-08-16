@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using Cohesive.Execution;
+using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
 using Cohesive.Relations.Authoring;
 
@@ -286,13 +287,13 @@ public sealed class ProcessContext
     /// <see cref="InvokeProcessProcessNode"/> and erases the CLR protocol handle and branch functions.
     /// </remarks>
     /// <typeparam name="TInput">Portable child input type declared by the protocol's canonical Process.</typeparam>
-    /// <typeparam name="TResult">Portable child terminal-result type supplied to every semantic branch.</typeparam>
+    /// <typeparam name="TResult">Portable child result type supplied only to successful completion.</typeparam>
     /// <param name="protocol">Typed exact child Process and Request/Reply invocation protocol.</param>
     /// <param name="input">Pure child input and Request payload fused into the canonical invocation.</param>
     /// <param name="purpose">Explicit work, compensation, or reconciliation purpose.</param>
     /// <param name="cancellation">Explicit parent-to-child cancellation behavior.</param>
     /// <param name="completed">Named source-only branch selected when the child completes successfully.</param>
-    /// <param name="failed">Named source-only branch selected when the child fails.</param>
+    /// <param name="failed">Named source-only branch receiving structured child execution-failure evidence.</param>
     /// <param name="cancelled">Named source-only branch selected when the child is cancelled.</param>
     /// <param name="terminated">Named source-only branch selected when the child is forcibly terminated.</param>
     /// <param name="id">Optional explicit canonical node identity.</param>
@@ -304,9 +305,9 @@ public sealed class ProcessContext
         ProcessChildPurpose purpose,
         ProcessChildCancellationPolicy cancellation,
         ProcessOutcomeBranch<TResult> completed,
-        ProcessOutcomeBranch<TResult> failed,
-        ProcessOutcomeBranch<TResult> cancelled,
-        ProcessOutcomeBranch<TResult> terminated,
+        ProcessOutcomeBranch<ProcessChildFailure> failed,
+        ProcessBranch cancelled,
+        ProcessBranch terminated,
         ExecutionNodeId? id = null) =>
         throw SyntaxOnly();
 
