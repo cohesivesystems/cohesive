@@ -10,8 +10,8 @@ namespace Cohesive.Processes.Execution;
 /// The authoritative durable source is the owning <see cref="ProcessChildState"/> in
 /// <see cref="ProcessChildDisposition.CancellationRequested"/>. This projection gives runtimes and adapters a
 /// deterministic, portable control surface after recovery without creating a second state authority. Construction
-/// validates transport integrity; only projection from authoritative parent state proves that cancellation was
-/// semantically requested.
+/// validates transport integrity; only projection from authoritative parent state, or from that state together with
+/// its exact canonical attempt-restart intent, proves that cancellation was semantically requested.
 /// </remarks>
 public sealed record ProcessChildCancellationIntent
 {
@@ -124,9 +124,57 @@ public static class ProcessChildCancellationIntents
     /// <exception cref="InvalidOperationException">
     /// A cancellation-requested child lacks its exact propagated policy, Request emission, or identity evidence.
     /// </exception>
-    public static ImmutableArray<ProcessChildCancellationIntent> Project(ProcessContinuationState state)
+    public static ImmutableArray<ProcessChildCancellationIntent> Project(ProcessContinuationState state) =>
+        ProjectCore(
+            state,
+            static child => child.Disposition == ProcessChildDisposition.CancellationRequested);
+
+    /// <summary>
+    /// Projects the propagated child cancellations required to close an abandoned attempt before its replacement
+    /// may start child work.
+    /// </summary>
+    /// <param name="state">Exact continuation of the attempt being abandoned.</param>
+    /// <param name="restart">Canonical lifecycle intent authorizing the attempt replacement.</param>
+    /// <returns>
+    /// Replay-stable intents for active or already cancellation-requested children whose authored policy is
+    /// <see cref="ProcessChildCancellationPolicy.Propagate"/>. Detached, pending, and terminal children contribute
+    /// no intent.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">Either argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="restart"/> does not close the exact Process instance and attempt retained by
+    /// <paramref name="state"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// A selected child lacks its exact propagated policy, Request emission, or identity evidence.
+    /// </exception>
+    public static ImmutableArray<ProcessChildCancellationIntent> ProjectAttemptRestart(
+        ProcessContinuationState state,
+        ProcessAttemptRestartIntent restart)
     {
         ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(restart);
+        if (restart.ProcessInstanceId != state.Continuation.ProcessInstanceId
+            || restart.AbandonedAttemptId != state.Continuation.ProcessAttemptId)
+        {
+            throw new ArgumentException(
+                "A child restart-closure projection requires the canonical intent for the retained parent attempt.",
+                nameof(restart));
+        }
+
+        return ProjectCore(
+            state,
+            static child => child.Cancellation == ProcessChildCancellationPolicy.Propagate
+                && child.Disposition is
+                    ProcessChildDisposition.Active or ProcessChildDisposition.CancellationRequested);
+    }
+
+    static ImmutableArray<ProcessChildCancellationIntent> ProjectCore(
+        ProcessContinuationState state,
+        Func<ProcessChildState, bool> include)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(include);
         if (!IsValid(state.Definition) || !IsValid(state.Continuation))
         {
             throw new InvalidOperationException(
@@ -142,7 +190,7 @@ public static class ProcessChildCancellationIntents
                     "A child cancellation-intent projection cannot inspect a null restored child entry.");
             }
 
-            if (child.Disposition != ProcessChildDisposition.CancellationRequested)
+            if (!include(child))
                 continue;
             if (child.Cancellation != ProcessChildCancellationPolicy.Propagate
                 || child.RequestEmission is not { } request

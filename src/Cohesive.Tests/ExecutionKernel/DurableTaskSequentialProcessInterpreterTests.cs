@@ -801,6 +801,100 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
+    public async Task LifecycleControl_RestartAttemptClosesPropagatedChildBeforeStartingReplacement()
+    {
+        var fixture = CompileChildParentPlan(ProcessRecoveryPolicy.RestartAttempt);
+        var start = Start(fixture.Parent, "restart-child", "instance/control-restart-child");
+        var now = StartedAtUtc;
+        var controls = Channel.CreateUnbounded<ProcessControlCommand>();
+        ConcurrentDictionary<EmissionId, PendingChild> pending = [];
+        ConcurrentQueue<DurableTaskSequentialProcessResult> observations = [];
+        var dispatched = new TaskCompletionSource<ProcessChildCancellationIntent>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            fixture.Parent,
+            start,
+            new DurableRequestBindingCatalog([fixture.Binding]),
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            invocation =>
+            {
+                var target = Assert.IsType<ProcessChildRequestTarget>(invocation.Request.ChildTarget);
+                var completion = new TaskCompletionSource<DurableTaskDurableOperationAttemptResult>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                Assert.True(pending.TryAdd(
+                    invocation.Request.Context.EmissionId,
+                    new(target, completion)));
+                return completion.Task;
+            },
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            TestDurableTimer,
+            () => now,
+            observations.Enqueue,
+            dispatchChildCancellation: intent =>
+            {
+                dispatched.TrySetResult(intent);
+                return Task.CompletedTask;
+            },
+            waitForControl: () => controls.Reader.ReadAsync().AsTask());
+
+        await WaitUntilAsync(() => pending.Count == 1);
+        var abandoned = Assert.Single(pending);
+        var running = await WaitForObservationAsync(
+            observations,
+            static result => result.Control.CurrentAttempt.Phase == ProcessControlExecutionPhase.AtSafePoint
+                && result.State.Children.Length == 1);
+        now = now.AddSeconds(1);
+        var restart = Restart(start, running.Control, "control/restart-child", now, new("process-attempt/2"));
+        await controls.Writer.WriteAsync(restart);
+
+        var intent = await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(abandoned.Key, intent.RequestEmission);
+        Assert.Equal(abandoned.Value.Target.Continuation, intent.ChildContinuation);
+        Assert.Equal(start.Receipt.Request.InitialContinuation, intent.ParentContinuation);
+        Assert.Single(pending);
+        Assert.False(execution.IsCompleted);
+
+        abandoned.Value.Completion.SetResult(CancelledChild(abandoned.Key, abandoned.Value.Target));
+        await WaitUntilAsync(() => pending.Count == 2 || execution.IsCompleted);
+        Assert.False(
+            execution.IsCompleted,
+            execution.Exception?.GetBaseException().ToString()
+            ?? "Restart execution completed before scheduling the replacement child.");
+        var replacement = Assert.Single(pending, candidate => candidate.Key != abandoned.Key);
+        Assert.NotEqual(abandoned.Value.Target.Continuation, replacement.Value.Target.Continuation);
+        Assert.NotEqual(abandoned.Key, replacement.Key);
+
+        replacement.Value.Completion.SetResult(CompletedChild(replacement.Key, replacement.Value.Target));
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(new ProcessAttemptId("process-attempt/2"), result.State.Continuation.ProcessAttemptId);
+        Assert.Equal(ProcessChildDisposition.Completed, Assert.Single(result.State.Children).Disposition);
+        Assert.Equal(
+            [ProcessControlAttemptDisposition.Abandoned, ProcessControlAttemptDisposition.Current],
+            result.Control.Attempts.Select(static attempt => attempt.Disposition));
+        var abandonedOperation = result.DurableOperations.Single(operation =>
+            operation.State.OperationId == abandoned.Key);
+        Assert.Equal(
+            DurableTaskDurableOperationDisposition.ResultDispositioned,
+            abandonedOperation.Disposition);
+        Assert.Equal(DurableOperationResultArrival.Stale, abandonedOperation.State.Admission?.Arrival);
+        Assert.Equal(
+            DurableOperationAdmissionDisposition.Rejected,
+            abandonedOperation.State.Admission?.Disposition);
+        Assert.Equal(
+            [
+                start.Receipt.Request.InitialContinuation.ProcessAttemptId,
+                new ProcessAttemptId("process-attempt/2"),
+                new ProcessAttemptId("process-attempt/2")
+            ],
+            result.Traces.Select(static trace => trace.Continuation!.ProcessAttemptId));
+    }
+
+    [Fact]
     public async Task LifecycleControl_CancelAndTerminateRemainDistinctFromTransportCancellation()
     {
         var cancelled = await RunTerminalControlAsync(terminate: false);
@@ -1537,6 +1631,12 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.Equal(ChildOutcomeMapping.Completed, child.TerminalOutcome);
         Assert.Equal(StringValue("child-completed"), child.Result);
         Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        var ready = Assert.Single(result.DurableOperations);
+        Assert.Equal(DurableTaskDurableOperationDisposition.ReplyReady, ready.Disposition);
+        var fenced = DurableTaskSequentialProcessInterpreter.FenceAbandonedChildResult(ready);
+        Assert.Equal(DurableTaskDurableOperationDisposition.SupersededByAttemptRestart, fenced.Disposition);
+        Assert.Same(ready.State, fenced.State);
+        Assert.Null(fenced.Input);
     }
 
     [Fact]
@@ -2798,6 +2898,94 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [DurableTaskSchedulerFact]
+    public async Task SchedulerEmulator_RestartAttemptClosesOldChildBeforeReplacementCompletes()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
+            ?? throw new InvalidOperationException(
+                "The Durable Task Scheduler connection string disappeared after test discovery.");
+        var fixture = CompileRestartableTimerChildParentPlan();
+        var catalog = new DurableTaskSequentialProcessPlanCatalog(
+            [Physical(fixture.Parent), Physical(fixture.Child)],
+            [fixture.Binding]);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var worker = SchedulerHost(connectionString, catalog, RejectingHost.Instance);
+        await worker.StartAsync(timeout.Token);
+        var client = worker.Services.GetRequiredService<DurableTaskClient>();
+        var dueAtUtc = DateTimeOffset.UtcNow.AddSeconds(5);
+        var start = Start(
+            fixture.Parent,
+            InstantValue(dueAtUtc),
+            $"instance/scheduler-restart-child/{Guid.NewGuid():N}");
+        var scheduled = await client.ScheduleCohesiveProcessAsync(start, timeout.Token);
+        var waiting = await WaitForActiveWait(
+            client,
+            scheduled.InstanceId,
+            ProcessWaitKind.Request,
+            timeout.Token);
+        var restart = Restart(
+            start,
+            waiting,
+            "scheduler-control/restart-child",
+            DateTimeOffset.UtcNow,
+            new("process-attempt/2"));
+        await client.RaiseCohesiveProcessControlAsync(start, restart, timeout.Token);
+
+        var completed = await client.WaitForInstanceCompletionAsync(
+            scheduled.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.True(
+            completed.RuntimeStatus == OrchestrationRuntimeStatus.Completed,
+            completed.FailureDetails?.ToString());
+        var result = Assert.IsType<DurableTaskSequentialProcessResult>(
+            completed.ReadOutputAs<DurableTaskSequentialProcessResult>());
+
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(new ProcessAttemptId("process-attempt/2"), result.State.Continuation.ProcessAttemptId);
+        Assert.Equal(ProcessChildDisposition.Completed, Assert.Single(result.State.Children).Disposition);
+        Assert.Equal(
+            [ProcessControlAttemptDisposition.Abandoned, ProcessControlAttemptDisposition.Current],
+            result.Control.Attempts.Select(static attempt => attempt.Disposition));
+        Assert.Equal(2, result.DurableOperations.Length);
+        var abandoned = result.DurableOperations.Single(operation =>
+            Assert.IsType<ProcessInteractionOrigin>(operation.State.Request.Context.Origin)
+                .Continuation.ProcessAttemptId == start.Receipt.Request.InitialContinuation.ProcessAttemptId);
+        var replacement = result.DurableOperations.Single(operation =>
+            Assert.IsType<ProcessInteractionOrigin>(operation.State.Request.Context.Origin)
+                .Continuation.ProcessAttemptId == new ProcessAttemptId("process-attempt/2"));
+        Assert.Equal(DurableTaskDurableOperationDisposition.ResultDispositioned, abandoned.Disposition);
+        Assert.Equal(DurableOperationResultArrival.Stale, abandoned.State.Admission?.Arrival);
+        Assert.Equal(DurableTaskDurableOperationDisposition.ReplyReady, replacement.Disposition);
+
+        var abandonedTarget = Assert.IsType<ProcessChildRequestTarget>(abandoned.State.Request.ChildTarget);
+        var abandonedInstance = await client.GetInstanceAsync(
+            DurableTaskSequentialProcessIdentities.OrchestrationInstance(
+                start.ActivationContext.AuthorityScope,
+                abandonedTarget.Continuation.ProcessInstanceId),
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, abandonedInstance?.RuntimeStatus);
+        var abandonedChild = Assert.IsType<DurableTaskSequentialProcessResult>(
+            abandonedInstance!.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(ProcessActivationDisposition.Cancelled, abandonedChild.Disposition);
+        Assert.Equal(ProcessControlMode.Cancelled, abandonedChild.Control.Mode);
+
+        var replacementTarget = Assert.IsType<ProcessChildRequestTarget>(replacement.State.Request.ChildTarget);
+        var replacementInstance = await client.GetInstanceAsync(
+            DurableTaskSequentialProcessIdentities.OrchestrationInstance(
+                start.ActivationContext.AuthorityScope,
+                replacementTarget.Continuation.ProcessInstanceId),
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, replacementInstance?.RuntimeStatus);
+        Assert.Equal(
+            ProcessActivationDisposition.Completed,
+            replacementInstance?.ReadOutputAs<DurableTaskSequentialProcessResult>()?.Disposition);
+
+        await worker.StopAsync(timeout.Token);
+    }
+
+    [DurableTaskSchedulerFact]
     public async Task SchedulerEmulator_ProvesCompletionFailureDuplicateStartAndWorkerRestart()
     {
         var connectionString = Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
@@ -3925,7 +4113,8 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             new("accepted"),
             new(Edge(edge, "join")))]);
 
-    static ChildProcessFixture CompileChildParentPlan()
+    static ChildProcessFixture CompileChildParentPlan(
+        ProcessRecoveryPolicy recoveryPolicy = ProcessRecoveryPolicy.ContinueAttempt)
     {
         var child = Compile(
             Definition("return", [new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))]),
@@ -3953,7 +4142,8 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                     new FailProcessNode(new("failed"), Expr.Const("child-failed")),
                     new FailProcessNode(new("cancelled"), Expr.Const("child-cancelled")),
                     new FailProcessNode(new("terminated"), Expr.Const("child-terminated"))
-                ]),
+                ],
+                recoveryPolicy),
             interactions.Catalog,
             [new(
                 child.DefinitionReference,
@@ -3963,6 +4153,50 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 [],
                 child.Definition.RecoveryPolicy)],
             "process/durable-task-child-parent");
+        return new(parent, child, interactions.Binding);
+    }
+
+    static ChildProcessFixture CompileRestartableTimerChildParentPlan()
+    {
+        var child = CompileInputTimerPlan(
+            "process/durable-task-scheduler-restart-timer-child",
+            ProcessRecoveryPolicy.ContinueAttempt);
+        var interactions = RequestContracts(
+            "scheduler-restart-timer-child",
+            InstantContract,
+            "completed",
+            "failed",
+            "cancelled",
+            "terminated");
+        var parent = Compile(
+            Definition(
+                InstantContract,
+                "child",
+                [
+                    new InvokeProcessProcessNode(
+                        new("child"),
+                        child.DefinitionReference,
+                        interactions.Request,
+                        ChildOutcomeMapping,
+                        Expr.BoundValue(ProcessBindingIds.Input),
+                        ProcessChildPurpose.Work,
+                        ProcessChildCancellationPolicy.Propagate,
+                        ChildOutcomes()),
+                    new ReturnProcessNode(new("completed"), Expr.Const("parent-completed")),
+                    new FailProcessNode(new("failed"), Expr.Const("child-failed")),
+                    new FailProcessNode(new("cancelled"), Expr.Const("child-cancelled")),
+                    new FailProcessNode(new("terminated"), Expr.Const("child-terminated"))
+                ],
+                ProcessRecoveryPolicy.RestartAttempt),
+            interactions.Catalog,
+            [new(
+                child.DefinitionReference,
+                ProcessDefinitionLinkKind.Process,
+                child.Definition.Input,
+                child.Definition.Result,
+                [],
+                child.Definition.RecoveryPolicy)],
+            "process/durable-task-scheduler-restart-child-parent");
         return new(parent, child, interactions.Binding);
     }
 
@@ -4162,12 +4396,18 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         new(outcome),
         new(Edge($"edge/{outcome}", outcome)));
 
-    static RequestContractFixture RequestContracts(string name, params string[] outcomes)
+    static RequestContractFixture RequestContracts(string name, params string[] outcomes) =>
+        RequestContracts(name, StringContract, outcomes);
+
+    static RequestContractFixture RequestContracts(
+        string name,
+        ValueContract payloadContract,
+        params string[] outcomes)
     {
         var requestDocument = InteractionDocument(
             $"interaction/request/durable-task-{name}",
             new RequestContractDefinition(
-                new(StringContract, new("request/v1")),
+                new(payloadContract, new("request/v1")),
                 new RequestResponseObligation(
                     [.. outcomes.Select(outcome => outcome is "failed" or "cancelled" or "terminated"
                         ? (RequestTerminalOutcomeDefinition)new RequestFailureDefinition(

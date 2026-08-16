@@ -339,18 +339,33 @@ timer may likewise become ready but cannot advance canonical state while paused.
 policy across every provider recovery cut.
 
 RestartAttempt retains the Process instance and canonical attempt lineage, closes the old attempt, creates the exact
-authored replacement attempt, abandons old target-local timers and pending result tasks, and starts the replacement
-with a `Control` activation cause. Cancel performs a canonical cooperative cancellation activation and retains its
-terminal trace. Terminate is represented by terminal `ProcessControlState`; the physical orchestration completes
-normally so the canonical termination receipt and cleanup decision remain queryable. The adapter intentionally does
-not substitute similarly named Scheduler suspend/terminate APIs because they cannot preserve this complete protocol.
+authored replacement attempt, and starts the replacement with a `Control` activation cause. Before replacement child
+work may start, every active child with `Propagate` cancellation is projected from the canonical restart intent plus
+the abandoned continuation, sent its exact portable cancellation command, and drained to terminal evidence. The
+replacement fence normally makes the old child result stale at the parent target. If its Reply became eligible in
+the same deterministic wake as the prioritized restart command, the adapter retains the canonical admission ledger
+with the explicit `SupersededByAttemptRestart` disposition instead. Neither result may advance the new attempt.
+Scheduler sub-orchestrations have independent task-hub-unique identities; the adapter therefore creates the
+replacement attempt's new exact child occurrence instead of pretending to reattach a second call to the old physical
+instance. `Detach` remains the explicit authored policy under which an old child may outlive its parent attempt and
+is not drained.
+
+Old target-local timers and non-child pending result tasks are abandoned. Propagated child closure prevents old and
+replacement child executions from overlapping, but it cannot undo a child side effect that committed before the
+child reached its cancellation safe point. Such operations must retain their declared domain idempotency or target
+deduplication boundary across a replacement attempt. Cancel performs a canonical cooperative cancellation activation
+and retains its terminal trace. Terminate is represented by terminal `ProcessControlState`; the physical orchestration
+completes normally so the canonical termination receipt and cleanup decision remain queryable. The adapter
+intentionally does not substitute similarly named Scheduler suspend/terminate APIs because they cannot preserve this
+complete protocol.
 
 The current bounded cleanup profile accepts `RetainEvidence` for RestartAttempt and Terminate. Commands demanding
 attempt-resource release or affinity abandonment fail before canonical admission because no general provider cleanup
 port exists yet. Target-local timer cancellation and abandoned-task observation are physical hygiene, not a claim
-that an external activity or child was recalled. Complete durable Request retry/reconciliation pausing, general
-external cleanup, lifecycle Signal qualification, and exhaustive crash/race closure remain the follow-up
-qualification scope tracked by ARI-302.
+that an external activity was recalled. Propagated child closure is stronger: the parent awaits the child's canonical
+terminal control evidence before replacement child work begins. Complete durable Request retry/reconciliation
+pausing, general external cleanup, lifecycle Signal qualification, and exhaustive crash/race closure remain the
+follow-up qualification scope tracked by ARI-302.
 
 Transport cancellation tokens cancel only scheduling or event delivery. Worker shutdown cancels the activity
 `OperationContext` through `ApplicationStopping`; the resulting `OperationCanceledException` is physical failure

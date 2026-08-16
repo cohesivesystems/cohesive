@@ -565,6 +565,7 @@ static class DurableTaskSequentialProcessInterpreter
                             "Canonical RestartAttempt intent does not match the active Durable Task continuation lineage.");
                     }
 
+                    var childClosures = PrepareAttemptRestartChildClosures(restart);
                     AbandonAttemptOwnedPhysicalWork();
                     state = ProcessReferenceInterpreter.RestartAttempt(
                         plan,
@@ -574,6 +575,7 @@ static class DurableTaskSequentialProcessInterpreter
                     cancellation = null;
                     cause = ProcessActivationCause.Control;
                     observedAtUtc = RequireUtc(getCurrentUtc());
+                    await CloseAbandonedAttemptChildrenAsync(childClosures).ConfigureAwait(true);
                     return;
 
                 case ProcessCancellationIntent cancel:
@@ -678,6 +680,61 @@ static class DurableTaskSequentialProcessInterpreter
                 ObserveAbandoned(timer.Execution);
             }
             pendingTimers.Clear();
+        }
+
+        ImmutableArray<AttemptRestartChildClosure> PrepareAttemptRestartChildClosures(
+            ProcessAttemptRestartIntent restart)
+        {
+            var intents = ProcessChildCancellationIntents.ProjectAttemptRestart(state, restart);
+            if (intents.IsEmpty)
+            {
+                return [];
+            }
+
+            var closures = ImmutableArray.CreateBuilder<AttemptRestartChildClosure>(intents.Length);
+            foreach (var intent in intents)
+            {
+                if (pendingOperations.Remove(intent.RequestEmission, out var pending))
+                {
+                    closures.Add(new(intent, pending));
+                    continue;
+                }
+                if (durableOperations.TryGetValue(intent.RequestEmission, out var completed))
+                {
+                    durableOperations[intent.RequestEmission] = FenceAbandonedChildResult(completed);
+                    continue;
+                }
+                throw new InvalidOperationException(
+                    $"RestartAttempt cannot close child '{intent.ChildRegistrationId}' because its exact "
+                    + $"Request '{intent.RequestEmission.Value}' has no retained Durable Task execution evidence.");
+            }
+            if (closures.Any(static closure => !closure.Operation.Execution.IsCompleted)
+                && dispatchChildCancellation is null)
+            {
+                throw new InvalidOperationException(
+                    "RestartAttempt requires propagated child closure, but this Durable Task host has no "
+                    + "child-control dispatcher.");
+            }
+            return closures.Count == closures.Capacity ? closures.MoveToImmutable() : closures.ToImmutable();
+        }
+
+        async Task CloseAbandonedAttemptChildrenAsync(
+            ImmutableArray<AttemptRestartChildClosure> closures)
+        {
+            foreach (var closure in closures)
+            {
+                if (!closure.Operation.Execution.IsCompleted)
+                {
+                    await DispatchChildCancellationAsync(closure.Intent).ConfigureAwait(true);
+                }
+            }
+
+            foreach (var closure in closures)
+            {
+                var operation = FenceAbandonedChildResult(
+                    await closure.Operation.Execution.ConfigureAwait(true));
+                durableOperations[operation.State.OperationId] = operation;
+            }
         }
 
         async Task<NextProcessStimulus> WaitForNextStimulusAsync()
@@ -808,17 +865,22 @@ static class DurableTaskSequentialProcessInterpreter
 
             foreach (var intent in ProcessChildCancellationIntents.Project(state))
             {
-                if (!dispatchedChildCancellations.Add(intent.IntentId))
-                {
-                    continue;
-                }
-                if (dispatchChildCancellation is null)
-                {
-                    throw new InvalidOperationException(
-                        "The Process requested propagated child cancellation, but this Durable Task host has no child-control dispatcher.");
-                }
-                await dispatchChildCancellation(intent).ConfigureAwait(true);
+                await DispatchChildCancellationAsync(intent).ConfigureAwait(true);
             }
+        }
+
+        async Task DispatchChildCancellationAsync(ProcessChildCancellationIntent intent)
+        {
+            if (!dispatchedChildCancellations.Add(intent.IntentId))
+            {
+                return;
+            }
+            if (dispatchChildCancellation is null)
+            {
+                throw new InvalidOperationException(
+                    "The Process requested propagated child cancellation, but this Durable Task host has no child-control dispatcher.");
+            }
+            await dispatchChildCancellation(intent).ConfigureAwait(true);
         }
 
         void SynchronizeTimers()
@@ -977,6 +1039,17 @@ static class DurableTaskSequentialProcessInterpreter
     static ProcessControlExpectation Expectation(ProcessControlState state) => new(
         new(state.ProcessInstanceId, state.CurrentAttempt.AttemptId),
         state.Revision);
+
+    internal static DurableTaskDurableOperationResult FenceAbandonedChildResult(
+        DurableTaskDurableOperationResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return result.Disposition == DurableTaskDurableOperationDisposition.ReplyReady
+            ? new(
+                DurableTaskDurableOperationDisposition.SupersededByAttemptRestart,
+                result.State)
+            : result;
+    }
 
     static ProcessControlReferenceExecutor CreateControlExecutor(CompiledProcessPlan plan)
     {
@@ -1301,6 +1374,10 @@ static class DurableTaskSequentialProcessInterpreter
     sealed record PendingDurableOperation(
         RequestEnvelope Request,
         Task<DurableTaskDurableOperationResult> Execution);
+
+    sealed record AttemptRestartChildClosure(
+        ProcessChildCancellationIntent Intent,
+        PendingDurableOperation Operation);
 
     sealed record PendingProcessTimer(
         CancellationTokenSource Cancellation,
