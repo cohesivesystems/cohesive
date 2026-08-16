@@ -373,6 +373,13 @@ and never becomes `CancelProcessCommand` or semantic cancellation evidence. The 
 Task activity context exposes no per-activity cancellation token, and terminating an orchestration does not recall an
 already-running activity, so host implementations must also honor their exact-operation idempotency boundary.
 
+Entity-creation Transitions hosted through `EntityTransitionProcessOperationAdapter` provide one such natural
+boundary when their repository implements `IEntityTransitionOperationRepository`: after exact-occurrence lookup,
+an existing subject can replay only an attributable atomic creation receipt with the same authority scope, exact
+Transition, subject, and materialized input. The original typed result and envelopes are returned unchanged, so a
+replacement attempt retains the original emission and target-deduplication identities. Changed intent conflicts, and
+an existing subject without an atomic creation receipt remains rejected; this is not general upsert behavior.
+
 A non-child Request without an exact binding still emits canonical evidence and waits for a canonical
 `ProcessActivationInput` external event; use `RaiseCohesiveProcessInteractionAsync` for that deliberately external
 boundary. `InvokeProcess` and `ForEachPartition` are different: worker catalog admission inventories their exact

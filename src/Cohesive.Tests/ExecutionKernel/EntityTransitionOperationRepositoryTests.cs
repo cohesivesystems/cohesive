@@ -35,6 +35,7 @@ public sealed class EntityTransitionOperationRepositoryTests
                 operation.Token,
                 operation.Node,
                 operation.Occurrence),
+            fixture.Request.AuthorityScope,
             fixture.Request.Transition,
             fixture.Request.Subject,
             fixture.Request.Input);
@@ -161,6 +162,7 @@ public sealed class EntityTransitionOperationRepositoryTests
     }
 
     [Theory]
+    [InlineData("authority")]
     [InlineData("transition")]
     [InlineData("subject")]
     [InlineData("input")]
@@ -170,18 +172,27 @@ public sealed class EntityTransitionOperationRepositoryTests
         _ = await fixture.Repository.CommitTransitionOperation(fixture.Context, fixture.Commit);
         EntityTransitionOperationRequest request = conflict switch
         {
+            "authority" => new(
+                fixture.Request.Operation,
+                new("authority/other", "tenant/acme"),
+                fixture.Transition,
+                fixture.Subject,
+                fixture.Request.Input),
             "transition" => new(
                 fixture.Request.Operation,
+                fixture.Request.AuthorityScope,
                 ProcessDurabilityTestFixture.DefinitionReference("transition/another", '7'),
                 fixture.Subject,
                 fixture.Request.Input),
             "subject" => new(
                 fixture.Request.Operation,
+                fixture.Request.AuthorityScope,
                 fixture.Transition,
                 new(fixture.Subject.EntityType, new("customer/another")),
                 fixture.Request.Input),
             "input" => new(
                 fixture.Request.Operation,
+                fixture.Request.AuthorityScope,
                 fixture.Transition,
                 fixture.Subject,
                 ProcessDurabilityTestFixture.StringValue("input/another")),
@@ -347,6 +358,7 @@ public sealed class EntityTransitionOperationRepositoryTests
             var transition = decision.Evidence.Definition;
             var request = new EntityTransitionOperationRequest(
                 operation,
+                new("authority/tests", "tenant/acme"),
                 transition,
                 subject,
                 ProcessDurabilityTestFixture.StringValue("input/approve"));

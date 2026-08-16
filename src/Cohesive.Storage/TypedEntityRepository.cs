@@ -55,6 +55,15 @@ public sealed class TypedEntityRepository<TEntity>(
         EntityTransitionOperationRequest request) =>
         repository.TryGetTransitionOperation(context, request);
 
+    /// <summary>Looks up one subject-scoped creation Transition receipt.</summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="request">Candidate creation request whose exact occurrence was not retained.</param>
+    /// <returns>Missing, semantic replay, conflict, or capability evidence.</returns>
+    public Task<EntityTransitionOperationResult> TryGetCreationTransitionOperation(
+        OperationContext context,
+        EntityTransitionOperationRequest request) =>
+        repository.TryGetCreationTransitionOperation(context, request);
+
     /// <summary>Atomically commits entity state and one Process Transition operation receipt.</summary>
     /// <param name="context">Operation context, time, and cancellation.</param>
     /// <param name="commit">Complete deterministic atomic commit intent.</param>
@@ -112,6 +121,15 @@ public sealed class TypedEntityOutboxRepository<TEntity>(
         OperationContext context,
         EntityTransitionOperationRequest request) =>
         outboxRepository.TryGetTransitionOperation(context, request);
+
+    /// <summary>Looks up one subject-scoped creation Transition receipt.</summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="request">Candidate creation request whose exact occurrence was not retained.</param>
+    /// <returns>Missing, semantic replay, conflict, or capability evidence.</returns>
+    public Task<EntityTransitionOperationResult> TryGetCreationTransitionOperation(
+        OperationContext context,
+        EntityTransitionOperationRequest request) =>
+        outboxRepository.TryGetCreationTransitionOperation(context, request);
 
     /// <summary>Atomically commits entity state and one Process Transition operation receipt.</summary>
     /// <param name="context">Operation context, time, and cancellation.</param>

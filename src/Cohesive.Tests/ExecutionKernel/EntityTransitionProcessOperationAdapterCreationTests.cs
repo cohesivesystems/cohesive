@@ -50,6 +50,91 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
     }
 
     [Fact]
+    public async Task CreateOnPresent_FromDifferentOccurrenceWithExactIntent_ReplaysOriginalReceiptAndEmission()
+    {
+        var fixture = await Fixture.CreateAsync();
+        var replacement = fixture.ReplacementInvocation();
+
+        var committed = await fixture.Adapter.ExecuteAsync(fixture.Context, fixture.Invocation);
+        var replayed = await fixture.Adapter.ExecuteAsync(fixture.Context, replacement);
+
+        Assert.Equal(committed, replayed);
+        Assert.Single(replayed.Emissions);
+        var origin = Assert.IsType<ProcessInteractionOrigin>(Assert.Single(replayed.Emissions).Context.Origin);
+        Assert.Equal(fixture.Invocation.Continuation, origin.Continuation);
+        Assert.Equal(EntityTransitionOperationDisposition.NotFound, (
+            await fixture.Repository.TryGetTransitionOperation(
+                fixture.Context,
+                fixture.RequestFor(replacement))).Disposition);
+        var semanticReplay = await fixture.Repository.TryGetCreationTransitionOperation(
+            fixture.Context,
+            fixture.RequestFor(replacement));
+        Assert.Equal(EntityTransitionOperationDisposition.Replayed, semanticReplay.Disposition);
+        Assert.Equal(fixture.Request.Operation, semanticReplay.Receipt!.Request.Operation);
+    }
+
+    [Fact]
+    public async Task CreateOnPresent_FromDifferentOccurrenceWithChangedIntent_IsIdentityConflict()
+    {
+        var fixture = await Fixture.CreateAsync();
+        _ = await fixture.Adapter.ExecuteAsync(fixture.Context, fixture.Invocation);
+        var replacement = fixture.ReplacementInvocation(input: fixture.Input(status: "changed"));
+
+        var conflict = await fixture.Adapter.ExecuteAsync(fixture.Context, replacement);
+
+        Assert.False(conflict.IsSuccessful);
+        Assert.Equal(EntityTransitionOperationDiagnosticCodes.IdentityConflict, conflict.Failure?.Code);
+    }
+
+    [Fact]
+    public async Task CreateOnPresent_FromDifferentAuthorityWithOtherwiseExactIntent_IsIdentityConflict()
+    {
+        var fixture = await Fixture.CreateAsync();
+        _ = await fixture.Adapter.ExecuteAsync(fixture.Context, fixture.Invocation);
+        var replacement = fixture.ReplacementInvocation(
+            authorityScope: new("authority/other", "tenant/acme"));
+
+        var conflict = await fixture.Adapter.ExecuteAsync(fixture.Context, replacement);
+
+        Assert.False(conflict.IsSuccessful);
+        Assert.Equal(EntityTransitionOperationDiagnosticCodes.IdentityConflict, conflict.Failure?.Code);
+    }
+
+    [Fact]
+    public async Task ConcurrentExactCreationIntents_CommitOnceAndConvergeOnOriginalReceipt()
+    {
+        using var barrier = new Barrier(participantCount: 2);
+        var fixture = await Fixture.CreateAsync(commitBoundary: phase =>
+        {
+            if (phase == EntityTransitionOperationCommitPhase.BeforeAtomicCommit
+                && !barrier.SignalAndWait(TimeSpan.FromSeconds(10)))
+            {
+                throw new TimeoutException("Concurrent creation attempts did not reach the atomic boundary together.");
+            }
+        });
+        var replacement = fixture.ReplacementInvocation();
+
+        var results = await Task.WhenAll(
+            Task.Run(async () => await fixture.Adapter.ExecuteAsync(fixture.Context, fixture.Invocation)),
+            Task.Run(async () => await fixture.Adapter.ExecuteAsync(fixture.Context, replacement)));
+
+        Assert.All(results, static result => Assert.True(result.IsSuccessful));
+        Assert.Equal(results[0], results[1]);
+        Assert.Single(results[0].Emissions);
+        Assert.NotNull(await fixture.Repository.TryGet(
+            fixture.Context,
+            fixture.SubjectId,
+            EntityReadOptions.Full));
+        var exactDispositions = await Task.WhenAll(
+            fixture.Repository.TryGetTransitionOperation(fixture.Context, fixture.Request),
+            fixture.Repository.TryGetTransitionOperation(fixture.Context, fixture.RequestFor(replacement)));
+        Assert.Single(exactDispositions, static result =>
+            result.Disposition == EntityTransitionOperationDisposition.Replayed);
+        Assert.Single(exactDispositions, static result =>
+            result.Disposition == EntityTransitionOperationDisposition.NotFound);
+    }
+
+    [Fact]
     public async Task CreateOnPresent_IsRejectedWithoutReplacingAuthoritativeState()
     {
         var fixture = await Fixture.CreateAsync(seedSubject: true);
@@ -234,6 +319,7 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
                 fixture.Context,
                 new(
                     operation.Key,
+                    fixture.Invocation.Context.AuthorityScope,
                     fixture.Plan.DefinitionReference,
                     new(new(fixture.Repository.EntityType), new(fixture.SubjectId)),
                     fixture.Invocation.Input))).Disposition);
@@ -371,6 +457,46 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
             "tenant/acme",
             status);
 
+        internal EntityTransitionOperationRequest RequestFor(ProcessTransitionInvocation invocation) => new(
+            new(
+                invocation.Continuation,
+                invocation.Activation,
+                invocation.Token,
+                invocation.Node,
+                invocation.Occurrence),
+            invocation.Context.AuthorityScope,
+            invocation.Definition,
+            new(new(Repository.EntityType), new(SubjectId)),
+            invocation.Input);
+
+        internal ProcessTransitionInvocation ReplacementInvocation(
+            PortableValue? input = null,
+            InteractionAuthorityScope? authorityScope = null)
+        {
+            var context = Invocation.Context;
+            if (authorityScope is not null)
+            {
+                context = new(
+                    authorityScope,
+                    context.CorrelationId,
+                    context.Delivery,
+                    context.Provenance,
+                    context.CausationId,
+                    context.Ordering);
+            }
+            return Invocation with
+            {
+                Input = input ?? Invocation.Input,
+                Continuation = new(
+                    Invocation.Continuation.ProcessInstanceId,
+                    new("process-attempt/2")),
+                Activation = new("activation/create-customer/2"),
+                Token = new("token/create-customer/2"),
+                ObservedAtUtc = Invocation.ObservedAtUtc.AddSeconds(1),
+                Context = context
+            };
+        }
+
         internal async Task SeedSubjectAsync(string status)
         {
             var seeded = CustomerEntity.Instance.CreateState(
@@ -471,6 +597,7 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
                 ActivationContext());
             var request = new EntityTransitionOperationRequest(
                 new(continuation, activation, token, node, occurrence: 0),
+                invocation.Context.AuthorityScope,
                 plan.DefinitionReference,
                 new(new(repository.EntityType), new("customer/1")),
                 invocation.Input);

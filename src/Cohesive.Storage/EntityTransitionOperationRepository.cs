@@ -67,6 +67,7 @@ public sealed record EntityTransitionOperationRequest
 {
     /// <summary>Creates an exact Transition operation request identity.</summary>
     /// <param name="operation">Attempt-, activation-, token-, node-, and occurrence-scoped Process operation.</param>
+    /// <param name="authorityScope">Authority and optional tenant within which the operation is meaningful.</param>
     /// <param name="transition">Exact invoked Transition definition.</param>
     /// <param name="subject">Authoritative aggregate subject.</param>
     /// <param name="input">Typed materialized Transition input.</param>
@@ -74,19 +75,25 @@ public sealed record EntityTransitionOperationRequest
     /// <exception cref="ArgumentException"><paramref name="input"/> is unknown or failed.</exception>
     public EntityTransitionOperationRequest(
         ProcessOperationOccurrence operation,
+        InteractionAuthorityScope authorityScope,
         ExecutionDefinitionReference transition,
         InteractionEntityReference subject,
         PortableValue input)
     {
         Operation = operation ?? throw new ArgumentNullException(nameof(operation));
+        AuthorityScope = authorityScope ?? throw new ArgumentNullException(nameof(authorityScope));
         Transition = transition ?? throw new ArgumentNullException(nameof(transition));
         Subject = subject ?? throw new ArgumentNullException(nameof(subject));
         Input = RequireMaterialized(input, nameof(input), "Transition input");
         Fingerprint = EntityTransitionOperationFingerprints.Request(this);
+        IntentFingerprint = EntityTransitionOperationFingerprints.Intent(this);
     }
 
     /// <summary>Exact Process operation occurrence.</summary>
     public ProcessOperationOccurrence Operation { get; }
+
+    /// <summary>Authority and optional tenant within which this operation and its natural idempotency are meaningful.</summary>
+    public InteractionAuthorityScope AuthorityScope { get; }
 
     /// <summary>Exact invoked Transition definition.</summary>
     public ExecutionDefinitionReference Transition { get; }
@@ -99,6 +106,16 @@ public sealed record EntityTransitionOperationRequest
 
     /// <summary>Canonical fingerprint of the complete replay lookup identity.</summary>
     public ProcessCommitFingerprint Fingerprint { get; }
+
+    /// <summary>
+    /// Occurrence-independent fingerprint of the authority-scoped Transition, subject, and materialized input.
+    /// </summary>
+    /// <remarks>
+    /// Entity-creation repositories use this derived identity only after proving that the subject was created by
+    /// the atomic Transition-receipt protocol. It is not general upsert or update-replay authority.
+    /// </remarks>
+    [JsonIgnore]
+    public ProcessCommitFingerprint IntentFingerprint { get; }
 
     static PortableValue RequireMaterialized(PortableValue value, string parameterName, string description)
     {
@@ -284,6 +301,7 @@ public sealed record EntityTransitionOperationCommit
                     nameof(result));
             }
             if (emission.Context.Origin is not ProcessInteractionOrigin origin
+                || emission.Context.AuthorityScope != request.AuthorityScope
                 || origin.Continuation != request.Operation.Continuation
                 || origin.Activation != request.Operation.Activation
                 || origin.Token != request.Operation.Token
@@ -295,7 +313,7 @@ public sealed record EntityTransitionOperationCommit
                 || !evidence.EmittedIntents.Contains(transitionNode))
             {
                 throw new ArgumentException(
-                    "Every retained envelope must identify the exact Process operation, Transition emission, subject, and outcome.",
+                    "Every retained envelope must identify the exact authority, Process operation, Transition emission, subject, and outcome.",
                     nameof(result));
             }
         }
@@ -479,6 +497,23 @@ public interface IEntityTransitionOperationRepository : IEntityRepository
         OperationContext context,
         EntityTransitionOperationRequest request);
 
+    /// <summary>
+    /// Looks up the unique creation receipt for a subject and compares its authority-scoped semantic intent.
+    /// </summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="request">Candidate creation request whose exact occurrence was not previously retained.</param>
+    /// <returns>
+    /// Missing when no atomic creation receipt owns the subject, replay when the retained creation intent is exact,
+    /// or identity-conflict evidence when the subject was created through another semantic intent.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="context"/> or <paramref name="request"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">The operation is cancelled before the lookup.</exception>
+    Task<EntityTransitionOperationResult> TryGetCreationTransitionOperation(
+        OperationContext context,
+        EntityTransitionOperationRequest request);
+
     /// <summary>Atomically commits candidate entity state and one replayable operation receipt.</summary>
     /// <param name="context">Operation context, time, and cancellation.</param>
     /// <param name="commit">Complete deterministic atomic commit intent.</param>
@@ -514,6 +549,28 @@ public static class EntityTransitionOperationRepositoryExtensions
         return repository is IEntityTransitionOperationRepository atomic
                && repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt
             ? atomic.TryGetTransitionOperation(context, request)
+            : Task.FromResult(CapabilityFailure(repository));
+    }
+
+    /// <summary>Looks up a subject-scoped creation intent through a capability-checked entity repository.</summary>
+    /// <param name="repository">Entity repository selected for the authoritative subject.</param>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="request">Candidate creation request whose exact occurrence was not retained.</param>
+    /// <returns>Missing, semantic replay, conflict, or capability evidence.</returns>
+    /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
+    /// <exception cref="OperationCanceledException">The operation is cancelled before the lookup.</exception>
+    public static Task<EntityTransitionOperationResult> TryGetCreationTransitionOperation(
+        this IEntityRepository repository,
+        OperationContext context,
+        EntityTransitionOperationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        context.ThrowIfCancellationRequested();
+        return repository is IEntityTransitionOperationRepository atomic
+               && repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt
+            ? atomic.TryGetCreationTransitionOperation(context, request)
             : Task.FromResult(CapabilityFailure(repository));
     }
 
@@ -609,6 +666,14 @@ static class EntityTransitionOperationFingerprints
     internal static ProcessCommitFingerprint Request(EntityTransitionOperationRequest request) =>
         ProcessStorageContentFingerprints.Value(new RequestContent(
             request.Operation,
+            request.AuthorityScope,
+            request.Transition,
+            request.Subject,
+            request.Input));
+
+    internal static ProcessCommitFingerprint Intent(EntityTransitionOperationRequest request) =>
+        ProcessStorageContentFingerprints.Value(new IntentContent(
+            request.AuthorityScope,
             request.Transition,
             request.Subject,
             request.Input));
@@ -628,6 +693,13 @@ static class EntityTransitionOperationFingerprints
 
     sealed record RequestContent(
         ProcessOperationOccurrence Operation,
+        InteractionAuthorityScope AuthorityScope,
+        ExecutionDefinitionReference Transition,
+        InteractionEntityReference Subject,
+        PortableValue Input);
+
+    sealed record IntentContent(
+        InteractionAuthorityScope AuthorityScope,
         ExecutionDefinitionReference Transition,
         InteractionEntityReference Subject,
         PortableValue Input);

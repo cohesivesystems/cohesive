@@ -16,6 +16,8 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     readonly Dictionary<string, EntitySnapshot> snapshotsByKey = new(StringComparer.Ordinal);
     readonly Dictionary<string, HashSet<string>> partitionKeysByObservationId = new(StringComparer.Ordinal);
     readonly Dictionary<ProcessOperationOccurrence, EntityTransitionOperationReceipt> transitionOperationReceipts = [];
+    readonly Dictionary<string, EntityTransitionOperationReceipt> creationTransitionOperationReceiptsBySubject =
+        new(StringComparer.Ordinal);
     readonly List<InteractionEnvelope> outboxEnvelopes = [];
     readonly Dictionary<EmissionId, InteractionEnvelopeContentFingerprint> outboxEnvelopeFingerprintsById = [];
     readonly EntityDefinition entityDefinition;
@@ -270,6 +272,29 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         }
     }
 
+    /// <summary>Looks up the unique atomic creation receipt for a subject and compares its semantic intent.</summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="request">Candidate creation request whose exact occurrence was not retained.</param>
+    /// <returns>Missing, semantic replay, or identity-conflict evidence.</returns>
+    /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
+    /// <exception cref="OperationCanceledException">The operation is cancelled before the lookup.</exception>
+    public Task<EntityTransitionOperationResult> TryGetCreationTransitionOperation(
+        OperationContext context,
+        EntityTransitionOperationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        context.ThrowIfCancellationRequested();
+
+        lock (gate)
+        {
+            return Task.FromResult(
+                creationTransitionOperationReceiptsBySubject.TryGetValue(request.Subject.EntityId.Value, out var retained)
+                    ? ReplayOrCreationIntentConflict(request, retained)
+                    : EntityTransitionOperationResult.NotFound());
+        }
+    }
+
     /// <summary>Atomically commits candidate entity state and one Process Transition operation receipt.</summary>
     /// <param name="context">Operation context, time, and cancellation.</param>
     /// <param name="commit">Complete deterministic atomic commit intent.</param>
@@ -292,6 +317,13 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         {
             if (transitionOperationReceipts.TryGetValue(commit.Request.Operation, out var retained))
                 return Task.FromResult(ReplayOrCommitConflict(commit, retained));
+            if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
+                && creationTransitionOperationReceiptsBySubject.TryGetValue(
+                    commit.Request.Subject.EntityId.Value,
+                    out retained))
+            {
+                return Task.FromResult(ReplayOrCreationCommitConflict(commit, retained));
+            }
         }
 
         ObserveTransitionOperationCommitBoundary(EntityTransitionOperationCommitPhase.BeforeAtomicCommit);
@@ -302,6 +334,13 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
             if (transitionOperationReceipts.TryGetValue(commit.Request.Operation, out var retained))
             {
                 result = ReplayOrCommitConflict(commit, retained);
+            }
+            else if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
+                && creationTransitionOperationReceiptsBySubject.TryGetValue(
+                    commit.Request.Subject.EntityId.Value,
+                    out retained))
+            {
+                result = ReplayOrCreationCommitConflict(commit, retained);
             }
             else
             {
@@ -331,6 +370,10 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
                     var receipt = new EntityTransitionOperationReceipt(commit, snapshot, context.UtcNow);
                     snapshotsByKey[key] = snapshot;
                     transitionOperationReceipts.Add(commit.Request.Operation, receipt);
+                    if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent)
+                    {
+                        creationTransitionOperationReceiptsBySubject.Add(commit.Request.Subject.EntityId.Value, receipt);
+                    }
                     TrackObservation(snapshot.Entity.Id, partitionKey);
                     result = EntityTransitionOperationResult.Committed(receipt);
                 }
@@ -374,6 +417,34 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
             : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
                 "The Process operation occurrence is retained for another Transition, subject, or input.",
                 "/request");
+
+    static EntityTransitionOperationResult ReplayOrCreationIntentConflict(
+        EntityTransitionOperationRequest request,
+        EntityTransitionOperationReceipt retained) =>
+        retained.Request.IntentFingerprint == request.IntentFingerprint
+            ? EntityTransitionOperationResult.Replayed(retained)
+            : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
+                $"Entity subject '{request.Subject.EntityType.Value}:{request.Subject.EntityId.Value}' is retained "
+                + "for another authority-scoped creation Transition intent.",
+                "/request/intentFingerprint");
+
+    static EntityTransitionOperationResult ReplayOrCreationCommitConflict(
+        EntityTransitionOperationCommit commit,
+        EntityTransitionOperationReceipt retained)
+    {
+        var request = ReplayOrCreationIntentConflict(commit.Request, retained);
+        if (request.Disposition != EntityTransitionOperationDisposition.Replayed)
+        {
+            return request;
+        }
+        return retained.Entity.Entity.HasSameContent(commit.Write.Entity)
+               && retained.Commit.DecisionKind == commit.DecisionKind
+               && retained.Commit.Result.Value == commit.Result.Value
+            ? request
+            : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
+                "The authority-scoped creation Transition intent is retained with another candidate state or typed outcome.",
+                "/commit");
+    }
 
     static EntityTransitionOperationResult ReplayOrCommitConflict(
         EntityTransitionOperationCommit commit,
