@@ -156,7 +156,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
-    public async Task HostOperationActivity_WorkerShutdownCancelsPhysicalHostWithoutSemanticCancellation()
+    public async Task HostOperationActivity_WorkerShutdownProjectsRetryablePhysicalFailureWithoutSemanticCancellation()
     {
         var query = HostedQueryHandlerCatalogTests.Query();
         var evaluation = HostedQueryHandlerCatalogTests.Evaluation(
@@ -179,8 +179,36 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 
         lifetime.StopApplication();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
+        var failure = await Assert.ThrowsAsync<DurableTaskWorkerStoppingException>(() => execution);
+        Assert.IsAssignableFrom<OperationCanceledException>(failure.InnerException);
+        Assert.True(DurableTaskActivityOperationContext.IsWorkerStoppingFailure(
+            TaskFailureDetails.FromException(failure)));
+        Assert.False(DurableTaskActivityOperationContext.IsWorkerStoppingFailure(
+            TaskFailureDetails.FromException(new InvalidOperationException("semantic host failure"))));
         Assert.True(capturedContext?.CancellationToken.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task HostOperationActivity_OrdinaryOperationCancellationIsNotWorkerStoppingFailure()
+    {
+        var query = HostedQueryHandlerCatalogTests.Query();
+        var evaluation = HostedQueryHandlerCatalogTests.Evaluation(
+            query,
+            new HostedQueryHandlerCatalogTests.QueryInput("source/operation-cancelled"));
+        using var lifetime = new TestHostApplicationLifetime();
+        var expected = new OperationCanceledException("The operation rejected its own work.");
+        var host = new DelegateAsyncProcessHost(evaluateRelation: (_, _) =>
+            ValueTask.FromException<ProcessOperationResult>(expected));
+        var activity = new DurableTaskProcessHostOperationActivity(host, lifetime);
+
+        var actual = await Assert.ThrowsAsync<OperationCanceledException>(() => activity.RunAsync(
+            new TestTaskActivityContext("instance/operation-cancelled"),
+            DurableTaskProcessHostOperation.For(evaluation)));
+
+        Assert.Same(expected, actual);
+        Assert.False(lifetime.ApplicationStopping.IsCancellationRequested);
+        Assert.False(DurableTaskActivityOperationContext.IsWorkerStoppingFailure(
+            TaskFailureDetails.FromException(actual)));
     }
 
     [Fact]
@@ -3045,10 +3073,11 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         [durableBinding, childFixture.Binding, forkChildFixture.Binding],
         new DomainEventPublisherResolver(eventPublisher));
         var operations = new CountingEchoHost();
+        var workerRestartHost = new WorkerStoppingAsyncProcessHost(operations);
         var durableOperations = new CountingDurableOperationAdapter(durableBinding.Request);
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        using var firstWorker = SchedulerHost(connectionString, catalog, operations, durableOperations);
+        using var firstWorker = SchedulerHost(connectionString, catalog, workerRestartHost, durableOperations);
         var workerOptions = firstWorker.Services
             .GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<DurableTaskWorkerOptions>>()
             .Get(Microsoft.Extensions.Options.Options.DefaultName);
@@ -3331,21 +3360,28 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             ProcessWaitKind.AwaitMatch,
             timeout.Token);
 
+        var workerStoppingGate = workerRestartHost.Arm();
         var restartStart = Start(restartPlan, "restart", "instance/restart");
         var restartSchedule = await firstClient.ScheduleCohesiveProcessAsync(restartStart, timeout.Token);
+        await workerStoppingGate.WaitUntilEntered(timeout.Token);
+        Assert.Empty(operations.Transitions);
+
+        var stopping = firstWorker.StopAsync(timeout.Token);
+        await workerStoppingGate.WaitUntilCancelled(timeout.Token);
+        await stopping;
+        Assert.Equal(1, workerStoppingGate.CancellationCount);
+        Assert.Empty(operations.Transitions);
+
+        using var recoveredWorker = SchedulerHost(connectionString, catalog, workerRestartHost, durableOperations);
+        await recoveredWorker.StartAsync(timeout.Token);
+        var recoveredClient = recoveredWorker.Services.GetRequiredService<DurableTaskClient>();
         var waiting = await WaitForOutstandingRequest(
-            firstClient,
+            recoveredClient,
             restartSchedule.InstanceId,
             timeout.Token);
         var firstInvocation = Assert.Single(operations.Transitions);
         Assert.Equal(restartPlan.DefinitionReference, firstInvocation.Process);
         Assert.Equal(transition, firstInvocation.Definition);
-
-        await firstWorker.StopAsync(timeout.Token);
-
-        using var recoveredWorker = SchedulerHost(connectionString, catalog, operations, durableOperations);
-        await recoveredWorker.StartAsync(timeout.Token);
-        var recoveredClient = recoveredWorker.Services.GetRequiredService<DurableTaskClient>();
         var waitingContinuation = new ProcessContinuationIdentity(
             waiting.ProcessInstanceId,
             waiting.CurrentAttemptId);
@@ -3462,13 +3498,21 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         string connectionString,
         DurableTaskSequentialProcessPlanCatalog catalog,
         IProcessReferenceHost processHost,
+        IDurableOperationAdapter? durableOperationAdapter = null) =>
+        SchedulerHost(
+            connectionString,
+            catalog,
+            new SynchronousProcessReferenceHostAdapter(processHost),
+            durableOperationAdapter);
+
+    static Microsoft.Extensions.Hosting.IHost SchedulerHost(
+        string connectionString,
+        DurableTaskSequentialProcessPlanCatalog catalog,
+        IAsyncProcessReferenceHost processHost,
         IDurableOperationAdapter? durableOperationAdapter = null)
     {
         var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder();
         builder.Services.AddSingleton(processHost);
-        builder.Services.AddSingleton<IAsyncProcessReferenceHost>(services =>
-            new SynchronousProcessReferenceHostAdapter(
-                services.GetRequiredService<IProcessReferenceHost>()));
         if (durableOperationAdapter is not null)
         {
             builder.Services.AddSingleton<IDurableOperationAdapterResolver>(
@@ -5026,6 +5070,83 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 
         public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
             throw new InvalidOperationException("Unexpected Signal target resolution.");
+    }
+
+    sealed class WorkerStoppingAsyncProcessHost(IProcessReferenceHost host) : IAsyncProcessReferenceHost
+    {
+        readonly SynchronousProcessReferenceHostAdapter inner = new(host);
+        WorkerStoppingGate? gate;
+
+        internal WorkerStoppingGate Arm()
+        {
+            var armed = new WorkerStoppingGate();
+            if (Interlocked.CompareExchange(ref gate, armed, null) is not null)
+                throw new InvalidOperationException("A worker-stopping host gate is already armed.");
+            return armed;
+        }
+
+        public ValueTask<ProcessOperationResult> InvokeTransitionAsync(
+            OperationContext context,
+            ProcessTransitionInvocation invocation) =>
+            ExecuteAsync(context, () => inner.InvokeTransitionAsync(context, invocation));
+
+        public ValueTask<ProcessOperationResult> EvaluateRelationAsync(
+            OperationContext context,
+            ProcessRelationEvaluation evaluation) =>
+            ExecuteAsync(context, () => inner.EvaluateRelationAsync(context, evaluation));
+
+        public ValueTask<ProcessSignalTargetResult> ResolveSignalTargetAsync(
+            OperationContext context,
+            ProcessSignalTargetResolution resolution) =>
+            ExecuteAsync(context, () => inner.ResolveSignalTargetAsync(context, resolution));
+
+        async ValueTask<TResult> ExecuteAsync<TResult>(
+            OperationContext context,
+            Func<ValueTask<TResult>> execute)
+        {
+            var claimed = Interlocked.Exchange(ref gate, null);
+            if (claimed is not null)
+            {
+                claimed.Enter();
+                try
+                {
+                    await claimed.WaitForWorkerCancellation(context.CancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+                {
+                    claimed.Cancel();
+                    throw;
+                }
+            }
+            return await execute().ConfigureAwait(false);
+        }
+    }
+
+    sealed class WorkerStoppingGate
+    {
+        readonly TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly TaskCompletionSource never = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly TaskCompletionSource cancelled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int cancellationCount;
+
+        internal int CancellationCount => Volatile.Read(ref cancellationCount);
+
+        internal void Enter() => entered.TrySetResult();
+
+        internal Task WaitUntilEntered(CancellationToken cancellationToken) =>
+            entered.Task.WaitAsync(cancellationToken);
+
+        internal Task WaitUntilCancelled(CancellationToken cancellationToken) =>
+            cancelled.Task.WaitAsync(cancellationToken);
+
+        internal void Cancel()
+        {
+            Interlocked.Increment(ref cancellationCount);
+            cancelled.TrySetResult();
+        }
+
+        internal Task WaitForWorkerCancellation(CancellationToken cancellationToken) =>
+            never.Task.WaitAsync(cancellationToken);
     }
 
     sealed class CountingEchoHost : IProcessReferenceHost

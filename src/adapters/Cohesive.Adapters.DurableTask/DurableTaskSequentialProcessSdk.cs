@@ -210,7 +210,8 @@ public sealed class DurableTaskSequentialProcessOrchestrator
             catalog.BindingResolver,
             operation => context.CallActivityAsync<ProcessOperationResult>(
                 DurableTaskSequentialProcessNames.HostOperationActivity,
-                operation),
+                operation,
+                DurableTaskActivityOperationContext.WorkerStoppingRetryOptions),
             invocation => context.CallActivityAsync<DurableTaskDurableOperationAttemptResult>(
                 DurableTaskSequentialProcessNames.DurableOperationActivity,
                 invocation),
@@ -241,7 +242,8 @@ public sealed class DurableTaskSequentialProcessOrchestrator
             waitForChildCancellation,
             resolution => context.CallActivityAsync<ProcessSignalTargetResult>(
                 DurableTaskSequentialProcessNames.SignalTargetResolutionActivity,
-                resolution),
+                resolution,
+                DurableTaskActivityOperationContext.WorkerStoppingRetryOptions),
             signal => DeliverSignal(context, signal),
             () => context.WaitForExternalEvent<ProcessControlCommand>(
                 DurableTaskSequentialProcessNames.ControlEvent),
@@ -518,16 +520,19 @@ public sealed class DurableTaskProcessHostOperationActivity
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(input);
-        var operationContext = DurableTaskActivityOperationContext.Create(applicationLifetime);
-        operationContext.ThrowIfCancellationRequested();
-        var result = input.Kind switch
-        {
-            DurableTaskProcessHostOperationKind.Transition =>
-                await host.InvokeTransitionAsync(operationContext, input.Transition!).ConfigureAwait(false),
-            DurableTaskProcessHostOperationKind.RelationQuery =>
-                await host.EvaluateRelationAsync(operationContext, input.RelationQuery!).ConfigureAwait(false),
-            _ => throw new ArgumentOutOfRangeException(nameof(input), input.Kind, "Unsupported host operation kind.")
-        };
+        var result = await DurableTaskActivityOperationContext.ExecuteAsync(
+            applicationLifetime,
+            operationContext => input.Kind switch
+            {
+                DurableTaskProcessHostOperationKind.Transition =>
+                    host.InvokeTransitionAsync(operationContext, input.Transition!),
+                DurableTaskProcessHostOperationKind.RelationQuery =>
+                    host.EvaluateRelationAsync(operationContext, input.RelationQuery!),
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(input),
+                    input.Kind,
+                    "Unsupported host operation kind.")
+            }).ConfigureAwait(false);
         return result ?? throw new InvalidOperationException(
             "The asynchronous Process host returned null operation evidence.");
     }
@@ -561,9 +566,10 @@ public sealed class DurableTaskProcessSignalTargetActivity
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(input);
-        var operationContext = DurableTaskActivityOperationContext.Create(applicationLifetime);
-        operationContext.ThrowIfCancellationRequested();
-        return await host.ResolveSignalTargetAsync(operationContext, input).ConfigureAwait(false)
+        return await DurableTaskActivityOperationContext.ExecuteAsync(
+                applicationLifetime,
+                operationContext => host.ResolveSignalTargetAsync(operationContext, input))
+            .ConfigureAwait(false)
             ?? throw new InvalidOperationException(
                 "The asynchronous Process host returned null Signal-target evidence.");
     }
@@ -571,6 +577,9 @@ public sealed class DurableTaskProcessSignalTargetActivity
 
 static class DurableTaskActivityOperationContext
 {
+    internal static TaskOptions WorkerStoppingRetryOptions { get; } = TaskOptions.FromRetryHandler(
+        static context => IsWorkerStoppingFailure(context.LastFailure));
+
     internal static OperationContext Create(IHostApplicationLifetime applicationLifetime)
     {
         ArgumentNullException.ThrowIfNull(applicationLifetime);
@@ -578,6 +587,31 @@ static class DurableTaskActivityOperationContext
             traceContext: System.Diagnostics.Activity.Current?.Context,
             cancellationToken: applicationLifetime.ApplicationStopping);
     }
+
+    internal static async Task<TResult> ExecuteAsync<TResult>(
+        IHostApplicationLifetime applicationLifetime,
+        Func<OperationContext, ValueTask<TResult>> execute)
+    {
+        ArgumentNullException.ThrowIfNull(applicationLifetime);
+        ArgumentNullException.ThrowIfNull(execute);
+        var operationContext = Create(applicationLifetime);
+        try
+        {
+            operationContext.ThrowIfCancellationRequested();
+            return await execute(operationContext).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception)
+            when (applicationLifetime.ApplicationStopping.IsCancellationRequested)
+        {
+            throw new DurableTaskWorkerStoppingException(exception);
+        }
+    }
+
+    internal static bool IsWorkerStoppingFailure(TaskFailureDetails failure) =>
+        string.Equals(
+            failure.ErrorType,
+            typeof(DurableTaskWorkerStoppingException).FullName,
+            StringComparison.Ordinal);
 }
 
 /// <summary>Activity boundary for target-deduplicated canonical domain-event publication.</summary>
@@ -614,6 +648,24 @@ public sealed class DurableTaskProcessFailedException : Exception
     /// <summary>Creates a failure with canonical diagnostic detail.</summary>
     /// <param name="message">Non-empty canonical failure detail.</param>
     public DurableTaskProcessFailedException(string message) : base(message)
+    {
+    }
+}
+
+/// <summary>
+/// Physical activity failure emitted when a Durable Task worker stops while canonical Process host work is in flight.
+/// </summary>
+/// <remarks>
+/// The Process orchestrator retries only this adapter-owned failure on an equivalent worker. It is physical Scheduler
+/// evidence and does not represent authored Process failure, cancellation, or attempt restart.
+/// </remarks>
+public sealed class DurableTaskWorkerStoppingException : Exception
+{
+    internal DurableTaskWorkerStoppingException(OperationCanceledException innerException)
+        : base(
+            "The Durable Task worker stopped while canonical Process host work was in flight; "
+            + "an equivalent worker must retry the exact activity.",
+            innerException)
     {
     }
 }

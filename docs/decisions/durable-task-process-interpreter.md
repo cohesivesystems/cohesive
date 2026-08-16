@@ -228,8 +228,12 @@ activation, and termination retains its canonical terminal control result instea
 physical Scheduler operation. Differential tests cover canonical decisions and evidence; a pinned Scheduler
 emulator proves the lifecycle command sequence and replay, completion, bound Request activity dispatch and Reply admission, cross-instance and self-Signal
 delivery, child sub-orchestration, recurrence Continue-as-new, authored failure, duplicate start admission, and
-worker restart at unbound Request, Timer, and AwaitMatch boundaries without re-invoking an activity already retained
-in Scheduler history, changing a canonical due instant, or admitting an interaction twice. `ProcessWaitState` and
+worker restart at active host work and at unbound Request, Timer, and AwaitMatch boundaries. Shutdown-attributable
+activity cancellation has one adapter-owned physical failure identity and is the only host failure retried by the
+orchestrator; it does not author semantic cancellation, failure, or attempt lineage. Restart does not re-invoke an
+activity already retained in Scheduler history, change a canonical due instant, or admit an interaction twice.
+Re-executed in-flight work remains at-least-once and retains its exact operation occurrence and declared target
+idempotency boundary. `ProcessWaitState` and
 `ProcessTimerState.DueAtUtc` remain semantic
 authority; Durable Task events and timers are replayable physical stimuli. Co-ready AwaitMatch interaction and timer
 stimuli enter one canonical activation, where the reference interpreter retains exclusive authority for guard,
