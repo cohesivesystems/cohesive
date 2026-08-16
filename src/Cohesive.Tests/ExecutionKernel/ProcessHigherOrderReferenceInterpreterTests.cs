@@ -1615,6 +1615,32 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
             Activation("activation/cancellation-start", ProcessActivationCause.Start),
             RejectingHost.Instance);
 
+        var restartIntent = new ProcessAttemptRestartIntent(
+            waiting.State.Continuation.ProcessInstanceId,
+            waiting.State.Continuation.ProcessAttemptId,
+            new("process-attempt/replacement"),
+            ProcessAttemptCleanupRequirement.RetainEvidence);
+        var restartIntents = ProcessChildCancellationIntents.ProjectAttemptRestart(
+            waiting.State,
+            restartIntent);
+        Assert.Equal(
+            policy == ProcessChildCancellationPolicy.Propagate ? 2 : 0,
+            restartIntents.Length);
+        Assert.All(restartIntents, intent =>
+        {
+            Assert.Equal(waiting.State.Definition, intent.ParentDefinition);
+            Assert.Equal(waiting.State.Continuation, intent.ParentContinuation);
+            Assert.Equal(ProcessChildCancellationPolicy.Propagate, waiting.State.Children.Single(childState =>
+                childState.RegistrationId == intent.ChildRegistrationId).Cancellation);
+        });
+        Assert.Throws<ArgumentException>(() => ProcessChildCancellationIntents.ProjectAttemptRestart(
+            waiting.State,
+            new(
+                new("process-instance/not-the-parent"),
+                waiting.State.Continuation.ProcessAttemptId,
+                new("process-attempt/replacement"),
+                ProcessAttemptCleanupRequirement.RetainEvidence)));
+
         var cancelled = ProcessReferenceInterpreter.Activate(
             plan,
             waiting.State,

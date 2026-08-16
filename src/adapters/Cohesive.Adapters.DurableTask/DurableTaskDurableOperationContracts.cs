@@ -76,7 +76,13 @@ public enum DurableTaskDurableOperationDisposition
     DeadlineElapsed = 3,
 
     /// <summary>The canonical acknowledgement was dispositioned without advancing its closed or incompatible target.</summary>
-    ResultDispositioned = 4
+    ResultDispositioned = 4,
+
+    /// <summary>
+    /// The Reply was eligible for the abandoned attempt but canonical RestartAttempt priority fenced it before a
+    /// Process activation could consume it.
+    /// </summary>
+    SupersededByAttemptRestart = 5
 }
 
 /// <summary>Canonical durable Request state and optional Process input produced by the Durable Task interpreter.</summary>
