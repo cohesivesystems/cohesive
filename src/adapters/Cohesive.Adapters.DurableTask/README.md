@@ -368,10 +368,14 @@ pausing, general external cleanup, lifecycle Signal qualification, and exhaustiv
 follow-up qualification scope tracked by ARI-302.
 
 Transport cancellation tokens cancel only scheduling or event delivery. Worker shutdown cancels the activity
-`OperationContext` through `ApplicationStopping`; the resulting `OperationCanceledException` is physical failure
-and never becomes `CancelProcessCommand` or semantic cancellation evidence. The current standalone .NET Durable
-Task activity context exposes no per-activity cancellation token, and terminating an orchestration does not recall an
-already-running activity, so host implementations must also honor their exact-operation idempotency boundary.
+`OperationContext` through `ApplicationStopping`. The activity boundary projects only that shutdown-attributable
+`OperationCanceledException` as `DurableTaskWorkerStoppingException`, and the orchestrator's deterministic retry
+handler retries only that physical failure on an equivalent worker. It never becomes `CancelProcessCommand`,
+authored failure, replacement-attempt, or other semantic evidence. Ordinary host exceptions and cancellation without
+`ApplicationStopping` remain failures rather than being reclassified as worker loss. The current standalone .NET
+Durable Task activity context exposes no per-activity cancellation token, and terminating an orchestration does not
+recall an already-running activity. Activity execution and repeated worker loss therefore remain at-least-once;
+host implementations must honor their exact-operation idempotency or natural-deduplication boundary.
 
 Entity-creation Transitions hosted through `EntityTransitionProcessOperationAdapter` provide one such natural
 boundary when their repository implements `IEntityTransitionOperationRepository`: after exact-occurrence lookup,
@@ -486,9 +490,10 @@ eng/test-durable-task-integration.sh
 The script pins the emulator image by digest. Emulator coverage proves successful completion, canonical Pause,
 Inspect, exact replay, Continue, RestartAttempt, Cancel, and Terminate through the public event API, bound Request
 activity dispatch and Reply admission, child sub-orchestration, recurrence history rollover, authored failure,
-duplicate start admission, cross-instance and self-Signal delivery, and worker restart while an unbound Request,
-canonical Timer, and AwaitMatch are waiting. The restart assertions verify that retained Transition activity history
-is not reinvoked, Timer keeps its persisted due instant, and an AwaitMatch input is admitted once after replay. The
+duplicate start admission, cross-instance and self-Signal delivery, and worker restart during active Transition work
+and while an unbound Request, canonical Timer, and AwaitMatch are waiting. The restart assertions verify that
+shutdown-cancelled in-flight work is retried with its exact occurrence, retained Transition activity history is not
+reinvoked, Timer keeps its persisted due instant, and an AwaitMatch input is admitted once after replay. The
 emulator reads the safe `ExecutionStatus` custom-status projection directly and through
 `IProcessExecutionRepository` while orchestrations are live and after semantic cancellation; it does not use custom
 status as a hidden continuation, inbox, outbox, or control-receipt channel. It also proves both AwaitMatch
