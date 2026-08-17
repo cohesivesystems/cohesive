@@ -1,7 +1,10 @@
+using System.Collections.Immutable;
+using System.Linq.Expressions;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Authoring;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
 
 namespace Cohesive.Relations.Authoring;
@@ -9,6 +12,120 @@ namespace Cohesive.Relations.Authoring;
 public sealed partial class RelationQueryExpressionAuthoring
 {
     static readonly IClrTypeRefMapper CanonicalRelationTypeMapper = new DefaultClrTypeRefMapper();
+
+    /// <summary>Builds and projects one unkeyed exactly-one Relation into a typed canonical handle.</summary>
+    /// <typeparam name="TInput">CLR type represented by the Relation root.</typeparam>
+    /// <typeparam name="TOutputNode">Canonical logical-node type producing the Relation output.</typeparam>
+    /// <typeparam name="TResult">CLR type represented by the Relation output.</typeparam>
+    /// <param name="input">Typed source handle that owns the canonical Relation root.</param>
+    /// <param name="result">Typed output handle producing the canonical Relation output.</param>
+    /// <param name="revisionId">Exact semantic revision used by execution-definition links.</param>
+    /// <param name="metadata">Optional persisted Relation document metadata.</param>
+    /// <param name="invariants">Optional already-canonical output invariants.</param>
+    /// <param name="id">Optional explicit Relation identity overriding the endpoint convention.</param>
+    /// <param name="name">Optional explicit Relation display name overriding the CLR output-type convention.</param>
+    /// <param name="sourceReference">Optional stable producer reference for provenance.</param>
+    /// <returns>
+    /// A typed immutable handle containing the canonical document, exact reference, contracts, and captured
+    /// semantic dependency evidence.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="input"/> or <paramref name="result"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// A handle belongs to another session; the output is invalid or does not produce exactly one result per root;
+    /// an endpoint has no graph-qualified shape; an invariant is null; or <paramref name="revisionId"/> is default.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Canonical Relation, shape, or relationship content has no stable serialized representation.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// Canonical Relation, shape, or relationship content contains an unsupported runtime value.
+    /// </exception>
+    public Relation<TInput, TResult> CreateRelation<TInput, TOutputNode, TResult>(
+        RelationQueryExpressionBoundNode<SourceQueryNode, TInput> input,
+        RelationQueryExpressionBoundNode<TOutputNode, TResult> result,
+        ExecutionRevisionId revisionId,
+        RelationQueryDocumentMetadata? metadata = null,
+        ImmutableArray<InvariantDefinition> invariants = default,
+        RelationId? id = null,
+        RelationName? name = null,
+        string? sourceReference = null)
+        where TInput : notnull
+        where TOutputNode : LogicalQueryNode
+        where TResult : notnull
+    {
+        var authored = BuildRelation(
+            root: input,
+            output: result,
+            invariants: invariants,
+            id: id,
+            name: name,
+            sourceReference: sourceReference);
+        return CreateRelation(authored, input, result, revisionId, metadata);
+    }
+
+    /// <summary>Builds and projects one keyed exactly-one Relation into a typed canonical handle.</summary>
+    /// <typeparam name="TInput">CLR type represented by the Relation root.</typeparam>
+    /// <typeparam name="TOutputNode">Canonical logical-node type producing the Relation output.</typeparam>
+    /// <typeparam name="TResult">CLR type represented by the Relation output.</typeparam>
+    /// <typeparam name="TKey">CLR type represented by the Relation output key.</typeparam>
+    /// <param name="input">Typed source handle that owns the canonical Relation root.</param>
+    /// <param name="result">Typed output handle producing the canonical Relation output.</param>
+    /// <param name="key">Stable non-null output-key expression.</param>
+    /// <param name="revisionId">Exact semantic revision used by execution-definition links.</param>
+    /// <param name="metadata">Optional persisted Relation document metadata.</param>
+    /// <param name="invariants">Optional output invariants lowered before the terminal commits.</param>
+    /// <param name="id">Optional explicit Relation identity overriding the endpoint convention.</param>
+    /// <param name="name">Optional explicit Relation display name overriding the CLR output-type convention.</param>
+    /// <param name="sourceReference">Optional stable producer reference for provenance.</param>
+    /// <returns>
+    /// A typed immutable handle containing the canonical document, exact reference, contracts, and captured
+    /// semantic dependency evidence.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="input"/>, <paramref name="result"/>, or <paramref name="key"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// A handle belongs to another session; the output is invalid or does not produce exactly one result per root;
+    /// an endpoint has no graph-qualified shape; an invariant is null; invariant names repeat; or
+    /// <paramref name="revisionId"/> is default.
+    /// </exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// The key or an invariant cannot be lowered exactly, or contains a raw CLR temporal carrier instead of an
+    /// explicitly normalized canonical scalar.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Canonical Relation, shape, or relationship content has no stable serialized representation.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// Canonical Relation, shape, or relationship content contains an unsupported runtime value.
+    /// </exception>
+    public Relation<TInput, TResult> CreateRelation<TInput, TOutputNode, TResult, TKey>(
+        RelationQueryExpressionBoundNode<SourceQueryNode, TInput> input,
+        RelationQueryExpressionBoundNode<TOutputNode, TResult> result,
+        Expression<Func<TResult, TKey>> key,
+        ExecutionRevisionId revisionId,
+        RelationQueryDocumentMetadata? metadata = null,
+        IEnumerable<RelationQueryExpressionInvariant<TResult>>? invariants = null,
+        RelationId? id = null,
+        RelationName? name = null,
+        string? sourceReference = null)
+        where TInput : notnull
+        where TOutputNode : LogicalQueryNode
+        where TResult : notnull
+    {
+        var authored = BuildRelation(
+            root: input,
+            output: result,
+            key: key,
+            invariants: invariants,
+            id: id,
+            name: name,
+            sourceReference: sourceReference);
+        return CreateRelation(authored, input, result, revisionId, metadata);
+    }
 
     /// <summary>Projects one successfully authored exactly-one Relation into a typed canonical handle.</summary>
     /// <typeparam name="TInput">CLR type represented by the Relation root.</typeparam>
