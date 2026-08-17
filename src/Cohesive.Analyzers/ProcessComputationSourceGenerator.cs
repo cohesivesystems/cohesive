@@ -3386,6 +3386,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                             action.Syntax,
                             "Transition requires an exact definition, portable subject and input, and a stable continuation role");
                     }
+                    if (IsTypedCanonicalTransitionHandle(transition.Parameter?.Type))
+                        transitionReference = $"{transitionReference}.Reference";
                     builderStatements.Add(
                         $"__builder.InvokeTransition(id: {action.Identity.Variable}, transition: {transitionReference}, subject: {subjectValue}, input: {transitionInputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {action.Identity.Variable}, role: {transitionRole}, target: {successor}, {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)});");
                     return true;
@@ -4116,6 +4118,14 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             } named
             && named.ContainingNamespace.ToDisplayString() == "Cohesive.Relations.Authoring";
 
+        static bool IsTypedCanonicalTransitionHandle(ITypeSymbol? type) =>
+            type is INamedTypeSymbol
+            {
+                Name: "Transition",
+                Arity: 3
+            } named
+            && named.ContainingNamespace.ToDisplayString() == "Cohesive.Transitions.Authoring";
+
         bool TryEmitTransition(AwaitFlow awaited, string successor)
         {
             var transition = Argument(awaited.Invocation, "transition");
@@ -4133,6 +4143,9 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 return false;
             }
+
+            if (IsTypedCanonicalTransitionHandle(transition.Parameter?.Type))
+                transitionReference = $"{transitionReference}.Reference";
 
             builderStatements.Add(
                 $"__builder.InvokeTransition(id: {awaited.Identity.Variable}, transition: {transitionReference}, subject: {subjectValue}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: {nextRole}, target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)});");

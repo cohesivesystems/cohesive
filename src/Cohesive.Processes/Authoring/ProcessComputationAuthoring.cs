@@ -193,6 +193,28 @@ public sealed class ProcessContext
         string outputRole = "result") =>
         throw SyntaxOnly();
 
+    /// <summary>Declares invocation of a typed exact aggregate Transition and binds its typed outcome.</summary>
+    /// <typeparam name="TEntity">CLR entity authoring type whose shape owns the Transition.</typeparam>
+    /// <typeparam name="TInput">CLR type of the Transition invocation input.</typeparam>
+    /// <typeparam name="TOutcome">CLR type of the Transition outcome.</typeparam>
+    /// <param name="transition">Typed exact canonical Transition revision.</param>
+    /// <param name="subject">Pure authoritative aggregate-subject expression.</param>
+    /// <param name="input">Pure typed Transition input fused into the canonical invocation node.</param>
+    /// <param name="id">Optional explicit canonical node identity.</param>
+    /// <param name="nextRole">Stable semantic role of the completed continuation edge.</param>
+    /// <param name="outputRole">Stable semantic role of the Transition outcome binding.</param>
+    /// <returns>A syntax-only awaitable whose result represents the typed Transition outcome.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<TOutcome> Transition<TEntity, TInput, TOutcome>(
+        Transition<TEntity, TInput, TOutcome> transition,
+        object subject,
+        TInput input,
+        ExecutionNodeId? id = null,
+        string nextRole = "next",
+        string outputRole = "result")
+        where TEntity : Entity =>
+        throw SyntaxOnly();
+
     /// <summary>Declares an exact aggregate Transition whose outcome is not retained.</summary>
     /// <param name="transition">Exact Transition definition revision and fingerprint.</param>
     /// <param name="subject">Pure authoritative aggregate-subject expression.</param>

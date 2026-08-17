@@ -1668,6 +1668,90 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
     }
 
     [Fact]
+    public void Generator_LowersTypedTransitionHandleToItsExactReference()
+    {
+        var source = """
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Transitions.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class TypedTransitionProcess
+                     {
+                         private static Transition<ReviewEntity, TransitionInput, TransitionOutcome> Approve => null!;
+
+                         private static async ProcessTask<TransitionOutcome> Run(ProcessContext process, TransitionInput input)
+                         {
+                             var outcome = await process.Transition(Approve, "review-1", input);
+                             await process.Transition(Approve, "review-2", input);
+                             return outcome;
+                         }
+                     }
+
+                     public abstract class ReviewEntity : Entity
+                     {
+                     }
+                     public sealed record TransitionInput(string Reason);
+                     public sealed record TransitionOutcome(string Status);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        Assert.DoesNotContain(
+            compilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.Equal(2, Count(generated, "__builder.InvokeTransition"));
+        Assert.Equal(2, Count(generated, "(Approve).Reference"));
+    }
+
+    [Fact]
+    public void CSharpRejectsTypedTransitionInputMismatch()
+    {
+        var source = """
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Transitions.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class TypedTransitionProcess
+                     {
+                         private static Transition<ReviewEntity, ExpectedInput, TransitionOutcome> Approve => null!;
+
+                         private static async ProcessTask<TransitionOutcome> Run(ProcessContext process, ActualInput input)
+                         {
+                             var outcome = await process.Transition(Approve, "review-1", input);
+                             return outcome;
+                         }
+                     }
+
+                     public abstract class ReviewEntity : Entity
+                     {
+                     }
+                     public sealed record ExpectedInput(string Reason);
+                     public sealed record ActualInput(string Reason);
+                     public sealed record TransitionOutcome(string Status);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        RunGenerator(compilation, out var outputCompilation);
+
+        Assert.Contains(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Id == "CS0411"
+                || diagnostic.Id == "CS1503");
+    }
+
+    [Fact]
     public void CSharpRequiresEveryTypedChildSemanticHandler()
     {
         var source = """
@@ -2253,6 +2337,7 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
             .Append(typeof(Cohesive.Execution.ExecutionDefinitionReference).Assembly)
             .Append(typeof(ProcessContext).Assembly)
             .Append(typeof(Cohesive.Relations.Authoring.Relation<,>).Assembly)
+            .Append(typeof(Cohesive.Transitions.Authoring.Transition<,,>).Assembly)
             .Append(typeof(ProcessComputationSourceGenerator).Assembly)
             .Distinct()
             .Select(static assembly => MetadataReference.CreateFromFile(assembly.Location));
