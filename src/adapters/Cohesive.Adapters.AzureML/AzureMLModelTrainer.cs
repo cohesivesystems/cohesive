@@ -142,11 +142,22 @@ public sealed class AzureMLModelTrainer : IModelTrainer
             ? new(resourceId: computeTarget)
             : new(resourceId: $"/subscriptions/{options.SubscriptionId}/resourceGroups/{options.ResourceGroupName}/providers/Microsoft.MachineLearningServices/workspaces/{options.WorkspaceName}/computes/{computeTarget}");
 
-    static MachineLearningJobInput CreateInput(TrainingDatasetArtifact dataset) => dataset.Kind switch
+    static MachineLearningJobInput CreateInput(TrainingDatasetArtifact dataset)
     {
-        TrainingDatasetArtifactKind.Folder => new MachineLearningUriFolderJobInput(dataset.Location),
-        _ => new MachineLearningUriFileJobInput(uri: dataset.Location)
-    };
+        ArgumentNullException.ThrowIfNull(dataset);
+        if (!Uri.TryCreate(dataset.Location, UriKind.Absolute, out var location))
+        {
+            throw new ArgumentException(
+                $"Training dataset '{dataset.Name}' location must be an absolute URI.",
+                nameof(dataset));
+        }
+
+        return dataset.Kind switch
+        {
+            TrainingDatasetArtifactKind.Folder => new MachineLearningUriFolderJobInput(location),
+            _ => new MachineLearningUriFileJobInput(uri: location)
+        };
+    }
 
     static MachineLearningJobOutput CreateOutput(string? outputUri)
     {
