@@ -1,6 +1,6 @@
 # Real-container materialization harness
 
-This harness is the local infrastructure boundary for ARI-399. It starts pinned PostgreSQL, Azure Cosmos DB emulator, and Elasticsearch containers, then projects one deterministic freight scenario journal into both source databases.
+This harness is the local infrastructure boundary for ARI-399. It starts pinned PostgreSQL, Azure Cosmos DB emulator, and Elasticsearch containers together with pgAdmin, Cosmos Data Explorer, and Kibana, then projects one deterministic freight scenario journal into both source databases.
 
 The journal at `scenarios/freight-baseline.json` is the only seed-data authority. The .NET seed projection validates tenant-local references and cardinality before replacing the harness PostgreSQL schema and Cosmos database. Elasticsearch starts empty because candidate generations are outputs of materialization, not seed data.
 
@@ -43,17 +43,28 @@ Default endpoints:
 | Service | Endpoint |
 | --- | --- |
 | PostgreSQL | `localhost:55432`, database `cohesive_materialization` |
+| pgAdmin | `http://localhost:55050/` |
 | Cosmos gateway | `https://localhost:58081/` |
 | Cosmos readiness | `http://localhost:58080/ready` |
+| Cosmos Data Explorer | `http://localhost:58082/` |
 | Elasticsearch | `http://localhost:59200` |
+| Kibana | `http://localhost:55601/` |
 
 Use `harness.sh env` to inspect the effective project identity and endpoints without displaying connection secrets.
+
+### Browser UI access
+
+`harness.sh up` waits for all three browser UIs to become healthy. Cosmos Data Explorer is attached directly to the local emulator. Kibana is preconfigured for the harness Elasticsearch node. pgAdmin is preconfigured with a server named `Cohesive materialization harness` whose connection settings are derived from the same Postgres environment variables used by the database container.
+
+The default pgAdmin login is `harness@cohesivesystems.com` with password `cohesive-local-only`. Both values are local-only defaults and can be changed through `.env`. The database password is acquired by the preconfigured server at runtime and is not copied into pgAdmin's persisted configuration database.
 
 ## Pinned service capabilities
 
 - PostgreSQL `17.10-alpine3.24` starts with `wal_level=logical`, ten replication slots, and ten WAL senders.
-- Cosmos emulator `vnext-EN20260810` runs in HTTPS gateway mode and uses its documented readiness endpoint. The local .NET seeder accepts the emulator certificate only for loopback requests.
+- pgAdmin `9.17` persists its UI metadata independently of the Postgres data volume and reloads its declarative server definition on startup.
+- Cosmos emulator `vnext-EN20260810` runs in HTTPS gateway mode with its built-in HTTP Data Explorer and uses its documented readiness endpoint. The local .NET seeder accepts the emulator certificate only for loopback requests.
 - Elasticsearch `8.19.13` matches the adapter client's minor line and runs as an unauthenticated single node bound only to loopback.
+- Kibana `8.19.13` matches the Elasticsearch node exactly and runs without external telemetry or authentication for this loopback-only harness.
 
 The emulator proves local NoSQL gateway behavior. It does not establish production equivalence for unsupported full-fidelity change-feed or continuous-backup capabilities; those remain explicit adapter capability differences.
 
