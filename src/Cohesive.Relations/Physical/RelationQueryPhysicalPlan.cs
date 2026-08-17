@@ -565,8 +565,6 @@ public sealed class CompiledRelationQueryPhysicalPlan
         if (Stages.Any(stage => stage.PlacementBinding is { } binding
             && !stage.Provenance.PlacementBindings.Contains(binding)))
             throw new ArgumentException("A source-backed physical stage must attribute its placement binding.", nameof(stages));
-        if (Placement.Bindings.Any(static binding => binding.Partition is not null))
-            throw new ArgumentException("The v1 physical plan cannot preserve partition selectors.", nameof(placement));
         if (Stages.SelectMany(static stage => stage.SemanticInputs.Concat(stage.RequestedFields))
             .Any(input => !Plan.Inputs.Contains(input)))
             throw new ArgumentException("A physical stage references an input absent from the compiled plan.", nameof(stages));

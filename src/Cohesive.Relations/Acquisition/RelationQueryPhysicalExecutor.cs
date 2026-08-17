@@ -203,15 +203,6 @@ public sealed class RelationQueryPhysicalExecutor
 
         foreach (var binding in physical.Placement.Bindings)
         {
-            if (binding.Partition is not null)
-            {
-                return Diagnostic(
-                    RelationQueryPhysicalExecutionDiagnosticCodes.StageInvalid,
-                    "The v1 source-read request cannot preserve a placed partition selector.",
-                    input: binding.Input,
-                    source: binding.Source);
-            }
-
             if (binding.Acquisition == RelationQuerySourceAcquisitionKind.Supplied)
                 continue;
             var source = physical.Placement.SourceInstances.Single(candidate => candidate.Id == binding.Source);
@@ -232,6 +223,18 @@ public sealed class RelationQueryPhysicalExecutor
                 return Diagnostic(
                     RelationQueryPhysicalExecutionDiagnosticCodes.SourceReaderMismatch,
                     "A source reader does not match the placed source, execution domain, and capability profile.",
+                    input: binding.Input,
+                    source: source.Id);
+            }
+
+            if ((binding.Partition is { } partition
+                 && (descriptor.PartitionScope is not { } scope
+                     || !string.Equals(scope.SourceSelector, partition.SourceSelector, StringComparison.Ordinal)))
+                || (binding.Partition is null && descriptor.PartitionScope is not null))
+            {
+                return Diagnostic(
+                    RelationQueryPhysicalExecutionDiagnosticCodes.SourceReaderMismatch,
+                    "A source reader's fixed logical-partition evidence does not match the exact placed partition selector.",
                     input: binding.Input,
                     source: source.Id);
             }

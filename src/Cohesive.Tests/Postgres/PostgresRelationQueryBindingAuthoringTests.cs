@@ -102,6 +102,39 @@ public sealed class PostgresRelationQueryBindingAuthoringTests
     }
 
     [Fact]
+    public void Build_PartitionColumnIsExplicitInspectableAndFingerprintSignificant()
+    {
+        var fixture = CreateFixture(partitioned: true);
+        var first = PostgresRelationQueryBinding.For(fixture.AuthoredPlacement)
+            .Table(
+                fixture.Placed,
+                "loads",
+                table => table.Partition(load => load.TenantId, "tenant_id", StatusOptions))
+            .Build()
+            .RequireValue();
+        var differentColumn = PostgresRelationQueryBinding.For(fixture.AuthoredPlacement)
+            .Table(
+                fixture.Placed,
+                "loads",
+                table => table.Partition(load => load.TenantId, "organization_id", StatusOptions))
+            .Build()
+            .RequireValue();
+
+        var partition = Assert.IsType<PostgresRelationQueryPartitionBinding>(Assert.Single(first.Tables).Partition);
+        Assert.Equal("tenantId", partition.SourceSelector);
+        Assert.Equal(FieldPath.FromField("tenantId"), partition.SemanticPath);
+        Assert.Equal("tenant_id", partition.ColumnName);
+        Assert.Equal(PostgresRelationQueryScalarType.Text, partition.ScalarType);
+        Assert.Equal(PostgresRelationQueryTextEqualitySemantics.Ordinal, partition.TextSemantics?.Equality);
+        Assert.NotEqual(first.Fingerprint, differentColumn.Fingerprint);
+        Assert.NotEqual(first.Id, differentColumn.Id);
+
+        var json = JsonSerializer.Serialize(first, JsonOptions);
+        var rehydrated = JsonSerializer.Deserialize<PostgresRelationQueryStorageBinding>(json, JsonOptions);
+        Assert.Equal(first.Fingerprint, Assert.IsType<PostgresRelationQueryStorageBinding>(rehydrated).Fingerprint);
+    }
+
+    [Fact]
     public void Build_PartialColumnOptionsRetainPerSettingProvenance()
     {
         var fixture = CreateFixture();
@@ -589,7 +622,9 @@ public sealed class PostgresRelationQueryBindingAuthoringTests
             [table]);
     }
 
-    static Fixture CreateFixture(string? placementConventionSetVersion = null)
+    static Fixture CreateFixture(
+        string? placementConventionSetVersion = null,
+        bool partitioned = false)
     {
         var author = RelationQuery.Expression();
         var loadShape = author.Clr.Shape<LoadDocument>();
@@ -634,6 +669,8 @@ public sealed class PostgresRelationQueryBindingAuthoringTests
         var placedSource = placementBuilder.PlaceSource(source, loadShape)
             .Identity(load => load.Id)
             .FieldsBySemanticPath();
+        if (partitioned)
+            placedSource.Partition(load => load.TenantId);
         var authoredPlacement = placementBuilder.Build().RequireValue();
         return new(plan, authoredPlacement, authoredPlacement.GetInput(placedSource));
     }
@@ -647,6 +684,9 @@ public sealed class PostgresRelationQueryBindingAuthoringTests
 
         [JsonPropertyName("status")]
         public required string Status { get; init; }
+
+        [JsonPropertyName("tenantId")]
+        public required string TenantId { get; init; }
     }
 
     sealed class LoadRow

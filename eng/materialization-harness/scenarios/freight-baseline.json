@@ -1,0 +1,406 @@
+{
+  "schemaVersion": "cohesive.materialization-harness/scenario-journal/v1",
+  "scenarioId": "freight-baseline-v1",
+  "operations": [
+    {
+      "sequence": 1,
+      "entity": "customerAccount",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "customerAccountId": "customer-grocery",
+        "displayName": "Northwind Grocery"
+      }
+    },
+    {
+      "sequence": 2,
+      "entity": "customerAccount",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "customerAccountId": "customer-retail",
+        "displayName": "Northwind Retail"
+      }
+    },
+    {
+      "sequence": 3,
+      "entity": "location",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "locationId": "location-seattle",
+        "displayName": "Seattle Distribution Center",
+        "city": "Seattle",
+        "region": "WA"
+      }
+    },
+    {
+      "sequence": 4,
+      "entity": "location",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "locationId": "location-portland",
+        "displayName": "Portland Crossdock",
+        "city": "Portland",
+        "region": "OR"
+      }
+    },
+    {
+      "sequence": 5,
+      "entity": "location",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "locationId": "location-boise",
+        "displayName": "Boise Store Cluster",
+        "city": "Boise",
+        "region": "ID"
+      }
+    },
+    {
+      "sequence": 6,
+      "entity": "order",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "orderId": "order-1001",
+        "orderNumber": "NW-1001",
+        "customerAccountId": "customer-grocery",
+        "equipmentClass": "Reefer",
+        "createdAt": "2026-08-01T08:00:00Z"
+      }
+    },
+    {
+      "sequence": 7,
+      "entity": "order",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "orderId": "order-1002",
+        "orderNumber": "NW-1002",
+        "customerAccountId": "customer-grocery",
+        "equipmentClass": "DryVan",
+        "createdAt": "2026-08-01T08:05:00Z"
+      }
+    },
+    {
+      "sequence": 8,
+      "entity": "order",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "orderId": "order-1003",
+        "orderNumber": "NW-1003",
+        "customerAccountId": "customer-retail",
+        "equipmentClass": "DryVan",
+        "createdAt": "2026-08-01T08:10:00Z"
+      }
+    },
+    {
+      "sequence": 9,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "orderStopId": "stop-1001-pickup",
+        "orderId": "order-1001",
+        "sequence": 10,
+        "stopType": "Pickup",
+        "locationId": "location-seattle",
+        "scheduledStart": "2026-08-02T08:00:00Z",
+        "scheduledEnd": "2026-08-02T10:00:00Z"
+      }
+    },
+    {
+      "sequence": 10,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "orderStopId": "stop-1001-drop",
+        "orderId": "order-1001",
+        "sequence": 20,
+        "stopType": "Drop",
+        "locationId": "location-portland",
+        "scheduledStart": "2026-08-03T08:00:00Z",
+        "scheduledEnd": "2026-08-03T10:00:00Z"
+      }
+    },
+    {
+      "sequence": 11,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "orderStopId": "stop-1002-pickup",
+        "orderId": "order-1002",
+        "sequence": 10,
+        "stopType": "Pickup",
+        "locationId": "location-seattle",
+        "scheduledStart": "2026-08-02T11:00:00Z",
+        "scheduledEnd": "2026-08-02T12:00:00Z"
+      }
+    },
+    {
+      "sequence": 12,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "orderStopId": "stop-1002-drop",
+        "orderId": "order-1002",
+        "sequence": 20,
+        "stopType": "Drop",
+        "locationId": "location-boise",
+        "scheduledStart": "2026-08-03T14:00:00Z",
+        "scheduledEnd": "2026-08-03T16:00:00Z"
+      }
+    },
+    {
+      "sequence": 13,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "orderStopId": "stop-1003-pickup",
+        "orderId": "order-1003",
+        "sequence": 10,
+        "stopType": "Pickup",
+        "locationId": "location-portland",
+        "scheduledStart": "2026-08-04T07:00:00Z",
+        "scheduledEnd": "2026-08-04T08:00:00Z"
+      }
+    },
+    {
+      "sequence": 14,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "orderStopId": "stop-1003-drop-boise",
+        "orderId": "order-1003",
+        "sequence": 20,
+        "stopType": "Drop",
+        "locationId": "location-boise",
+        "scheduledStart": "2026-08-05T09:00:00Z",
+        "scheduledEnd": "2026-08-05T10:00:00Z"
+      }
+    },
+    {
+      "sequence": 15,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "northwind",
+        "orderStopId": "stop-1003-drop-seattle",
+        "orderId": "order-1003",
+        "sequence": 30,
+        "stopType": "Drop",
+        "locationId": "location-seattle",
+        "scheduledStart": "2026-08-06T09:00:00Z",
+        "scheduledEnd": "2026-08-06T11:00:00Z"
+      }
+    },
+    {
+      "sequence": 16,
+      "entity": "customerAccount",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "customerAccountId": "customer-broker",
+        "displayName": "Acme Brokerage"
+      }
+    },
+    {
+      "sequence": 17,
+      "entity": "customerAccount",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "customerAccountId": "customer-manufacturer",
+        "displayName": "Acme Manufacturing"
+      }
+    },
+    {
+      "sequence": 18,
+      "entity": "location",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "locationId": "location-dallas",
+        "displayName": "Dallas Plant",
+        "city": "Dallas",
+        "region": "TX"
+      }
+    },
+    {
+      "sequence": 19,
+      "entity": "location",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "locationId": "location-austin",
+        "displayName": "Austin Warehouse",
+        "city": "Austin",
+        "region": "TX"
+      }
+    },
+    {
+      "sequence": 20,
+      "entity": "location",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "locationId": "location-houston",
+        "displayName": "Houston Terminal",
+        "city": "Houston",
+        "region": "TX"
+      }
+    },
+    {
+      "sequence": 21,
+      "entity": "order",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "orderId": "order-2001",
+        "orderNumber": "AC-2001",
+        "customerAccountId": "customer-broker",
+        "equipmentClass": "Flatbed",
+        "createdAt": "2026-08-01T09:00:00Z"
+      }
+    },
+    {
+      "sequence": 22,
+      "entity": "order",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "orderId": "order-2002",
+        "orderNumber": "AC-2002",
+        "customerAccountId": "customer-broker",
+        "equipmentClass": "Tanker",
+        "createdAt": "2026-08-01T09:05:00Z"
+      }
+    },
+    {
+      "sequence": 23,
+      "entity": "order",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "orderId": "order-2003",
+        "orderNumber": "AC-2003",
+        "customerAccountId": "customer-manufacturer",
+        "equipmentClass": "DryVan",
+        "createdAt": "2026-08-01T09:10:00Z"
+      }
+    },
+    {
+      "sequence": 24,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "orderStopId": "stop-2001-pickup",
+        "orderId": "order-2001",
+        "sequence": 10,
+        "stopType": "Pickup",
+        "locationId": "location-dallas",
+        "scheduledStart": "2026-08-02T08:00:00Z",
+        "scheduledEnd": "2026-08-02T09:00:00Z"
+      }
+    },
+    {
+      "sequence": 25,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "orderStopId": "stop-2001-drop",
+        "orderId": "order-2001",
+        "sequence": 20,
+        "stopType": "Drop",
+        "locationId": "location-austin",
+        "scheduledStart": "2026-08-02T14:00:00Z",
+        "scheduledEnd": "2026-08-02T15:00:00Z"
+      }
+    },
+    {
+      "sequence": 26,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "orderStopId": "stop-2002-pickup",
+        "orderId": "order-2002",
+        "sequence": 10,
+        "stopType": "Pickup",
+        "locationId": "location-dallas",
+        "scheduledStart": "2026-08-03T08:00:00Z",
+        "scheduledEnd": "2026-08-03T09:00:00Z"
+      }
+    },
+    {
+      "sequence": 27,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "orderStopId": "stop-2002-drop",
+        "orderId": "order-2002",
+        "sequence": 20,
+        "stopType": "Drop",
+        "locationId": "location-houston",
+        "scheduledStart": "2026-08-03T15:00:00Z",
+        "scheduledEnd": "2026-08-03T17:00:00Z"
+      }
+    },
+    {
+      "sequence": 28,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "orderStopId": "stop-2003-pickup",
+        "orderId": "order-2003",
+        "sequence": 10,
+        "stopType": "Pickup",
+        "locationId": "location-houston",
+        "scheduledStart": "2026-08-04T07:00:00Z",
+        "scheduledEnd": "2026-08-04T09:00:00Z"
+      }
+    },
+    {
+      "sequence": 29,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "orderStopId": "stop-2003-drop-austin",
+        "orderId": "order-2003",
+        "sequence": 20,
+        "stopType": "Drop",
+        "locationId": "location-austin",
+        "scheduledStart": "2026-08-04T13:00:00Z",
+        "scheduledEnd": "2026-08-04T14:00:00Z"
+      }
+    },
+    {
+      "sequence": 30,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "orderStopId": "stop-2003-drop-dallas",
+        "orderId": "order-2003",
+        "sequence": 30,
+        "stopType": "Drop",
+        "locationId": "location-dallas",
+        "scheduledStart": "2026-08-05T08:00:00Z",
+        "scheduledEnd": "2026-08-05T09:00:00Z"
+      }
+    }
+  ]
+}

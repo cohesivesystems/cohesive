@@ -1,0 +1,73 @@
+services:
+  postgres:
+    image: postgres:17.10-alpine3.24
+    environment:
+      POSTGRES_DB: ${COHESIVE_HARNESS_POSTGRES_DATABASE:-cohesive_materialization}
+      POSTGRES_USER: ${COHESIVE_HARNESS_POSTGRES_USER:-cohesive}
+      POSTGRES_PASSWORD: ${COHESIVE_HARNESS_POSTGRES_PASSWORD:-cohesive-local-only}
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=10
+      - -c
+      - max_wal_senders=10
+    ports:
+      - "127.0.0.1:${COHESIVE_HARNESS_POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready --dbname="$${POSTGRES_DB}" --username="$${POSTGRES_USER}"
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 30s
+
+  cosmos:
+    image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-EN20260810
+    environment:
+      PROTOCOL: https
+      ENABLE_EXPLORER: "false"
+    ports:
+      - "127.0.0.1:${COHESIVE_HARNESS_COSMOS_PORT:-58081}:8081"
+      - "127.0.0.1:${COHESIVE_HARNESS_COSMOS_HEALTH_PORT:-58080}:8080"
+    volumes:
+      - cosmos-data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl --fail --silent http://localhost:8080/ready >/dev/null
+      interval: 3s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    stop_grace_period: 30s
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.13
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.license.self_generated.type: basic
+      ES_JAVA_OPTS: ${COHESIVE_HARNESS_ELASTIC_JAVA_OPTS:--Xms512m -Xmx512m}
+    ports:
+      - "127.0.0.1:${COHESIVE_HARNESS_ELASTIC_PORT:-59200}:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl --fail --silent 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=2s' >/dev/null
+      interval: 3s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    stop_grace_period: 30s
+
+volumes:
+  postgres-data:
+  cosmos-data:
+  elasticsearch-data:

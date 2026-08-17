@@ -542,6 +542,56 @@ public sealed class RelationQueryPhysicalExecutorTests
         AssertNoIo(readers);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("$wrong-partition")]
+    public async Task ExecuteAsync_PartitionedPlacementRequiresExactReaderScopeBeforeAnyIo(
+        string? readerSelector)
+    {
+        var compilation = WithPartition(
+            FederatedLoadPhysicalExecutionFixture.Create(
+                FederatedLoadRelationFixture.QueryDocument,
+                maximumBatchSize: 2),
+            FederatedLoadRelationFixture.EquipmentTraversalNodeId,
+            "$tenant");
+        var scope = readerSelector is null
+            ? null
+            : new RelationQuerySourceReaderPartitionScope(readerSelector, "scope/tenant-a");
+        var readers = CreateReaders(compilation, equipmentPartitionScope: scope);
+
+        var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
+            Request(compilation, "tests/partition-reader-mismatch"));
+
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
+        Assert.Null(result.Evidence);
+        Assert.Null(result.Interpretation);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == RelationQueryPhysicalExecutionDiagnosticCodes.SourceReaderMismatch
+            && diagnostic.Source == FederatedLoadPhysicalExecutionFixture.EquipmentSource);
+        AssertNoIo(readers);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PartitionedPlacementAcceptsExactReaderScope()
+    {
+        var compilation = WithPartition(
+            FederatedLoadPhysicalExecutionFixture.Create(
+                FederatedLoadRelationFixture.QueryDocument,
+                maximumBatchSize: 2),
+            FederatedLoadRelationFixture.EquipmentTraversalNodeId,
+            "$tenant");
+        var readers = CreateReaders(
+            compilation,
+            equipmentPartitionScope: new("$tenant", "scope/tenant-a"));
+
+        var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
+            Request(compilation, "tests/partition-reader-match"));
+
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
+        Assert.Empty(result.Diagnostics);
+        Assert.NotEmpty(readers.Equipment.Requests);
+    }
+
     [Fact]
     public async Task ExecuteAsync_MissingReaderFailsBeforeAnyIo()
     {
@@ -1129,7 +1179,8 @@ public sealed class RelationQueryPhysicalExecutorTests
         bool mismatchCustomerProfile = false,
         Func<RelationQuerySourceReadRequest, RelationQuerySourceReadResult>? customerResultFactory = null,
         Action<RelationQuerySourceReadRequest>? afterLoadRead = null,
-        Action<RelationQuerySourceReadRequest>? afterCustomerRead = null)
+        Action<RelationQuerySourceReadRequest>? afterCustomerRead = null,
+        RelationQuerySourceReaderPartitionScope? equipmentPartitionScope = null)
     {
         var loads = FederatedLoadPhysicalExecutionFixture.Source(
             compilation,
@@ -1162,8 +1213,60 @@ public sealed class RelationQueryPhysicalExecutorTests
                 customerResultFactory,
                 afterCustomerRead),
             new(
-                new(equipment.Id, equipment.ExecutionDomain, equipment.TargetProfile),
+                new(
+                    equipment.Id,
+                    equipment.ExecutionDomain,
+                    equipment.TargetProfile,
+                    equipmentPartitionScope),
                 EquipmentRows));
+    }
+
+    static FederatedLoadPhysicalExecutionFixture.Compilation WithPartition(
+        FederatedLoadPhysicalExecutionFixture.Compilation compilation,
+        QueryNodeId traversal,
+        string selector)
+    {
+        var input = compilation.Plan.InputContract.Traversals.Single(
+            candidate => candidate.Input.Traversal == traversal).Input.Id;
+        var bindings = compilation.Placement.Bindings
+            .Select(binding => binding.Input != input
+                ? binding
+                : new RelationQuerySourcePlacementBinding(
+                    binding.Id,
+                    binding.Input,
+                    binding.Node,
+                    binding.Binding,
+                    binding.Shape,
+                    binding.Source,
+                    binding.Kind,
+                    binding.Acquisition,
+                    binding.Origin,
+                    binding.Identity,
+                    binding.Fields,
+                    binding.RelationshipKeys,
+                    new(selector)))
+            .ToImmutableArray();
+        var placement = new RelationQuerySourcePlacement(
+            RelationQuerySourcePlacement.CurrentSchemaVersion,
+            RelationQueryCompiledPlanReference.From(compilation.Plan),
+            compilation.Placement.ConventionSetVersion,
+            compilation.Placement.SourceInstances,
+            bindings,
+            configurationDecisions: compilation.Placement.ConfigurationDecisions);
+        var result = RelationQueryPhysicalPlanner.Compile(
+            compilation.Plan,
+            compilation.Realization,
+            placement,
+            compilation.PhysicalPlan.Policy);
+        Assert.True(
+            result.IsSuccessful,
+            string.Join(Environment.NewLine, result.Diagnostics.Select(static diagnostic =>
+                $"{diagnostic.Code}: {diagnostic.Message}")));
+        return new(
+            compilation.Plan,
+            compilation.Realization,
+            placement,
+            Assert.IsType<CompiledRelationQueryPhysicalPlan>(result.Plan));
     }
 
     static readonly ImmutableArray<DeterministicRelationQuerySourceReader.SourceRow> LoadRows =

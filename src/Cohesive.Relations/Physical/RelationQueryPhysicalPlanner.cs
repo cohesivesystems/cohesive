@@ -363,14 +363,6 @@ public static class RelationQueryPhysicalPlanner
                 if (placements.TryGetValue(traversal.Input.Id, out var binding))
                     ValidateTraversalPlacement(traversal, binding);
 
-            foreach (var binding in placement.Bindings.Where(static binding => binding.Partition is not null))
-            {
-                Error(
-                    RelationQueryPhysicalPlanningDiagnosticCodes.OperatingBoundaryInvalid,
-                    $"Placement '{binding.Id.Value}' uses a partition selector, which the v1 physical reader contract cannot preserve.",
-                    binding.Input,
-                    binding.Id);
-            }
         }
 
         void ValidateSourcePlacement(
