@@ -187,8 +187,8 @@ public sealed class AzureMLModelTrainer : IModelTrainer
         return new(
             ModelName: modelName,
             Version: jobId,
-            ArtifactLocation: artifactUri,
-            Metrics: new Dictionary<string, float>(StringComparer.Ordinal)
+            ArtifactLocation: artifactUri.ToString(),
+            Metrics: Array.Empty<TrainingMetric>()
             );
     }
 
