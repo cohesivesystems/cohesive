@@ -215,11 +215,7 @@ internal static partial class ElasticMaterializationWireJson
             ["deleted"] = new(Type: "boolean")
         };
         return Serialize(new IndexCreateBody(
-            new(
-                Hidden: true,
-                BindingFingerprint: bindingFingerprint,
-                TemplateFingerprint: templateFingerprint,
-                GenerationId: generationId),
+            new(Hidden: true),
             new(
                 Dynamic: null,
                 new(StringComparer.Ordinal)
@@ -228,6 +224,12 @@ internal static partial class ElasticMaterializationWireJson
                         Type: "object",
                         Dynamic: false,
                         Properties: metadataProperties)
+                },
+                Meta: new(StringComparer.Ordinal)
+                {
+                    ["cohesive_binding"] = bindingFingerprint,
+                    ["cohesive_template"] = templateFingerprint,
+                    ["cohesive_generation"] = generationId
                 }),
             new(StringComparer.Ordinal) { [ownerAlias] = new(IsHidden: true) }));
     }
@@ -250,11 +252,11 @@ internal static partial class ElasticMaterializationWireJson
             RequireValue(id, nameof(ids));
         }
 
+        var source = sourceProjection == ElasticMultiGetSourceProjection.MaterializationMetadata
+            ? new[] { ElasticMaterializationTargetBinding.MetadataField }
+            : null;
         return Serialize(new MultiGetBody(
-            sourceProjection == ElasticMultiGetSourceProjection.MaterializationMetadata
-                ? [ElasticMaterializationTargetBinding.MetadataField]
-                : null,
-            ids));
+            [.. ids.Select(id => new MultiGetDocument(id, source))]));
     }
 
     internal static ElasticJsonObject CreateScanBody(ElasticScanRequest request)
@@ -355,14 +357,12 @@ internal static partial class ElasticMaterializationWireJson
 
     sealed record IndexSettings(
         [property: JsonPropertyName("index.hidden")] bool Hidden,
-        [property: JsonPropertyName("number_of_shards")] int? NumberOfShards = null,
-        [property: JsonPropertyName("index.meta.cohesive_binding")] string? BindingFingerprint = null,
-        [property: JsonPropertyName("index.meta.cohesive_template")] string? TemplateFingerprint = null,
-        [property: JsonPropertyName("index.meta.cohesive_generation")] string? GenerationId = null);
+        [property: JsonPropertyName("number_of_shards")] int? NumberOfShards = null);
 
     sealed record IndexMappings(
         [property: JsonPropertyName("dynamic")] bool? Dynamic,
-        [property: JsonPropertyName("properties")] Dictionary<string, FieldMapping> Properties);
+        [property: JsonPropertyName("properties")] Dictionary<string, FieldMapping> Properties,
+        [property: JsonPropertyName("_meta")] Dictionary<string, string>? Meta = null);
 
     sealed record FieldMapping(
         [property: JsonPropertyName("type")] string Type,
@@ -379,8 +379,11 @@ internal static partial class ElasticMaterializationWireJson
         bool? WriteBlock);
 
     sealed record MultiGetBody(
-        [property: JsonPropertyName("_source")] string[]? Source,
-        [property: JsonPropertyName("ids")] ImmutableArray<string> Ids);
+        [property: JsonPropertyName("docs")] MultiGetDocument[] Documents);
+
+    sealed record MultiGetDocument(
+        [property: JsonPropertyName("_id")] string Id,
+        [property: JsonPropertyName("_source")] string[]? Source);
 
     sealed record ScanBody(
         [property: JsonPropertyName("size")] int Size,

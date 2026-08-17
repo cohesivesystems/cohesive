@@ -50,6 +50,7 @@
     <ProjectReference Include="..\Cohesive.Storage\Cohesive.Storage.csproj" />
     <ProjectReference Include="..\Cohesive.Analyzers\Cohesive.Analyzers.csproj" OutputItemType="Analyzer" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.Json\Cohesive.Adapters.Json.csproj" />
+    <ProjectReference Include="..\..\eng\materialization-harness\model\Cohesive.MaterializationHarness.Model.csproj" />
   </ItemGroup>
   
   <ItemGroup>

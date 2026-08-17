@@ -66,7 +66,7 @@ public sealed class ElasticMaterializationWireJsonTests
             ".cohesive-owner-generation",
             maximumIndexedIdentityCharacters: 321);
 
-        const string expected = """{"settings":{"index.hidden":true,"index.meta.cohesive_binding":"binding-fingerprint","index.meta.cohesive_template":"template-fingerprint","index.meta.cohesive_generation":"generation/001"},"mappings":{"properties":{"_cohesive":{"type":"object","dynamic":false,"properties":{"generationId":{"type":"keyword","index":false,"doc_values":false},"itemId":{"type":"keyword","ignore_above":321},"mutationId":{"type":"keyword","index":false,"doc_values":false},"mutationFingerprint":{"type":"keyword","index":false,"doc_values":false},"version":{"type":"long"},"deleted":{"type":"boolean"}}}}},"aliases":{".cohesive-owner-generation":{"is_hidden":true}}}""";
+        const string expected = """{"settings":{"index.hidden":true},"mappings":{"properties":{"_cohesive":{"type":"object","dynamic":false,"properties":{"generationId":{"type":"keyword","index":false,"doc_values":false},"itemId":{"type":"keyword","ignore_above":321},"mutationId":{"type":"keyword","index":false,"doc_values":false},"mutationFingerprint":{"type":"keyword","index":false,"doc_values":false},"version":{"type":"long"},"deleted":{"type":"boolean"}}}},"_meta":{"cohesive_binding":"binding-fingerprint","cohesive_template":"template-fingerprint","cohesive_generation":"generation/001"}},"aliases":{".cohesive-owner-generation":{"is_hidden":true}}}""";
         AssertExact(expected, body);
     }
 
@@ -119,7 +119,19 @@ public sealed class ElasticMaterializationWireJsonTests
             ["item-a"],
             ElasticMultiGetSourceProjection.Full);
 
-        AssertExact("""{"ids":["item-a"]}""", body);
+        AssertExact("""{"docs":[{"_id":"item-a"}]}""", body);
+    }
+
+    [Fact]
+    public void CreateMultiGetBody_MetadataProjectionScopesEachDocument()
+    {
+        var body = ElasticMaterializationWireJson.CreateMultiGetBody(
+            ["item-a", "item-b"],
+            ElasticMultiGetSourceProjection.MaterializationMetadata);
+
+        AssertExact(
+            """{"docs":[{"_id":"item-a","_source":["_cohesive"]},{"_id":"item-b","_source":["_cohesive"]}]}""",
+            body);
     }
 
     [Fact]
