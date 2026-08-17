@@ -4,11 +4,59 @@ using Cohesive.Processes.Authoring;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.IR;
 using Cohesive.Relations.Authoring;
+using Cohesive.Relations.IR;
+using Cohesive.Relations.Serialization;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
 public sealed class TypedRelationProcessAuthoringTests
 {
+    [Fact]
+    public void OneInvocationUnkeyedRelationCreation_CreatesExactlyOneTypedHandle()
+    {
+        var author = RelationQuery.Expression();
+        var input = author.Source<TypedRelationInput>();
+        var output = author.Project(input, value => new TypedRelationResult
+        {
+            Id = value.Id,
+            Normalized = value.Value
+        });
+
+        var relation = author.CreateRelation(
+            input: input,
+            result: output,
+            revisionId: new("1"),
+            metadata: new(origin: DocumentOrigin.Generated, producer: "tests", producerVersion: "1"),
+            id: new("relation/tests/typed-process-unkeyed"),
+            name: new("Unkeyed typed Process relation"));
+
+        Assert.Equal(RelationOutputMode.OnePerRoot, relation.Definition.Output.Mode);
+        Assert.Null(relation.Definition.Output.Key);
+        Assert.NotNull(relation.InputContract.Type);
+        Assert.NotNull(relation.ResultContract.Type);
+    }
+
+    [Fact]
+    public void OneInvocationRelationCreation_IsEquivalentToStagedCreation()
+    {
+        var oneInvocation = GeneratedTypedRelationCatalog.Normalize;
+        var staged = CreateStagedRelation();
+
+        Assert.Equal(
+            RelationQueryJsonSerializer.Serialize(staged.Document, indented: false),
+            RelationQueryJsonSerializer.Serialize(oneInvocation.Document, indented: false));
+        Assert.Equal(staged.Document.DefinitionFingerprint, oneInvocation.Document.DefinitionFingerprint);
+        Assert.Equal(staged.Reference, oneInvocation.Reference);
+        Assert.Equal(staged.InputContract, oneInvocation.InputContract);
+        Assert.Equal(staged.ResultContract, oneInvocation.ResultContract);
+        Assert.Equal(
+            staged.ShapeDocuments.Select(static document => document.Graph.Id),
+            oneInvocation.ShapeDocuments.Select(static document => document.Graph.Id));
+        Assert.Equal(
+            RelationshipCatalogJsonSerializer.Serialize(staged.RelationshipCatalog, indented: false),
+            RelationshipCatalogJsonSerializer.Serialize(oneInvocation.RelationshipCatalog, indented: false));
+    }
+
     [Fact]
     public void TypedRelationEvaluation_IsByteEquivalentToRawExactReferenceAuthoring()
     {
@@ -51,6 +99,27 @@ public sealed class TypedRelationProcessAuthoringTests
     static string Format(DocumentValidationResult validation) =>
         string.Join(Environment.NewLine, validation.Diagnostics.Select(static diagnostic =>
             $"{diagnostic.Code}:{diagnostic.Location}:{diagnostic.Message}"));
+
+    static Relation<TypedRelationInput, TypedRelationResult> CreateStagedRelation()
+    {
+        var author = RelationQuery.Expression();
+        var input = author.Source<TypedRelationInput>();
+        var output = author.Project(input, value => new TypedRelationResult
+        {
+            Id = value.Id,
+            Normalized = value.Value
+        });
+        var authored = output.BuildRelation(
+            value => value.Id,
+            id: new("relation/tests/typed-process"),
+            name: new("Typed Process relation"));
+        return author.CreateRelation(
+            authored,
+            input,
+            output,
+            new("1"),
+            new(origin: DocumentOrigin.Generated, producer: "tests", producerVersion: "1"));
+    }
 }
 
 public sealed class TypedRelationInput
@@ -80,16 +149,14 @@ public static class GeneratedTypedRelationCatalog
             Id = value.Id,
             Normalized = value.Value
         });
-        var authored = output.BuildRelation(
-            value => value.Id,
+        return author.CreateRelation(
+            input: input,
+            result: output,
+            key: value => value.Id,
+            revisionId: new("1"),
+            metadata: new(origin: DocumentOrigin.Generated, producer: "tests", producerVersion: "1"),
             id: new("relation/tests/typed-process"),
             name: new("Typed Process relation"));
-        return author.CreateRelation(
-            authored,
-            input,
-            output,
-            new("1"),
-            new(origin: DocumentOrigin.Generated, producer: "tests", producerVersion: "1"));
     }
 }
 
