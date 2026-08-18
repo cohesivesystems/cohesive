@@ -23,10 +23,14 @@ public sealed class PostgresEntityRepositoryTests
         Assert.True(repository.BatchCapabilities.SupportsSamePartitionAtomicity);
         Assert.True(repository.BatchCapabilities.SupportsAllOrNothingAtomicity);
         Assert.Equal(64, repository.BatchCapabilities.MaxItemsPerBatch);
-        Assert.Contains("INSERT INTO \"freight_harness\".\"orders\"", sql.Upsert, StringComparison.Ordinal);
-        Assert.Contains("ON CONFLICT (\"tenant_id\", \"order_id\")", sql.Upsert, StringComparison.Ordinal);
-        Assert.Contains("\"observation_version\"", sql.Upsert, StringComparison.Ordinal);
-        Assert.Contains("xmin::text = @expected_concurrency", sql.Replace, StringComparison.Ordinal);
+        Assert.Contains("INSERT INTO \"freight_harness\".\"orders\"", sql.Upsert.Text, StringComparison.Ordinal);
+        Assert.Contains("ON CONFLICT (\"tenant_id\", \"order_id\")", sql.Upsert.Text, StringComparison.Ordinal);
+        Assert.Contains("\"observation_version\"", sql.Upsert.Text, StringComparison.Ordinal);
+        Assert.Contains("(\"xmin\" = $", sql.Replace.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("@", sql.ReadByIdentity.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("@", sql.ReadByIdentityAndPartition.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("@", sql.Upsert.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("@", sql.Replace.Text, StringComparison.Ordinal);
     }
 
     [Fact]

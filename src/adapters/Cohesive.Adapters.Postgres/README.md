@@ -1,7 +1,7 @@
 # Cohesive.Adapters.Postgres
 
-`Cohesive.Adapters.Postgres` is the single PostgreSQL adapter package. It provides an injection-safe standalone
-`SELECT` builder, canonical Relations compilation, exact persistable storage bindings, and Npgsql-backed bounded
+`Cohesive.Adapters.Postgres` is the single PostgreSQL adapter package. It provides injection-safe standalone SQL
+construction, canonical Relations compilation, exact persistable storage bindings, and Npgsql-backed bounded
 Relations, rebuild, reconciliation, transaction-aligned logical-replication sources, and a durable competing-consumer
 ledger for `Cohesive.Processes.Distribution`. The builder can be used
 without Cohesive.Relations query compilation; the storage binding remains the shared physical authority for
@@ -60,7 +60,10 @@ var statement = template.Bind(new Dictionary<string, object?>
 ```
 
 `PostgresSqlSelectBuilder` also composes derived-table joins, aggregate `FILTER` clauses, explicit null placement,
-offset paging, and null-aware structural keyset predicates.
+offset paging, and null-aware structural keyset predicates. `PostgresSqlInsertBuilder` supports parameterized inserts
+and `ON CONFLICT DO UPDATE` from `EXCLUDED` values, while `PostgresSqlUpdateBuilder` requires at least one predicate so
+an unrestricted update cannot be produced accidentally. Both mutation builders use the same safe identifiers,
+expression tree, deterministic positional parameters, and immutable command templates as the select builder.
 
 Captured constants remain portable when a compiled artifact is serialized, and runtime bindings accept the same
 closed provider-neutral CLR domain. The supported values are `null`, `bool`, `int`, `long`, `decimal`, `string`,

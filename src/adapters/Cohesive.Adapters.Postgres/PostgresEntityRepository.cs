@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Globalization;
-using System.Text;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Relations.Mapping;
@@ -187,11 +186,9 @@ public sealed class PostgresEntityRepository : IEntityRepository
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         context.ThrowIfCancellationRequested();
 
-        await using var command = runtime.DataSource.CreateCommand(
-            options?.PartitionKey is null ? sql.ReadByIdentity : sql.ReadByIdentityAndPartition);
-        AddTextParameter(command, "identity", id);
-        if (options?.PartitionKey is { } partition)
-            AddTextParameter(command, "partition", partition);
+        var template = options?.PartitionKey is null ? sql.ReadByIdentity : sql.ReadByIdentityAndPartition;
+        await using var command = runtime.DataSource.CreateCommand(template.Text);
+        AddReadParameters(command, template, id, options?.PartitionKey);
 
         await using var reader = await command.ExecuteReaderAsync(context.CancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(context.CancellationToken).ConfigureAwait(false))
@@ -290,16 +287,15 @@ public sealed class PostgresEntityRepository : IEntityRepository
         NpgsqlTransaction? transaction,
         EntityWriteRequest write)
     {
+        var template = write.ExpectedConcurrencyToken is null ? sql.Upsert : sql.Replace;
         await using var command = new NpgsqlCommand(
-            write.ExpectedConcurrencyToken is null ? sql.Upsert : sql.Replace,
+            template.Text,
             connection,
             transaction);
-        AddWriteParameters(command, write);
-        if (write.ExpectedConcurrencyToken is { } expected)
-            AddTextParameter(command, "expected_concurrency", expected.Value);
+        AddWriteParameters(command, template, write);
 
-        var token = await command.ExecuteScalarAsync(context.CancellationToken).ConfigureAwait(false) as string;
-        if (token is null)
+        var token = await command.ExecuteScalarAsync(context.CancellationToken).ConfigureAwait(false);
+        if (token is not uint transactionId)
         {
             throw new ObservationConcurrencyConflictException(
                 $"Observation '{EntityType}:{write.Entity.Id}' failed optimistic concurrency validation.");
@@ -308,23 +304,71 @@ public sealed class PostgresEntityRepository : IEntityRepository
         return new(
             write.Entity,
             GetPartitionKey(write.Entity),
-            new(Guard.RequireNotNullOrWhiteSpace(token)));
+            new(transactionId.ToString(CultureInfo.InvariantCulture)));
     }
 
-    void AddWriteParameters(NpgsqlCommand command, EntityWriteRequest write)
+    static void AddReadParameters(
+        NpgsqlCommand command,
+        PostgresSqlCommandTemplate template,
+        string identity,
+        string? partition)
     {
-        for (var index = 0; index < mapping.Fields.Length; index++)
+        foreach (var slot in template.Parameters)
         {
-            var binding = mapping.Fields[index];
-            var observed = write.Entity.GetField(binding.FieldName);
-            var parameter = command.Parameters.Add(
-                $"field_{index.ToString(CultureInfo.InvariantCulture)}",
-                PostgresRelationQueryScalarCatalog.ToNpgsqlDbType(binding.ScalarType, array: false));
-            parameter.Value = ToPostgresValue(observed, binding);
+            switch (slot.Binding)
+            {
+                case PostgresEntityRepositorySql.IdentityBinding:
+                    AddTextParameter(command, binding: slot.Binding, value: identity);
+                    break;
+                case PostgresEntityRepositorySql.PartitionBinding when partition is not null:
+                    AddTextParameter(command, binding: slot.Binding, value: partition);
+                    break;
+                default:
+                    throw new InvalidOperationException(
+                        $"PostgreSQL entity read template contains unsupported binding '{slot.Binding}'.");
+            }
         }
+    }
 
-        var version = command.Parameters.Add("observation_version", NpgsqlTypes.NpgsqlDbType.Bigint);
-        version.Value = write.Entity.Version;
+    void AddWriteParameters(
+        NpgsqlCommand command,
+        PostgresSqlCommandTemplate template,
+        EntityWriteRequest write)
+    {
+        foreach (var slot in template.Parameters)
+        {
+            var bindingName = slot.Binding
+                ?? throw new InvalidOperationException("PostgreSQL entity write templates cannot contain constant parameters.");
+            if (sql.FieldIndexByBinding.TryGetValue(bindingName, out var fieldIndex))
+            {
+                var binding = mapping.Fields[fieldIndex];
+                var observed = write.Entity.GetField(binding.FieldName);
+                command.Parameters.Add(new NpgsqlParameter
+                {
+                    NpgsqlDbType = PostgresRelationQueryScalarCatalog.ToNpgsqlDbType(binding.ScalarType, array: false),
+                    Value = ToPostgresValue(observed, binding)
+                });
+                continue;
+            }
+
+            switch (bindingName)
+            {
+                case PostgresEntityRepositorySql.ObservationVersionBinding:
+                    command.Parameters.Add(new NpgsqlParameter
+                    {
+                        NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Bigint,
+                        Value = write.Entity.Version
+                    });
+                    break;
+                case PostgresEntityRepositorySql.ExpectedConcurrencyBinding
+                    when write.ExpectedConcurrencyToken is { } expected:
+                    AddXidParameter(command, binding: bindingName, value: expected.Value);
+                    break;
+                default:
+                    throw new InvalidOperationException(
+                        $"PostgreSQL entity write template contains unsupported binding '{bindingName}'.");
+            }
+        }
     }
 
     EntitySnapshot ReadSnapshot(NpgsqlDataReader reader, IReadOnlySet<string>? selectedFields)
@@ -342,7 +386,8 @@ public sealed class PostgresEntityRepository : IEntityRepository
         }
 
         var version = reader.GetInt64(mapping.Fields.Length);
-        var token = reader.GetString(mapping.Fields.Length + 1);
+        var token = reader.GetFieldValue<uint>(mapping.Fields.Length + 1)
+            .ToString(CultureInfo.InvariantCulture);
         var identity = fields[mapping.IdentityField].GetRequiredString();
         var partition = fields[mapping.PartitionField].GetRequiredString();
         var complete = new Observation(EntityDefinition.Shape.Id, identity, fields, version);
@@ -503,117 +548,148 @@ public sealed class PostgresEntityRepository : IEntityRepository
         return PostgresRelationQueryScalarCatalog.ToObservationValue(value, scalarType);
     }
 
-    static void AddTextParameter(NpgsqlCommand command, string name, string value)
+    static void AddTextParameter(NpgsqlCommand command, string binding, string value)
     {
-        var parameter = command.Parameters.Add(name, NpgsqlTypes.NpgsqlDbType.Text);
-        parameter.Value = PostgresSqlUtf8.RequireText(value, name);
+        command.Parameters.Add(new NpgsqlParameter
+        {
+            NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Text,
+            Value = PostgresSqlUtf8.RequireText(value, binding)
+        });
+    }
+
+    static void AddXidParameter(NpgsqlCommand command, string binding, string value)
+    {
+        if (!uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var transactionId))
+        {
+            throw new ObservationConcurrencyConflictException(
+                $"PostgreSQL concurrency binding '{binding}' contains invalid transaction identifier '{value}'.");
+        }
+        command.Parameters.Add(new NpgsqlParameter
+        {
+            NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Xid,
+            Value = transactionId
+        });
     }
 }
 
 internal sealed record PostgresEntityRepositorySql(
-    string ReadByIdentity,
-    string ReadByIdentityAndPartition,
-    string Upsert,
-    string Replace)
+    PostgresSqlCommandTemplate ReadByIdentity,
+    PostgresSqlCommandTemplate ReadByIdentityAndPartition,
+    PostgresSqlCommandTemplate Upsert,
+    PostgresSqlCommandTemplate Replace,
+    ImmutableDictionary<string, int> FieldIndexByBinding)
 {
+    const string SourceAlias = "entity";
+    internal const string IdentityBinding = "identity";
+    internal const string PartitionBinding = "partition";
+    internal const string ObservationVersionBinding = "observation_version";
+    internal const string ExpectedConcurrencyBinding = "expected_concurrency";
+    const string ConcurrencyColumn = "xmin";
+    const string ConcurrencyResultAlias = "concurrency_token";
+
     internal static PostgresEntityRepositorySql Create(PostgresEntityRepositoryMapping mapping)
     {
         var identity = mapping.FieldByName[mapping.IdentityField];
         var partition = mapping.FieldByName[mapping.PartitionField];
-        var selected = new StringBuilder("SELECT ");
-        AppendColumns(selected, mapping.Fields.Select(static field => field.Column));
-        selected.Append(", ");
-        mapping.VersionColumn.WriteQuoted(selected);
-        selected.Append(", xmin::text FROM ");
-        mapping.Table.WriteTo(selected);
-        selected.Append(" WHERE ");
-        identity.Column.WriteQuoted(selected);
-        selected.Append(" = @identity");
-        var readByIdentity = selected.ToString() + " LIMIT 2";
-        selected.Append(" AND ");
-        partition.Column.WriteQuoted(selected);
-        selected.Append(" = @partition LIMIT 2");
+        var readByIdentity = CreateRead(mapping, identity, partition: null);
+        var readByIdentityAndPartition = CreateRead(mapping, identity, partition);
 
-        var insert = new StringBuilder("INSERT INTO ");
-        mapping.Table.WriteTo(insert);
-        insert.Append(" (");
-        AppendColumns(insert, mapping.Fields.Select(static field => field.Column));
-        insert.Append(", ");
-        mapping.VersionColumn.WriteQuoted(insert);
-        insert.Append(") VALUES (");
+        PostgresSqlInsertBuilder insert = new(mapping.Table);
         for (var index = 0; index < mapping.Fields.Length; index++)
         {
-            if (index > 0)
-                insert.Append(", ");
-            insert.Append("@field_").Append(index.ToString(CultureInfo.InvariantCulture));
+            insert.Value(
+                columnName: mapping.Fields[index].Column.Value,
+                value: PostgresSqlExpression.RuntimeParameter(FieldBinding(index)));
         }
-        insert.Append(", @observation_version) ON CONFLICT (");
-        partition.Column.WriteQuoted(insert);
-        if (partition.Column != identity.Column)
-        {
-            insert.Append(", ");
-            identity.Column.WriteQuoted(insert);
-        }
-        insert.Append(") DO UPDATE SET ");
-        AppendAssignments(insert, mapping);
-        insert.Append(" RETURNING xmin::text");
+        insert.Value(
+            columnName: mapping.VersionColumn.Value,
+            value: PostgresSqlExpression.RuntimeParameter(ObservationVersionBinding));
+        var conflictColumns = partition.Column == identity.Column
+            ? new[] { partition.Column.Value }
+            : [partition.Column.Value, identity.Column.Value];
+        insert.OnConflictDoUpdate(
+            conflictColumns: conflictColumns,
+            excludedUpdateColumns:
+            [
+                .. mapping.Fields.Select(static field => field.Column.Value),
+                mapping.VersionColumn.Value
+            ]);
+        insert.Returning(
+            expression: PostgresSqlExpression.UnqualifiedColumn(ConcurrencyColumn),
+            alias: ConcurrencyResultAlias);
 
-        var replace = new StringBuilder("UPDATE ");
-        mapping.Table.WriteTo(replace);
-        replace.Append(" SET ");
-        AppendAssignments(replace, mapping, parameterPrefix: "@field_");
-        replace.Append(" WHERE ");
-        identity.Column.WriteQuoted(replace);
-        replace.Append(" = @field_").Append(mapping.Fields.IndexOf(identity).ToString(CultureInfo.InvariantCulture));
+        PostgresSqlUpdateBuilder replace = new(mapping.Table);
+        for (var index = 0; index < mapping.Fields.Length; index++)
+        {
+            replace.Set(
+                columnName: mapping.Fields[index].Column.Value,
+                value: PostgresSqlExpression.RuntimeParameter(FieldBinding(index)));
+        }
+        replace.Set(
+            columnName: mapping.VersionColumn.Value,
+            value: PostgresSqlExpression.RuntimeParameter(ObservationVersionBinding));
+        replace.Where(PostgresSqlExpression.Binary(
+            @operator: PostgresSqlBinaryOperator.Equal,
+            left: PostgresSqlExpression.UnqualifiedColumn(identity.Column.Value),
+            right: PostgresSqlExpression.RuntimeParameter(FieldBinding(mapping.Fields.IndexOf(identity)))));
         if (partition != identity)
         {
-            replace.Append(" AND ");
-            partition.Column.WriteQuoted(replace);
-            replace.Append(" = @field_").Append(mapping.Fields.IndexOf(partition).ToString(CultureInfo.InvariantCulture));
+            replace.Where(PostgresSqlExpression.Binary(
+                @operator: PostgresSqlBinaryOperator.Equal,
+                left: PostgresSqlExpression.UnqualifiedColumn(partition.Column.Value),
+                right: PostgresSqlExpression.RuntimeParameter(FieldBinding(mapping.Fields.IndexOf(partition)))));
         }
-        replace.Append(" AND xmin::text = @expected_concurrency RETURNING xmin::text");
+        replace.Where(PostgresSqlExpression.Binary(
+            @operator: PostgresSqlBinaryOperator.Equal,
+            left: PostgresSqlExpression.UnqualifiedColumn(ConcurrencyColumn),
+            right: PostgresSqlExpression.RuntimeParameter(ExpectedConcurrencyBinding)));
+        replace.Returning(
+            expression: PostgresSqlExpression.UnqualifiedColumn(ConcurrencyColumn),
+            alias: ConcurrencyResultAlias);
 
-        return new(readByIdentity, selected.ToString(), insert.ToString(), replace.ToString());
+        return new(
+            readByIdentity,
+            readByIdentityAndPartition,
+            insert.BuildTemplate(),
+            replace.BuildTemplate(),
+            mapping.Fields
+                .Select(static (_, index) => KeyValuePair.Create(FieldBinding(index), index))
+                .ToImmutableDictionary(StringComparer.Ordinal));
     }
 
-    static void AppendColumns(StringBuilder builder, IEnumerable<PostgresSqlIdentifier> columns)
-    {
-        var first = true;
-        foreach (var column in columns)
-        {
-            if (!first)
-                builder.Append(", ");
-            column.WriteQuoted(builder);
-            first = false;
-        }
-    }
-
-    static void AppendAssignments(
-        StringBuilder builder,
+    static PostgresSqlCommandTemplate CreateRead(
         PostgresEntityRepositoryMapping mapping,
-        string? parameterPrefix = null)
+        PostgresEntityRepositoryFieldBinding identity,
+        PostgresEntityRepositoryFieldBinding? partition)
     {
-        for (var index = 0; index < mapping.Fields.Length; index++)
+        PostgresSqlAliasAllocator aliases = new();
+        PostgresSqlSelectBuilder selected = new(mapping.Table, SourceAlias);
+        foreach (var field in mapping.Fields)
         {
-            if (index > 0)
-                builder.Append(", ");
-            var field = mapping.Fields[index];
-            field.Column.WriteQuoted(builder);
-            builder.Append(" = ");
-            if (parameterPrefix is null)
-            {
-                builder.Append("EXCLUDED.");
-                field.Column.WriteQuoted(builder);
-            }
-            else
-            {
-                builder.Append(parameterPrefix).Append(index.ToString(CultureInfo.InvariantCulture));
-            }
+            selected.Select(
+                expression: PostgresSqlExpression.Column(SourceAlias, field.Column.Value),
+                alias: aliases.Allocate(field.Column.Value, $"field:{field.FieldName}", "field"));
         }
-        builder.Append(", ");
-        mapping.VersionColumn.WriteQuoted(builder);
-        builder.Append(parameterPrefix is null ? " = EXCLUDED." : " = @observation_version");
-        if (parameterPrefix is null)
-            mapping.VersionColumn.WriteQuoted(builder);
+        selected.Select(
+            expression: PostgresSqlExpression.Column(SourceAlias, mapping.VersionColumn.Value),
+            alias: aliases.Allocate(mapping.VersionColumn.Value, "observation-version", "version"));
+        selected.Select(
+            expression: PostgresSqlExpression.Column(SourceAlias, ConcurrencyColumn),
+            alias: aliases.Allocate(ConcurrencyResultAlias, "concurrency-token", "concurrency"));
+        selected.Where(PostgresSqlExpression.Binary(
+            @operator: PostgresSqlBinaryOperator.Equal,
+            left: PostgresSqlExpression.Column(SourceAlias, identity.Column.Value),
+            right: PostgresSqlExpression.RuntimeParameter(IdentityBinding)));
+        if (partition is not null)
+        {
+            selected.Where(PostgresSqlExpression.Binary(
+                @operator: PostgresSqlBinaryOperator.Equal,
+                left: PostgresSqlExpression.Column(SourceAlias, partition.Column.Value),
+                right: PostgresSqlExpression.RuntimeParameter(PartitionBinding)));
+        }
+        return selected.Limit(2).BuildTemplate();
     }
+
+    internal static string FieldBinding(int index) =>
+        $"field_{index.ToString(CultureInfo.InvariantCulture)}";
 }

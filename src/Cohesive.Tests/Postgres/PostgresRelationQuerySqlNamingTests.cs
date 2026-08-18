@@ -8,7 +8,7 @@ public sealed class PostgresRelationQuerySqlNamingTests
     [Fact]
     public void Allocate_PreservesReadableSemanticNamesAndSanitizesPunctuation()
     {
-        var aliases = new PostgresRelationQuerySqlAliasAllocator();
+        var aliases = new PostgresSqlAliasAllocator();
 
         Assert.Equal(
             "LoadSearchDto__customerName",
@@ -28,8 +28,8 @@ public sealed class PostgresRelationQuerySqlNamingTests
     [Fact]
     public void Allocate_DisambiguatesRepeatedAndNormalizationCollidingNamesDeterministically()
     {
-        var first = new PostgresRelationQuerySqlAliasAllocator();
-        var second = new PostgresRelationQuerySqlAliasAllocator();
+        var first = new PostgresSqlAliasAllocator();
+        var second = new PostgresSqlAliasAllocator();
 
         Assert.Equal("Customer", first.Allocate("Customer", "shape:customer", "rows"));
         Assert.Equal("Customer__2", first.Allocate("Customer", "shape:customer", "rows"));
@@ -55,8 +55,8 @@ public sealed class PostgresRelationQuerySqlNamingTests
     [Fact]
     public void Allocate_ShortensAsciiAndUnicodeAtThePostgresUtf8Boundary()
     {
-        var first = new PostgresRelationQuerySqlAliasAllocator();
-        var second = new PostgresRelationQuerySqlAliasAllocator();
+        var first = new PostgresSqlAliasAllocator();
+        var second = new PostgresSqlAliasAllocator();
         var longAscii = new string('a', 100);
         var longUnicode = string.Concat(Enumerable.Repeat("顧客", 20));
 
@@ -77,7 +77,7 @@ public sealed class PostgresRelationQuerySqlNamingTests
     [Fact]
     public void Allocate_NormalizesComposedUnicodeAndReplacesInvalidUtf16()
     {
-        var aliases = new PostgresRelationQuerySqlAliasAllocator();
+        var aliases = new PostgresSqlAliasAllocator();
 
         Assert.Equal("Café", aliases.Allocate("Cafe\u0301", "field:cafe", "field"));
         Assert.Equal("bad_name", aliases.Allocate("bad\ud800name", "field:invalid", "field"));
