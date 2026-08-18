@@ -429,24 +429,23 @@ public sealed class RelationQueryPhysicalPlannerTests
     }
 
     [Fact]
-    public void Compile_PartitionPlacementFailsDuringPlanningInsteadOfExecution()
+    public void Compile_PartitionPlacementIsPreservedForReaderScopeValidation()
     {
         var semantic = Compile(FederatedLoadRelationFixture.QueryDocument);
         var equipment = Traversal(
             semantic,
             FederatedLoadRelationFixture.EquipmentTraversalNodeId);
 
-        var result = RelationQueryPhysicalPlanner.Compile(
+        var physical = SuccessfulPlan(RelationQueryPhysicalPlanner.Compile(
             semantic,
             Realize(semantic),
             CreatePlacement(semantic, partitionedInput: equipment.Input.Id),
-            PhysicalPolicy);
+            PhysicalPolicy));
 
-        Assert.Equal(RelationQueryPhysicalPlanningStatus.Unavailable, result.Status);
-        Assert.Null(result.Plan);
-        Assert.Contains(result.Diagnostics, diagnostic =>
-            diagnostic.Code == RelationQueryPhysicalPlanningDiagnosticCodes.OperatingBoundaryInvalid
-            && diagnostic.Input == equipment.Input.Id);
+        var placement = Assert.Single(
+            physical.Placement.Bindings,
+            binding => binding.Input == equipment.Input.Id);
+        Assert.Equal("$partition", Assert.IsType<RelationQueryPartitionBinding>(placement.Partition).SourceSelector);
     }
 
     [Fact]

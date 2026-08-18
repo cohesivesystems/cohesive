@@ -408,6 +408,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         decisions.Add(Configuration(prefix + "columnMappingConvention", convention));
         var fields = BuildFields(declaration, convention, consumedColumns, decisions);
         var identity = BuildIdentity(declaration, convention, consumedColumns, decisions);
+        var partition = BuildPartition(declaration, convention, consumedColumns, decisions);
         var references = BuildRelationshipReferences(
             declaration,
             convention,
@@ -432,7 +433,8 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
                 identity,
                 fields.Value,
                 references,
-                intervalValidities);
+                intervalValidities,
+                partition);
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
@@ -565,6 +567,120 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
                 declaration.Input.Binding.Input,
                 selected.Path,
                 TableSetting(declaration.Input.Binding.Id, "identity/semantics"));
+            return null;
+        }
+    }
+
+    PostgresRelationQueryPartitionBinding? BuildPartition(
+        TableDeclaration declaration,
+        Effective<PostgresRelationQueryColumnMappingConvention> convention,
+        ISet<FieldPath> consumedColumns,
+        ICollection<EffectiveConfigurationDecision> decisions)
+    {
+        var canonical = declaration.Input.Binding.Partition;
+        if (canonical is null)
+        {
+            if (declaration.PartitionPath is not null)
+            {
+                Error(
+                    PostgresRelationQueryBindingAuthoringDiagnosticCodes.SelectorUnknown,
+                    "A PostgreSQL partition column was configured for an unpartitioned placement.",
+                    declaration.Input.Binding.Input,
+                    declaration.PartitionPath.Path,
+                    TableSetting(declaration.Input.Binding.Id, "partition/columnName"));
+            }
+            return null;
+        }
+
+        var selected = declaration.PartitionPath;
+        if (selected is null)
+        {
+            try
+            {
+                selected = new(FieldPath.Parse(canonical.SourceSelector), Column: null, Options: null);
+            }
+            catch (ArgumentException)
+            {
+                Error(
+                    PostgresRelationQueryBindingAuthoringDiagnosticCodes.BindingMissing,
+                    "The placed partition selector is not a semantic field path; declare its semantic field and physical column explicitly with Partition(...).",
+                    declaration.Input.Binding.Input,
+                    setting: TableSetting(declaration.Input.Binding.Id, "partition/semanticPath"));
+                return null;
+            }
+        }
+
+        if (!TryResolveColumn(
+                declaration,
+                selected.Path,
+                convention,
+                consumedColumns,
+                out var column,
+                out var columnAttribution,
+                selected.Column))
+        {
+            Error(
+                PostgresRelationQueryBindingAuthoringDiagnosticCodes.BindingMissing,
+                $"Partition path '{selected.Path}' has no PostgreSQL column mapping.",
+                declaration.Input.Binding.Input,
+                selected.Path,
+                TableSetting(declaration.Input.Binding.Id, "partition/columnName"));
+            return null;
+        }
+
+        var partitionOptions = selected.Options ?? declaration.ColumnOptions.GetValueOrDefault(selected.Path);
+        if (!TryResolveShapeFieldContract(declaration.Input, selected.Path, out var contract)
+            || !TryResolveValueSemantics(
+                contract,
+                partitionOptions,
+                declaration.Input.Binding.Input,
+                selected.Path,
+                out var value))
+        {
+            return null;
+        }
+        if (value.Missing.Value != PostgresRelationQueryMissingValueEncoding.Prohibited
+            || value.Null.Value != PostgresRelationQueryNullValueEncoding.Prohibited)
+        {
+            Error(
+                PostgresRelationQueryBindingAuthoringDiagnosticCodes.SemanticEvidenceMissing,
+                "A PostgreSQL partition coordinate must be present and non-null.",
+                declaration.Input.Binding.Input,
+                selected.Path,
+                TableSetting(declaration.Input.Binding.Id, "partition/semantics"));
+            return null;
+        }
+
+        var attribution = declaration.PartitionPath is null ? columnAttribution : ExplicitMarker();
+        decisions.Add(Configuration(
+            TableSetting(declaration.Input.Binding.Id, "partition/sourceSelector"),
+            Adapter(canonical.SourceSelector)));
+        decisions.Add(Configuration(
+            TableSetting(declaration.Input.Binding.Id, "partition/semanticPath"),
+            attribution));
+        decisions.Add(Configuration(
+            TableSetting(declaration.Input.Binding.Id, "partition/columnName"),
+            declaration.PartitionPath is null ? columnAttribution : Explicit(column)));
+        AppendPartitionValueDecisions(declaration.Input.Binding.Id, value, decisions);
+        try
+        {
+            return new(
+                canonical.SourceSelector,
+                selected.Path,
+                column,
+                value.ScalarType.Value,
+                value.Text.Value,
+                value.NumericDomain.Value,
+                value.TemporalDomain.Value);
+        }
+        catch (ArgumentException exception)
+        {
+            Error(
+                PostgresRelationQueryBindingAuthoringDiagnosticCodes.SemanticEvidenceMissing,
+                exception.Message,
+                declaration.Input.Binding.Input,
+                selected.Path,
+                TableSetting(declaration.Input.Binding.Id, "partition/semantics"));
             return null;
         }
     }
@@ -1014,6 +1130,17 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         decisions.Add(Configuration(TableSetting(placementBinding, "identity/temporalDomain"), value.TemporalDomain));
     }
 
+    static void AppendPartitionValueDecisions(
+        RelationQuerySourcePlacementBindingId placementBinding,
+        EffectiveValueSemantics value,
+        ICollection<EffectiveConfigurationDecision> decisions)
+    {
+        decisions.Add(Configuration(TableSetting(placementBinding, "partition/scalarType"), value.ScalarType));
+        decisions.Add(Configuration(TableSetting(placementBinding, "partition/textSemantics"), value.Text));
+        decisions.Add(Configuration(TableSetting(placementBinding, "partition/numericDomain"), value.NumericDomain));
+        decisions.Add(Configuration(TableSetting(placementBinding, "partition/temporalDomain"), value.TemporalDomain));
+    }
+
     static void AppendRelationshipValueDecisions(
         RelationQuerySourcePlacementBindingId placementBinding,
         RelationQueryInputId input,
@@ -1137,6 +1264,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         public Dictionary<FieldPath, Effective<string>> Columns { get; } = [];
         public Dictionary<FieldPath, PostgresRelationQueryColumnOptions> ColumnOptions { get; } = [];
         public IdentityDeclaration? IdentityPath { get; set; }
+        public PartitionDeclaration? PartitionPath { get; set; }
         public Dictionary<RelationQueryInputId, RelationshipReferenceDeclaration> RelationshipReferences { get; } = [];
         public Dictionary<(FieldPath Lower, FieldPath Upper), IntervalValidityDeclaration> IntervalValidities { get; } = [];
     }
@@ -1152,6 +1280,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         Effective<PostgresRelationQueryDecimalAggregateAttestation?> DecimalAggregates,
         Effective<PostgresRelationQueryTemporalDomainEvidence?> TemporalDomain);
     internal sealed record IdentityDeclaration(FieldPath Path, string? Column, PostgresRelationQueryColumnOptions? Options);
+    internal sealed record PartitionDeclaration(FieldPath Path, string? Column, PostgresRelationQueryColumnOptions? Options);
     internal sealed record RelationshipReferenceDeclaration(FieldPath Path, string Column, PostgresRelationQueryColumnOptions? Options);
     internal sealed record IntervalValidityDeclaration(
         FieldPath LowerPath,
@@ -1250,6 +1379,28 @@ public class PostgresRelationQueryTableBindingBuilder
             owner.Duplicate(declaration.Input, "identityColumn");
         else
             declaration.IdentityPath = new(semanticPath, columnName, options);
+        return this;
+    }
+
+    /// <summary>Binds the placement's logical-partition selector to one non-null PostgreSQL column.</summary>
+    /// <param name="semanticPath">Semantic scalar field represented by the partition coordinate.</param>
+    /// <param name="columnName">Physical column name, or <see langword="null"/> to use effective field mapping.</param>
+    /// <param name="options">Optional exact scalar-domain and text-equality evidence.</param>
+    /// <returns>This table builder.</returns>
+    /// <exception cref="ArgumentException">The path or supplied column is invalid.</exception>
+    public virtual PostgresRelationQueryTableBindingBuilder Partition(
+        FieldPath semanticPath,
+        string? columnName = null,
+        PostgresRelationQueryColumnOptions? options = null)
+    {
+        if (semanticPath.Segments.IsDefaultOrEmpty)
+            throw new ArgumentException("A PostgreSQL partition path cannot be empty.", nameof(semanticPath));
+        if (columnName is not null)
+            columnName = PostgresRelationQueryStorageBinding.RequireIdentifier(columnName, nameof(columnName));
+        if (declaration.PartitionPath is not null)
+            owner.Duplicate(declaration.Input, "partitionColumn");
+        else
+            declaration.PartitionPath = new(semanticPath, columnName, options);
         return this;
     }
 
@@ -1406,6 +1557,24 @@ public sealed class PostgresRelationQueryTableBindingBuilder<T> : PostgresRelati
         PostgresRelationQueryColumnOptions? options = null)
     {
         base.Identity(input.ResolveFieldPath(selector), columnName, options);
+        return this;
+    }
+
+    /// <summary>Binds a typed semantic partition field to one non-null PostgreSQL column.</summary>
+    /// <typeparam name="TValue">CLR partition value selected by the readable property chain.</typeparam>
+    /// <param name="selector">Typed semantic partition selector.</param>
+    /// <param name="columnName">Physical column name, or <see langword="null"/> to use effective mapping.</param>
+    /// <param name="options">Optional exact scalar-domain and text-equality evidence.</param>
+    /// <returns>This typed table builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="selector"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">The selector or supplied column is invalid.</exception>
+    /// <exception cref="InvalidOperationException">CLR metadata cannot resolve the selected path.</exception>
+    public PostgresRelationQueryTableBindingBuilder<T> Partition<TValue>(
+        Expression<Func<T, TValue>> selector,
+        string? columnName = null,
+        PostgresRelationQueryColumnOptions? options = null)
+    {
+        base.Partition(input.ResolveFieldPath(selector), columnName, options);
         return this;
     }
 

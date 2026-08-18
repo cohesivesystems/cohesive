@@ -1,0 +1,152 @@
+services:
+  postgres:
+    image: postgres:17.10-alpine3.24
+    environment:
+      POSTGRES_DB: ${COHESIVE_HARNESS_POSTGRES_DATABASE:-cohesive_materialization}
+      POSTGRES_USER: ${COHESIVE_HARNESS_POSTGRES_USER:-cohesive}
+      POSTGRES_PASSWORD: ${COHESIVE_HARNESS_POSTGRES_PASSWORD:-cohesive-local-only}
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=10
+      - -c
+      - max_wal_senders=10
+    ports:
+      - "127.0.0.1:${COHESIVE_HARNESS_POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready --dbname="$${POSTGRES_DB}" --username="$${POSTGRES_USER}"
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 30s
+
+  cosmos:
+    image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-EN20260810
+    environment:
+      PROTOCOL: https
+      PORT: ${COHESIVE_HARNESS_COSMOS_PORT:-58081}
+      ENABLE_EXPLORER: "true"
+      EXPLORER_PROTOCOL: http
+      GATEWAY_PUBLIC_ENDPOINT: https://localhost:${COHESIVE_HARNESS_COSMOS_PORT:-58081}
+    ports:
+      - "127.0.0.1:${COHESIVE_HARNESS_COSMOS_PORT:-58081}:${COHESIVE_HARNESS_COSMOS_PORT:-58081}"
+      - "127.0.0.1:${COHESIVE_HARNESS_COSMOS_HEALTH_PORT:-58080}:8080"
+      - "127.0.0.1:${COHESIVE_HARNESS_COSMOS_EXPLORER_PORT:-58082}:1234"
+    volumes:
+      - cosmos-data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl --fail --silent http://localhost:8080/ready >/dev/null && curl --fail --silent http://localhost:1234/ >/dev/null
+      interval: 3s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    stop_grace_period: 30s
+
+  pgadmin:
+    image: dpage/pgadmin4:9.17
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${COHESIVE_HARNESS_PGADMIN_EMAIL:-harness@cohesivesystems.com}
+      PGADMIN_DEFAULT_PASSWORD: ${COHESIVE_HARNESS_PGADMIN_PASSWORD:-cohesive-local-only}
+      PGADMIN_DISABLE_POSTFIX: "true"
+      PGADMIN_REPLACE_SERVERS_ON_STARTUP: "True"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+      PGADMIN_CONFIG_UPGRADE_CHECK_ENABLED: "False"
+      COHESIVE_HARNESS_POSTGRES_PASSWORD: ${COHESIVE_HARNESS_POSTGRES_PASSWORD:-cohesive-local-only}
+    ports:
+      - "127.0.0.1:${COHESIVE_HARNESS_PGADMIN_PORT:-55050}:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    configs:
+      - source: pgadmin-servers
+        target: /pgadmin4/servers.json
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget --quiet --spider http://localhost/misc/ping
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    stop_grace_period: 30s
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.13
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.license.self_generated.type: basic
+      ES_JAVA_OPTS: ${COHESIVE_HARNESS_ELASTIC_JAVA_OPTS:--Xms512m -Xmx512m}
+    ports:
+      - "127.0.0.1:${COHESIVE_HARNESS_ELASTIC_PORT:-59200}:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl --fail --silent 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=2s' >/dev/null
+      interval: 3s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    stop_grace_period: 30s
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.19.13
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
+      SERVER_HOST: 0.0.0.0
+      XPACK_SECURITY_ENABLED: "false"
+      TELEMETRY_ENABLED: "false"
+    ports:
+      - "127.0.0.1:${COHESIVE_HARNESS_KIBANA_PORT:-55601}:5601"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl --fail --silent http://localhost:5601/api/status >/dev/null
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    stop_grace_period: 30s
+
+configs:
+  pgadmin-servers:
+    content: |
+      {
+        "Servers": {
+          "1": {
+            "Name": "Cohesive materialization harness",
+            "Group": "Cohesive",
+            "Host": "postgres",
+            "Port": 5432,
+            "MaintenanceDB": "${COHESIVE_HARNESS_POSTGRES_DATABASE:-cohesive_materialization}",
+            "Username": "${COHESIVE_HARNESS_POSTGRES_USER:-cohesive}",
+            "PasswordExecCommand": "printenv COHESIVE_HARNESS_POSTGRES_PASSWORD",
+            "PasswordExecExpiration": 3600,
+            "ConnectionParameters": {
+              "sslmode": "prefer",
+              "connect_timeout": 10
+            }
+          }
+        }
+      }
+
+volumes:
+  postgres-data:
+  cosmos-data:
+  elasticsearch-data:
+  pgadmin-data:

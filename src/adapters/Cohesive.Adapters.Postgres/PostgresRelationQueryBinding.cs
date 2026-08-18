@@ -692,6 +692,79 @@ public sealed record PostgresRelationQueryIdentityBinding
     }
 }
 
+/// <summary>Exact logical-partition selector bound to one non-null PostgreSQL table column.</summary>
+public sealed record PostgresRelationQueryPartitionBinding
+{
+    /// <summary>Creates physical partition-column evidence.</summary>
+    /// <param name="sourceSelector">Exact adapter selector retained by the canonical placement.</param>
+    /// <param name="semanticPath">Semantic scalar field represented by the partition column.</param>
+    /// <param name="columnName">Physical non-null PostgreSQL partition column.</param>
+    /// <param name="scalarType">Physical partition scalar type.</param>
+    /// <param name="textSemantics">Ordinal text equality evidence, or <see langword="null"/> for non-text values.</param>
+    /// <param name="numericDomain">Finite CLR-decimal physical-domain evidence for a numeric partition.</param>
+    /// <param name="temporalDomain">Finite canonical CLR temporal-domain evidence for a temporal partition.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="sourceSelector"/> or <paramref name="columnName"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// A selector, path, column, or exact scalar-domain or text-equality requirement is invalid.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="scalarType"/> is unsupported.</exception>
+    public PostgresRelationQueryPartitionBinding(
+        string sourceSelector,
+        FieldPath semanticPath,
+        string columnName,
+        PostgresRelationQueryScalarType scalarType,
+        PostgresRelationQueryTextSemantics? textSemantics = null,
+        PostgresRelationQueryNumericDomainEvidence? numericDomain = null,
+        PostgresRelationQueryTemporalDomainEvidence? temporalDomain = null)
+    {
+        if (semanticPath.Segments.IsDefaultOrEmpty)
+            throw new ArgumentException("A PostgreSQL partition binding requires a semantic path.", nameof(semanticPath));
+        PostgresRelationQueryFieldBinding.RequireValueSemantics(
+            scalarType,
+            PostgresRelationQueryMissingValueEncoding.Prohibited,
+            PostgresRelationQueryNullValueEncoding.Prohibited,
+            textSemantics,
+            PostgresRelationQueryOrderingCapability.None);
+        PostgresRelationQueryIdentityBinding.RequireKeyDomainEvidence(scalarType, numericDomain, temporalDomain);
+        if (scalarType == PostgresRelationQueryScalarType.Text
+            && textSemantics?.Equality != PostgresRelationQueryTextEqualitySemantics.Ordinal)
+        {
+            throw new ArgumentException(
+                "A text partition requires exact ordinal equality evidence.",
+                nameof(textSemantics));
+        }
+
+        SourceSelector = Guard.RequireNotNullOrWhiteSpace(sourceSelector);
+        SemanticPath = semanticPath;
+        ColumnName = PostgresRelationQueryStorageBinding.RequireIdentifier(columnName, nameof(columnName));
+        ScalarType = scalarType;
+        TextSemantics = textSemantics;
+        NumericDomain = numericDomain;
+        TemporalDomain = temporalDomain;
+    }
+
+    /// <summary>Exact adapter selector retained by the canonical placement.</summary>
+    public string SourceSelector { get; }
+
+    /// <summary>Semantic scalar field represented by the partition column.</summary>
+    public FieldPath SemanticPath { get; }
+
+    /// <summary>Physical non-null PostgreSQL partition column.</summary>
+    public string ColumnName { get; }
+
+    /// <summary>Physical partition scalar type.</summary>
+    public PostgresRelationQueryScalarType ScalarType { get; }
+
+    /// <summary>Ordinal text equality evidence, or <see langword="null"/>.</summary>
+    public PostgresRelationQueryTextSemantics? TextSemantics { get; }
+
+    /// <summary>Finite CLR-decimal domain evidence, or <see langword="null"/>.</summary>
+    public PostgresRelationQueryNumericDomainEvidence? NumericDomain { get; }
+
+    /// <summary>Finite canonical CLR temporal-domain evidence, or <see langword="null"/>.</summary>
+    public PostgresRelationQueryTemporalDomainEvidence? TemporalDomain { get; }
+}
+
 /// <summary>Physical source-reference column used to correlate one semantic relationship traversal.</summary>
 public sealed record PostgresRelationQueryRelationshipReferenceBinding
 {
@@ -874,6 +947,7 @@ public sealed record PostgresRelationQueryTableBinding
     /// <param name="fields">Exact demanded field-column bindings.</param>
     /// <param name="relationshipReferences">Relationship correlation columns owned by this table.</param>
     /// <param name="intervalValidities">Trusted validity evidence for exact semantic interval endpoint pairs.</param>
+    /// <param name="partition">Exact physical partition column, or <see langword="null"/> for an unpartitioned placement.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="schemaName"/> or <paramref name="tableName"/> is <see langword="null"/>.
     /// </exception>
@@ -888,7 +962,8 @@ public sealed record PostgresRelationQueryTableBinding
         PostgresRelationQueryIdentityBinding? identity,
         ImmutableArray<PostgresRelationQueryFieldBinding> fields,
         ImmutableArray<PostgresRelationQueryRelationshipReferenceBinding> relationshipReferences = default,
-        ImmutableArray<PostgresRelationQueryIntervalValidityBinding> intervalValidities = default)
+        ImmutableArray<PostgresRelationQueryIntervalValidityBinding> intervalValidities = default,
+        PostgresRelationQueryPartitionBinding? partition = null)
     {
         if (string.IsNullOrWhiteSpace(source.Value) || string.IsNullOrWhiteSpace(placementBinding.Value)
             || string.IsNullOrWhiteSpace(input.Value))
@@ -913,6 +988,7 @@ public sealed record PostgresRelationQueryTableBinding
             intervalValidities,
             static interval => $"{interval.LowerInput.Value}\n{interval.UpperInput.Value}",
             nameof(intervalValidities));
+        Partition = partition;
         foreach (var interval in IntervalValidities)
         {
             var lower = Fields.SingleOrDefault(field => field.Input == interval.LowerInput);
@@ -966,6 +1042,9 @@ public sealed record PostgresRelationQueryTableBinding
     /// <summary>Trusted check-constraint evidence for exact semantic interval endpoint pairs.</summary>
     public ImmutableArray<PostgresRelationQueryIntervalValidityBinding> IntervalValidities { get; }
 
+    /// <summary>Exact physical partition column, or <see langword="null"/>.</summary>
+    public PostgresRelationQueryPartitionBinding? Partition { get; }
+
     /// <summary>Resolves one exact demanded field binding.</summary>
     /// <param name="input">Compiled field-input identity.</param>
     /// <returns>The exact physical field binding.</returns>
@@ -1012,7 +1091,7 @@ public sealed record PostgresRelationQueryTableBinding
 public sealed class PostgresRelationQueryStorageBinding
 {
     /// <summary>Current PostgreSQL relation/query storage-binding schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive.relations.postgres-binding/v1";
+    public const string CurrentSchemaVersion = "cohesive.relations.postgres-binding/v2";
 
     /// <summary>Default deterministic convention set for table-column binding.</summary>
     public const string SemanticPathConventionSet = "cohesive.adapters.postgres.sql/semantic-path-conventions/v1";
@@ -1237,8 +1316,8 @@ public sealed class PostgresRelationQueryStorageBinding
 static class PostgresRelationQueryBindingFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.postgres-binding/v1-c14n/v1";
-    const string DerivedIdentityCanonicalization = "cohesive.relations.postgres-binding-id/v1-c14n/v1";
+    const string Canonicalization = "cohesive.relations.postgres-binding/v2-c14n/v1";
+    const string DerivedIdentityCanonicalization = "cohesive.relations.postgres-binding-id/v2-c14n/v1";
 
     public static PostgresRelationQueryBindingFingerprint Compute(PostgresRelationQueryStorageBinding binding)
     {
@@ -1303,6 +1382,7 @@ static class PostgresRelationQueryBindingFingerprinter
         Append(canonical, table.SchemaName);
         Append(canonical, table.TableName);
         AppendIdentity(canonical, table.Identity);
+        AppendPartition(canonical, table.Partition);
         Append(canonical, table.Fields.Length);
         foreach (var field in table.Fields)
         {
@@ -1356,6 +1436,20 @@ static class PostgresRelationQueryBindingFingerprinter
         AppendText(builder, identity.TextSemantics);
         AppendNumericDomain(builder, identity.NumericDomain);
         AppendTemporalDomain(builder, identity.TemporalDomain);
+    }
+
+    static void AppendPartition(StringBuilder builder, PostgresRelationQueryPartitionBinding? partition)
+    {
+        Append(builder, partition is null ? 0 : 1);
+        if (partition is null)
+            return;
+        Append(builder, partition.SourceSelector);
+        AppendPath(builder, partition.SemanticPath);
+        Append(builder, partition.ColumnName);
+        Append(builder, (int)partition.ScalarType);
+        AppendText(builder, partition.TextSemantics);
+        AppendNumericDomain(builder, partition.NumericDomain);
+        AppendTemporalDomain(builder, partition.TemporalDomain);
     }
 
     static void AppendText(StringBuilder builder, PostgresRelationQueryTextSemantics? text)

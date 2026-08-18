@@ -231,7 +231,24 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         }
 
         Shape = shape;
-        Descriptor = new(source.Id, source.ExecutionDomain, source.TargetProfile);
+        Descriptor = new(
+            source.Id,
+            source.ExecutionDomain,
+            source.TargetProfile,
+            Policy.FixedPartitionKey is { } fixedPartition
+                ? new(
+                    Policy.PartitionSourceSelector,
+                    string.Concat(
+                        "cosmos/logical-scope/sha256/",
+                        CosmosMaterializationIdentity.ComputeReferenceFingerprint(
+                        [
+                            AccountEndpoint,
+                            DatabaseId,
+                            ContainerId,
+                            Policy.PartitionSourceSelector,
+                            fixedPartition.ToString()
+                        ])))
+                : null);
         IdentitySourceSelector = identitySourceSelector is null
             ? ObservationIdentitySourceSelector
             : Guard.RequireNotNullOrWhiteSpace(identitySourceSelector);

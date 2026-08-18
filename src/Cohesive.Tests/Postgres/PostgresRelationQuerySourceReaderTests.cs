@@ -329,6 +329,104 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
     }
 
     [Fact]
+    public async Task TenantScopedMaterializationPagesBindExactPredicateAndRejectCrossTenantContinuation()
+    {
+        var executor = new TableExecutor(
+        [
+            new("item-a", "Alpha", null, "parent-1", "tenant-a"),
+            new("item-b", "Beta", null, "parent-1", "tenant-b"),
+            new("item-c", "Gamma", null, "parent-2", "tenant-a")
+        ]);
+        var tenantAFixture = CreateFixture(
+            executor.ExecuteAsync,
+            TenantPolicy("tenant-a"),
+            partitioned: true);
+        var tenantA = new PostgresMaterializationSource(
+            tenantAFixture.Reader,
+            tenantAFixture.SourcePlacement,
+            ContinuationAuthenticationKey);
+        var readA = tenantAFixture.Read(
+            tenantAFixture.SourcePlacement,
+            [Field(tenantAFixture.NameInput, "name")],
+            new RelationQueryBoundedEnumeration(maximumRows: 10));
+
+        var first = await tenantA.ReadPageAsync(
+            OperationContext.Create(),
+            new(readA, tenantA.Scope, continuation: null, maximumItems: 1, maximumBytes: 1_000_000));
+        var continuation = Assert.IsType<MaterializationSourceContinuation>(first.Continuation);
+        var second = await tenantA.ReadPageAsync(
+            OperationContext.Create(),
+            new(readA, tenantA.Scope, continuation, maximumItems: 1, maximumBytes: 1_000_000));
+
+        Assert.Equal(["item-a"], first.Read.Observations.Select(static row => row.Identity));
+        Assert.Equal(["item-c"], second.Read.Observations.Select(static row => row.Identity));
+        Assert.Equal(MaterializationSourcePageState.Exhausted, second.State);
+        Assert.All(executor.Commands, command =>
+        {
+            Assert.Contains("\"source\".\"tenant_id\" COLLATE \"C\"", command.Text, StringComparison.Ordinal);
+            Assert.Contains(command.Parameters, parameter =>
+                !parameter.IsArray
+                && parameter.ScalarType == PostgresRelationQueryScalarType.Text
+                && Equals(parameter.Value, "tenant-a"));
+        });
+        Assert.DoesNotContain("tenant-a", tenantA.Scope.Partition.Value, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "tenant-a",
+            tenantA.Descriptor.CapabilityProfile.Id.Value,
+            StringComparison.Ordinal);
+
+        var tenantBExecutor = new TableExecutor([]);
+        var tenantBFixture = CreateFixture(
+            tenantBExecutor.ExecuteAsync,
+            TenantPolicy("tenant-b"),
+            partitioned: true);
+        var tenantB = new PostgresMaterializationSource(
+            tenantBFixture.Reader,
+            tenantBFixture.SourcePlacement,
+            ContinuationAuthenticationKey);
+        var readB = tenantBFixture.Read(
+            tenantBFixture.SourcePlacement,
+            [Field(tenantBFixture.NameInput, "name")],
+            new RelationQueryBoundedEnumeration(maximumRows: 10));
+
+        Assert.NotEqual(tenantA.Scope.Partition, tenantB.Scope.Partition);
+        Assert.NotEqual(
+            tenantA.Descriptor.CapabilityProfile.Id,
+            tenantB.Descriptor.CapabilityProfile.Id);
+        Assert.Throws<ArgumentException>(() => new MaterializationSourcePageRequest(
+            readB,
+            tenantB.Scope,
+            continuation,
+            maximumItems: 1,
+            maximumBytes: 1_000_000));
+        Assert.Empty(tenantBExecutor.Commands);
+    }
+
+    [Fact]
+    public void PartitionedReaderRequiresMatchingRuntimeAndPhysicalScopes()
+    {
+        var executor = new TableExecutor([]);
+
+        var missing = Assert.Throws<ArgumentException>(() => CreateFixture(
+            executor.ExecuteAsync,
+            Policy,
+            partitioned: true));
+        var unpartitioned = Assert.Throws<ArgumentException>(() => CreateFixture(
+            executor.ExecuteAsync,
+            TenantPolicy("tenant-a"),
+            partitioned: false));
+        var wrongSelector = Assert.Throws<ArgumentException>(() => CreateFixture(
+            executor.ExecuteAsync,
+            new(10, 10, 3, 1_000_000, partitionScope: new("organizationId", "tenant-a")),
+            partitioned: true));
+
+        Assert.Contains("requires matching", missing.Message, StringComparison.Ordinal);
+        Assert.Contains("unpartitioned placement", unpartitioned.Message, StringComparison.Ordinal);
+        Assert.Contains("different selectors", wrongSelector.Message, StringComparison.Ordinal);
+        Assert.Empty(executor.Commands);
+    }
+
+    [Fact]
     public async Task ExecutorBoundReaderRetainsAffinityAcrossMaterializationPages()
     {
         var originalExecutor = new TableExecutor([]);
@@ -1386,6 +1484,108 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
     }
 
     [PostgresFact]
+    public async Task LocalPostgres_TenantScopedMaterializationPagesStayWithinTheExactPartition()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")
+            ?? throw new InvalidOperationException("The PostgreSQL integration-test connection string disappeared after test discovery.");
+
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var schema = $"ari401_{Guid.NewGuid():N}";
+        const string TableName = "tenant_items";
+        var contracts = CreateContracts(schema, TableName, partitioned: true);
+        try
+        {
+            await using (var setup = dataSource.CreateCommand($$"""
+                CREATE SCHEMA "{{schema}}";
+                CREATE TABLE "{{schema}}"."{{TableName}}" (
+                    "id" text COLLATE "C" PRIMARY KEY,
+                    "name" text NOT NULL,
+                    "optional" text NULL,
+                    "parent_id" text COLLATE "C" NOT NULL,
+                    "tenant_id" text COLLATE "C" NOT NULL,
+                    CONSTRAINT "ck_{{TableName}}_id_ascii" CHECK (octet_length("id") = length("id"))
+                );
+                INSERT INTO "{{schema}}"."{{TableName}}"
+                    ("id", "name", "optional", "parent_id", "tenant_id") VALUES
+                    ('item-a', 'Alpha', NULL, 'parent-1', 'tenant-a'),
+                    ('item-b', 'Beta', NULL, 'parent-1', 'tenant-b'),
+                    ('item-c', 'Gamma', NULL, 'parent-2', 'tenant-a');
+                """))
+            {
+                await setup.ExecuteNonQueryAsync();
+            }
+
+            var readerA = new PostgresRelationQuerySourceReader(
+                PhysicalPlan,
+                contracts.Placement,
+                contracts.Source,
+                contracts.Storage,
+                (command, cancellationToken) => PostgresNpgsqlExecution.ExecuteAsync(
+                    dataSource,
+                    command,
+                    cancellationToken),
+                TenantPolicy("tenant-a"));
+            var fixtureA = contracts.ToFixture(readerA);
+            var sourceA = new PostgresMaterializationSource(
+                readerA,
+                fixtureA.SourcePlacement,
+                ContinuationAuthenticationKey);
+            var readA = fixtureA.Read(
+                fixtureA.SourcePlacement,
+                [Field(fixtureA.NameInput, "name")],
+                new RelationQueryBoundedEnumeration(maximumRows: 10));
+            var firstA = await sourceA.ReadPageAsync(
+                OperationContext.Create(),
+                new(readA, sourceA.Scope, continuation: null, maximumItems: 1, maximumBytes: 1_000_000));
+            var continuationA = Assert.IsType<MaterializationSourceContinuation>(firstA.Continuation);
+            var secondA = await sourceA.ReadPageAsync(
+                OperationContext.Create(),
+                new(readA, sourceA.Scope, continuationA, maximumItems: 1, maximumBytes: 1_000_000));
+
+            Assert.Equal(["item-a"], firstA.Read.Observations.Select(static row => row.Identity));
+            Assert.Equal(["item-c"], secondA.Read.Observations.Select(static row => row.Identity));
+            Assert.Equal(MaterializationSourcePageState.Exhausted, secondA.State);
+
+            var readerB = new PostgresRelationQuerySourceReader(
+                PhysicalPlan,
+                contracts.Placement,
+                contracts.Source,
+                contracts.Storage,
+                (command, cancellationToken) => PostgresNpgsqlExecution.ExecuteAsync(
+                    dataSource,
+                    command,
+                    cancellationToken),
+                TenantPolicy("tenant-b"));
+            var fixtureB = contracts.ToFixture(readerB);
+            var sourceB = new PostgresMaterializationSource(
+                readerB,
+                fixtureB.SourcePlacement,
+                ContinuationAuthenticationKey);
+            var readB = fixtureB.Read(
+                fixtureB.SourcePlacement,
+                [Field(fixtureB.NameInput, "name")],
+                new RelationQueryBoundedEnumeration(maximumRows: 10));
+            var pageB = await sourceB.ReadPageAsync(
+                OperationContext.Create(),
+                new(readB, sourceB.Scope, continuation: null, maximumItems: 3, maximumBytes: 1_000_000));
+
+            Assert.Equal(["item-b"], pageB.Read.Observations.Select(static row => row.Identity));
+            Assert.NotEqual(sourceA.Scope.Partition, sourceB.Scope.Partition);
+            Assert.Throws<ArgumentException>(() => new MaterializationSourcePageRequest(
+                readB,
+                sourceB.Scope,
+                continuationA,
+                maximumItems: 1,
+                maximumBytes: 1_000_000));
+        }
+        finally
+        {
+            await using var cleanup = dataSource.CreateCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE;");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [PostgresFact]
     public async Task LocalPostgres_TransactionBoundMaterializationPagesShareOneSnapshot_WhenConfigured()
     {
         var connectionString = Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")
@@ -1734,6 +1934,13 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         "6A68A7530D77D4EC92FC40B9DA97BEA07E19BB7269C8A2B2E8B8FD640F1689F7");
     static readonly PostgresRelationQuerySourcePolicy Policy = new(10, 10, 3, 1_000_000);
 
+    static PostgresRelationQuerySourcePolicy TenantPolicy(string tenantId) => new(
+        maximumBatchKeys: 10,
+        maximumRowsPerRead: 10,
+        maximumPageItems: 3,
+        maximumPageBytes: 1_000_000,
+        partitionScope: new("tenantId", tenantId));
+
     static CanonicalExecutionFixture CreateCanonicalExecutionFixture(
         PostgresNpgsqlCommandExecutor executor,
         string schema = "public",
@@ -2016,14 +2223,16 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         PostgresRelationQuerySourcePolicy? policy = null,
         long maximumFanOut = 10,
         string sourcePlacementId = "placement:items",
-        PostgresRelationQueryScalarType relationshipScalarType = PostgresRelationQueryScalarType.Text)
+        PostgresRelationQueryScalarType relationshipScalarType = PostgresRelationQueryScalarType.Text,
+        bool partitioned = false)
     {
         var contracts = CreateContracts(
             "public",
             "items",
             maximumFanOut,
             sourcePlacementId,
-            relationshipScalarType);
+            relationshipScalarType,
+            partitioned);
         var effectivePolicy = policy ?? Policy;
         var reader = new PostgresRelationQuerySourceReader(
             PhysicalPlan,
@@ -2040,7 +2249,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         string tableName,
         long maximumFanOut = 10,
         string sourcePlacementId = "placement:items",
-        PostgresRelationQueryScalarType relationshipScalarType = PostgresRelationQueryScalarType.Text)
+        PostgresRelationQueryScalarType relationshipScalarType = PostgresRelationQueryScalarType.Text,
+        bool partitioned = false)
     {
         var sourceInput = new RelationQueryInputId("input:items");
         var pointInput = new RelationQueryInputId("input:point-items");
@@ -2068,7 +2278,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
             RelationQuerySourcePlacementBindingKind.SourceSet,
             RelationQuerySourceAcquisitionKind.BoundedEnumeration,
             [new(nameInput, FieldPath.FromField("name"), "name")],
-            []);
+            [],
+            partitioned ? new("tenantId") : null);
         var pointPlacement = Placement(
             "placement:point-items",
             pointInput,
@@ -2078,7 +2289,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
                 new(pointNameInput, FieldPath.FromField("name"), "name"),
                 new(pointOptionalInput, FieldPath.FromField("optional"), "optional")
             ],
-            []);
+            [],
+            partitioned ? new("tenantId") : null);
         var traversalPlacement = Placement(
             "placement:related-items",
             traversalInput,
@@ -2088,7 +2300,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
                 new(traversalNameInput, FieldPath.FromField("name"), "name"),
                 new(optionalInput, FieldPath.FromField("optional"), "optional")
             ],
-            [new(traversalInput, parentPath, ParentSelector)]);
+            [new(traversalInput, parentPath, ParentSelector)],
+            partitioned ? new("tenantId") : null);
         var sourceFields = ImmutableArray.Create(
             new PostgresRelationQueryFieldBinding(
                 nameInput,
@@ -2213,7 +2426,16 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
                 PostgresRelationQueryScalarType.Text,
                 identityText),
             tableFields,
-            relationships);
+            relationships,
+            intervalValidities: [],
+            partition: partitioned
+                ? new(
+                    "tenantId",
+                    FieldPath.FromField("tenantId"),
+                    "tenant_id",
+                    PostgresRelationQueryScalarType.Text,
+                    equalityText)
+                : null);
     }
 
     static RelationQuerySourcePlacementBinding Placement(
@@ -2222,7 +2444,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         RelationQuerySourcePlacementBindingKind kind,
         RelationQuerySourceAcquisitionKind acquisition,
         ImmutableArray<RelationQuerySourceFieldBinding> fields,
-        ImmutableArray<RelationQueryRelationshipKeyBinding> relationshipKeys) => new(
+        ImmutableArray<RelationQueryRelationshipKeyBinding> relationshipKeys,
+        RelationQueryPartitionBinding? partition = null) => new(
         new(id),
         input,
         new QueryNodeId($"node:{input.Value}"),
@@ -2234,7 +2457,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         RelationQuerySourcePlacementOrigin.Explicit,
         new(Shape, "id"),
         fields,
-        relationshipKeys);
+        relationshipKeys,
+        partition);
 
     static IEnumerable<Type> PublicSignatureTypes(System.Reflection.MemberInfo member) => member switch
     {
@@ -2398,7 +2622,12 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         }
     }
 
-    sealed record TableRow(string Id, string Name, string? Optional, string ParentId)
+    sealed record TableRow(
+        string Id,
+        string Name,
+        string? Optional,
+        string ParentId,
+        string TenantId = "tenant-a")
     {
         public object? Get(string column) => column switch
         {
@@ -2408,6 +2637,7 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
             "load_name" => Name,
             "optional" => Optional,
             "parent_id" => ParentId,
+            "tenant_id" => TenantId,
             _ => throw new InvalidOperationException($"Unknown test column '{column}'.")
         };
     }
@@ -2439,7 +2669,15 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
                     ? keys.SelectMany(key => rows.Where(row => string.Equals(row.ParentId, key, StringComparison.Ordinal)))
                     : selected.Where(row => keys.Contains(row.Id, StringComparer.Ordinal));
             }
-            var after = command.Parameters.FirstOrDefault(static parameter => !parameter.IsArray).Value as string;
+            var scalarParameters = command.Parameters.Where(static parameter => !parameter.IsArray).ToArray();
+            var scalarOffset = 0;
+            if (command.Text.Contains("\"source\".\"tenant_id\"", StringComparison.Ordinal))
+            {
+                var tenant = Assert.IsType<string>(scalarParameters[0].Value);
+                selected = selected.Where(row => string.Equals(row.TenantId, tenant, StringComparison.Ordinal));
+                scalarOffset = 1;
+            }
+            var after = scalarParameters.Skip(scalarOffset).FirstOrDefault().Value as string;
             if (after is not null)
                 selected = selected.Where(row => StringComparer.Ordinal.Compare(row.Id, after) > 0);
             var limitMatch = Limit.Match(command.Text);

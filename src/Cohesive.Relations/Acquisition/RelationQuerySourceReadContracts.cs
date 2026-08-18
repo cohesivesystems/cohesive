@@ -589,6 +589,27 @@ public sealed class RelationQuerySourceReadResult
             : RelationQueryEvidenceCompleteness.Partial;
 }
 
+/// <summary>Opaque evidence that one source reader is fixed to an exact logical partition.</summary>
+public sealed record RelationQuerySourceReaderPartitionScope
+{
+    /// <summary>Creates fixed-partition reader evidence.</summary>
+    /// <param name="sourceSelector">Exact placement partition selector implemented by the reader.</param>
+    /// <param name="scopeIdentity">Stable non-secret identity of the exact partition value and physical binding.</param>
+    /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">A parameter is empty or white space.</exception>
+    public RelationQuerySourceReaderPartitionScope(string sourceSelector, string scopeIdentity)
+    {
+        SourceSelector = Guard.RequireNotNullOrWhiteSpace(sourceSelector);
+        ScopeIdentity = Guard.RequireNotNullOrWhiteSpace(scopeIdentity);
+    }
+
+    /// <summary>Exact placement partition selector implemented by the reader.</summary>
+    public string SourceSelector { get; }
+
+    /// <summary>Stable non-secret identity of the exact partition value and physical binding.</summary>
+    public string ScopeIdentity { get; }
+}
+
 /// <summary>Exact provider identity exposed by one source reader.</summary>
 public sealed record RelationQuerySourceReaderDescriptor
 {
@@ -596,20 +617,22 @@ public sealed record RelationQuerySourceReaderDescriptor
     /// <param name="source">Physical source instance implemented by the reader.</param>
     /// <param name="executionDomain">Execution or consistency domain containing the source.</param>
     /// <param name="targetProfile">Exact capability profile implemented by the reader.</param>
+    /// <param name="partitionScope">Optional exact fixed-partition evidence implemented by every reader request.</param>
     /// <exception cref="ArgumentException">An identity is default.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="targetProfile"/> is <see langword="null"/>.</exception>
     [JsonConstructor]
     public RelationQuerySourceReaderDescriptor(
         RelationQuerySourceInstanceId source,
         RelationQueryExecutionDomainId executionDomain,
-        RelationQueryTargetCapabilityProfile targetProfile
-        )
+        RelationQueryTargetCapabilityProfile targetProfile,
+        RelationQuerySourceReaderPartitionScope? partitionScope = null)
     {
         if (string.IsNullOrWhiteSpace(source.Value) || string.IsNullOrWhiteSpace(executionDomain.Value))
             throw new ArgumentException("A source-reader descriptor requires complete physical identities.", nameof(source));
         Source = source;
         ExecutionDomain = executionDomain;
         TargetProfile = Guard.RequireNotNull(targetProfile);
+        PartitionScope = partitionScope;
     }
 
     /// <summary>Physical source instance implemented by the reader.</summary>
@@ -620,6 +643,9 @@ public sealed record RelationQuerySourceReaderDescriptor
 
     /// <summary>Exact capability profile implemented by the reader.</summary>
     public RelationQueryTargetCapabilityProfile TargetProfile { get; }
+
+    /// <summary>Exact fixed-partition evidence applied to every reader request, or <see langword="null"/>.</summary>
+    public RelationQuerySourceReaderPartitionScope? PartitionScope { get; }
 }
 
 /// <summary>Narrow target-neutral port for bounded source enumeration and batched lookup.</summary>

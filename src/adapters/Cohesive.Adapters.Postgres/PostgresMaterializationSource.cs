@@ -126,14 +126,20 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
                 "PostgreSQL durable paging requires a UUID identity or exact ordinal text ordering evidence.",
                 nameof(placement));
         }
+        var partition = reader.ResolvePartition(placement.Id);
+        var partitionIdentity = partition is null
+            ? "unpartitioned"
+            : string.Concat(
+                "selector/", Uri.EscapeDataString(partition.Binding.SourceSelector),
+                "/logical-scope/sha256/", partition.ScopeDigest);
         Scope = new(
             reader.PhysicalPlan,
             placement,
             new MaterializationSourcePartitionId(
-                $"postgres/table/{reader.StorageBinding.Fingerprint.Value}/{Uri.EscapeDataString(placement.Id.Value)}"),
+                $"postgres/table/{reader.StorageBinding.Fingerprint.Value}/{Uri.EscapeDataString(placement.Id.Value)}/partition/{partitionIdentity}"),
             new MaterializationOrderingScopeId(
                 $"postgres/identity/{(int)identity.ScalarType}/{Uri.EscapeDataString(identity.ColumnName)}/ascending/v1"));
-        Descriptor = new(reader, CreateCapabilityProfile(reader, placement, table));
+        Descriptor = new(reader, CreateCapabilityProfile(reader, placement, table, partition));
         try
         {
             if (ComputeMaximumContinuationValueCharacters() > MaximumContinuationValueCharacters)
@@ -288,7 +294,8 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
     static MaterializationCapabilityProfile CreateCapabilityProfile(
         PostgresRelationQuerySourceReader reader,
         RelationQuerySourcePlacementBinding placement,
-        PostgresRelationQueryTableBinding table)
+        PostgresRelationQueryTableBinding table,
+        ResolvedPartition? partition)
     {
         var policy = reader.Policy;
         var stages = reader.ResolveAuthorizedStages(placement.Id);
@@ -298,7 +305,7 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
             Uri.EscapeDataString(reader.PhysicalPlan.Canonicalization), "/",
             Uri.EscapeDataString(reader.PhysicalPlan.Value));
         var sourceReferences = ImmutableArray.CreateBuilder<string>(
-            5 + stages.Length + (reader.RuntimeEvidenceReference is null ? 0 : 1));
+            5 + stages.Length + (reader.RuntimeEvidenceReference is null ? 0 : 1) + (partition is null ? 0 : 1));
         sourceReferences.Add(EvidencePrefix);
         sourceReferences.Add($"postgres-binding/sha256/{reader.StorageBinding.Fingerprint.Value}");
         if (reader.RuntimeEvidenceReference is { } runtimeEvidence)
@@ -306,6 +313,13 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
         sourceReferences.Add($"postgres-policy/batch/{policy.MaximumBatchKeys.ToString(CultureInfo.InvariantCulture)}/rows/{policy.MaximumRowsPerRead.ToString(CultureInfo.InvariantCulture)}/page-items/{policy.MaximumPageItems.ToString(CultureInfo.InvariantCulture)}/page-bytes/{policy.MaximumPageBytes.ToString(CultureInfo.InvariantCulture)}/key-bytes/{policy.MaximumKeyBytes.ToString(CultureInfo.InvariantCulture)}/temporal/{(int)policy.TemporalSemantics}");
         sourceReferences.Add($"relations-source-limits/batch/{reader.Limits.MaximumBatchSize.ToString(CultureInfo.InvariantCulture)}/rows/{reader.Limits.MaximumBufferedRows.ToString(CultureInfo.InvariantCulture)}/fan-out/{reader.Limits.MaximumFanOut.ToString(CultureInfo.InvariantCulture)}/parallelism/{reader.Limits.MaximumConcurrency.ToString(CultureInfo.InvariantCulture)}");
         sourceReferences.Add(physicalPlanReference);
+        if (partition is not null)
+        {
+            sourceReferences.Add(string.Concat(
+                "postgres-partition-selector/", Uri.EscapeDataString(partition.Binding.SourceSelector),
+                "/column/", Uri.EscapeDataString(partition.Binding.ColumnName),
+                "/logical-scope/sha256/", partition.ScopeDigest));
+        }
         foreach (var stage in stages)
         {
             sourceReferences.Add(string.Concat(
@@ -376,6 +390,11 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
                     : string.Join(",", stages.Select(static stage => Uri.EscapeDataString(stage.Id.Value))),
                 "/placement/", Uri.EscapeDataString(placement.Id.Value),
                 "/source/", Uri.EscapeDataString(reader.Descriptor.Source.Value),
+                "/partition/", partition is null
+                    ? "unpartitioned"
+                    : string.Concat(
+                        "selector-", Uri.EscapeDataString(partition.Binding.SourceSelector),
+                        "-sha256-", partition.ScopeDigest),
                 "/policy/", policy.MaximumBatchKeys.ToString(CultureInfo.InvariantCulture), "-",
                 policy.MaximumRowsPerRead.ToString(CultureInfo.InvariantCulture), "-",
                 policy.MaximumPageItems.ToString(CultureInfo.InvariantCulture), "-",

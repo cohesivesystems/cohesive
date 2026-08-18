@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Text;
 using System.Transactions;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
@@ -23,6 +24,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
     const string RelationshipAlias = "_relationship";
     const string KeysBinding = "keys";
     const string AfterBinding = "after";
+    const string PartitionBinding = "partition";
     const string RequestedAlias = "requested";
     const string RequestedKeyAlias = "key";
     const string CandidateAlias = "candidate";
@@ -35,6 +37,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
     readonly PostgresRelationQueryStorageBinding storage;
     readonly PostgresNpgsqlRuntimeBinding? runtimeBinding;
     readonly PostgresNpgsqlCommandExecutor executeCommand;
+    readonly ImmutableDictionary<RelationQuerySourcePlacementBindingId, ResolvedPartition> partitions;
 
     /// <summary>Creates an Npgsql-backed canonical PostgreSQL source reader.</summary>
     /// <param name="plan">Exact semantic compiled plan referenced by <paramref name="physicalPlan"/>.</param>
@@ -158,10 +161,12 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 nameof(source));
         }
         ValidateStorageAffinity(placement, source, storage, semanticPlan);
+        partitions = ResolvePartitions(placement, source, storage, Policy);
         if (compiledPhysicalPlan is not null
             && storage.Tables.Any(table =>
                 table.Source == source.Id
                 && (table.Identity is { } identity && PostgresNpgsqlExecution.IsTemporal(identity.ScalarType)
+                    || table.Partition is { } partition && PostgresNpgsqlExecution.IsTemporal(partition.ScalarType)
                     || table.Fields.Any(static field => PostgresNpgsqlExecution.IsTemporal(field.ScalarType))
                     || table.RelationshipReferences.Any(static reference =>
                         PostgresNpgsqlExecution.IsTemporal(reference.ScalarType)))))
@@ -176,7 +181,20 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 nameof(source));
         }
 
-        Descriptor = new(source.Id, source.ExecutionDomain, source.TargetProfile);
+        Descriptor = new(
+            source.Id,
+            source.ExecutionDomain,
+            source.TargetProfile,
+            Policy.PartitionScope is { } scope
+                ? new(
+                    scope.SourceSelector,
+                    string.Concat(
+                        "postgres/logical-scope/sha256/",
+                        scope.ComputeDigest(
+                            partitions
+                                .OrderBy(static pair => pair.Key.Value, StringComparer.Ordinal)
+                                .Select(static pair => pair.Value.Binding))))
+                : null);
     }
 
     /// <inheritdoc />
@@ -219,6 +237,10 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             Uri.EscapeDataString(runtimeBinding.DataSourceFingerprint.Canonicalization),
             "/",
             runtimeBinding.DataSourceFingerprint.Value);
+
+    internal ResolvedPartition? ResolvePartition(
+        RelationQuerySourcePlacementBindingId placementBinding) =>
+        partitions.TryGetValue(placementBinding, out var partition) ? partition : null;
 
     internal RelationQuerySourcePlacementBinding ResolvePlacement(
         RelationQuerySourcePlacementBindingId placementBinding) =>
@@ -358,6 +380,81 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         }
     }
 
+    static ImmutableDictionary<RelationQuerySourcePlacementBindingId, ResolvedPartition> ResolvePartitions(
+        RelationQuerySourcePlacement placement,
+        RelationQuerySourceInstance source,
+        PostgresRelationQueryStorageBinding storage,
+        PostgresRelationQuerySourcePolicy policy)
+    {
+        var scope = policy.PartitionScope;
+        var builder = ImmutableDictionary.CreateBuilder<RelationQuerySourcePlacementBindingId, ResolvedPartition>();
+        foreach (var canonical in placement.Bindings.Where(binding =>
+                     binding.Source == source.Id
+                     && binding.Acquisition != RelationQuerySourceAcquisitionKind.Supplied))
+        {
+            var table = storage.ResolveTable(canonical.Id);
+            if (canonical.Partition is null && table.Partition is null)
+            {
+                if (scope is not null)
+                {
+                    throw new ArgumentException(
+                        "A fixed PostgreSQL partition scope cannot serve an unpartitioned placement.",
+                        nameof(policy));
+                }
+                continue;
+            }
+            if (canonical.Partition is not { } canonicalPartition
+                || table.Partition is not { } physicalPartition
+                || scope is null)
+            {
+                throw new ArgumentException(
+                    "A partitioned PostgreSQL placement requires matching physical column evidence and one exact runtime scope.",
+                    nameof(policy));
+            }
+            if (!string.Equals(canonicalPartition.SourceSelector, physicalPartition.SourceSelector, StringComparison.Ordinal)
+                || !string.Equals(canonicalPartition.SourceSelector, scope.SourceSelector, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "The PostgreSQL placement, table binding, and runtime partition scope use different selectors.",
+                    nameof(policy));
+            }
+            if (Encoding.UTF8.GetByteCount(scope.CanonicalValue) > policy.MaximumKeyBytes)
+            {
+                throw new ArgumentException(
+                    "The PostgreSQL partition value exceeds the canonical key byte bound.",
+                    nameof(policy));
+            }
+
+            object value;
+            try
+            {
+                value = PostgresRelationQueryScalarCatalog.ParseKey(
+                    scope.CanonicalValue,
+                    physicalPartition.ScalarType);
+            }
+            catch (ArgumentException exception)
+            {
+                throw new ArgumentException(
+                    "The PostgreSQL partition value has no exact scalar representation.",
+                    nameof(policy),
+                    exception);
+            }
+            if (!string.Equals(
+                    PostgresRelationQueryScalarCatalog.FormatKey(value, physicalPartition.ScalarType),
+                    scope.CanonicalValue,
+                    StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "The PostgreSQL partition value is not in canonical scalar form.",
+                    nameof(policy));
+            }
+            builder.Add(
+                canonical.Id,
+                new(physicalPartition, value, scope.ComputeDigest(physicalPartition)));
+        }
+        return builder.ToImmutable();
+    }
+
     static string? GetTableCoverageMismatch(
         RelationQuerySourcePlacementBinding binding,
         PostgresRelationQueryTableBinding? table)
@@ -380,6 +477,17 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         if (table.Shape != binding.Shape)
         {
             return "the semantic shape differs";
+        }
+
+        if ((binding.Partition is { } canonicalPartition
+             && (table.Partition is not { } physicalPartition
+                 || !string.Equals(
+                     physicalPartition.SourceSelector,
+                     canonicalPartition.SourceSelector,
+                     StringComparison.Ordinal)))
+            || (binding.Partition is null && table.Partition is not null))
+        {
+            return "the logical partition selector lacks exact physical column evidence";
         }
 
         if (binding.Identity is not { } canonicalIdentity || canonicalIdentity.Shape != binding.Shape)
@@ -735,6 +843,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         int probeLimit)
     {
         var identity = table.Identity!;
+        var partition = ResolvePartition(table.PlacementBinding);
         if (relationship is not null
             && request.Constraint is RelationQueryRelationshipKeyBatchLookup relationshipLookup)
         {
@@ -743,6 +852,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 projection,
                 identity,
                 relationship,
+                partition,
                 ParseKeys(relationshipLookup.Keys, relationship.ScalarType),
                 afterIdentity,
                 probeLimit,
@@ -763,6 +873,18 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             builder.Select(
                 PostgresSqlExpression.Column(SourceAlias, item.ColumnName),
                 $"_field{index.ToString(CultureInfo.InvariantCulture)}");
+        }
+
+        if (partition is not null)
+        {
+            var partitionExpression = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+                PostgresSqlExpression.Column(SourceAlias, partition.Binding.ColumnName),
+                partition.Binding.ScalarType,
+                partition.Binding.TextSemantics);
+            builder.Where(PostgresSqlExpression.Binary(
+                PostgresSqlBinaryOperator.Equal,
+                partitionExpression,
+                PostgresSqlExpression.RuntimeParameter(PartitionBinding)));
         }
 
         ImmutableArray<object> parsedKeys = [];
@@ -811,6 +933,10 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                     type,
                     IsArray: true),
                 AfterBinding => new(afterIdentity!, identity.ScalarType, IsArray: false),
+                PartitionBinding when partition is not null => new(
+                    partition.Value,
+                    partition.Binding.ScalarType,
+                    IsArray: false),
                 _ => throw new InvalidOperationException(
                     $"Unexpected PostgreSQL source parameter '{parameter.Binding ?? "<constant>"}'.")
             });
@@ -835,6 +961,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         ImmutableArray<PostgresRelationQueryProjectionBinding> projection,
         PostgresRelationQueryIdentityBinding identity,
         PostgresRelationQueryRelationshipReferenceBinding relationship,
+        ResolvedPartition? partition,
         ImmutableArray<object> parsedKeys,
         object? afterIdentity,
         int probeLimit,
@@ -870,6 +997,17 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 PostgresSqlBinaryOperator.Equal,
                 relationshipExpression,
                 requestedKeyExpression));
+        if (partition is not null)
+        {
+            var partitionExpression = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+                PostgresSqlExpression.Column(SourceAlias, partition.Binding.ColumnName),
+                partition.Binding.ScalarType,
+                partition.Binding.TextSemantics);
+            candidateBuilder.Where(PostgresSqlExpression.Binary(
+                PostgresSqlBinaryOperator.Equal,
+                partitionExpression,
+                PostgresSqlExpression.RuntimeParameter(PartitionBinding)));
+        }
         if (afterIdentity is not null)
         {
             candidateBuilder.Where(PostgresSqlExpression.KeysetAfter(
@@ -916,6 +1054,10 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                     relationship.ScalarType,
                     IsArray: true),
                 AfterBinding => new(afterIdentity!, identity.ScalarType, IsArray: false),
+                PartitionBinding when partition is not null => new(
+                    partition.Value,
+                    partition.Binding.ScalarType,
+                    IsArray: false),
                 _ => throw new InvalidOperationException(
                     $"Unexpected PostgreSQL relationship-source parameter '{parameter.Binding ?? "<constant>"}'.")
             });
@@ -1295,6 +1437,11 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         CompiledRelationQueryPhysicalPlan PhysicalPlan,
         RelationQuerySourceInstance Source);
 }
+
+internal sealed record ResolvedPartition(
+    PostgresRelationQueryPartitionBinding Binding,
+    object Value,
+    string ScopeDigest);
 
 internal sealed record PostgresRelationQueryProjectionBinding(
     RelationQuerySourceReadField Field,
