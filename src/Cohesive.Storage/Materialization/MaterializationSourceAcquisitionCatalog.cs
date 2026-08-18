@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
@@ -10,6 +11,29 @@ namespace Cohesive.Storage.Materialization;
 /// </summary>
 public static class MaterializationSourceAcquisitionCatalog
 {
+    /// <summary>Gets every canonical acquisition input owned by one compiled relation plan.</summary>
+    /// <param name="plan">Canonical compiled relation plan whose acquisition inputs are requested.</param>
+    /// <returns>Source and traversal input identities in canonical ordinal identity order.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">The compiled plan repeats an acquisition input identity.</exception>
+    public static ImmutableArray<RelationQueryInputId> GetInputs(CompiledRelationQueryPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ImmutableArray<RelationQueryInputId> inputs =
+        [
+            .. plan.InputContract.Sources.Select(static source => source.Input.Id),
+            .. plan.InputContract.Traversals.Select(static traversal => traversal.Input.Id)
+        ];
+        if (inputs.GroupBy(static input => input).Any(static group => group.Count() > 1))
+        {
+            throw new ArgumentException(
+                "A compiled Relations acquisition contract cannot repeat an input identity.",
+                nameof(plan));
+        }
+
+        return [.. inputs.OrderBy(static input => input.Value, StringComparer.Ordinal)];
+    }
+
     /// <summary>Projects one compiled input to its required materialization source-read capability.</summary>
     /// <param name="plan">Canonical compiled relation plan that owns the input.</param>
     /// <param name="input">Compiled source or traversal input.</param>

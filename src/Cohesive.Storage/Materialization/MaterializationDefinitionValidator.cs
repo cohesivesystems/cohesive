@@ -230,7 +230,7 @@ public static class MaterializationDefinitionValidator
         CompiledRelationQueryPlan plan,
         ICollection<DocumentValidationDiagnostic> diagnostics)
     {
-        var inputs = GetAcquisitionInputs(plan).ToHashSet();
+        var inputs = MaterializationSourceAcquisitionCatalog.GetInputs(plan).ToHashSet();
         var declared = definition.Sources.Select(static source => source.Input).ToHashSet();
         foreach (var source in definition.Sources)
         {
@@ -325,10 +325,9 @@ public static class MaterializationDefinitionValidator
 
         if ((definition.UpdatePolicy.SupportedModes & MaterializationSynchronizationMode.Rebuild) != 0)
         {
-            ImmutableArray<MaterializationCapabilityKind> requiredTarget =
-                definition.UpdatePolicy.Consistency == MaterializationConsistencyKind.BaselinePlusCatchUp
-                ? [.. RebuildTargetCapabilities, MaterializationCapabilityKind.TargetBulkDelete]
-                : RebuildTargetCapabilities;
+            var requiredTarget = GetRequiredTargetCapabilities(
+                definition.UpdatePolicy,
+                MaterializationSynchronizationMode.Rebuild);
             foreach (var source in definition.Sources)
             {
                 var requiredSource = GetRebuildSourceCapabilities(plan, source.Input);
@@ -375,7 +374,9 @@ public static class MaterializationDefinitionValidator
                 definition,
                 MaterializationSynchronizationMode.Incremental,
                 definition.TargetCapabilities,
-                IncrementalTargetCapabilities,
+                GetRequiredTargetCapabilities(
+                    definition.UpdatePolicy,
+                    MaterializationSynchronizationMode.Incremental),
                 "/targetCapabilities",
                 diagnostics);
             ValidateOutcomeBounds(
@@ -444,7 +445,7 @@ public static class MaterializationDefinitionValidator
         string location,
         ICollection<DocumentValidationDiagnostic> diagnostics)
     {
-        foreach (var guarantee in GetRequiredGuarantees(definition, requirement.Capability))
+        foreach (var guarantee in GetRequiredGuarantees(definition.UpdatePolicy, requirement.Capability))
         {
             if (requirement.Guarantees.Contains(guarantee))
             {
@@ -516,20 +517,21 @@ public static class MaterializationDefinitionValidator
     }
 
     internal static IEnumerable<MaterializationGuaranteeKind> GetRequiredGuarantees(
-        MaterializationDefinition definition,
+        MaterializationUpdatePolicy updatePolicy,
         MaterializationCapabilityKind capability)
     {
+        ArgumentNullException.ThrowIfNull(updatePolicy);
         if (capability is MaterializationCapabilityKind.SourceBatchedPointRead
             or MaterializationCapabilityKind.SourceParameterizedPredicateQuery
             or MaterializationCapabilityKind.SourceBoundedEnumeration)
         {
             yield return MaterializationGuaranteeKind.StableOrdering;
             yield return MaterializationGuaranteeKind.RequestLocalCompleteness;
-            if (definition.UpdatePolicy.Consistency == MaterializationConsistencyKind.CoordinatedSnapshot)
+            if (updatePolicy.Consistency == MaterializationConsistencyKind.CoordinatedSnapshot)
             {
                 yield return MaterializationGuaranteeKind.CoordinatedSnapshot;
             }
-            else if (definition.UpdatePolicy.Consistency == MaterializationConsistencyKind.Reconciliation)
+            else if (updatePolicy.Consistency == MaterializationConsistencyKind.Reconciliation)
             {
                 yield return MaterializationGuaranteeKind.Reconciliation;
             }
@@ -538,7 +540,7 @@ public static class MaterializationDefinitionValidator
         {
             yield return MaterializationGuaranteeKind.StableOrdering;
             yield return MaterializationGuaranteeKind.AtLeastOnceDelivery;
-            if (definition.UpdatePolicy.Consistency == MaterializationConsistencyKind.BaselinePlusCatchUp)
+            if (updatePolicy.Consistency == MaterializationConsistencyKind.BaselinePlusCatchUp)
             {
                 yield return MaterializationGuaranteeKind.BaselinePlusCatchUp;
             }
@@ -557,7 +559,7 @@ public static class MaterializationDefinitionValidator
         {
             yield return MaterializationGuaranteeKind.IdempotentWrite;
             yield return MaterializationGuaranteeKind.FencedMutation;
-            if (definition.UpdatePolicy.Idempotency == MaterializationIdempotencyKind.StableOutputIdentityAndVersion)
+            if (updatePolicy.Idempotency == MaterializationIdempotencyKind.StableOutputIdentityAndVersion)
             {
                 yield return MaterializationGuaranteeKind.VersionConditionalWrite;
             }
@@ -592,17 +594,32 @@ public static class MaterializationDefinitionValidator
         }
     }
 
-    static IEnumerable<RelationQueryInputId> GetAcquisitionInputs(CompiledRelationQueryPlan plan)
+    internal static ImmutableArray<MaterializationCapabilityKind> GetRequiredTargetCapabilities(
+        MaterializationUpdatePolicy updatePolicy,
+        MaterializationSynchronizationMode mode)
     {
-        foreach (var source in plan.InputContract.Sources)
+        ArgumentNullException.ThrowIfNull(updatePolicy);
+        MaterializationSynchronizationModes.RequireValid(mode, nameof(mode), allowCombined: false);
+        if ((updatePolicy.SupportedModes & mode) == 0)
         {
-            yield return source.Input.Id;
+            throw new ArgumentOutOfRangeException(
+                nameof(mode),
+                mode,
+                "The materialization update policy does not support the requested synchronization mode.");
         }
 
-        foreach (var traversal in plan.InputContract.Traversals)
+        return mode switch
         {
-            yield return traversal.Input.Id;
-        }
+            MaterializationSynchronizationMode.Rebuild
+                when updatePolicy.Consistency == MaterializationConsistencyKind.BaselinePlusCatchUp =>
+                [.. RebuildTargetCapabilities, MaterializationCapabilityKind.TargetBulkDelete],
+            MaterializationSynchronizationMode.Rebuild => RebuildTargetCapabilities,
+            MaterializationSynchronizationMode.Incremental => IncrementalTargetCapabilities,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(mode),
+                mode,
+                "Unsupported materialization synchronization mode.")
+        };
     }
 
     static ImmutableArray<MaterializationCapabilityKind> GetRebuildSourceCapabilities(
