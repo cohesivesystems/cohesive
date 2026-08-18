@@ -7,7 +7,7 @@ namespace Cohesive.Adapters.Postgres;
 /// <summary>
 /// Allocates deterministic, human-readable PostgreSQL aliases within one SQL identifier namespace.
 /// </summary>
-internal sealed class PostgresRelationQuerySqlAliasAllocator
+internal sealed class PostgresSqlAliasAllocator
 {
     const int DigestLength = 8;
     readonly Dictionary<string, string> semanticKeyByAlias = new(StringComparer.Ordinal);

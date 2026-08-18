@@ -2,7 +2,7 @@
 
 This harness is the local infrastructure boundary for ARI-399 and its materialization slices. It starts pinned PostgreSQL, Azure Cosmos DB emulator, and Elasticsearch containers together with pgAdmin, Cosmos Data Explorer, and Kibana. It projects one deterministic freight scenario journal into both source databases, executes one canonical Cohesive relation over either replica, and atomically promotes the equivalent results into provider-specific Elasticsearch generations.
 
-The journal at `scenarios/freight-baseline.json` is the only seed-data authority. The .NET seed projection validates tenant-local references and cardinality before replacing the harness PostgreSQL schema and Cosmos database. Elasticsearch starts empty after a fresh reset; `materialize` creates candidate generations and promotes their read aliases.
+The journal at `scenarios/freight-baseline.json` is the only seed-data authority. The .NET seed projection validates tenant-local references and cardinality before replacing the harness PostgreSQL schema and Cosmos database. The default seed path creates canonical entity states and sends them through `GenericRepositorySeedDataService`, `PostgresEntityRepository`, and `CosmosEntityOutboxRepository`. A separate direct path retains raw Npgsql and Cosmos SDK writes as an independent oracle. Elasticsearch starts empty after a fresh reset; `materialize` creates candidate generations and promotes their read aliases.
 
 ## Prerequisites
 
@@ -18,6 +18,7 @@ Run these from the repository root:
 eng/materialization-harness/harness.sh up
 eng/materialization-harness/harness.sh validate
 eng/materialization-harness/harness.sh seed
+eng/materialization-harness/harness.sh seed-direct
 eng/materialization-harness/harness.sh verify
 eng/materialization-harness/harness.sh materialize
 eng/materialization-harness/harness.sh verify-index
@@ -28,7 +29,7 @@ eng/materialization-harness/harness.sh down
 eng/materialization-harness/harness.sh reset
 ```
 
-`down` preserves database, checkpoint, and index volumes. After `down` and `up`, `verify` proves both source databases still match the journal without rewriting them. `materialize` creates and promotes a new generation for each replica. `verify-index` is read-only and displays the active aliases and their document counts. `reset` is intentionally destructive: it removes only this Compose project's volumes, starts fresh services, and replays the canonical scenario journal.
+`seed` uses Cohesive.Storage repositories and is the normal path. `seed-direct` performs the same projection with raw provider clients, keeping seed verification independent from the repository implementation being tested. `test` seeds, verifies, and materializes the direct path first, then replaces it with the repository path and repeats the same checks. `down` preserves database, checkpoint, and index volumes. After `down` and `up`, `verify` proves both source databases still match the journal without rewriting them. `materialize` creates and promotes a new generation for each replica. `verify-index` is read-only and displays the active aliases and their document counts. `reset` is intentionally destructive: it removes only this Compose project's volumes, starts fresh services, and replays the canonical scenario journal through Cohesive.Storage.
 
 The shorter acceptance entrypoint is:
 
@@ -83,7 +84,7 @@ The vNext emulator proves local NoSQL gateway behavior but reports an Eventual a
 
 ## Seeded freight surface
 
-Each provider receives separate tenant-partitioned Orders, CustomerAccounts, OrderStops, and Locations. PostgreSQL uses composite tenant/entity keys, and Cosmos stores canonical Cohesive observation envelopes partitioned by `/partitionKey`. The baseline contains two tenants, shared customers, shared locations, six orders, and enough stops to cross the harness's two-item paging and lookup boundaries.
+Each provider receives separate tenant-partitioned Orders, CustomerAccounts, OrderStops, and Locations. The relation model's inferred source shapes are projected once into canonical entity definitions; both repository seed realizations consume those definitions rather than maintaining a second field schema. PostgreSQL uses composite tenant/entity keys, an explicit semantic observation-version column, and `xmin` only as its opaque concurrency token. Cosmos stores canonical Cohesive observation envelopes partitioned by `/partitionKey`. Physical schema/container creation remains an explicit harness lifecycle step rather than a hidden repository side effect. The baseline contains two tenants, shared customers, shared locations, six orders, and enough stops to cross the harness's two-item paging and lookup boundaries.
 
 The seed projection derives each order's pickup/delivery stop and endpoint location identities from the ordered stop sequence once, then writes those same values to both replicas. The canonical relation joins each order to its customer and both endpoint locations and projects an `OrderSearchDocument`. Provider-specific code supplies only physical placements, field selectors, and readers; the compiled relation and materialization definition fingerprint remain identical.
 

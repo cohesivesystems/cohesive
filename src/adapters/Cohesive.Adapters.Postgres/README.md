@@ -1,7 +1,7 @@
 # Cohesive.Adapters.Postgres
 
-`Cohesive.Adapters.Postgres` is the single PostgreSQL adapter package. It provides an injection-safe standalone
-`SELECT` builder, canonical Relations compilation, exact persistable storage bindings, and Npgsql-backed bounded
+`Cohesive.Adapters.Postgres` is the single PostgreSQL adapter package. It provides injection-safe standalone SQL
+construction, canonical Relations compilation, exact persistable storage bindings, and Npgsql-backed bounded
 Relations, rebuild, reconciliation, transaction-aligned logical-replication sources, and a durable competing-consumer
 ledger for `Cohesive.Processes.Distribution`. The builder can be used
 without Cohesive.Relations query compilation; the storage binding remains the shared physical authority for
@@ -60,7 +60,10 @@ var statement = template.Bind(new Dictionary<string, object?>
 ```
 
 `PostgresSqlSelectBuilder` also composes derived-table joins, aggregate `FILTER` clauses, explicit null placement,
-offset paging, and null-aware structural keyset predicates.
+offset paging, and null-aware structural keyset predicates. `PostgresSqlInsertBuilder` supports parameterized inserts
+and `ON CONFLICT DO UPDATE` from `EXCLUDED` values, while `PostgresSqlUpdateBuilder` requires at least one predicate so
+an unrestricted update cannot be produced accidentally. Both mutation builders use the same safe identifiers,
+expression tree, deterministic positional parameters, and immutable command templates as the select builder.
 
 Captured constants remain portable when a compiled artifact is serialized, and runtime bindings accept the same
 closed provider-neutral CLR domain. The supported values are `null`, `bool`, `int`, `long`, `decimal`, `string`,
@@ -653,6 +656,22 @@ native-artifact executor that automatically dispatches that statement. Its direc
 the bounded canonical source reader and materialization source, where the exact storage binding supplies explicit
 PostgreSQL parameter and result types. A supplied relation root remains an explicit plan input, not an implicit table
 scan: only its demanded fields are bound, and acquired inputs still use the persisted storage binding.
+
+## Entity repository
+
+`PostgresEntityRepository` realizes `IEntityRepository` over a normalized table. Its
+`PostgresEntityRepositoryMapping` declares only physical table/column names, exact scalar encodings, the canonical
+identity and partition fields, the semantic observation-version column, and a batch limit. Construction rejects a
+missing, extra, duplicated, or type-incompatible field binding, so the supplied `EntityDefinition` remains the sole
+semantic field authority.
+
+Reads may be partition-scoped; an unscoped identity that occurs in more than one partition is rejected as ambiguous.
+Writes validate the complete observation through the entity definition and require the mapped identity field to equal
+the observation identity. PostgreSQL `xmin` is returned only as an opaque optimistic-concurrency token, while the
+portable observation version is persisted explicitly. Native batches run inside one database transaction and
+advertise both same-partition and cross-partition all-or-nothing support. Schema creation, migrations, constraints,
+foreign keys, publications, and replica identity remain explicit deployment/lifecycle responsibilities rather than
+repository side effects.
 
 Conformance tests compile representative rows, aggregation, relationship traversal, explicit join, temporal join,
 text-search, paging, and distinct plans against the exact advertised profile, including structured fail-closed cases.

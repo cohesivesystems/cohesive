@@ -812,9 +812,9 @@ public sealed class PostgresRelationQueryCompiler
         readonly HashSet<QueryAssignmentId> coveredAssignments = [];
         readonly Dictionary<string, PostgresRelationQueryTextOrderingDomainEvidence> runtimeTextOrderingDomains =
             new(StringComparer.Ordinal);
-        readonly PostgresRelationQuerySqlAliasAllocator relationAliases = new();
-        readonly PostgresRelationQuerySqlAliasAllocator valueAliases = new();
-        readonly PostgresRelationQuerySqlAliasAllocator resultAliases = new();
+        readonly PostgresSqlAliasAllocator relationAliases = new();
+        readonly PostgresSqlAliasAllocator valueAliases = new();
+        readonly PostgresSqlAliasAllocator resultAliases = new();
         PostgresRelationQueryPagingContract? paging;
 
         public BranchCompiler(

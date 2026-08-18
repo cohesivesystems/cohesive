@@ -161,6 +161,69 @@ public sealed class PostgresSqlConstructionTests
     }
 
     [Fact]
+    public void MutationBuildersShareSafeIdentifiersExpressionsAndParameterTemplates()
+    {
+        PostgresSqlQualifiedTable table = new("transport", "loads");
+        var insert = new PostgresSqlInsertBuilder(table)
+            .Value("tenant_id", PostgresSqlExpression.RuntimeParameter("tenant"))
+            .Value("load_id", PostgresSqlExpression.RuntimeParameter("id"))
+            .Value("status", PostgresSqlExpression.RuntimeParameter("status"))
+            .OnConflictDoUpdate(
+                conflictColumns: ["tenant_id", "load_id"],
+                excludedUpdateColumns: ["status"])
+            .Returning(PostgresSqlExpression.UnqualifiedColumn("xmin"), "concurrency_token")
+            .BuildTemplate();
+
+        Assert.Equal(
+            "INSERT INTO \"transport\".\"loads\" (\"tenant_id\", \"load_id\", \"status\") "
+            + "VALUES ($1, $2, $3) ON CONFLICT (\"tenant_id\", \"load_id\") DO UPDATE SET "
+            + "\"status\" = EXCLUDED.\"status\" RETURNING \"xmin\" AS \"concurrency_token\"",
+            insert.Text);
+        Assert.Equal(
+            ["tenant", "id", "status"],
+            insert.Parameters.Select(static parameter => parameter.Binding));
+
+        var update = new PostgresSqlUpdateBuilder(table)
+            .Set("load_id", PostgresSqlExpression.RuntimeParameter("id"))
+            .Set("status", PostgresSqlExpression.RuntimeParameter("status"))
+            .Where(PostgresSqlExpression.Binary(
+                @operator: PostgresSqlBinaryOperator.Equal,
+                left: PostgresSqlExpression.UnqualifiedColumn("load_id"),
+                right: PostgresSqlExpression.RuntimeParameter("id")))
+            .Where(PostgresSqlExpression.Binary(
+                @operator: PostgresSqlBinaryOperator.Equal,
+                left: PostgresSqlExpression.UnqualifiedColumn("xmin"),
+                right: PostgresSqlExpression.RuntimeParameter("expected-concurrency")))
+            .Returning(PostgresSqlExpression.UnqualifiedColumn("xmin"), "concurrency_token")
+            .BuildTemplate();
+
+        Assert.Equal(
+            "UPDATE \"transport\".\"loads\" SET \"load_id\" = $1, \"status\" = $2 "
+            + "WHERE (\"load_id\" = $1) AND (\"xmin\" = $3) "
+            + "RETURNING \"xmin\" AS \"concurrency_token\"",
+            update.Text);
+        Assert.Equal(
+            ["id", "status", "expected-concurrency"],
+            update.Parameters.Select(static parameter => parameter.Binding));
+    }
+
+    [Fact]
+    public void MutationBuildersRejectIncompleteOrUnrestrictedCommands()
+    {
+        PostgresSqlQualifiedTable table = new("transport", "loads");
+        var unrestricted = new PostgresSqlUpdateBuilder(table)
+            .Set("status", PostgresSqlExpression.RuntimeParameter("status"));
+        var incompleteUpsert = new PostgresSqlInsertBuilder(table)
+            .Value("load_id", PostgresSqlExpression.RuntimeParameter("id"))
+            .OnConflictDoUpdate(
+                conflictColumns: ["tenant_id", "load_id"],
+                excludedUpdateColumns: ["status"]);
+
+        Assert.Throws<InvalidOperationException>(unrestricted.BuildTemplate);
+        Assert.Throws<InvalidOperationException>(incompleteUpsert.BuildTemplate);
+    }
+
+    [Fact]
     public void Build_ComposesDerivedJoinAggregateFilterAndNullAwareKeysetPaging()
     {
         var activeLoads = new PostgresSqlSelectBuilder(

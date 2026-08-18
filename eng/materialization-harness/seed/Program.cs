@@ -1,9 +1,15 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Net;
 using System.Net.Security;
 using System.Text.Json;
 using Cohesive.Adapters.Cosmos;
+using Cohesive.Adapters.Postgres;
+using Cohesive.Execution;
 using Cohesive.MaterializationHarness.Model;
+using Cohesive.Model;
+using Cohesive.Storage;
+using Cohesive.Storage.Seeding;
 using Microsoft.Azure.Cosmos;
 using Npgsql;
 
@@ -23,11 +29,13 @@ static class Program
     {
         var mode = args switch
         {
-            [] => ExecutionMode.Seed,
+            [] => ExecutionMode.SeedCohesive,
+            ["--cohesive"] => ExecutionMode.SeedCohesive,
+            ["--direct"] => ExecutionMode.SeedDirect,
             ["--validate-only"] => ExecutionMode.Validate,
             ["--verify-only"] => ExecutionMode.Verify,
             _ => throw new ArgumentException(
-                "The seed projection accepts only --validate-only or --verify-only.",
+                "The seed projection accepts --cohesive, --direct, --validate-only, or --verify-only.",
                 nameof(args))
         };
         var options = SeedOptions.FromEnvironment(mode == ExecutionMode.Validate);
@@ -38,10 +46,20 @@ static class Program
             PrintSummary("Validated", state);
             return 0;
         }
-        if (mode == ExecutionMode.Seed)
+        if (mode == ExecutionMode.SeedDirect)
         {
-            await SeedPostgresAsync(options.PostgresConnectionString, state);
-            await SeedCosmosAsync(options.CosmosConnectionString, options.CosmosDatabase, state);
+            await SeedPostgresDirectAsync(options.PostgresConnectionString, state);
+            await SeedCosmosDirectAsync(options.CosmosConnectionString, options.CosmosDatabase, state);
+        }
+        else if (mode == ExecutionMode.SeedCohesive)
+        {
+            var semantics = FreightOrderMaterializationModel.Create();
+            await SeedPostgresWithRepositoriesAsync(options.PostgresConnectionString, state, semantics.Storage);
+            await SeedCosmosWithRepositoriesAsync(
+                options.CosmosConnectionString,
+                options.CosmosDatabase,
+                state,
+                semantics.Storage);
         }
         else
         {
@@ -49,7 +67,13 @@ static class Program
             await VerifyCosmosAsync(options.CosmosConnectionString, options.CosmosDatabase, state);
         }
         await VerifyElasticsearchAsync(options.ElasticsearchEndpoint);
-        PrintSummary(mode == ExecutionMode.Seed ? "Seeded" : "Verified", state);
+        var action = mode switch
+        {
+            ExecutionMode.SeedDirect => "Seeded directly",
+            ExecutionMode.SeedCohesive => "Seeded through Cohesive.Storage",
+            _ => "Verified"
+        };
+        PrintSummary(action, state);
         return 0;
     }
 
@@ -223,12 +247,82 @@ static class Program
             "Every Order must own at least one tenant-local stop sequence.");
     }
 
-    static async Task SeedPostgresAsync(string connectionString, ScenarioState state)
+    static async Task SeedPostgresDirectAsync(string connectionString, ScenarioState state)
     {
         await using var dataSource = NpgsqlDataSource.Create(connectionString);
         await using var connection = await dataSource.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
-        await using (var schema = new NpgsqlCommand($$"""
+        await ResetPostgresSchemaAsync(connection, transaction);
+
+        foreach (var value in state.Customers)
+        {
+            await ExecuteAsync(
+                connection,
+                transaction,
+                $"INSERT INTO {PostgresSchema}.customer_accounts VALUES (@tenant, @id, @name, @version);",
+                ("tenant", value.TenantId),
+                ("id", value.CustomerAccountId),
+                ("name", value.DisplayName),
+                ("version", 1L));
+        }
+        foreach (var value in state.Locations)
+        {
+            await ExecuteAsync(
+                connection,
+                transaction,
+                $"INSERT INTO {PostgresSchema}.locations VALUES (@tenant, @id, @name, @city, @region, @version);",
+                ("tenant", value.TenantId),
+                ("id", value.LocationId),
+                ("name", value.DisplayName),
+                ("city", value.City),
+                ("region", value.Region),
+                ("version", 1L));
+        }
+        foreach (var value in state.Orders)
+        {
+            var endpoints = SelectEndpoints(state, value);
+            await ExecuteAsync(
+                connection,
+                transaction,
+                $"INSERT INTO {PostgresSchema}.orders VALUES (@tenant, @id, @number, @customer, @equipment, @pickup, @delivery, @origin, @destination, @created, @version);",
+                ("tenant", value.TenantId),
+                ("id", value.OrderId),
+                ("number", value.OrderNumber),
+                ("customer", value.CustomerAccountId),
+                ("equipment", value.EquipmentClass),
+                ("pickup", endpoints.PickupStopId),
+                ("delivery", endpoints.DeliveryStopId),
+                ("origin", endpoints.OriginLocationId),
+                ("destination", endpoints.DestinationLocationId),
+                ("created", value.CreatedAt),
+                ("version", 1L));
+        }
+        foreach (var value in state.Stops)
+        {
+            await ExecuteAsync(
+                connection,
+                transaction,
+                $"INSERT INTO {PostgresSchema}.order_stops VALUES (@tenant, @id, @order, @sequence, @type, @location, @start, @end, @version);",
+                ("tenant", value.TenantId),
+                ("id", value.OrderStopId),
+                ("order", value.OrderId),
+                ("sequence", value.Sequence),
+                ("type", value.StopType),
+                ("location", value.LocationId),
+                ("start", value.ScheduledStart),
+                ("end", value.ScheduledEnd),
+                ("version", 1L));
+        }
+        await transaction.CommitAsync();
+
+        await VerifyPostgresAsync(connection, state);
+    }
+
+    static async Task ResetPostgresSchemaAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction)
+    {
+        await using var schema = new NpgsqlCommand($$"""
             DROP PUBLICATION IF EXISTS {{PostgresPublication}};
             DROP SCHEMA IF EXISTS {{PostgresSchema}} CASCADE;
             CREATE SCHEMA {{PostgresSchema}};
@@ -239,6 +333,7 @@ static class Program
                     CONSTRAINT ck_freight_harness_customer_id_ascii
                     CHECK (customer_account_id ~ '^[ -~]+$'),
                 display_name text NOT NULL,
+                observation_version bigint NOT NULL,
                 PRIMARY KEY (tenant_id, customer_account_id)
             );
             CREATE TABLE {{PostgresSchema}}.locations (
@@ -249,6 +344,7 @@ static class Program
                 display_name text NOT NULL,
                 city text NOT NULL,
                 region text NOT NULL,
+                observation_version bigint NOT NULL,
                 PRIMARY KEY (tenant_id, location_id)
             );
             CREATE TABLE {{PostgresSchema}}.orders (
@@ -264,6 +360,7 @@ static class Program
                 origin_location_id text COLLATE "C" NOT NULL,
                 destination_location_id text COLLATE "C" NOT NULL,
                 created_at timestamptz NOT NULL,
+                observation_version bigint NOT NULL,
                 PRIMARY KEY (tenant_id, order_id),
                 FOREIGN KEY (tenant_id, customer_account_id)
                     REFERENCES {{PostgresSchema}}.customer_accounts (tenant_id, customer_account_id)
@@ -279,6 +376,7 @@ static class Program
                 location_id text COLLATE "C" NOT NULL,
                 scheduled_start timestamptz NOT NULL,
                 scheduled_end timestamptz NOT NULL,
+                observation_version bigint NOT NULL,
                 PRIMARY KEY (tenant_id, order_stop_id),
                 UNIQUE (tenant_id, order_id, sequence),
                 FOREIGN KEY (tenant_id, order_id)
@@ -297,69 +395,116 @@ static class Program
                 {{PostgresSchema}}.locations,
                 {{PostgresSchema}}.orders,
                 {{PostgresSchema}}.order_stops;
-            """, connection, transaction))
+            """, connection, transaction);
+        await schema.ExecuteNonQueryAsync();
+    }
+
+    static async Task SeedPostgresWithRepositoriesAsync(
+        string connectionString,
+        ScenarioState state,
+        FreightOrderStorageDefinitions storage)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using (var connection = await dataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
         {
-            await schema.ExecuteNonQueryAsync();
+            await ResetPostgresSchemaAsync(connection, transaction);
+            await transaction.CommitAsync();
         }
 
-        foreach (var value in state.Customers)
-        {
-            await ExecuteAsync(
-                connection,
-                transaction,
-                $"INSERT INTO {PostgresSchema}.customer_accounts VALUES (@tenant, @id, @name);",
-                ("tenant", value.TenantId),
-                ("id", value.CustomerAccountId),
-                ("name", value.DisplayName));
-        }
-        foreach (var value in state.Locations)
-        {
-            await ExecuteAsync(
-                connection,
-                transaction,
-                $"INSERT INTO {PostgresSchema}.locations VALUES (@tenant, @id, @name, @city, @region);",
-                ("tenant", value.TenantId),
-                ("id", value.LocationId),
-                ("name", value.DisplayName),
-                ("city", value.City),
-                ("region", value.Region));
-        }
-        foreach (var value in state.Orders)
-        {
-            var endpoints = SelectEndpoints(state, value);
-            await ExecuteAsync(
-                connection,
-                transaction,
-                $"INSERT INTO {PostgresSchema}.orders VALUES (@tenant, @id, @number, @customer, @equipment, @pickup, @delivery, @origin, @destination, @created);",
-                ("tenant", value.TenantId),
-                ("id", value.OrderId),
-                ("number", value.OrderNumber),
-                ("customer", value.CustomerAccountId),
-                ("equipment", value.EquipmentClass),
-                ("pickup", endpoints.PickupStopId),
-                ("delivery", endpoints.DeliveryStopId),
-                ("origin", endpoints.OriginLocationId),
-                ("destination", endpoints.DestinationLocationId),
-                ("created", value.CreatedAt));
-        }
-        foreach (var value in state.Stops)
-        {
-            await ExecuteAsync(
-                connection,
-                transaction,
-                $"INSERT INTO {PostgresSchema}.order_stops VALUES (@tenant, @id, @order, @sequence, @type, @location, @start, @end);",
-                ("tenant", value.TenantId),
-                ("id", value.OrderStopId),
-                ("order", value.OrderId),
-                ("sequence", value.Sequence),
-                ("type", value.StopType),
-                ("location", value.LocationId),
-                ("start", value.ScheduledStart),
-                ("end", value.ScheduledEnd));
-        }
-        await transaction.CommitAsync();
+        var runtime = new PostgresNpgsqlRuntimeBinding(
+            new("cohesive/materialization-harness/postgres"),
+            dataSource,
+            "cohesive.materialization-harness.seed");
+        var customerRepository = new PostgresEntityRepository(
+            storage.CustomerAccount,
+            runtime,
+            Mapping(
+                "customer_accounts",
+                "id",
+                "customer_account_id",
+                ("tenantId", "tenant_id", PostgresRelationQueryScalarType.Text),
+                ("displayName", "display_name", PostgresRelationQueryScalarType.Text)));
+        var locationRepository = new PostgresEntityRepository(
+            storage.Location,
+            runtime,
+            Mapping(
+                "locations",
+                "id",
+                "location_id",
+                ("tenantId", "tenant_id", PostgresRelationQueryScalarType.Text),
+                ("displayName", "display_name", PostgresRelationQueryScalarType.Text),
+                ("city", "city", PostgresRelationQueryScalarType.Text),
+                ("region", "region", PostgresRelationQueryScalarType.Text)));
+        var orderRepository = new PostgresEntityRepository(
+            storage.Order,
+            runtime,
+            Mapping(
+                "orders",
+                "id",
+                "order_id",
+                ("tenantId", "tenant_id", PostgresRelationQueryScalarType.Text),
+                ("orderNumber", "order_number", PostgresRelationQueryScalarType.Text),
+                ("customerAccountId", "customer_account_id", PostgresRelationQueryScalarType.Text),
+                ("equipmentClass", "equipment_class", PostgresRelationQueryScalarType.Text),
+                ("pickupStopId", "pickup_stop_id", PostgresRelationQueryScalarType.Text),
+                ("deliveryStopId", "delivery_stop_id", PostgresRelationQueryScalarType.Text),
+                ("originLocationId", "origin_location_id", PostgresRelationQueryScalarType.Text),
+                ("destinationLocationId", "destination_location_id", PostgresRelationQueryScalarType.Text),
+                ("createdAt", "created_at", PostgresRelationQueryScalarType.TimestampWithTimeZone)));
+        var stopRepository = new PostgresEntityRepository(
+            storage.OrderStop,
+            runtime,
+            Mapping(
+                "order_stops",
+                "id",
+                "order_stop_id",
+                ("tenantId", "tenant_id", PostgresRelationQueryScalarType.Text),
+                ("orderId", "order_id", PostgresRelationQueryScalarType.Text),
+                ("sequence", "sequence", PostgresRelationQueryScalarType.Int32),
+                ("stopType", "stop_type", PostgresRelationQueryScalarType.Text),
+                ("locationId", "location_id", PostgresRelationQueryScalarType.Text),
+                ("scheduledStart", "scheduled_start", PostgresRelationQueryScalarType.TimestampWithTimeZone),
+                ("scheduledEnd", "scheduled_end", PostgresRelationQueryScalarType.TimestampWithTimeZone)));
 
-        await VerifyPostgresAsync(connection, state);
+        var seeder = new GenericRepositorySeedDataService(
+            [
+                GenericRepositorySeedBinding.For(storage.CustomerAccount, customerRepository),
+                GenericRepositorySeedBinding.For(storage.Location, locationRepository),
+                GenericRepositorySeedBinding.For(storage.Order, orderRepository),
+                GenericRepositorySeedBinding.For(storage.OrderStop, stopRepository)
+            ],
+            new());
+        var seedItems = CreateRepositorySeedItems(state);
+        var result = await seeder.Seed(
+            OperationContext.Create(),
+            seedItems,
+            new(Atomicity: EntityBatchAtomicity.AllOrNothing));
+        Require(result.WrittenCount == result.Items.Count, "PostgreSQL repository seeding did not write every item.");
+        var replay = await seeder.Seed(
+            OperationContext.Create(),
+            seedItems,
+            new(Atomicity: EntityBatchAtomicity.AllOrNothing));
+        Require(
+            replay.Items.All(static item => item.Status == RepositorySeedItemStatuses.Replaced),
+            "PostgreSQL repository replay did not exercise replacement semantics for every item.");
+        await VerifyPostgresAsync(connectionString, state);
+
+        static PostgresEntityRepositoryMapping Mapping(
+            string table,
+            string identityField,
+            string identityColumn,
+            params (string Field, string Column, PostgresRelationQueryScalarType Scalar)[] fields) => new(
+            new PostgresSqlQualifiedTable(PostgresSchema, table),
+            [
+                new(identityField, identityColumn, PostgresRelationQueryScalarType.Text),
+                .. fields.Select(static field => new PostgresEntityRepositoryFieldBinding(
+                    field.Field,
+                    field.Column,
+                    field.Scalar))
+            ],
+            identityField,
+            partitionField: "tenantId");
     }
 
     static async Task VerifyPostgresAsync(string connectionString, ScenarioState state)
@@ -381,17 +526,127 @@ static class Program
                 (SELECT count(*) FROM {{PostgresSchema}}.locations),
                 (SELECT count(*) FROM pg_publication WHERE pubname = '{{PostgresPublication}}');
             """, connection);
-        await using var reader = await verify.ExecuteReaderAsync();
-        Require(await reader.ReadAsync(), "PostgreSQL verification returned no row.");
-        Require(
-            reader.GetString(0).StartsWith("17.10", StringComparison.Ordinal),
-            "The PostgreSQL server version differs from the pinned harness image.");
-        Require(reader.GetString(1) == "logical", "PostgreSQL logical WAL is not enabled.");
-        Require(reader.GetInt64(2) == state.Orders.Length, "PostgreSQL Order count differs from the journal.");
-        Require(reader.GetInt64(3) == state.Customers.Length, "PostgreSQL CustomerAccount count differs from the journal.");
-        Require(reader.GetInt64(4) == state.Stops.Length, "PostgreSQL OrderStop count differs from the journal.");
-        Require(reader.GetInt64(5) == state.Locations.Length, "PostgreSQL Location count differs from the journal.");
-        Require(reader.GetInt64(6) == 1, "The PostgreSQL freight publication is missing.");
+        await using (var reader = await verify.ExecuteReaderAsync())
+        {
+            Require(await reader.ReadAsync(), "PostgreSQL verification returned no row.");
+            Require(
+                reader.GetString(0).StartsWith("17.10", StringComparison.Ordinal),
+                "The PostgreSQL server version differs from the pinned harness image.");
+            Require(reader.GetString(1) == "logical", "PostgreSQL logical WAL is not enabled.");
+            Require(reader.GetInt64(2) == state.Orders.Length, "PostgreSQL Order count differs from the journal.");
+            Require(reader.GetInt64(3) == state.Customers.Length, "PostgreSQL CustomerAccount count differs from the journal.");
+            Require(reader.GetInt64(4) == state.Stops.Length, "PostgreSQL OrderStop count differs from the journal.");
+            Require(reader.GetInt64(5) == state.Locations.Length, "PostgreSQL Location count differs from the journal.");
+            Require(reader.GetInt64(6) == 1, "The PostgreSQL freight publication is missing.");
+        }
+
+        await VerifyPostgresRowsAsync(connection, state);
+    }
+
+    static async Task VerifyPostgresRowsAsync(NpgsqlConnection connection, ScenarioState state)
+    {
+        await VerifyRowsAsync(
+            connection,
+            $"SELECT tenant_id, customer_account_id, display_name, observation_version FROM {PostgresSchema}.customer_accounts;",
+            state.Customers.Select(static value => Row(
+                value.TenantId,
+                value.CustomerAccountId,
+                value.DisplayName,
+                1L)),
+            static reader => Row(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3)),
+            "CustomerAccount");
+        await VerifyRowsAsync(
+            connection,
+            $"SELECT tenant_id, location_id, display_name, city, region, observation_version FROM {PostgresSchema}.locations;",
+            state.Locations.Select(static value => Row(
+                value.TenantId,
+                value.LocationId,
+                value.DisplayName,
+                value.City,
+                value.Region,
+                1L)),
+            static reader => Row(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetInt64(5)),
+            "Location");
+        await VerifyRowsAsync(
+            connection,
+            $"SELECT tenant_id, order_id, order_number, customer_account_id, equipment_class, pickup_stop_id, delivery_stop_id, origin_location_id, destination_location_id, created_at, observation_version FROM {PostgresSchema}.orders;",
+            state.Orders.Select(value =>
+            {
+                var endpoints = SelectEndpoints(state, value);
+                return Row(
+                    value.TenantId,
+                    value.OrderId,
+                    value.OrderNumber,
+                    value.CustomerAccountId,
+                    value.EquipmentClass,
+                    endpoints.PickupStopId,
+                    endpoints.DeliveryStopId,
+                    endpoints.OriginLocationId,
+                    endpoints.DestinationLocationId,
+                    value.CreatedAt.ToUniversalTime(),
+                    1L);
+            }),
+            static reader => Row(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.GetString(7),
+                reader.GetString(8),
+                new DateTimeOffset(reader.GetFieldValue<DateTime>(9)).ToUniversalTime(),
+                reader.GetInt64(10)),
+            "Order");
+        await VerifyRowsAsync(
+            connection,
+            $"SELECT tenant_id, order_stop_id, order_id, sequence, stop_type, location_id, scheduled_start, scheduled_end, observation_version FROM {PostgresSchema}.order_stops;",
+            state.Stops.Select(static value => Row(
+                value.TenantId,
+                value.OrderStopId,
+                value.OrderId,
+                value.Sequence,
+                value.StopType,
+                value.LocationId,
+                value.ScheduledStart.ToUniversalTime(),
+                value.ScheduledEnd.ToUniversalTime(),
+                1L)),
+            static reader => Row(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt32(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                new DateTimeOffset(reader.GetFieldValue<DateTime>(6)).ToUniversalTime(),
+                new DateTimeOffset(reader.GetFieldValue<DateTime>(7)).ToUniversalTime(),
+                reader.GetInt64(8)),
+            "OrderStop");
+
+        static string Row(params object[] values) => JsonSerializer.Serialize(values, JsonOptions);
+    }
+
+    static async Task VerifyRowsAsync(
+        NpgsqlConnection connection,
+        string sql,
+        IEnumerable<string> expectedRows,
+        Func<NpgsqlDataReader, string> project,
+        string entity)
+    {
+        var expected = expectedRows.ToHashSet(StringComparer.Ordinal);
+        HashSet<string> actual = new(StringComparer.Ordinal);
+        await using var command = new NpgsqlCommand(sql, connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            Require(actual.Add(project(reader)), $"PostgreSQL {entity} contains a duplicate canonical row.");
+        Require(actual.SetEquals(expected), $"PostgreSQL {entity} rows differ from the canonical journal projection.");
     }
 
     static async Task ExecuteAsync(
@@ -406,26 +661,19 @@ static class Program
         await command.ExecuteNonQueryAsync();
     }
 
-    static async Task SeedCosmosAsync(
+    static async Task SeedCosmosDirectAsync(
         string connectionString,
         string databaseId,
         ScenarioState state)
     {
         using var client = CreateCosmosClient(connectionString);
-        var prior = client.GetDatabase(databaseId);
-        try
-        {
-            await prior.DeleteAsync();
-        }
-        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
-        {
-        }
-
-        var database = (await client.CreateDatabaseAsync(databaseId)).Database;
-        var orders = (await database.CreateContainerAsync("orders", "/partitionKey")).Container;
-        var customers = (await database.CreateContainerAsync("customerAccounts", "/partitionKey")).Container;
-        var stops = (await database.CreateContainerAsync("orderStops", "/partitionKey")).Container;
-        var locations = (await database.CreateContainerAsync("locations", "/partitionKey")).Container;
+        var containers = await ResetCosmosAsync(client, databaseId);
+        var database = containers.Database;
+        var orders = containers.Orders;
+        var customers = containers.Customers;
+        var stops = containers.Stops;
+        var locations = containers.Locations;
+        var occurredAtUtc = DateTimeOffset.UtcNow;
         foreach (var value in state.Orders)
         {
             var endpoints = SelectEndpoints(state, value);
@@ -448,8 +696,10 @@ static class Program
                         pickupStopId = endpoints.PickupStopId,
                         deliveryStopId = endpoints.DeliveryStopId,
                         originLocationId = endpoints.OriginLocationId,
-                        destinationLocationId = endpoints.DestinationLocationId
-                    }
+                        destinationLocationId = endpoints.DestinationLocationId,
+                        createdAt = value.CreatedAt.ToString("O", CultureInfo.InvariantCulture)
+                    },
+                    occurredAtUtc
                 },
                 new(value.TenantId));
         }
@@ -469,7 +719,8 @@ static class Program
                         id = value.CustomerAccountId,
                         tenantId = value.TenantId,
                         displayName = value.DisplayName
-                    }
+                    },
+                    occurredAtUtc
                 },
                 new(value.TenantId));
         }
@@ -491,8 +742,11 @@ static class Program
                         orderId = value.OrderId,
                         sequence = value.Sequence,
                         stopType = value.StopType,
-                        locationId = value.LocationId
-                    }
+                        locationId = value.LocationId,
+                        scheduledStart = value.ScheduledStart.ToString("O", CultureInfo.InvariantCulture),
+                        scheduledEnd = value.ScheduledEnd.ToString("O", CultureInfo.InvariantCulture)
+                    },
+                    occurredAtUtc
                 },
                 new(value.TenantId));
         }
@@ -514,12 +768,157 @@ static class Program
                         displayName = value.DisplayName,
                         city = value.City,
                         region = value.Region
-                    }
+                    },
+                    occurredAtUtc
                 },
                 new(value.TenantId));
         }
 
         await VerifyCosmosAsync(database, state);
+    }
+
+    static async Task<CosmosSeedContainers> ResetCosmosAsync(CosmosClient client, string databaseId)
+    {
+        var prior = client.GetDatabase(databaseId);
+        try
+        {
+            await prior.DeleteAsync();
+        }
+        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+        {
+        }
+
+        var database = (await client.CreateDatabaseAsync(databaseId)).Database;
+        return new(
+            database,
+            (await database.CreateContainerAsync("orders", "/partitionKey")).Container,
+            (await database.CreateContainerAsync("customerAccounts", "/partitionKey")).Container,
+            (await database.CreateContainerAsync("orderStops", "/partitionKey")).Container,
+            (await database.CreateContainerAsync("locations", "/partitionKey")).Container);
+    }
+
+    static async Task SeedCosmosWithRepositoriesAsync(
+        string connectionString,
+        string databaseId,
+        ScenarioState state,
+        FreightOrderStorageDefinitions storage)
+    {
+        using var client = CreateCosmosClient(connectionString);
+        var containers = await ResetCosmosAsync(client, databaseId);
+        var partition = EntityPartitionKeyPolicy.FromField("tenantId");
+        var orderRepository = Repository(storage.Order, containers.Orders, "order");
+        var customerRepository = Repository(storage.CustomerAccount, containers.Customers, "customer");
+        var stopRepository = Repository(storage.OrderStop, containers.Stops, "stop");
+        var locationRepository = Repository(storage.Location, containers.Locations, "location");
+        var seeder = new GenericRepositorySeedDataService(
+            [
+                GenericRepositorySeedBinding.For(storage.CustomerAccount, customerRepository),
+                GenericRepositorySeedBinding.For(storage.Location, locationRepository),
+                GenericRepositorySeedBinding.For(storage.Order, orderRepository),
+                GenericRepositorySeedBinding.For(storage.OrderStop, stopRepository)
+            ],
+            new());
+        var seedItems = CreateRepositorySeedItems(state);
+        var result = await seeder.Seed(
+            OperationContext.Create(),
+            seedItems,
+            new(Atomicity: EntityBatchAtomicity.None));
+        Require(result.WrittenCount == result.Items.Count, "Cosmos repository seeding did not write every item.");
+        var replay = await seeder.Seed(
+            OperationContext.Create(),
+            seedItems,
+            new(Atomicity: EntityBatchAtomicity.None));
+        Require(
+            replay.Items.All(static item => item.Status == RepositorySeedItemStatuses.Replaced),
+            "Cosmos repository replay did not exercise replacement semantics for every item.");
+        await VerifyCosmosAsync(containers.Database, state);
+
+        CosmosEntityOutboxRepository Repository(
+            Cohesive.Transitions.Model.EntityDefinition definition,
+            Container container,
+            string itemPrefix) => new(
+            definition,
+            container,
+            itemIdSelector: observation => $"{itemPrefix}/{observation.Id}",
+            partitionKeyPolicy: partition);
+    }
+
+    static IReadOnlyList<RepositorySeedStateItem> CreateRepositorySeedItems(ScenarioState state)
+    {
+        List<RepositorySeedStateItem> items = new(
+            state.Customers.Length + state.Locations.Length + state.Orders.Length + state.Stops.Length);
+        foreach (var value in state.Customers)
+        {
+            items.Add(new(
+                Type: FreightOrderMaterializationModel.CustomerAccountShapeId.ShapeId.Value,
+                Id: value.CustomerAccountId,
+                State: new FreightCustomerAccount
+                {
+                    Id = value.CustomerAccountId,
+                    TenantId = value.TenantId,
+                    DisplayName = value.DisplayName
+                },
+                Version: 1,
+                PartitionKey: value.TenantId));
+        }
+        foreach (var value in state.Locations)
+        {
+            items.Add(new(
+                Type: FreightOrderMaterializationModel.LocationShapeId.ShapeId.Value,
+                Id: value.LocationId,
+                State: new FreightLocation
+                {
+                    Id = value.LocationId,
+                    TenantId = value.TenantId,
+                    DisplayName = value.DisplayName,
+                    City = value.City,
+                    Region = value.Region
+                },
+                Version: 1,
+                PartitionKey: value.TenantId));
+        }
+        foreach (var value in state.Orders)
+        {
+            var endpoints = SelectEndpoints(state, value);
+            items.Add(new(
+                Type: FreightOrderMaterializationModel.OrderShapeId.ShapeId.Value,
+                Id: value.OrderId,
+                State: new Cohesive.MaterializationHarness.Model.FreightOrder
+                {
+                    Id = value.OrderId,
+                    TenantId = value.TenantId,
+                    OrderNumber = value.OrderNumber,
+                    CustomerAccountId = value.CustomerAccountId,
+                    EquipmentClass = value.EquipmentClass,
+                    PickupStopId = endpoints.PickupStopId,
+                    DeliveryStopId = endpoints.DeliveryStopId,
+                    OriginLocationId = endpoints.OriginLocationId,
+                    DestinationLocationId = endpoints.DestinationLocationId,
+                    CreatedAt = value.CreatedAt
+                },
+                Version: 1,
+                PartitionKey: value.TenantId));
+        }
+        foreach (var value in state.Stops)
+        {
+            items.Add(new(
+                Type: FreightOrderMaterializationModel.OrderStopShapeId.ShapeId.Value,
+                Id: value.OrderStopId,
+                State: new FreightOrderStop
+                {
+                    Id = value.OrderStopId,
+                    TenantId = value.TenantId,
+                    OrderId = value.OrderId,
+                    Sequence = value.Sequence,
+                    StopType = value.StopType,
+                    LocationId = value.LocationId,
+                    ScheduledStart = value.ScheduledStart,
+                    ScheduledEnd = value.ScheduledEnd
+                },
+                Version: 1,
+                PartitionKey: value.TenantId));
+        }
+        return items;
     }
 
     static async Task VerifyCosmosAsync(
@@ -537,6 +936,88 @@ static class Program
         await VerifyContainerAsync(database, "customerAccounts", state.Customers.Length, "CustomerAccount");
         await VerifyContainerAsync(database, "orderStops", state.Stops.Length, "OrderStop");
         await VerifyContainerAsync(database, "locations", state.Locations.Length, "Location");
+        await VerifyCosmosDocumentsAsync(database, state);
+    }
+
+    static async Task VerifyCosmosDocumentsAsync(Database database, ScenarioState state)
+    {
+        var expected = CreateRepositorySeedItems(state)
+            .Select(item => ExpectedCosmosDocument.From(item))
+            .GroupBy(static item => item.Container, StringComparer.Ordinal)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.ToDictionary(
+                    static item => new EntityKey(item.PartitionKey, item.ObservationId)),
+                StringComparer.Ordinal);
+
+        foreach (var (containerName, expectedDocuments) in expected)
+        {
+            var container = database.GetContainer(containerName);
+            using var iterator = container.GetItemQueryIterator<JsonElement>(
+                new QueryDefinition("SELECT * FROM c"),
+                requestOptions: new QueryRequestOptions { MaxItemCount = 32 });
+            HashSet<EntityKey> observed = [];
+            while (iterator.HasMoreResults)
+            {
+                foreach (var document in await iterator.ReadNextAsync())
+                {
+                    var partitionKey = document.GetProperty("partitionKey").GetString()
+                        ?? throw new InvalidOperationException("Cosmos entity envelope has no partition key.");
+                    var observationId = document.GetProperty("observationId").GetString()
+                        ?? throw new InvalidOperationException("Cosmos entity envelope has no observation id.");
+                    var key = new EntityKey(partitionKey, observationId);
+                    Require(observed.Add(key), $"Cosmos container '{containerName}' repeats observation '{key}'.");
+                    if (!expectedDocuments.TryGetValue(key, out var expectedDocument))
+                    {
+                        throw new InvalidOperationException(
+                            $"Cosmos container '{containerName}' contains unexpected observation '{key}'.");
+                    }
+                    Require(
+                        document.GetProperty("id").GetString() == expectedDocument.ItemId,
+                        $"Cosmos observation '{key}' has a non-canonical item id.");
+                    Require(
+                        document.GetProperty("documentKind").GetString() == CosmosRelationQuerySourceReader.DefaultEntityDocumentKind,
+                        $"Cosmos observation '{key}' has a non-entity discriminator.");
+                    Require(
+                        document.GetProperty("observationType").GetString() == expectedDocument.ObservationType,
+                        $"Cosmos observation '{key}' has a different semantic type.");
+                    Require(
+                        document.GetProperty("observationVersion").GetInt64() == 1,
+                        $"Cosmos observation '{key}' has a different semantic version.");
+                    Require(
+                        document.TryGetProperty("occurredAtUtc", out var occurred)
+                        && occurred.TryGetDateTimeOffset(out _),
+                        $"Cosmos observation '{key}' has no valid persistence instant.");
+                    var actualState = document.GetProperty("observation");
+                    if (!JsonElement.DeepEquals(actualState, expectedDocument.State))
+                    {
+                        throw new InvalidOperationException(
+                            $"Cosmos observation '{key}' differs from the canonical journal projection. "
+                            + $"Expected {expectedDocument.State.GetRawText()}; actual {actualState.GetRawText()}.");
+                    }
+                    foreach (var optional in new[]
+                    {
+                        "streamName",
+                        "subjectType",
+                        "subjectId",
+                        "subjectVersion",
+                        "correlationId",
+                        "traceId",
+                        "spanId",
+                        "envelope",
+                        "envelopeFingerprint"
+                    })
+                    {
+                        Require(
+                            !document.TryGetProperty(optional, out _),
+                            $"Cosmos entity observation '{key}' unexpectedly contains outbox field '{optional}'.");
+                    }
+                }
+            }
+            Require(
+                observed.SetEquals(expectedDocuments.Keys),
+                $"Cosmos container '{containerName}' differs from the canonical journal projection.");
+        }
     }
 
     static CosmosClient CreateCosmosClient(string connectionString) => new(
@@ -545,7 +1026,8 @@ static class Program
         {
             ConnectionMode = ConnectionMode.Gateway,
             HttpClientFactory = CreateCosmosHttpClient,
-            LimitToEndpoint = true
+            LimitToEndpoint = true,
+            Serializer = new CosmosSystemTextJsonSerializer()
         });
 
     static HttpClient CreateCosmosHttpClient()
@@ -671,7 +1153,8 @@ static class Program
 
     enum ExecutionMode
     {
-        Seed,
+        SeedCohesive,
+        SeedDirect,
         Validate,
         Verify
     }
@@ -729,6 +1212,44 @@ static class Program
         string DeliveryStopId,
         string OriginLocationId,
         string DestinationLocationId);
+
+    sealed record CosmosSeedContainers(
+        Database Database,
+        Container Orders,
+        Container Customers,
+        Container Stops,
+        Container Locations);
+
+    sealed record ExpectedCosmosDocument(
+        string Container,
+        string ItemId,
+        string PartitionKey,
+        string ObservationType,
+        string ObservationId,
+        JsonElement State)
+    {
+        public static ExpectedCosmosDocument From(RepositorySeedStateItem item)
+        {
+            var (container, prefix) = item.Type switch
+            {
+                "order" => ("orders", "order"),
+                "customer-account" => ("customerAccounts", "customer"),
+                "order-stop" => ("orderStops", "stop"),
+                "location" => ("locations", "location"),
+                _ => throw new InvalidOperationException($"Unsupported Cosmos seed type '{item.Type}'.")
+            };
+            var state = ObservationValue.FromObject(item.State);
+            return new(
+                container,
+                $"{prefix}/{item.Id}",
+                item.PartitionKey ?? throw new InvalidOperationException("Cosmos seed item has no partition key."),
+                item.Type,
+                item.Id,
+                JsonSerializer.SerializeToElement(
+                    state.Fields ?? throw new InvalidOperationException("Cosmos seed state is not an object."),
+                    CosmosSystemTextJsonSerializer.CreateDefaultOptions()));
+        }
+    }
 
     sealed record ScenarioState(
         string ScenarioId,

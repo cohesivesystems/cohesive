@@ -18,7 +18,7 @@ public sealed class FreightOrderHarnessModelTests
 
         Assert.Equal(first.DefinitionFingerprint, second.DefinitionFingerprint);
         Assert.Equal(
-            "956e59762ba24a3dc459baafa8849681a415a7f3580d79a58cacfabe39fbb3ab",
+            "8b2162bdcec768183420694d056c703ed814c972e5560a9a70f7bfbe37339805",
             first.DefinitionFingerprint.Value);
         Assert.Equal(MaterializationSynchronizationMode.Rebuild, first.Definition.UpdatePolicy.SupportedModes);
         Assert.Equal(MaterializationConsistencyKind.Reconciliation, first.Definition.UpdatePolicy.Consistency);
@@ -32,6 +32,17 @@ public sealed class FreightOrderHarnessModelTests
                 capability => capability.Capability == MaterializationCapabilityKind.SourceContinuation));
         Assert.Equal(FreightOrderMaterializationModel.OrderShapeId, first.Root.Shape);
         Assert.Equal(FreightOrderMaterializationModel.OrderSearchDocumentShapeId, first.Output.Shape);
+        Assert.All(
+            new[]
+            {
+                first.Storage.Order,
+                first.Storage.CustomerAccount,
+                first.Storage.OrderStop,
+                first.Storage.Location
+            },
+            static entity => Assert.True(entity.Shape.HasRole(Cohesive.Model.ShapeRoles.Entity)));
+        Assert.Contains(first.Storage.Order.Fields, static field => field.Name.Value == "createdAt");
+        Assert.Contains(first.Storage.OrderStop.Fields, static field => field.Name.Value == "scheduledStart");
         Assert.Equal(
             RelationQueryCompiledPlanReferenceFingerprinter.Compute(
                 RelationQueryCompiledPlanReference.From(first.Plan)),

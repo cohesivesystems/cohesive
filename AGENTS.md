@@ -140,6 +140,7 @@ Cohesive has many semantic layers, compilation phases, and target interpreters, 
 When adding or changing a type, helper, compiler, or adapter:
 
 - Search the repository, especially sibling target implementations and the core/prelude, for the same concept or algorithm before introducing a parallel implementation.
+- In an official adapter, treat its shared construction, compilation, naming, escaping, parameterization, execution, capability, and diagnostic layers as the default infrastructure authority rather than optional helpers. Before emitting target commands or artifacts directly, reuse or minimally extend the existing adapter mechanism. A feature-local emitter is appropriate only when target semantics materially differ or the shared gap is explicitly temporary; document the divergence and track consolidation.
 - Identify the semantic authority for the concept. If multiple enums, records, constants, or switch tables describe the same closed set and are expected to evolve together, default to one canonical type or catalog and project from it.
 - Treat exhaustive one-to-one conversions between types with identical cases as evidence of a duplicated model. Keep separate types only when they enforce a real distinction such as different valid states, units, ownership, lifecycle, versioning, serialization contracts, or capability guarantees.
 - Do not duplicate a type merely because it might diverge later. Share the present semantic model and split it when a concrete differing invariant appears. When an external or persisted boundary requires a distinct type, prefer a thin attributed wrapper or explicit projection over a second independently maintained case list.
@@ -196,7 +197,9 @@ That is where integration with external storage, runtimes, ML systems, transport
 - Use modern C# features (collection literals/expressions, immutable collections, records, nullables, extension members/methods, switch expressions, lambda syntax, etc.).
 - Favor collection expressions over explicit collection constructions (e.g., `[..items]` vs `items.ToArray()`)
 - Favor read-only collection abstractions (minimal required interfaces).
-- Explicitly name method parameters for primitive types or when ambiguous.
+- Favor named arguments at call sites when they make code understandable in a plain-text review without IDE parameter hints. Be especially generous for literals and primitive values, adjacent arguments of the same type, non-obvious units or policy choices, and constructors or factories with several scalar arguments.
+- Positional arguments remain appropriate when the method name and argument expressions make the meaning immediately clear, particularly for short conventional calls. Do not add names that merely repeat self-evident expressions or make a compact call materially harder to scan.
+- Treat recurring dependence on named arguments as possible API-design evidence: where callers repeatedly need names to distinguish several loosely related scalar values, consider a semantic value object, options type, or more intention-revealing operation instead of relying on argument labels alone.
 - Avoid magic strings, magic numbers. Project everything from a single source of truth.
 - Type local factory/sample values against generated contracts or narrow explicit interfaces instead of relying on anonymous inferred object shapes.
 - Avoid external dependencies unless discussed and approved.
