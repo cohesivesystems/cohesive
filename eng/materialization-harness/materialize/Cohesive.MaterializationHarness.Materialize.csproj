@@ -11,6 +11,7 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <ProjectReference Include="../model/Cohesive.MaterializationHarness.Model.csproj" />
     <ProjectReference Include="../../../src/adapters/Cohesive.Adapters.Cosmos/Cohesive.Adapters.Cosmos.csproj" />
+    <ProjectReference Include="../../../src/adapters/Cohesive.Adapters.Elastic/Cohesive.Adapters.Elastic.csproj" />
     <ProjectReference Include="../../../src/adapters/Cohesive.Adapters.Postgres/Cohesive.Adapters.Postgres.csproj" />
   </ItemGroup>
 </Project>

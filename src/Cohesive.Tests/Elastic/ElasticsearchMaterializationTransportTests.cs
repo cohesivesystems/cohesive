@@ -346,7 +346,7 @@ public sealed class ElasticsearchMaterializationTransportTests
         Assert.Equal(global::Elastic.Transport.HttpMethod.POST, call.HttpMethod);
         Assert.Equal("/generation-a/_mget", call.Uri?.AbsolutePath);
         Assert.Equal(
-            "{\"_source\":[\"_cohesive\"],\"ids\":[\"item-a\"]}",
+            "{\"docs\":[{\"_id\":\"item-a\",\"_source\":[\"_cohesive\"]}]}",
             Encoding.UTF8.GetString(call.RequestBodyInBytes!));
     }
 

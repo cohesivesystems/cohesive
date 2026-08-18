@@ -2,6 +2,8 @@ using System.Collections.Immutable;
 using System.Net;
 using System.Net.Security;
 using System.Text.Json;
+using Cohesive.Adapters.Cosmos;
+using Cohesive.MaterializationHarness.Model;
 using Microsoft.Azure.Cosmos;
 using Npgsql;
 
@@ -210,7 +212,9 @@ static class Program
             Require(
                 group.Select(static stop => stop.Sequence).Distinct().Count() == group.Count(),
                 $"Order '{group.Key}' repeats a stop sequence.");
-            Require(group.Any(static stop => stop.StopType == "Pickup"), $"Order '{group.Key}' has no pickup.");
+            Require(
+                group.Count(static stop => stop.StopType == "Pickup") == 1,
+                $"Order '{group.Key}' must have exactly one unambiguous pickup endpoint.");
             Require(group.Any(static stop => stop.StopType == "Drop"), $"Order '{group.Key}' has no drop.");
         }
         Require(
@@ -231,13 +235,17 @@ static class Program
 
             CREATE TABLE {{PostgresSchema}}.customer_accounts (
                 tenant_id text COLLATE "C" NOT NULL,
-                customer_account_id text COLLATE "C" NOT NULL,
+                customer_account_id text COLLATE "C" NOT NULL
+                    CONSTRAINT ck_freight_harness_customer_id_ascii
+                    CHECK (customer_account_id ~ '^[ -~]+$'),
                 display_name text NOT NULL,
                 PRIMARY KEY (tenant_id, customer_account_id)
             );
             CREATE TABLE {{PostgresSchema}}.locations (
                 tenant_id text COLLATE "C" NOT NULL,
-                location_id text COLLATE "C" NOT NULL,
+                location_id text COLLATE "C" NOT NULL
+                    CONSTRAINT ck_freight_harness_location_id_ascii
+                    CHECK (location_id ~ '^[ -~]+$'),
                 display_name text NOT NULL,
                 city text NOT NULL,
                 region text NOT NULL,
@@ -245,10 +253,16 @@ static class Program
             );
             CREATE TABLE {{PostgresSchema}}.orders (
                 tenant_id text COLLATE "C" NOT NULL,
-                order_id text COLLATE "C" NOT NULL,
+                order_id text COLLATE "C" NOT NULL
+                    CONSTRAINT ck_freight_harness_order_id_ascii
+                    CHECK (order_id ~ '^[ -~]+$'),
                 order_number text COLLATE "C" NOT NULL,
                 customer_account_id text COLLATE "C" NOT NULL,
                 equipment_class text NOT NULL,
+                pickup_stop_id text COLLATE "C" NOT NULL,
+                delivery_stop_id text COLLATE "C" NOT NULL,
+                origin_location_id text COLLATE "C" NOT NULL,
+                destination_location_id text COLLATE "C" NOT NULL,
                 created_at timestamptz NOT NULL,
                 PRIMARY KEY (tenant_id, order_id),
                 FOREIGN KEY (tenant_id, customer_account_id)
@@ -256,7 +270,9 @@ static class Program
             );
             CREATE TABLE {{PostgresSchema}}.order_stops (
                 tenant_id text COLLATE "C" NOT NULL,
-                order_stop_id text COLLATE "C" NOT NULL,
+                order_stop_id text COLLATE "C" NOT NULL
+                    CONSTRAINT ck_freight_harness_stop_id_ascii
+                    CHECK (order_stop_id ~ '^[ -~]+$'),
                 order_id text COLLATE "C" NOT NULL,
                 sequence integer NOT NULL CHECK (sequence > 0),
                 stop_type text NOT NULL CHECK (stop_type IN ('Pickup', 'Drop')),
@@ -310,15 +326,20 @@ static class Program
         }
         foreach (var value in state.Orders)
         {
+            var endpoints = SelectEndpoints(state, value);
             await ExecuteAsync(
                 connection,
                 transaction,
-                $"INSERT INTO {PostgresSchema}.orders VALUES (@tenant, @id, @number, @customer, @equipment, @created);",
+                $"INSERT INTO {PostgresSchema}.orders VALUES (@tenant, @id, @number, @customer, @equipment, @pickup, @delivery, @origin, @destination, @created);",
                 ("tenant", value.TenantId),
                 ("id", value.OrderId),
                 ("number", value.OrderNumber),
                 ("customer", value.CustomerAccountId),
                 ("equipment", value.EquipmentClass),
+                ("pickup", endpoints.PickupStopId),
+                ("delivery", endpoints.DeliveryStopId),
+                ("origin", endpoints.OriginLocationId),
+                ("destination", endpoints.DestinationLocationId),
                 ("created", value.CreatedAt));
         }
         foreach (var value in state.Stops)
@@ -401,22 +422,34 @@ static class Program
         }
 
         var database = (await client.CreateDatabaseAsync(databaseId)).Database;
-        var orders = (await database.CreateContainerAsync("orders", "/tenantId")).Container;
-        var customers = (await database.CreateContainerAsync("customerAccounts", "/tenantId")).Container;
-        var stops = (await database.CreateContainerAsync("orderStops", "/tenantId")).Container;
-        var locations = (await database.CreateContainerAsync("locations", "/tenantId")).Container;
+        var orders = (await database.CreateContainerAsync("orders", "/partitionKey")).Container;
+        var customers = (await database.CreateContainerAsync("customerAccounts", "/partitionKey")).Container;
+        var stops = (await database.CreateContainerAsync("orderStops", "/partitionKey")).Container;
+        var locations = (await database.CreateContainerAsync("locations", "/partitionKey")).Container;
         foreach (var value in state.Orders)
         {
+            var endpoints = SelectEndpoints(state, value);
             await orders.UpsertItemAsync(
                 new
                 {
-                    id = value.OrderId,
-                    tenantId = value.TenantId,
-                    orderId = value.OrderId,
-                    orderNumber = value.OrderNumber,
-                    customerAccountId = value.CustomerAccountId,
-                    equipmentClass = value.EquipmentClass,
-                    createdAt = value.CreatedAt
+                    id = $"order/{value.OrderId}",
+                    partitionKey = value.TenantId,
+                    documentKind = CosmosRelationQuerySourceReader.DefaultEntityDocumentKind,
+                    observationType = FreightOrderMaterializationModel.OrderShapeId.ShapeId.Value,
+                    observationId = value.OrderId,
+                    observationVersion = 1,
+                    observation = new
+                    {
+                        id = value.OrderId,
+                        tenantId = value.TenantId,
+                        orderNumber = value.OrderNumber,
+                        customerAccountId = value.CustomerAccountId,
+                        equipmentClass = value.EquipmentClass,
+                        pickupStopId = endpoints.PickupStopId,
+                        deliveryStopId = endpoints.DeliveryStopId,
+                        originLocationId = endpoints.OriginLocationId,
+                        destinationLocationId = endpoints.DestinationLocationId
+                    }
                 },
                 new(value.TenantId));
         }
@@ -425,10 +458,18 @@ static class Program
             await customers.UpsertItemAsync(
                 new
                 {
-                    id = value.CustomerAccountId,
-                    tenantId = value.TenantId,
-                    customerAccountId = value.CustomerAccountId,
-                    displayName = value.DisplayName
+                    id = $"customer/{value.CustomerAccountId}",
+                    partitionKey = value.TenantId,
+                    documentKind = CosmosRelationQuerySourceReader.DefaultEntityDocumentKind,
+                    observationType = FreightOrderMaterializationModel.CustomerAccountShapeId.ShapeId.Value,
+                    observationId = value.CustomerAccountId,
+                    observationVersion = 1,
+                    observation = new
+                    {
+                        id = value.CustomerAccountId,
+                        tenantId = value.TenantId,
+                        displayName = value.DisplayName
+                    }
                 },
                 new(value.TenantId));
         }
@@ -437,15 +478,21 @@ static class Program
             await stops.UpsertItemAsync(
                 new
                 {
-                    id = value.OrderStopId,
-                    tenantId = value.TenantId,
-                    orderStopId = value.OrderStopId,
-                    orderId = value.OrderId,
-                    sequence = value.Sequence,
-                    stopType = value.StopType,
-                    locationId = value.LocationId,
-                    scheduledStart = value.ScheduledStart,
-                    scheduledEnd = value.ScheduledEnd
+                    id = $"stop/{value.OrderStopId}",
+                    partitionKey = value.TenantId,
+                    documentKind = CosmosRelationQuerySourceReader.DefaultEntityDocumentKind,
+                    observationType = FreightOrderMaterializationModel.OrderStopShapeId.ShapeId.Value,
+                    observationId = value.OrderStopId,
+                    observationVersion = 1,
+                    observation = new
+                    {
+                        id = value.OrderStopId,
+                        tenantId = value.TenantId,
+                        orderId = value.OrderId,
+                        sequence = value.Sequence,
+                        stopType = value.StopType,
+                        locationId = value.LocationId
+                    }
                 },
                 new(value.TenantId));
         }
@@ -454,12 +501,20 @@ static class Program
             await locations.UpsertItemAsync(
                 new
                 {
-                    id = value.LocationId,
-                    tenantId = value.TenantId,
-                    locationId = value.LocationId,
-                    displayName = value.DisplayName,
-                    city = value.City,
-                    region = value.Region
+                    id = $"location/{value.LocationId}",
+                    partitionKey = value.TenantId,
+                    documentKind = CosmosRelationQuerySourceReader.DefaultEntityDocumentKind,
+                    observationType = FreightOrderMaterializationModel.LocationShapeId.ShapeId.Value,
+                    observationId = value.LocationId,
+                    observationVersion = 1,
+                    observation = new
+                    {
+                        id = value.LocationId,
+                        tenantId = value.TenantId,
+                        displayName = value.DisplayName,
+                        city = value.City,
+                        region = value.Region
+                    }
                 },
                 new(value.TenantId));
         }
@@ -524,8 +579,8 @@ static class Program
         var container = database.GetContainer(containerId);
         var properties = (await container.ReadContainerAsync()).Resource;
         Require(
-            string.Equals(properties.PartitionKeyPath, "/tenantId", StringComparison.Ordinal),
-            $"Cosmos {entity} partition path is not /tenantId.");
+            string.Equals(properties.PartitionKeyPath, "/partitionKey", StringComparison.Ordinal),
+            $"Cosmos {entity} partition path is not /partitionKey.");
         Require(
             await CountAsync(container) == expectedCount,
             $"Cosmos {entity} count differs from the journal.");
@@ -558,6 +613,27 @@ static class Program
     {
         if (string.IsNullOrWhiteSpace(value))
             throw new InvalidOperationException($"{name} cannot be empty.");
+    }
+
+    static OrderEndpoints SelectEndpoints(ScenarioState state, FreightOrder order)
+    {
+        var ordered = state.Stops
+            .Where(stop => stop.TenantId == order.TenantId && stop.OrderId == order.OrderId)
+            .OrderBy(static stop => stop.Sequence)
+            .ToArray();
+        var pickups = ordered.Where(static stop => stop.StopType == "Pickup").ToArray();
+        var drops = ordered.Where(static stop => stop.StopType == "Drop").ToArray();
+        Require(
+            pickups.Length == 1,
+            $"Order '{order.TenantId}/{order.OrderId}' has {pickups.Length} pickup endpoints; exactly one is required.");
+        Require(
+            drops.Length > 0,
+            $"Order '{order.TenantId}/{order.OrderId}' has no delivery endpoint.");
+        return new(
+            pickups[0].OrderStopId,
+            drops[^1].OrderStopId,
+            pickups[0].LocationId,
+            drops[^1].LocationId);
     }
 
     sealed record SeedOptions(
@@ -647,6 +723,12 @@ static class Program
     {
         public override string ToString() => $"{TenantId}/{Id}";
     }
+
+    readonly record struct OrderEndpoints(
+        string PickupStopId,
+        string DeliveryStopId,
+        string OriginLocationId,
+        string DestinationLocationId);
 
     sealed record ScenarioState(
         string ScenarioId,

@@ -74,13 +74,34 @@ verify() {
     --verify-only
 }
 
+materialize() {
+  configure_runtime
+  dotnet run \
+    --project "$script_dir/materialize/Cohesive.MaterializationHarness.Materialize.csproj" \
+    --configuration Release
+}
+
+verify_index() {
+  configure_runtime
+  curl --fail --silent --show-error \
+    "${COHESIVE_MATERIALIZATION_ELASTIC_ENDPOINT}/_cat/aliases/freight-order-search-*?v"
+  printf '\nPostgres alias count:\n'
+  curl --fail --silent --show-error \
+    "${COHESIVE_MATERIALIZATION_ELASTIC_ENDPOINT}/freight-order-search-postgres/_count?pretty"
+  printf '\nCosmos alias count:\n'
+  curl --fail --silent --show-error \
+    "${COHESIVE_MATERIALIZATION_ELASTIC_ENDPOINT}/freight-order-search-cosmos/_count?pretty"
+  printf '\n'
+}
+
 test_harness() {
   up
   seed
+  materialize
   configure_runtime
   dotnet test "$repo_root/src/Cohesive.Tests/Cohesive.Tests.csproj" \
     --configuration Release \
-    --filter "FullyQualifiedName~FreightOrderMaterializationRelationTests|FullyQualifiedName~TenantScopedMaterializationPagesBindExactPredicateAndRejectCrossTenantContinuation|FullyQualifiedName~PartitionedReaderRequiresMatchingRuntimeAndPhysicalScopes|FullyQualifiedName~LocalPostgres_TenantScopedMaterializationPagesStayWithinTheExactPartition" \
+    --filter "FullyQualifiedName~FreightOrderHarnessModelTests|FullyQualifiedName~FreightOrderMaterializationRelationTests|FullyQualifiedName~TenantScopedMaterializationPagesBindExactPredicateAndRejectCrossTenantContinuation|FullyQualifiedName~PartitionedReaderRequiresMatchingRuntimeAndPhysicalScopes|FullyQualifiedName~LocalPostgres_TenantScopedMaterializationPagesStayWithinTheExactPartition" \
     --logger "console;verbosity=minimal"
 }
 
@@ -93,7 +114,9 @@ Commands:
   seed     Replace the harness source databases from the canonical scenario journal.
   validate Validate the canonical scenario journal without starting Docker.
   verify   Verify that both source databases still equal the journal; do not mutate them.
-  test     Start, seed, and run the ARI-401 focused verification suite.
+  materialize Build and atomically promote equivalent Postgres and Cosmos Elasticsearch generations.
+  verify-index Show active generation aliases and document counts without mutating Elasticsearch.
+  test     Start, seed, materialize, and run the focused verification suite.
   status   Show service and health state.
   logs     Follow service logs.
   down     Stop services while preserving volumes and checkpoints.
@@ -117,6 +140,14 @@ case "$command" in
   verify)
     up
     verify
+    ;;
+  materialize)
+    up
+    materialize
+    ;;
+  verify-index)
+    up
+    verify_index
     ;;
   test)
     test_harness
@@ -143,6 +174,8 @@ case "$command" in
     printf 'cosmos-health=http://localhost:%s/ready\n' "$COHESIVE_HARNESS_COSMOS_HEALTH_PORT"
     printf 'cosmos-explorer=http://localhost:%s/\n' "$COHESIVE_HARNESS_COSMOS_EXPLORER_PORT"
     printf 'elasticsearch=http://localhost:%s\n' "$COHESIVE_HARNESS_ELASTIC_PORT"
+    printf 'elastic-postgres-alias=freight-order-search-postgres\n'
+    printf 'elastic-cosmos-alias=freight-order-search-cosmos\n'
     printf 'kibana=http://localhost:%s/\n' "$COHESIVE_HARNESS_KIBANA_PORT"
     printf 'pgadmin=http://localhost:%s/\n' "$COHESIVE_HARNESS_PGADMIN_PORT"
     printf 'pgadmin-email=%s\n' "$COHESIVE_HARNESS_PGADMIN_EMAIL"
