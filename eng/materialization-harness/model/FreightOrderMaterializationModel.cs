@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Linq.Expressions;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
@@ -123,11 +122,27 @@ public static class FreightOrderMaterializationModel
         var root = plan.InputContract.Sources.Single(static source =>
             source.Role == RelationQuerySourceInputRole.RelationRoot);
         var output = plan.RequirementGraph.Outputs.Single(static candidate => candidate.Field is null);
-        var definition = CreateDefinition(
-            plan,
-            MaterializationRelationReference.From(compilationRequest, output.Id));
-        var validation = MaterializationDefinitionValidator.Validate(definition);
-        Require(validation.IsValid, validation.Diagnostics.Select(static diagnostic => diagnostic.Message));
+        var materialization = Materialization.Define(
+                new("freight/order-search"),
+                compilationRequest,
+                output.Id)
+            .WithUpdatePolicy(new(
+                MaterializationSynchronizationMode.Rebuild,
+                MaterializationConsistencyKind.Reconciliation,
+                MaterializationIdempotencyKind.StableOutputIdentityAndVersion))
+            .WithBoundedRelationRebuildSources(MaximumReadItems, MaximumReadBytes)
+            .WithGenerationalIndexTarget(MaximumWriteItems, MaximumWriteBytes)
+            .WithFailurePolicy(new(3, MaterializationFailureDisposition.Stop))
+            .WithFreshnessPolicy(new(maximumLagMilliseconds: 30_000))
+            .WithProvenance(new(
+                new("cohesive-materialization-harness", "1"),
+                new("eng/materialization-harness/model/freight-order-search"),
+                DocumentOrigin.Generated))
+            .Build();
+        Require(
+            materialization.Validation.IsValid,
+            materialization.Validation.Diagnostics.Select(static diagnostic => diagnostic.Message));
+        var definition = materialization.Definition;
 
         return new(
             compilationRequest,
@@ -138,113 +153,6 @@ public static class FreightOrderMaterializationModel
             definition,
             MaterializationDefinitionFingerprinter.Compute(definition));
     }
-
-    static MaterializationDefinition CreateDefinition(
-        CompiledRelationQueryPlan plan,
-        MaterializationRelationReference relation)
-    {
-        ImmutableArray<MaterializationSourceRequirement> sources =
-        [
-            .. plan.InputContract.Sources.Select(source => SourceRequirement(
-                source.Input.Id,
-                MaterializationCapabilityKind.SourceBoundedEnumeration)),
-            .. plan.InputContract.Traversals.Select(traversal => SourceRequirement(
-                traversal.Input.Id,
-                traversal.Input.Direction == RelationshipTraversalDirection.Forward
-                    ? MaterializationCapabilityKind.SourceBatchedPointRead
-                    : MaterializationCapabilityKind.SourceParameterizedPredicateQuery))
-        ];
-        ImmutableArray<MaterializationCapabilityRequirement> target =
-        [
-            TargetRequirement("target/isolation", MaterializationCapabilityKind.TargetGenerationIsolation),
-            TargetRequirement("target/upsert", MaterializationCapabilityKind.TargetBulkUpsert),
-            TargetRequirement("target/outcomes", MaterializationCapabilityKind.TargetPerItemOutcomes),
-            TargetRequirement("target/seal", MaterializationCapabilityKind.TargetSeal),
-            TargetRequirement("target/validation", MaterializationCapabilityKind.TargetValidation),
-            TargetRequirement("target/promotion", MaterializationCapabilityKind.TargetFencedPromotion),
-            TargetRequirement("target/abandonment", MaterializationCapabilityKind.TargetGenerationAbandonment),
-            TargetRequirement("target/retirement", MaterializationCapabilityKind.TargetRetirement),
-            TargetRequirement("target/cleanup", MaterializationCapabilityKind.TargetCleanup)
-        ];
-        return new(
-            id: new("freight/order-search"),
-            relation,
-            sources,
-            target,
-            updatePolicy: new(
-                MaterializationSynchronizationMode.Rebuild,
-                MaterializationConsistencyKind.Reconciliation,
-                MaterializationIdempotencyKind.StableOutputIdentityAndVersion),
-            failurePolicy: new(3, MaterializationFailureDisposition.Stop),
-            freshnessPolicy: new(maximumLagMilliseconds: 30_000),
-            controlLoops: [],
-            provenance: new(
-                new("cohesive-materialization-harness", "1"),
-                new("eng/materialization-harness/model/freight-order-search"),
-                DocumentOrigin.Generated));
-    }
-
-    static MaterializationSourceRequirement SourceRequirement(
-        RelationQueryInputId input,
-        MaterializationCapabilityKind read) => new(
-        input,
-        [
-            new(
-                new($"{input.Value}/read"),
-                read,
-                [
-                    MaterializationGuaranteeKind.StableOrdering,
-                    MaterializationGuaranteeKind.RequestLocalCompleteness,
-                    MaterializationGuaranteeKind.Reconciliation
-                ],
-                [
-                    new(MaterializationLimitKind.ReadItems, MaximumReadItems),
-                    new(MaterializationLimitKind.ReadBytes, MaximumReadBytes)
-                ],
-                MaterializationSynchronizationMode.Rebuild),
-            new(
-                new($"{input.Value}/continuation"),
-                MaterializationCapabilityKind.SourceContinuation,
-                [
-                    MaterializationGuaranteeKind.StableOrdering,
-                    MaterializationGuaranteeKind.Reconciliation
-                ],
-                [],
-                MaterializationSynchronizationMode.Rebuild)
-        ]);
-
-    static MaterializationCapabilityRequirement TargetRequirement(
-        string id,
-        MaterializationCapabilityKind capability) => new(
-        new(id),
-        capability,
-        capability switch
-        {
-            MaterializationCapabilityKind.TargetGenerationIsolation =>
-                [MaterializationGuaranteeKind.GenerationIsolation, MaterializationGuaranteeKind.FencedMutation],
-            MaterializationCapabilityKind.TargetBulkUpsert =>
-                [
-                    MaterializationGuaranteeKind.IdempotentWrite,
-                    MaterializationGuaranteeKind.FencedMutation,
-                    MaterializationGuaranteeKind.VersionConditionalWrite
-                ],
-            MaterializationCapabilityKind.TargetPerItemOutcomes =>
-                [MaterializationGuaranteeKind.ExactPerItemOutcome],
-            MaterializationCapabilityKind.TargetFencedPromotion =>
-                [MaterializationGuaranteeKind.AtomicPromotion, MaterializationGuaranteeKind.FencedPromotion],
-            MaterializationCapabilityKind.TargetGenerationAbandonment =>
-                [MaterializationGuaranteeKind.AtomicDurableGenerationExclusion],
-            _ => [MaterializationGuaranteeKind.FencedMutation]
-        },
-        capability is MaterializationCapabilityKind.TargetBulkUpsert
-            or MaterializationCapabilityKind.TargetPerItemOutcomes
-            ?
-            [
-                new(MaterializationLimitKind.WriteItems, MaximumWriteItems),
-                new(MaterializationLimitKind.WriteBytes, MaximumWriteBytes)
-            ]
-            : [],
-        MaterializationSynchronizationMode.Rebuild);
 
     static QualifiedShapeId Shape(string value) => new(GraphId, new(value));
 

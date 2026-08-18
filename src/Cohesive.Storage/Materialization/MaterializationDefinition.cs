@@ -218,7 +218,13 @@ public sealed record MaterializationRelationReference
     /// <exception cref="NotSupportedException">A semantic snapshot contains an unsupported serialization type.</exception>
     public static MaterializationRelationReference From(
         RelationQueryCompilationRequest request,
-        RelationQueryOutputId output)
+        RelationQueryOutputId output) =>
+        From(request, output, out _);
+
+    internal static MaterializationRelationReference From(
+        RelationQueryCompilationRequest request,
+        RelationQueryOutputId output,
+        out CompiledRelationQueryPlan plan)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(output.Value))
@@ -227,13 +233,14 @@ public sealed record MaterializationRelationReference
         }
 
         var compilation = RelationQueryStaticCompiler.Compile(request);
-        if (!compilation.IsSuccessful || compilation.Plan is not { } plan)
+        if (!compilation.IsSuccessful || compilation.Plan is not { } compiledPlan)
         {
             throw new ArgumentException(
                 string.Join(" ", compilation.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")),
                 nameof(request));
         }
 
+        plan = compiledPlan;
         var selected = plan.RequirementGraph.Outputs.FirstOrDefault(candidate => candidate.Id == output)
             ?? throw new ArgumentException($"Compiled output '{output.Value}' is absent from the exact Relations plan.", nameof(output));
         var reference = RelationQueryCompiledPlanReference.From(plan);

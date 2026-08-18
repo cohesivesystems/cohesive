@@ -837,7 +837,7 @@ public static class MaterializationImpactPlanCompiler
             MaterializationCapabilityKind capability) =>
             [
                 .. MaterializationDefinitionValidator.GetRequiredGuarantees(
-                    definition,
+                    definition.UpdatePolicy,
                     capability)
             ];
 
