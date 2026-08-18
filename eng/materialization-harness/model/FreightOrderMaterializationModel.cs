@@ -9,6 +9,7 @@ using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Realization;
 using Cohesive.Storage.Materialization;
+using Cohesive.Transitions.Model;
 
 namespace Cohesive.MaterializationHarness.Model;
 
@@ -46,8 +47,9 @@ public static class FreightOrderMaterializationModel
         var author = RelationQuery.Expression();
         var orderShape = author.Clr.Shape<FreightOrder>(OrderShapeId);
         var customerShape = author.Clr.Shape<FreightCustomerAccount>(CustomerAccountShapeId);
+        var stopShape = author.Clr.Shape<FreightOrderStop>(OrderStopShapeId);
         var locationShape = author.Clr.Shape<FreightLocation>(LocationShapeId);
-        var searchShape = author.Clr.Shape<FreightOrderSearchDocument>(OrderSearchDocumentShapeId);
+        var searchShape = author.Clr.Shape<FreightOrderSearchDocument>(OrderSearchDocumentShapeId, ShapeRoles.Projection);
 
         var orderCustomer = author.Relationship<FreightOrder, FreightCustomerAccount>(
             order => order.CustomerAccountId,
@@ -143,6 +145,11 @@ public static class FreightOrderMaterializationModel
             materialization.Validation.IsValid,
             materialization.Validation.Diagnostics.Select(static diagnostic => diagnostic.Message));
         var definition = materialization.Definition;
+        var storage = new FreightOrderStorageDefinitions(
+            Order: Entity(orderShape.Id.ShapeId.Value, orderShape.Document.Graph.TryGetShape(orderShape.Id)),
+            CustomerAccount: Entity(customerShape.Id.ShapeId.Value, customerShape.Document.Graph.TryGetShape(customerShape.Id)),
+            OrderStop: Entity(stopShape.Id.ShapeId.Value, stopShape.Document.Graph.TryGetShape(stopShape.Id)),
+            Location: Entity(locationShape.Id.ShapeId.Value, locationShape.Document.Graph.TryGetShape(locationShape.Id)));
 
         return new(
             compilationRequest,
@@ -150,8 +157,17 @@ public static class FreightOrderMaterializationModel
             realization,
             root,
             output,
+            storage,
             definition,
             MaterializationDefinitionFingerprinter.Compute(definition));
+
+        static EntityDefinition Entity(string name, Shape? shape)
+        {
+            var source = shape ?? throw new InvalidOperationException($"Canonical entity shape '{name}' is missing.");
+            return new(
+                new(name),
+                new Shape(source.Id, source.Fields, source.Constraints, source.Annotations, ShapeRoles.Entity));
+        }
     }
 
     static QualifiedShapeId Shape(string value) => new(GraphId, new(value));
@@ -169,6 +185,7 @@ public static class FreightOrderMaterializationModel
 /// <param name="Realization">Canonical in-memory relation realization used for hydration.</param>
 /// <param name="Root">Relation root supplied by each bounded source page.</param>
 /// <param name="Output">Complete derived OrderSearchDocument output.</param>
+/// <param name="Storage">Canonical entity definitions used by every seed realization.</param>
 /// <param name="Definition">Backend-independent materialization definition.</param>
 /// <param name="DefinitionFingerprint">Stable fingerprint shared by provider realizations.</param>
 public sealed record FreightOrderMaterializationSemantics(
@@ -177,8 +194,20 @@ public sealed record FreightOrderMaterializationSemantics(
     RelationQueryRealizationReport Realization,
     RelationQuerySourceInputContract Root,
     RelationQueryOutputReference Output,
+    FreightOrderStorageDefinitions Storage,
     MaterializationDefinition Definition,
     ExecutionDefinitionFingerprint DefinitionFingerprint);
+
+/// <summary>Canonical source entity definitions shared by PostgreSQL and Cosmos seed repositories.</summary>
+/// <param name="Order">Immutable freight order definition.</param>
+/// <param name="CustomerAccount">Customer account definition.</param>
+/// <param name="OrderStop">Immutable order-stop definition.</param>
+/// <param name="Location">Freight location definition.</param>
+public sealed record FreightOrderStorageDefinitions(
+    EntityDefinition Order,
+    EntityDefinition CustomerAccount,
+    EntityDefinition OrderStop,
+    EntityDefinition Location);
 
 /// <summary>Simplified immutable freight order root.</summary>
 public sealed record FreightOrder
@@ -218,6 +247,10 @@ public sealed record FreightOrder
     /// <summary>Location selected by the last drop in canonical stop order.</summary>
     [JsonPropertyName("destinationLocationId")]
     public required string DestinationLocationId { get; init; }
+
+    /// <summary>Source creation instant retained for incremental ordering and spot checks.</summary>
+    [JsonPropertyName("createdAt")]
+    public DateTimeOffset CreatedAt { get; init; }
 }
 
 /// <summary>Simplified freight customer account.</summary>
@@ -262,6 +295,14 @@ public sealed record FreightOrderStop
     /// <summary>Tenant-local location identity.</summary>
     [JsonPropertyName("locationId")]
     public required string LocationId { get; init; }
+
+    /// <summary>Beginning of the scheduled service window.</summary>
+    [JsonPropertyName("scheduledStart")]
+    public DateTimeOffset ScheduledStart { get; init; }
+
+    /// <summary>End of the scheduled service window.</summary>
+    [JsonPropertyName("scheduledEnd")]
+    public DateTimeOffset ScheduledEnd { get; init; }
 }
 
 /// <summary>Simplified freight location.</summary>

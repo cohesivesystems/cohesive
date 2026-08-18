@@ -654,6 +654,22 @@ the bounded canonical source reader and materialization source, where the exact 
 PostgreSQL parameter and result types. A supplied relation root remains an explicit plan input, not an implicit table
 scan: only its demanded fields are bound, and acquired inputs still use the persisted storage binding.
 
+## Entity repository
+
+`PostgresEntityRepository` realizes `IEntityRepository` over a normalized table. Its
+`PostgresEntityRepositoryMapping` declares only physical table/column names, exact scalar encodings, the canonical
+identity and partition fields, the semantic observation-version column, and a batch limit. Construction rejects a
+missing, extra, duplicated, or type-incompatible field binding, so the supplied `EntityDefinition` remains the sole
+semantic field authority.
+
+Reads may be partition-scoped; an unscoped identity that occurs in more than one partition is rejected as ambiguous.
+Writes validate the complete observation through the entity definition and require the mapped identity field to equal
+the observation identity. PostgreSQL `xmin` is returned only as an opaque optimistic-concurrency token, while the
+portable observation version is persisted explicitly. Native batches run inside one database transaction and
+advertise both same-partition and cross-partition all-or-nothing support. Schema creation, migrations, constraints,
+foreign keys, publications, and replica identity remain explicit deployment/lifecycle responsibilities rather than
+repository side effects.
+
 Conformance tests compile representative rows, aggregation, relationship traversal, explicit join, temporal join,
 text-search, paging, and distinct plans against the exact advertised profile, including structured fail-closed cases.
 Source-reader and materialization conformance tests additionally cover set-oriented point and predicate batches,

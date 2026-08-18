@@ -51,9 +51,12 @@ up() {
 
 seed() {
   configure_runtime
+  local seed_mode="${1:---cohesive}"
   dotnet run \
     --project "$script_dir/seed/Cohesive.MaterializationHarness.Seed.csproj" \
-    --configuration Release
+    --configuration Release \
+    -- \
+    "$seed_mode"
 }
 
 validate() {
@@ -96,12 +99,16 @@ verify_index() {
 
 test_harness() {
   up
-  seed
+  seed --direct
+  verify
+  materialize
+  seed --cohesive
+  verify
   materialize
   configure_runtime
   dotnet test "$repo_root/src/Cohesive.Tests/Cohesive.Tests.csproj" \
     --configuration Release \
-    --filter "FullyQualifiedName~FreightOrderHarnessModelTests|FullyQualifiedName~FreightOrderMaterializationRelationTests|FullyQualifiedName~TenantScopedMaterializationPagesBindExactPredicateAndRejectCrossTenantContinuation|FullyQualifiedName~PartitionedReaderRequiresMatchingRuntimeAndPhysicalScopes|FullyQualifiedName~LocalPostgres_TenantScopedMaterializationPagesStayWithinTheExactPartition" \
+    --filter "FullyQualifiedName~FreightOrderHarnessModelTests|FullyQualifiedName~FreightOrderMaterializationRelationTests|FullyQualifiedName~PostgresEntityRepositoryTests|FullyQualifiedName~TenantScopedMaterializationPagesBindExactPredicateAndRejectCrossTenantContinuation|FullyQualifiedName~PartitionedReaderRequiresMatchingRuntimeAndPhysicalScopes|FullyQualifiedName~LocalPostgres_TenantScopedMaterializationPagesStayWithinTheExactPartition" \
     --logger "console;verbosity=minimal"
 }
 
@@ -111,7 +118,8 @@ Usage: eng/materialization-harness/harness.sh <command>
 
 Commands:
   up       Start the pinned databases and browser UIs; wait for readiness and preserve volumes.
-  seed     Replace the harness source databases from the canonical scenario journal.
+  seed     Replace both source databases through Cohesive.Storage repositories (default).
+  seed-direct Replace both source databases through raw Npgsql/Cosmos SDK calls as an independent oracle.
   validate Validate the canonical scenario journal without starting Docker.
   verify   Verify that both source databases still equal the journal; do not mutate them.
   materialize Build and atomically promote equivalent Postgres and Cosmos Elasticsearch generations.
@@ -132,7 +140,11 @@ case "$command" in
     ;;
   seed)
     up
-    seed
+    seed --cohesive
+    ;;
+  seed-direct)
+    up
+    seed --direct
     ;;
   validate)
     validate
