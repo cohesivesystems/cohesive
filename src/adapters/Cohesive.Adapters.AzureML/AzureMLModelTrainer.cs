@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using Azure;
 using Azure.Core;
 using Azure.ResourceManager;
@@ -27,22 +29,75 @@ public sealed class AzureMLModelTrainer : IModelTrainer
         this.options.Validate();
     }
     
-    /// <summary>Starts an Azure ML training job.</summary>
-    public async ValueTask<TrainingJobReference> StartAsync(TrainingRequest request, CancellationToken ct = default)
+    /// <summary>
+    /// Submits an Azure ML training job under a deterministic provider job identity.
+    /// </summary>
+    /// <param name="submission">Stable logical submission identity and exact request content.</param>
+    /// <param name="ct">Cancellation token for cooperative cancellation.</param>
+    /// <returns>The Azure ML job accepted for the exact logical submission.</returns>
+    /// <exception cref="TrainingJobSubmissionConflictException">
+    /// Thrown when the deterministic Azure ML job identity contains different submission evidence.
+    /// </exception>
+    public async ValueTask<TrainingJobReference> SubmitAsync(
+        TrainingJobSubmission submission,
+        CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(submission);
         ct.ThrowIfCancellationRequested();
 
-        var configuration = AzureMLTrainingConfiguration.Parse(request.ConfigJson);
+        var request = submission.Request;
         var workspace = GetWorkspaceResource();
         var jobs = workspace.GetMachineLearningJobs();
-        var jobId = CreateJobId(request.OutputModelName);
-        var job = CreateJob(jobId, request, configuration);
+        var jobId = CreateJobId(submission.SubmissionId);
+        var existing = await jobs.GetIfExistsAsync(jobId, ct).ConfigureAwait(false);
+        if (existing.HasValue)
+            return BindAcceptedJob(submission, existing.Value!.Data.Properties);
+
+        var configuration = AzureMLTrainingConfiguration.Parse(request.ConfigJson);
+        var job = CreateJob(jobId, submission, configuration);
         var operation = await jobs
             .CreateOrUpdateAsync(WaitUntil.Started, jobId, new(job), ct)
             .ConfigureAwait(false);
 
-        return new(jobId, MapStatus(operation.Value.Data.Properties.Status));
+        return BindAcceptedJob(submission, operation.Value.Data.Properties);
+    }
+
+    /// <summary>
+    /// Reconciles an exact logical submission against deterministic Azure ML job evidence.
+    /// </summary>
+    /// <param name="submission">Stable logical submission identity and exact request content.</param>
+    /// <param name="ct">Cancellation token for cooperative cancellation.</param>
+    /// <returns>Accepted, authoritatively absent, or unresolved submission evidence.</returns>
+    /// <exception cref="TrainingJobSubmissionConflictException">
+    /// Thrown when the deterministic Azure ML job identity contains different submission evidence.
+    /// </exception>
+    public async ValueTask<TrainingJobSubmissionResolution> ReconcileSubmissionAsync(
+        TrainingJobSubmission submission,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(submission);
+        ct.ThrowIfCancellationRequested();
+
+        try
+        {
+            var workspace = GetWorkspaceResource();
+            var jobs = workspace.GetMachineLearningJobs();
+            var jobId = CreateJobId(submission.SubmissionId);
+            var existing = await jobs.GetIfExistsAsync(jobId, ct).ConfigureAwait(false);
+            if (!existing.HasValue)
+                return new TrainingJobSubmissionResolution.ConfirmedAbsent();
+
+            return new TrainingJobSubmissionResolution.Accepted(
+                BindAcceptedJob(submission, existing.Value!.Data.Properties));
+        }
+        catch (RequestFailedException error)
+        {
+            ct.ThrowIfCancellationRequested();
+            return new TrainingJobSubmissionResolution.Unresolved(
+                ErrorType: $"AzureML.{error.ErrorCode ?? "RequestFailed"}",
+                ErrorMessage: error.Message,
+                IsTransient: IsTransient(error.Status));
+        }
     }
 
     /// <summary>Gets status asynchronously.</summary>
@@ -79,8 +134,12 @@ public sealed class AzureMLModelTrainer : IModelTrainer
         return armClient.GetMachineLearningWorkspaceResource(id);
     }
 
-    MachineLearningCommandJob CreateJob(string jobId, TrainingRequest request, AzureMLTrainingConfiguration configuration)
+    MachineLearningCommandJob CreateJob(
+        string jobId,
+        TrainingJobSubmission submission,
+        AzureMLTrainingConfiguration configuration)
     {
+        var request = submission.Request;
         var job = new MachineLearningCommandJob(command: configuration.Command, environmentId: new(resourceId: configuration.EnvironmentId))
         {
             DisplayName = request.OutputModelName,
@@ -119,6 +178,7 @@ public sealed class AzureMLModelTrainer : IModelTrainer
         job.Outputs[configuration.OutputName ?? DefaultOutputName] = CreateOutput(configuration.OutputUri);
 
         job.Properties["cohesive.jobId"] = jobId;
+        AzureMLTrainingSubmissionEvidence.WriteTo(job.Properties, submission);
         job.Properties["cohesive.modelName"] = request.ModelName;
         job.Properties["cohesive.outputModelName"] = request.OutputModelName;
 
@@ -224,18 +284,51 @@ public sealed class AzureMLModelTrainer : IModelTrainer
         };
     }
 
-    static string CreateJobId(string outputModelName)
+    internal static string CreateJobId(string submissionId)
     {
-        var trimmed = outputModelName.ToLettersOrDigitsWithSeparator(separator: '-');
-        if (string.IsNullOrWhiteSpace(trimmed))
-            trimmed = "model";
+        ArgumentException.ThrowIfNullOrWhiteSpace(submissionId);
 
-        if (trimmed.Length > 32)
-            trimmed = trimmed[..32];
+        var prefix = new StringBuilder(capacity: Math.Min(submissionId.Length, 32));
+        var pendingSeparator = false;
+        foreach (var character in submissionId)
+        {
+            if (char.IsAsciiLetterOrDigit(character))
+            {
+                if (pendingSeparator && prefix.Length > 0)
+                {
+                    if (prefix.Length >= 31)
+                        break;
+                    prefix.Append('-');
+                }
+                if (prefix.Length >= 32)
+                    break;
+                prefix.Append(char.ToLowerInvariant(character));
+                pendingSeparator = false;
+            }
+            else
+            {
+                pendingSeparator = true;
+            }
+        }
 
-        var suffix = Guid.NewGuid().ToString("N")[..8];
-        return $"train-{trimmed}-{suffix}";
+        if (prefix.Length is 0)
+            prefix.Append("submission");
+
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(submissionId));
+        return $"train-{prefix}-{Convert.ToHexStringLower(digest)}";
     }
+
+    static TrainingJobReference BindAcceptedJob(
+        TrainingJobSubmission submission,
+        MachineLearningJobProperties job)
+    {
+        AzureMLTrainingSubmissionEvidence.EnsureMatches(job.Properties, submission);
+
+        var jobId = CreateJobId(submission.SubmissionId);
+        return new(jobId, MapStatus(job.Status));
+    }
+
+    static bool IsTransient(int status) => status is 408 or 409 or 429 or >= 500;
 
     sealed record AzureMLTrainingConfiguration(
         string Command,

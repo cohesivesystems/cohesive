@@ -30,6 +30,32 @@ var closure = OntologyClosure.Create(ontology);
 var isPartyRole = closure.IsSubConceptOf("party.ship-to", "party.role");
 ```
 
+### Reconciliable training submissions
+
+Training submission is identified independently of any physical attempt. Bind the workflow's stable logical
+identity to the exact request once, then use the same submission for dispatch and ambiguity recovery:
+
+```csharp
+using Cohesive.AI.Training;
+
+var submission = new TrainingJobSubmission(
+    submissionId: "tenant/acme/training-run/42/submission",
+    request: trainingRequest);
+
+var job = await trainer.SubmitAsync(submission, cancellationToken);
+var reconciliation = await trainer.ReconcileSubmissionAsync(submission, cancellationToken);
+```
+
+`TrainingJobSubmission` snapshots dataset bindings and derives a versioned request fingerprint. Dataset bindings
+are canonicalized by their ordinal names because list order is not provider meaning; duplicate names are rejected.
+Every other request value, including provider configuration text, participates exactly. An adapter must return the
+same provider job for a repeated identity and fingerprint, and must throw `TrainingJobSubmissionConflictException`
+when the identity is already bound to different or missing request evidence.
+
+Reconciliation returns one closed result: `Accepted`, `ConfirmedAbsent`, or `Unresolved`. A workflow may safely
+retry only according to its durable recovery policy and the returned evidence; physical attempt identity must not
+replace the stable logical submission identity.
+
 ## Related Packages
 
 - `Cohesive.Adapters.AzureML` for Azure Machine Learning training integration.
