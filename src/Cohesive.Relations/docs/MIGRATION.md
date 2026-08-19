@@ -238,7 +238,7 @@ Current portable and adapter contracts expose their schema versions through cons
 - `relationship-catalog/v1`
 - `relation-query/v1`
 - `relation-draft/v1`
-- `relation-query-evaluation/v1`
+- `relation-query-evaluation/v2`
 - `relation-query-source-placement/v3`
 - `relation-query-physical-plan/v1`
 - `relation-query-explain/v1`
@@ -253,9 +253,11 @@ Migration rules:
 2. Serialize through the dedicated strict document serializers; do not depend on incidental default JSON behavior.
 3. Regenerate fingerprints after producing a canonical document under the current canonicalization profile.
 4. Regenerate non-current adapter bindings, bound-realization reports, and native artifacts together.
-5. Treat `RelationQueryEvaluationOutcome` and physical execution results as in-process composites, not durable wire
+5. Reauthor `relation-query-evaluation/v1` supplied-root documents as v2 with an explicit provider-neutral logical
+   partition identity; use `RelationQueryLogicalPartitionIdentity.WholeSource` only for genuinely unpartitioned data.
+6. Treat `RelationQueryEvaluationOutcome` and physical execution results as in-process composites, not durable wire
    contracts.
-6. Treat persisted executable SQL artifacts as trusted code. PostgreSQL rehydration is intentionally named
+7. Treat persisted executable SQL artifacts as trusted code. PostgreSQL rehydration is intentionally named
    `DeserializeTrusted`; fingerprints detect inconsistency but are not cryptographic signatures.
 
 Source-placement v3 adds optional semantic identity-path evidence independently from the adapter-interpreted physical

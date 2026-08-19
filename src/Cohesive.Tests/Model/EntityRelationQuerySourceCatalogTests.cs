@@ -83,7 +83,8 @@ public sealed class EntityRelationQuerySourceCatalogTests
             new StubReader(new(
                 incompatibleInstance.Id,
                 incompatibleInstance.ExecutionDomain,
-                incompatibleInstance.TargetProfile)));
+                incompatibleInstance.TargetProfile,
+                RelationQueryLogicalPartitionIdentity.WholeSource)));
 
         var badSelector = new EntityRelationQuerySourceCatalog([selectorFailure]).Place(fixture.Plan);
         var badProfile = new EntityRelationQuerySourceCatalog([incompatible]).Place(fixture.Plan);
@@ -135,7 +136,8 @@ public sealed class EntityRelationQuerySourceCatalogTests
         var mismatchedReader = new StubReader(new(
             new("source/foreign"),
             first.Source.ExecutionDomain,
-            first.Source.TargetProfile));
+            first.Source.TargetProfile,
+            RelationQueryLogicalPartitionIdentity.WholeSource));
 
         Assert.Throws<ArgumentException>(() => new EntityRelationQuerySourceCatalog([first, second]));
         Assert.Throws<ArgumentException>(() => new EntityRelationQuerySourceCatalog([first, otherShapeSameSource]));
@@ -330,6 +332,7 @@ public sealed class EntityRelationQuerySourceCatalogTests
         return EntityRelationQuerySourceRegistration.InMemory(
             fixture.SourceShape.Id,
             repository,
+            RelationQueryLogicalPartitionIdentity.WholeSource,
             source: source);
     }
 
@@ -349,7 +352,10 @@ public sealed class EntityRelationQuerySourceCatalogTests
             new EntityDefinition(new(entityShape.Id.Value), entityShape),
             static _ => "partition",
             snapshots);
-        return EntityRelationQuerySourceRegistration.InMemory(sourceShape.Id, repository);
+        return EntityRelationQuerySourceRegistration.InMemory(
+            sourceShape.Id,
+            repository,
+            RelationQueryLogicalPartitionIdentity.WholeSource);
     }
 
     static EntitySnapshot Snapshot(

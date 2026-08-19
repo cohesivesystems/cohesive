@@ -185,15 +185,10 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             source.Id,
             source.ExecutionDomain,
             source.TargetProfile,
-            Policy.PartitionScope is { } scope
-                ? new(
-                    scope.SourceSelector,
-                    string.Concat(
-                        "postgres/logical-scope/sha256/",
-                        scope.ComputeDigest(
-                            partitions
-                                .OrderBy(static pair => pair.Key.Value, StringComparer.Ordinal)
-                                .Select(static pair => pair.Value.Binding))))
+            logicalPartition: Policy.PartitionScope?.LogicalPartition
+                ?? RelationQueryLogicalPartitionIdentity.WholeSource,
+            partitionBinding: Policy.PartitionScope is { } scope
+                ? new(scope.SourceSelector)
                 : null);
     }
 

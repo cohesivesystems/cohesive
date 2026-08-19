@@ -67,6 +67,7 @@ static class RelationDtoMapperTestFixture
             });
         var supplied = new RelationQuerySuppliedSourceInput(
             source.Input.Id,
+            RelationQueryLogicalPartitionIdentity.WholeSource,
             RelationQueryEvidenceCompleteness.Complete,
             [
                 SuppliedLoad("load-1", "customer-1", "equipment-1", selections),
@@ -234,7 +235,11 @@ static class RelationDtoMapperTestFixture
     static DeterministicRelationQuerySourceReader Reader(
         Cohesive.Relations.Physical.RelationQuerySourceInstance source,
         ImmutableArray<DeterministicRelationQuerySourceReader.SourceRow> rows) => new(
-        new(source.Id, source.ExecutionDomain, source.TargetProfile),
+        new(
+            source.Id,
+            source.ExecutionDomain,
+            source.TargetProfile,
+            RelationQueryLogicalPartitionIdentity.WholeSource),
         rows);
 
     static DeterministicRelationQuerySourceReader.SourceRow Customer(

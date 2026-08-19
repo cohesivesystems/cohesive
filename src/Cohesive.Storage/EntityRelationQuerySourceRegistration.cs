@@ -92,6 +92,7 @@ public sealed class EntityRelationQuerySourceRegistration
     /// <summary>Creates an in-memory entity source registration using deterministic conventions.</summary>
     /// <param name="shape">Exact graph-qualified shape represented by <paramref name="repository"/>.</param>
     /// <param name="repository">In-memory entity repository supplying observations.</param>
+    /// <param name="logicalPartition">Provider-neutral logical partition implemented by the registration.</param>
     /// <param name="source">Explicit source identity, or <see langword="null"/> for a shape-derived identity.</param>
     /// <param name="executionDomain">
     /// Explicit execution domain, or <see langword="null"/> for a shape-derived domain that does not imply a
@@ -104,7 +105,9 @@ public sealed class EntityRelationQuerySourceRegistration
     /// Explicit relationship-reference selector policy, or <see langword="null"/> for semantic paths.
     /// </param>
     /// <returns>A registration whose source, reader, limits, profile, and selector policies agree exactly.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="repository"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="repository"/> or <paramref name="logicalPartition"/> is <see langword="null"/>.
+    /// </exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="shape"/> does not identify the repository entity shape, or an explicit identity or selector
     /// is invalid.
@@ -112,6 +115,7 @@ public sealed class EntityRelationQuerySourceRegistration
     public static EntityRelationQuerySourceRegistration InMemory(
         QualifiedShapeId shape,
         InMemoryEntityOutboxRepository repository,
+        RelationQueryLogicalPartitionIdentity logicalPartition,
         RelationQuerySourceInstanceId? source = null,
         RelationQueryExecutionDomainId? executionDomain = null,
         RelationQuerySourcePlacementLimits? limits = null,
@@ -142,6 +146,7 @@ public sealed class EntityRelationQuerySourceRegistration
             shape,
             sourceInstance,
             repository,
+            logicalPartition,
             identitySourceSelector,
             fieldSourceSelector,
             relationshipKeySourceSelector);

@@ -272,10 +272,13 @@ public sealed record MaterializationImpactHydrationRequest
 {
     /// <summary>Creates one root hydration request.</summary>
     /// <param name="evaluation">Stable Relations evaluation identity.</param>
+    /// <param name="logicalPartition">Provider-neutral logical partition containing every affected root.</param>
     /// <param name="roots">Distinct current roots in canonical input and identity order.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="logicalPartition"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">The evaluation is default or roots are empty, null, repeated, or unordered.</exception>
     public MaterializationImpactHydrationRequest(
         RelationQueryEvaluationId evaluation,
+        RelationQueryLogicalPartitionIdentity logicalPartition,
         ImmutableArray<MaterializationAffectedRoot> roots)
     {
         MaterializationContract.RequireDefinedIdentity(evaluation.Value, nameof(evaluation));
@@ -292,11 +295,15 @@ public sealed record MaterializationImpactHydrationRequest
             throw new ArgumentException("Impact hydration roots must already be in canonical order.", nameof(roots));
 
         Evaluation = evaluation;
+        LogicalPartition = Guard.RequireNotNull(logicalPartition);
         Roots = normalized;
     }
 
     /// <summary>Stable Relations evaluation identity.</summary>
     public RelationQueryEvaluationId Evaluation { get; }
+
+    /// <summary>Provider-neutral logical partition containing every affected root.</summary>
+    public RelationQueryLogicalPartitionIdentity LogicalPartition { get; }
 
     /// <summary>Distinct current roots in canonical input and identity order.</summary>
     public ImmutableArray<MaterializationAffectedRoot> Roots { get; }
@@ -474,6 +481,7 @@ public sealed class RelationQueryMaterializationImpactRuntime : IMaterialization
         {
             supplied.Add(new(
                 input: root.Input.Id,
+                logicalPartition: request.LogicalPartition,
                 completeness: RelationQueryEvidenceCompleteness.Complete,
                 observations: [.. observationsByInput[root.Input.Id]],
                 evidenceReference: request.Evaluation.Value));
@@ -685,7 +693,10 @@ public sealed class MaterializationImpactPlanInterpreter
                 page.ThroughPosition.Value)}");
         var projections = await runtime.HydrateAsync(
                 context,
-                new(evaluation, canonicalRoots))
+                new(
+                    evaluation,
+                    feed.Scope.LogicalPartition,
+                    canonicalRoots))
             .ConfigureAwait(false);
         return MaterializationRootProjectionSemantics.ValidateHydration(
             requestedRoots: canonicalRoots,

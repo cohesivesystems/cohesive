@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
+using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.IR;
@@ -17,8 +18,10 @@ public sealed record RelationQuerySuppliedRootSet
 {
     /// <summary>Creates normalized directly supplied root evidence.</summary>
     /// <param name="observations">Identity-bearing root observations.</param>
+    /// <param name="logicalPartition">Provider-neutral logical partition containing every supplied root.</param>
     /// <param name="completeness">Whether omission from the supplied set is authoritative.</param>
     /// <param name="evidenceReference">Optional opaque provenance reference.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="logicalPartition"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="observations"/> contains a null entry or duplicate identity, or
     /// <paramref name="evidenceReference"/> is empty.
@@ -27,6 +30,7 @@ public sealed record RelationQuerySuppliedRootSet
     [JsonConstructor]
     public RelationQuerySuppliedRootSet(
         ImmutableArray<Observation> observations,
+        RelationQueryLogicalPartitionIdentity logicalPartition,
         RelationQueryEvidenceCompleteness completeness,
         string? evidenceReference)
     {
@@ -44,12 +48,16 @@ public sealed record RelationQuerySuppliedRootSet
             ArgumentException.ThrowIfNullOrWhiteSpace(evidenceReference);
 
         Observations = [.. normalized.OrderBy(static observation => observation.Id, StringComparer.Ordinal)];
+        LogicalPartition = Guard.RequireNotNull(logicalPartition);
         Completeness = completeness;
         EvidenceReference = evidenceReference;
     }
 
     /// <summary>Identity-bearing root observations in deterministic identity order.</summary>
     public ImmutableArray<Observation> Observations { get; }
+
+    /// <summary>Provider-neutral logical partition containing every supplied root.</summary>
+    public RelationQueryLogicalPartitionIdentity LogicalPartition { get; }
 
     /// <summary>Whether omission from the supplied root set is authoritative.</summary>
     public RelationQueryEvidenceCompleteness Completeness { get; }
@@ -70,7 +78,7 @@ public sealed record RelationQuerySuppliedRootSet
 public sealed class RelationQueryEvaluation
 {
     /// <summary>Current portable canonical evaluation schema version.</summary>
-    public const string CurrentSchemaVersion = "relation-query-evaluation/v1";
+    public const string CurrentSchemaVersion = "relation-query-evaluation/v2";
 
     internal RelationQueryEvaluation(
         RelationQueryCompilationRequest compilation,
@@ -557,6 +565,10 @@ public sealed class RelationQueryEvaluationBuilder
     /// </param>
     /// <param name="completeness">Whether omission from the supplied set is authoritative.</param>
     /// <param name="evidenceReference">Optional opaque provenance reference.</param>
+    /// <param name="logicalPartition">
+    /// Provider-neutral logical partition containing every supplied root, or <see langword="null"/> for the
+    /// explicitly unpartitioned whole-source identity.
+    /// </param>
     /// <returns>This builder for continued evaluation authoring.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="observations"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
@@ -570,7 +582,8 @@ public sealed class RelationQueryEvaluationBuilder
     public RelationQueryEvaluationBuilder Supply(
         IEnumerable<Observation> observations,
         RelationQueryEvidenceCompleteness completeness = RelationQueryEvidenceCompleteness.Complete,
-        string? evidenceReference = null)
+        string? evidenceReference = null,
+        RelationQueryLogicalPartitionIdentity? logicalPartition = null)
     {
         ArgumentNullException.ThrowIfNull(observations);
         if (!Enum.IsDefined(completeness))
@@ -598,6 +611,7 @@ public sealed class RelationQueryEvaluationBuilder
 
         suppliedRoots = new(
             [.. normalized.OrderBy(static observation => observation.Id, StringComparer.Ordinal)],
+            logicalPartition ?? RelationQueryLogicalPartitionIdentity.WholeSource,
             completeness,
             evidenceReference);
         return this;
@@ -612,6 +626,10 @@ public sealed class RelationQueryEvaluationBuilder
     /// </param>
     /// <param name="completeness">Whether omission from the supplied set is authoritative.</param>
     /// <param name="evidenceReference">Optional opaque provenance reference.</param>
+    /// <param name="logicalPartition">
+    /// Provider-neutral logical partition containing every supplied root, or <see langword="null"/> for the
+    /// explicitly unpartitioned whole-source identity.
+    /// </param>
     /// <returns>This builder for continued evaluation authoring.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="values"/> or <paramref name="selectIdentity"/> is <see langword="null"/>, a value is null, or
@@ -631,7 +649,8 @@ public sealed class RelationQueryEvaluationBuilder
         Func<T, string> selectIdentity,
         ShapeMappingContext? mappingContext = null,
         RelationQueryEvidenceCompleteness completeness = RelationQueryEvidenceCompleteness.Complete,
-        string? evidenceReference = null)
+        string? evidenceReference = null,
+        RelationQueryLogicalPartitionIdentity? logicalPartition = null)
         where T : notnull
     {
         ArgumentNullException.ThrowIfNull(values);
@@ -650,7 +669,7 @@ public sealed class RelationQueryEvaluationBuilder
                 new ObjectObservationMetadata { Id = identity }));
         }
 
-        return Supply(observations, completeness, evidenceReference);
+        return Supply(observations, completeness, evidenceReference, logicalPartition);
     }
 
     /// <summary>Builds an immutable target-neutral evaluation descriptor.</summary>

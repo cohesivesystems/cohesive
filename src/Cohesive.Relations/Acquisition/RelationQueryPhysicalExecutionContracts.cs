@@ -13,14 +13,17 @@ public sealed record RelationQuerySuppliedSourceInput
 {
     /// <summary>Creates directly supplied source input.</summary>
     /// <param name="input">Compiled relation-root source-set input.</param>
+    /// <param name="logicalPartition">Provider-neutral logical partition containing every supplied observation.</param>
     /// <param name="completeness">Whether the supplied set is authoritative and complete.</param>
     /// <param name="observations">Identity-bearing supplied observations.</param>
     /// <param name="evidenceReference">Optional opaque provenance reference.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="logicalPartition"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">The input is default, observations contain null or duplicate identities, or the reference is empty.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="completeness"/> is unsupported.</exception>
     [JsonConstructor]
     public RelationQuerySuppliedSourceInput(
         RelationQueryInputId input,
+        RelationQueryLogicalPartitionIdentity logicalPartition,
         RelationQueryEvidenceCompleteness completeness,
         ImmutableArray<RelationQuerySourceReadObservation> observations,
         string? evidenceReference = null)
@@ -38,6 +41,7 @@ public sealed record RelationQuerySuppliedSourceInput
         if (evidenceReference is not null)
             ArgumentException.ThrowIfNullOrWhiteSpace(evidenceReference);
         Input = input;
+        LogicalPartition = Guard.RequireNotNull(logicalPartition);
         Completeness = completeness;
         Observations = [.. normalized.OrderBy(static observation => observation.Identity, StringComparer.Ordinal)];
         EvidenceReference = evidenceReference;
@@ -45,6 +49,9 @@ public sealed record RelationQuerySuppliedSourceInput
 
     /// <summary>Compiled relation-root source-set input.</summary>
     public RelationQueryInputId Input { get; }
+
+    /// <summary>Provider-neutral logical partition containing every supplied observation.</summary>
+    public RelationQueryLogicalPartitionIdentity LogicalPartition { get; }
 
     /// <summary>Whether the supplied set is authoritative and complete.</summary>
     public RelationQueryEvidenceCompleteness Completeness { get; }
@@ -323,6 +330,9 @@ public static class RelationQueryPhysicalExecutionDiagnosticCodes
 
     /// <summary>The physical stage graph is incompatible with the v1 executor.</summary>
     public const string StageInvalid = "REL2207";
+
+    /// <summary>Supplied sources and readers do not implement one exact provider-neutral logical partition.</summary>
+    public const string LogicalPartitionMismatch = "REL2208";
 }
 
 /// <summary>Immutable in-process result of bounded acquisition followed by canonical interpretation.</summary>

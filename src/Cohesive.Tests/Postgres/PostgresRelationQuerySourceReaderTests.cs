@@ -417,7 +417,15 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
             partitioned: false));
         var wrongSelector = Assert.Throws<ArgumentException>(() => CreateFixture(
             executor.ExecuteAsync,
-            new(10, 10, 3, 1_000_000, partitionScope: new("organizationId", "tenant-a")),
+            new(
+                10,
+                10,
+                3,
+                1_000_000,
+                partitionScope: new(
+                    RelationQueryLogicalPartitionIdentity.WholeSource,
+                    "organizationId",
+                    "tenant-a")),
             partitioned: true));
 
         Assert.Contains("requires matching", missing.Message, StringComparison.Ordinal);
@@ -1939,7 +1947,10 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         maximumRowsPerRead: 10,
         maximumPageItems: 3,
         maximumPageBytes: 1_000_000,
-        partitionScope: new("tenantId", tenantId));
+        partitionScope: new(
+            new($"tests/tenant/{tenantId}"),
+            "tenantId",
+            tenantId));
 
     static CanonicalExecutionFixture CreateCanonicalExecutionFixture(
         PostgresNpgsqlCommandExecutor executor,

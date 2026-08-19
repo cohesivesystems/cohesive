@@ -17,7 +17,7 @@ namespace Cohesive.MaterializationHarness.Seed;
 
 static class Program
 {
-    const string JournalSchema = "cohesive.materialization-harness/scenario-journal/v1";
+    const string JournalSchema = "cohesive.materialization-harness/scenario-journal/v2";
     const string PostgresSchema = "freight_harness";
     const string PostgresPublication = "cohesive_freight_harness";
     static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -94,6 +94,8 @@ static class Program
         }
         if (string.IsNullOrWhiteSpace(journal.ScenarioId))
             throw new InvalidOperationException("The scenario journal requires an identity.");
+        if (journal.OccurredAtUtc == default || journal.OccurredAtUtc.Offset != TimeSpan.Zero)
+            throw new InvalidOperationException("The scenario journal requires a non-default UTC persistence instant.");
         if (journal.Operations.IsDefaultOrEmpty)
             throw new InvalidOperationException("The scenario journal requires at least one operation.");
 
@@ -138,6 +140,7 @@ static class Program
 
         return new(
             journal.ScenarioId,
+            journal.OccurredAtUtc,
             [.. orders.Values.OrderBy(static value => value.TenantId, StringComparer.Ordinal)
                 .ThenBy(static value => value.OrderId, StringComparer.Ordinal)],
             [.. customers.Values.OrderBy(static value => value.TenantId, StringComparer.Ordinal)
@@ -280,20 +283,15 @@ static class Program
         }
         foreach (var value in state.Orders)
         {
-            var endpoints = SelectEndpoints(state, value);
             await ExecuteAsync(
                 connection,
                 transaction,
-                $"INSERT INTO {PostgresSchema}.orders VALUES (@tenant, @id, @number, @customer, @equipment, @pickup, @delivery, @origin, @destination, @created, @version);",
+                $"INSERT INTO {PostgresSchema}.orders VALUES (@tenant, @id, @number, @customer, @equipment, @created, @version);",
                 ("tenant", value.TenantId),
                 ("id", value.OrderId),
                 ("number", value.OrderNumber),
                 ("customer", value.CustomerAccountId),
                 ("equipment", value.EquipmentClass),
-                ("pickup", endpoints.PickupStopId),
-                ("delivery", endpoints.DeliveryStopId),
-                ("origin", endpoints.OriginLocationId),
-                ("destination", endpoints.DestinationLocationId),
                 ("created", value.CreatedAt),
                 ("version", 1L));
         }
@@ -355,10 +353,6 @@ static class Program
                 order_number text COLLATE "C" NOT NULL,
                 customer_account_id text COLLATE "C" NOT NULL,
                 equipment_class text NOT NULL,
-                pickup_stop_id text COLLATE "C" NOT NULL,
-                delivery_stop_id text COLLATE "C" NOT NULL,
-                origin_location_id text COLLATE "C" NOT NULL,
-                destination_location_id text COLLATE "C" NOT NULL,
                 created_at timestamptz NOT NULL,
                 observation_version bigint NOT NULL,
                 PRIMARY KEY (tenant_id, order_id),
@@ -447,10 +441,6 @@ static class Program
                 ("orderNumber", "order_number", PostgresRelationQueryScalarType.Text),
                 ("customerAccountId", "customer_account_id", PostgresRelationQueryScalarType.Text),
                 ("equipmentClass", "equipment_class", PostgresRelationQueryScalarType.Text),
-                ("pickupStopId", "pickup_stop_id", PostgresRelationQueryScalarType.Text),
-                ("deliveryStopId", "delivery_stop_id", PostgresRelationQueryScalarType.Text),
-                ("originLocationId", "origin_location_id", PostgresRelationQueryScalarType.Text),
-                ("destinationLocationId", "destination_location_id", PostgresRelationQueryScalarType.Text),
                 ("createdAt", "created_at", PostgresRelationQueryScalarType.TimestampWithTimeZone)));
         var stopRepository = new PostgresEntityRepository(
             storage.OrderStop,
@@ -575,35 +565,23 @@ static class Program
             "Location");
         await VerifyRowsAsync(
             connection,
-            $"SELECT tenant_id, order_id, order_number, customer_account_id, equipment_class, pickup_stop_id, delivery_stop_id, origin_location_id, destination_location_id, created_at, observation_version FROM {PostgresSchema}.orders;",
-            state.Orders.Select(value =>
-            {
-                var endpoints = SelectEndpoints(state, value);
-                return Row(
-                    value.TenantId,
-                    value.OrderId,
-                    value.OrderNumber,
-                    value.CustomerAccountId,
-                    value.EquipmentClass,
-                    endpoints.PickupStopId,
-                    endpoints.DeliveryStopId,
-                    endpoints.OriginLocationId,
-                    endpoints.DestinationLocationId,
-                    value.CreatedAt.ToUniversalTime(),
-                    1L);
-            }),
+            $"SELECT tenant_id, order_id, order_number, customer_account_id, equipment_class, created_at, observation_version FROM {PostgresSchema}.orders;",
+            state.Orders.Select(static value => Row(
+                value.TenantId,
+                value.OrderId,
+                value.OrderNumber,
+                value.CustomerAccountId,
+                value.EquipmentClass,
+                value.CreatedAt.ToUniversalTime(),
+                1L)),
             static reader => Row(
                 reader.GetString(0),
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetString(3),
                 reader.GetString(4),
-                reader.GetString(5),
-                reader.GetString(6),
-                reader.GetString(7),
-                reader.GetString(8),
-                new DateTimeOffset(reader.GetFieldValue<DateTime>(9)).ToUniversalTime(),
-                reader.GetInt64(10)),
+                new DateTimeOffset(reader.GetFieldValue<DateTime>(5)).ToUniversalTime(),
+                reader.GetInt64(6)),
             "Order");
         await VerifyRowsAsync(
             connection,
@@ -673,10 +651,9 @@ static class Program
         var customers = containers.Customers;
         var stops = containers.Stops;
         var locations = containers.Locations;
-        var occurredAtUtc = DateTimeOffset.UtcNow;
+        var occurredAtUtc = state.OccurredAtUtc;
         foreach (var value in state.Orders)
         {
-            var endpoints = SelectEndpoints(state, value);
             await orders.UpsertItemAsync(
                 new
                 {
@@ -693,10 +670,6 @@ static class Program
                         orderNumber = value.OrderNumber,
                         customerAccountId = value.CustomerAccountId,
                         equipmentClass = value.EquipmentClass,
-                        pickupStopId = endpoints.PickupStopId,
-                        deliveryStopId = endpoints.DeliveryStopId,
-                        originLocationId = endpoints.OriginLocationId,
-                        destinationLocationId = endpoints.DestinationLocationId,
                         createdAt = value.CreatedAt.ToString("O", CultureInfo.InvariantCulture)
                     },
                     occurredAtUtc
@@ -879,7 +852,6 @@ static class Program
         }
         foreach (var value in state.Orders)
         {
-            var endpoints = SelectEndpoints(state, value);
             items.Add(new(
                 Type: FreightOrderMaterializationModel.OrderShapeId.ShapeId.Value,
                 Id: value.OrderId,
@@ -890,10 +862,6 @@ static class Program
                     OrderNumber = value.OrderNumber,
                     CustomerAccountId = value.CustomerAccountId,
                     EquipmentClass = value.EquipmentClass,
-                    PickupStopId = endpoints.PickupStopId,
-                    DeliveryStopId = endpoints.DeliveryStopId,
-                    OriginLocationId = endpoints.OriginLocationId,
-                    DestinationLocationId = endpoints.DestinationLocationId,
                     CreatedAt = value.CreatedAt
                 },
                 Version: 1,
@@ -1097,27 +1065,6 @@ static class Program
             throw new InvalidOperationException($"{name} cannot be empty.");
     }
 
-    static OrderEndpoints SelectEndpoints(ScenarioState state, FreightOrder order)
-    {
-        var ordered = state.Stops
-            .Where(stop => stop.TenantId == order.TenantId && stop.OrderId == order.OrderId)
-            .OrderBy(static stop => stop.Sequence)
-            .ToArray();
-        var pickups = ordered.Where(static stop => stop.StopType == "Pickup").ToArray();
-        var drops = ordered.Where(static stop => stop.StopType == "Drop").ToArray();
-        Require(
-            pickups.Length == 1,
-            $"Order '{order.TenantId}/{order.OrderId}' has {pickups.Length} pickup endpoints; exactly one is required.");
-        Require(
-            drops.Length > 0,
-            $"Order '{order.TenantId}/{order.OrderId}' has no delivery endpoint.");
-        return new(
-            pickups[0].OrderStopId,
-            drops[^1].OrderStopId,
-            pickups[0].LocationId,
-            drops[^1].LocationId);
-    }
-
     sealed record SeedOptions(
         string ScenarioPath,
         string PostgresConnectionString,
@@ -1162,6 +1109,7 @@ static class Program
     sealed record ScenarioJournal(
         string SchemaVersion,
         string ScenarioId,
+        DateTimeOffset OccurredAtUtc,
         ImmutableArray<ScenarioOperation> Operations);
 
     sealed record ScenarioOperation(
@@ -1207,12 +1155,6 @@ static class Program
         public override string ToString() => $"{TenantId}/{Id}";
     }
 
-    readonly record struct OrderEndpoints(
-        string PickupStopId,
-        string DeliveryStopId,
-        string OriginLocationId,
-        string DestinationLocationId);
-
     sealed record CosmosSeedContainers(
         Database Database,
         Container Orders,
@@ -1253,6 +1195,7 @@ static class Program
 
     sealed record ScenarioState(
         string ScenarioId,
+        DateTimeOffset OccurredAtUtc,
         ImmutableArray<FreightOrder> Orders,
         ImmutableArray<CustomerAccount> Customers,
         ImmutableArray<OrderStop> Stops,

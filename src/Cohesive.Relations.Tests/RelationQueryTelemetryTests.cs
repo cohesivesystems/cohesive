@@ -441,7 +441,11 @@ public sealed class RelationQueryTelemetryTests
         var customerSource = placement.SourceInstances.Single(
             static source => source.Id == FederatedLoadPhysicalExecutionFixture.CustomersSource);
         DeterministicRelationQuerySourceReader reader = new(
-            new(customerSource.Id, customerSource.ExecutionDomain, customerSource.TargetProfile),
+            new(
+                customerSource.Id,
+                customerSource.ExecutionDomain,
+                customerSource.TargetProfile,
+                RelationQueryLogicalPartitionIdentity.WholeSource),
             [
                 DeterministicRelationQuerySourceReader.SourceRow.Create(
                     $"customer/{privatePayload}",

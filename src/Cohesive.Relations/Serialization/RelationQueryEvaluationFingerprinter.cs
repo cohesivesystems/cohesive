@@ -44,7 +44,7 @@ public static class RelationQueryEvaluationFingerprinter
     public const string Algorithm = "sha256";
 
     /// <summary>Canonical evaluation profile identifier.</summary>
-    public const string Canonicalization = "relation-query-evaluation/v1-c14n/v1";
+    public const string Canonicalization = "relation-query-evaluation/v2-c14n/v1";
 
     /// <summary>
     /// Computes a fingerprint over compilation snapshots, demand origin, evaluation identity, runtime input evidence,

@@ -135,6 +135,7 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
         Scope = new(
             reader.PhysicalPlan,
             placement,
+            reader.Descriptor.LogicalPartition,
             new MaterializationSourcePartitionId(
                 $"postgres/table/{reader.StorageBinding.Fingerprint.Value}/{Uri.EscapeDataString(placement.Id.Value)}/partition/{partitionIdentity}"),
             new MaterializationOrderingScopeId(

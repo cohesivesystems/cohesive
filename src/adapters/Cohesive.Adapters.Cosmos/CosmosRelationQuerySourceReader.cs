@@ -235,19 +235,9 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
             source.Id,
             source.ExecutionDomain,
             source.TargetProfile,
-            Policy.FixedPartitionKey is { } fixedPartition
-                ? new(
-                    Policy.PartitionSourceSelector,
-                    string.Concat(
-                        "cosmos/logical-scope/sha256/",
-                        CosmosMaterializationIdentity.ComputeReferenceFingerprint(
-                        [
-                            AccountEndpoint,
-                            DatabaseId,
-                            ContainerId,
-                            Policy.PartitionSourceSelector,
-                            fixedPartition.ToString()
-                        ])))
+            logicalPartition: Policy.LogicalPartition,
+            partitionBinding: Policy.FixedPartitionKey is not null
+                ? new(Policy.PartitionSourceSelector)
                 : null);
         IdentitySourceSelector = identitySourceSelector is null
             ? ObservationIdentitySourceSelector

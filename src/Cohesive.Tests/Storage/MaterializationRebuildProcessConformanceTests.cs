@@ -535,7 +535,8 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 descriptor: new(
                     source: rootPhysicalSource.Id,
                     executionDomain: rootPhysicalSource.ExecutionDomain,
-                    targetProfile: rootPhysicalSource.TargetProfile),
+                    targetProfile: rootPhysicalSource.TargetProfile,
+                    logicalPartition: plan.Shards[index].Scope.LogicalPartition),
                 result: new(
                     state: RelationQuerySourceReadState.Complete,
                     observations,

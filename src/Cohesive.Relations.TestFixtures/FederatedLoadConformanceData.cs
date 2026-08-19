@@ -131,6 +131,7 @@ static class FederatedLoadConformanceData
         var loads = CreateLoadRows(rootCount, distinctCustomerCount, distinctEquipmentCount);
         var supplied = new RelationQuerySuppliedSourceInput(
             source.Input.Id,
+            RelationQueryLogicalPartitionIdentity.WholeSource,
             RelationQueryEvidenceCompleteness.Complete,
             [
                 .. loads.Select(row => new RelationQuerySourceReadObservation(
@@ -153,11 +154,19 @@ static class FederatedLoadConformanceData
             customerRows = [.. customerRows.Where(static row => row.Identity != CustomerIdentity(1))];
         }
         var customerReader = new DeterministicRelationQuerySourceReader(
-            new(customerSource.Id, customerSource.ExecutionDomain, customerSource.TargetProfile),
+            new(
+                customerSource.Id,
+                customerSource.ExecutionDomain,
+                customerSource.TargetProfile,
+                RelationQueryLogicalPartitionIdentity.WholeSource),
             customerRows,
             recordRequests: recordRequests);
         var equipmentReader = new DeterministicRelationQuerySourceReader(
-            new(equipmentSource.Id, equipmentSource.ExecutionDomain, equipmentSource.TargetProfile),
+            new(
+                equipmentSource.Id,
+                equipmentSource.ExecutionDomain,
+                equipmentSource.TargetProfile,
+                RelationQueryLogicalPartitionIdentity.WholeSource),
             CreateEquipmentRows(distinctEquipmentCount),
             recordRequests: recordRequests);
         return new(
@@ -197,17 +206,29 @@ static class FederatedLoadConformanceData
             compilation,
             FederatedLoadPhysicalExecutionFixture.EquipmentSource);
         var loads = new DeterministicRelationQuerySourceReader(
-            new(loadSource.Id, loadSource.ExecutionDomain, loadSource.TargetProfile),
+            new(
+                loadSource.Id,
+                loadSource.ExecutionDomain,
+                loadSource.TargetProfile,
+                RelationQueryLogicalPartitionIdentity.WholeSource),
             CreateLoadRows(rootCount, distinctCustomerCount, distinctEquipmentCount),
             afterRead: afterLoadRead,
             recordRequests: recordRequests);
         var customers = new DeterministicRelationQuerySourceReader(
-            new(customerSource.Id, customerSource.ExecutionDomain, customerSource.TargetProfile),
+            new(
+                customerSource.Id,
+                customerSource.ExecutionDomain,
+                customerSource.TargetProfile,
+                RelationQueryLogicalPartitionIdentity.WholeSource),
             CreateCustomerRows(distinctCustomerCount),
             customerResultFactory,
             recordRequests: recordRequests);
         var equipment = new DeterministicRelationQuerySourceReader(
-            new(equipmentSource.Id, equipmentSource.ExecutionDomain, equipmentSource.TargetProfile),
+            new(
+                equipmentSource.Id,
+                equipmentSource.ExecutionDomain,
+                equipmentSource.TargetProfile,
+                RelationQueryLogicalPartitionIdentity.WholeSource),
             CreateEquipmentRows(distinctEquipmentCount),
             recordRequests: recordRequests);
         return new(

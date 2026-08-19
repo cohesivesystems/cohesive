@@ -5,26 +5,47 @@ using Cohesive.Relations.Model;
 
 namespace Cohesive.Relations.Physical;
 
-/// <summary>Proves the narrow row-preserving traversal chains supported by v1 federated acquisition.</summary>
+/// <summary>Closed source-occurrence acquisition strategy for a physical relationship traversal.</summary>
+internal enum RelationQueryPhysicalTraversalReachabilityMode
+{
+    /// <summary>Acquire only owners proven to survive the intervening left, at-most-one traversal chain.</summary>
+    ExactOccurrenceChain = 0,
+
+    /// <summary>
+    /// Acquire for every bounded occurrence of the declared source binding and let the canonical interpreter discard
+    /// evidence for occurrences removed by intervening semantic operators.
+    /// </summary>
+    ConservativeBindingOverAcquisition = 1
+}
+
+/// <summary>Resolved physical source-occurrence acquisition strategy for one traversal.</summary>
+/// <param name="Mode">Exact or conservative bounded acquisition strategy.</param>
+/// <param name="InterveningTraversals">
+/// Exact left, at-most-one traversal chain used by <see cref="RelationQueryPhysicalTraversalReachabilityMode.ExactOccurrenceChain"/>.
+/// </param>
+internal sealed record RelationQueryPhysicalTraversalReachability(
+    RelationQueryPhysicalTraversalReachabilityMode Mode,
+    ImmutableArray<RelationQueryTraversalInputContract> InterveningTraversals);
+
+/// <summary>Resolves the bounded source-occurrence acquisition strategy supported by federated acquisition.</summary>
 internal static class RelationQueryPhysicalReachability
 {
     /// <summary>
-    /// Tries to identify the left, at-most-one sibling traversals that must complete before
-    /// <paramref name="contract"/> can acquire the same source-binding occurrences.
+    /// Resolves either an exact left-row-preserving chain or conservative bounded over-acquisition from the declared
+    /// source binding. Conservative acquisition changes physical work, not logical results: the canonical interpreter
+    /// remains authoritative for filters, ordering, distinctness, cardinality, and downstream reachability.
     /// </summary>
     /// <param name="plan">Exact compiled semantic plan.</param>
-    /// <param name="contract">Traversal whose source-binding reachability is being proven.</param>
-    /// <param name="interveningTraversals">
-    /// Proven intervening traversals in semantic evaluation order, or an empty array for a direct traversal.
-    /// </param>
+    /// <param name="contract">Traversal whose source-binding reachability is being resolved.</param>
+    /// <param name="reachability">Resolved acquisition strategy.</param>
     /// <returns>
-    /// <see langword="true"/> when every intervening node is a left, at-most-one traversal from the same
-    /// source binding; otherwise, <see langword="false"/>.
+    /// <see langword="true"/> when the traversal and its declared source binding each have one exact producer;
+    /// otherwise, <see langword="false"/>.
     /// </returns>
-    internal static bool TryGetPreservingInterveningTraversals(
+    internal static bool TryResolve(
         CompiledRelationQueryPlan plan,
         RelationQueryTraversalInputContract contract,
-        out ImmutableArray<RelationQueryTraversalInputContract> interveningTraversals)
+        out RelationQueryPhysicalTraversalReachability reachability)
     {
         var nodes = plan.ExecutionSlice.Nodes
             .Select(static execution => execution.CanonicalNode)
@@ -32,7 +53,7 @@ internal static class RelationQueryPhysicalReachability
         if (!nodes.TryGetValue(contract.Input.Traversal, out var canonical)
             || canonical is not TraverseRelationshipQueryNode traversalNode)
         {
-            interveningTraversals = [];
+            reachability = null!;
             return false;
         }
 
@@ -47,7 +68,7 @@ internal static class RelationQueryPhysicalReachability
         ];
         if (producers.Length != 1)
         {
-            interveningTraversals = [];
+            reachability = null!;
             return false;
         }
 
@@ -56,14 +77,20 @@ internal static class RelationQueryPhysicalReachability
         var cursor = traversalNode.Input;
         while (cursor != producers[0])
         {
-            if (!visited.Add(cursor)
-                || !nodes.TryGetValue(cursor, out var intervening)
-                || intervening is not TraverseRelationshipQueryNode prior
+            if (!visited.Add(cursor) || !nodes.TryGetValue(cursor, out var intervening))
+            {
+                reachability = null!;
+                return false;
+            }
+
+            if (intervening is not TraverseRelationshipQueryNode prior
                 || prior.JoinKind != JoinKind.Left
                 || prior.From != contract.From)
             {
-                interveningTraversals = [];
-                return false;
+                reachability = new(
+                    RelationQueryPhysicalTraversalReachabilityMode.ConservativeBindingOverAcquisition,
+                    []);
+                return true;
             }
 
             var priorContracts = plan.InputContract.Traversals
@@ -74,8 +101,10 @@ internal static class RelationQueryPhysicalReachability
                 || priorContracts[0].From != contract.From
                 || priorContracts[0].Cardinality != RelationshipTraversalCardinality.AtMostOne)
             {
-                interveningTraversals = [];
-                return false;
+                reachability = new(
+                    RelationQueryPhysicalTraversalReachabilityMode.ConservativeBindingOverAcquisition,
+                    []);
+                return true;
             }
 
             reversed.Add(priorContracts[0]);
@@ -83,7 +112,9 @@ internal static class RelationQueryPhysicalReachability
         }
 
         reversed.Reverse();
-        interveningTraversals = [.. reversed];
+        reachability = new(
+            RelationQueryPhysicalTraversalReachabilityMode.ExactOccurrenceChain,
+            [.. reversed]);
         return true;
     }
 }

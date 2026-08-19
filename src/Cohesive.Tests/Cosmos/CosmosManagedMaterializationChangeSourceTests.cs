@@ -1190,6 +1190,7 @@ public sealed class CosmosManagedMaterializationChangeSourceTests
     {
         CosmosRelationQuerySourcePolicy queryPolicy = new(
             partitionSourceSelector: partitionSourceSelector,
+            logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
             crossPartitionPolicy: fixedPartition
                 ? CosmosRelationQueryCrossPartitionPolicy.Prohibit
                 : CosmosRelationQueryCrossPartitionPolicy.AllowBoundedQueries,

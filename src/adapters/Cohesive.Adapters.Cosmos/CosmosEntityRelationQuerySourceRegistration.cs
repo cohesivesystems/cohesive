@@ -179,6 +179,7 @@ public static class CosmosEntityRelationQuerySourceRegistration
         Append(identitySourceSelector);
         Append(entityDocumentKind);
         Append(policy.PartitionSourceSelector);
+        Append(policy.LogicalPartition.Value);
         Append(((int)policy.CrossPartitionPolicy).ToString(CultureInfo.InvariantCulture));
         Append(policy.FixedPartitionKey?.ToString());
         Append(policy.MaximumEnumerationRows.ToString(CultureInfo.InvariantCulture));

@@ -17,8 +17,8 @@ namespace Cohesive.Storage.Materialization;
 /// </remarks>
 public static class MaterializationChannelSemantics
 {
-    const string ScopePrefix = "materialization-channel-scope:v1:sha256:";
-    const string CouplingPrefix = "materialization-channel-settlement:v1:sha256:";
+    const string ScopePrefix = "materialization-channel-scope:v2:sha256:";
+    const string CouplingPrefix = "materialization-channel-settlement:v2:sha256:";
     static readonly JsonSerializerOptions CanonicalJsonOptions = MaterializationJsonSerializer.CreateOptions();
 
     /// <summary>Projects one exact materialization source scope into a stable Channel binding scope.</summary>

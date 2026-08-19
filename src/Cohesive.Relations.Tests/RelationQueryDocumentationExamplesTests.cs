@@ -179,13 +179,21 @@ public sealed class RelationQueryDocumentationExamplesTests
             compilation,
             FederatedLoadPhysicalExecutionFixture.CustomersSource);
         var loadReader = new DeterministicRelationQuerySourceReader(
-            new(loads.Id, loads.ExecutionDomain, loads.TargetProfile),
+            new(
+                loads.Id,
+                loads.ExecutionDomain,
+                loads.TargetProfile,
+                RelationQueryLogicalPartitionIdentity.WholeSource),
             FederatedLoadConformanceData.CreateLoadRows(
                 RootCount,
                 distinctCustomerCount: 2,
                 distinctEquipmentCount: 1));
         var customerReader = new DeterministicRelationQuerySourceReader(
-            new(customers.Id, customers.ExecutionDomain, customers.TargetProfile),
+            new(
+                customers.Id,
+                customers.ExecutionDomain,
+                customers.TargetProfile,
+                RelationQueryLogicalPartitionIdentity.WholeSource),
             FederatedLoadConformanceData.CreateCustomerRows(count: 2));
 
         var evaluation = FederatedLoadRelationFixture.ConformanceQueryDocument

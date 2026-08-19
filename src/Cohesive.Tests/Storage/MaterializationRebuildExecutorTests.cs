@@ -875,7 +875,8 @@ public sealed partial class MaterializationRebuildExecutorTests
                 new RelationQuerySourceReaderDescriptor(
                     source: rootPhysicalSource.Id,
                     executionDomain: rootPhysicalSource.ExecutionDomain,
-                    targetProfile: rootPhysicalSource.TargetProfile),
+                    targetProfile: rootPhysicalSource.TargetProfile,
+                    logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource),
                 new RelationQuerySourceReadResult(
                     state: RelationQuerySourceReadState.Complete,
                     observations: observations,

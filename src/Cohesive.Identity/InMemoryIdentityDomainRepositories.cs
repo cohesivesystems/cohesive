@@ -1,3 +1,4 @@
+using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Physical;
 using Cohesive.Storage;
@@ -40,13 +41,18 @@ public sealed record InMemoryIdentityDomainRepositories(
         ArgumentNullException.ThrowIfNull(ScopeMemberships);
         EntityRelationQuerySourceCatalog sources = new(
         [
-            EntityRelationQuerySourceRegistration.InMemory(IdentityDomainModel.ScopeShape, Scopes),
+            EntityRelationQuerySourceRegistration.InMemory(
+                IdentityDomainModel.ScopeShape,
+                Scopes,
+                RelationQueryLogicalPartitionIdentity.WholeSource),
             EntityRelationQuerySourceRegistration.InMemory(
                 IdentityDomainModel.PrincipalAccountShape,
-                PrincipalAccounts),
+                PrincipalAccounts,
+                RelationQueryLogicalPartitionIdentity.WholeSource),
             EntityRelationQuerySourceRegistration.InMemory(
                 IdentityDomainModel.ScopeMembershipShape,
-                ScopeMemberships)
+                ScopeMemberships,
+                RelationQueryLogicalPartitionIdentity.WholeSource)
         ]);
         return new EntityRepositoryIdentityDirectory(
             sources.CreateEvaluator(physicalPlanningPolicy ?? DefaultPhysicalPlanningPolicy),
