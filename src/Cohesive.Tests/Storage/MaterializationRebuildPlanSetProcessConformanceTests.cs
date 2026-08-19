@@ -23,7 +23,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
             host: RejectingHost.Instance,
             options: RuntimeOptions("worker/materialization-plan-set/shards"),
             bindingResolver: new ExactBindingResolver([artifacts.Leaf.ShardRebuildBinding]),
-            operationAdapterResolver: new ExactAdapterResolver(
+            operationAdapterResolver: new DurableOperationAdapterCatalog(
             [
                 new MaterializationRebuildShardDurableOperationAdapter(
                     request: artifacts.Leaf.ShardRebuildRequest,
@@ -39,14 +39,14 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 artifacts.Leaf.WorkerInvocationBinding,
                 artifacts.Leaf.SynchronizationPreparationBinding
             ]),
-            operationAdapterResolver: new ExactAdapterResolver(
+            operationAdapterResolver: new DurableOperationAdapterCatalog(
             [
                 new MaterializationRebuildInitializationDurableOperationAdapter(
                     request: artifacts.Leaf.InitializationRequest,
                     resolver: executionResolver),
                 new ProcessChildDurableOperationAdapter(
                     runtime: workerRuntime,
-                    planResolver: new ExactChildPlanResolver(artifacts.Leaf.WorkerPlan),
+                    planResolver: new ProcessChildPlanCatalog([artifacts.Leaf.WorkerPlan]),
                     supportedRequests: [artifacts.Leaf.WorkerInvocationRequest]),
                 new MaterializationSynchronizationPreparationDurableOperationAdapter(
                     request: artifacts.Leaf.SynchronizationPreparationRequest,
@@ -75,7 +75,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 artifacts.PreparePromotionBinding,
                 artifacts.ApplyPromotionBinding
             ]),
-            operationAdapterResolver: new ExactAdapterResolver(
+            operationAdapterResolver: new DurableOperationAdapterCatalog(
             [
                 activationAdapter,
                 new MaterializationIndependentPromotionPreparationDurableOperationAdapter(
@@ -111,7 +111,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
         var leafChildAdapter = new CompletionObservingAdapter(
             new ProcessChildDurableOperationAdapter(
                 runtime: leafRuntime,
-                planResolver: new ExactChildPlanResolver(artifacts.Leaf.CoordinatorPlan),
+                planResolver: new ProcessChildPlanCatalog([artifacts.Leaf.CoordinatorPlan]),
                 supportedRequests: [artifacts.LeafInvocationRequest]),
             () => childCompleted = true);
         var parentRuntime = new ProcessDurableRuntime(
@@ -128,7 +128,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 artifacts.PromotionInvocationBinding,
                 artifacts.FinalizeBinding
             ]),
-            operationAdapterResolver: new ExactAdapterResolver(
+            operationAdapterResolver: new DurableOperationAdapterCatalog(
             [
                 new MaterializationRebuildPlanSetInitializationDurableOperationAdapter(
                     request: artifacts.InitializationRequest,
@@ -142,7 +142,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                     parentPlan: artifacts.ParentPlan),
                 new ProcessChildDurableOperationAdapter(
                     runtime: promotionRuntime,
-                    planResolver: new ExactChildPlanResolver(artifacts.PromotionWorkerPlan),
+                    planResolver: new ProcessChildPlanCatalog([artifacts.PromotionWorkerPlan]),
                     supportedRequests: [artifacts.PromotionInvocationRequest]),
                 new MaterializationRebuildPlanSetFinalizationDurableOperationAdapter(
                     request: artifacts.FinalizeRequest,

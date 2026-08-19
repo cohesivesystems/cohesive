@@ -152,13 +152,17 @@ public sealed class FreightOrderRebuildPlanCompilation
     /// <param name="impactInterpreter">
     /// Factory returning the definition-linked impact interpreter for one exact persisted feed.
     /// </param>
+    /// <param name="controlRuntimeProvider">
+    /// Durable Control runtime provider implementing this exact plan's declared safe-point policy.
+    /// </param>
     /// <returns>A fully validated runtime rebuild plan.</returns>
     /// <exception cref="ArgumentNullException">A required runtime dependency is null.</exception>
     /// <exception cref="ArgumentException">Any runtime dependency differs from persisted plan evidence.</exception>
     public ResolvedMaterializationRebuildPlan Resolve(
         IMaterializationTarget target,
         IMaterializationProgressStore progressStore,
-        Func<MaterializationChangeFeedPlan, MaterializationImpactPlanInterpreter> impactInterpreter)
+        Func<MaterializationChangeFeedPlan, MaterializationImpactPlanInterpreter> impactInterpreter,
+        MaterializationIndexSyncControlRuntimeProvider? controlRuntimeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(progressStore);
@@ -182,7 +186,8 @@ public sealed class FreightOrderRebuildPlanCompilation
             target: target,
             progressStore: progressStore,
             shardBindings: shards,
-            changeFeedBindings: feeds);
+            changeFeedBindings: feeds,
+            controlRuntimeProvider: controlRuntimeProvider);
     }
 }
 

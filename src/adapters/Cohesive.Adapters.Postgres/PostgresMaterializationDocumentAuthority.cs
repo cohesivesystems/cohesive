@@ -11,12 +11,10 @@ namespace Cohesive.Adapters.Postgres;
 /// </summary>
 /// <remarks>
 /// Semantic stores own document meaning and mutation rules. This component owns only PostgreSQL row initialization,
-/// serializable locking, byte limits, content fingerprints, and compare-and-swap replacement.
+/// row locking, byte limits, content fingerprints, and compare-and-swap replacement.
 /// </remarks>
 internal sealed class PostgresMaterializationDocumentAuthority
 {
-    const int MaximumSerializationAttempts = 8;
-
     readonly NpgsqlDataSource dataSource;
     readonly PostgresMaterializationStateStoreOptions options;
 
@@ -54,27 +52,16 @@ internal sealed class PostgresMaterializationDocumentAuthority
         Func<TDocument, OperationContext, Task<(TResult Result, TDocument Replacement)>> operation)
         where TDocument : class
     {
-        for (var attempt = 1; ; attempt++)
-        {
-            try
-            {
-                return await AccessOnceAsync(
+        return await PostgresSerializationRetrier.ExecuteAsync(
+                context: context,
+                operation: () => AccessOnceAsync(
                         context: context,
                         authorityKind: authorityKind,
                         empty: empty,
                         deserialize: deserialize,
                         serialize: serialize,
-                        operation: operation)
-                    .ConfigureAwait(false);
-            }
-            catch (PostgresException exception) when (
-                attempt < MaximumSerializationAttempts
-                && exception.SqlState is PostgresErrorCodes.SerializationFailure
-                    or PostgresErrorCodes.DeadlockDetected)
-            {
-                context.ThrowIfCancellationRequested();
-            }
-        }
+                        operation: operation))
+            .ConfigureAwait(false);
     }
 
     async Task<TResult> AccessOnceAsync<TDocument, TResult>(
@@ -95,8 +82,11 @@ internal sealed class PostgresMaterializationDocumentAuthority
         var cancellationToken = context.CancellationToken;
         var authorityId = $"{options.AuthorityId}/{Guard.RequireNotNullOrWhiteSpace(authorityKind)}";
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        // This transaction reads and conditionally replaces one authority row. The row lock is the serialization
+        // boundary; ReadCommitted observes the version current when that lock is acquired and avoids stale-snapshot
+        // aborts when another authority mutation commits while this transaction is waiting.
         await using var transaction = await connection.BeginTransactionAsync(
-                IsolationLevel.Serializable,
+                IsolationLevel.ReadCommitted,
                 cancellationToken)
             .ConfigureAwait(false);
 

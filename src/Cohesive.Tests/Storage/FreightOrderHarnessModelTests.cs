@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Cohesive.Control;
 using Cohesive.Execution;
 using Cohesive.MaterializationHarness.Model;
 using Cohesive.Model;
@@ -29,13 +30,18 @@ public sealed class FreightOrderHarnessModelTests
 
         Assert.Equal(first.DefinitionFingerprint, second.DefinitionFingerprint);
         Assert.Equal(
-            "d65c19d0117eded93b158dd0d76b8d76c5783e2fd3cc6714bcc2144eb8381156",
+            "b938e9df3a38b20c1331941f255e93cb68628db7922bb64e361f7132b36fc1d9",
             first.DefinitionFingerprint.Value);
         Assert.Equal(MaterializationSynchronizationMode.All, first.Definition.UpdatePolicy.SupportedModes);
         Assert.Equal(MaterializationConsistencyKind.BaselinePlusCatchUp, first.Definition.UpdatePolicy.Consistency);
         Assert.Single(first.Plan.InputContract.Sources);
         Assert.Equal(5, first.Plan.InputContract.Traversals.Length);
         Assert.Equal(6, first.Definition.Sources.Length);
+        var control = Assert.Single(first.Definition.ControlLoops);
+        var workload = Assert.Single(first.Definition.ControlWorkloads);
+        Assert.Equal(ControlStageKind.Target, control.Stage);
+        Assert.Equal(MaterializationIndexSyncWorkloadKind.Rebuild, workload.Workload);
+        Assert.Equal(control.Id, workload.LoopId);
         Assert.Equal(
             2,
             first.Plan.InputContract.Traversals.Count(static traversal =>
@@ -104,7 +110,7 @@ public sealed class FreightOrderHarnessModelTests
             .WithBoundedRelationRebuildSources(maximumItems: 64, maximumBytes: 1_048_576)
             .WithGenerationalIndexTarget(maximumItems: 16, maximumBytes: 1_048_576)
             .WithFailurePolicy(new(maximumAttempts: 3, MaterializationFailureDisposition.Stop))
-            .WithFreshnessPolicy(new(maximumLagMilliseconds: 30_000))
+            .WithFreshnessPolicy(new(maximumLagMilliseconds: 1_800_000))
             .WithProvenance(Provenance("baseline-catch-up"))
             .Build();
 
@@ -285,19 +291,26 @@ public sealed class FreightOrderHarnessModelTests
             Target("target/retirement", MaterializationCapabilityKind.TargetRetirement),
             Target("target/cleanup", MaterializationCapabilityKind.TargetCleanup)
         ];
+        var targetBatchControl = TargetBatchControl(maximumWriteItems);
         return new(
-            new("freight/order-search"),
-            MaterializationRelationReference.From(semantics.CompilationRequest, semantics.Output.Id),
-            sources,
-            target,
-            new(
+            id: new("freight/order-search"),
+            relation: MaterializationRelationReference.From(semantics.CompilationRequest, semantics.Output.Id),
+            sources: sources,
+            targetCapabilities: target,
+            updatePolicy: new(
                 MaterializationSynchronizationMode.All,
                 MaterializationConsistencyKind.BaselinePlusCatchUp,
                 MaterializationIdempotencyKind.StableOutputIdentityAndVersion),
-            new(maximumAttempts: 3, MaterializationFailureDisposition.Stop),
-            new(maximumLagMilliseconds: 30_000),
-            [],
-            Provenance("freight-order-search"));
+            failurePolicy: new(maximumAttempts: 3, MaterializationFailureDisposition.Stop),
+            freshnessPolicy: new(maximumLagMilliseconds: 1_800_000),
+            controlLoops: [targetBatchControl],
+            provenance: Provenance("freight-order-search"),
+            controlWorkloads:
+            [
+                new(
+                    loopId: targetBatchControl.Id,
+                    workload: MaterializationIndexSyncWorkloadKind.Rebuild)
+            ]);
 
         static MaterializationCapabilityRequirement Target(
             string id,
@@ -338,6 +351,51 @@ public sealed class FreightOrderHarnessModelTests
                 ? MaterializationSynchronizationMode.All
                 : MaterializationSynchronizationMode.Rebuild);
     }
+
+    static ControlLoopDefinition TargetBatchControl(long maximumWriteItems) => new(
+        schemaVersion: ControlLoopDefinition.CurrentSchemaVersion,
+        id: new("freight-order-search/elastic-target-batch"),
+        target: "freight/order-search",
+        applicationAuthority: MaterializationIndexSyncControlCompiler.ApplicationAuthority,
+        stage: ControlStageKind.Target,
+        hardLimits: new([
+            new(
+                range: new(
+                    actuator: ControlActuatorKind.BatchItems,
+                    minimum: new(1, ControlUnit.Count),
+                    maximum: new(maximumWriteItems, ControlUnit.Count)),
+                origin: ControlHardLimitOrigin.Semantic,
+                authority: "materialization-harness/freight/order-search/v1")
+        ]),
+        initialOperatingPoint: new([
+            new(
+                actuator: ControlActuatorKind.BatchItems,
+                quantity: new(maximumWriteItems, ControlUnit.Count))
+        ]),
+        objectives:
+        [
+            new(
+                metric: ControlMetricKind.RejectionRatio,
+                statistic: ControlStatisticKind.Last,
+                direction: ControlObjectiveDirection.HigherIsCongested,
+                recoveryBoundary: new(0, ControlUnit.BasisPoints),
+                congestionBoundary: new(2_500, ControlUnit.BasisPoints))
+        ],
+        policy: AimdControlPolicyResolver.Resolve(
+            actuator: ControlActuatorKind.BatchItems,
+            layers: [new AimdControlPolicyLayer(
+                origin: EffectiveConfigurationOrigin.Explicit,
+                authority: "materialization-harness/freight/control-policy/v1",
+                settings: new AimdControlPolicySettings(
+                    additiveIncrease: 1,
+                    multiplicativeDecreaseBasisPoints: 5_000,
+                    healthyObservationCount: 2,
+                    recoveryCooldownMilliseconds: 1_000,
+                    minimumDwellMilliseconds: 1_000,
+                    maximumObservationAgeMilliseconds: 60_000,
+                    minimumSampleCount: 1))]),
+        budgets: [],
+        provenance: Provenance("freight-order-search-control"));
 
     static async Task<RelationQueryOutputRow> ExecuteAsync(
         FreightOrderMaterializationSemantics semantics,

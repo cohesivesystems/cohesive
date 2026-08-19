@@ -56,6 +56,7 @@ public static class Program
         {
             var postgresPlan = CreateProviderPlan(ProviderKind.Postgres, semantics);
             var cosmosPlan = CreateProviderPlan(ProviderKind.Cosmos, semantics);
+            Console.WriteLine($"Validated canonical definition: {semantics.DefinitionFingerprint.Value}.");
             Console.WriteLine(
                 $"Validated provider plans: postgres={postgresPlan.HydrationPhysicalPlan.Fingerprint.Value}, "
                 + $"cosmos={cosmosPlan.HydrationPhysicalPlan.Fingerprint.Value}.");
@@ -831,7 +832,7 @@ public static class Program
             [customerSource, stopSource, locationSource]);
     }
 
-    static FreightOrderRebuildPlanCompilation CompilePostgresRebuildPlan(
+    internal static FreightOrderRebuildPlanCompilation CompilePostgresRebuildPlan(
         FreightOrderMaterializationSemantics semantics,
         ProviderPlan plan,
         ElasticMaterializationTarget target,
@@ -923,7 +924,7 @@ public static class Program
             tenantBindings: bindings);
     }
 
-    static FreightOrderRebuildPlanCompilation CompileCosmosRebuildPlan(
+    internal static FreightOrderRebuildPlanCompilation CompileCosmosRebuildPlan(
         FreightOrderMaterializationSemantics semantics,
         ProviderPlan plan,
         ElasticMaterializationTarget target,
@@ -1078,7 +1079,7 @@ public static class Program
             placementFingerprint: placement.Fingerprint);
     }
 
-    static ElasticMaterializationTargetBinding CreateTargetBinding(
+    internal static ElasticMaterializationTargetBinding CreateTargetBinding(
         ProviderKind provider,
         FreightOrderMaterializationSemantics semantics,
         ElasticClusterId clusterId)
@@ -1108,7 +1109,7 @@ public static class Program
                 []));
     }
 
-    static ElasticMaterializationTarget CreateTarget(
+    internal static ElasticMaterializationTarget CreateTarget(
         ElasticMaterializationTargetBinding binding,
         Uri endpoint)
     {
@@ -1276,7 +1277,7 @@ public static class Program
         return new(new(reader, profile));
     }
 
-    static CosmosClient CreateCosmosClient(string connectionString)
+    internal static CosmosClient CreateCosmosClient(string connectionString)
     {
         CosmosClientOptions options = new()
         {
@@ -1405,7 +1406,7 @@ public static class Program
             Environment.NewLine,
             result.Diagnostics.Select(static diagnostic => diagnostic.Message)));
 
-    static async Task<ElasticClusterId> ReadClusterIdAsync(HttpClient client)
+    internal static async Task<ElasticClusterId> ReadClusterIdAsync(HttpClient client)
     {
         using var response = await client.GetAsync("/");
         response.EnsureSuccessStatusCode();
@@ -1415,7 +1416,7 @@ public static class Program
             ?? throw new InvalidOperationException("Elasticsearch returned no cluster UUID."));
     }
 
-    static async Task EnsureLocalElasticTemplatesAsync(
+    internal static async Task EnsureLocalElasticTemplatesAsync(
         HttpClient client,
         ElasticMaterializationTargetBinding binding,
         string provider)
@@ -1477,7 +1478,7 @@ public static class Program
             .OrderBy(static value => value, StringComparer.Ordinal)];
     }
 
-    static async Task<ImmutableArray<string>> ReadCanonicalDocumentsAsync(HttpClient client, string alias)
+    internal static async Task<ImmutableArray<string>> ReadCanonicalDocumentsAsync(HttpClient client, string alias)
     {
         using var response = await client.GetAsync(
             $"/{Uri.EscapeDataString(alias)}/_search?size=100&filter_path=hits.hits._source.value");
@@ -1499,7 +1500,7 @@ public static class Program
         $"{provider}/{tenant} hydration failed ({result.Status}): "
         + string.Join(" ", result.Diagnostics.Select(static diagnostic => diagnostic.Message));
 
-    static string ProviderName(ProviderKind provider) => provider switch
+    internal static string ProviderName(ProviderKind provider) => provider switch
     {
         ProviderKind.Postgres => "postgres",
         ProviderKind.Cosmos => "cosmos",
@@ -1540,7 +1541,7 @@ public static class Program
         string DefinitionFingerprint,
         ImmutableArray<string> Documents);
 
-    sealed record HarnessOptions(
+    internal sealed record HarnessOptions(
         string PostgresConnectionString,
         string CosmosConnectionString,
         string CosmosDatabase,
