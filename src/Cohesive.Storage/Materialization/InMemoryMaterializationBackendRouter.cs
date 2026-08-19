@@ -40,8 +40,76 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
             throw new ArgumentException("The target pool must implement the exact routed backend-pool definition.", nameof(targets));
     }
 
+    /// <summary>Restores one complete portable routing authority without replaying target I/O.</summary>
+    /// <param name="document">Canonical pool document and content fingerprint.</param>
+    /// <param name="targets">Exact-ID dependency pool implementing the document's members.</param>
+    /// <param name="authority">Complete portable authority state to restore.</param>
+    /// <param name="timeProvider">Clock used only to timestamp subsequently committed routing receipts.</param>
+    /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The dependency pool implements another definition or <paramref name="authority"/> belongs to another pool.
+    /// </exception>
+    public InMemoryMaterializationBackendRouter(
+        MaterializationBackendPoolDocument document,
+        IMaterializationTargetPool targets,
+        MaterializationBackendRoutingAuthorityDocument authority,
+        TimeProvider? timeProvider = null)
+        : this(document, targets, timeProvider)
+    {
+        Restore(authority ?? throw new ArgumentNullException(nameof(authority)));
+    }
+
     /// <summary>Canonical pool definition and exact content fingerprint governing this router.</summary>
     public MaterializationBackendPoolDocument Document { get; }
+
+    /// <summary>Captures the complete provider-neutral authority state under the router's linearization gate.</summary>
+    /// <param name="context">Operation context carrying cancellation and trace metadata.</param>
+    /// <returns>A canonical portable document suitable for exact persistence and reconstruction.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="context"/> is <see langword="null"/>.</exception>
+    /// <exception cref="OperationCanceledException">The operation cancellation token was cancelled.</exception>
+    /// <exception cref="ObjectDisposedException">The router has been disposed.</exception>
+    public async ValueTask<MaterializationBackendRoutingAuthorityDocument> CaptureAsync(OperationContext context)
+    {
+        RequireContext(context);
+        await EnterAsync(context).ConfigureAwait(false);
+        try
+        {
+            return new(
+                schemaVersion: MaterializationBackendRoutingAuthorityDocument.CurrentSchemaVersion,
+                pool: MaterializationBackendPoolReference.FromDocument(Document),
+                scopes:
+                [
+                    .. scopes.Values
+                        .Where(static state => state.HasDurableState)
+                        .Select(static state => new MaterializationBackendRoutingScopeDocument(
+                            snapshot: Snapshot(state),
+                            commands:
+                            [
+                                .. state.Intents.Select(entry => new MaterializationBackendRoutingCommandState(
+                                    command: entry.Value.Request,
+                                    isExpectedFollowUp: entry.Value.IsExpectedFollowUp,
+                                    isCancelled: entry.Value.IsCancelled,
+                                    receipt: state.Receipts.TryGetValue(entry.Key, out var receipt)
+                                        ? receipt.Receipt
+                                        : null))
+                            ]))
+                ],
+                physicalCleanup:
+                [
+                    .. physicalCleanup.Values.Select(static cleanup => new MaterializationBackendPhysicalCleanupDocument(
+                        reservation: cleanup.Reservation,
+                        completion: cleanup.Completion is { } completion
+                            ? new MaterializationBackendPhysicalCleanupCompletion(
+                                cleanupFingerprint: completion.CleanupFingerprint,
+                                observedAtUtc: completion.ObservedAtUtc)
+                            : null))
+                ]);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
 
     /// <inheritdoc />
     public async ValueTask<MaterializationBackendRoutingSnapshot> InspectAsync(
@@ -692,7 +760,7 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
     MaterializationBackendRoutingResult? BeginCommand(
         ScopeState state,
         MaterializationBackendRoutingCommandHeader header,
-        object request)
+        IMaterializationBackendRoutingCommand request)
     {
         if (header is null)
             return Reject(state, MaterializationBackendRoutingDisposition.EvidenceConflict, "A routing command requires a header.");
@@ -752,7 +820,7 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
     MaterializationBackendRoutingResult Commit(
         ScopeState state,
         MaterializationBackendRoutingCommandHeader header,
-        object request,
+        IMaterializationBackendRoutingCommand request,
         MaterializationBackendRoutingOperation operation,
         MaterializationBackendRoutingRevision? committedRevision = null)
     {
@@ -848,7 +916,7 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
 
     static bool IsAllowedPendingFollowUpCommand(
         ScopeState state,
-        object request) =>
+        IMaterializationBackendRoutingCommand request) =>
         state.PendingFollowUp is { } pending
         && (request is MaterializationSwapBackendRoutingRequest swap && swap == pending.Request
             || request is MaterializationAbandonBackendCandidateRequest abandonment
@@ -950,6 +1018,74 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
         context.CancellationToken.ThrowIfCancellationRequested();
     }
 
+    void Restore(MaterializationBackendRoutingAuthorityDocument authority)
+    {
+        var expectedPool = MaterializationBackendPoolReference.FromDocument(Document);
+        if (authority.Pool != expectedPool)
+        {
+            throw new ArgumentException(
+                "The routing-authority document belongs to another backend-pool definition.",
+                nameof(authority));
+        }
+
+        foreach (var scope in authority.Scopes)
+        {
+            var snapshot = scope.Snapshot;
+            var state = GetOrCreateState(snapshot.PlacementSlice);
+            state.Revision = snapshot.Revision;
+            state.LatestFence = snapshot.LatestFence;
+            state.ActiveRead = snapshot.ActiveRead;
+            state.ActiveWrite = snapshot.ActiveWrite;
+            state.Candidate = snapshot.Candidate;
+            state.PendingFollowUp = snapshot.PendingFollowUp;
+            state.EffectiveConfiguration = snapshot.Configuration;
+            foreach (var drain in snapshot.Draining)
+            {
+                state.Draining.Add(drain.Generation, drain);
+            }
+            foreach (var retirement in snapshot.Retired)
+            {
+                state.Retired.Add(retirement.Generation, retirement);
+            }
+            foreach (var generation in snapshot.Cleaned)
+            {
+                state.Cleaned.Add(generation);
+            }
+
+            foreach (var command in scope.Commands)
+            {
+                var commandId = command.Command.Header.CommandId;
+                var intent = new StoredCommandIntent(
+                    request: command.Command,
+                    isExpectedFollowUp: command.IsExpectedFollowUp)
+                {
+                    IsCancelled = command.IsCancelled
+                };
+                state.Intents.Add(commandId, intent);
+                if (command.Receipt is { } receipt)
+                {
+                    state.Receipts.Add(
+                        commandId,
+                        new StoredCommandReceipt(
+                            Request: command.Command,
+                            Receipt: receipt));
+                }
+            }
+        }
+
+        foreach (var cleanup in authority.PhysicalCleanup)
+        {
+            var restored = new PhysicalCleanupState(cleanup.Reservation);
+            if (cleanup.Completion is { } completion)
+            {
+                restored.Completion = new PhysicalCleanupCompletion(
+                    CleanupFingerprint: completion.CleanupFingerprint,
+                    ObservedAtUtc: completion.ObservedAtUtc);
+            }
+            physicalCleanup.Add(cleanup.Reservation.Generation, restored);
+        }
+    }
+
     sealed class ScopeState(MaterializationPlacementSliceReference placementSlice)
     {
         internal MaterializationPlacementSliceReference PlacementSlice { get; } = placementSlice;
@@ -977,11 +1113,27 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
         internal MaterializationBackendFollowUpReservation? PendingFollowUp { get; set; }
 
         internal MaterializationBackendRoutingConfiguration? EffectiveConfiguration { get; set; }
+
+        internal bool HasDurableState =>
+            Revision != MaterializationBackendRoutingRevision.Initial
+            || LatestFence is not null
+            || ActiveRead is not null
+            || ActiveWrite is not null
+            || Candidate is not null
+            || PendingFollowUp is not null
+            || EffectiveConfiguration is not null
+            || Receipts.Count != 0
+            || Intents.Count != 0
+            || Draining.Count != 0
+            || Retired.Count != 0
+            || Cleaned.Count != 0;
     }
 
-    sealed class StoredCommandIntent(object request, bool isExpectedFollowUp = false)
+    sealed class StoredCommandIntent(
+        IMaterializationBackendRoutingCommand request,
+        bool isExpectedFollowUp = false)
     {
-        internal object Request { get; } = request;
+        internal IMaterializationBackendRoutingCommand Request { get; } = request;
 
         internal bool IsExpectedFollowUp { get; } = isExpectedFollowUp;
 
@@ -991,7 +1143,9 @@ public sealed class InMemoryMaterializationBackendRouter : IMaterializationBacke
             new(request, isExpectedFollowUp: true);
     }
 
-    sealed record StoredCommandReceipt(object Request, MaterializationBackendRoutingReceipt Receipt);
+    sealed record StoredCommandReceipt(
+        IMaterializationBackendRoutingCommand Request,
+        MaterializationBackendRoutingReceipt Receipt);
 
     sealed class PhysicalCleanupState(MaterializationBackendCleanupReservation reservation)
     {

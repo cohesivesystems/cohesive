@@ -28,6 +28,41 @@ The focused
 example authors one Load-to-Customer query, then shows why co-located PostgreSQL tables compile to one inline
 `LEFT JOIN` while separately stored Cosmos documents require bounded composed acquisition.
 
+## Durable materialization runtime authorities
+
+`PostgresMaterializationStateStore` persists progress, prepared synchronization work, and Control state.
+`PostgresMaterializationBackendRouter` persists the complete backend-routing authority: accepted command intents,
+exact replay receipts, candidate and active routes, pending follow-ups, drain and retirement evidence, cleanup
+reservations, and cleanup tombstones. Both adapters share one internal serializable JSON-document authority instead of
+implementing independent PostgreSQL locking or compare-and-swap rules.
+
+Routing transition semantics remain provider-neutral. A PostgreSQL access restores the canonical
+`MaterializationBackendRoutingAuthorityDocument` into `InMemoryMaterializationBackendRouter`, evaluates one operation,
+captures the complete replacement, and commits it under one row lock. Rejected commands are persisted when they accept
+an intent or a newer fence. Concurrent serializable conflicts are retried from the newly committed document, so two
+host instances addressing the same revision converge to one applied command and one canonical conflict result.
+Persisted content is size-bounded and fingerprint-checked on every access; mismatched content fails closed.
+
+Construct both adapters with a caller-owned `NpgsqlDataSource` and `PostgresMaterializationStateStoreOptions`, then call
+`EnsureCreatedAsync` explicitly during bootstrap. The options reuse `PostgresSqlQualifiedTable` for validated,
+injection-safe schema and table identifiers. `AuthorityId` must identify one logical runtime authority; reusing it with
+another backend-pool document is rejected during canonical restoration.
+
+```csharp
+var options = new PostgresMaterializationStateStoreOptions(
+    authorityId: "freight/order-search/runtime");
+var router = new PostgresMaterializationBackendRouter(
+    dataSource: dataSource,
+    options: options,
+    document: backendPoolDocument,
+    targets: targetPool);
+
+await router.EnsureCreatedAsync(context);
+var snapshot = await router.InspectAsync(
+    context: context,
+    placementSlice: tenantPlacement);
+```
+
 ## Standalone SQL construction
 
 Identifiers are always quoted, and values become positional parameters. Runtime parameters can be rebound without
