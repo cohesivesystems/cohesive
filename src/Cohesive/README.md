@@ -74,6 +74,19 @@ payload contract from `TPayload` and returns one typed handle containing the can
 reference, and validation diagnostics. The durable event identity, contract revision, payload-schema revision, and
 provenance remain explicit inputs: CLR names are authoring details and never become durable authority by convention.
 
+`InteractionContractAuthoring.CreateRequestProtocol<TRequest, TOutcomes>` applies the same projection to a complete
+Request/Reply protocol. Its finite callback declares typed result, failure, timeout, and cancellation descriptors;
+the returned handle exposes those caller-named descriptors together with the canonical Request document, exact
+Request reference, exhaustive Reply documents and mappings, retained diagnostics, and validated catalog. Outcome
+identity, kind, schema revision, and response policy live only in `RequestResponseObligation`; `TOutcomes` is a CLR
+authoring projection and is neither serialized nor consulted by an interpreter. `BindDurably` can consequently
+derive the exact Request and Reply links while keeping physical attempt, lease, timeout, idempotency, and recovery
+policy explicit. The raw document and binding constructors remain the low-level escape hatch.
+
+The typed projection intentionally does not define a second tagged-union representation or duplicate outcome-kind
+enum. Process result binding may use an analyzer-recognized closed C# family today and adopt native C# union types
+when the language toolchain supplies them without changing canonical documents, fingerprints, or Process IR.
+
 ## Canonical durable Request execution
 
 The durable-operation reference protocol interprets an ARI-160 `RequestEnvelope` without creating a second

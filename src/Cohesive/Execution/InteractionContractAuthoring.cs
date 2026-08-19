@@ -49,7 +49,7 @@ public sealed class AuthoredDomainEventContract<TPayload>
 }
 
 /// <summary>Produces canonical interaction contracts from typed C# payload declarations.</summary>
-public static class InteractionContractAuthoring
+public static partial class InteractionContractAuthoring
 {
     static readonly IClrTypeRefMapper TypeMapper = new DefaultClrTypeRefMapper();
 
