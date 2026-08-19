@@ -602,6 +602,106 @@ public sealed class MaterializationBackendRouterTests
     }
 
     [Fact]
+    public async Task AuthorityDocument_CaptureRestorePreservesExactPendingIntentAndReplayState()
+    {
+        using var rig = await RoutingRig.CreateAsync(secondBackendActive: true);
+        var (initialRequest, initialized) = await InitializeAsync(rig);
+        var followUp = SwapRequest(
+            rig,
+            commandId: "command/reserved-follow-up",
+            expectedRevision: new("2"),
+            issuedAtUtc: At(3),
+            read: rig.Second.Read!,
+            write: rig.Second.Generation);
+        var admission = new MaterializationAdmitBackendCandidateRequest(
+            header: Header(
+                rig,
+                commandId: "command/admit-with-follow-up",
+                expectedRevision: initialized.Snapshot.Revision,
+                fence: FenceOne,
+                issuedAtUtc: At(2)),
+            candidate: rig.Second.Generation,
+            expectedFollowUp: followUp);
+        var admitted = await rig.Router.AdmitCandidateAsync(Context(), admission);
+        var captured = await rig.Router.CaptureAsync(Context());
+        var json = MaterializationBackendRoutingAuthorityJsonSerializer.Serialize(
+            document: captured,
+            formatting: PortableDocumentJsonFormatting.Compact);
+        var roundTripped = MaterializationBackendRoutingAuthorityJsonSerializer.Deserialize(json);
+        var pool = new InMemoryMaterializationTargetPool(
+            definition: rig.Definition,
+            targets: [rig.First.Target, rig.Second.Target]);
+        using var restored = new InMemoryMaterializationBackendRouter(
+            document: rig.Document,
+            targets: pool,
+            authority: roundTripped,
+            timeProvider: new FixedTimeProvider(At(100)));
+
+        var restoredDocument = await restored.CaptureAsync(Context());
+        var appliedFollowUp = await restored.SwapAsync(Context(), followUp);
+        var replayedAdmission = await restored.AdmitCandidateAsync(Context(), admission);
+        var replayedInitial = await restored.SwapAsync(Context(), initialRequest);
+
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, admitted.Disposition);
+        Assert.Equal(
+            MaterializationBackendRoutingAuthorityJsonSerializer.GetCanonicalBytes(captured),
+            MaterializationBackendRoutingAuthorityJsonSerializer.GetCanonicalBytes(restoredDocument));
+        Assert.Equal(MaterializationBackendRoutingDisposition.Applied, appliedFollowUp.Disposition);
+        Assert.Equal(rig.Second.Generation, appliedFollowUp.Snapshot.ActiveRead!.Generation);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Replayed, replayedAdmission.Disposition);
+        Assert.Equal(admitted.Receipt, replayedAdmission.Receipt);
+        Assert.Equal(MaterializationBackendRoutingDisposition.Replayed, replayedInitial.Disposition);
+    }
+
+    [Fact]
+    public async Task AuthorityDocument_RestoreRetainsRejectedIntentAndAcceptedTakeoverFence()
+    {
+        using var rig = await RoutingRig.CreateAsync(secondBackendActive: false);
+        var takeover = new MaterializationAdmitBackendCandidateRequest(
+            header: Header(
+                rig,
+                commandId: "command/rejected-takeover",
+                expectedRevision: new("1"),
+                fence: FenceTwo,
+                issuedAtUtc: At(1)),
+            candidate: rig.Second.Generation);
+        var rejected = await rig.Router.AdmitCandidateAsync(Context(), takeover);
+        var captured = await rig.Router.CaptureAsync(Context());
+        var pool = new InMemoryMaterializationTargetPool(
+            definition: rig.Definition,
+            targets: [rig.First.Target, rig.Second.Target]);
+        using var restored = new InMemoryMaterializationBackendRouter(
+            document: rig.Document,
+            targets: pool,
+            authority: captured,
+            timeProvider: new FixedTimeProvider(At(100)));
+        var conflictingIdentity = new MaterializationAdmitBackendCandidateRequest(
+            header: Header(
+                rig,
+                commandId: takeover.Header.CommandId.Value,
+                expectedRevision: MaterializationBackendRoutingRevision.Initial,
+                fence: FenceTwo,
+                issuedAtUtc: At(2)),
+            candidate: rig.Second.Generation);
+        var conflict = await restored.AdmitCandidateAsync(Context(), conflictingIdentity);
+        var stale = await restored.AdmitCandidateAsync(
+            Context(),
+            new(
+                header: Header(
+                    rig,
+                    commandId: "command/stale-after-restore",
+                    expectedRevision: MaterializationBackendRoutingRevision.Initial,
+                    fence: FenceOne,
+                    issuedAtUtc: At(3)),
+                candidate: rig.Second.Generation));
+
+        Assert.Equal(MaterializationBackendRoutingDisposition.RevisionConflict, rejected.Disposition);
+        Assert.Equal(MaterializationBackendRoutingDisposition.IdentityConflict, conflict.Disposition);
+        Assert.Equal(MaterializationBackendRoutingDisposition.StaleFence, stale.Disposition);
+        Assert.Equal(FenceTwo, stale.Snapshot.LatestFence);
+    }
+
+    [Fact]
     public async Task HigherFenceTakeover_MakesPriorOwnerStaleEvenWhenTakeoverRevisionConflicts()
     {
         using var rig = await RoutingRig.CreateAsync(secondBackendActive: false);

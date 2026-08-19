@@ -739,8 +739,27 @@ public sealed record MaterializationBackendFollowUpReservation
     public MaterializationBackendGenerationReference Candidate => Request.Write;
 }
 
+/// <summary>Closed portable union implemented directly by every backend-routing command request.</summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
+[JsonDerivedType(typeof(MaterializationAdmitBackendCandidateRequest), "admitCandidate")]
+[JsonDerivedType(typeof(MaterializationAbandonBackendCandidateRequest), "abandonCandidate")]
+[JsonDerivedType(typeof(MaterializationSwapBackendRoutingRequest), "swap")]
+[JsonDerivedType(typeof(MaterializationCompleteBackendDrainRequest), "completeDrain")]
+[JsonDerivedType(typeof(MaterializationRetireBackendGenerationRequest), "retire")]
+[JsonDerivedType(typeof(MaterializationReserveBackendCleanupRequest), "reserveCleanup")]
+[JsonDerivedType(typeof(MaterializationCleanupBackendGenerationRequest), "cleanup")]
+public interface IMaterializationBackendRoutingCommand
+{
+    /// <summary>Common exact command fence.</summary>
+    MaterializationBackendRoutingCommandHeader Header { get; }
+
+    /// <summary>Closed semantic operation represented by the command.</summary>
+    [JsonIgnore]
+    MaterializationBackendRoutingOperation Operation { get; }
+}
+
 /// <summary>Admits one physical generation as the placement's sole rebuild candidate.</summary>
-public sealed record MaterializationAdmitBackendCandidateRequest
+public sealed record MaterializationAdmitBackendCandidateRequest : IMaterializationBackendRoutingCommand
 {
     /// <summary>Creates one candidate-admission command.</summary>
     /// <param name="header">Common exact command fence.</param>
@@ -784,6 +803,10 @@ public sealed record MaterializationAdmitBackendCandidateRequest
     /// <summary>Common exact command fence.</summary>
     public MaterializationBackendRoutingCommandHeader Header { get; }
 
+    /// <inheritdoc />
+    [JsonIgnore]
+    public MaterializationBackendRoutingOperation Operation => MaterializationBackendRoutingOperation.AdmitCandidate;
+
     /// <summary>Generation to admit as the sole candidate.</summary>
     public MaterializationBackendGenerationReference Candidate { get; }
 
@@ -792,7 +815,7 @@ public sealed record MaterializationAdmitBackendCandidateRequest
 }
 
 /// <summary>Clears a failed pool candidate only after target-owned permanent-abandonment evidence exists.</summary>
-public sealed record MaterializationAbandonBackendCandidateRequest
+public sealed record MaterializationAbandonBackendCandidateRequest : IMaterializationBackendRoutingCommand
 {
     /// <summary>Creates one candidate-abandonment command.</summary>
     /// <param name="header">Common exact command fence.</param>
@@ -820,6 +843,10 @@ public sealed record MaterializationAbandonBackendCandidateRequest
     /// <summary>Common exact command fence.</summary>
     public MaterializationBackendRoutingCommandHeader Header { get; }
 
+    /// <inheritdoc />
+    [JsonIgnore]
+    public MaterializationBackendRoutingOperation Operation => MaterializationBackendRoutingOperation.AbandonCandidate;
+
     /// <summary>Exact candidate generation whose placement-scoped role should be cleared.</summary>
     public MaterializationBackendGenerationReference Candidate { get; }
 
@@ -828,7 +855,7 @@ public sealed record MaterializationAbandonBackendCandidateRequest
 }
 
 /// <summary>Atomically replaces the independently addressable read and write routes.</summary>
-public sealed record MaterializationSwapBackendRoutingRequest
+public sealed record MaterializationSwapBackendRoutingRequest : IMaterializationBackendRoutingCommand
 {
     /// <summary>Creates one atomic route swap or rollback command.</summary>
     /// <param name="header">Common exact command fence.</param>
@@ -855,6 +882,10 @@ public sealed record MaterializationSwapBackendRoutingRequest
     /// <summary>Common exact command fence.</summary>
     public MaterializationBackendRoutingCommandHeader Header { get; }
 
+    /// <inheritdoc />
+    [JsonIgnore]
+    public MaterializationBackendRoutingOperation Operation => MaterializationBackendRoutingOperation.Swap;
+
     /// <summary>Exact successfully activated read route.</summary>
     public MaterializationReadableBackendReference Read { get; }
 
@@ -869,7 +900,7 @@ public sealed record MaterializationSwapBackendRoutingRequest
 }
 
 /// <summary>Completes drain only with exact revision-bound quiescence evidence.</summary>
-public sealed record MaterializationCompleteBackendDrainRequest
+public sealed record MaterializationCompleteBackendDrainRequest : IMaterializationBackendRoutingCommand
 {
     /// <summary>Creates one drain-completion command.</summary>
     /// <param name="header">Common exact command fence.</param>
@@ -887,12 +918,16 @@ public sealed record MaterializationCompleteBackendDrainRequest
     /// <summary>Common exact command fence.</summary>
     public MaterializationBackendRoutingCommandHeader Header { get; }
 
+    /// <inheritdoc />
+    [JsonIgnore]
+    public MaterializationBackendRoutingOperation Operation => MaterializationBackendRoutingOperation.CompleteDrain;
+
     /// <summary>Exact quiescence proof.</summary>
     public MaterializationBackendDrainProof Proof { get; }
 }
 
 /// <summary>Retires one quiescent generation from placement routing while preserving target-local lifecycle state.</summary>
-public sealed record MaterializationRetireBackendGenerationRequest
+public sealed record MaterializationRetireBackendGenerationRequest : IMaterializationBackendRoutingCommand
 {
     /// <summary>Creates one placement-retirement command.</summary>
     /// <param name="header">Common exact command fence.</param>
@@ -910,12 +945,16 @@ public sealed record MaterializationRetireBackendGenerationRequest
     /// <summary>Common exact command fence.</summary>
     public MaterializationBackendRoutingCommandHeader Header { get; }
 
+    /// <inheritdoc />
+    [JsonIgnore]
+    public MaterializationBackendRoutingOperation Operation => MaterializationBackendRoutingOperation.Retire;
+
     /// <summary>Quiescent generation to retire from placement routing.</summary>
     public MaterializationBackendGenerationReference Generation { get; }
 }
 
 /// <summary>Reserves one generation after excluding every reference owned by one routing authority.</summary>
-public sealed record MaterializationReserveBackendCleanupRequest
+public sealed record MaterializationReserveBackendCleanupRequest : IMaterializationBackendRoutingCommand
 {
     /// <summary>Creates one physical cleanup reservation command.</summary>
     /// <param name="header">Common exact command fence.</param>
@@ -933,12 +972,16 @@ public sealed record MaterializationReserveBackendCleanupRequest
     /// <summary>Common exact command fence.</summary>
     public MaterializationBackendRoutingCommandHeader Header { get; }
 
+    /// <inheritdoc />
+    [JsonIgnore]
+    public MaterializationBackendRoutingOperation Operation => MaterializationBackendRoutingOperation.ReserveCleanup;
+
     /// <summary>Retired physical generation to reserve for cleanup.</summary>
     public MaterializationBackendGenerationReference Generation { get; }
 }
 
 /// <summary>Consumes reservation-bound cleanup evidence while retaining a placement routing tombstone.</summary>
-public sealed record MaterializationCleanupBackendGenerationRequest
+public sealed record MaterializationCleanupBackendGenerationRequest : IMaterializationBackendRoutingCommand
 {
     /// <summary>Creates one placement-scoped cleanup acknowledgement command.</summary>
     /// <param name="header">Common exact command fence.</param>
@@ -955,6 +998,10 @@ public sealed record MaterializationCleanupBackendGenerationRequest
 
     /// <summary>Common exact command fence.</summary>
     public MaterializationBackendRoutingCommandHeader Header { get; }
+
+    /// <inheritdoc />
+    [JsonIgnore]
+    public MaterializationBackendRoutingOperation Operation => MaterializationBackendRoutingOperation.Cleanup;
 
     /// <summary>Exact adapter-owned physical cleanup evidence.</summary>
     public MaterializationBackendCleanupProof Proof { get; }
