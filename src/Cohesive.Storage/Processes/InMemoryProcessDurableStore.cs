@@ -23,6 +23,36 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
     {
     }
 
+    /// <summary>Restores the reference store from one complete provider-neutral authority document.</summary>
+    /// <param name="document">Exact persisted Process durability state.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="document"/> is <see langword="null"/>.</exception>
+    public InMemoryProcessDurableStore(ProcessDurableStoreDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        foreach (var aggregate in document.Aggregates)
+        {
+            aggregates.Add(
+                aggregate.InstanceId,
+                new(
+                    Checkpoint: aggregate.Checkpoint,
+                    Revision: aggregate.Revision,
+                    WorkerLease: aggregate.WorkerLease,
+                    LatestWorkerFence: aggregate.LatestWorkerFence,
+                    LocalState: aggregate.LocalState.ToImmutableDictionary(
+                        static state => state.Resource,
+                        StringComparer.Ordinal),
+                    LocalMutationFingerprints: aggregate.LocalMutationReceipts.ToImmutableDictionary(
+                        static receipt => receipt.Identity,
+                        static receipt => receipt.Fingerprint,
+                        StringComparer.Ordinal),
+                    CommitReceipts: aggregate.CommitReceipts.ToImmutableDictionary(
+                        static receipt => receipt.Id,
+                        static receipt => new StoredCommitReceipt(
+                            Fingerprint: receipt.Fingerprint,
+                            Snapshot: receipt.Snapshot))));
+        }
+    }
+
     internal InMemoryProcessDurableStore(Func<ProcessStoreCrashContext, bool> shouldCrash)
     {
         this.shouldCrash = shouldCrash ?? throw new ArgumentNullException(nameof(shouldCrash));
@@ -33,6 +63,20 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
         SupportsAtomicAggregateCommit: true,
         SupportsCompareAndSwap: true,
         SupportsWorkerFencing: true);
+
+    /// <summary>Captures the complete provider-neutral authority state in canonical instance order.</summary>
+    /// <returns>An immutable current-version Process durable-store document.</returns>
+    public ProcessDurableStoreDocument CaptureDocument()
+    {
+        lock (gate)
+        {
+            return new(
+                schemaVersion: ProcessDurableStoreDocument.CurrentSchemaVersion,
+                aggregates: [.. aggregates
+                    .OrderBy(static item => item.Key.Value, StringComparer.Ordinal)
+                    .Select(static item => item.Value.Document())]);
+        }
+    }
 
     /// <inheritdoc />
     public Task<ProcessDurableStoreSnapshot?> LoadAsync(
@@ -1179,10 +1223,29 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
     {
         internal ProcessDurableStoreSnapshot Snapshot() =>
             new(
-                Checkpoint,
-                Revision,
-                WorkerLease,
-                [.. LocalState.Values.OrderBy(static value => value.Resource, StringComparer.Ordinal)]);
+                checkpoint: Checkpoint,
+                revision: Revision,
+                workerLease: WorkerLease,
+                localState: [.. LocalState.Values.OrderBy(static value => value.Resource, StringComparer.Ordinal)]);
+
+        internal ProcessDurableAggregateDocument Document() =>
+            new(
+                checkpoint: Checkpoint,
+                revision: Revision,
+                workerLease: WorkerLease,
+                latestWorkerFence: LatestWorkerFence,
+                localState: [.. LocalState.Values.OrderBy(static value => value.Resource, StringComparer.Ordinal)],
+                localMutationReceipts: [.. LocalMutationFingerprints
+                    .OrderBy(static item => item.Key, StringComparer.Ordinal)
+                    .Select(static item => new ProcessDurableLocalMutationReceipt(
+                        identity: item.Key,
+                        fingerprint: item.Value))],
+                commitReceipts: [.. CommitReceipts
+                    .OrderBy(static item => item.Key.Value, StringComparer.Ordinal)
+                    .Select(static item => new ProcessDurableCommitReceiptDocument(
+                        id: item.Key,
+                        fingerprint: item.Value.Fingerprint,
+                        snapshot: item.Value.Snapshot))]);
     }
 }
 

@@ -28,6 +28,7 @@ export COHESIVE_HARNESS_KIBANA_PORT="${COHESIVE_HARNESS_KIBANA_PORT:-55601}"
 export COHESIVE_HARNESS_PGADMIN_PORT="${COHESIVE_HARNESS_PGADMIN_PORT:-55050}"
 export COHESIVE_HARNESS_PGADMIN_EMAIL="${COHESIVE_HARNESS_PGADMIN_EMAIL:-harness@cohesivesystems.com}"
 export COHESIVE_HARNESS_PGADMIN_PASSWORD="${COHESIVE_HARNESS_PGADMIN_PASSWORD:-cohesive-local-only}"
+export COHESIVE_HARNESS_HOST_PORT="${COHESIVE_HARNESS_HOST_PORT:-59399}"
 
 compose() {
   docker compose \
@@ -42,6 +43,7 @@ configure_runtime() {
   export COHESIVE_MATERIALIZATION_COSMOS_CONNECTION_STRING="AccountEndpoint=https://localhost:${COHESIVE_HARNESS_COSMOS_PORT}/;AccountKey=C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==;"
   export COHESIVE_MATERIALIZATION_COSMOS_DATABASE="cohesive-freight-harness"
   export COHESIVE_MATERIALIZATION_ELASTIC_ENDPOINT="http://localhost:${COHESIVE_HARNESS_ELASTIC_PORT}"
+  export COHESIVE_MATERIALIZATION_HOST_URL="http://localhost:${COHESIVE_HARNESS_HOST_PORT}"
   export COHESIVE_POSTGRES_TEST_CONNECTION_STRING="$COHESIVE_MATERIALIZATION_POSTGRES_CONNECTION_STRING"
 }
 
@@ -84,6 +86,23 @@ materialize() {
     --configuration Release
 }
 
+process_host() {
+  configure_runtime
+  dotnet run \
+    --project "$script_dir/host/Cohesive.MaterializationHarness.Host.csproj" \
+    --configuration Release
+}
+
+process_command() {
+  configure_runtime
+  local command="$1"
+  dotnet run \
+    --project "$script_dir/host/Cohesive.MaterializationHarness.Host.csproj" \
+    --configuration Release \
+    -- \
+    "$command"
+}
+
 verify_index() {
   configure_runtime
   curl --fail --silent --show-error \
@@ -108,7 +127,7 @@ test_harness() {
   configure_runtime
   dotnet test "$repo_root/src/Cohesive.Tests/Cohesive.Tests.csproj" \
     --configuration Release \
-    --filter "FullyQualifiedName~FreightOrderHarnessModelTests|FullyQualifiedName~FreightOrderMaterializationRelationTests|FullyQualifiedName~PostgresEntityRepositoryTests|FullyQualifiedName~TenantScopedMaterializationPagesBindExactPredicateAndRejectCrossTenantContinuation|FullyQualifiedName~PartitionedReaderRequiresMatchingRuntimeAndPhysicalScopes|FullyQualifiedName~LocalPostgres_TenantScopedMaterializationPagesStayWithinTheExactPartition" \
+    --filter "FullyQualifiedName~FreightOrderHarnessModelTests|FullyQualifiedName~FreightOrderMaterializationRelationTests|FullyQualifiedName~PostgresEntityRepositoryTests|FullyQualifiedName~PostgresProcessDurableStoreTests|FullyQualifiedName~PostgresMaterializationStateStoreTests|FullyQualifiedName~InMemoryProcessDurableStoreTests|FullyQualifiedName~ProcessExecutionCommandApiEndpointRouteBuilderExtensionsTests|FullyQualifiedName~TenantScopedMaterializationPagesBindExactPredicateAndRejectCrossTenantContinuation|FullyQualifiedName~PartitionedReaderRequiresMatchingRuntimeAndPhysicalScopes|FullyQualifiedName~LocalPostgres_TenantScopedMaterializationPagesStayWithinTheExactPartition" \
     --logger "console;verbosity=minimal"
 }
 
@@ -123,6 +142,15 @@ Commands:
   validate Validate the canonical scenario journal without starting Docker.
   verify   Verify that both source databases still equal the journal; do not mutate them.
   materialize Build and atomically promote equivalent Postgres and Cosmos Elasticsearch generations.
+  host     Run the restartable Process/API host in the foreground.
+  process-start Start one durable rebuild Process through the canonical SDK dispatcher.
+  process-inspect Inspect its durable Process status through the SDK dispatcher.
+  process-explain Read its canonical execution explanation through the SDK dispatcher.
+  process-traces Read its retained canonical Process traces through the SDK dispatcher.
+  process-pause Pause the current attempt at its next page boundary.
+  process-continue Continue the same paused attempt and retained continuations.
+  process-restart Abandon the current candidate and start a fresh attempt/generation.
+  process-cancel Cooperatively cancel the Process and abandon its candidate generation.
   verify-index Show active generation aliases and document counts without mutating Elasticsearch.
   test     Start, seed, materialize, and run the focused verification suite.
   status   Show service and health state.
@@ -156,6 +184,42 @@ case "$command" in
   materialize)
     up
     materialize
+    ;;
+  host)
+    up
+    process_host
+    ;;
+  process-start)
+    up
+    process_command --start
+    ;;
+  process-inspect)
+    up
+    process_command --inspect
+    ;;
+  process-explain)
+    up
+    process_command --explain
+    ;;
+  process-traces)
+    up
+    process_command --traces
+    ;;
+  process-pause)
+    up
+    process_command --pause
+    ;;
+  process-continue)
+    up
+    process_command --continue
+    ;;
+  process-restart)
+    up
+    process_command --restart-attempt
+    ;;
+  process-cancel)
+    up
+    process_command --cancel
     ;;
   verify-index)
     up
@@ -191,6 +255,7 @@ case "$command" in
     printf 'kibana=http://localhost:%s/\n' "$COHESIVE_HARNESS_KIBANA_PORT"
     printf 'pgadmin=http://localhost:%s/\n' "$COHESIVE_HARNESS_PGADMIN_PORT"
     printf 'pgadmin-email=%s\n' "$COHESIVE_HARNESS_PGADMIN_EMAIL"
+    printf 'process-host=http://localhost:%s/\n' "$COHESIVE_HARNESS_HOST_PORT"
     ;;
   *)
     usage
