@@ -26,7 +26,8 @@ using Npgsql;
 
 namespace Cohesive.MaterializationHarness.Materialize;
 
-static class Program
+/// <summary>Runs the local freight materialization scenario across PostgreSQL and Cosmos sources.</summary>
+public static class Program
 {
     const int RootPageItems = 2;
     const int MaximumBatchItems = 64;
@@ -36,6 +37,10 @@ static class Program
     static readonly byte[] ContinuationKey =
         "cohesive-materialization-harness-local-key-v1"u8.ToArray();
 
+    /// <summary>Validates or runs the standalone materialization harness.</summary>
+    /// <param name="args">Optional single <c>--validate-only</c> argument.</param>
+    /// <returns>Zero after successful validation or materialization.</returns>
+    /// <exception cref="ArgumentException"><paramref name="args"/> contains an unsupported argument.</exception>
     public static async Task<int> Main(string[] args)
     {
         var validateOnly = args switch
@@ -57,22 +62,43 @@ static class Program
             return 0;
         }
 
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var runId = startedAtUtc.ToString("yyyyMMddHHmmssfffffff", CultureInfo.InvariantCulture);
+        await RunAsync(new(
+            runId: runId,
+            startedAtUtc: startedAtUtc,
+            control: UncontrolledMaterializationHarnessRun.Instance));
+        return 0;
+    }
+
+    /// <summary>Runs or exactly retries one bounded dual-provider materialization attempt.</summary>
+    /// <param name="run">Stable attempt identity, cancellation, and safe-point control.</param>
+    /// <returns>A task completing after both provider generations are atomically promoted and compared.</returns>
+    public static async Task RunAsync(MaterializationHarnessRunOptions run)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        var semantics = FreightOrderMaterializationModel.Create();
         var options = HarnessOptions.FromEnvironment();
         using HttpClient elasticHttp = new() { BaseAddress = options.ElasticsearchEndpoint };
         var clusterId = await ReadClusterIdAsync(elasticHttp);
+        var context = OperationContext.Create(cancellationToken: run.CancellationToken);
 
         var postgres = await MaterializeProviderAsync(
             ProviderKind.Postgres,
             semantics,
             options,
             clusterId,
-            elasticHttp);
+            elasticHttp,
+            context,
+            run);
         var cosmos = await MaterializeProviderAsync(
             ProviderKind.Cosmos,
             semantics,
             options,
             clusterId,
-            elasticHttp);
+            elasticHttp,
+            context,
+            run);
 
         Require(
             postgres.Documents.SequenceEqual(cosmos.Documents, StringComparer.Ordinal),
@@ -85,7 +111,56 @@ static class Program
         PrintResult(postgres);
         PrintResult(cosmos);
         Console.WriteLine($"Verified {postgres.Documents.Length} canonically equivalent freight documents.");
-        return 0;
+    }
+
+    /// <summary>
+    /// Idempotently abandons every non-active provider generation owned by one superseded harness run.
+    /// </summary>
+    /// <param name="runId">Stable run identity whose provider generations must never be promoted.</param>
+    /// <param name="abandonedAtUtc">Stable UTC control-command time reused by exact retries.</param>
+    /// <param name="cancellationToken">Cancellation for Elasticsearch operations.</param>
+    /// <returns>A task completing after both provider targets retain abandonment evidence.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="runId"/> is empty or <paramref name="abandonedAtUtc"/> is not UTC.
+    /// </exception>
+    public static async Task AbandonRunAsync(
+        string runId,
+        DateTimeOffset abandonedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+        if (abandonedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("A materialization abandonment time must be UTC.", nameof(abandonedAtUtc));
+        }
+
+        var semantics = FreightOrderMaterializationModel.Create();
+        var options = HarnessOptions.FromEnvironment();
+        using HttpClient elasticHttp = new() { BaseAddress = options.ElasticsearchEndpoint };
+        var clusterId = await ReadClusterIdAsync(elasticHttp);
+        var context = OperationContext.Create(cancellationToken: cancellationToken);
+        foreach (var provider in new[] { ProviderKind.Postgres, ProviderKind.Cosmos })
+        {
+            var targetBinding = CreateTargetBinding(provider, semantics, clusterId);
+            await EnsureLocalElasticTemplatesAsync(elasticHttp, targetBinding, ProviderName(provider));
+            var target = CreateTarget(targetBinding, options.ElasticsearchEndpoint);
+            var generationId = new MaterializationGenerationId($"{ProviderName(provider)}/{runId}");
+            var generation = await target.InspectGenerationAsync(context, generationId);
+            if (generation?.State == MaterializationGenerationState.Active)
+                continue;
+
+            var abandoned = await target.AbandonGenerationAsync(
+                context,
+                new(
+                    abandonmentId: new($"abandon/{ProviderName(provider)}/{runId}"),
+                    generationId: generationId,
+                    abandonedAtUtc: abandonedAtUtc));
+            Require(
+                abandoned.Disposition is MaterializationTargetOperationDisposition.Applied
+                    or MaterializationTargetOperationDisposition.Replayed
+                    or MaterializationTargetOperationDisposition.ActiveGenerationConflict,
+                $"{provider} generation abandonment failed: {abandoned.Disposition}.");
+        }
     }
 
     static async Task<ProviderResult> MaterializeProviderAsync(
@@ -93,199 +168,245 @@ static class Program
         FreightOrderMaterializationSemantics semantics,
         HarnessOptions options,
         ElasticClusterId clusterId,
-        HttpClient elasticHttp)
+        HttpClient elasticHttp,
+        OperationContext context,
+        MaterializationHarnessRunOptions run)
     {
         var plan = CreateProviderPlan(provider, semantics);
         var targetBinding = CreateTargetBinding(provider, semantics, clusterId);
         await EnsureLocalElasticTemplatesAsync(elasticHttp, targetBinding, ProviderName(provider));
         var target = CreateTarget(targetBinding, options.ElasticsearchEndpoint);
-        var context = OperationContext.Create();
         var before = await target.InspectAsync(context);
-        var run = DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfffffff", CultureInfo.InvariantCulture);
-        var generationId = new MaterializationGenerationId($"{ProviderName(provider)}/{run}");
+        var generationId = new MaterializationGenerationId($"{ProviderName(provider)}/{run.RunId}");
         var generationIndex = targetBinding.GetGenerationIndexName(generationId);
+        if (before.ActiveGenerationId == generationId)
+        {
+            var replayedDocuments = await ReadCanonicalDocumentsAsync(elasticHttp, targetBinding.ReadAlias);
+            return new(
+                ProviderName(provider),
+                targetBinding.ReadAlias,
+                generationIndex,
+                semantics.DefinitionFingerprint.Value,
+                replayedDocuments);
+        }
         var workerFence = MaterializationWorkerFence.Initial;
         var begun = await target.BeginGenerationAsync(
-            context,
-            new(
-                semantics.Definition.Id,
-                generationId,
-                semantics.DefinitionFingerprint,
-                workerFence,
-                DateTimeOffset.UtcNow));
+            context: context,
+            request: new(
+                materializationId: semantics.Definition.Id,
+                generationId: generationId,
+                definitionFingerprint: semantics.DefinitionFingerprint,
+                workerFence: workerFence,
+                createdAtUtc: run.StartedAtUtc));
         Require(
-            begun.Disposition == MaterializationTargetOperationDisposition.Applied,
+            begun.Disposition is MaterializationTargetOperationDisposition.Applied
+                or MaterializationTargetOperationDisposition.Replayed,
             $"{provider} generation begin failed: {begun.Disposition}.");
         var generation = RequireValue(begun.Generation, $"{provider} generation begin returned no snapshot.");
-        var pageOrdinal = 0;
-        var itemCount = 0;
-
-        if (provider == ProviderKind.Postgres)
+        if (generation.State == MaterializationGenerationState.Loading)
         {
-            await using var dataSource = NpgsqlDataSource.Create(options.PostgresConnectionString);
-            var hydrationStorage = CreatePostgresStorageBinding(
-                plan.HydrationPlacement,
-                semantics.Plan,
-                "hydration");
-            var scanStorage = CreatePostgresStorageBinding(plan.ScanPlacement, semantics.Plan, "scan");
-            foreach (var tenant in options.Tenants)
+            var pageOrdinal = 0;
+            if (provider == ProviderKind.Postgres)
             {
-                var policy = PostgresPolicy(tenant);
-                var scanRuntime = new PostgresNpgsqlRuntimeBinding(
-                    scanStorage.Database,
-                    dataSource,
-                    "materialization-harness/postgres/scan");
-                var rootReader = new PostgresRelationQuerySourceReader(
+                await using var dataSource = NpgsqlDataSource.Create(options.PostgresConnectionString);
+                var hydrationStorage = CreatePostgresStorageBinding(
+                    plan.HydrationPlacement,
                     semantics.Plan,
-                    plan.ScanPhysicalPlan,
-                    plan.OrderSource,
-                    scanStorage,
-                    dataSource,
-                    scanRuntime,
-                    policy);
-                var source = new PostgresMaterializationSource(
-                    rootReader,
-                    plan.ScanRoot,
-                    ContinuationKey);
-                var readers = plan.HydrationSources
-                    .Select(sourceId =>
-                    {
-                        var runtime = new PostgresNpgsqlRuntimeBinding(
-                            hydrationStorage.Database,
-                            dataSource,
-                            "materialization-harness/postgres/hydration");
-                        return (IRelationQuerySourceReader)new PostgresRelationQuerySourceReader(
-                            semantics.Plan,
-                            plan.HydrationPhysicalPlan,
-                            sourceId,
-                            hydrationStorage,
-                            dataSource,
-                            runtime,
-                            policy);
-                    })
-                    .ToImmutableArray();
-                itemCount += await MaterializeTenantAsync(
-                    provider,
-                    tenant,
-                    semantics,
-                    plan,
-                    source,
-                    source.Scope,
-                    readers,
-                    target,
-                    generationId,
-                    workerFence,
-                    generation.Revision,
-                    pageOrdinal);
-                pageOrdinal += 1_000;
-                generation = RequireValue(
-                    await target.InspectGenerationAsync(context, generationId),
-                    $"{provider} generation disappeared while loading.");
-            }
-        }
-        else
-        {
-            using var cosmosClient = CreateCosmosClient(options.CosmosConnectionString);
-            var database = cosmosClient.GetDatabase(options.CosmosDatabase);
-            foreach (var tenant in options.Tenants)
-            {
-                var policy = CosmosPolicy(tenant);
-                var rootReader = CreateCosmosReader(
-                    semantics.Root.Shape,
-                    plan.OrderSource,
-                    database.GetContainer("orders"),
-                    options.CosmosDatabase,
-                    "orders",
-                    policy);
-                var source = CreateCosmosReconciliationSource(rootReader);
-                var sourceScope = new MaterializationSourceScope(
-                    plan.ScanPhysicalPlan.Fingerprint,
-                    plan.ScanRoot,
-                    LogicalPartition(tenant),
-                    new($"cosmos/reconciliation/{tenant}"),
-                    new($"cosmos/reconciliation/{tenant}/canonical-order"));
-                var readers = plan.HydrationSources
-                    .Select(sourceId => CreateCosmosHydrationReader(
+                    "hydration");
+                var scanStorage = CreatePostgresStorageBinding(plan.ScanPlacement, semantics.Plan, "scan");
+                foreach (var tenant in options.Tenants)
+                {
+                    var policy = PostgresPolicy(tenant);
+                    var scanRuntime = new PostgresNpgsqlRuntimeBinding(
+                        scanStorage.Database,
+                        dataSource,
+                        "materialization-harness/postgres/scan");
+                    var rootReader = new PostgresRelationQuerySourceReader(
+                        semantics.Plan,
+                        plan.ScanPhysicalPlan,
+                        plan.OrderSource,
+                        scanStorage,
+                        dataSource,
+                        scanRuntime,
+                        policy);
+                    var source = new PostgresMaterializationSource(
+                        rootReader,
+                        plan.ScanRoot,
+                        ContinuationKey);
+                    var readers = plan.HydrationSources
+                        .Select(sourceId =>
+                        {
+                            var runtime = new PostgresNpgsqlRuntimeBinding(
+                                hydrationStorage.Database,
+                                dataSource,
+                                "materialization-harness/postgres/hydration");
+                            return (IRelationQuerySourceReader)new PostgresRelationQuerySourceReader(
+                                semantics.Plan,
+                                plan.HydrationPhysicalPlan,
+                                sourceId,
+                                hydrationStorage,
+                                dataSource,
+                                runtime,
+                                policy);
+                        })
+                        .ToImmutableArray();
+                    await MaterializeTenantAsync(
+                        provider,
+                        tenant,
                         semantics,
                         plan,
-                        sourceId,
-                        database,
+                        source,
+                        source.Scope,
+                        readers,
+                        target,
+                        generationId,
+                        workerFence,
+                        generation.Revision,
+                        pageOrdinal,
+                        context,
+                        run);
+                    pageOrdinal += 1_000;
+                    generation = RequireValue(
+                        await target.InspectGenerationAsync(context, generationId),
+                        $"{provider} generation disappeared while loading.");
+                }
+            }
+            else
+            {
+                using var cosmosClient = CreateCosmosClient(options.CosmosConnectionString);
+                var database = cosmosClient.GetDatabase(options.CosmosDatabase);
+                foreach (var tenant in options.Tenants)
+                {
+                    var policy = CosmosPolicy(tenant);
+                    var rootReader = CreateCosmosReader(
+                        semantics.Root.Shape,
+                        plan.OrderSource,
+                        database.GetContainer("orders"),
                         options.CosmosDatabase,
-                        policy))
-                    .Cast<IRelationQuerySourceReader>()
-                    .ToImmutableArray();
-                itemCount += await MaterializeTenantAsync(
-                    provider,
-                    tenant,
-                    semantics,
-                    plan,
-                    source,
-                    sourceScope,
-                    readers,
-                    target,
-                    generationId,
-                    workerFence,
-                    generation.Revision,
-                    pageOrdinal);
-                pageOrdinal += 1_000;
-                generation = RequireValue(
-                    await target.InspectGenerationAsync(context, generationId),
-                    $"{provider} generation disappeared while loading.");
+                        "orders",
+                        policy);
+                    var source = CreateCosmosReconciliationSource(rootReader);
+                    var sourceScope = new MaterializationSourceScope(
+                        plan.ScanPhysicalPlan.Fingerprint,
+                        plan.ScanRoot,
+                        LogicalPartition(tenant),
+                        new($"cosmos/reconciliation/{tenant}"),
+                        new($"cosmos/reconciliation/{tenant}/canonical-order"));
+                    var readers = plan.HydrationSources
+                        .Select(sourceId => CreateCosmosHydrationReader(
+                            semantics,
+                            plan,
+                            sourceId,
+                            database,
+                            options.CosmosDatabase,
+                            policy))
+                        .Cast<IRelationQuerySourceReader>()
+                        .ToImmutableArray();
+                    await MaterializeTenantAsync(
+                        provider,
+                        tenant,
+                        semantics,
+                        plan,
+                        source,
+                        sourceScope,
+                        readers,
+                        target,
+                        generationId,
+                        workerFence,
+                        generation.Revision,
+                        pageOrdinal,
+                        context,
+                        run);
+                    pageOrdinal += 1_000;
+                    generation = RequireValue(
+                        await target.InspectGenerationAsync(context, generationId),
+                        $"{provider} generation disappeared while loading.");
+                }
             }
         }
 
-        Require(itemCount > RootPageItems, $"{provider} did not cross the configured root page boundary.");
+        Require(
+            generation.State is MaterializationGenerationState.Loading
+                or MaterializationGenerationState.Sealed
+                or MaterializationGenerationState.Validated,
+            $"{provider} generation cannot resume from '{generation.State}'.");
+
+        Require(
+            generation.VisibleItemCount > RootPageItems,
+            $"{provider} did not cross the configured root page boundary.");
         var aliasBeforePromotion = await ReadAliasIndicesAsync(elasticHttp, targetBinding.ReadAlias);
         Require(
             !aliasBeforePromotion.Contains(generationIndex, StringComparer.Ordinal),
             $"{provider} candidate generation was exposed through the read alias before promotion.");
 
-        var sealedResult = await target.SealGenerationAsync(
-            context,
-            new(
-                new($"seal/{ProviderName(provider)}/{run}"),
-                generationId,
-                generation.Revision,
-                workerFence,
-                DateTimeOffset.UtcNow));
-        Require(
-            sealedResult.Disposition == MaterializationTargetOperationDisposition.Applied,
-            $"{provider} generation seal failed: {sealedResult.Disposition}.");
-        var sealedGeneration = RequireValue(sealedResult.Generation, $"{provider} seal returned no generation.");
-        var sealReceipt = RequireValue(sealedResult.Receipt, $"{provider} seal returned no receipt.");
-        var validated = await target.ValidateGenerationAsync(
-            context,
-            new(
-                new($"validate/{ProviderName(provider)}/{run}"),
-                generationId,
-                sealedGeneration.Revision,
-                sealReceipt.Fingerprint,
-                itemCount,
-                "materialization-harness/freight-readback/v1",
-                workerFence,
-                DateTimeOffset.UtcNow));
-        Require(
-            validated.Disposition == MaterializationTargetOperationDisposition.Applied,
-            $"{provider} generation validation failed: {validated.Disposition}.");
-        var validatedGeneration = RequireValue(validated.Generation, $"{provider} validation returned no generation.");
-        var validationReceipt = RequireValue(validated.Receipt, $"{provider} validation returned no receipt.");
+        MaterializationSealReceipt sealReceipt;
+        if (generation.State == MaterializationGenerationState.Loading)
+        {
+            var sealedResult = await target.SealGenerationAsync(
+                context,
+                new(
+                    sealId: new($"seal/{ProviderName(provider)}/{run.RunId}"),
+                    generationId: generationId,
+                    expectedRevision: generation.Revision,
+                    workerFence: workerFence,
+                    sealedAtUtc: context.UtcNow));
+            Require(
+                sealedResult.Disposition is MaterializationTargetOperationDisposition.Applied
+                    or MaterializationTargetOperationDisposition.Replayed,
+                $"{provider} generation seal failed: {sealedResult.Disposition}.");
+            generation = RequireValue(sealedResult.Generation, $"{provider} seal returned no generation.");
+            sealReceipt = RequireValue(sealedResult.Receipt, $"{provider} seal returned no receipt.");
+        }
+        else
+        {
+            sealReceipt = RequireValue(generation.SealReceipt, $"{provider} retained no seal receipt.");
+        }
+
+        MaterializationValidationReceipt validationReceipt;
+        if (generation.State == MaterializationGenerationState.Sealed)
+        {
+            var validated = await target.ValidateGenerationAsync(
+                context,
+                new(
+                    validationId: new($"validate/{ProviderName(provider)}/{run.RunId}"),
+                    generationId: generationId,
+                    expectedRevision: generation.Revision,
+                    expectedSealFingerprint: sealReceipt.Fingerprint,
+                    expectedVisibleItemCount: generation.VisibleItemCount,
+                    validator: "materialization-harness/freight-readback/v1",
+                    workerFence: workerFence,
+                    validatedAtUtc: context.UtcNow));
+            Require(
+                validated.Disposition is MaterializationTargetOperationDisposition.Applied
+                    or MaterializationTargetOperationDisposition.Replayed,
+                $"{provider} generation validation failed: {validated.Disposition}.");
+            generation = RequireValue(validated.Generation, $"{provider} validation returned no generation.");
+            validationReceipt = RequireValue(validated.Receipt, $"{provider} validation returned no receipt.");
+        }
+        else
+        {
+            validationReceipt = RequireValue(
+                generation.ValidationReceipt,
+                $"{provider} retained no validation receipt.");
+        }
         Require(validationReceipt.Validation.IsValid, $"{provider} generation validation was inconclusive.");
         var promotionFence = new MaterializationPromotionFence(
             (before.LatestPromotionFence?.Ordinal + 1 ?? 1).ToString(CultureInfo.InvariantCulture));
         var promoted = await target.PromoteGenerationAsync(
             context,
             new(
-                new($"promote/{ProviderName(provider)}/{run}"),
-                generationId,
-                validatedGeneration.Revision,
-                validationReceipt.Fingerprint,
-                before.ActiveGenerationId,
-                before.Revision,
-                workerFence,
-                promotionFence,
-                DateTimeOffset.UtcNow));
+                promotionId: new($"promote/{ProviderName(provider)}/{run.RunId}"),
+                generationId: generationId,
+                expectedGenerationRevision: generation.Revision,
+                validationFingerprint: validationReceipt.Fingerprint,
+                expectedActiveGenerationId: before.ActiveGenerationId,
+                expectedTargetRevision: before.Revision,
+                generationWorkerFence: workerFence,
+                promotionFence: promotionFence,
+                promotedAtUtc: context.UtcNow));
         Require(
-            promoted.Disposition == MaterializationTargetOperationDisposition.Applied,
+            promoted.Disposition is MaterializationTargetOperationDisposition.Applied
+                or MaterializationTargetOperationDisposition.Replayed,
             $"{provider} generation promotion failed: {promoted.Disposition}.");
 
         var aliasAfterPromotion = await ReadAliasIndicesAsync(elasticHttp, targetBinding.ReadAlias);
@@ -293,7 +414,9 @@ static class Program
             aliasAfterPromotion.SequenceEqual([generationIndex], StringComparer.Ordinal),
             $"{provider} read alias did not atomically resolve to exactly the promoted generation.");
         var documents = await ReadCanonicalDocumentsAsync(elasticHttp, targetBinding.ReadAlias);
-        Require(documents.Length == itemCount, $"{provider} alias readback count differs from materialized output.");
+        Require(
+            documents.Length == generation.VisibleItemCount,
+            $"{provider} alias readback count differs from materialized output.");
         return new(
             ProviderName(provider),
             targetBinding.ReadAlias,
@@ -302,7 +425,7 @@ static class Program
             documents);
     }
 
-    static async Task<int> MaterializeTenantAsync(
+    static async Task MaterializeTenantAsync(
         ProviderKind provider,
         string tenant,
         FreightOrderMaterializationSemantics semantics,
@@ -314,22 +437,41 @@ static class Program
         MaterializationGenerationId generationId,
         MaterializationWorkerFence workerFence,
         MaterializationGenerationRevision initialRevision,
-        int pageOrdinalBase)
+        int pageOrdinalBase,
+        OperationContext context,
+        MaterializationHarnessRunOptions run)
     {
-        var context = OperationContext.Create();
         var read = CreateRootRead(plan, semantics.Root);
-        MaterializationSourceContinuation? continuation = null;
+        var progressKey = new MaterializationProgressKey(
+            materialization: semantics.Definition.Id,
+            definitionFingerprint: semantics.DefinitionFingerprint,
+            generation: generationId,
+            scope: sourceScope);
+        var progress = await AcquireProgressAsync(context, progressKey, run);
+        if (progress?.LatestBatchCheckpoint?.Kind == MaterializationCheckpointKind.BatchCompleted)
+            return;
+
+        var continuation = progress?.LatestBatchCheckpoint?.Continuation;
         var generationRevision = initialRevision;
-        var pageOrdinal = 0;
-        var outputCount = 0;
+        var pageOrdinal = checked((int)(progress?.LatestBatchCheckpoint?.BatchPageOrdinal ?? 0));
         do
         {
+            await run.Control.BeforePageAsync(
+                context,
+                ProviderName(provider),
+                tenant,
+                pageOrdinal);
             MaterializationSourcePage page;
             try
             {
                 page = await source.ReadPageAsync(
-                    context,
-                    new(read, sourceScope, continuation, RootPageItems, MaximumBytes));
+                    context: context,
+                    request: new(
+                        read: read,
+                        scope: sourceScope,
+                        continuation: continuation,
+                        maximumItems: RootPageItems,
+                        maximumBytes: MaximumBytes));
             }
             catch (CosmosMaterializationSourceException exception)
             {
@@ -350,17 +492,17 @@ static class Program
                 $"{provider}/{tenant} root page completeness did not match its continuation state: "
                 + $"{page.Read.State}/{page.State}.");
             var supplied = new RelationQuerySuppliedSourceInput(
-                semantics.Root.Input.Id,
-                sourceScope.LogicalPartition,
-                RelationQueryEvidenceCompleteness.Complete,
-                page.Read.Observations,
-                page.Read.EvidenceReference);
+                input: semantics.Root.Input.Id,
+                logicalPartition: sourceScope.LogicalPartition,
+                completeness: RelationQueryEvidenceCompleteness.Complete,
+                observations: page.Read.Observations,
+                evidenceReference: page.Read.EvidenceReference);
             var execution = await new RelationQueryPhysicalExecutor(readers).ExecuteAsync(
                 new(
-                    semantics.Plan,
-                    plan.HydrationPhysicalPlan,
-                    semantics.Realization,
-                    new($"materialization-harness/{ProviderName(provider)}/{tenant}/{pageOrdinal}"),
+                    plan: semantics.Plan,
+                    physicalPlan: plan.HydrationPhysicalPlan,
+                    realization: semantics.Realization,
+                    evaluation: new($"materialization-harness/{ProviderName(provider)}/{tenant}/{pageOrdinal}"),
                     suppliedSources: [supplied],
                     capabilities: RelationQueryRealizationRuntimeEvidence.ProjectCapabilities(
                         semantics.Plan,
@@ -388,29 +530,37 @@ static class Program
                         row.Value.GetProperty("tenantId").String == tenant,
                         $"{provider}/{tenant} produced a cross-tenant joined document '{itemId}'.");
                     return (MaterializationItemMutation)new MaterializationUpsert(
-                        new(itemId),
-                        new($"mutation/{generationId.Value}/{tenant}/{pageOrdinalBase + pageOrdinal}/{ordinal}"),
-                        new("1"),
-                        row.Value);
+                        itemId: new(itemId),
+                        mutationId: new($"mutation/{generationId.Value}/{tenant}/{pageOrdinalBase + pageOrdinal}/{ordinal}"),
+                        version: new("1"),
+                        value: row.Value);
                 }).ToImmutableArray();
                 var applied = await target.ApplyBatchAsync(
-                    context,
-                    new(
-                        new($"batch/{generationId.Value}/{tenant}/{pageOrdinalBase + pageOrdinal}"),
-                        generationId,
-                        workerFence,
-                        mutations));
+                    context: context,
+                    request: new(
+                        batchId: new($"batch/{generationId.Value}/{tenant}/{pageOrdinalBase + pageOrdinal}"),
+                        generationId: generationId,
+                        workerFence: workerFence,
+                        mutations: mutations));
                 Require(
-                    applied.Disposition == MaterializationBatchDisposition.Applied,
+                    applied.Disposition is MaterializationBatchDisposition.Applied
+                        or MaterializationBatchDisposition.Replayed,
                     $"{provider}/{tenant} target batch failed: {applied.Disposition}.");
                 Require(
                     applied.Outcomes.All(static outcome =>
-                        outcome.Disposition == MaterializationItemOutcomeDisposition.Applied),
+                        outcome.Disposition is MaterializationItemOutcomeDisposition.Applied
+                            or MaterializationItemOutcomeDisposition.Replayed),
                     $"{provider}/{tenant} target batch contained a rejected item.");
                 generationRevision = applied.GenerationRevision
                     ?? throw new InvalidOperationException("The target batch returned no generation revision.");
-                outputCount += mutations.Length;
             }
+            progress = await SaveProgressAsync(
+                context,
+                progressKey,
+                progress,
+                page,
+                pageOrdinal,
+                run);
             continuation = page.Continuation;
             pageOrdinal++;
         } while (continuation is not null);
@@ -419,7 +569,80 @@ static class Program
         Require(
             observed?.Revision == generationRevision,
             $"{provider}/{tenant} target generation revision drifted after paging.");
-        return outputCount;
+    }
+
+    static async Task<MaterializationProgressSnapshot?> AcquireProgressAsync(
+        OperationContext context,
+        MaterializationProgressKey key,
+        MaterializationHarnessRunOptions run)
+    {
+        if (run.ProgressStore is null)
+            return null;
+
+        var owner = run.ProgressOwner!;
+        var current = await run.ProgressStore.LoadAsync(context, key);
+        if (current is not null && string.Equals(current.FenceOwner, owner, StringComparison.Ordinal))
+            return current;
+
+        var priorRevision = current?.Revision.Value ?? "none";
+        var scopeIdentity = Uri.EscapeDataString(
+            $"{key.Scope.Source.Value}/{key.Scope.Partition.Value}/{key.Scope.OrderingScope.Value}");
+        var acquired = await run.ProgressStore.AcquireFenceAsync(
+            context: context,
+            key: key,
+            mutationId: new($"claim/{key.Generation.Value}/{scopeIdentity}/{priorRevision}"),
+            expectedRevision: current?.Revision,
+            owner: owner);
+        Require(
+            acquired.Disposition is MaterializationProgressMutationDisposition.Applied
+                or MaterializationProgressMutationDisposition.Replayed,
+            $"Could not acquire durable page progress: {acquired.Disposition}.");
+        return RequireValue(acquired.Snapshot, "Progress acquisition returned no snapshot.");
+    }
+
+    static async Task<MaterializationProgressSnapshot?> SaveProgressAsync(
+        OperationContext context,
+        MaterializationProgressKey key,
+        MaterializationProgressSnapshot? progress,
+        MaterializationSourcePage page,
+        int pageOrdinal,
+        MaterializationHarnessRunOptions run)
+    {
+        if (run.ProgressStore is null)
+            return null;
+        progress = RequireValue(progress, "A durable run has no acquired progress snapshot.");
+        var ordinal = checked((long)pageOrdinal + 1);
+        var scopeIdentity = Uri.EscapeDataString(
+            $"{key.Scope.Source.Value}/{key.Scope.Partition.Value}/{key.Scope.OrderingScope.Value}");
+        var checkpointId = new MaterializationCheckpointId(
+            $"checkpoint/{key.Generation.Value}/{scopeIdentity}/{ordinal}");
+        var checkpoint = new MaterializationApplicationCheckpoint(
+            id: checkpointId,
+            kind: page.State == MaterializationSourcePageState.MoreAvailable
+                ? MaterializationCheckpointKind.BatchContinuation
+                : MaterializationCheckpointKind.BatchCompleted,
+            continuation: page.Continuation,
+            completion: page.State == MaterializationSourcePageState.Exhausted
+                ? MaterializationSourceReadCompletion.FromPage(page)
+                : null,
+            position: null,
+            appliedDeliveries: [],
+            committedAtUtc: context.UtcNow,
+            evidenceReference: page.Read.EvidenceReference,
+            batchPageOrdinal: ordinal);
+        var saved = await run.ProgressStore.SaveCheckpointAsync(
+            context: context,
+            key: key,
+            mutationId: new($"save/{checkpointId.Value}"),
+            expectedRevision: progress.Revision,
+            owner: run.ProgressOwner!,
+            fence: progress.Fence,
+            checkpoint: checkpoint);
+        Require(
+            saved.Disposition is MaterializationProgressMutationDisposition.Applied
+                or MaterializationProgressMutationDisposition.Replayed,
+            $"Could not persist durable page progress: {saved.Disposition}.");
+        return RequireValue(saved.Snapshot, "Progress persistence returned no snapshot.");
     }
 
     static ProviderPlan CreateProviderPlan(

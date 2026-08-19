@@ -25,7 +25,10 @@ public static partial class ProcessExecutionReadApiEndpointRouteBuilderExtension
             return false;
         }
 
-        processInstanceId = new(text.Trim());
+        var decoded = Uri.UnescapeDataString(text.Trim());
+        if (string.IsNullOrWhiteSpace(decoded))
+            return false;
+        processInstanceId = new(decoded.Trim());
         return true;
     }
 

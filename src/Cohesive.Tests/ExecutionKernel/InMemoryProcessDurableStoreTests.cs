@@ -621,6 +621,49 @@ public sealed class InMemoryProcessDurableStoreTests
     }
 
     [Fact]
+    public async Task AuthorityDocument_RoundTripsCompleteReplayAndFenceState()
+    {
+        var store = new InMemoryProcessDurableStore();
+        var checkpoint = Checkpoint("authority-document");
+        var ready = await InitializeAndAcquireAsync(
+            store,
+            checkpoint,
+            owner: "worker/document",
+            observedAtUtc: StartedAtUtc.AddMinutes(1),
+            leaseDuration: TimeSpan.FromHours(1));
+        var commit = Commit(
+            id: "commit/authority-document",
+            snapshot: ready,
+            owner: "worker/document",
+            observedAtUtc: StartedAtUtc.AddMinutes(2),
+            localMutations:
+            [
+                LocalMutation(
+                    identity: "mutation/authority-document",
+                    resource: "local/document",
+                    value: "retained",
+                    expectedVersion: 0)
+            ]);
+        var applied = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(store, commit);
+        Assert.Equal(ProcessStoreMutationDisposition.Applied, applied.Disposition);
+
+        var json = ProcessDurableStoreJsonSerializer.Serialize(store.CaptureDocument());
+        var restored = new InMemoryProcessDurableStore(
+            ProcessDurableStoreJsonSerializer.Deserialize(json));
+        var restoredJson = ProcessDurableStoreJsonSerializer.Serialize(restored.CaptureDocument());
+        var replayed = await ProcessDurabilityTestFixture.CommitAtEvidenceTimeAsync(restored, commit);
+
+        Assert.Equal(json, restoredJson);
+        Assert.Equal(ProcessStoreMutationDisposition.Replayed, replayed.Disposition);
+        Assert.Equal(applied.Snapshot!.Revision, replayed.Snapshot!.Revision);
+        Assert.Equal(applied.Snapshot.WorkerLease, replayed.Snapshot.WorkerLease);
+        var restoredLocal = Assert.Single(replayed.Snapshot.LocalState);
+        Assert.Equal("local/document", restoredLocal.Resource);
+        Assert.Equal(1, restoredLocal.Version);
+        Assert.Equal("mutation/authority-document", restoredLocal.MutationIdentity);
+    }
+
+    [Fact]
     public async Task ConcurrentCommits_PublishOneCompleteWinnerWithoutMixingState()
     {
         var store = new InMemoryProcessDurableStore();

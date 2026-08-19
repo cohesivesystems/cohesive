@@ -155,7 +155,7 @@ public sealed class ExecutionApiInvocationContext
 /// the local Control registry entirely; the adapter only authorizes, rebinds trusted context, and projects the
 /// authoritative decision.
 /// </remarks>
-public sealed class InMemoryExecutionControlApiAdapter
+public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDispatcher
 {
     readonly object processRegistryGate = new();
     readonly object controlRegistryGate = new();

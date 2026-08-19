@@ -49,7 +49,11 @@ public sealed class ProcessExecutionInspectApiEndpointRouteBuilderExtensionsTest
             },
             ResolvePolicy);
         var endpoint = GetRouteEndpoint(app);
-        var response = await InvokeAsync(app, endpoint, status.ProcessInstanceId.Value, "not-json");
+        var response = await InvokeAsync(
+            app,
+            endpoint,
+            Uri.EscapeDataString(status.ProcessInstanceId.Value),
+            "not-json");
 
         Assert.Equal(StatusCodes.Status200OK, response.StatusCode);
         Assert.Equal("application/json", response.ContentType);

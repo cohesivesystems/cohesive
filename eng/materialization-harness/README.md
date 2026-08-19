@@ -21,6 +21,15 @@ eng/materialization-harness/harness.sh seed
 eng/materialization-harness/harness.sh seed-direct
 eng/materialization-harness/harness.sh verify
 eng/materialization-harness/harness.sh materialize
+eng/materialization-harness/harness.sh process-start
+eng/materialization-harness/harness.sh host
+eng/materialization-harness/harness.sh process-inspect
+eng/materialization-harness/harness.sh process-explain
+eng/materialization-harness/harness.sh process-traces
+eng/materialization-harness/harness.sh process-pause
+eng/materialization-harness/harness.sh process-continue
+eng/materialization-harness/harness.sh process-restart
+eng/materialization-harness/harness.sh process-cancel
 eng/materialization-harness/harness.sh verify-index
 eng/materialization-harness/harness.sh test
 eng/materialization-harness/harness.sh status
@@ -30,6 +39,10 @@ eng/materialization-harness/harness.sh reset
 ```
 
 `seed` uses Cohesive.Storage repositories and is the normal path. `seed-direct` performs the same projection with raw provider clients, keeping seed verification independent from the repository implementation being tested. The direct Cosmos envelope timestamp is journal-derived; repository-managed persistence metadata remains adapter evidence rather than canonical freight state. `test` seeds, verifies, and materializes the direct path first, then replaces it with the repository path and repeats the same logical-state checks. `down` preserves database, checkpoint, and index volumes. After `down` and `up`, `verify` proves both source databases still match the journal's exact logical state without rewriting them. `materialize` creates and promotes a new generation for each replica. `verify-index` is read-only and displays the active aliases and their document counts. `reset` is intentionally destructive: it removes only this Compose project's volumes, starts fresh services, and replays the canonical scenario journal through Cohesive.Storage.
+
+`process-start` exercises the canonical execution-control SDK dispatcher without starting an HTTP server. `host` runs the same dispatcher behind the ASP.NET projection and executes the admitted rebuild in a background worker. The remaining `process-*` commands are SDK clients over the same durable PostgreSQL authority and can be run in another terminal while `host` is active. Pause takes effect before the next bounded source page; Continue preserves the attempt, generation, and source continuation; RestartAttempt abandons the old candidate and creates a fresh attempt/generation; Cancel is terminal and abandons any non-active candidate.
+
+This host is the durable control and recovery foundation, not yet the final Process execution proof. Its bounded materializer currently runs beside the retained Process checkpoint and consults canonical Process control at each page boundary. ARI-428 will replace that temporary worker loop with the existing `MaterializationRebuildProcessLifecycle` and durable operation adapters so initialization, shards, synchronization, completion, promotion, limit updates, and traces are all accounted for by Process activations.
 
 The shorter acceptance entrypoint is:
 
@@ -52,6 +65,7 @@ Default endpoints:
 | Cosmos Data Explorer | `http://localhost:58082/` |
 | Elasticsearch | `http://localhost:59200` |
 | Kibana | `http://localhost:55601/` |
+| Process/API host | `http://localhost:59399/` |
 
 Use `harness.sh env` to inspect the effective project identity and endpoints without displaying connection secrets.
 
@@ -71,6 +85,27 @@ GET /freight-order-search-cosmos/_search?pretty
 ```
 
 The stable read aliases are `freight-order-search-postgres` and `freight-order-search-cosmos`. Generation index names are content-derived and are printed by `materialize`; callers should read through the aliases.
+
+### Process and API surface
+
+The host persists the canonical Process checkpoint and materialization page progress as inspectable JSONB authority documents in PostgreSQL. The same adapter also supplies synchronization-work and index-sync Control-state persistence for the canonical lifecycle binding in ARI-428; this foundation does not claim that the temporary worker loop has exercised those ledgers. Each tenant/provider progress key retains the exact physical source scope, relation read fingerprint, generation, worker fence, batch page ordinal, and opaque continuation. A crash after an Elasticsearch batch but before its progress checkpoint is safe because the stable batch identity replays before the checkpoint advances.
+
+The HTTP projection uses only canonical Cohesive.Api.Execution contracts:
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/execution-control/processes/start` | Admit a stable Process attempt. |
+| `GET` | `/execution-control/processes/{processInstanceId}` | Inspect durable status. |
+| `GET` | `/execution-control/processes/{processInstanceId}/explain` | Project canonical definition, status, and evidence. |
+| `GET` | `/execution-control/processes/{processInstanceId}/traces` | Read retained canonical traces or an explicit availability result. |
+| `POST` | `/execution-control/processes/pause` | Pause at a page boundary. |
+| `POST` | `/execution-control/processes/continue` | Continue the current attempt. |
+| `POST` | `/execution-control/processes/restart-attempt` | Replace the attempt and abandon its candidate. |
+| `POST` | `/execution-control/processes/cancel` | Cancel terminally and abandon its candidate. |
+
+The local host intentionally exposes one fixed Process instance and one trusted local authority scope. The SDK commands construct optimistic revision/attempt expectations from the retained checkpoint. HTTP callers supply the canonical command request; the host derives authorization and invocation evidence server-side. `harness.sh env` prints the effective host URL and other endpoints.
+
+Set `COHESIVE_MATERIALIZATION_PAGE_DELAY_MS` to a non-negative value up to `60000` when the six-order fixture completes too quickly for manual pause or crash testing. The delay occurs before the durable control check at each bounded page and defaults to zero.
 
 ## Pinned service capabilities
 
@@ -99,3 +134,5 @@ For every provider, materialization:
 5. seals and validates the expected document count;
 6. promotes the candidate through a fenced alias update; and
 7. reads both aliases back and rejects any canonical difference.
+
+When run through the Process host, each applied page also commits a PostgreSQL progress checkpoint. A stopped host therefore resumes from the last durable continuation. An exact retry uses the same attempt-derived generation and idempotency identities; an explicit RestartAttempt uses a new generation and leaves durable abandonment evidence that prevents a delayed old worker from promoting its candidate.
