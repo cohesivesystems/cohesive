@@ -219,10 +219,14 @@ public static class FreightOrderMaterializationModel
                 compilationRequest,
                 output.Id)
             .WithUpdatePolicy(new(
-                MaterializationSynchronizationMode.Rebuild,
-                MaterializationConsistencyKind.Reconciliation,
+                MaterializationSynchronizationMode.All,
+                MaterializationConsistencyKind.BaselinePlusCatchUp,
                 MaterializationIdempotencyKind.StableOutputIdentityAndVersion))
-            .WithBoundedRelationRebuildSources(MaximumReadItems, MaximumReadBytes)
+            .WithBoundedRelationBaselineCatchUpSources(
+                maximumReadItems: MaximumReadItems,
+                maximumReadBytes: MaximumReadBytes,
+                maximumChangeItems: MaximumReadItems,
+                maximumChangeBytes: MaximumReadBytes)
             .WithGenerationalIndexTarget(MaximumWriteItems, MaximumWriteBytes)
             .WithFailurePolicy(new(3, MaterializationFailureDisposition.Stop))
             .WithFreshnessPolicy(new(maximumLagMilliseconds: 30_000))
@@ -234,7 +238,8 @@ public static class FreightOrderMaterializationModel
         Require(
             materialization.Validation.IsValid,
             materialization.Validation.Diagnostics.Select(static diagnostic => diagnostic.Message));
-        var definition = materialization.Definition;
+        var document = materialization.CreateDocument();
+        var definition = document.Definition;
         var storage = new FreightOrderStorageDefinitions(
             Order: Entity(orderShape.Id.ShapeId.Value, orderShape.Document.Graph.TryGetShape(orderShape.Id)),
             CustomerAccount: Entity(customerShape.Id.ShapeId.Value, customerShape.Document.Graph.TryGetShape(customerShape.Id)),
@@ -248,6 +253,7 @@ public static class FreightOrderMaterializationModel
             root,
             output,
             storage,
+            document,
             definition,
             MaterializationDefinitionFingerprinter.Compute(definition));
 
@@ -276,6 +282,7 @@ public static class FreightOrderMaterializationModel
 /// <param name="Root">Relation root supplied by each bounded source page.</param>
 /// <param name="Output">Complete derived OrderSearchDocument output.</param>
 /// <param name="Storage">Canonical entity definitions used by every seed realization.</param>
+/// <param name="Document">Portable canonical materialization document retained for planning and execution.</param>
 /// <param name="Definition">Backend-independent materialization definition.</param>
 /// <param name="DefinitionFingerprint">Stable fingerprint shared by provider realizations.</param>
 public sealed record FreightOrderMaterializationSemantics(
@@ -285,6 +292,7 @@ public sealed record FreightOrderMaterializationSemantics(
     RelationQuerySourceInputContract Root,
     RelationQueryOutputReference Output,
     FreightOrderStorageDefinitions Storage,
+    MaterializationDocument Document,
     MaterializationDefinition Definition,
     ExecutionDefinitionFingerprint DefinitionFingerprint);
 

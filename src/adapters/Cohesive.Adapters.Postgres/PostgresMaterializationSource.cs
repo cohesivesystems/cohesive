@@ -15,7 +15,9 @@ namespace Cohesive.Adapters.Postgres;
 /// Every page executes in one PostgreSQL statement snapshot. A durable continuation starts a later statement and
 /// therefore does not retain an MVCC snapshot across pages or pause/resume. The capability profile advertises stable
 /// ordering, request-local completeness, and bounded reconciliation; it intentionally omits coordinated snapshots,
-/// change delivery, and settlement. The wrapped reader borrows its caller-owned Npgsql data source.
+/// change delivery, and settlement. The profile retains partition selector and column capability but not one tenant
+/// value; exact logical and physical tenant binding evidence belongs to <see cref="Scope"/> and authenticated
+/// continuations. The wrapped reader borrows its caller-owned Npgsql data source.
 /// </remarks>
 public sealed class PostgresMaterializationSource : IMaterializationSource
 {
@@ -318,8 +320,7 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
         {
             sourceReferences.Add(string.Concat(
                 "postgres-partition-selector/", Uri.EscapeDataString(partition.Binding.SourceSelector),
-                "/column/", Uri.EscapeDataString(partition.Binding.ColumnName),
-                "/logical-scope/sha256/", partition.ScopeDigest));
+                "/column/", Uri.EscapeDataString(partition.Binding.ColumnName)));
         }
         foreach (var stage in stages)
         {
@@ -395,7 +396,7 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
                     ? "unpartitioned"
                     : string.Concat(
                         "selector-", Uri.EscapeDataString(partition.Binding.SourceSelector),
-                        "-sha256-", partition.ScopeDigest),
+                        "-column-", Uri.EscapeDataString(partition.Binding.ColumnName)),
                 "/policy/", policy.MaximumBatchKeys.ToString(CultureInfo.InvariantCulture), "-",
                 policy.MaximumRowsPerRead.ToString(CultureInfo.InvariantCulture), "-",
                 policy.MaximumPageItems.ToString(CultureInfo.InvariantCulture), "-",

@@ -390,9 +390,9 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
             new RelationQueryBoundedEnumeration(maximumRows: 10));
 
         Assert.NotEqual(tenantA.Scope.Partition, tenantB.Scope.Partition);
-        Assert.NotEqual(
-            tenantA.Descriptor.CapabilityProfile.Id,
-            tenantB.Descriptor.CapabilityProfile.Id);
+        Assert.True(MaterializationContract.CanonicalEquals(
+            tenantA.Descriptor.CapabilityProfile,
+            tenantB.Descriptor.CapabilityProfile));
         Assert.Throws<ArgumentException>(() => new MaterializationSourcePageRequest(
             readB,
             tenantB.Scope,

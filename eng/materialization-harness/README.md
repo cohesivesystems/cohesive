@@ -42,7 +42,7 @@ eng/materialization-harness/harness.sh reset
 
 `process-start` exercises the canonical execution-control SDK dispatcher without starting an HTTP server. `host` runs the same dispatcher behind the ASP.NET projection and executes the admitted rebuild in a background worker. The remaining `process-*` commands are SDK clients over the same durable PostgreSQL authority and can be run in another terminal while `host` is active. Pause takes effect before the next bounded source page; Continue preserves the attempt, generation, and source continuation; RestartAttempt abandons the old candidate and creates a fresh attempt/generation; Cancel is terminal and abandons any non-active candidate.
 
-This host is the durable control and recovery foundation, not yet the final Process execution proof. Its bounded materializer currently runs beside the retained Process checkpoint and consults canonical Process control at each page boundary. ARI-428 will replace that temporary worker loop with the existing `MaterializationRebuildProcessLifecycle` and durable operation adapters so initialization, shards, synchronization, completion, promotion, limit updates, and traces are all accounted for by Process activations.
+This host is the durable control and recovery foundation, not yet the final Process execution proof. Before source I/O, each provider now compiles a canonical single-leaf rebuild plan set with two tenant shards, complete dependency-feed catalogs, exact provider source profiles, one Elastic target, and deterministic placement evidence. Its bounded materializer still runs beside the retained Process checkpoint and consults canonical Process control at each page boundary. ARI-431 will replace that temporary worker loop with the existing `MaterializationRebuildProcessLifecycle` and durable operation adapters so initialization, shards, synchronization, completion, promotion, limit updates, and traces are all accounted for by Process activations.
 
 The shorter acceptance entrypoint is:
 
@@ -115,7 +115,7 @@ Set `COHESIVE_MATERIALIZATION_PAGE_DELAY_MS` to a non-negative value up to `6000
 - Elasticsearch `8.19.13` matches the adapter client's minor line and runs as an unauthenticated single node bound only to loopback.
 - Kibana `8.19.13` matches the Elasticsearch node exactly and runs without external telemetry or authentication for this loopback-only harness.
 
-The vNext emulator proves local NoSQL gateway behavior but reports an Eventual account consistency level and does not support the production full-fidelity change-feed/continuous-backup contract. The Cosmos rebuild therefore uses the real Cosmos relation reader plus Cohesive's deterministic in-memory reconciliation pager. It explicitly does not claim a coordinated snapshot or baseline-plus-catch-up. Production incremental indexing remains bound to the stricter `CosmosMaterializationSource` capability contract.
+The vNext emulator proves local NoSQL gateway behavior but reports an Eventual account consistency level and does not support the production full-fidelity change-feed/continuous-backup contract. The Cosmos rebuild therefore uses the real Cosmos relation reader plus Cohesive's deterministic in-memory reconciliation pager. For canonical rebuild planning only, both provider replicas are held immutable after verification and expose a harness-only complete empty change interval. That evidence is valid only for the frozen seed attempt; it is not a production PostgreSQL logical-replication or Cosmos change-feed claim. Production incremental indexing remains bound to the stricter provider change-source contracts.
 
 ## Seeded freight surface
 
@@ -127,12 +127,13 @@ Some location reads are conservatively over-acquired because their traversals fo
 
 For every provider, materialization:
 
-1. creates an isolated generation;
-2. reads each tenant in deterministic pages;
-3. executes the canonical relation to hydrate customer, ordered-stop, and location contributors;
-4. bulk-upserts the projected documents;
-5. seals and validates the expected document count;
-6. promotes the candidate through a fenced alias update; and
-7. reads both aliases back and rejects any canonical difference.
+1. compiles and links a canonical one-target rebuild plan set with one shard per tenant;
+2. creates an isolated generation;
+3. reads each tenant in deterministic pages;
+4. executes the canonical relation to hydrate customer, ordered-stop, and location contributors;
+5. bulk-upserts the projected documents;
+6. seals and validates the expected document count;
+7. promotes the candidate through a fenced alias update; and
+8. reads both aliases back and rejects any canonical difference.
 
 When run through the Process host, each applied page also commits a PostgreSQL progress checkpoint. A stopped host therefore resumes from the last durable continuation. An exact retry uses the same attempt-derived generation and idempotency identities; an explicit RestartAttempt uses a new generation and leaves durable abandonment evidence that prevents a delayed old worker from promoting its candidate.
