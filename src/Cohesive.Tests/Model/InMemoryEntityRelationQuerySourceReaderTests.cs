@@ -329,6 +329,7 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
         var registration = EntityRelationQuerySourceRegistration.InMemory(
             Shape,
             repository,
+            RelationQueryLogicalPartitionIdentity.WholeSource,
             limits: limits,
             fieldSourceSelector: fieldSourceSelector,
             relationshipKeySourceSelector: relationshipKeySourceSelector);

@@ -1912,6 +1912,9 @@ public sealed class CosmosMaterializationSourceTests
     {
         CosmosRelationQuerySourcePolicy queryPolicy = new(
             partitionSourceSelector,
+            fixedPartition
+                ? new("tenant-a")
+                : RelationQueryLogicalPartitionIdentity.WholeSource,
             crossPartitionPolicy: fixedPartition
                 ? CosmosRelationQueryCrossPartitionPolicy.Prohibit
                 : CosmosRelationQueryCrossPartitionPolicy.AllowBoundedQueries,

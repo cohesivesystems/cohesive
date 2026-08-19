@@ -1482,6 +1482,7 @@ public sealed class IndexSyncVerticalSliceTests
             baseline.Create);
         CosmosRelationQuerySourcePolicy queryPolicy = new(
             CosmosRelationQuerySourceReader.ObservationPartitionSourceSelector,
+            new("tenant-a"),
             crossPartitionPolicy: CosmosRelationQueryCrossPartitionPolicy.Prohibit,
             fixedPartitionKey: new("tenant-a"),
             maximumEnumerationRows: MaximumItems,

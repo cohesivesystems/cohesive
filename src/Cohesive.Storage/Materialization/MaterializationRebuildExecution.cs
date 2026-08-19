@@ -394,6 +394,7 @@ public sealed class RelationQueryMaterializationRebuildHydrator : IMaterializati
         context.ThrowIfCancellationRequested();
         var supplied = new RelationQuerySuppliedSourceInput(
             input: suppliedRoot,
+            logicalPartition: request.Page.Scope.LogicalPartition,
             completeness: RelationQueryEvidenceCompleteness.Complete,
             observations: request.Page.Read.Observations,
             evidenceReference: request.Page.Read.EvidenceReference);

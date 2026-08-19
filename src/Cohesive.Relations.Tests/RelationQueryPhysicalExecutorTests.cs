@@ -195,7 +195,7 @@ public sealed class RelationQueryPhysicalExecutorTests
             compilation,
             FederatedLoadPhysicalExecutionFixture.LoadsSource);
         var loadReader = new DeterministicRelationQuerySourceReader(
-            new(loads.Id, loads.ExecutionDomain, loads.TargetProfile),
+            new(loads.Id, loads.ExecutionDomain, loads.TargetProfile, RelationQueryLogicalPartitionIdentity.WholeSource),
             LoadRows);
 
         var result = await new RelationQueryPhysicalExecutor([loadReader]).ExecuteAsync(
@@ -307,6 +307,7 @@ public sealed class RelationQueryPhysicalExecutorTests
             RelationQuerySourceReadFieldPurpose.SemanticInput);
         var supplied = new RelationQuerySuppliedSourceInput(
             source.Input.Id,
+            RelationQueryLogicalPartitionIdentity.WholeSource,
             RelationQueryEvidenceCompleteness.Complete,
             [
                 new(
@@ -355,10 +356,10 @@ public sealed class RelationQueryPhysicalExecutorTests
             compilation,
             FederatedLoadPhysicalExecutionFixture.CustomersSource);
         var loadReader = new DeterministicRelationQuerySourceReader(
-            new(loads.Id, loads.ExecutionDomain, loads.TargetProfile),
+            new(loads.Id, loads.ExecutionDomain, loads.TargetProfile, RelationQueryLogicalPartitionIdentity.WholeSource),
             LoadRows);
         var customerReader = new DeterministicRelationQuerySourceReader(
-            new(customers.Id, customers.ExecutionDomain, customers.TargetProfile),
+            new(customers.Id, customers.ExecutionDomain, customers.TargetProfile, RelationQueryLogicalPartitionIdentity.WholeSource),
             CustomerRows);
 
         var result = await new RelationQueryPhysicalExecutor([customerReader, loadReader]).ExecuteAsync(
@@ -428,7 +429,7 @@ public sealed class RelationQueryPhysicalExecutorTests
             compilation,
             FederatedLoadPhysicalExecutionFixture.CustomersSource);
         var loadReader = new DeterministicRelationQuerySourceReader(
-            new(loads.Id, loads.ExecutionDomain, loads.TargetProfile),
+            new(loads.Id, loads.ExecutionDomain, loads.TargetProfile, RelationQueryLogicalPartitionIdentity.WholeSource),
             LoadRows,
             request =>
             {
@@ -459,7 +460,7 @@ public sealed class RelationQueryPhysicalExecutorTests
                     "tests/conflicting-inverse-reference");
             });
         var customerReader = new DeterministicRelationQuerySourceReader(
-            new(customers.Id, customers.ExecutionDomain, customers.TargetProfile),
+            new(customers.Id, customers.ExecutionDomain, customers.TargetProfile, RelationQueryLogicalPartitionIdentity.WholeSource),
             CustomerRows);
 
         var result = await new RelationQueryPhysicalExecutor([customerReader, loadReader]).ExecuteAsync(
@@ -496,11 +497,11 @@ public sealed class RelationQueryPhysicalExecutorTests
             compilation,
             FederatedLoadPhysicalExecutionFixture.CustomersSource);
         var loadReader = new DeterministicRelationQuerySourceReader(
-            new(loads.Id, loads.ExecutionDomain, loads.TargetProfile),
+            new(loads.Id, loads.ExecutionDomain, loads.TargetProfile, RelationQueryLogicalPartitionIdentity.WholeSource),
             LoadRows,
             _ => new(readState, evidenceReference: $"tests/inverse-{readState}"));
         var customerReader = new DeterministicRelationQuerySourceReader(
-            new(customers.Id, customers.ExecutionDomain, customers.TargetProfile),
+            new(customers.Id, customers.ExecutionDomain, customers.TargetProfile, RelationQueryLogicalPartitionIdentity.WholeSource),
             CustomerRows);
 
         var result = await new RelationQueryPhysicalExecutor([customerReader, loadReader]).ExecuteAsync(
@@ -554,10 +555,10 @@ public sealed class RelationQueryPhysicalExecutorTests
                 maximumBatchSize: 2),
             FederatedLoadRelationFixture.EquipmentTraversalNodeId,
             "$tenant");
-        var scope = readerSelector is null
+        var binding = readerSelector is null
             ? null
-            : new RelationQuerySourceReaderPartitionScope(readerSelector, "scope/tenant-a");
-        var readers = CreateReaders(compilation, equipmentPartitionScope: scope);
+            : new RelationQuerySourceReaderPartitionBinding(readerSelector);
+        var readers = CreateReaders(compilation, equipmentPartitionBinding: binding);
 
         var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
             Request(compilation, "tests/partition-reader-mismatch"));
@@ -582,7 +583,7 @@ public sealed class RelationQueryPhysicalExecutorTests
             "$tenant");
         var readers = CreateReaders(
             compilation,
-            equipmentPartitionScope: new("$tenant", "scope/tenant-a"));
+            equipmentPartitionBinding: new("$tenant"));
 
         var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
             Request(compilation, "tests/partition-reader-match"));
@@ -590,6 +591,68 @@ public sealed class RelationQueryPhysicalExecutorTests
         Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
         Assert.Empty(result.Diagnostics);
         Assert.NotEmpty(readers.Equipment.Requests);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MixedReaderLogicalPartitionsFailBeforeAnyIo()
+    {
+        var compilation = WithPartition(
+            FederatedLoadPhysicalExecutionFixture.Create(
+                FederatedLoadRelationFixture.QueryDocument,
+                maximumBatchSize: 2),
+            FederatedLoadRelationFixture.EquipmentTraversalNodeId,
+            "$tenant");
+        RelationQueryLogicalPartitionIdentity tenantA = new("tests/tenant-a");
+        RelationQueryLogicalPartitionIdentity tenantB = new("tests/tenant-b");
+        var readers = CreateReaders(
+            compilation,
+            logicalPartition: tenantA,
+            equipmentLogicalPartition: tenantB,
+            equipmentPartitionBinding: new("$tenant"));
+
+        var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(
+            Request(compilation, "tests/mixed-reader-logical-partitions"));
+
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
+        Assert.Null(result.Evidence);
+        Assert.Null(result.Interpretation);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == RelationQueryPhysicalExecutionDiagnosticCodes.LogicalPartitionMismatch
+            && diagnostic.Source == FederatedLoadPhysicalExecutionFixture.EquipmentSource);
+        AssertNoIo(readers);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_TenantARootsWithTenantBReadersFailBeforeAnyIo()
+    {
+        var compilation = FederatedLoadPhysicalExecutionFixture.Create(
+            FederatedLoadRelationFixture.RelationDocument,
+            maximumBatchSize: 2);
+        var scenario = FederatedLoadConformanceData.CreatePhysicalScenario(compilation);
+        var supplied = new RelationQuerySuppliedSourceInput(
+            scenario.SuppliedLoads.Input,
+            new("tests/tenant-a"),
+            scenario.SuppliedLoads.Completeness,
+            scenario.SuppliedLoads.Observations,
+            scenario.SuppliedLoads.EvidenceReference);
+        var readers = CreateReaders(
+            compilation,
+            logicalPartition: new("tests/tenant-b"));
+
+        var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(new(
+            compilation.Plan,
+            compilation.PhysicalPlan,
+            compilation.Realization,
+            new("tests/mixed-root-reader-logical-partitions"),
+            suppliedSources: [supplied],
+            capabilities: FederatedLoadPhysicalExecutionFixture.AvailableCapabilities(compilation.Plan)));
+
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
+        Assert.Null(result.Evidence);
+        Assert.Null(result.Interpretation);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == RelationQueryPhysicalExecutionDiagnosticCodes.LogicalPartitionMismatch);
+        AssertNoIo(readers);
     }
 
     [Fact]
@@ -674,6 +737,7 @@ public sealed class RelationQueryPhysicalExecutorTests
         var root = Assert.Single(compilation.Plan.InputContract.Sources);
         var supplied = new RelationQuerySuppliedSourceInput(
             root.Input.Id,
+            RelationQueryLogicalPartitionIdentity.WholeSource,
             RelationQueryEvidenceCompleteness.Complete,
             [new("load-1", FederatedLoadRelationFixture.LoadShapeId, fields: [])],
             "tests/malformed-supplied-root");
@@ -898,10 +962,10 @@ public sealed class RelationQueryPhysicalExecutorTests
             compilation,
             FederatedLoadPhysicalExecutionFixture.CustomersSource);
         var loadReader = new DeterministicRelationQuerySourceReader(
-            new(loads.Id, loads.ExecutionDomain, loads.TargetProfile),
+            new(loads.Id, loads.ExecutionDomain, loads.TargetProfile, RelationQueryLogicalPartitionIdentity.WholeSource),
             LoadRows);
         var customerReader = new DeterministicRelationQuerySourceReader(
-            new(customers.Id, customers.ExecutionDomain, customers.TargetProfile),
+            new(customers.Id, customers.ExecutionDomain, customers.TargetProfile, RelationQueryLogicalPartitionIdentity.WholeSource),
             CustomerRows);
 
         var result = await new RelationQueryPhysicalExecutor([customerReader, loadReader]).ExecuteAsync(
@@ -955,10 +1019,10 @@ public sealed class RelationQueryPhysicalExecutorTests
                 (FederatedLoadRelationFixture.CustomerNamePath, ObservationValue.FromString("Customer One")))
         ];
         var loadReader = new DeterministicRelationQuerySourceReader(
-            new(loads.Id, loads.ExecutionDomain, loads.TargetProfile),
+            new(loads.Id, loads.ExecutionDomain, loads.TargetProfile, RelationQueryLogicalPartitionIdentity.WholeSource),
             LoadRows);
         var customerReader = new DeterministicRelationQuerySourceReader(
-            new(customers.Id, customers.ExecutionDomain, customers.TargetProfile),
+            new(customers.Id, customers.ExecutionDomain, customers.TargetProfile, RelationQueryLogicalPartitionIdentity.WholeSource),
             invalidCustomerRows);
 
         var result = await new RelationQueryPhysicalExecutor([customerReader, loadReader]).ExecuteAsync(
@@ -1180,7 +1244,9 @@ public sealed class RelationQueryPhysicalExecutorTests
         Func<RelationQuerySourceReadRequest, RelationQuerySourceReadResult>? customerResultFactory = null,
         Action<RelationQuerySourceReadRequest>? afterLoadRead = null,
         Action<RelationQuerySourceReadRequest>? afterCustomerRead = null,
-        RelationQuerySourceReaderPartitionScope? equipmentPartitionScope = null)
+        RelationQuerySourceReaderPartitionBinding? equipmentPartitionBinding = null,
+        RelationQueryLogicalPartitionIdentity? logicalPartition = null,
+        RelationQueryLogicalPartitionIdentity? equipmentLogicalPartition = null)
     {
         var loads = FederatedLoadPhysicalExecutionFixture.Source(
             compilation,
@@ -1201,14 +1267,23 @@ public sealed class RelationQueryPhysicalExecutorTests
                 customers.TargetProfile.OperatingBoundaries,
                 customers.TargetProfile.Description)
             : customers.TargetProfile;
+        var effectiveLogicalPartition = logicalPartition ?? RelationQueryLogicalPartitionIdentity.WholeSource;
 
         return new(
             new(
-                new(loads.Id, loads.ExecutionDomain, loads.TargetProfile),
+                new(
+                    loads.Id,
+                    loads.ExecutionDomain,
+                    loads.TargetProfile,
+                    effectiveLogicalPartition),
                 LoadRows,
                 afterRead: afterLoadRead),
             new(
-                new(customers.Id, customers.ExecutionDomain, customerProfile),
+                new(
+                    customers.Id,
+                    customers.ExecutionDomain,
+                    customerProfile,
+                    effectiveLogicalPartition),
                 CustomerRows,
                 customerResultFactory,
                 afterCustomerRead),
@@ -1217,7 +1292,8 @@ public sealed class RelationQueryPhysicalExecutorTests
                     equipment.Id,
                     equipment.ExecutionDomain,
                     equipment.TargetProfile,
-                    equipmentPartitionScope),
+                    equipmentLogicalPartition ?? effectiveLogicalPartition,
+                    equipmentPartitionBinding),
                 EquipmentRows));
     }
 

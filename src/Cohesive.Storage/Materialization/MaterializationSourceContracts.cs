@@ -8,7 +8,7 @@ using Cohesive.Relations.Physical;
 
 namespace Cohesive.Storage.Materialization;
 
-/// <summary>Stable provider-neutral identity of one logical materialization source partition.</summary>
+/// <summary>Stable adapter-defined identity of one physical materialization source-feed partition.</summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct MaterializationSourcePartitionId
 {
@@ -52,22 +52,51 @@ public readonly record struct MaterializationOrderingScopeId
 /// </summary>
 public sealed record MaterializationSourceScope
 {
-    /// <summary>Creates an exact source-feed scope.</summary>
+    /// <summary>Creates an explicitly unpartitioned whole-source feed scope.</summary>
     /// <param name="physicalPlan">Exact physical-plan fingerprint authorizing reads in this scope.</param>
     /// <param name="placement">Canonical placement that binds one Relations acquisition input to its source.</param>
-    /// <param name="partition">Logical materialization partition.</param>
+    /// <param name="partition">Adapter-defined physical materialization source-feed partition.</param>
     /// <param name="orderingScope">Adapter-stable domain within which source positions are ordered.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="physicalPlan"/> or <paramref name="placement"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="physicalPlan"/> or <paramref name="placement"/> is <see langword="null"/>.
+    /// </exception>
     /// <exception cref="ArgumentException">An identity is default or the placement cannot perform a source read.</exception>
-    [JsonConstructor]
     public MaterializationSourceScope(
         RelationQueryPhysicalPlanFingerprint physicalPlan,
         RelationQuerySourcePlacementBinding placement,
         MaterializationSourcePartitionId partition,
         MaterializationOrderingScopeId orderingScope)
+        : this(
+            physicalPlan,
+            placement,
+            RelationQueryLogicalPartitionIdentity.WholeSource,
+            partition,
+            orderingScope)
+    {
+    }
+
+    /// <summary>Creates an exact source-feed scope.</summary>
+    /// <param name="physicalPlan">Exact physical-plan fingerprint authorizing reads in this scope.</param>
+    /// <param name="placement">Canonical placement that binds one Relations acquisition input to its source.</param>
+    /// <param name="logicalPartition">Provider-neutral logical partition represented by the source feed.</param>
+    /// <param name="partition">Adapter-defined physical materialization source-feed partition.</param>
+    /// <param name="orderingScope">Adapter-stable domain within which source positions are ordered.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="physicalPlan"/>, <paramref name="placement"/>, or <paramref name="logicalPartition"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">An identity is default or the placement cannot perform a source read.</exception>
+    [JsonConstructor]
+    public MaterializationSourceScope(
+        RelationQueryPhysicalPlanFingerprint physicalPlan,
+        RelationQuerySourcePlacementBinding placement,
+        RelationQueryLogicalPartitionIdentity logicalPartition,
+        MaterializationSourcePartitionId partition,
+        MaterializationOrderingScopeId orderingScope)
     {
         PhysicalPlan = Guard.RequireNotNull(physicalPlan);
         Placement = Guard.RequireNotNull(placement);
+        LogicalPartition = Guard.RequireNotNull(logicalPartition);
         if (placement.Acquisition == RelationQuerySourceAcquisitionKind.Supplied)
         {
             throw new ArgumentException("A materialization source scope requires an externally readable placement.", nameof(placement));
@@ -97,7 +126,10 @@ public sealed record MaterializationSourceScope
     [JsonIgnore]
     public QualifiedShapeId Shape => Placement.Shape;
 
-    /// <summary>Logical materialization partition.</summary>
+    /// <summary>Provider-neutral logical partition represented by this source feed.</summary>
+    public RelationQueryLogicalPartitionIdentity LogicalPartition { get; }
+
+    /// <summary>Adapter-defined physical materialization source-feed partition.</summary>
     public MaterializationSourcePartitionId Partition { get; }
 
     /// <summary>Adapter-stable domain within which source positions are ordered.</summary>

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Cohesive.Model;
+using Cohesive.Relations.Acquisition;
 
 namespace Cohesive.Adapters.Postgres;
 
@@ -16,10 +17,11 @@ public enum PostgresNpgsqlTemporalSemantics
     InfinityConversionsDisabledBeforeInitialization = 1
 }
 
-/// <summary>One exact logical partition selected for every read performed by a PostgreSQL source reader.</summary>
+/// <summary>Logical identity and physical selector for one partition selected by a PostgreSQL source reader.</summary>
 public sealed record PostgresRelationQueryPartitionScope
 {
     /// <summary>Creates an exact fixed-partition scope.</summary>
+    /// <param name="logicalPartition">Provider-neutral identity shared by all sources in this logical partition.</param>
     /// <param name="sourceSelector">Canonical placement selector identifying the partition coordinate.</param>
     /// <param name="canonicalValue">
     /// Canonical scalar text interpreted according to each table's partition binding. The value is retained only by
@@ -27,11 +29,18 @@ public sealed record PostgresRelationQueryPartitionScope
     /// </param>
     /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">A parameter is empty or white space.</exception>
-    public PostgresRelationQueryPartitionScope(string sourceSelector, string canonicalValue)
+    public PostgresRelationQueryPartitionScope(
+        RelationQueryLogicalPartitionIdentity logicalPartition,
+        string sourceSelector,
+        string canonicalValue)
     {
+        LogicalPartition = Guard.RequireNotNull(logicalPartition);
         SourceSelector = Guard.RequireNotNullOrWhiteSpace(sourceSelector);
         CanonicalValue = Guard.RequireNotNullOrWhiteSpace(canonicalValue);
     }
+
+    /// <summary>Provider-neutral identity shared by all sources in this logical partition.</summary>
+    public RelationQueryLogicalPartitionIdentity LogicalPartition { get; }
 
     /// <summary>Canonical placement selector identifying the partition coordinate.</summary>
     public string SourceSelector { get; }
@@ -52,16 +61,6 @@ public sealed record PostgresRelationQueryPartitionScope
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
-    internal string ComputeDigest(IEnumerable<PostgresRelationQueryPartitionBinding> bindings)
-    {
-        ArgumentNullException.ThrowIfNull(bindings);
-        var canonical = new StringBuilder("cohesive.adapters.postgres/reader-partition-scope/v1\0");
-        foreach (var binding in bindings)
-        {
-            canonical.Append(ComputeDigest(binding)).Append('\0');
-        }
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
-    }
 }
 
 /// <summary>Explicit physical operating bounds for PostgreSQL Relations acquisition and materialization paging.</summary>
@@ -94,8 +93,9 @@ public sealed record PostgresRelationQuerySourcePolicy
     /// batched requests and durable continuation state physically bounded.
     /// </param>
     /// <param name="partitionScope">
-    /// Optional exact logical partition applied by parameterized equality to every acquired table. When supplied,
-    /// every placement served by the reader must declare the same selector and every table must bind it physically.
+    /// Optional provider-neutral logical partition and fixed physical selector applied by parameterized equality to
+    /// every acquired table. When supplied, every placement served by the reader must declare the same selector and
+    /// every table must bind it physically.
     /// </param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// A bound is not positive, exceeds the supported CLR range, page items exceed rows per read or the canonical

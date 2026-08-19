@@ -604,6 +604,7 @@ public sealed class CosmosManagedMaterializationChangeSource : IMaterializationM
         return new(
             physicalPlan: physicalPlan,
             placement: placement,
+            logicalPartition: reader.Descriptor.LogicalPartition,
             partition: new MaterializationSourcePartitionId(string.Concat(
                 "cosmos/container/", accountFingerprint,
                 "/database/", Uri.EscapeDataString(reader.DatabaseId),
@@ -622,6 +623,7 @@ public sealed class CosmosManagedMaterializationChangeSource : IMaterializationM
         return new(
             physicalPlan: physicalPlan,
             placement: placement,
+            logicalPartition: reader.Descriptor.LogicalPartition,
             partition: new MaterializationSourcePartitionId(string.Concat(
                 "cosmos/container/", accountFingerprint,
                 "/database/", Uri.EscapeDataString(reader.DatabaseId),

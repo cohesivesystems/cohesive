@@ -728,7 +728,7 @@ The complete executable version is in `RelationQueryStructuralAuthoringExampleTe
 determines whether the request evaluates a rooted correspondence or independently acquires query inputs; there is no
 second kind enum or parallel execution model. The request carries the exact `RelationQueryCompilationRequest`,
 parameter evidence, optional supplied roots, output demand, and optional compiled-plan attribution.
-The normalized request is a portable `relation-query-evaluation/v1` document with a deterministic fingerprint over
+The normalized request is a portable `relation-query-evaluation/v2` document with a deterministic fingerprint over
 the complete compilation snapshots, demand and its origin, evaluation identity, parameter and root evidence,
 provenance references, and optional plan attribution. Use `RelationQueryEvaluationJsonSerializer` for strict
 round trips and `HasSameSemantics` when a host must compare independently reconstructed requests.
@@ -1713,12 +1713,14 @@ physical plan. A statically proven field-equality join can use bounded local cor
 source sets when at least one string identity field is tied to the reader's unique observation identity.
 Multiple left, at-most-one sibling enrichments from the same owner binding are sequenced in semantic order;
 each downstream read is restricted to owner occurrences that conclusively reached it, and non-reaching owners
-receive `NotApplicable` evidence without I/O. Other traversals separated from their owner producer by a filter,
-a different binding, or a cardinality-changing operator remain unavailable until reachability can be staged
-without over-fetching or false requirement gaps. Predeclared conversion failures that can alter a supported
-sibling reachability chain also fail preflight rather than guessing. Arbitrary predicates, unbounded collection
-expansion, and temporal cross-source acquisition fail with structured `REL21xx` diagnostics rather than falling
-back to unbounded enumeration or weakened semantics.
+receive `NotApplicable` evidence without I/O. A traversal separated from its declared source binding by a filter,
+ordering, distinctness, or another cardinality-changing operator may instead use conservative binding
+over-acquisition. That strategy reads every already-bounded occurrence of the declared binding, retains `REL2113`
+in the physical plan, and leaves logical reachability entirely to the canonical interpreter; it may therefore do
+more physical work or reach a declared boundary earlier, but it does not weaken result semantics. Predeclared
+conversion failures that can alter an exact sibling reachability chain still fail preflight rather than guessing.
+Arbitrary predicates, unbounded collection expansion, and temporal cross-source acquisition fail with structured
+`REL21xx` diagnostics rather than falling back to unbounded enumeration or weakened semantics.
 
 `IRelationQuerySourceReader` is the narrow provider port. Every request carries an exact physical-plan
 and stage identity, source placement, graph-qualified shape, identity selector, selected semantic fields,

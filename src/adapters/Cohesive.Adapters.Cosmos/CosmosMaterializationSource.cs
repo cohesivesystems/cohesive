@@ -308,6 +308,7 @@ public sealed class CosmosMaterializationSource : IMaterializationPullChangeSour
         Scope = new(
             physicalPlan: physicalPlan,
             placement: placement,
+            logicalPartition: reader.Descriptor.LogicalPartition,
             partition: new MaterializationSourcePartitionId(string.Concat(
                 "cosmos/container/", accountFingerprint,
                 "/database/", Uri.EscapeDataString(reader.DatabaseId),

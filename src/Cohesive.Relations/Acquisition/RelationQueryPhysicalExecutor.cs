@@ -186,6 +186,7 @@ public sealed class RelationQueryPhysicalExecutor
         if (ValidateTraversalReachabilityConversions(request) is { } reachabilityFailure)
             return reachabilityFailure;
 
+        RelationQueryLogicalPartitionIdentity? logicalPartition = null;
         var sourceContracts = request.Plan.InputContract.Sources.ToDictionary(static source => source.Input.Id);
         foreach (var supplied in request.SuppliedSources)
         {
@@ -198,6 +199,16 @@ public sealed class RelationQueryPhysicalExecutor
                     RelationQueryPhysicalExecutionDiagnosticCodes.SuppliedInputInvalid,
                     "A directly supplied input must identify an exact supplied relation-root source.",
                     input: supplied.Input);
+            }
+
+            var binding = physical.Placement.Bindings.Single(candidate => candidate.Input == supplied.Input);
+            if (RequireLogicalPartition(
+                    supplied.LogicalPartition,
+                    ref logicalPartition,
+                    binding.Input,
+                    binding.Source) is { } suppliedPartitionFailure)
+            {
+                return suppliedPartitionFailure;
             }
         }
 
@@ -228,19 +239,48 @@ public sealed class RelationQueryPhysicalExecutor
             }
 
             if ((binding.Partition is { } partition
-                 && (descriptor.PartitionScope is not { } scope
-                     || !string.Equals(scope.SourceSelector, partition.SourceSelector, StringComparison.Ordinal)))
-                || (binding.Partition is null && descriptor.PartitionScope is not null))
+                 && (descriptor.PartitionBinding is not { } partitionBinding
+                     || !string.Equals(partitionBinding.SourceSelector, partition.SourceSelector, StringComparison.Ordinal)))
+                || (binding.Partition is null && descriptor.PartitionBinding is not null))
             {
                 return Diagnostic(
                     RelationQueryPhysicalExecutionDiagnosticCodes.SourceReaderMismatch,
-                    "A source reader's fixed logical-partition evidence does not match the exact placed partition selector.",
+                    "A source reader's fixed physical-partition evidence does not match the exact placed partition selector.",
                     input: binding.Input,
                     source: source.Id);
+            }
+            if (RequireLogicalPartition(
+                    descriptor.LogicalPartition,
+                    ref logicalPartition,
+                    binding.Input,
+                    source.Id) is { } readerPartitionFailure)
+            {
+                return readerPartitionFailure;
             }
         }
 
         return null;
+    }
+
+    static RelationQueryPhysicalExecutionDiagnostic? RequireLogicalPartition(
+        RelationQueryLogicalPartitionIdentity candidate,
+        ref RelationQueryLogicalPartitionIdentity? expected,
+        RelationQueryInputId input,
+        RelationQuerySourceInstanceId source)
+    {
+        if (expected is null)
+        {
+            expected = candidate;
+            return null;
+        }
+        if (Equals(expected, candidate))
+            return null;
+
+        return Diagnostic(
+            RelationQueryPhysicalExecutionDiagnosticCodes.LogicalPartitionMismatch,
+            "Every supplied source and reader in one physical execution must implement the same provider-neutral logical partition.",
+            input: input,
+            source: source);
     }
 
     static RelationQueryPhysicalExecutionDiagnostic? ValidateTraversalReachabilityConversions(RelationQueryPhysicalExecutionRequest request)
@@ -271,19 +311,19 @@ public sealed class RelationQueryPhysicalExecutor
                     source: downstreamPlacement.Source);
             }
 
-            if (!RelationQueryPhysicalReachability.TryGetPreservingInterveningTraversals(
+            if (!RelationQueryPhysicalReachability.TryResolve(
                     request.Plan,
                     downstream,
-                    out var intervening))
+                    out var reachability))
             {
                 return Diagnostic(
                     RelationQueryPhysicalExecutionDiagnosticCodes.StageInvalid,
-                    $"Traversal '{downstream.Input.Traversal.Value}' has no proven v1 source-occurrence reachability chain.",
+                    $"Traversal '{downstream.Input.Traversal.Value}' has no resolved source-occurrence acquisition strategy.",
                     input: downstream.Input.Id,
                     source: downstreamPlacement.Source);
             }
 
-            foreach (var prior in intervening)
+            foreach (var prior in reachability.InterveningTraversals)
             {
                 if (!TryAddTraversalReachabilityInputs(request.Plan, prior, reachabilityInputs))
                 {
@@ -1069,20 +1109,22 @@ public sealed class RelationQueryPhysicalExecutor
             var candidates = GetOccurrences(contract.From)
                 .OrderBy(static owner => owner.Occurrence.Id.Value, StringComparer.Ordinal)
                 .ToArray();
-            if (!RelationQueryPhysicalReachability.TryGetPreservingInterveningTraversals(
+            if (!RelationQueryPhysicalReachability.TryResolve(
                     request.Plan,
                     contract,
-                    out var intervening))
+                    out var reachability))
             {
                 owners = [];
                 return Diagnostic(
                     RelationQueryPhysicalExecutionDiagnosticCodes.StageInvalid,
-                    "A traversal has no proven v1 source-occurrence reachability chain.",
+                    "A traversal has no resolved source-occurrence acquisition strategy.",
                     stage.Id,
                     contract.Input.Id,
                     placements[contract.Input.Id].Source);
             }
-            if (intervening.IsDefaultOrEmpty)
+            if (reachability.Mode
+                    == RelationQueryPhysicalTraversalReachabilityMode.ConservativeBindingOverAcquisition
+                || reachability.InterveningTraversals.IsDefaultOrEmpty)
             {
                 owners = candidates;
                 return null;
@@ -1092,7 +1134,7 @@ public sealed class RelationQueryPhysicalExecutor
             foreach (var candidate in candidates)
             {
                 RelationQueryTraversalEvidence? blocker = null;
-                foreach (var prior in intervening)
+                foreach (var prior in reachability.InterveningTraversals)
                 {
                     var matches = traversalEvidence
                         .Where(evidence => evidence.Input == prior.Input.Id

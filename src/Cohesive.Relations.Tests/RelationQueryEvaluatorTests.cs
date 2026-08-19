@@ -638,7 +638,11 @@ public sealed class RelationQueryEvaluatorTests
             var source = placement.SourceInstances.Single(
                 candidate => candidate.Id == FederatedLoadPhysicalExecutionFixture.LoadsSource);
             readers.Add(new DeterministicRelationQuerySourceReader(
-                new(source.Id, source.ExecutionDomain, source.TargetProfile),
+                new(
+                    source.Id,
+                    source.ExecutionDomain,
+                    source.TargetProfile,
+                    RelationQueryLogicalPartitionIdentity.WholeSource),
                 loadRows,
                 afterRead: afterLoadRead is null ? null : _ => afterLoadRead()));
         }
@@ -649,7 +653,11 @@ public sealed class RelationQueryEvaluatorTests
             var source = placement.SourceInstances.Single(
                 candidate => candidate.Id == FederatedLoadPhysicalExecutionFixture.CustomersSource);
             readers.Add(new DeterministicRelationQuerySourceReader(
-                new(source.Id, source.ExecutionDomain, source.TargetProfile),
+                new(
+                    source.Id,
+                    source.ExecutionDomain,
+                    source.TargetProfile,
+                    RelationQueryLogicalPartitionIdentity.WholeSource),
                 customerRows));
         }
 

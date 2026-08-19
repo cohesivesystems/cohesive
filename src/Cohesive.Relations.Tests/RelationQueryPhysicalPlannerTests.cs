@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Json;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
@@ -534,7 +535,7 @@ public sealed class RelationQueryPhysicalPlannerTests
     }
 
     [Fact]
-    public void Compile_TraversalAfterFilterIsRejectedUntilReachabilityCanBeStaged()
+    public void Compile_TraversalAfterFilterUsesExplicitBoundedOverAcquisition()
     {
         var semantic = Compile(CreateFilteredTraversalDocument());
 
@@ -544,10 +545,12 @@ public sealed class RelationQueryPhysicalPlannerTests
             CreatePlacement(semantic),
             PhysicalPolicy);
 
-        Assert.Equal(RelationQueryPhysicalPlanningStatus.Unavailable, result.Status);
-        Assert.Null(result.Plan);
-        Assert.Contains(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == RelationQueryPhysicalPlanningDiagnosticCodes.LoweringUnavailable);
+        var physical = SuccessfulPlan(result);
+
+        Assert.Equal(RelationQueryPhysicalPlanningStatus.Planned, result.Status);
+        Assert.Contains(physical.Diagnostics, static diagnostic =>
+            diagnostic.Code == RelationQueryPhysicalPlanningDiagnosticCodes.ConservativeOverAcquisition
+            && diagnostic.Severity == DiagnosticSeverity.Warning);
     }
 
     static CompiledRelationQueryPlan Compile(

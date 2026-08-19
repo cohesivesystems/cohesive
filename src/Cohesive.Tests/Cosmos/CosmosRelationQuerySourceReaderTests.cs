@@ -106,6 +106,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
             "entities",
             new CosmosRelationQuerySourcePolicy(
                 partitionSourceSelector: "partitionKey",
+                logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
                 CosmosRelationQueryCrossPartitionPolicy.Prohibit)));
         Assert.Throws<ArgumentException>(() => new CosmosRelationQuerySourceReader(
             Shape,
@@ -115,9 +116,11 @@ public sealed class CosmosRelationQuerySourceReaderTests
             "entities",
             new CosmosRelationQuerySourcePolicy(
                 partitionSourceSelector: "partitionKey",
+                logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
                 CosmosRelationQueryCrossPartitionPolicy.Prohibit)));
         var otherPolicy = new CosmosRelationQuerySourcePolicy(
             partitionSourceSelector: "partitionKey",
+            logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
             fixedPartitionKey: new("tenant-b"));
         var otherScope = CosmosEntityRelationQuerySourceRegistration.Create(
             Shape,
@@ -133,6 +136,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
             "entities",
             new CosmosRelationQuerySourcePolicy(
                 partitionSourceSelector: "partitionKey",
+                logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
                 fixedPartitionKey: policy.FixedPartitionKey));
         Assert.NotEqual(first.Source.Id, inheritedConsistencyScope.Source.Id);
         Assert.Throws<ArgumentException>(() => CosmosEntityRelationQuerySourceRegistration.Create(
@@ -150,6 +154,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
             "entities",
             new CosmosRelationQuerySourcePolicy(
                 partitionSourceSelector: "partitionKey",
+                logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
                 fixedPartitionKey: new("tenant-a"),
                 maximumEnumerationRows: 40,
                 maximumKeysPerQuery: 2,
@@ -171,6 +176,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
             chunkFeed,
             new(
                 partitionSourceSelector: "partitionKey",
+                logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
                 fixedPartitionKey: new("tenant-a"),
                 maximumKeysPerQuery: 1,
                 maximumQueryChunks: 1));
@@ -260,6 +266,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
     {
         var policy = new CosmosRelationQuerySourcePolicy(
             partitionSourceSelector: "partitionKey",
+            logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
             fixedPartitionKey: new("tenant-a"),
             maximumKeysPerQuery: 1,
             maximumQueryChunks: 4);
@@ -306,6 +313,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
     {
         var policy = new CosmosRelationQuerySourcePolicy(
             partitionSourceSelector: "partitionKey",
+            logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
             fixedPartitionKey: new("tenant-a"),
             maximumKeysPerQuery: 1,
             maximumQueryChunks: 2);
@@ -355,6 +363,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
     {
         var policy = new CosmosRelationQuerySourcePolicy(
             partitionSourceSelector: "partitionKey",
+            logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
             fixedPartitionKey: new("tenant-a"),
             maximumKeysPerQuery: 1,
             maximumQueryChunks: 2);
@@ -499,6 +508,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
         RecordingFeedFactory feed = new();
         var policy = new CosmosRelationQuerySourcePolicy(
             partitionSourceSelector: "partitionKey",
+            logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
             fixedPartitionKey: new("tenant-a"),
             maximumKeysPerQuery: 1,
             maximumQueryChunks: 1);
@@ -524,6 +534,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
             feed,
             new CosmosRelationQuerySourcePolicy(
                 partitionSourceSelector: "partitionKey",
+                logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
                 fixedPartitionKey: new("tenant-a"),
                 requestSizeLimits: new CosmosQueryRequestSizeLimits(
                     maximumSqlQueryUtf8Bytes: 64,
@@ -549,6 +560,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
             maximumRequestUtf8Bytes: 1_023));
         Assert.Throws<ArgumentOutOfRangeException>(() => new CosmosRelationQuerySourcePolicy(
             partitionSourceSelector: "partitionKey",
+            logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
             fixedPartitionKey: new("tenant-a"),
             maximumKeysPerQuery: CosmosRelationQuerySourcePolicy.MaximumSupportedKeysPerQuery + 1));
     }
@@ -584,6 +596,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
             feed,
             new CosmosRelationQuerySourcePolicy(
                 partitionSourceSelector: "partitionKey",
+                logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
                 fixedPartitionKey: new("tenant-a"),
                 maximumKeysPerQuery: CosmosRelationQuerySourcePolicy.MaximumSupportedKeysPerQuery),
             new RelationQuerySourcePlacementLimits(
@@ -618,6 +631,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
             duplicateIdentityFeed,
             new(
                 partitionSourceSelector: "partitionKey",
+                logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
                 CosmosRelationQueryCrossPartitionPolicy.AllowBoundedQueries));
         var duplicateIdentity = await crossPartition.Reader.ReadAsync(Request(
             crossPartition,
@@ -1056,6 +1070,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
 
     static CosmosRelationQuerySourcePolicy FixedPolicy() => new(
         partitionSourceSelector: "partitionKey",
+        logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
         fixedPartitionKey: new("tenant-a"),
         readConsistencyLevel: ConsistencyLevel.Strong);
 

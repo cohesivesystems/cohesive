@@ -67,6 +67,7 @@ public sealed partial class MaterializationRebuildExecutorTests
             OperationContext.Create(),
             new(
                 evaluation: new("tests/relations-runtime/incremental"),
+                logicalPartition: shard.Scope.LogicalPartition,
                 roots: roots));
 
         Assert.Equal(rebuilt.Rows.Length, hydrated.Length - 1);

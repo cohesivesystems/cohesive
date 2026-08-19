@@ -13,6 +13,7 @@ public sealed class MaterializationChannelSemanticsTests
         new(2026, 8, 1, 12, 0, 0, TimeSpan.Zero);
     static readonly QualifiedShapeId Shape = new(new("tests/channel"), new("Item"));
     static readonly RelationQuerySourceInstanceId Source = new("tests/channel/source");
+    static readonly RelationQueryLogicalPartitionIdentity LogicalPartition = new("tenant-a");
     static readonly RelationQueryPhysicalPlanFingerprint PhysicalPlan =
         new("sha256", "tests/channel/canonicalization/v1", "0123456789abcdef");
     static readonly RelationQuerySourcePlacementBinding Placement = new(
@@ -29,6 +30,7 @@ public sealed class MaterializationChannelSemanticsTests
     static readonly MaterializationSourceScope Scope = new(
         physicalPlan: PhysicalPlan,
         placement: Placement,
+        logicalPartition: LogicalPartition,
         partition: new("tenant-a"),
         orderingScope: new("tenant-a/feed-0"));
 
@@ -41,13 +43,21 @@ public sealed class MaterializationChannelSemanticsTests
                 PhysicalPlan.Canonicalization,
                 PhysicalPlan.Value),
             placement: Placement,
+            logicalPartition: Scope.LogicalPartition,
             partition: Scope.Partition,
             orderingScope: Scope.OrderingScope);
         MaterializationSourceScope otherPartition = new(
             physicalPlan: PhysicalPlan,
             placement: Placement,
+            logicalPartition: Scope.LogicalPartition,
             partition: new("tenant-b"),
             orderingScope: new("tenant-b/feed-0"));
+        MaterializationSourceScope otherLogicalPartition = new(
+            physicalPlan: PhysicalPlan,
+            placement: Placement,
+            logicalPartition: new("tenant-b"),
+            partition: Scope.Partition,
+            orderingScope: Scope.OrderingScope);
         RelationQuerySourcePlacementBinding otherPlacement = new(
             id: Placement.Id,
             input: Placement.Input,
@@ -65,17 +75,19 @@ public sealed class MaterializationChannelSemanticsTests
         MaterializationSourceScope otherPlacementScope = new(
             physicalPlan: PhysicalPlan,
             placement: otherPlacement,
+            logicalPartition: Scope.LogicalPartition,
             partition: Scope.Partition,
             orderingScope: Scope.OrderingScope);
 
         var projected = MaterializationChannelSemantics.ToChannelScopeId(Scope);
 
         Assert.Equal(
-            "materialization-channel-scope:v1:sha256:"
-            + "3d39366c7c6c29a1c7685df72fda16a8e7f1f1d466f5b52e879841d2f614e55f",
+            "materialization-channel-scope:v2:sha256:"
+            + "e33eaa2907e33f32a2becf896addd5761ceebeb82c2529280b8e0c5c4b88b094",
             projected.Value);
         Assert.Equal(projected, MaterializationChannelSemantics.ToChannelScopeId(restored));
         Assert.NotEqual(projected, MaterializationChannelSemantics.ToChannelScopeId(otherPartition));
+        Assert.NotEqual(projected, MaterializationChannelSemantics.ToChannelScopeId(otherLogicalPartition));
         Assert.NotEqual(projected, MaterializationChannelSemantics.ToChannelScopeId(otherPlacementScope));
         Assert.Equal(
             Scope.OrderingScope.Value,

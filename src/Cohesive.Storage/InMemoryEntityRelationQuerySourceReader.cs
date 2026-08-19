@@ -39,6 +39,7 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
     /// <param name="shape">Exact graph-qualified shape represented by <paramref name="repository"/>.</param>
     /// <param name="source">Canonical physical source instance and limits implemented by the reader.</param>
     /// <param name="repository">In-memory repository supplying entity observations.</param>
+    /// <param name="logicalPartition">Provider-neutral logical partition implemented by every repository read.</param>
     /// <param name="identitySourceSelector">
     /// Stable physical identity selector, or <see langword="null"/> for the observation-identity convention.
     /// </param>
@@ -53,12 +54,14 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
     /// selector is empty; or <paramref name="source"/> does not use <see cref="TargetProfile"/>.
     /// </exception>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="source"/> or <paramref name="repository"/> is <see langword="null"/>.
+    /// <paramref name="source"/>, <paramref name="repository"/>, or <paramref name="logicalPartition"/> is
+    /// <see langword="null"/>.
     /// </exception>
     public InMemoryEntityRelationQuerySourceReader(
         QualifiedShapeId shape,
         RelationQuerySourceInstance source,
         InMemoryEntityOutboxRepository repository,
+        RelationQueryLogicalPartitionIdentity logicalPartition,
         string? identitySourceSelector = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null)
@@ -83,7 +86,11 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
         }
 
         Shape = shape;
-        Descriptor = new(source.Id, source.ExecutionDomain, source.TargetProfile);
+        Descriptor = new(
+            source.Id,
+            source.ExecutionDomain,
+            source.TargetProfile,
+            Guard.RequireNotNull(logicalPartition));
         IdentitySourceSelector = identitySourceSelector is null
             ? EntityRelationQuerySourceRegistration.ObservationIdentitySourceSelector
             : Guard.RequireNotNullOrWhiteSpace(identitySourceSelector);

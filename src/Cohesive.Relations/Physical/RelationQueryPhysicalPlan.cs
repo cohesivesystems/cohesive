@@ -501,6 +501,9 @@ public static class RelationQueryPhysicalPlanningDiagnosticCodes
 
     /// <summary>A cross-source join cannot be lowered exactly within declared bounds.</summary>
     public const string CrossSourceJoinUnsupported = "REL2112";
+
+    /// <summary>A bounded traversal uses conservative source-binding over-acquisition across intervening semantics.</summary>
+    public const string ConservativeOverAcquisition = "REL2113";
 }
 
 /// <summary>Successful deterministic physical plan for one exact semantic and realization input.</summary>

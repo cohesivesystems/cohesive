@@ -29,7 +29,7 @@ eng/materialization-harness/harness.sh down
 eng/materialization-harness/harness.sh reset
 ```
 
-`seed` uses Cohesive.Storage repositories and is the normal path. `seed-direct` performs the same projection with raw provider clients, keeping seed verification independent from the repository implementation being tested. `test` seeds, verifies, and materializes the direct path first, then replaces it with the repository path and repeats the same checks. `down` preserves database, checkpoint, and index volumes. After `down` and `up`, `verify` proves both source databases still match the journal without rewriting them. `materialize` creates and promotes a new generation for each replica. `verify-index` is read-only and displays the active aliases and their document counts. `reset` is intentionally destructive: it removes only this Compose project's volumes, starts fresh services, and replays the canonical scenario journal through Cohesive.Storage.
+`seed` uses Cohesive.Storage repositories and is the normal path. `seed-direct` performs the same projection with raw provider clients, keeping seed verification independent from the repository implementation being tested. The direct Cosmos envelope timestamp is journal-derived; repository-managed persistence metadata remains adapter evidence rather than canonical freight state. `test` seeds, verifies, and materializes the direct path first, then replaces it with the repository path and repeats the same logical-state checks. `down` preserves database, checkpoint, and index volumes. After `down` and `up`, `verify` proves both source databases still match the journal's exact logical state without rewriting them. `materialize` creates and promotes a new generation for each replica. `verify-index` is read-only and displays the active aliases and their document counts. `reset` is intentionally destructive: it removes only this Compose project's volumes, starts fresh services, and replays the canonical scenario journal through Cohesive.Storage.
 
 The shorter acceptance entrypoint is:
 
@@ -86,15 +86,15 @@ The vNext emulator proves local NoSQL gateway behavior but reports an Eventual a
 
 Each provider receives separate tenant-partitioned Orders, CustomerAccounts, OrderStops, and Locations. The relation model's inferred source shapes are projected once into canonical entity definitions; both repository seed realizations consume those definitions rather than maintaining a second field schema. PostgreSQL uses composite tenant/entity keys, an explicit semantic observation-version column, and `xmin` only as its opaque concurrency token. Cosmos stores canonical Cohesive observation envelopes partitioned by `/partitionKey`. Physical schema/container creation remains an explicit harness lifecycle step rather than a hidden repository side effect. The baseline contains two tenants, shared customers, shared locations, six orders, and enough stops to cross the harness's two-item paging and lookup boundaries.
 
-The seed projection derives each order's pickup/delivery stop and endpoint location identities from the ordered stop sequence once, then writes those same values to both replicas. The canonical relation joins each order to its customer and both endpoint locations and projects an `OrderSearchDocument`. Provider-specific code supplies only physical placements, field selectors, and readers; the compiled relation and materialization definition fingerprint remain identical.
+The canonical relation joins each order to its customer, traverses the inverse `Order -> OrderStop` relationship, selects the first pickup and last drop by `(orderId, sequence, id)`, and then joins each selected stop to its location before projecting an `OrderSearchDocument`. Orders retain no precomputed stop or endpoint-location identities. Provider-specific code supplies only physical placements, selectors, and readers; the compiled relation and materialization definition fingerprint remain identical.
 
-The current physical lowerer cannot yet branch from a stop traversal back to the order root for a second endpoint traversal. Retaining the derived endpoint identities on the order keeps that limitation visible without introducing provider-specific relation semantics. A later relation-planning slice can move the endpoint selection itself into the canonical query once branching traversals are supported.
+Some location reads are conservatively over-acquired because their traversals follow filter/order/distinct semantics. This is an explicit bounded physical-plan choice (`REL2113`), not a second endpoint-selection implementation: every candidate remains tenant-fenced and subject to fan-out and row limits, while the canonical interpreter alone decides which ordered stop is logically reachable. The canonical fixture's behavioral tests cover stop reorder, location move, and selected-stop deletion.
 
 For every provider, materialization:
 
 1. creates an isolated generation;
 2. reads each tenant in deterministic pages;
-3. executes the canonical relation to hydrate customer and location contributors;
+3. executes the canonical relation to hydrate customer, ordered-stop, and location contributors;
 4. bulk-upserts the projected documents;
 5. seals and validates the expected document count;
 6. promotes the candidate through a fenced alias update; and

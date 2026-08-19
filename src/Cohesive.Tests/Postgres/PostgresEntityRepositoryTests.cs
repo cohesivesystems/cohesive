@@ -105,10 +105,6 @@ public sealed class PostgresEntityRepositoryTests
                 OrderNumber = $"ORD-{id}",
                 CustomerAccountId = "customer-1",
                 EquipmentClass = "DryVan",
-                PickupStopId = "pickup-1",
-                DeliveryStopId = "delivery-1",
-                OriginLocationId = "origin-1",
-                DestinationLocationId = "destination-1",
                 CreatedAt = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
             },
             version: 1).Observation);
@@ -121,10 +117,6 @@ public sealed class PostgresEntityRepositoryTests
             new("orderNumber", "order_number", PostgresRelationQueryScalarType.Text),
             new("customerAccountId", "customer_account_id", PostgresRelationQueryScalarType.Text),
             new("equipmentClass", "equipment_class", PostgresRelationQueryScalarType.Text),
-            new("pickupStopId", "pickup_stop_id", PostgresRelationQueryScalarType.Text),
-            new("deliveryStopId", "delivery_stop_id", PostgresRelationQueryScalarType.Text),
-            new("originLocationId", "origin_location_id", PostgresRelationQueryScalarType.Text),
-            new("destinationLocationId", "destination_location_id", PostgresRelationQueryScalarType.Text),
             new("createdAt", "created_at", PostgresRelationQueryScalarType.TimestampWithTimeZone)
         ],
         identityField: "id",

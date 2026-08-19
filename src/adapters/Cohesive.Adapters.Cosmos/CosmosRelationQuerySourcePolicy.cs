@@ -1,4 +1,5 @@
 using Cohesive.Model;
+using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Physical;
 using Microsoft.Azure.Cosmos;
 
@@ -41,6 +42,9 @@ public sealed record CosmosRelationQuerySourcePolicy
     public const int MaximumSupportedKeysPerQuery = 4_096;
 
     /// <summary>Creates explicit Cosmos source-acquisition policy.</summary>
+    /// <param name="logicalPartition">
+    /// Provider-neutral identity shared by every supplied source and reader participating in this logical partition.
+    /// </param>
     /// <param name="partitionSourceSelector">
     /// Caller-declared property-only path to one scalar Cosmos partition coordinate. The reader does not verify it
     /// against container metadata; hierarchical partition-key tuples are not represented in v1.
@@ -63,7 +67,9 @@ public sealed record CosmosRelationQuerySourcePolicy
     /// Explicit pre-I/O SQL-text and complete-request size boundaries, or <see langword="null"/> for Cosmos
     /// conventions.
     /// </param>
-    /// <exception cref="ArgumentNullException"><paramref name="partitionSourceSelector"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="partitionSourceSelector"/> or <paramref name="logicalPartition"/> is <see langword="null"/>.
+    /// </exception>
     /// <exception cref="ArgumentException"><paramref name="partitionSourceSelector"/> is empty or is not a property-only path.</exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="crossPartitionPolicy"/> or <paramref name="readConsistencyLevel"/> is unsupported, a
@@ -72,6 +78,7 @@ public sealed record CosmosRelationQuerySourcePolicy
     /// </exception>
     public CosmosRelationQuerySourcePolicy(
         string partitionSourceSelector,
+        RelationQueryLogicalPartitionIdentity logicalPartition,
         CosmosRelationQueryCrossPartitionPolicy crossPartitionPolicy = CosmosRelationQueryCrossPartitionPolicy.Prohibit,
         PartitionKey? fixedPartitionKey = null,
         int maximumEnumerationRows = 10_000,
@@ -109,6 +116,7 @@ public sealed record CosmosRelationQuerySourcePolicy
                 "Unsupported Cosmos read-consistency level.");
         }
 
+        LogicalPartition = Guard.RequireNotNull(logicalPartition);
         PartitionSourceSelector = CosmosRelationQuerySourceSelectors.RequirePropertyPath(
             partitionSourceSelector,
             nameof(partitionSourceSelector)).ToString();
@@ -127,6 +135,9 @@ public sealed record CosmosRelationQuerySourcePolicy
     /// metadata.
     /// </summary>
     public string PartitionSourceSelector { get; }
+
+    /// <summary>Provider-neutral logical partition implemented by every read under this policy.</summary>
+    public RelationQueryLogicalPartitionIdentity LogicalPartition { get; }
 
     /// <summary>Whether bounded reads without a fixed partition may query multiple logical partitions.</summary>
     public CosmosRelationQueryCrossPartitionPolicy CrossPartitionPolicy { get; }

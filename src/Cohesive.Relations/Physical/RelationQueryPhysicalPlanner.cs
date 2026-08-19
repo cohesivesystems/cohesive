@@ -271,7 +271,7 @@ public static class RelationQueryPhysicalPlanner
                     policy,
                     [.. stages],
                     terminalId,
-                    diagnostics: []);
+                    diagnostics: [.. diagnostics]);
                 return new(RelationQueryPhysicalPlanningStatus.Planned, physical);
             }
             catch (ArgumentException exception)
@@ -417,14 +417,23 @@ public static class RelationQueryPhysicalPlanner
 
             ValidateFields(contract.Fields, binding);
             RequireIdentity(binding, contract.Input.Id);
-            if (!RelationQueryPhysicalReachability.TryGetPreservingInterveningTraversals(
+            if (!RelationQueryPhysicalReachability.TryResolve(
                     plan,
                     contract,
-                    out _))
+                    out var reachability))
             {
                 Error(
                     RelationQueryPhysicalPlanningDiagnosticCodes.LoweringUnavailable,
-                    "The v1 traversal lowerer cannot preserve logical reachability across an upstream row-selective or cardinality-changing node.",
+                    "The traversal lowerer cannot resolve one exact producer for the declared source binding.",
+                    contract.Input.Id,
+                    binding.Id);
+            }
+            else if (reachability.Mode
+                     == RelationQueryPhysicalTraversalReachabilityMode.ConservativeBindingOverAcquisition)
+            {
+                Warning(
+                    RelationQueryPhysicalPlanningDiagnosticCodes.ConservativeOverAcquisition,
+                    "The traversal is separated from its source binding by row-selective or cardinality-changing semantics; bounded acquisition will read every source-binding occurrence and the canonical interpreter will retain only logically reachable evidence.",
                     contract.Input.Id,
                     binding.Id);
             }
@@ -679,20 +688,21 @@ public static class RelationQueryPhysicalPlanner
                 return;
             }
 
-            if (!RelationQueryPhysicalReachability.TryGetPreservingInterveningTraversals(
+            if (!RelationQueryPhysicalReachability.TryResolve(
                     plan,
                     contract,
-                    out var interveningTraversals))
+                    out var reachability))
             {
                 Error(
                     RelationQueryPhysicalPlanningDiagnosticCodes.StageProvenanceInvalid,
-                    $"Traversal '{contract.Input.Traversal.Value}' has no proven v1 source-occurrence reachability chain.",
+                    $"Traversal '{contract.Input.Traversal.Value}' has no resolved source-occurrence acquisition strategy.",
                     contract.Input.Id);
                 return;
             }
-            if (!interveningTraversals.IsDefaultOrEmpty
+            if (reachability.Mode == RelationQueryPhysicalTraversalReachabilityMode.ExactOccurrenceChain
+                && !reachability.InterveningTraversals.IsDefaultOrEmpty
                 && !traversalNodeProducers.TryGetValue(
-                    interveningTraversals[^1].Input.Traversal,
+                    reachability.InterveningTraversals[^1].Input.Traversal,
                     out owner))
             {
                 Error(
@@ -1001,6 +1011,18 @@ public static class RelationQueryPhysicalPlanner
             diagnostics.Add(new(
                 code,
                 DiagnosticSeverity.Error,
+                message,
+                input,
+                placementBinding: placementBinding));
+
+        void Warning(
+            string code,
+            string message,
+            RelationQueryInputId? input = null,
+            RelationQuerySourcePlacementBindingId? placementBinding = null) =>
+            diagnostics.Add(new(
+                code,
+                DiagnosticSeverity.Warning,
                 message,
                 input,
                 placementBinding: placementBinding));

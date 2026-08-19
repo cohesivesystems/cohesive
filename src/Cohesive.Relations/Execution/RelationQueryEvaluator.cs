@@ -645,6 +645,7 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
         [
             new(
                 root.Input.Id,
+                evaluation.SuppliedRoots.LogicalPartition,
                 evaluation.SuppliedRoots.Completeness,
                 observations,
                 evaluation.SuppliedRoots.EvidenceReference)

@@ -1,6 +1,7 @@
 {
-  "schemaVersion": "cohesive.materialization-harness/scenario-journal/v1",
+  "schemaVersion": "cohesive.materialization-harness/scenario-journal/v2",
   "scenarioId": "freight-baseline-v1",
+  "occurredAtUtc": "2026-08-01T10:00:00Z",
   "operations": [
     {
       "sequence": 1,

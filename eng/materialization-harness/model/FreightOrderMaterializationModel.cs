@@ -7,6 +7,7 @@ using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Model;
 using Cohesive.Relations.Realization;
 using Cohesive.Storage.Materialization;
 using Cohesive.Transitions.Model;
@@ -54,12 +55,12 @@ public static class FreightOrderMaterializationModel
         var orderCustomer = author.Relationship<FreightOrder, FreightCustomerAccount>(
             order => order.CustomerAccountId,
             new("freight-order.customer-account"));
-        var orderOrigin = author.Relationship<FreightOrder, FreightLocation>(
-            order => order.OriginLocationId,
-            new("freight-order.origin-location"));
-        var orderDestination = author.Relationship<FreightOrder, FreightLocation>(
-            order => order.DestinationLocationId,
-            new("freight-order.destination-location"));
+        var stopOrder = author.Relationship<FreightOrderStop, FreightOrder>(
+            stop => stop.OrderId,
+            new("freight-order-stop.order"));
+        var stopLocation = author.Relationship<FreightOrderStop, FreightLocation>(
+            stop => stop.LocationId,
+            new("freight-order-stop.location"));
 
         var orders = author.Source(orderShape, "materialization-harness/freight/orders");
         var customers = author.Traverse(
@@ -67,20 +68,102 @@ public static class FreightOrderMaterializationModel
             orderCustomer,
             requirement: QueryInputRequirement.Required,
             sourceReference: "materialization-harness/freight/customer");
-        var originLocations = author.Traverse(
-            customers,
+        var pickupStops = author.TraverseInverse(
+            customers.Node,
             orders.Binding,
-            orderOrigin,
+            stopOrder,
+            requirement: QueryInputRequirement.Required,
+            sourceReference: "materialization-harness/freight/pickup-stops");
+        var pickupCandidates = author.Filter(
+            pickupStops.Node,
+            (FreightOrderStop stop) => stop.StopType == "Pickup",
+            pickupStops.Binding,
+            sourceReference: "materialization-harness/freight/pickup-filter");
+        var orderedPickupCandidates = author.Order(
+            pickupCandidates,
+            [
+                author.Ordering(
+                    (FreightOrderStop stop) => stop.OrderId,
+                    pickupStops.Binding,
+                    sourceReference: "materialization-harness/freight/pickup-order/order"),
+                author.Ordering(
+                    (FreightOrderStop stop) => stop.Sequence,
+                    pickupStops.Binding,
+                    sourceReference: "materialization-harness/freight/pickup-order/sequence"),
+                author.Ordering(
+                    (FreightOrderStop stop) => stop.Id,
+                    pickupStops.Binding,
+                    sourceReference: "materialization-harness/freight/pickup-order/id")
+            ],
+            sourceReference: "materialization-harness/freight/pickup-order");
+        var selectedPickupStops = author.Distinct(
+            orderedPickupCandidates,
+            (FreightOrderStop stop) => stop.OrderId,
+            pickupStops.Binding,
+            sourceReference: "materialization-harness/freight/pickup-per-order");
+        var originLocations = author.Traverse(
+            selectedPickupStops,
+            pickupStops.Binding,
+            stopLocation,
             requirement: QueryInputRequirement.Required,
             sourceReference: "materialization-harness/freight/pickup-location");
-        var destinationLocations = author.Traverse(
-            originLocations,
+
+        var deliveryStops = author.TraverseInverse(
+            originLocations.Node,
             orders.Binding,
-            orderDestination,
+            stopOrder,
+            requirement: QueryInputRequirement.Required,
+            sourceReference: "materialization-harness/freight/delivery-stops");
+        var deliveryCandidates = author.Filter(
+            deliveryStops.Node,
+            (FreightOrderStop stop) => stop.StopType == "Drop",
+            deliveryStops.Binding,
+            sourceReference: "materialization-harness/freight/delivery-filter");
+        var orderedDeliveryCandidates = author.Order(
+            deliveryCandidates,
+            [
+                author.Ordering(
+                    (FreightOrderStop stop) => stop.OrderId,
+                    deliveryStops.Binding,
+                    sourceReference: "materialization-harness/freight/delivery-order/order"),
+                author.Ordering(
+                    (FreightOrderStop stop) => stop.Sequence,
+                    deliveryStops.Binding,
+                    direction: QuerySortDirection.Descending,
+                    sourceReference: "materialization-harness/freight/delivery-order/sequence"),
+                author.Ordering(
+                    (FreightOrderStop stop) => stop.Id,
+                    deliveryStops.Binding,
+                    direction: QuerySortDirection.Descending,
+                    sourceReference: "materialization-harness/freight/delivery-order/id")
+            ],
+            sourceReference: "materialization-harness/freight/delivery-order");
+        var selectedDeliveryStops = author.Distinct(
+            orderedDeliveryCandidates,
+            (FreightOrderStop stop) => stop.OrderId,
+            deliveryStops.Binding,
+            sourceReference: "materialization-harness/freight/delivery-per-order");
+        var destinationLocations = author.Traverse(
+            selectedDeliveryStops,
+            deliveryStops.Binding,
+            stopLocation,
             requirement: QueryInputRequirement.Required,
             sourceReference: "materialization-harness/freight/delivery-location");
-        Expression<Func<FreightOrder, FreightCustomerAccount, FreightLocation, FreightLocation, FreightOrderSearchDocument>> projection =
-            (FreightOrder order, FreightCustomerAccount customer, FreightLocation origin, FreightLocation destination) =>
+        Expression<Func<
+            FreightOrder,
+            FreightCustomerAccount,
+            FreightOrderStop,
+            FreightLocation,
+            FreightOrderStop,
+            FreightLocation,
+            FreightOrderSearchDocument>> projection =
+            (
+                FreightOrder order,
+                FreightCustomerAccount customer,
+                FreightOrderStop pickup,
+                FreightLocation origin,
+                FreightOrderStop delivery,
+                FreightLocation destination) =>
                 new FreightOrderSearchDocument
                 {
                     Id = order.TenantId + "/" + order.Id,
@@ -89,10 +172,10 @@ public static class FreightOrderMaterializationModel
                     OrderNumber = order.OrderNumber,
                     CustomerName = customer.DisplayName,
                     EquipmentClass = order.EquipmentClass,
-                    OriginStopId = order.PickupStopId,
+                    OriginStopId = pickup.Id,
                     OriginCity = origin.City,
                     OriginRegion = origin.Region,
-                    DestinationStopId = order.DeliveryStopId,
+                    DestinationStopId = delivery.Id,
                     DestinationCity = destination.City,
                     DestinationRegion = destination.Region
                 };
@@ -100,7 +183,14 @@ public static class FreightOrderMaterializationModel
             destinationLocations.Node,
             searchShape,
             projection,
-            [orders.Binding, customers.Binding, originLocations.Binding, destinationLocations.Binding],
+            [
+                orders.Binding,
+                customers.Binding,
+                pickupStops.Binding,
+                originLocations.Binding,
+                deliveryStops.Binding,
+                destinationLocations.Binding
+            ],
             sourceReference: "materialization-harness/freight/order-search-document");
         var authored = author.BuildRelation(
             orders,
@@ -231,22 +321,6 @@ public sealed record FreightOrder
     /// <summary>Required equipment class.</summary>
     [JsonPropertyName("equipmentClass")]
     public required string EquipmentClass { get; init; }
-
-    /// <summary>First pickup stop selected from canonical stop order.</summary>
-    [JsonPropertyName("pickupStopId")]
-    public required string PickupStopId { get; init; }
-
-    /// <summary>Last delivery stop selected from canonical stop order.</summary>
-    [JsonPropertyName("deliveryStopId")]
-    public required string DeliveryStopId { get; init; }
-
-    /// <summary>Location selected by the first unambiguous pickup stop.</summary>
-    [JsonPropertyName("originLocationId")]
-    public required string OriginLocationId { get; init; }
-
-    /// <summary>Location selected by the last drop in canonical stop order.</summary>
-    [JsonPropertyName("destinationLocationId")]
-    public required string DestinationLocationId { get; init; }
 
     /// <summary>Source creation instant retained for incremental ordering and spot checks.</summary>
     [JsonPropertyName("createdAt")]

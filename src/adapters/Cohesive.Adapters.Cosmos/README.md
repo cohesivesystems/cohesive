@@ -531,6 +531,7 @@ var cosmosSource = CosmosEntityRelationQuerySourceRegistration.Create(
     containerId: "entities",
     policy: new CosmosRelationQuerySourcePolicy(
         partitionSourceSelector: "partitionKey",
+        logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
         crossPartitionPolicy: CosmosRelationQueryCrossPartitionPolicy.AllowBoundedQueries,
         maximumEnumerationRows: 10_000,
         maximumKeysPerQuery: 100,

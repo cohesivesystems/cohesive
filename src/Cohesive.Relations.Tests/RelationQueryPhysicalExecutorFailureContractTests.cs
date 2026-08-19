@@ -48,7 +48,11 @@ public sealed class RelationQueryPhysicalExecutorFailureContractTests
     {
         var source = FederatedLoadPhysicalExecutionFixture.Source(compilation, sourceId);
         return new(
-            new(source.Id, source.ExecutionDomain, source.TargetProfile),
+            new(
+                source.Id,
+                source.ExecutionDomain,
+                source.TargetProfile,
+                RelationQueryLogicalPartitionIdentity.WholeSource),
             [],
             resultFactory);
     }

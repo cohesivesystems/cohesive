@@ -286,7 +286,11 @@ public sealed class RelationQueryExplainTests
         var customerSource = placement.SourceInstances.Single(
             static source => source.Id == FederatedLoadPhysicalExecutionFixture.CustomersSource);
         var customerReader = new DeterministicRelationQuerySourceReader(
-            new(customerSource.Id, customerSource.ExecutionDomain, customerSource.TargetProfile),
+            new(
+                customerSource.Id,
+                customerSource.ExecutionDomain,
+                customerSource.TargetProfile,
+                RelationQueryLogicalPartitionIdentity.WholeSource),
             [DeterministicRelationQuerySourceReader.SourceRow.Create(
                 "customer-secret",
                 (LoadCustomerRelationFixture.CustomerIdPath, ObservationValue.FromString("customer-secret")),

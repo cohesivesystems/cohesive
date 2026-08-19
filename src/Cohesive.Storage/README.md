@@ -149,6 +149,7 @@ placement and constructs the existing canonical evaluator:
 var source = EntityRelationQuerySourceRegistration.InMemory(
     loadShape,
     loadRepository,
+    logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
     limits: new(
         maximumBatchSize: 100,
         maximumBufferedRows: 10_000,
@@ -164,6 +165,11 @@ The in-memory reader supports bounded enumeration, identity batches, relationshi
 selection, authoritative absence, partial/inconclusive evidence, and cancellation. Canonical interpretation owns
 filters, joins, output shaping, aggregation, and paging. Query source roots are read from registered sources;
 relation roots remain invocation inputs and must be supplied by the evaluation.
+
+Every reader and supplied root in one evaluation declares the same provider-neutral logical partition before I/O.
+Materialization source scopes retain that identity separately from adapter-defined feed partitions. Because logical
+partition evidence is now fingerprint-significant, Channel projections use `materialization-channel-scope:v2` and
+`materialization-channel-settlement:v2`; persisted v1 identities must not be mixed with v2 progress.
 
 `Cohesive.Adapters.Postgres` supplies a production Npgsql-backed implementation of the same source-reader port.
 `PostgresRelationQuerySourceReader` uses the exact persisted PostgreSQL binding for bounded enumeration, point/batch

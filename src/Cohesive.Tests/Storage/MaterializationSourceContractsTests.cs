@@ -16,6 +16,7 @@ public sealed class MaterializationSourceContractsTests
 
     static readonly DateTimeOffset Epoch = DateTimeOffset.UnixEpoch;
     static readonly RelationQuerySourceInstanceId Source = new("tests/source");
+    static readonly RelationQueryLogicalPartitionIdentity LogicalPartition = new("tenant-a");
     static readonly MaterializationSourcePartitionId Partition = new("tenant-a");
     static readonly RelationQueryInputId Input = new("source/items");
     static readonly MaterializationOrderingScopeId OrderingScope = new("tenant-a/feed-0");
@@ -33,11 +34,22 @@ public sealed class MaterializationSourceContractsTests
         RelationQuerySourceAcquisitionKind.BoundedEnumeration,
         RelationQuerySourcePlacementOrigin.Explicit,
         new RelationQuerySourceIdentityBinding(Shape, "id"));
-    static readonly MaterializationSourceScope Scope = new(PhysicalPlan, Placement, Partition, OrderingScope);
+    static readonly MaterializationSourceScope Scope = new(
+        PhysicalPlan,
+        Placement,
+        LogicalPartition,
+        Partition,
+        OrderingScope);
 
     [Fact]
     public void SourceScope_RejectsDefaultValueIdentitiesAsArgumentException()
     {
+        Assert.Throws<ArgumentNullException>(() => new MaterializationSourceScope(
+            physicalPlan: PhysicalPlan,
+            placement: Placement,
+            logicalPartition: null!,
+            partition: Partition,
+            orderingScope: OrderingScope));
         Assert.Throws<ArgumentException>(() => new MaterializationSourceScope(
             PhysicalPlan,
             Placement,
@@ -89,7 +101,12 @@ public sealed class MaterializationSourceContractsTests
 
         Assert.Throws<ArgumentException>(() => new MaterializationSourcePageRequest(
             request.Read,
-            new MaterializationSourceScope(PhysicalPlan, Placement, new("tenant-b"), new("tenant-b/feed-0")),
+            new MaterializationSourceScope(
+                PhysicalPlan,
+                Placement,
+                new("tenant-b"),
+                new("tenant-b"),
+                new("tenant-b/feed-0")),
             continuation,
             maximumItems: 2,
             maximumBytes: MaximumPageBytes));
@@ -106,7 +123,12 @@ public sealed class MaterializationSourceContractsTests
             new RelationQuerySourceIdentityBinding(Shape, "id"));
         Assert.Throws<ArgumentException>(() => new MaterializationSourcePageRequest(
             request.Read,
-            new MaterializationSourceScope(PhysicalPlan, wrongInputPlacement, Partition, OrderingScope),
+            new MaterializationSourceScope(
+                PhysicalPlan,
+                wrongInputPlacement,
+                LogicalPartition,
+                Partition,
+                OrderingScope),
             continuation: null,
             maximumItems: 2,
             maximumBytes: MaximumPageBytes));
@@ -808,7 +830,8 @@ public sealed class MaterializationSourceContractsTests
         RelationQuerySourceReaderDescriptor readerDescriptor = new(
             Source,
             new("tests/domain"),
-            relationProfile);
+            relationProfile,
+            LogicalPartition);
         RecordingReader reader = new(
             readerDescriptor,
             new RelationQuerySourceReadResult(

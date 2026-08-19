@@ -14,6 +14,8 @@ using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
+using Cohesive.Relations.IR;
+using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 using Cohesive.Storage.Materialization;
@@ -34,10 +36,28 @@ static class Program
     static readonly byte[] ContinuationKey =
         "cohesive-materialization-harness-local-key-v1"u8.ToArray();
 
-    public static async Task<int> Main()
+    public static async Task<int> Main(string[] args)
     {
-        var options = HarnessOptions.FromEnvironment();
+        var validateOnly = args switch
+        {
+            [] => false,
+            ["--validate-only"] => true,
+            _ => throw new ArgumentException(
+                "The materialization harness accepts only --validate-only.",
+                nameof(args))
+        };
         var semantics = FreightOrderMaterializationModel.Create();
+        if (validateOnly)
+        {
+            var postgresPlan = CreateProviderPlan(ProviderKind.Postgres, semantics);
+            var cosmosPlan = CreateProviderPlan(ProviderKind.Cosmos, semantics);
+            Console.WriteLine(
+                $"Validated provider plans: postgres={postgresPlan.HydrationPhysicalPlan.Fingerprint.Value}, "
+                + $"cosmos={cosmosPlan.HydrationPhysicalPlan.Fingerprint.Value}.");
+            return 0;
+        }
+
+        var options = HarnessOptions.FromEnvironment();
         using HttpClient elasticHttp = new() { BaseAddress = options.ElasticsearchEndpoint };
         var clusterId = await ReadClusterIdAsync(elasticHttp);
 
@@ -181,6 +201,7 @@ static class Program
                 var sourceScope = new MaterializationSourceScope(
                     plan.ScanPhysicalPlan.Fingerprint,
                     plan.ScanRoot,
+                    LogicalPartition(tenant),
                     new($"cosmos/reconciliation/{tenant}"),
                     new($"cosmos/reconciliation/{tenant}/canonical-order"));
                 var readers = plan.HydrationSources
@@ -330,6 +351,7 @@ static class Program
                 + $"{page.Read.State}/{page.State}.");
             var supplied = new RelationQuerySuppliedSourceInput(
                 semantics.Root.Input.Id,
+                sourceScope.LogicalPartition,
                 RelationQueryEvidenceCompleteness.Complete,
                 page.Read.Observations,
                 page.Read.EvidenceReference);
@@ -419,11 +441,13 @@ static class Program
         var domain = new RelationQueryExecutionDomainId($"materialization-harness/{prefix}/freight");
         var orderSource = new RelationQuerySourceInstanceId($"{prefix}/freight/orders");
         var customerSource = new RelationQuerySourceInstanceId($"{prefix}/freight/customers");
+        var stopSource = new RelationQuerySourceInstanceId($"{prefix}/freight/order-stops");
         var locationSource = new RelationQuerySourceInstanceId($"{prefix}/freight/locations");
         ImmutableArray<RelationQuerySourceInstance> sources =
         [
             new(orderSource, domain, profile, limits),
             new(customerSource, domain, profile, limits),
+            new(stopSource, domain, profile, limits),
             new(locationSource, domain, profile, limits)
         ];
         var bindings = ImmutableArray.CreateBuilder<RelationQuerySourcePlacementBinding>();
@@ -454,13 +478,22 @@ static class Program
                 SourceForShape(
                     traversal.ResultShape,
                     customerSource,
+                    stopSource,
                     locationSource),
                 RelationQuerySourcePlacementBindingKind.RelationshipTraversal,
                 RelationQuerySourceAcquisitionKind.BoundedLookup,
                 RelationQuerySourcePlacementOrigin.Explicit,
                 new(traversal.ResultShape, IdentitySelector(provider), FieldPath.FromField("id")),
                 Fields(provider, traversal.ResultShape, traversal.Fields),
-                relationshipKeys: [],
+                relationshipKeys: traversal.Input.Direction == RelationshipTraversalDirection.Inverse
+                    ? [new(
+                        traversal.Input.Id,
+                        traversal.Definition.SourceReference,
+                        provider == ProviderKind.Postgres
+                            ? Column(traversal.ResultShape, traversal.Definition.SourceReference)
+                            : CosmosRelationQuerySourceReader.GetObservationFieldSourceSelector(
+                                traversal.Definition.SourceReference))]
+                    : [],
                 partition: new(partitionSelector)));
         }
         var hydrationPlacement = new RelationQuerySourcePlacement(
@@ -544,7 +577,8 @@ static class Program
             scanPlacement,
             hydrationPhysical.Policy,
             scanStages,
-            hydrationPhysical.Terminal);
+            hydrationPhysical.Terminal,
+            diagnostics: hydrationPhysical.Diagnostics);
         return new(
             hydrationPlacement,
             hydrationPhysical,
@@ -552,7 +586,7 @@ static class Program
             scanPhysical,
             scanRoot,
             orderSource,
-            [customerSource, locationSource]);
+            [customerSource, stopSource, locationSource]);
     }
 
     static PostgresRelationQueryStorageBinding CreatePostgresStorageBinding(
@@ -587,6 +621,19 @@ static class Program
                             | PostgresRelationQueryOrderingCapability.StableUnique
                         : PostgresRelationQueryOrderingCapability.None);
             }).ToImmutableArray();
+            var relationshipReferences = binding.RelationshipKeys.Select(key =>
+            {
+                var traversal = plan.InputContract.Traversals.Single(candidate => candidate.Input.Id == key.Input);
+                return new PostgresRelationQueryRelationshipReferenceBinding(
+                    input: key.Input,
+                    semanticPath: key.SemanticPath,
+                    columnName: key.SourceSelector,
+                    scalarType: PostgresRelationQueryScalarType.Text,
+                    uniqueness: traversal.Definition.SourceReferenceUniqueness,
+                    missingValueEncoding: PostgresRelationQueryMissingValueEncoding.Prohibited,
+                    nullValueEncoding: PostgresRelationQueryNullValueEncoding.Prohibited,
+                    textSemantics: EqualityTextSemantics());
+            }).ToImmutableArray();
             return new PostgresRelationQueryTableBinding(
                 binding.Source,
                 binding.Id,
@@ -596,6 +643,7 @@ static class Program
                 table.Name,
                 new(FieldPath.FromField("id"), table.IdentityColumn, PostgresRelationQueryScalarType.Text, identitySemantics),
                 fields,
+                relationshipReferences: relationshipReferences,
                 partition: new(
                     "tenantId",
                     FieldPath.FromField("tenantId"),
@@ -703,6 +751,16 @@ static class Program
                 "customerAccounts",
                 policy);
         }
+        if (sourceId == plan.HydrationSources[1])
+        {
+            return CreateCosmosReader(
+                FreightOrderMaterializationModel.OrderStopShapeId,
+                sourceId,
+                database.GetContainer("orderStops"),
+                databaseId,
+                "orderStops",
+                policy);
+        }
         return CreateCosmosReader(
             FreightOrderMaterializationModel.LocationShapeId,
             sourceId,
@@ -734,6 +792,7 @@ static class Program
 
     static CosmosRelationQuerySourcePolicy CosmosPolicy(string tenant) => new(
         CosmosRelationQuerySourceReader.ObservationPartitionSourceSelector,
+        LogicalPartition(tenant),
         CosmosRelationQueryCrossPartitionPolicy.Prohibit,
         new PartitionKey(tenant),
         MaximumRows,
@@ -746,7 +805,13 @@ static class Program
         MaximumRows,
         MaximumRows,
         MaximumBytes,
-        partitionScope: new("tenantId", tenant));
+        partitionScope: new(
+            LogicalPartition(tenant),
+            "tenantId",
+            tenant));
+
+    static RelationQueryLogicalPartitionIdentity LogicalPartition(string tenant) =>
+        new($"materialization-harness/freight/tenant/{tenant}");
 
     static InMemoryMaterializationSource CreateCosmosReconciliationSource(
         CosmosRelationQuerySourceReader reader)
@@ -835,8 +900,11 @@ static class Program
     static RelationQuerySourceInstanceId SourceForShape(
         QualifiedShapeId shape,
         RelationQuerySourceInstanceId customer,
+        RelationQuerySourceInstanceId stop,
         RelationQuerySourceInstanceId location) => shape == FreightOrderMaterializationModel.CustomerAccountShapeId
         ? customer
+        : shape == FreightOrderMaterializationModel.OrderStopShapeId
+            ? stop
         : shape == FreightOrderMaterializationModel.LocationShapeId
             ? location
             : throw new InvalidOperationException($"No provider source is registered for shape '{shape}'.");
@@ -846,6 +914,8 @@ static class Program
             ? ("orders", "order_id", "ck_freight_harness_order_id_ascii")
             : shape == FreightOrderMaterializationModel.CustomerAccountShapeId
                 ? ("customer_accounts", "customer_account_id", "ck_freight_harness_customer_id_ascii")
+                : shape == FreightOrderMaterializationModel.OrderStopShapeId
+                    ? ("order_stops", "order_stop_id", "ck_freight_harness_stop_id_ascii")
                 : shape == FreightOrderMaterializationModel.LocationShapeId
                     ? ("locations", "location_id", "ck_freight_harness_location_id_ascii")
                     : throw new InvalidOperationException($"No PostgreSQL table is registered for shape '{shape}'.");
@@ -862,10 +932,6 @@ static class Program
                 "orderNumber" => "order_number",
                 "customerAccountId" => "customer_account_id",
                 "equipmentClass" => "equipment_class",
-                "pickupStopId" => "pickup_stop_id",
-                "deliveryStopId" => "delivery_stop_id",
-                "originLocationId" => "origin_location_id",
-                "destinationLocationId" => "destination_location_id",
                 _ => throw UnknownColumn(shape, path)
             };
         }
@@ -886,6 +952,18 @@ static class Program
                 "displayName" => "display_name",
                 "city" => "city",
                 "region" => "region",
+                _ => throw UnknownColumn(shape, path)
+            };
+        }
+        if (shape == FreightOrderMaterializationModel.OrderStopShapeId)
+        {
+            return field switch
+            {
+                "id" => "order_stop_id",
+                "orderId" => "order_id",
+                "sequence" => "sequence",
+                "stopType" => "stop_type",
+                "locationId" => "location_id",
                 _ => throw UnknownColumn(shape, path)
             };
         }
