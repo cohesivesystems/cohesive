@@ -96,11 +96,12 @@ process_host() {
 process_command() {
   configure_runtime
   local command="$1"
+  shift
   dotnet run \
     --project "$script_dir/host/Cohesive.MaterializationHarness.Host.csproj" \
     --configuration Release \
     -- \
-    "$command"
+    "$command" "$@"
 }
 
 verify_index() {
@@ -143,14 +144,15 @@ Commands:
   verify   Verify that both source databases still equal the journal; do not mutate them.
   materialize Build and atomically promote equivalent Postgres and Cosmos Elasticsearch generations.
   host     Run the restartable Process/API host in the foreground.
-  process-start Start one durable rebuild Process through the canonical SDK dispatcher.
-  process-inspect Inspect its durable Process status through the SDK dispatcher.
+  process-start [provider|all] Start provider rebuild Processes through the canonical SDK dispatcher.
+  process-inspect [provider|all] Inspect durable Process status through the SDK dispatcher.
   process-explain Read its canonical execution explanation through the SDK dispatcher.
   process-traces Read its retained canonical Process traces through the SDK dispatcher.
   process-pause Pause the current attempt at its next page boundary.
   process-continue Continue the same paused attempt and retained continuations.
   process-restart Abandon the current candidate and start a fresh attempt/generation.
   process-cancel Cooperatively cancel the Process and abandon its candidate generation.
+  process-limits <provider> <items> Update the canonical rebuild batch-item limit.
   verify-index Show active generation aliases and document counts without mutating Elasticsearch.
   test     Start, seed, materialize, and run the focused verification suite.
   status   Show service and health state.
@@ -191,35 +193,43 @@ case "$command" in
     ;;
   process-start)
     up
-    process_command --start
+    process_command --start "${2:-all}"
     ;;
   process-inspect)
     up
-    process_command --inspect
+    process_command --inspect "${2:-all}"
     ;;
   process-explain)
     up
-    process_command --explain
+    process_command --explain "${2:-all}"
     ;;
   process-traces)
     up
-    process_command --traces
+    process_command --traces "${2:-all}"
     ;;
   process-pause)
     up
-    process_command --pause
+    process_command --pause "${2:-all}"
     ;;
   process-continue)
     up
-    process_command --continue
+    process_command --continue "${2:-all}"
     ;;
   process-restart)
     up
-    process_command --restart-attempt
+    process_command --restart-attempt "${2:-all}"
     ;;
   process-cancel)
     up
-    process_command --cancel
+    process_command --cancel "${2:-all}"
+    ;;
+  process-limits)
+    if [[ "$#" -ne 3 ]]; then
+      usage
+      exit 2
+    fi
+    up
+    process_command --update-limits "$2" "$3"
     ;;
   verify-index)
     up

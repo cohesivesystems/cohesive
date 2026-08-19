@@ -12,7 +12,7 @@ namespace Cohesive.Adapters.Postgres;
 /// <summary>Durable PostgreSQL realization of the atomic provider-neutral Process store.</summary>
 /// <remarks>
 /// The first PostgreSQL realization stores one complete portable authority document per configured row. A
-/// serializable transaction locks that row, hydrates the in-memory reference state machine, applies one canonical
+/// transaction locks that row, hydrates the in-memory reference state machine, applies one canonical
 /// operation, and replaces the document atomically. This deliberately favors semantic equivalence and
 /// inspectability over cross-instance write concurrency. A future row-per-instance projection may preserve the
 /// same document and store contracts without changing callers.
@@ -159,13 +159,26 @@ public sealed class PostgresProcessDurableStore : IProcessDurableStore
         OperationContext context,
         Func<InMemoryProcessDurableStore, OperationContext, Task<TResult>> operation)
     {
+        return await PostgresSerializationRetrier.ExecuteAsync(
+                context: context,
+                operation: () => MutateOnceAsync(context, operation))
+            .ConfigureAwait(false);
+    }
+
+    async Task<TResult> MutateOnceAsync<TResult>(
+        OperationContext context,
+        Func<InMemoryProcessDurableStore, OperationContext, Task<TResult>> operation)
+    {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(operation);
         context.ThrowIfCancellationRequested();
         var cancellationToken = context.CancellationToken;
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        // The authority row is the sole mutable database object for this operation. Its row lock establishes the
+        // total mutation order; ReadCommitted lets a waiter observe the row version that won while it was waiting,
+        // instead of aborting the waiter from an older Serializable snapshot under sustained authority traffic.
         await using var transaction = await connection.BeginTransactionAsync(
-                IsolationLevel.Serializable,
+                IsolationLevel.ReadCommitted,
                 cancellationToken)
             .ConfigureAwait(false);
 

@@ -50,6 +50,7 @@ public sealed class MaterializationRebuildPlanSetProcessArtifacts
         ExecutionDefinitionDocument compensationWorkerProcessDocument,
         CompiledProcessPlan compensationWorkerPlan,
         ExecutionDefinitionDocument parentProcessDocument,
+        ProcessCompilationResult parentCompilation,
         CompiledProcessPlan parentPlan)
     {
         PlanSet = planSet;
@@ -90,6 +91,7 @@ public sealed class MaterializationRebuildPlanSetProcessArtifacts
         CompensationWorkerProcessDocument = compensationWorkerProcessDocument;
         CompensationWorkerPlan = compensationWorkerPlan;
         ParentProcessDocument = parentProcessDocument;
+        ParentCompilation = parentCompilation;
         ParentPlan = parentPlan;
         ProcessDocuments = atomicRoutingManifestRealization is not null
             ? [.. leaf.ProcessDocuments, parentProcessDocument]
@@ -237,6 +239,9 @@ public sealed class MaterializationRebuildPlanSetProcessArtifacts
 
     /// <summary>Canonical exact plan-set parent Process document.</summary>
     public ExecutionDefinitionDocument ParentProcessDocument { get; }
+
+    /// <summary>Exact target-independent compilation of the parent Process definition.</summary>
+    public ProcessCompilationResult ParentCompilation { get; }
 
     /// <summary>Compiled exact plan-set parent Process.</summary>
     public CompiledProcessPlan ParentPlan { get; }
@@ -675,6 +680,7 @@ public static class MaterializationRebuildPlanSetProcessFactory
             compensationDocument,
             compensationPlan,
             parentDocument,
+            parentCompilation,
             parentPlan);
     }
 

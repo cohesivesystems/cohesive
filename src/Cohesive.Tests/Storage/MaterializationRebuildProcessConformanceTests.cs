@@ -26,6 +26,33 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
         new("authority/materialization-rebuild-conformance", "tenant/cohesive");
 
     [Fact]
+    public void ExactRuntimeCatalogs_RejectAmbiguousAdapterAndChildPlanRegistrations()
+    {
+        var artifacts = MaterializationRebuildProcessFactory.Create();
+        ProcessContinuationIdentity continuation = new(
+            processInstanceId: new("process-instance/materialization-rebuild/catalog"),
+            processAttemptId: new("process-attempt/materialization-rebuild/catalog"));
+        var materialization = CreateMaterializationFixture();
+        var execution = new MaterializationRebuildExecution(
+            resolved: materialization.Resolved,
+            attempt: new(
+                continuation: continuation,
+                startedAtUtc: StartedAtUtc),
+            synchronizationWorkStore: new InMemoryMaterializationSynchronizationWorkStore());
+        var adapter = new MaterializationRebuildShardDurableOperationAdapter(
+            request: artifacts.ShardRebuildRequest,
+            resolver: new ExactExecutionResolver(execution));
+
+        var adapterException = Assert.Throws<ArgumentException>(() =>
+            new DurableOperationAdapterCatalog([adapter, adapter]));
+        var childPlanException = Assert.Throws<ArgumentException>(() =>
+            new ProcessChildPlanCatalog([artifacts.WorkerPlan, artifacts.WorkerPlan]));
+
+        Assert.Contains("handled more than once", adapterException.Message, StringComparison.Ordinal);
+        Assert.Contains("registered more than once", childPlanException.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CanonicalLeafCoordinator_DrivesBaselineCatchUpToReadyThenActivationConsumesExactEvidence()
     {
         var artifacts = MaterializationRebuildProcessFactory.Create();
@@ -57,10 +84,10 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 workerId: "worker/materialization-rebuild-shards",
                 workerLease: TimeSpan.FromMinutes(5)),
             bindingResolver: new ExactBindingResolver([artifacts.ShardRebuildBinding]),
-            operationAdapterResolver: new ExactAdapterResolver([shardAdapter]));
+            operationAdapterResolver: new DurableOperationAdapterCatalog([shardAdapter]));
         var childAdapter = new ProcessChildDurableOperationAdapter(
             runtime: workerRuntime,
-            planResolver: new ExactChildPlanResolver(artifacts.WorkerPlan),
+            planResolver: new ProcessChildPlanCatalog([artifacts.WorkerPlan]),
             supportedRequests: [artifacts.WorkerInvocationRequest]);
         var coordinatorStore = new InMemoryProcessDurableStore();
         var coordinatorRuntime = new ProcessDurableRuntime(
@@ -75,7 +102,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                     artifacts.WorkerInvocationBinding,
                     artifacts.SynchronizationPreparationBinding
                 ]),
-            operationAdapterResolver: new ExactAdapterResolver(
+            operationAdapterResolver: new DurableOperationAdapterCatalog(
                 [initializationAdapter, childAdapter, preparationAdapter]));
         var context = OperationContext.Create(timeProvider: new FixedTimeProvider(StartedAtUtc));
         var start = Start(artifacts, coordinatorContinuation, materialization.Resolved.Authority);
@@ -855,18 +882,6 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
         }
     }
 
-    sealed class ExactChildPlanResolver(Cohesive.Processes.Compilation.CompiledProcessPlan plan)
-        : IProcessChildPlanResolver
-    {
-        public bool TryResolve(
-            ExecutionDefinitionReference definition,
-            out Cohesive.Processes.Compilation.CompiledProcessPlan? resolved)
-        {
-            resolved = plan.DefinitionReference == definition ? plan : null;
-            return resolved is not null;
-        }
-    }
-
     sealed class ExactBindingResolver(ImmutableArray<DurableRequestBinding> bindings)
         : IDurableRequestBindingResolver
     {
@@ -874,16 +889,6 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
         {
             binding = bindings.FirstOrDefault(candidate => candidate.Request == request.Contract);
             return binding is not null;
-        }
-    }
-
-    sealed class ExactAdapterResolver(ImmutableArray<IDurableOperationAdapter> adapters)
-        : IDurableOperationAdapterResolver
-    {
-        public bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? adapter)
-        {
-            adapter = adapters.FirstOrDefault(candidate => candidate.Capabilities.Supports(request.Contract));
-            return adapter is not null;
         }
     }
 

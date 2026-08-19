@@ -21,15 +21,16 @@ eng/materialization-harness/harness.sh seed
 eng/materialization-harness/harness.sh seed-direct
 eng/materialization-harness/harness.sh verify
 eng/materialization-harness/harness.sh materialize
-eng/materialization-harness/harness.sh process-start
+eng/materialization-harness/harness.sh process-start all
 eng/materialization-harness/harness.sh host
-eng/materialization-harness/harness.sh process-inspect
-eng/materialization-harness/harness.sh process-explain
-eng/materialization-harness/harness.sh process-traces
-eng/materialization-harness/harness.sh process-pause
-eng/materialization-harness/harness.sh process-continue
-eng/materialization-harness/harness.sh process-restart
-eng/materialization-harness/harness.sh process-cancel
+eng/materialization-harness/harness.sh process-inspect postgres
+eng/materialization-harness/harness.sh process-explain cosmos
+eng/materialization-harness/harness.sh process-traces all
+eng/materialization-harness/harness.sh process-pause postgres
+eng/materialization-harness/harness.sh process-continue postgres
+eng/materialization-harness/harness.sh process-restart cosmos
+eng/materialization-harness/harness.sh process-cancel cosmos
+eng/materialization-harness/harness.sh process-limits postgres 8
 eng/materialization-harness/harness.sh verify-index
 eng/materialization-harness/harness.sh test
 eng/materialization-harness/harness.sh status
@@ -40,9 +41,9 @@ eng/materialization-harness/harness.sh reset
 
 `seed` uses Cohesive.Storage repositories and is the normal path. `seed-direct` performs the same projection with raw provider clients, keeping seed verification independent from the repository implementation being tested. The direct Cosmos envelope timestamp is journal-derived; repository-managed persistence metadata remains adapter evidence rather than canonical freight state. `test` seeds, verifies, and materializes the direct path first, then replaces it with the repository path and repeats the same logical-state checks. `down` preserves database, checkpoint, and index volumes. After `down` and `up`, `verify` proves both source databases still match the journal's exact logical state without rewriting them. `materialize` creates and promotes a new generation for each replica. `verify-index` is read-only and displays the active aliases and their document counts. `reset` is intentionally destructive: it removes only this Compose project's volumes, starts fresh services, and replays the canonical scenario journal through Cohesive.Storage.
 
-`process-start` exercises the canonical execution-control SDK dispatcher without starting an HTTP server. `host` runs the same dispatcher behind the ASP.NET projection and executes the admitted rebuild in a background worker. The remaining `process-*` commands are SDK clients over the same durable PostgreSQL authority and can be run in another terminal while `host` is active. Pause takes effect before the next bounded source page; Continue preserves the attempt, generation, and source continuation; RestartAttempt abandons the old candidate and creates a fresh attempt/generation; Cancel is terminal and abandons any non-active candidate.
+`process-start` exercises the canonical execution-control SDK dispatcher without starting an HTTP server. It accepts `postgres`, `cosmos`, or `all` (the default). `host` runs the same dispatcher behind the ASP.NET projection and drives admitted rebuilds in a background worker. The remaining `process-*` commands are SDK clients over the same durable PostgreSQL authority and accept the same optional provider selector. Pause interrupts bounded work and is retained before further source I/O; Continue preserves the attempt, generation, and source continuation; RestartAttempt abandons the old candidate and creates a fresh attempt/generation; Cancel is terminal and abandons every non-active candidate. `process-limits` targets one provider because a limit update is bound to an exact control epoch.
 
-This host is the durable control and recovery foundation, not yet the final Process execution proof. Before source I/O, each provider now compiles a canonical single-leaf rebuild plan set with two tenant shards, complete dependency-feed catalogs, exact provider source profiles, one Elastic target, and deterministic placement evidence. Its bounded materializer still runs beside the retained Process checkpoint and consults canonical Process control at each page boundary. ARI-431 will replace that temporary worker loop with the existing `MaterializationRebuildProcessLifecycle` and durable operation adapters so initialization, shards, synchronization, completion, promotion, limit updates, and traces are all accounted for by Process activations.
+Each provider compiles a canonical single-leaf rebuild plan set with two tenant shards, complete dependency-feed catalogs, exact provider source profiles, one Elastic target, and deterministic placement evidence. The host executes that plan set through its parent coordinator, leaf coordinator, shard worker, promotion worker, durable operation adapters, and storage-owned lifecycle. Initialization, bounded scans and joins, synchronization, readiness, promotion, finalization, limit updates, and retained traces are therefore accounted for by canonical Process checkpoints rather than a parallel harness lifecycle. When both providers complete, the host reads the promoted aliases and rejects any semantic document difference.
 
 The shorter acceptance entrypoint is:
 
@@ -88,7 +89,7 @@ The stable read aliases are `freight-order-search-postgres` and `freight-order-s
 
 ### Process and API surface
 
-The host persists the canonical Process checkpoint and materialization page progress as inspectable JSONB authority documents in PostgreSQL. The same adapter also supplies synchronization-work and index-sync Control-state persistence for the canonical lifecycle binding in ARI-428; this foundation does not claim that the temporary worker loop has exercised those ledgers. Each tenant/provider progress key retains the exact physical source scope, relation read fingerprint, generation, worker fence, batch page ordinal, and opaque continuation. A crash after an Elasticsearch batch but before its progress checkpoint is safe because the stable batch identity replays before the checkpoint advances.
+The host persists canonical Process checkpoints, materialization page progress, synchronization work, routing state, and index-sync Control state as inspectable JSONB authority documents in PostgreSQL. Postgres and Cosmos Process graphs use independent durability authority rows so one provider's parent/child traffic and evidence size cannot contend with the other provider. Routing authority rows are additionally namespaced by the canonical backend-pool definition fingerprint, preventing a revised semantic model from reusing incompatible routing state. The harness configures an explicit 256 MiB authority-document guard because these first-generation aggregate documents retain complete canonical plans and execution evidence; that is a test-harness boundary, not production sizing guidance. Each tenant/provider progress key retains the exact physical source scope, relation read fingerprint, generation, worker fence, batch page ordinal, and opaque continuation. A crash after an Elasticsearch batch but before its progress checkpoint is safe because the stable batch identity replays before the checkpoint advances. A host restart reconstructs execution bindings from the durable parent operation boundary that logically allocated each child attempt and uses a new physical worker-incarnation identity so an orphaned in-flight claim cannot be mistaken for work still owned by the restarted host. The local profile's one-minute worker lease bounds aggregate ownership recovery without making large-document lease maintenance dominate the test workload. An explicit RestartAttempt allocates a new attempt-derived generation and abandons the prior candidate through the lifecycle.
 
 The HTTP projection uses only canonical Cohesive.Api.Execution contracts:
 
@@ -102,10 +103,11 @@ The HTTP projection uses only canonical Cohesive.Api.Execution contracts:
 | `POST` | `/execution-control/processes/continue` | Continue the current attempt. |
 | `POST` | `/execution-control/processes/restart-attempt` | Replace the attempt and abandon its candidate. |
 | `POST` | `/execution-control/processes/cancel` | Cancel terminally and abandon its candidate. |
+| `POST` | `/execution-control/processes/update-limits` | Update a bound index-sync Control epoch. |
 
-The local host intentionally exposes one fixed Process instance and one trusted local authority scope. The SDK commands construct optimistic revision/attempt expectations from the retained checkpoint. HTTP callers supply the canonical command request; the host derives authorization and invocation evidence server-side. `harness.sh env` prints the effective host URL and other endpoints.
+The local host intentionally exposes two fixed Process instances—`process/materialization-harness/freight-rebuild/postgres` and `process/materialization-harness/freight-rebuild/cosmos`—under one trusted local authority scope. `COHESIVE_MATERIALIZATION_PROCESS_INSTANCE_ID` overrides their common prefix. The SDK commands construct optimistic revision/attempt expectations from the retained checkpoint. HTTP callers supply the canonical command request; the host derives authorization and invocation evidence server-side. `harness.sh env` prints the effective host URL and other endpoints.
 
-Set `COHESIVE_MATERIALIZATION_PAGE_DELAY_MS` to a non-negative value up to `60000` when the six-order fixture completes too quickly for manual pause or crash testing. The delay occurs before the durable control check at each bounded page and defaults to zero.
+Set `COHESIVE_MATERIALIZATION_PAGE_DELAY_MS` to a non-negative value up to `60000` when the six-order fixture completes too quickly for manual pause or crash testing. The delay uses the canonical executor's boundary-observation hook after bounded materialization operations and honors the active operation's cancellation token. It defaults to zero.
 
 ## Pinned service capabilities
 
@@ -115,11 +117,11 @@ Set `COHESIVE_MATERIALIZATION_PAGE_DELAY_MS` to a non-negative value up to `6000
 - Elasticsearch `8.19.13` matches the adapter client's minor line and runs as an unauthenticated single node bound only to loopback.
 - Kibana `8.19.13` matches the Elasticsearch node exactly and runs without external telemetry or authentication for this loopback-only harness.
 
-The vNext emulator proves local NoSQL gateway behavior but reports an Eventual account consistency level and does not support the production full-fidelity change-feed/continuous-backup contract. The Cosmos rebuild therefore uses the real Cosmos relation reader plus Cohesive's deterministic in-memory reconciliation pager. For canonical rebuild planning only, both provider replicas are held immutable after verification and expose a harness-only complete empty change interval. That evidence is valid only for the frozen seed attempt; it is not a production PostgreSQL logical-replication or Cosmos change-feed claim. Production incremental indexing remains bound to the stricter provider change-source contracts.
+The vNext emulator proves local NoSQL gateway behavior but reports an Eventual account consistency level and does not support the production full-fidelity change-feed/continuous-backup contract. The Cosmos rebuild therefore uses the real Cosmos relation reader plus Cohesive's deterministic in-memory reconciliation pager. For canonical rebuild planning only, both provider replicas are held immutable after verification and expose a harness-only complete empty change interval. The harness declares a 30-minute convergence-freshness window so crash/restart drills over the evidence-heavy reference store do not turn a frozen source into a false lag failure. That evidence is valid only for the frozen seed attempt; it is not a production PostgreSQL logical-replication or Cosmos change-feed claim. Production incremental indexing remains bound to the stricter provider change-source contracts.
 
 ## Seeded freight surface
 
-Each provider receives separate tenant-partitioned Orders, CustomerAccounts, OrderStops, and Locations. The relation model's inferred source shapes are projected once into canonical entity definitions; both repository seed realizations consume those definitions rather than maintaining a second field schema. PostgreSQL uses composite tenant/entity keys, an explicit semantic observation-version column, and `xmin` only as its opaque concurrency token. Cosmos stores canonical Cohesive observation envelopes partitioned by `/partitionKey`. Physical schema/container creation remains an explicit harness lifecycle step rather than a hidden repository side effect. The baseline contains two tenants, shared customers, shared locations, six orders, and enough stops to cross the harness's two-item paging and lookup boundaries.
+Each provider receives separate tenant-partitioned Orders, CustomerAccounts, OrderStops, and Locations. The relation model's inferred source shapes are projected once into canonical entity definitions; both repository seed realizations consume those definitions rather than maintaining a second field schema. PostgreSQL uses composite tenant/entity keys, an explicit semantic observation-version column, and `xmin` only as its opaque concurrency token. Cosmos stores canonical Cohesive observation envelopes partitioned by `/partitionKey`. Physical schema/container creation remains an explicit harness lifecycle step rather than a hidden repository side effect. The baseline contains two tenants, shared customers, shared locations, six orders, and enough stops to cross the harness's two-item paging and lookup boundaries. Its order IDs are globally unique because the current one-output-per-root materialization contract deliberately uses the root identity as the stable index item identity; tenant partition evidence still fences every source and join read.
 
 The canonical relation joins each order to its customer, traverses the inverse `Order -> OrderStop` relationship, selects the first pickup and last drop by `(orderId, sequence, id)`, and then joins each selected stop to its location before projecting an `OrderSearchDocument`. Orders retain no precomputed stop or endpoint-location identities. Provider-specific code supplies only physical placements, selectors, and readers; the compiled relation and materialization definition fingerprint remain identical.
 

@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using System.Text.Json.Serialization;
+using Cohesive.Control;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -166,7 +167,7 @@ public static class FreightOrderMaterializationModel
                 FreightLocation destination) =>
                 new FreightOrderSearchDocument
                 {
-                    Id = order.TenantId + "/" + order.Id,
+                    Id = order.Id,
                     TenantId = order.TenantId,
                     OrderId = order.Id,
                     OrderNumber = order.OrderNumber,
@@ -214,6 +215,7 @@ public static class FreightOrderMaterializationModel
         var root = plan.InputContract.Sources.Single(static source =>
             source.Role == RelationQuerySourceInputRole.RelationRoot);
         var output = plan.RequirementGraph.Outputs.Single(static candidate => candidate.Field is null);
+        var targetBatchControl = TargetBatchControl();
         var materialization = Materialization.Define(
                 new("freight/order-search"),
                 compilationRequest,
@@ -229,7 +231,15 @@ public static class FreightOrderMaterializationModel
                 maximumChangeBytes: MaximumReadBytes)
             .WithGenerationalIndexTarget(MaximumWriteItems, MaximumWriteBytes)
             .WithFailurePolicy(new(3, MaterializationFailureDisposition.Stop))
-            .WithFreshnessPolicy(new(maximumLagMilliseconds: 30_000))
+            .WithFreshnessPolicy(new(maximumLagMilliseconds: 1_800_000))
+            .WithControls(
+                loops: [targetBatchControl],
+                workloads:
+                [
+                    new(
+                        loopId: targetBatchControl.Id,
+                        workload: MaterializationIndexSyncWorkloadKind.Rebuild)
+                ])
             .WithProvenance(new(
                 new("cohesive-materialization-harness", "1"),
                 new("eng/materialization-harness/model/freight-order-search"),
@@ -267,6 +277,54 @@ public static class FreightOrderMaterializationModel
     }
 
     static QualifiedShapeId Shape(string value) => new(GraphId, new(value));
+
+    static ControlLoopDefinition TargetBatchControl() => new(
+        schemaVersion: ControlLoopDefinition.CurrentSchemaVersion,
+        id: new("freight-order-search/elastic-target-batch"),
+        target: "freight/order-search",
+        applicationAuthority: MaterializationIndexSyncControlCompiler.ApplicationAuthority,
+        stage: ControlStageKind.Target,
+        hardLimits: new([
+            new(
+                range: new(
+                    actuator: ControlActuatorKind.BatchItems,
+                    minimum: new(1, ControlUnit.Count),
+                    maximum: new(MaximumWriteItems, ControlUnit.Count)),
+                origin: ControlHardLimitOrigin.Semantic,
+                authority: "materialization-harness/freight/order-search/v1")
+        ]),
+        initialOperatingPoint: new([
+            new(
+                actuator: ControlActuatorKind.BatchItems,
+                quantity: new(MaximumWriteItems, ControlUnit.Count))
+        ]),
+        objectives:
+        [
+            new(
+                metric: ControlMetricKind.RejectionRatio,
+                statistic: ControlStatisticKind.Last,
+                direction: ControlObjectiveDirection.HigherIsCongested,
+                recoveryBoundary: new(0, ControlUnit.BasisPoints),
+                congestionBoundary: new(2_500, ControlUnit.BasisPoints))
+        ],
+        policy: AimdControlPolicyResolver.Resolve(
+            actuator: ControlActuatorKind.BatchItems,
+            layers: [new AimdControlPolicyLayer(
+                origin: EffectiveConfigurationOrigin.Explicit,
+                authority: "materialization-harness/freight/control-policy/v1",
+                settings: new AimdControlPolicySettings(
+                    additiveIncrease: 1,
+                    multiplicativeDecreaseBasisPoints: 5_000,
+                    healthyObservationCount: 2,
+                    recoveryCooldownMilliseconds: 1_000,
+                    minimumDwellMilliseconds: 1_000,
+                    maximumObservationAgeMilliseconds: 60_000,
+                    minimumSampleCount: 1))]),
+        budgets: [],
+        provenance: new(
+            producer: new("cohesive-materialization-harness", "1"),
+            source: new("eng/materialization-harness/model/freight-order-search-control"),
+            origin: DocumentOrigin.Generated));
 
     static void Require(bool condition, IEnumerable<string> diagnostics)
     {
@@ -310,7 +368,7 @@ public sealed record FreightOrderStorageDefinitions(
 /// <summary>Simplified immutable freight order root.</summary>
 public sealed record FreightOrder
 {
-    /// <summary>Tenant-local order identity.</summary>
+    /// <summary>Globally unique order identity used as the stable materialization item identity.</summary>
     [JsonPropertyName("id")]
     public required string Id { get; init; }
 
@@ -414,7 +472,7 @@ public sealed record FreightLocation
 /// <summary>Canonical value written beneath the Elasticsearch materialization envelope.</summary>
 public sealed record FreightOrderSearchDocument
 {
-    /// <summary>Globally unique tenant/order index identity.</summary>
+    /// <summary>Stable index identity equal to the canonical root order identity.</summary>
     [JsonPropertyName("id")]
     public required string Id { get; init; }
 

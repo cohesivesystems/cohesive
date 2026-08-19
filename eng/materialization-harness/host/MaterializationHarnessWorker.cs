@@ -1,5 +1,3 @@
-using Cohesive.MaterializationHarness.Materialize;
-
 namespace Cohesive.MaterializationHarness.Host;
 
 sealed class MaterializationHarnessWorker(
@@ -12,11 +10,7 @@ sealed class MaterializationHarnessWorker(
         {
             try
             {
-                await controller.RunCurrentAttemptAsync(stoppingToken);
-            }
-            catch (MaterializationHarnessRunSuspendedException exception)
-            {
-                logger.LogInformation("Materialization attempt suspended at a page boundary: {Reason}", exception.Message);
+                await controller.RunReadyProcessesAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -24,11 +18,11 @@ sealed class MaterializationHarnessWorker(
             }
             catch (OperationCanceledException exception)
             {
-                logger.LogInformation("Materialization attempt stopped: {Reason}", exception.Message);
+                logger.LogInformation("Materialization Process work stopped at a durable boundary: {Reason}", exception.Message);
             }
             catch (Exception exception)
             {
-                logger.LogError(exception, "Materialization attempt failed and remains resumable.");
+                logger.LogError(exception, "Materialization Process work failed and remains resumable.");
             }
 
             await controller.WaitForWorkAsync(stoppingToken);

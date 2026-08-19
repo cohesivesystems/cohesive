@@ -9,6 +9,22 @@ namespace Cohesive.Tests.Postgres;
 public sealed class PostgresProcessDurableStoreTests
 {
     [Fact]
+    public void ExceptionClassifier_PreservesAmbiguousProviderFailuresAndRejectsLocalFailures()
+    {
+        var classifier = PostgresProcessStoreMutationExceptionClassifier.Instance;
+
+        Assert.Equal(
+            ProcessStoreMutationExceptionClassification.Ambiguous,
+            classifier.Classify(new NpgsqlException("provider boundary")));
+        Assert.Equal(
+            ProcessStoreMutationExceptionClassification.Ambiguous,
+            classifier.Classify(new OperationCanceledException("provider-local cancellation")));
+        Assert.Equal(
+            ProcessStoreMutationExceptionClassification.NotAmbiguous,
+            classifier.Classify(new InvalidOperationException("local validation")));
+    }
+
+    [Fact]
     public async Task Capabilities_DeclareAtomicDurableProcessGuaranteesAndConfiguredLimit()
     {
         await using var dataSource = NpgsqlDataSource.Create(
@@ -58,6 +74,52 @@ public sealed class PostgresProcessDurableStoreTests
 
         Assert.Equal("\"process-schema\".\"process\"\"stores\"", options.QualifiedTable);
         Assert.Equal("\"process-schema\"", options.QualifiedSchema);
+    }
+
+    [PostgresFact]
+    public async Task LocalPostgres_SerializesConcurrentAuthorityAccessThroughTheLockedRow()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")
+            ?? throw new InvalidOperationException(
+                "The PostgreSQL integration-test connection string disappeared after test discovery.");
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var schema = $"process_concurrency_{Guid.NewGuid():N}";
+        var options = new PostgresProcessDurableStoreOptions(
+            authorityId: $"authority/process-concurrency/{Guid.NewGuid():N}",
+            schema: schema);
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: "process/postgres-durable-store/concurrency",
+            semanticVariant: "postgres-concurrency");
+        var context = OperationContext.Create();
+
+        try
+        {
+            var bootstrap = new PostgresProcessDurableStore(
+                dataSource: dataSource,
+                options: options);
+            await bootstrap.EnsureCreatedAsync(context);
+            ProcessCommitId commitId = new("commit/postgres-process-concurrency");
+            var stores = Enumerable.Range(0, 12)
+                .Select(_ => new PostgresProcessDurableStore(
+                    dataSource: dataSource,
+                    options: options))
+                .ToArray();
+
+            var results = await Task.WhenAll(stores.Select(store => store.InitializeAsync(
+                context: context,
+                commitId: commitId,
+                checkpoint: fixture.Checkpoint)));
+
+            Assert.Contains(results, static result => result.Disposition == ProcessStoreMutationDisposition.Applied);
+            Assert.All(results, static result => Assert.Contains(
+                result.Disposition,
+                new[] { ProcessStoreMutationDisposition.Applied, ProcessStoreMutationDisposition.Replayed }));
+        }
+        finally
+        {
+            await using var cleanup = dataSource.CreateCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE;");
+            await cleanup.ExecuteNonQueryAsync();
+        }
     }
 
     [PostgresFact]

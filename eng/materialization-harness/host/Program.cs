@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Cohesive.Adapters.AspNet.Processes;
 using Cohesive.Api;
 using Cohesive.Api.Execution;
@@ -24,30 +25,68 @@ static class ProgramEntry
             catalog: catalog);
         await controller.EnsureCreatedAsync(OperationContext.Create());
 
-        if (args is ["--start"])
+        if (args is ["--start"] or ["--start", _])
         {
             var now = DateTimeOffset.UtcNow;
-            var request = controller.CreateStartRequest(
-                attemptId: new($"attempt/{now:yyyyMMddHHmmssfffffff}"),
-                issuedAtUtc: now);
-            var result = await controller.DispatchAsync(
-                context: OperationContext.Create(),
-                endpoint: catalog.Start,
-                request: request,
-                invocation: Invocation(catalog.Start, options, now));
-            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result.Body));
-            return result.Result.Kind == ApiResultKind.Success ? 0 : 1;
+            var providers = ResolveProviders(args.ElementAtOrDefault(1), controller);
+            var results = new List<object?>();
+            var successful = true;
+            foreach (var provider in providers)
+            {
+                var request = controller.CreateStartRequest(
+                    provider: provider,
+                    attemptId: new($"attempt/{provider}/{now:yyyyMMddHHmmssfffffff}"),
+                    issuedAtUtc: now);
+                var result = await controller.DispatchAsync(
+                    context: OperationContext.Create(),
+                    endpoint: catalog.Start,
+                    request: request,
+                    invocation: Invocation(catalog.Start, options, now));
+                results.Add(result.Body);
+                successful &= result.Result.Kind == ApiResultKind.Success;
+            }
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(results));
+            await controller.DisposeAsync();
+            return successful ? 0 : 1;
         }
-        if (args is [var command] && TryResolveOperatorEndpoint(command, catalog, out var endpoint))
+        if (args is ["--update-limits", var requestedProvider, var maximumBatchItems]
+            && long.TryParse(
+                maximumBatchItems,
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var parsedMaximumBatchItems))
         {
-            var result = await controller.DispatchOperatorAsync(endpoint, DateTimeOffset.UtcNow);
+            var result = await controller.DispatchLimitUpdateAsync(
+                provider: requestedProvider,
+                maximumBatchItems: parsedMaximumBatchItems,
+                issuedAtUtc: DateTimeOffset.UtcNow);
             Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result.Body));
+            await controller.DisposeAsync();
             return result.Result.Kind is ApiResultKind.Success or ApiResultKind.Accepted ? 0 : 1;
+        }
+        if (args.Length is 1 or 2
+            && TryResolveOperatorEndpoint(args[0], catalog, out var endpoint))
+        {
+            var providers = ResolveProviders(args.ElementAtOrDefault(1), controller);
+            var results = new List<object?>();
+            var successful = true;
+            foreach (var provider in providers)
+            {
+                var result = await controller.DispatchOperatorAsync(
+                    provider: provider,
+                    endpoint: endpoint,
+                    issuedAtUtc: DateTimeOffset.UtcNow);
+                results.Add(result.Body);
+                successful &= result.Result.Kind is ApiResultKind.Success or ApiResultKind.Accepted;
+            }
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(results));
+            await controller.DisposeAsync();
+            return successful ? 0 : 1;
         }
         if (args.Length != 0)
         {
             throw new ArgumentException(
-                "The materialization host accepts --start, --inspect, --explain, --traces, --pause, --continue, --restart-attempt, or --cancel.",
+                "The materialization host accepts --start, --inspect, --explain, --traces, --pause, --continue, --restart-attempt, or --cancel, optionally followed by postgres or cosmos; --update-limits requires a provider and maximum batch items.",
                 nameof(args));
         }
 
@@ -158,6 +197,17 @@ static class ProgramEntry
             _ => null!
         };
         return endpoint is not null;
+    }
+
+    static ImmutableArray<string> ResolveProviders(
+        string? requested,
+        MaterializationHarnessExecutionController controller)
+    {
+        if (string.IsNullOrWhiteSpace(requested) || string.Equals(requested, "all", StringComparison.Ordinal))
+            return controller.Providers;
+        if (controller.Providers.Contains(requested, StringComparer.Ordinal))
+            return [requested];
+        throw new ArgumentException("The provider must be postgres, cosmos, or all.", nameof(requested));
     }
 
     static ValueTask<ExecutionApiInvocationContext> ResolveInvocation(
