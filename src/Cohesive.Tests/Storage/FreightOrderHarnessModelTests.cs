@@ -29,10 +29,10 @@ public sealed class FreightOrderHarnessModelTests
 
         Assert.Equal(first.DefinitionFingerprint, second.DefinitionFingerprint);
         Assert.Equal(
-            "beede084c25d9efb09717e590d0c2206c610f0654e8707c996859bfbf0992bb9",
+            "d65c19d0117eded93b158dd0d76b8d76c5783e2fd3cc6714bcc2144eb8381156",
             first.DefinitionFingerprint.Value);
-        Assert.Equal(MaterializationSynchronizationMode.Rebuild, first.Definition.UpdatePolicy.SupportedModes);
-        Assert.Equal(MaterializationConsistencyKind.Reconciliation, first.Definition.UpdatePolicy.Consistency);
+        Assert.Equal(MaterializationSynchronizationMode.All, first.Definition.UpdatePolicy.SupportedModes);
+        Assert.Equal(MaterializationConsistencyKind.BaselinePlusCatchUp, first.Definition.UpdatePolicy.Consistency);
         Assert.Single(first.Plan.InputContract.Sources);
         Assert.Equal(5, first.Plan.InputContract.Traversals.Length);
         Assert.Equal(6, first.Definition.Sources.Length);
@@ -46,6 +46,11 @@ public sealed class FreightOrderHarnessModelTests
             static source => Assert.Contains(
                 source.Capabilities,
                 capability => capability.Capability == MaterializationCapabilityKind.SourceContinuation));
+        Assert.All(
+            first.Definition.Sources,
+            static source => Assert.Contains(
+                source.Capabilities,
+                capability => capability.Capability == MaterializationCapabilityKind.SourceChangeDelivery));
         Assert.Equal(FreightOrderMaterializationModel.OrderShapeId, first.Root.Shape);
         Assert.Equal(FreightOrderMaterializationModel.OrderSearchDocumentShapeId, first.Output.Shape);
         Assert.All(
@@ -212,38 +217,66 @@ public sealed class FreightOrderHarnessModelTests
                     semantics.Plan,
                     input,
                     out var readCapability));
-                return new MaterializationSourceRequirement(
-                    input,
-                    [
-                        new(
-                            new($"{input.Value}/read"),
-                            readCapability,
-                            [
-                                MaterializationGuaranteeKind.StableOrdering,
-                                MaterializationGuaranteeKind.RequestLocalCompleteness,
-                                MaterializationGuaranteeKind.Reconciliation
-                            ],
-                            [
-                                new(MaterializationLimitKind.ReadItems, maximumReadItems),
-                                new(MaterializationLimitKind.ReadBytes, maximumReadBytes)
-                            ],
-                            MaterializationSynchronizationMode.Rebuild),
-                        new(
-                            new($"{input.Value}/continuation"),
-                            MaterializationCapabilityKind.SourceContinuation,
-                            [
-                                MaterializationGuaranteeKind.StableOrdering,
-                                MaterializationGuaranteeKind.Reconciliation
-                            ],
-                            [],
-                            MaterializationSynchronizationMode.Rebuild)
-                    ]);
+                List<MaterializationCapabilityRequirement> capabilities =
+                [
+                    new(
+                        new($"{input.Value}/read"),
+                        readCapability,
+                        [
+                            MaterializationGuaranteeKind.StableOrdering,
+                            MaterializationGuaranteeKind.RequestLocalCompleteness
+                        ],
+                        [
+                            new(MaterializationLimitKind.ReadItems, maximumReadItems),
+                            new(MaterializationLimitKind.ReadBytes, maximumReadBytes)
+                        ],
+                        MaterializationSynchronizationMode.All),
+                    new(
+                        new($"{input.Value}/continuation"),
+                        MaterializationCapabilityKind.SourceContinuation,
+                        [MaterializationGuaranteeKind.StableOrdering],
+                        [],
+                        MaterializationSynchronizationMode.Rebuild),
+                    new(
+                        new($"{input.Value}/changes"),
+                        MaterializationCapabilityKind.SourceChangeDelivery,
+                        [
+                            MaterializationGuaranteeKind.StableOrdering,
+                            MaterializationGuaranteeKind.AtLeastOnceDelivery,
+                            MaterializationGuaranteeKind.BaselinePlusCatchUp,
+                            MaterializationGuaranteeKind.CompleteMutationDelivery,
+                            MaterializationGuaranteeKind.BeforeImage
+                        ],
+                        [
+                            new(MaterializationLimitKind.ChangeItems, maximumReadItems),
+                            new(MaterializationLimitKind.ReadBytes, maximumReadBytes)
+                        ],
+                        MaterializationSynchronizationMode.All)
+                ];
+                if (semantics.Root.Input.Id == input
+                    && readCapability != MaterializationCapabilityKind.SourceParameterizedPredicateQuery)
+                {
+                    capabilities.Add(new(
+                        new($"{input.Value}/inverse"),
+                        MaterializationCapabilityKind.SourceParameterizedPredicateQuery,
+                        [
+                            MaterializationGuaranteeKind.StableOrdering,
+                            MaterializationGuaranteeKind.RequestLocalCompleteness
+                        ],
+                        [
+                            new(MaterializationLimitKind.ReadItems, maximumReadItems),
+                            new(MaterializationLimitKind.ReadBytes, maximumReadBytes)
+                        ],
+                        MaterializationSynchronizationMode.Incremental));
+                }
+                return new MaterializationSourceRequirement(input, [.. capabilities]);
             })
         ];
         ImmutableArray<MaterializationCapabilityRequirement> target =
         [
             Target("target/isolation", MaterializationCapabilityKind.TargetGenerationIsolation),
             Target("target/upsert", MaterializationCapabilityKind.TargetBulkUpsert),
+            Target("target/delete", MaterializationCapabilityKind.TargetBulkDelete),
             Target("target/outcomes", MaterializationCapabilityKind.TargetPerItemOutcomes),
             Target("target/seal", MaterializationCapabilityKind.TargetSeal),
             Target("target/validation", MaterializationCapabilityKind.TargetValidation),
@@ -258,8 +291,8 @@ public sealed class FreightOrderHarnessModelTests
             sources,
             target,
             new(
-                MaterializationSynchronizationMode.Rebuild,
-                MaterializationConsistencyKind.Reconciliation,
+                MaterializationSynchronizationMode.All,
+                MaterializationConsistencyKind.BaselinePlusCatchUp,
                 MaterializationIdempotencyKind.StableOutputIdentityAndVersion),
             new(maximumAttempts: 3, MaterializationFailureDisposition.Stop),
             new(maximumLagMilliseconds: 30_000),
@@ -275,7 +308,8 @@ public sealed class FreightOrderHarnessModelTests
             {
                 MaterializationCapabilityKind.TargetGenerationIsolation =>
                     [MaterializationGuaranteeKind.GenerationIsolation, MaterializationGuaranteeKind.FencedMutation],
-                MaterializationCapabilityKind.TargetBulkUpsert =>
+                MaterializationCapabilityKind.TargetBulkUpsert
+                    or MaterializationCapabilityKind.TargetBulkDelete =>
                     [
                         MaterializationGuaranteeKind.IdempotentWrite,
                         MaterializationGuaranteeKind.FencedMutation,
@@ -290,6 +324,7 @@ public sealed class FreightOrderHarnessModelTests
                 _ => [MaterializationGuaranteeKind.FencedMutation]
             },
             capability is MaterializationCapabilityKind.TargetBulkUpsert
+                or MaterializationCapabilityKind.TargetBulkDelete
                 or MaterializationCapabilityKind.TargetPerItemOutcomes
                 ?
                 [
@@ -297,7 +332,11 @@ public sealed class FreightOrderHarnessModelTests
                     new(MaterializationLimitKind.WriteBytes, maximumWriteBytes)
                 ]
                 : [],
-            MaterializationSynchronizationMode.Rebuild);
+            capability is MaterializationCapabilityKind.TargetBulkUpsert
+                or MaterializationCapabilityKind.TargetBulkDelete
+                or MaterializationCapabilityKind.TargetPerItemOutcomes
+                ? MaterializationSynchronizationMode.All
+                : MaterializationSynchronizationMode.Rebuild);
     }
 
     static async Task<RelationQueryOutputRow> ExecuteAsync(

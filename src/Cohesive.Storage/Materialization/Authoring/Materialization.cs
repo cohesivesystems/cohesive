@@ -49,6 +49,7 @@ public sealed class MaterializationDefinitionBuilder
     ExecutionProvenance? provenance;
     ImmutableArray<MaterializationSourceRequirement>? explicitSources;
     AuthoringBounds? relationRebuildBounds;
+    BaselineCatchUpAuthoringBounds? relationBaselineCatchUpBounds;
     ImmutableArray<MaterializationCapabilityRequirement>? explicitTargetCapabilities;
     AuthoringBounds? generationalIndexBounds;
     ImmutableArray<ControlLoopDefinition> controlLoops = [];
@@ -98,6 +99,30 @@ public sealed class MaterializationDefinitionBuilder
     {
         EnsureSourcesUnset();
         relationRebuildBounds = AuthoringBounds.Create(maximumItems, maximumBytes);
+        return this;
+    }
+
+    /// <summary>
+    /// Derives bounded relation reads, continuations, and complete before-image change delivery for a rebuild that
+    /// converges into incremental maintenance.
+    /// </summary>
+    /// <param name="maximumReadItems">Largest requested item count for one source or inverse-impact read.</param>
+    /// <param name="maximumReadBytes">Largest requested encoded-byte count for one source or inverse-impact read.</param>
+    /// <param name="maximumChangeItems">Largest requested delivery count for one source change page.</param>
+    /// <param name="maximumChangeBytes">Largest requested encoded-byte count for one source change page.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">A supplied bound is not positive or portable.</exception>
+    /// <exception cref="InvalidOperationException">Source requirements were already configured.</exception>
+    public MaterializationDefinitionBuilder WithBoundedRelationBaselineCatchUpSources(
+        long maximumReadItems,
+        long maximumReadBytes,
+        long maximumChangeItems,
+        long maximumChangeBytes)
+    {
+        EnsureSourcesUnset();
+        relationBaselineCatchUpBounds = new(
+            Read: AuthoringBounds.Create(maximumReadItems, maximumReadBytes),
+            Change: AuthoringBounds.Create(maximumChangeItems, maximumChangeBytes));
         return this;
     }
 
@@ -215,7 +240,9 @@ public sealed class MaterializationDefinitionBuilder
         var sources = explicitSources
             ?? (relationRebuildBounds is { } sourceBounds
                 ? CreateRelationRebuildSources(declaredUpdatePolicy, sourceBounds)
-                : throw Missing("source requirements", nameof(WithBoundedRelationRebuildSources)));
+                : relationBaselineCatchUpBounds is { } baselineCatchUpBounds
+                    ? CreateRelationBaselineCatchUpSources(declaredUpdatePolicy, baselineCatchUpBounds)
+                    : throw Missing("source requirements", nameof(WithBoundedRelationRebuildSources)));
         var targetCapabilities = explicitTargetCapabilities
             ?? (generationalIndexBounds is { } targetBounds
                 ? CreateGenerationalIndexTarget(declaredUpdatePolicy, targetBounds)
@@ -282,6 +309,75 @@ public sealed class MaterializationDefinitionBuilder
                         [],
                         MaterializationSynchronizationMode.Rebuild)
                 ]));
+        }
+
+        return sources.MoveToImmutable();
+    }
+
+    ImmutableArray<MaterializationSourceRequirement> CreateRelationBaselineCatchUpSources(
+        MaterializationUpdatePolicy policy,
+        BaselineCatchUpAuthoringBounds bounds)
+    {
+        var inputs = MaterializationSourceAcquisitionCatalog.GetInputs(plan);
+        var rootInputs = plan.InputContract.Sources
+            .Where(static source => source.Role == RelationQuerySourceInputRole.RelationRoot)
+            .Select(static source => source.Input.Id)
+            .ToHashSet();
+        var sources = ImmutableArray.CreateBuilder<MaterializationSourceRequirement>(inputs.Length);
+        foreach (var input in inputs)
+        {
+            if (!MaterializationSourceAcquisitionCatalog.TryGetReadCapability(plan, input, out var readCapability))
+            {
+                throw new InvalidOperationException(
+                    $"Compiled Relations acquisition input '{input.Value}' has no materialization read projection.");
+            }
+
+            var capabilities = ImmutableArray.CreateBuilder<MaterializationCapabilityRequirement>(4);
+            capabilities.Add(new(
+                id: new($"{input.Value}/read"),
+                capability: readCapability,
+                guarantees: RequiredGuarantees(policy, readCapability),
+                operatingLimits: ReadLimits(bounds.Read),
+                modes: MaterializationSynchronizationMode.All));
+            capabilities.Add(new(
+                id: new($"{input.Value}/continuation"),
+                capability: MaterializationCapabilityKind.SourceContinuation,
+                guarantees: [MaterializationGuaranteeKind.StableOrdering],
+                operatingLimits: [],
+                modes: MaterializationSynchronizationMode.Rebuild));
+            capabilities.Add(new(
+                id: new($"{input.Value}/changes"),
+                capability: MaterializationCapabilityKind.SourceChangeDelivery,
+                guarantees:
+                [
+                    .. RequiredGuarantees(policy, MaterializationCapabilityKind.SourceChangeDelivery),
+                    MaterializationGuaranteeKind.CompleteMutationDelivery,
+                    MaterializationGuaranteeKind.BeforeImage
+                ],
+                operatingLimits:
+                [
+                    new(MaterializationLimitKind.ChangeItems, bounds.Change.MaximumItems),
+                    new(MaterializationLimitKind.ReadBytes, bounds.Change.MaximumBytes)
+                ],
+                modes: MaterializationSynchronizationMode.All));
+            if (rootInputs.Contains(input)
+                && readCapability != MaterializationCapabilityKind.SourceParameterizedPredicateQuery)
+            {
+                capabilities.Add(new(
+                    id: new($"{input.Value}/inverse"),
+                    capability: MaterializationCapabilityKind.SourceParameterizedPredicateQuery,
+                    guarantees: RequiredGuarantees(
+                        policy,
+                        MaterializationCapabilityKind.SourceParameterizedPredicateQuery),
+                    operatingLimits: ReadLimits(bounds.Read),
+                    modes: MaterializationSynchronizationMode.Incremental));
+            }
+
+            sources.Add(new(
+                input,
+                capabilities.Count == capabilities.Capacity
+                    ? capabilities.MoveToImmutable()
+                    : capabilities.ToImmutable()));
         }
 
         return sources.MoveToImmutable();
@@ -368,7 +464,9 @@ public sealed class MaterializationDefinitionBuilder
 
     void EnsureSourcesUnset()
     {
-        if (explicitSources is not null || relationRebuildBounds is not null)
+        if (explicitSources is not null
+            || relationRebuildBounds is not null
+            || relationBaselineCatchUpBounds is not null)
         {
             throw new InvalidOperationException("Materialization source requirements are already configured.");
         }
@@ -399,6 +497,10 @@ public sealed class MaterializationDefinitionBuilder
             MaterializationContract.RequirePortablePositiveBound(maximumItems, nameof(maximumItems)),
             MaterializationContract.RequirePortablePositiveBound(maximumBytes, nameof(maximumBytes)));
     }
+
+    readonly record struct BaselineCatchUpAuthoringBounds(
+        AuthoringBounds Read,
+        AuthoringBounds Change);
 }
 
 /// <summary>Canonical materialization definition and authoritative validation produced by one authoring terminal.</summary>
