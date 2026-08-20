@@ -93,9 +93,12 @@ public sealed class MotionDqInteractionContracts
         DomainEventContractReference prequalificationAuditEvent,
         SignalContractReference reviewDecisionSignal,
         SignalContractReference caseCancellationSignal,
-        RequestProtocol reviewTask,
-        RequestProtocol insuranceTerms,
-        RequestProtocol fulfillRequirement,
+        RequestContractReference reviewTaskRequest,
+        DurableRequestBinding reviewTaskBinding,
+        RequestContractReference insuranceTermsRequest,
+        DurableRequestBinding insuranceTermsBinding,
+        RequestContractReference fulfillRequirementRequest,
+        DurableRequestBinding fulfillRequirementBinding,
         ImmutableArray<ExecutionDefinitionDocument> documents,
         InteractionContractCatalog catalog)
     {
@@ -103,12 +106,12 @@ public sealed class MotionDqInteractionContracts
         PrequalificationAuditEvent = prequalificationAuditEvent;
         ReviewDecisionSignal = reviewDecisionSignal;
         CaseCancellationSignal = caseCancellationSignal;
-        ReviewTaskRequest = reviewTask.Contract;
-        ReviewTaskBinding = reviewTask.Binding;
-        InsuranceTermsRequest = insuranceTerms.Contract;
-        InsuranceTermsBinding = insuranceTerms.Binding;
-        FulfillRequirementRequest = fulfillRequirement.Contract;
-        FulfillRequirementBinding = fulfillRequirement.Binding;
+        ReviewTaskRequest = reviewTaskRequest;
+        ReviewTaskBinding = reviewTaskBinding;
+        InsuranceTermsRequest = insuranceTermsRequest;
+        InsuranceTermsBinding = insuranceTermsBinding;
+        FulfillRequirementRequest = fulfillRequirementRequest;
+        FulfillRequirementBinding = fulfillRequirementBinding;
         Documents = documents;
         Catalog = catalog;
     }
@@ -179,63 +182,94 @@ public sealed class MotionDqInteractionContracts
             new SignalContractDefinition(Schema<MotionDqCancellation>("motion-dq/case-cancellation/v1")),
             Provenance("case-cancellation"));
 
-        var reviewTask = CreateRequestProtocol(
-            definitionId: "interaction/motion-dq/create-review-task",
-            payload: Schema<MotionDqReviewTaskRequest>("motion-dq/review-task/request/v1"),
-            outcomes:
-            [
-                new(ReviewTaskCreatedOutcome, RequestOutcomeKind.Result,
-                    Schema<MotionDqReviewTaskReference>("motion-dq/review-task/reference/v1")),
-                new(ReviewTaskFailedOutcome, RequestOutcomeKind.Failure,
-                    Schema<string>("motion-dq/review-task/failure/v1"))
-            ],
-            timeout: RequestOptionalTerminalSemantics.Unsupported,
-            cancellation: RequestOptionalTerminalSemantics.Unsupported,
-            timeoutAfter: null,
+        var reviewTask = InteractionContractAuthoring.CreateRequestProtocol<
+            MotionDqReviewTaskRequest,
+            ReviewTaskOutcomes>(
+            definitionId: new("interaction/motion-dq/create-review-task"),
+            revisionId: Revision,
+            payloadRevision: new("motion-dq/review-task/request/v1"),
+            createOutcomes: outcomes => new(
+                Created: outcomes.Result<MotionDqReviewTaskReference>(
+                    ReviewTaskCreatedOutcome,
+                    new("motion-dq/review-task/reference/v1")),
+                Failed: outcomes.Failure<string>(
+                    ReviewTaskFailedOutcome,
+                    new("motion-dq/review-task/failure/v1"))),
+            responsePolicy: ResponsePolicy(
+                RequestOptionalTerminalSemantics.Unsupported,
+                RequestOptionalTerminalSemantics.Unsupported),
+            provenance: Provenance("interaction/motion-dq/create-review-task/request"),
+            replyProvenance: ReplyProvenance("interaction/motion-dq/create-review-task"));
+        var reviewTaskBinding = reviewTask.BindDurably(
             maxAttempts: 3,
-            terminalFailureOutcome: ReviewTaskFailedOutcome);
+            claimLease: TimeSpan.FromMinutes(5),
+            idempotencyEvidence: DurableOperationIdempotencyEvidence.TargetDeduplication,
+            terminalFailureOutcome: reviewTask.Outcomes.Failed);
 
-        var insuranceTerms = CreateRequestProtocol(
-            definitionId: "interaction/motion-dq/insurance-terms",
-            payload: Schema<MotionDqInsuranceTermsRequest>("motion-dq/insurance-terms/request/v1"),
-            outcomes:
-            [
-                new(InsuranceTermsAcceptedOutcome, RequestOutcomeKind.Result,
-                    Schema<MotionDqInsuranceTermsResult>("motion-dq/insurance-terms/result/v1")),
-                new(InsuranceTermsDeclinedOutcome, RequestOutcomeKind.Result,
-                    Schema<MotionDqInsuranceTermsResult>("motion-dq/insurance-terms/result/v1")),
-                new(InsuranceTermsFailedOutcome, RequestOutcomeKind.Failure,
-                    Schema<string>("motion-dq/insurance-terms/failure/v1")),
-                new(InsuranceTermsTimedOutOutcome, RequestOutcomeKind.Timeout,
-                    Schema<string>("motion-dq/insurance-terms/timeout/v1")),
-                new(InsuranceTermsCancelledOutcome, RequestOutcomeKind.Cancellation,
-                    Schema<string>("motion-dq/insurance-terms/cancellation/v1"))
-            ],
-            timeout: RequestOptionalTerminalSemantics.TerminalOutcome,
-            cancellation: RequestOptionalTerminalSemantics.TerminalOutcome,
+        var insuranceTerms = InteractionContractAuthoring.CreateRequestProtocol<
+            MotionDqInsuranceTermsRequest,
+            InsuranceTermsOutcomes>(
+            definitionId: new("interaction/motion-dq/insurance-terms"),
+            revisionId: Revision,
+            payloadRevision: new("motion-dq/insurance-terms/request/v1"),
+            createOutcomes: outcomes => new(
+                Accepted: outcomes.Result<MotionDqInsuranceTermsResult>(
+                    InsuranceTermsAcceptedOutcome,
+                    new("motion-dq/insurance-terms/result/v1")),
+                Declined: outcomes.Result<MotionDqInsuranceTermsResult>(
+                    InsuranceTermsDeclinedOutcome,
+                    new("motion-dq/insurance-terms/result/v1")),
+                Failed: outcomes.Failure<string>(
+                    InsuranceTermsFailedOutcome,
+                    new("motion-dq/insurance-terms/failure/v1")),
+                TimedOut: outcomes.Timeout<string>(
+                    InsuranceTermsTimedOutOutcome,
+                    new("motion-dq/insurance-terms/timeout/v1")),
+                Cancelled: outcomes.Cancellation<string>(
+                    InsuranceTermsCancelledOutcome,
+                    new("motion-dq/insurance-terms/cancellation/v1"))),
+            responsePolicy: ResponsePolicy(
+                RequestOptionalTerminalSemantics.TerminalOutcome,
+                RequestOptionalTerminalSemantics.TerminalOutcome),
+            provenance: Provenance("interaction/motion-dq/insurance-terms/request"),
+            replyProvenance: ReplyProvenance("interaction/motion-dq/insurance-terms"));
+        var insuranceTermsBinding = insuranceTerms.BindDurably(
+            maxAttempts: 3,
+            claimLease: TimeSpan.FromMinutes(5),
+            idempotencyEvidence: DurableOperationIdempotencyEvidence.TargetDeduplication,
             timeoutAfter: TimeSpan.FromDays(7),
-            maxAttempts: 3,
-            terminalFailureOutcome: InsuranceTermsFailedOutcome);
+            terminalFailureOutcome: insuranceTerms.Outcomes.Failed);
 
-        var fulfillmentReceipt = Schema<MotionDqRequirementEvaluationReceipt>(
-            "motion-dq/requirement/evaluation-receipt/v1");
-        var fulfillmentFailure = Schema<MotionDqRequirementFulfillmentFailure>(
-            "motion-dq/requirement/fulfillment-failure/v1");
-        var fulfillRequirement = CreateRequestProtocol(
-            definitionId: "interaction/motion-dq/fulfill-requirement",
-            payload: Schema<MotionDqRequirementFulfillmentRequest>("motion-dq/requirement/fulfillment-request/v1"),
-            outcomes:
-            [
-                new(RequirementFulfilledOutcome, RequestOutcomeKind.Result, fulfillmentReceipt),
-                new(RequirementProviderFailedOutcome, RequestOutcomeKind.Failure, fulfillmentFailure),
-                new(RequirementProviderTimedOutOutcome, RequestOutcomeKind.Timeout, fulfillmentFailure),
-                new(RequirementFulfillmentCancelledOutcome, RequestOutcomeKind.Cancellation, fulfillmentFailure)
-            ],
-            timeout: RequestOptionalTerminalSemantics.TerminalOutcome,
-            cancellation: RequestOptionalTerminalSemantics.TerminalOutcome,
-            timeoutAfter: TimeSpan.FromDays(1),
+        var fulfillRequirement = InteractionContractAuthoring.CreateRequestProtocol<
+            MotionDqRequirementFulfillmentRequest,
+            FulfillRequirementOutcomes>(
+            definitionId: new("interaction/motion-dq/fulfill-requirement"),
+            revisionId: Revision,
+            payloadRevision: new("motion-dq/requirement/fulfillment-request/v1"),
+            createOutcomes: outcomes => new(
+                Fulfilled: outcomes.Result<MotionDqRequirementEvaluationReceipt>(
+                    RequirementFulfilledOutcome,
+                    new("motion-dq/requirement/evaluation-receipt/v1")),
+                ProviderFailed: outcomes.Failure<MotionDqRequirementFulfillmentFailure>(
+                    RequirementProviderFailedOutcome,
+                    new("motion-dq/requirement/fulfillment-failure/v1")),
+                ProviderTimedOut: outcomes.Timeout<MotionDqRequirementFulfillmentFailure>(
+                    RequirementProviderTimedOutOutcome,
+                    new("motion-dq/requirement/fulfillment-failure/v1")),
+                Cancelled: outcomes.Cancellation<MotionDqRequirementFulfillmentFailure>(
+                    RequirementFulfillmentCancelledOutcome,
+                    new("motion-dq/requirement/fulfillment-failure/v1"))),
+            responsePolicy: ResponsePolicy(
+                RequestOptionalTerminalSemantics.TerminalOutcome,
+                RequestOptionalTerminalSemantics.TerminalOutcome),
+            provenance: Provenance("interaction/motion-dq/fulfill-requirement/request"),
+            replyProvenance: ReplyProvenance("interaction/motion-dq/fulfill-requirement"));
+        var fulfillRequirementBinding = fulfillRequirement.BindDurably(
             maxAttempts: 3,
-            terminalFailureOutcome: RequirementProviderFailedOutcome);
+            claimLease: TimeSpan.FromMinutes(5),
+            idempotencyEvidence: DurableOperationIdempotencyEvidence.TargetDeduplication,
+            timeoutAfter: TimeSpan.FromDays(1),
+            terminalFailureOutcome: fulfillRequirement.Outcomes.ProviderFailed);
 
         ImmutableArray<ExecutionDefinitionDocument> documents =
         [
@@ -259,83 +293,31 @@ public sealed class MotionDqInteractionContracts
             prequalificationAuditEvent: new(Reference(prequalificationAuditDocument)),
             reviewDecisionSignal: new(Reference(reviewDecisionDocument)),
             caseCancellationSignal: new(Reference(cancellationDocument)),
-            reviewTask: reviewTask,
-            insuranceTerms: insuranceTerms,
-            fulfillRequirement: fulfillRequirement,
+            reviewTaskRequest: reviewTask.Request,
+            reviewTaskBinding: reviewTaskBinding,
+            insuranceTermsRequest: insuranceTerms.Request,
+            insuranceTermsBinding: insuranceTermsBinding,
+            fulfillRequirementRequest: fulfillRequirement.Request,
+            fulfillRequirementBinding: fulfillRequirementBinding,
             documents: documents,
             catalog: catalog);
     }
 
-    static RequestProtocol CreateRequestProtocol(
-        string definitionId,
-        InteractionValueSchema payload,
-        ImmutableArray<RequestOutcome> outcomes,
+    static RequestProtocolResponsePolicy ResponsePolicy(
         RequestOptionalTerminalSemantics timeout,
-        RequestOptionalTerminalSemantics cancellation,
-        TimeSpan? timeoutAfter,
-        int maxAttempts,
-        RequestTerminalOutcomeId terminalFailureOutcome)
-    {
-        var terminalOutcomes = ImmutableArray.CreateBuilder<RequestTerminalOutcomeDefinition>(outcomes.Length);
-        foreach (var outcome in outcomes)
-        {
-            terminalOutcomes.Add(outcome.Kind switch
-            {
-                RequestOutcomeKind.Result => new RequestResultDefinition(outcome.Id, outcome.Schema),
-                RequestOutcomeKind.Failure => new RequestFailureDefinition(outcome.Id, outcome.Schema),
-                RequestOutcomeKind.Timeout => new RequestTimeoutDefinition(outcome.Id, outcome.Schema),
-                RequestOutcomeKind.Cancellation => new RequestCancellationDefinition(outcome.Id, outcome.Schema),
-                _ => throw new ArgumentOutOfRangeException(
-                    nameof(outcomes), outcome.Kind, "Unsupported Motion DQ Request outcome kind.")
-            });
-        }
+        RequestOptionalTerminalSemantics cancellation) => new(
+        timeout: timeout,
+        cancellation: cancellation,
+        lateResult: RequestResultDisposition.Observe,
+        staleResult: RequestResultDisposition.Reject,
+        duplicateResult: RequestResultDisposition.ReusePriorDisposition,
+        retry: RequestRetrySemantics.StableIdentity,
+        ambiguousOutcome: RequestResolutionSemantics.TerminalFailure,
+        unresolvedOutcome: RequestResolutionSemantics.TerminalFailure,
+        retentionHorizon: TimeSpan.FromDays(30));
 
-        var requestDocument = InteractionContractDocuments.Create(
-            new(definitionId),
-            Revision,
-            new RequestContractDefinition(
-                payload,
-                new(
-                    terminalOutcomes: terminalOutcomes.MoveToImmutable(),
-                    timeout: timeout,
-                    cancellation: cancellation,
-                    lateResult: RequestResultDisposition.Observe,
-                    staleResult: RequestResultDisposition.Reject,
-                    duplicateResult: RequestResultDisposition.ReusePriorDisposition,
-                    retry: RequestRetrySemantics.StableIdentity,
-                    ambiguousOutcome: RequestResolutionSemantics.TerminalFailure,
-                    unresolvedOutcome: RequestResolutionSemantics.TerminalFailure,
-                    retentionHorizon: TimeSpan.FromDays(30))),
-            Provenance($"{definitionId}/request"));
-        RequestContractReference request = new(Reference(requestDocument));
-
-        var documents = ImmutableArray.CreateBuilder<ExecutionDefinitionDocument>(outcomes.Length + 1);
-        var replies = ImmutableArray.CreateBuilder<DurableReplyBinding>(outcomes.Length);
-        documents.Add(requestDocument);
-        foreach (var outcome in outcomes)
-        {
-            var replyDocument = InteractionContractDocuments.Create(
-                new($"{definitionId}/reply/{outcome.Id.Value}"),
-                Revision,
-                new ReplyContractDefinition(request, outcome.Id),
-                Provenance($"{definitionId}/reply/{outcome.Id.Value}"));
-            documents.Add(replyDocument);
-            replies.Add(new(outcome.Id, new(Reference(replyDocument))));
-        }
-
-        var binding = new DurableRequestBinding(
-            request: request,
-            replies: replies.MoveToImmutable(),
-            maxAttempts: maxAttempts,
-            claimLease: TimeSpan.FromMinutes(5),
-            timeoutAfter: timeoutAfter,
-            idempotencyEvidence: DurableOperationIdempotencyEvidence.TargetDeduplication,
-            terminalFailureOutcome: terminalFailureOutcome);
-        return new(
-            Contract: request,
-            Binding: binding,
-            Documents: documents.MoveToImmutable());
-    }
+    static Func<RequestTerminalOutcomeId, ExecutionProvenance> ReplyProvenance(string definitionId) =>
+        outcome => Provenance($"{definitionId}/reply/{outcome.Value}");
 
     static InteractionValueSchema Schema<TValue>(string revision) => new(
         new ValueContract(TypeMapper.Map(typeof(TValue), null)),
@@ -356,21 +338,20 @@ public sealed class MotionDqInteractionContracts
         validation.Diagnostics.Select(static diagnostic =>
             $"{diagnostic.Code} at {diagnostic.Location}: {diagnostic.Message}"));
 
-    sealed record RequestProtocol(
-        RequestContractReference Contract,
-        DurableRequestBinding Binding,
-        ImmutableArray<ExecutionDefinitionDocument> Documents);
+    sealed record ReviewTaskOutcomes(
+        RequestProtocolOutcome<MotionDqReviewTaskReference> Created,
+        RequestProtocolOutcome<string> Failed);
 
-    readonly record struct RequestOutcome(
-        RequestTerminalOutcomeId Id,
-        RequestOutcomeKind Kind,
-        InteractionValueSchema Schema);
+    sealed record InsuranceTermsOutcomes(
+        RequestProtocolOutcome<MotionDqInsuranceTermsResult> Accepted,
+        RequestProtocolOutcome<MotionDqInsuranceTermsResult> Declined,
+        RequestProtocolOutcome<string> Failed,
+        RequestProtocolOutcome<string> TimedOut,
+        RequestProtocolOutcome<string> Cancelled);
 
-    enum RequestOutcomeKind
-    {
-        Result,
-        Failure,
-        Timeout,
-        Cancellation
-    }
+    sealed record FulfillRequirementOutcomes(
+        RequestProtocolOutcome<MotionDqRequirementEvaluationReceipt> Fulfilled,
+        RequestProtocolOutcome<MotionDqRequirementFulfillmentFailure> ProviderFailed,
+        RequestProtocolOutcome<MotionDqRequirementFulfillmentFailure> ProviderTimedOut,
+        RequestProtocolOutcome<MotionDqRequirementFulfillmentFailure> Cancelled);
 }
