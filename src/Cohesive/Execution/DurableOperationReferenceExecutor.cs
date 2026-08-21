@@ -41,6 +41,15 @@ public static class DurableOperationDiagnosticCodes
 /// <summary>Stable adapter-independent failure classifications produced by the reference protocol.</summary>
 public static class DurableOperationFailureCodes
 {
+    /// <summary>A typed durable handler could not materialize the exact canonical Request payload.</summary>
+    public const string TypedRequestPayloadInvalid = "operation.typedRequest.payload.invalid";
+
+    /// <summary>A typed durable handler returned an outcome that could not satisfy its canonical payload contract.</summary>
+    public const string TypedRequestOutcomeInvalid = "operation.typedRequest.outcome.invalid";
+
+    /// <summary>A typed durable reconciliation handler could not interpret the retained canonical evidence.</summary>
+    public const string TypedRequestReconciliationInvalid = "operation.typedRequest.reconciliation.invalid";
+
     /// <summary>A claim expired before the durable dispatch boundary.</summary>
     public const string ClaimExpiredBeforeDispatch = "operation.claim.expiredBeforeDispatch";
 

@@ -417,9 +417,15 @@ public sealed class RequestProtocolOutcomeBuilder
         Func<RequestTerminalOutcomeId, InteractionValueSchema, RequestTerminalOutcomeDefinition> create)
     {
         if (completed)
+        {
             throw new InvalidOperationException("A completed Request protocol outcome builder cannot be reused.");
+        }
+
         if (string.IsNullOrWhiteSpace(id.Value))
+        {
             throw new ArgumentException("A Request protocol outcome requires a stable identity.", nameof(id));
+        }
+
         foreach (var outcome in outcomes)
         {
             if (outcome.Id == id)
@@ -536,6 +542,12 @@ public class RequestProtocol<TRequest, TOutcomes>
         return ReferenceEquals(outcomeOwner, outcome.Owner);
     }
 
+    internal bool Declares(RequestProtocolCase outcome)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        return ReferenceEquals(outcomeOwner, outcome.Owner);
+    }
+
     /// <summary>Resolves the exact Reply contract paired with a typed protocol outcome.</summary>
     /// <typeparam name="TPayload">CLR payload type carried by the outcome descriptor.</typeparam>
     /// <param name="outcome">Typed outcome declared by this protocol.</param>
@@ -547,11 +559,16 @@ public class RequestProtocol<TRequest, TOutcomes>
     {
         ArgumentNullException.ThrowIfNull(outcome);
         if (!Declares(outcome))
+        {
             throw new ArgumentException("The typed outcome belongs to another Request protocol.", nameof(outcome));
+        }
+
         foreach (var reply in Replies)
         {
             if (reply.Outcome == outcome.Id)
+            {
                 return reply.Reply;
+            }
         }
 
         throw new InvalidOperationException(

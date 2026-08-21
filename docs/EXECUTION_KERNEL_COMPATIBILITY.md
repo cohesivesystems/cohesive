@@ -187,6 +187,12 @@ cannot collide.
 evidence. It has no aggregate mutation surface and declares the exact Request contracts and target guarantees it
 supports. `IDurableOperationBatchAdapter` returns complete emission/attempt/fence-keyed evidence for one physical
 batch, allowing successful items to acknowledge independently while failed items alone remain retryable.
+`IDurableRequestHandler<TRequest, TOutcome>` is a noncanonical convenience projection for ordinary single-protocol
+implementations. Its generic adapter derives exact Request capability evidence from `RequestProtocol`, materializes
+the domain request, and projects a protocol-owned selected outcome back onto the same raw observations. Typed
+reconciliation constructs the existing confirmed-outcome, confirmed-not-executed, or unresolved evidence rather
+than defining another durable result family. Idempotency and reconciliation remain explicit target evidence at
+registration, and raw adapters remain available for multi-protocol, batch, streaming, and specialized targets.
 `DurableOperationReferenceExecutor` consumes that evidence through deterministic replacement-state operations and
 validates adapter capabilities against the binding. Semantic timeout and cancellation are explicit typed state
 transitions; host cancellation is only operational interruption. The split makes the three EK-06 cuts observable:
