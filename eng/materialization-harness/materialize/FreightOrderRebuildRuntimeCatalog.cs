@@ -1,12 +1,23 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using Cohesive.Adapters.Elastic;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Execution;
 using Cohesive.MaterializationHarness.Model;
+using Cohesive.Model;
 using Cohesive.Storage.Materialization;
 using Npgsql;
 
 namespace Cohesive.MaterializationHarness.Materialize;
+
+/// <summary>Exact logical and adapter metadata retained for one visible freight index item.</summary>
+/// <param name="ItemId">Stable Cohesive materialization item identity.</param>
+/// <param name="Version">Current monotonic item version.</param>
+/// <param name="Value">Current portable logical document value.</param>
+public sealed record FreightOrderMaterializedItem(
+    MaterializationItemId ItemId,
+    MaterializationItemVersion Version,
+    ObservationValue Value);
 
 /// <summary>Exact provider runtime needed to interpret one canonical freight rebuild plan set.</summary>
 public sealed class FreightOrderRebuildProviderRuntime
@@ -191,6 +202,46 @@ public sealed class FreightOrderRebuildRuntimeCatalog : IAsyncDisposable
     {
         var runtime = GetProvider(provider);
         return Program.ReadCanonicalDocumentsAsync(elasticHttp, runtime.TargetBinding.ReadAlias);
+    }
+
+    /// <summary>Reads visible item identities, versions, and logical values through one provider's active alias.</summary>
+    /// <param name="provider">Stable provider name.</param>
+    /// <param name="cancellationToken">Cancellation token for the Elasticsearch read.</param>
+    /// <returns>Visible items in canonical item-identity order.</returns>
+    /// <exception cref="ArgumentException"><paramref name="provider"/> is empty.</exception>
+    /// <exception cref="KeyNotFoundException">The provider is not configured.</exception>
+    /// <exception cref="HttpRequestException">Elasticsearch rejects the read.</exception>
+    /// <exception cref="JsonException">Elasticsearch returns an invalid materialization item envelope.</exception>
+    /// <exception cref="OperationCanceledException">The operation is cancelled.</exception>
+    public async Task<ImmutableArray<FreightOrderMaterializedItem>> ReadMaterializedItemsAsync(
+        string provider,
+        CancellationToken cancellationToken = default)
+    {
+        var runtime = GetProvider(provider);
+        using var response = await elasticHttp.GetAsync(
+                $"/{Uri.EscapeDataString(runtime.TargetBinding.ReadAlias)}/_search?size=100&filter_path=hits.hits._source",
+                cancellationToken)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        var items = ImmutableArray.CreateBuilder<FreightOrderMaterializedItem>();
+        foreach (var hit in document.RootElement.GetProperty("hits").GetProperty("hits").EnumerateArray())
+        {
+            var source = hit.GetProperty("_source");
+            var metadata = source.GetProperty(ElasticMaterializationTargetBinding.MetadataField);
+            if (metadata.GetProperty("deleted").GetBoolean())
+                continue;
+            items.Add(new(
+                ItemId: new(metadata.GetProperty("itemId").GetString()
+                    ?? throw new JsonException("A materialization item omitted its item identity.")),
+                Version: new(metadata.GetProperty("version").GetInt64().ToString(
+                    System.Globalization.CultureInfo.InvariantCulture)),
+                Value: ObservationValue.FromJsonElement(source.GetProperty(ElasticMaterializationTargetBinding.ValueField))));
+        }
+        items.Sort(static (left, right) => StringComparer.Ordinal.Compare(left.ItemId.Value, right.ItemId.Value));
+        return items.ToImmutable();
     }
 
     /// <inheritdoc />

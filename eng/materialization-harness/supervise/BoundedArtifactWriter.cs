@@ -75,6 +75,12 @@ sealed class BoundedArtifactWriter(string directory, int maximumBytes)
         return body;
     }
 
+    internal Task WriteJsonAsync<T>(string name, T value) => WriteTextAsync(
+        name: name,
+        content: JsonSerializer.Serialize(
+            value,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+
     internal async Task WriteManifestAsync(object summary)
     {
         var json = JsonSerializer.Serialize(new

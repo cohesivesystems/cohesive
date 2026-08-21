@@ -180,6 +180,46 @@ control_equivalence_test() {
   printf 'control-equivalence-artifacts=%s\n' "$artifact_root"
 }
 
+source_matrix_test() {
+  local requested_provider="${1:-all}"
+  if [[ "$requested_provider" != "all" && "$requested_provider" != "postgres" && "$requested_provider" != "cosmos" ]]; then
+    printf 'source-matrix-test provider must be postgres, cosmos, or all.\n' >&2
+    exit 2
+  fi
+  local run_id
+  run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  local artifact_root="$script_dir/artifacts/source-matrix-$run_id"
+  local providers=(postgres cosmos)
+  if [[ "$requested_provider" != "all" ]]; then
+    providers=("$requested_provider")
+  fi
+
+  dotnet build \
+    "$script_dir/host/Cohesive.MaterializationHarness.Host.csproj" \
+    --configuration Release
+  dotnet build \
+    "$script_dir/supervise/Cohesive.MaterializationHarness.Supervise.csproj" \
+    --configuration Release
+  for provider in "${providers[@]}"; do
+    compose down --volumes --remove-orphans
+    up
+    seed --cohesive
+    configure_runtime
+    export COHESIVE_MATERIALIZATION_REPOSITORY_ROOT="$repo_root"
+    dotnet \
+      "$script_dir/supervise/bin/Release/net10.0/Cohesive.MaterializationHarness.Supervise.dll" \
+      source-matrix \
+      "$provider" \
+      "$artifact_root/$provider"
+  done
+  if [[ "${#providers[@]}" -eq 2 ]]; then
+    cmp \
+      "$artifact_root/postgres/final-documents.json" \
+      "$artifact_root/cosmos/final-documents.json"
+  fi
+  printf 'source-matrix-artifacts=%s\n' "$artifact_root"
+}
+
 verify_index() {
   configure_runtime
   curl --fail --silent --show-error \
@@ -238,6 +278,7 @@ Commands:
   process-evidence <provider> [generation] Capture bounded Process, checkpoint, and target evidence.
   failure-test [provider] [boundary] Clean-reset, kill/restart the real host, and emit bounded artifacts.
   control-equivalence-test [provider] Clean-reset and compare SDK/HTTP control semantics.
+  source-matrix-test [provider|all] Clean-reset and prove replay, ordering, and fencing for real sources.
   verify-index Show active generation aliases and document counts without mutating Elasticsearch.
   test     Start, seed, materialize, and run the focused verification suite.
   status   Show service and health state.
@@ -349,6 +390,13 @@ case "$command" in
       exit 2
     fi
     control_equivalence_test "${2:-postgres}"
+    ;;
+  source-matrix-test)
+    if [[ "$#" -gt 2 ]]; then
+      usage
+      exit 2
+    fi
+    source_matrix_test "${2:-all}"
     ;;
   verify-index)
     up

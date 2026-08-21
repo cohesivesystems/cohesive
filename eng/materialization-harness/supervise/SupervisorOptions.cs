@@ -34,6 +34,16 @@ sealed record SupervisorOptions(
         "net10.0",
         "Cohesive.MaterializationHarness.Host.dll");
 
+    internal string SeedAssemblyPath => Path.Combine(
+        RepositoryRoot,
+        "eng",
+        "materialization-harness",
+        "seed",
+        "bin",
+        "Release",
+        "net10.0",
+        "Cohesive.MaterializationHarness.Seed.dll");
+
     internal string ProcessInstanceId => $"{ProcessInstancePrefix}/{Provider}";
 
     internal string MarkerPath => Path.Combine(ArtifactDirectory, "reached-boundary.json");
@@ -82,6 +92,45 @@ sealed record SupervisorOptions(
             ArtifactDirectory: artifactDirectory,
             RunIdentity: runIdentity,
             ProcessInstancePrefix: $"{basePrefix}/supervised/{runIdentity}",
+            HostUrl: new Uri(RequiredEnvironment("COHESIVE_MATERIALIZATION_HOST_URL"), UriKind.Absolute),
+            ElasticUrl: new Uri(RequiredEnvironment("COHESIVE_MATERIALIZATION_ELASTIC_ENDPOINT"), UriKind.Absolute),
+            ExpectedVisibleItemCount: journal.Baseline.Orders.Length,
+            Timeout: TimeSpan.FromSeconds(timeoutSeconds));
+    }
+
+    internal static async Task<SupervisorOptions> ParseSourceMatrixAsync(
+        string[] args,
+        CancellationToken cancellationToken = default)
+    {
+        if (args is not ["source-matrix", _, _])
+        {
+            throw new ArgumentException(
+                "Expected: source-matrix <provider> <absolute-artifact-directory>.",
+                nameof(args));
+        }
+        var provider = RequireValue(args[1], "provider");
+        var artifactDirectory = Path.GetFullPath(args[2]);
+        if (!Path.IsPathFullyQualified(args[2]))
+            throw new ArgumentException("The artifact directory must be absolute.", nameof(args));
+        var repositoryRoot = Path.GetFullPath(RequiredEnvironment("COHESIVE_MATERIALIZATION_REPOSITORY_ROOT"));
+        var basePrefix = Environment.GetEnvironmentVariable("COHESIVE_MATERIALIZATION_PROCESS_INSTANCE_ID")
+            ?? "process/materialization-harness/freight-rebuild";
+        var runIdentity = $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfffffff}-{Environment.ProcessId}-source-matrix";
+        var timeoutSeconds = OptionalPositiveInt(
+            name: "COHESIVE_MATERIALIZATION_SUPERVISOR_TIMEOUT_SECONDS",
+            defaultValue: 900,
+            maximumValue: 1_800);
+        var journal = await FreightScenarioJournal.LoadAsync(
+            path: RequiredEnvironment("COHESIVE_MATERIALIZATION_SCENARIO_PATH"),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        return new(
+            Mode: RecoveryMode.Resume,
+            Provider: provider,
+            Boundary: MaterializationExecutionBoundaryPoint.AfterTargetBatch,
+            RepositoryRoot: repositoryRoot,
+            ArtifactDirectory: artifactDirectory,
+            RunIdentity: runIdentity,
+            ProcessInstancePrefix: $"{basePrefix}/source-matrix/{runIdentity}",
             HostUrl: new Uri(RequiredEnvironment("COHESIVE_MATERIALIZATION_HOST_URL"), UriKind.Absolute),
             ElasticUrl: new Uri(RequiredEnvironment("COHESIVE_MATERIALIZATION_ELASTIC_ENDPOINT"), UriKind.Absolute),
             ExpectedVisibleItemCount: journal.Baseline.Orders.Length,

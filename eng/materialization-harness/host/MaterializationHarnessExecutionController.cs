@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Api;
 using Cohesive.Api.Execution;
@@ -6,6 +7,7 @@ using Cohesive.Control;
 using Cohesive.Execution;
 using Cohesive.MaterializationHarness.Control;
 using Cohesive.MaterializationHarness.Materialize;
+using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.Runtime;
@@ -355,6 +357,8 @@ sealed class MaterializationHarnessExecutionController :
                 .ConfigureAwait(false)
             : null;
         var progress = ImmutableArray<MaterializationHarnessProgressEvidence>.Empty;
+        MaterializationHarnessSynchronizationWorkEvidence? synchronizationWork = null;
+        var sourceHeads = ImmutableArray<MaterializationHarnessSourceHeadEvidence>.Empty;
         var controlEpochs = ImmutableArray<string>.Empty;
         if (generation is { } progressGeneration)
         {
@@ -386,7 +390,34 @@ sealed class MaterializationHarnessExecutionController :
                 progressBuilder.Add(MaterializationHarnessProgressEvidence.From(scope, retained));
             }
             progress = progressBuilder.MoveToImmutable();
+
+            var plan = process.Provider.Compilation.Plan;
+            var workKey = SynchronizationWorkKey(process, progressGeneration);
+            var retainedWork = await ((IMaterializationSynchronizationWorkStore)materializationStore)
+                .LoadAsync(context, workKey)
+                .ConfigureAwait(false);
+            synchronizationWork = retainedWork is null
+                ? null
+                : MaterializationHarnessSynchronizationWorkEvidence.From(retainedWork);
+
+            var sourceHeadBuilder = ImmutableArray.CreateBuilder<MaterializationHarnessSourceHeadEvidence>(
+                plan.ChangeFeeds.Length);
+            foreach (var feed in plan.ChangeFeeds.OrderBy(static feed => feed.Id.Value, StringComparer.Ordinal))
+            {
+                var binding = process.Provider.ResolvedPlan.GetChangeFeed(feed.Id);
+                var head = await binding.Source.CaptureCurrentPositionAsync(context, feed.Scope).ConfigureAwait(false);
+                sourceHeadBuilder.Add(new(
+                    Feed: feed.Id.Value,
+                    Input: feed.Scope.Input.Value,
+                    Partition: feed.Scope.Partition.Value,
+                    FormatVersion: head.FormatVersion,
+                    Position: head.Value));
+            }
+            sourceHeads = sourceHeadBuilder.MoveToImmutable();
         }
+        var canonicalDocuments = target.ActiveGenerationId is null || runtimeCatalog is null
+            ? []
+            : await runtimeCatalog.ReadCanonicalDocumentsAsync(provider).ConfigureAwait(false);
 
         return new(
             Provider: provider,
@@ -404,13 +435,166 @@ sealed class MaterializationHarnessExecutionController :
             SelectedVisibleItemCount: candidate?.VisibleItemCount,
             SelectedTombstoneCount: candidate?.TombstoneCount,
             SelectedControlEpochs: controlEpochs,
+            SynchronizationWork: synchronizationWork,
+            LastSynchronization: process.LastSynchronization is { } synchronization
+                ? MaterializationHarnessSynchronizationRunEvidence.From(synchronization)
+                : null,
             DurableOperations:
             [
                 .. snapshot.Checkpoint.DurableOperations.Select(
                     MaterializationHarnessDurableOperationEvidence.From)
             ],
             Progress: progress,
+            SourceHeads: sourceHeads,
+            CanonicalDocuments: canonicalDocuments,
             CapturedAtUtc: context.UtcNow);
+    }
+
+    internal async Task<MaterializationHarnessIncompatibleReplayProbeResult> ProbeIncompatibleReplayAsync(
+        string provider,
+        OperationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var process = GetProvider(provider);
+        var execution = await process.ResolveCurrentExecutionAsync(context).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"The {provider} materialization has no current generation.");
+        var workKey = SynchronizationWorkKey(process, execution.Generation);
+        var store = (IMaterializationSynchronizationWorkStore)materializationStore;
+        var before = await store.LoadAsync(context, workKey).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The active generation has no synchronization-work evidence.");
+        var pending = before.PendingWork
+            ?? throw new InvalidOperationException("The incompatible replay probe requires exact pending source work.");
+        var original = pending.Page.ThroughPosition;
+        var conflicting = new MaterializationSourcePosition(
+            formatVersion: original.FormatVersion,
+            scope: original.Scope,
+            value: $"{original.Value}/incompatible-source-matrix-probe");
+        var conflictingPage = new MaterializationSynchronizationPageIntent(
+            feed: pending.Page.Feed,
+            checkpoint: pending.Page.Checkpoint,
+            throughPosition: conflicting,
+            appliedDeliveries: pending.Page.AppliedDeliveries,
+            state: pending.Page.State,
+            readStartedAtUtc: pending.Page.ReadStartedAtUtc,
+            readCompletedAtUtc: pending.Page.ReadCompletedAtUtc);
+        var result = await store.PrepareAsync(
+                context: context,
+                key: workKey,
+                mutationId: pending.PreparationId,
+                expectedRevision: before.Revision,
+                owner: before.FenceOwner,
+                fence: before.Fence,
+                intent: new(conflictingPage, []))
+            .ConfigureAwait(false);
+        var after = result.Snapshot
+            ?? throw new InvalidOperationException("An incompatible replay probe lost its current work snapshot.");
+        return new(
+            Provider: provider,
+            Generation: execution.Generation.Value,
+            PreparationId: pending.PreparationId.Value,
+            OriginalPosition: original.Value,
+            ConflictingPosition: conflicting.Value,
+            Disposition: result.Disposition,
+            RequiredControlAction: process.Artifacts.ParentPlan.Definition.RecoveryPolicy,
+            BeforeRevision: before.Revision.Value,
+            AfterRevision: after.Revision.Value,
+            BeforeFence: before.Fence.Value,
+            AfterFence: after.Fence.Value,
+            PendingWorkPreserved: after.PendingWork is { } retained
+                && JsonElement.DeepEquals(
+                    JsonSerializer.SerializeToElement(retained),
+                    JsonSerializer.SerializeToElement(pending)));
+    }
+
+    internal async Task<MaterializationHarnessTargetOrderingProbeResult> ProbeTargetOrderingAsync(
+        string provider,
+        MaterializationWorkerFence staleWorkerFence,
+        OperationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var process = GetProvider(provider);
+        var execution = await process.ResolveCurrentExecutionAsync(context).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"The {provider} materialization has no current generation.");
+        var work = await ((IMaterializationSynchronizationWorkStore)materializationStore)
+                .LoadAsync(context, SynchronizationWorkKey(process, execution.Generation))
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The active generation has no synchronization-work evidence.");
+        var currentWorkerFence = new MaterializationWorkerFence(work.Fence.Value);
+        if (staleWorkerFence.Ordinal >= currentWorkerFence.Ordinal)
+            throw new ArgumentException("The supplied worker fence is not stale.", nameof(staleWorkerFence));
+        var catalog = runtimeCatalog
+            ?? throw new InvalidOperationException("The materialization runtime catalog is unavailable.");
+        var beforeDocuments = await catalog.ReadCanonicalDocumentsAsync(provider).ConfigureAwait(false);
+        var item = (await catalog.ReadMaterializedItemsAsync(
+                provider: provider,
+                cancellationToken: context.CancellationToken)
+            .ConfigureAwait(false))
+            .FirstOrDefault(static item => item.Version.Ordinal > 1)
+            ?? throw new InvalidOperationException("No incrementally versioned visible item is available for the ordering probe.");
+        var maliciousValue = ObservationValue.FromString("source-matrix-stale-value-must-not-apply");
+
+        var staleWorkerRequest = new MaterializationApplyBatchRequest(
+            batchId: new($"source-matrix/{provider}/{execution.Generation.Value}/stale-worker/{staleWorkerFence.Value}"),
+            generationId: execution.Generation,
+            workerFence: staleWorkerFence,
+            mutations:
+            [
+                new MaterializationUpsert(
+                    itemId: item.ItemId,
+                    mutationId: new($"source-matrix/{provider}/{execution.Generation.Value}/stale-worker-mutation/{staleWorkerFence.Value}"),
+                    version: item.Version,
+                    value: maliciousValue)
+            ]);
+        var staleWorkerResult = await process.Provider.Target.ApplyBatchAsync(context, staleWorkerRequest)
+            .ConfigureAwait(false);
+        staleWorkerResult.ValidateAgainst(staleWorkerRequest);
+
+        var staleVersion = new MaterializationItemVersion((item.Version.Ordinal - 1).ToString(
+            System.Globalization.CultureInfo.InvariantCulture));
+        var staleVersionRequest = new MaterializationApplyBatchRequest(
+            batchId: new($"source-matrix/{provider}/{execution.Generation.Value}/stale-version/{staleVersion.Value}"),
+            generationId: execution.Generation,
+            workerFence: currentWorkerFence,
+            mutations:
+            [
+                new MaterializationUpsert(
+                    itemId: item.ItemId,
+                    mutationId: new($"source-matrix/{provider}/{execution.Generation.Value}/stale-version-mutation/{staleVersion.Value}"),
+                    version: staleVersion,
+                    value: maliciousValue)
+            ]);
+        var staleVersionResult = await process.Provider.Target.ApplyBatchAsync(context, staleVersionRequest)
+            .ConfigureAwait(false);
+        staleVersionResult.ValidateAgainst(staleVersionRequest);
+        var afterDocuments = await catalog.ReadCanonicalDocumentsAsync(provider).ConfigureAwait(false);
+
+        return new(
+            Provider: provider,
+            Generation: execution.Generation.Value,
+            StaleWorkerFence: staleWorkerFence.Value,
+            CurrentWorkerFence: currentWorkerFence.Value,
+            Item: item.ItemId.Value,
+            CurrentItemVersion: item.Version.Value,
+            SubmittedStaleItemVersion: staleVersion.Value,
+            StaleWorkerDisposition: staleWorkerResult.Disposition,
+            StaleWorkerItemDisposition: staleWorkerResult.Outcomes.Single().Disposition,
+            StaleVersionDisposition: staleVersionResult.Disposition,
+            StaleVersionItemDisposition: staleVersionResult.Outcomes.Single().Disposition,
+            StaleVersionCode: staleVersionResult.Outcomes.Single().Code,
+            LogicalDocumentsUnchanged: beforeDocuments.SequenceEqual(afterDocuments, StringComparer.Ordinal));
+    }
+
+    static MaterializationSynchronizationWorkKey SynchronizationWorkKey(
+        MaterializationHarnessProviderProcess process,
+        MaterializationGenerationId generation)
+    {
+        var plan = process.Provider.Compilation.Plan;
+        return new(
+            materialization: plan.Materialization.Definition.Id,
+            definitionFingerprint: plan.Materialization.DefinitionFingerprint,
+            rebuildPlanFingerprint: plan.Fingerprint,
+            impactPlanFingerprint: plan.ImpactPlan.Fingerprint,
+            generation: generation);
     }
 
     public async ValueTask<ExecutionApiDispatchResult> DispatchAsync(
