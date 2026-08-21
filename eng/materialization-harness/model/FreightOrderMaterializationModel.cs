@@ -215,7 +215,8 @@ public static class FreightOrderMaterializationModel
         var root = plan.InputContract.Sources.Single(static source =>
             source.Role == RelationQuerySourceInputRole.RelationRoot);
         var output = plan.RequirementGraph.Outputs.Single(static candidate => candidate.Field is null);
-        var targetBatchControl = TargetBatchControl();
+        var rebuildTargetBatchControl = TargetBatchControl(MaterializationIndexSyncWorkloadKind.Rebuild);
+        var realtimeTargetBatchControl = TargetBatchControl(MaterializationIndexSyncWorkloadKind.Realtime);
         var materialization = Materialization.Define(
                 new("freight/order-search"),
                 compilationRequest,
@@ -233,12 +234,15 @@ public static class FreightOrderMaterializationModel
             .WithFailurePolicy(new(3, MaterializationFailureDisposition.Stop))
             .WithFreshnessPolicy(new(maximumLagMilliseconds: 1_800_000))
             .WithControls(
-                loops: [targetBatchControl],
+                loops: [rebuildTargetBatchControl, realtimeTargetBatchControl],
                 workloads:
                 [
                     new(
-                        loopId: targetBatchControl.Id,
-                        workload: MaterializationIndexSyncWorkloadKind.Rebuild)
+                        loopId: rebuildTargetBatchControl.Id,
+                        workload: MaterializationIndexSyncWorkloadKind.Rebuild),
+                    new(
+                        loopId: realtimeTargetBatchControl.Id,
+                        workload: MaterializationIndexSyncWorkloadKind.Realtime)
                 ])
             .WithProvenance(new(
                 new("cohesive-materialization-harness", "1"),
@@ -278,9 +282,9 @@ public static class FreightOrderMaterializationModel
 
     static QualifiedShapeId Shape(string value) => new(GraphId, new(value));
 
-    static ControlLoopDefinition TargetBatchControl() => new(
+    static ControlLoopDefinition TargetBatchControl(MaterializationIndexSyncWorkloadKind workload) => new(
         schemaVersion: ControlLoopDefinition.CurrentSchemaVersion,
-        id: new("freight-order-search/elastic-target-batch"),
+        id: new($"freight-order-search/elastic-target-batch/{workload.ToString().ToLowerInvariant()}"),
         target: "freight/order-search",
         applicationAuthority: MaterializationIndexSyncControlCompiler.ApplicationAuthority,
         stage: ControlStageKind.Target,

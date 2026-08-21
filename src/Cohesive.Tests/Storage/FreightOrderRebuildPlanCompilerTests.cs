@@ -29,12 +29,14 @@ public sealed class FreightOrderRebuildPlanCompilerTests
             semantics: semantics,
             provider: "postgres",
             target: target,
-            tenantBindings: forwardBindings);
+            tenantBindings: forwardBindings,
+            impactPlan: postgresPhysical.ImpactPlan);
         var reverse = FreightOrderRebuildPlanCompiler.Compile(
             semantics: semantics,
             provider: "postgres",
             target: target,
-            tenantBindings: reverseBindings);
+            tenantBindings: reverseBindings,
+            impactPlan: postgresPhysical.ImpactPlan);
 
         Assert.Equal(forward.Request.Fingerprint, reverse.Request.Fingerprint);
         Assert.Equal(forward.Membership.Fingerprint, reverse.Membership.Fingerprint);
@@ -66,12 +68,14 @@ public sealed class FreightOrderRebuildPlanCompilerTests
             semantics: semantics,
             provider: "postgres",
             target: Target(semantics, "postgres"),
-            tenantBindings: Bindings(semantics, "postgres", postgresPhysical, ["acme", "northwind"]));
+            tenantBindings: Bindings(semantics, "postgres", postgresPhysical, ["acme", "northwind"]),
+            impactPlan: postgresPhysical.ImpactPlan);
         var cosmos = FreightOrderRebuildPlanCompiler.Compile(
             semantics: semantics,
             provider: "cosmos",
             target: Target(semantics, "cosmos"),
-            tenantBindings: Bindings(semantics, "cosmos", cosmosPhysical, ["acme", "northwind"]));
+            tenantBindings: Bindings(semantics, "cosmos", cosmosPhysical, ["acme", "northwind"]),
+            impactPlan: cosmosPhysical.ImpactPlan);
 
         Assert.Equal(semantics.DefinitionFingerprint, postgres.Plan.Materialization.DefinitionFingerprint);
         Assert.Equal(semantics.DefinitionFingerprint, cosmos.Plan.Materialization.DefinitionFingerprint);
@@ -98,13 +102,15 @@ public sealed class FreightOrderRebuildPlanCompilerTests
             tenant: "acme",
             rootRead: valid[1].RootRead,
             hydrator: valid[1].Hydrator,
-            sourceBindings: valid[1].Sources);
+            sourceBindings: valid[1].Sources,
+            impactRuntimeFactory: impactPlan => new TestImpactRuntime(impactPlan.Fingerprint));
 
         var exception = Assert.Throws<ArgumentException>(() => FreightOrderRebuildPlanCompiler.Compile(
             semantics: semantics,
             provider: "postgres",
             target: Target(semantics, "postgres"),
-            tenantBindings: [mixed, valid[1]]));
+            tenantBindings: [mixed, valid[1]],
+            impactPlan: physical.ImpactPlan));
 
         Assert.Contains("another logical partition", exception.Message, StringComparison.Ordinal);
         Assert.All(
@@ -125,40 +131,13 @@ public sealed class FreightOrderRebuildPlanCompilerTests
             semantics: semantics,
             provider: "postgres",
             target: Target(semantics, "postgres"),
-            tenantBindings: [postgres[0], cosmos[0]]));
+            tenantBindings: [postgres[0], cosmos[0]],
+            impactPlan: postgresPhysical.ImpactPlan));
 
         Assert.Contains("changes capability evidence", exception.Message, StringComparison.Ordinal);
         Assert.All(
             cosmos[0].Sources.Select(static source => Assert.IsType<CountingReader>(source.Source.Descriptor.RelationReader)),
             static reader => Assert.Equal(0, reader.ReadCount));
-    }
-
-    [Fact]
-    public async Task FrozenSourceRejectsAnotherPhysicalScopeBeforeReaderIo()
-    {
-        var semantics = FreightOrderMaterializationModel.Create();
-        var physical = Program.CreateProviderPlan(Program.ProviderKind.Postgres, semantics);
-        var tenant = Bindings(semantics, "postgres", physical, ["acme"])[0];
-        var exact = tenant.GetSource(semantics.Root.Input.Id);
-        var reader = Assert.IsType<CountingReader>(exact.Source.Descriptor.RelationReader);
-        var source = new FrozenMaterializationPullChangeSource(
-            source: exact.Source,
-            scope: exact.Scope,
-            requirements: semantics.Definition.Sources.Single(requirement =>
-                requirement.Input == semantics.Root.Input.Id).Capabilities,
-            providerEvidenceReference: "tests/freight-order-rebuild-plan-compiler/frozen/v1");
-        var otherScope = new MaterializationSourceScope(
-            physicalPlan: exact.Scope.PhysicalPlan,
-            placement: exact.Scope.Placement,
-            logicalPartition: exact.Scope.LogicalPartition,
-            partition: new("postgres/acme/another-physical-partition"),
-            orderingScope: exact.Scope.OrderingScope);
-
-        await Assert.ThrowsAsync<ArgumentException>(async () => await source.CaptureCurrentPositionAsync(
-            context: OperationContext.Create(),
-            scope: otherScope));
-
-        Assert.Equal(0, reader.ReadCount);
     }
 
     static ImmutableArray<FreightOrderRebuildTenantBinding> Bindings(
@@ -210,7 +189,8 @@ public sealed class FreightOrderRebuildPlanCompilerTests
                     hydrator: new TestHydrator(
                         plan: RelationQueryCompiledPlanReference.From(semantics.Plan),
                         physicalPlan: physical.HydrationPhysicalPlan.Fingerprint),
-                    sourceBindings: bindings);
+                    sourceBindings: bindings,
+                    impactRuntimeFactory: impactPlan => new TestImpactRuntime(impactPlan.Fingerprint));
             })
         ];
     }
@@ -239,7 +219,7 @@ public sealed class FreightOrderRebuildPlanCompilerTests
                             [.. capabilities.SelectMany(static requirement => requirement.Guarantees).Distinct()],
                             MergeLimits(capabilities.SelectMany(static requirement => requirement.OperatingLimits))))
                 ],
-                description: "Frozen deterministic source capability profile for canonical freight rebuild planning."));
+                description: "Deterministic synthetic source capability profile for canonical freight rebuild planning."));
     }
 
     static MaterializationTargetDescriptor Target(
@@ -325,5 +305,20 @@ public sealed class FreightOrderRebuildPlanCompilerTests
                 rows: [],
                 evidenceReference: "tests/freight-order-rebuild-plan-compiler/empty"));
         }
+    }
+
+    sealed class TestImpactRuntime(MaterializationImpactPlanFingerprint impactPlan) : IMaterializationImpactRuntime
+    {
+        public MaterializationImpactPlanFingerprint ImpactPlan { get; } = impactPlan;
+
+        public ValueTask<ImmutableArray<MaterializationAffectedRoot>> ResolveRootsAsync(
+            OperationContext context,
+            MaterializationImpactRootResolutionRequest request) =>
+            throw new NotSupportedException("The planning test does not execute impact reads.");
+
+        public ValueTask<ImmutableArray<MaterializationRootProjection>> HydrateAsync(
+            OperationContext context,
+            MaterializationImpactHydrationRequest request) =>
+            throw new NotSupportedException("The planning test does not execute impact hydration.");
     }
 }

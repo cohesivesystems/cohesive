@@ -10,9 +10,11 @@ services:
       - -c
       - wal_level=logical
       - -c
-      - max_replication_slots=10
+      - max_replication_slots=20
       - -c
-      - max_wal_senders=10
+      - max_wal_senders=20
+      - -c
+      - wal_sender_timeout=1s
     ports:
       - "127.0.0.1:${COHESIVE_HARNESS_POSTGRES_PORT:-55432}:5432"
     volumes:

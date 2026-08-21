@@ -17,7 +17,6 @@ namespace Cohesive.MaterializationHarness.Seed;
 /// </summary>
 internal static class FreightScenarioMutationProjection
 {
-    internal const string CosmosChangeDocumentKind = "materialization-scenario-change";
     const string PostgresSchema = "freight_harness";
 
     internal static async Task ApplyAsync(
@@ -115,7 +114,9 @@ internal static class FreightScenarioMutationProjection
             var container = database.GetContainer(containerName);
             using var iterator = container.GetItemQueryIterator<JsonElement>(
                 new QueryDefinition("SELECT * FROM c WHERE c.documentKind = @documentKind")
-                    .WithParameter("@documentKind", CosmosChangeDocumentKind),
+                    .WithParameter(
+                        "@documentKind",
+                        FreightMaterializationChangeFeedConventions.CosmosEnvelopeDocumentKind),
                 requestOptions: new QueryRequestOptions { MaxItemCount = 32 });
             while (iterator.HasMoreResults)
             {
@@ -127,6 +128,8 @@ internal static class FreightScenarioMutationProjection
                         throw new InvalidOperationException($"Cosmos contains unexpected mutation evidence '{deliveryId}'.");
                     Require(
                         document.GetProperty("id").GetString() == ChangeItemId(transition)
+                        && document.GetProperty("schemaVersion").GetString()
+                        == FreightMaterializationChangeFeedConventions.CosmosEnvelopeSchemaVersion
                         && document.GetProperty("scenarioId").GetString() == transition.ScenarioId
                         && document.GetProperty("sequence").GetInt64() == transition.Sequence
                         && document.GetProperty("transactionId").GetString() == transition.TransactionId
@@ -1002,6 +1005,7 @@ internal static class FreightScenarioMutationProjection
     sealed record CosmosChangeEnvelope(
         [property: JsonPropertyName("id")] string Id,
         [property: JsonPropertyName("partitionKey")] string PartitionKey,
+        [property: JsonPropertyName("schemaVersion")] string SchemaVersion,
         [property: JsonPropertyName("documentKind")] string DocumentKind,
         [property: JsonPropertyName("scenarioId")] string ScenarioId,
         [property: JsonPropertyName("sequence")] long Sequence,
@@ -1019,7 +1023,8 @@ internal static class FreightScenarioMutationProjection
         internal static CosmosChangeEnvelope From(FreightScenarioTransition transition) => new(
             Id: ChangeItemId(transition),
             PartitionKey: transition.Key.TenantId,
-            DocumentKind: CosmosChangeDocumentKind,
+            SchemaVersion: FreightMaterializationChangeFeedConventions.CosmosEnvelopeSchemaVersion,
+            DocumentKind: FreightMaterializationChangeFeedConventions.CosmosEnvelopeDocumentKind,
             ScenarioId: transition.ScenarioId,
             Sequence: transition.Sequence,
             TransactionId: transition.TransactionId,

@@ -1957,7 +1957,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         string schema = "public",
         string tableName = "items",
         string queryId = "postgres-source-reader",
-        string? identitySelector = null)
+        string? identitySelector = null,
+        string? partitionTenant = null)
     {
         var author = RelationQuery.Expression();
         var itemShape = author.Clr.Shape<CanonicalItem>();
@@ -1986,6 +1987,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         _ = identitySelector is null
             ? placedSource.Identity(item => item.Id)
             : placedSource.Identity(item => item.Id, identitySelector);
+        if (partitionTenant is not null)
+            placedSource.Partition(item => item.TenantId);
         var placed = placedSource.FieldsBySemanticPath();
         var authoredPlacement = placementBuilder.Build().RequireValue();
         var placedInput = authoredPlacement.GetInput(placed);
@@ -2004,12 +2007,18 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
             .Table(
                 placedInput,
                 tableName,
-                table => table
-                    .Schema(schema)
-                    .ColumnsExplicitly()
-                    .Column(item => item.Id, "load_id", identityOptions)
-                    .Column(item => item.Name, "load_name")
-                    .Identity(item => item.Id, "load_id", identityOptions))
+                (PostgresRelationQueryTableBindingBuilder<CanonicalItem> table) =>
+                {
+                    table.Schema(schema)
+                        .ColumnsExplicitly()
+                        .Column(item => item.Id, "load_id", identityOptions)
+                        .Column(item => item.Name, "load_name")
+                        .Identity(item => item.Id, "load_id", identityOptions);
+                    if (partitionTenant is not null)
+                    {
+                        table.Partition(item => item.TenantId, "tenant_id", identityOptions);
+                    }
+                })
             .Build()
             .RequireValue();
         var realization = RelationQueryInMemoryInterpreter.Default.Realize(plan);
@@ -2034,7 +2043,7 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
             sourceHandle.Id,
             storage,
             executor,
-            Policy);
+            partitionTenant is null ? Policy : TenantPolicy(partitionTenant));
         return new(plan, realization, physicalPlan, sourceHandle.Id, storage, reader);
     }
 
@@ -2545,6 +2554,9 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
 
         [JsonPropertyName("name")]
         public required string Name { get; init; }
+
+        [JsonPropertyName("tenantId")]
+        public required string TenantId { get; init; }
     }
 
     sealed class CanonicalRow

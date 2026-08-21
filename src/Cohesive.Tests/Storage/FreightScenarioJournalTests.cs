@@ -13,22 +13,22 @@ public sealed class FreightScenarioJournalTests
         var transitions = journal.MutationTransactions.SelectMany(static value => value.Transitions).ToArray();
 
         Assert.Equal("freight-incremental-v1", journal.ScenarioId);
-        Assert.Equal(30, journal.BaselineThroughSequence);
-        Assert.Equal(30, journal.Baseline.ThroughSequence);
-        Assert.Equal(39, journal.Final.ThroughSequence);
-        Assert.Equal(8, journal.MutationTransactions.Length);
-        Assert.Equal(9, transitions.Length);
-        Assert.Equal(6, journal.Baseline.Orders.Length);
-        Assert.Equal(14, journal.Baseline.Stops.Length);
+        Assert.Equal(33, journal.BaselineThroughSequence);
+        Assert.Equal(33, journal.Baseline.ThroughSequence);
+        Assert.Equal(46, journal.Final.ThroughSequence);
+        Assert.Equal(10, journal.MutationTransactions.Length);
+        Assert.Equal(13, transitions.Length);
+        Assert.Equal(7, journal.Baseline.Orders.Length);
+        Assert.Equal(16, journal.Baseline.Stops.Length);
         Assert.Equal(6, journal.Final.Orders.Length);
-        Assert.Equal(14, journal.Final.Stops.Length);
+        Assert.Equal(13, journal.Final.Stops.Length);
 
-        var created = Assert.Single(transitions, static value => value.Sequence == 34);
+        var created = Assert.Single(transitions, static value => value.Sequence == 37);
         Assert.Null(created.BeforeState);
         Assert.NotNull(created.AfterState);
         Assert.Equal(1, created.Version);
 
-        var deleted = Assert.Single(transitions, static value => value.Sequence == 35);
+        var deleted = Assert.Single(transitions, static value => value.Sequence == 38);
         Assert.Equal(FreightScenarioOperationKind.Delete, deleted.Operation);
         Assert.NotNull(deleted.GetBefore<FreightOrderStop>());
         Assert.Null(deleted.GetAfter<FreightOrderStop>());
@@ -37,9 +37,15 @@ public sealed class FreightScenarioJournalTests
         var atomicExchange = Assert.Single(
             journal.MutationTransactions,
             static value => value.Id == "stop-type-exchange");
-        Assert.Equal([37L, 38L], atomicExchange.Transitions.Select(static value => value.Sequence));
+        Assert.Equal([40L, 41L], atomicExchange.Transitions.Select(static value => value.Sequence));
         Assert.All(atomicExchange.Transitions, static value => Assert.Equal("acme", value.Key.TenantId));
         Assert.All(atomicExchange.Transitions, static value => Assert.Equal(FreightScenarioEntityKind.OrderStop, value.Entity));
+
+        var rootDelete = Assert.Single(transitions, static value => value.Sequence == 46);
+        Assert.Equal(FreightScenarioEntityKind.Order, rootDelete.Entity);
+        Assert.Equal(FreightScenarioOperationKind.Delete, rootDelete.Operation);
+        Assert.NotNull(rootDelete.GetBefore<FreightOrder>());
+        Assert.Null(rootDelete.GetAfter<FreightOrder>());
 
         var finalCustomer = Assert.Single(
             journal.Final.Customers,
@@ -52,7 +58,7 @@ public sealed class FreightScenarioJournalTests
                 finalCustomer.TenantId,
                 finalCustomer.Id));
         Assert.Equal(
-            DateTimeOffset.Parse("2026-08-01T10:00:39Z"),
+            DateTimeOffset.Parse("2026-08-01T10:00:46Z"),
             journal.Final.OccurredAtUtc);
     }
 
@@ -72,7 +78,7 @@ public sealed class FreightScenarioJournalTests
             secondTransitions.Select(static value => value.Fingerprint));
         Assert.All(firstTransitions, static value => Assert.Equal(64, value.Fingerprint.Length));
         Assert.Equal(
-            "scenario/freight-incremental-v1/operation/31",
+            "scenario/freight-incremental-v1/operation/34",
             firstTransitions[0].DeliveryId);
     }
 
@@ -83,7 +89,7 @@ public sealed class FreightScenarioJournalTests
             ?? throw new InvalidOperationException("The freight scenario JSON is empty.");
         var operations = source["operations"]?.AsArray()
             ?? throw new InvalidOperationException("The freight scenario has no operations.");
-        operations.Single(operation => operation?["sequence"]?.GetValue<long>() == 36)!["transaction"] = "stop-delete";
+        operations.Single(operation => operation?["sequence"]?.GetValue<long>() == 39)!["transaction"] = "stop-delete";
         var temporaryPath = Path.Combine(
             Path.GetTempPath(),
             $"cohesive-freight-scenario-{Guid.NewGuid():N}.json");

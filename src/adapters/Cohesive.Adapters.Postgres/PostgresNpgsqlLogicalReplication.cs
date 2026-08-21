@@ -1049,6 +1049,14 @@ internal sealed class PostgresNpgsqlLogicalReplicationProtocol : IPostgresLogica
             table.Identity.ColumnName,
             table.Identity.ScalarType,
             evidenceReference);
+        if (table.Partition is { } partition)
+        {
+            AddRequiredColumn(
+                requiredColumns,
+                partition.ColumnName,
+                partition.ScalarType,
+                evidenceReference);
+        }
         foreach (var field in table.Fields)
         {
             AddRequiredColumn(
@@ -1518,6 +1526,14 @@ internal sealed class PostgresNpgsqlLogicalReplicationProtocol : IPostgresLogica
             && string.Equals(identity.ColumnName, columnName, StringComparison.Ordinal))
         {
             scalarType = identity.ScalarType;
+            found = true;
+        }
+        if (table.Partition is { } partition
+            && string.Equals(partition.ColumnName, columnName, StringComparison.Ordinal))
+        {
+            if (found && scalarType != partition.ScalarType)
+                throw ProtocolViolation("read/relation/binding-type-conflict");
+            scalarType = partition.ScalarType;
             found = true;
         }
         foreach (var field in table.Fields)

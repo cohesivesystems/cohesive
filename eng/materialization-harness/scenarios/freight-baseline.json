@@ -2,7 +2,7 @@
   "schemaVersion": "cohesive.materialization-harness/scenario-journal/v3",
   "scenarioId": "freight-incremental-v1",
   "occurredAtUtc": "2026-08-01T10:00:00Z",
-  "baselineThroughSequence": 30,
+  "baselineThroughSequence": 33,
   "operations": [
     {
       "sequence": 1,
@@ -406,6 +406,49 @@
     },
     {
       "sequence": 31,
+      "entity": "order",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "orderId": "order-2004",
+        "orderNumber": "AC-2004",
+        "customerAccountId": "customer-manufacturer",
+        "equipmentClass": "DryVan",
+        "createdAt": "2026-08-01T09:20:00Z"
+      }
+    },
+    {
+      "sequence": 32,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "orderStopId": "stop-2004-pickup",
+        "orderId": "order-2004",
+        "sequence": 10,
+        "stopType": "Pickup",
+        "locationId": "location-dallas",
+        "scheduledStart": "2026-08-06T08:00:00Z",
+        "scheduledEnd": "2026-08-06T09:00:00Z"
+      }
+    },
+    {
+      "sequence": 33,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "document": {
+        "tenantId": "acme",
+        "orderStopId": "stop-2004-drop",
+        "orderId": "order-2004",
+        "sequence": 20,
+        "stopType": "Drop",
+        "locationId": "location-austin",
+        "scheduledStart": "2026-08-06T13:00:00Z",
+        "scheduledEnd": "2026-08-06T14:00:00Z"
+      }
+    },
+    {
+      "sequence": 34,
       "entity": "customerAccount",
       "operation": "upsert",
       "transaction": "customer-rename",
@@ -416,7 +459,7 @@
       }
     },
     {
-      "sequence": 32,
+      "sequence": 35,
       "entity": "location",
       "operation": "upsert",
       "transaction": "shared-location-update",
@@ -429,7 +472,7 @@
       }
     },
     {
-      "sequence": 33,
+      "sequence": 36,
       "entity": "order",
       "operation": "upsert",
       "transaction": "direct-order-update",
@@ -443,7 +486,7 @@
       }
     },
     {
-      "sequence": 34,
+      "sequence": 37,
       "entity": "orderStop",
       "operation": "upsert",
       "transaction": "stop-add",
@@ -459,7 +502,7 @@
       }
     },
     {
-      "sequence": 35,
+      "sequence": 38,
       "entity": "orderStop",
       "operation": "delete",
       "transaction": "stop-delete",
@@ -469,7 +512,7 @@
       }
     },
     {
-      "sequence": 36,
+      "sequence": 39,
       "entity": "orderStop",
       "operation": "upsert",
       "transaction": "stop-reorder",
@@ -485,7 +528,7 @@
       }
     },
     {
-      "sequence": 37,
+      "sequence": 40,
       "entity": "orderStop",
       "operation": "upsert",
       "transaction": "stop-type-exchange",
@@ -501,7 +544,7 @@
       }
     },
     {
-      "sequence": 38,
+      "sequence": 41,
       "entity": "orderStop",
       "operation": "upsert",
       "transaction": "stop-type-exchange",
@@ -517,7 +560,7 @@
       }
     },
     {
-      "sequence": 39,
+      "sequence": 42,
       "entity": "orderStop",
       "operation": "upsert",
       "transaction": "stop-location-move",
@@ -530,6 +573,46 @@
         "locationId": "location-boise",
         "scheduledStart": "2026-08-03T08:00:00Z",
         "scheduledEnd": "2026-08-03T10:00:00Z"
+      }
+    },
+    {
+      "sequence": 43,
+      "entity": "orderStop",
+      "operation": "delete",
+      "transaction": "root-delete-stops",
+      "identity": {
+        "tenantId": "acme",
+        "id": "stop-2003-pickup"
+      }
+    },
+    {
+      "sequence": 44,
+      "entity": "orderStop",
+      "operation": "delete",
+      "transaction": "root-delete-stops",
+      "identity": {
+        "tenantId": "acme",
+        "id": "stop-2003-drop-austin"
+      }
+    },
+    {
+      "sequence": 45,
+      "entity": "orderStop",
+      "operation": "delete",
+      "transaction": "root-delete-stops",
+      "identity": {
+        "tenantId": "acme",
+        "id": "stop-2003-drop-dallas"
+      }
+    },
+    {
+      "sequence": 46,
+      "entity": "order",
+      "operation": "delete",
+      "transaction": "root-delete",
+      "identity": {
+        "tenantId": "acme",
+        "id": "order-2003"
       }
     }
   ]
