@@ -7,6 +7,7 @@ using Cohesive.Execution;
 using Cohesive.MaterializationHarness.Host;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Runtime;
+using Cohesive.Storage.Materialization;
 using Microsoft.AspNetCore.Authorization;
 using Npgsql;
 
@@ -64,6 +65,20 @@ static class ProgramEntry
             await controller.DisposeAsync();
             return result.Result.Kind is ApiResultKind.Success or ApiResultKind.Accepted ? 0 : 1;
         }
+        if (args.Length is 2 or 3 && string.Equals(args[0], "--failure-evidence", StringComparison.Ordinal))
+        {
+            var evidenceProvider = args[1];
+            var selectedGeneration = args.ElementAtOrDefault(2) is { } generation
+                ? new MaterializationGenerationId(generation)
+                : (MaterializationGenerationId?)null;
+            var evidence = await controller.CaptureFailureEvidenceAsync(
+                provider: evidenceProvider,
+                selectedGeneration: selectedGeneration,
+                context: OperationContext.Create());
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(evidence));
+            await controller.DisposeAsync();
+            return 0;
+        }
         if (args.Length is 1 or 2
             && TryResolveOperatorEndpoint(args[0], catalog, out var endpoint))
         {
@@ -86,7 +101,7 @@ static class ProgramEntry
         if (args.Length != 0)
         {
             throw new ArgumentException(
-                "The materialization host accepts --start, --inspect, --explain, --traces, --pause, --continue, --restart-attempt, or --cancel, optionally followed by postgres or cosmos; --update-limits requires a provider and maximum batch items.",
+                "The materialization host accepts --start, --inspect, --explain, --traces, --pause, --continue, --restart-attempt, --cancel, or --failure-evidence, followed by an optional provider; --failure-evidence also accepts a generation and --update-limits requires a provider and maximum batch items.",
                 nameof(args));
         }
 
@@ -118,6 +133,15 @@ static class ProgramEntry
         await using var app = builder.Build();
         app.UseAuthorization();
         MapCommands(app, catalog, options);
+        app.MapGet(
+            "/materialization-harness/providers/{provider}/failure-evidence",
+            async (
+                string provider,
+                MaterializationHarnessExecutionController executionController,
+                HttpContext httpContext) => Results.Json(await executionController.CaptureFailureEvidenceAsync(
+                provider: provider,
+                selectedGeneration: null,
+                context: OperationContext.Create(cancellationToken: httpContext.RequestAborted))));
         app.MapProcessExecutionInspectApi(
             catalog.Inspect,
             "/execution-control/processes/{processInstanceId}",

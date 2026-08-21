@@ -713,9 +713,23 @@ public sealed record MaterializationRebuildPlanSetReceipt
 
         if (!Leaves.SequenceEqual(retainedLeaves))
         {
-            throw new ArgumentException(
-                "The aggregate receipt differs from the exact retained parent child ledgers.",
-                nameof(checkpoint));
+            // Provider persistence can reconstruct semantically identical nested wire evidence as distinct CLR
+            // objects. The canonical portable document, rather than incidental reference equality below a leaf,
+            // is the final authority for the exact retained receipt.
+            var retainedReceipt = Create(
+                planSet: planSet,
+                parentContinuation: ParentContinuation,
+                outcome: Outcome,
+                leaves: retainedLeaves,
+                readyBarrier: ReadyBarrier,
+                completedAtUtc: CompletedAtUtc,
+                atomicRoutingManifest: AtomicRoutingManifest);
+            if (!MaterializationContract.CanonicalEquals(this, retainedReceipt))
+            {
+                throw new ArgumentException(
+                    "The aggregate receipt differs from the exact retained parent child ledgers.",
+                    nameof(checkpoint));
+            }
         }
     }
 

@@ -122,6 +122,39 @@ process_command() {
     "$command" "$@"
 }
 
+failure_test() {
+  local provider="${1:-postgres}"
+  local boundary="${2:-AfterTargetBatch}"
+  local run_id
+  run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  local artifact_root="$script_dir/artifacts/failure-$run_id"
+
+  compose down --volumes --remove-orphans
+  up
+  seed --cohesive
+  configure_runtime
+  export COHESIVE_MATERIALIZATION_REPOSITORY_ROOT="$repo_root"
+  dotnet build \
+    "$script_dir/host/Cohesive.MaterializationHarness.Host.csproj" \
+    --configuration Release
+  dotnet build \
+    "$script_dir/supervise/Cohesive.MaterializationHarness.Supervise.csproj" \
+    --configuration Release
+  dotnet \
+    "$script_dir/supervise/bin/Release/net10.0/Cohesive.MaterializationHarness.Supervise.dll" \
+    resume \
+    "$provider" \
+    "$boundary" \
+    "$artifact_root/resume"
+  dotnet \
+    "$script_dir/supervise/bin/Release/net10.0/Cohesive.MaterializationHarness.Supervise.dll" \
+    restart-attempt \
+    "$provider" \
+    "$boundary" \
+    "$artifact_root/restart-attempt"
+  printf 'failure-artifacts=%s\n' "$artifact_root"
+}
+
 verify_index() {
   configure_runtime
   curl --fail --silent --show-error \
@@ -177,6 +210,8 @@ Commands:
   process-restart Abandon the current candidate and start a fresh attempt/generation.
   process-cancel Cooperatively cancel the Process and abandon its candidate generation.
   process-limits <provider> <items> Update the canonical rebuild batch-item limit.
+  process-evidence <provider> [generation] Capture bounded Process, checkpoint, and target evidence.
+  failure-test [provider] [boundary] Clean-reset, kill/restart the real host, and emit bounded artifacts.
   verify-index Show active generation aliases and document counts without mutating Elasticsearch.
   test     Start, seed, materialize, and run the focused verification suite.
   status   Show service and health state.
@@ -262,6 +297,25 @@ case "$command" in
     fi
     up
     process_command --update-limits "$2" "$3"
+    ;;
+  process-evidence)
+    if [[ "$#" -lt 2 || "$#" -gt 3 ]]; then
+      usage
+      exit 2
+    fi
+    up
+    if [[ "$#" -eq 3 ]]; then
+      process_command --failure-evidence "$2" "$3"
+    else
+      process_command --failure-evidence "$2"
+    fi
+    ;;
+  failure-test)
+    if [[ "$#" -gt 3 ]]; then
+      usage
+      exit 2
+    fi
+    failure_test "${2:-postgres}" "${3:-AfterTargetBatch}"
     ;;
   verify-index)
     up

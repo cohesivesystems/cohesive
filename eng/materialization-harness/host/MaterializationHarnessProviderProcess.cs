@@ -68,7 +68,7 @@ sealed class MaterializationHarnessProviderProcess
         PostgresMaterializationStateStore materializationStore,
         InteractionAuthorityScope authorityScope,
         string workerIncarnation,
-        TimeSpan operationBoundaryDelay,
+        IMaterializationExecutionBoundaryObserver boundaryObserver,
         OperationContext context)
     {
         ArgumentNullException.ThrowIfNull(provider);
@@ -76,15 +76,14 @@ sealed class MaterializationHarnessProviderProcess
         ArgumentNullException.ThrowIfNull(processStore);
         ArgumentNullException.ThrowIfNull(materializationStore);
         ArgumentNullException.ThrowIfNull(authorityScope);
+        ArgumentNullException.ThrowIfNull(boundaryObserver);
         ArgumentNullException.ThrowIfNull(context);
         workerIncarnation = Guard.RequireNotNullOrWhiteSpace(workerIncarnation);
         var artifacts = MaterializationRebuildPlanSetProcessFactory.Create(provider.Compilation.PlanSet);
         var executionResolver = new AttemptExecutionResolver(
             resolvedPlan: provider.ResolvedPlan,
             synchronizationWorkStore: materializationStore,
-            boundaryObserver: operationBoundaryDelay == TimeSpan.Zero
-                ? NoOpMaterializationExecutionBoundaryObserver.Instance
-                : new DelayAtMaterializationBoundary(operationBoundaryDelay));
+            boundaryObserver: boundaryObserver);
         var planSetResolver = new ExactPlanSetResolver(provider.Compilation.PlanSet);
 
         var workerRuntime = Runtime(
@@ -598,18 +597,6 @@ sealed class MaterializationHarnessProviderProcess
                 }
                 return true;
             }
-        }
-    }
-
-    sealed class DelayAtMaterializationBoundary(TimeSpan delay) : IMaterializationExecutionBoundaryObserver
-    {
-        public async ValueTask ObserveAsync(
-            OperationContext context,
-            MaterializationExecutionBoundaryObservation observation)
-        {
-            ArgumentNullException.ThrowIfNull(context);
-            ArgumentNullException.ThrowIfNull(observation);
-            await Task.Delay(delay, context.CancellationToken).ConfigureAwait(false);
         }
     }
 

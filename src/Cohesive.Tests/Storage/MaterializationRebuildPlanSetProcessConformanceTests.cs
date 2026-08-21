@@ -320,7 +320,9 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 return snapshot;
 
             var operation = snapshot.Checkpoint.DurableOperations
-                .Where(static candidate => candidate.Status != DurableOperationStatus.Dispositioned)
+                .Where(candidate => candidate.Status != DurableOperationStatus.Dispositioned
+                    && candidate.Request.Context.Origin is ProcessInteractionOrigin origin
+                    && origin.Continuation == continuation)
                 .OrderBy(static candidate => candidate.OperationId.Value, StringComparer.Ordinal)
                 .FirstOrDefault();
             if (operation is not null)

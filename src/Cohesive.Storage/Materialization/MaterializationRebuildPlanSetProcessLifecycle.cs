@@ -814,19 +814,6 @@ public sealed class MaterializationRebuildPlanSetProcessLifecycle
             parentClosure,
             preventStartWhenAbsent: HasPotentialExternalChildConsequence(operation))
             .ConfigureAwait(false);
-        if (!childClosure.Conclusive)
-        {
-            return UnresolvedLeaf(
-                authority,
-                target.Continuation,
-                parentClosure.OccurredAtUtc,
-                generation: null,
-                MaterializationRebuildPlanSetProcessLifecycleDiagnosticCodes.ChildClosureUnresolved,
-                "The leaf coordinator could not be conclusively closed.",
-                promotionContinuation,
-                promotionTerminal,
-                childClosure.Diagnostics);
-        }
         var childTerminal = childClosure.Terminal;
         if (childClosure.PreventedBeforeStart)
         {
@@ -845,6 +832,19 @@ public sealed class MaterializationRebuildPlanSetProcessLifecycle
                     MaterializationRebuildPlanSetLeafClosureDisposition.NotStarted,
                     parentClosure.OccurredAtUtc),
                 []);
+        }
+        if (!childClosure.Conclusive && childTerminal is null)
+        {
+            return UnresolvedLeaf(
+                authority,
+                target.Continuation,
+                parentClosure.OccurredAtUtc,
+                generation: null,
+                MaterializationRebuildPlanSetProcessLifecycleDiagnosticCodes.ChildClosureUnresolved,
+                "The leaf coordinator could not be conclusively closed.",
+                promotionContinuation,
+                promotionTerminal,
+                childClosure.Diagnostics);
         }
         if (HasPotentialExternalChildConsequence(operation) && childTerminal is null)
         {
@@ -906,6 +906,19 @@ public sealed class MaterializationRebuildPlanSetProcessLifecycle
         var routing = await router.InspectAsync(context, authority.PlacementSlice).ConfigureAwait(false);
         if (routing.ActiveRead?.Generation == generation || routing.ActiveWrite == generation)
         {
+            if (!childClosure.Conclusive)
+            {
+                return UnresolvedLeaf(
+                    authority,
+                    target.Continuation,
+                    parentClosure.OccurredAtUtc,
+                    execution.Generation,
+                    MaterializationRebuildPlanSetProcessLifecycleDiagnosticCodes.ChildClosureUnresolved,
+                    "An active routed generation cannot be preserved until its leaf coordinator is conclusively closed.",
+                    promotionContinuation,
+                    promotionTerminal,
+                    childClosure.Diagnostics);
+            }
             return new(
                 new(
                     authority,
@@ -931,6 +944,19 @@ public sealed class MaterializationRebuildPlanSetProcessLifecycle
             && generationId == execution.Generation
             && definitionFingerprint == authority.PlacementSlice.Materialization.DefinitionFingerprint)
         {
+            if (!childClosure.Conclusive)
+            {
+                return UnresolvedLeaf(
+                    authority,
+                    target.Continuation,
+                    parentClosure.OccurredAtUtc,
+                    execution.Generation,
+                    MaterializationRebuildPlanSetProcessLifecycleDiagnosticCodes.ChildClosureUnresolved,
+                    "An active target generation cannot be preserved until its leaf coordinator is conclusively closed.",
+                    promotionContinuation,
+                    promotionTerminal,
+                    childClosure.Diagnostics);
+            }
             return new(
                 new(
                     authority,
@@ -957,6 +983,10 @@ public sealed class MaterializationRebuildPlanSetProcessLifecycle
                 promotionTerminal);
         }
 
+        // A permanent candidate tombstone is the conclusive fence for descendant materialization work. A child
+        // operation interrupted after an external target cut may remain unresolved in its cancelled coordinator,
+        // but any delayed replay is now rejected by the exact generation lifecycle instead of blocking a safe
+        // replacement attempt forever. Active route and target generations retain the stricter closure checks above.
         return new(
             new(
                 authority,
