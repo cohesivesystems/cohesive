@@ -1,7 +1,8 @@
 {
-  "schemaVersion": "cohesive.materialization-harness/scenario-journal/v2",
-  "scenarioId": "freight-baseline-v1",
+  "schemaVersion": "cohesive.materialization-harness/scenario-journal/v3",
+  "scenarioId": "freight-incremental-v1",
   "occurredAtUtc": "2026-08-01T10:00:00Z",
+  "baselineThroughSequence": 30,
   "operations": [
     {
       "sequence": 1,
@@ -401,6 +402,134 @@
         "locationId": "location-dallas",
         "scheduledStart": "2026-08-05T08:00:00Z",
         "scheduledEnd": "2026-08-05T09:00:00Z"
+      }
+    },
+    {
+      "sequence": 31,
+      "entity": "customerAccount",
+      "operation": "upsert",
+      "transaction": "customer-rename",
+      "document": {
+        "tenantId": "northwind",
+        "customerAccountId": "customer-grocery",
+        "displayName": "Northwind Cold Chain Grocery"
+      }
+    },
+    {
+      "sequence": 32,
+      "entity": "location",
+      "operation": "upsert",
+      "transaction": "shared-location-update",
+      "document": {
+        "tenantId": "northwind",
+        "locationId": "location-seattle",
+        "displayName": "Seattle Refrigerated Distribution Center",
+        "city": "Seattle",
+        "region": "WA"
+      }
+    },
+    {
+      "sequence": 33,
+      "entity": "order",
+      "operation": "upsert",
+      "transaction": "direct-order-update",
+      "document": {
+        "tenantId": "acme",
+        "orderId": "order-2001",
+        "orderNumber": "AC-2001",
+        "customerAccountId": "customer-broker",
+        "equipmentClass": "Reefer",
+        "createdAt": "2026-08-01T09:00:00Z"
+      }
+    },
+    {
+      "sequence": 34,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "transaction": "stop-add",
+      "document": {
+        "tenantId": "northwind",
+        "orderStopId": "stop-1002-drop-portland",
+        "orderId": "order-1002",
+        "sequence": 30,
+        "stopType": "Drop",
+        "locationId": "location-portland",
+        "scheduledStart": "2026-08-04T08:00:00Z",
+        "scheduledEnd": "2026-08-04T10:00:00Z"
+      }
+    },
+    {
+      "sequence": 35,
+      "entity": "orderStop",
+      "operation": "delete",
+      "transaction": "stop-delete",
+      "identity": {
+        "tenantId": "northwind",
+        "id": "stop-1003-drop-boise"
+      }
+    },
+    {
+      "sequence": 36,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "transaction": "stop-reorder",
+      "document": {
+        "tenantId": "acme",
+        "orderStopId": "stop-2003-drop-austin",
+        "orderId": "order-2003",
+        "sequence": 40,
+        "stopType": "Drop",
+        "locationId": "location-austin",
+        "scheduledStart": "2026-08-04T13:00:00Z",
+        "scheduledEnd": "2026-08-04T14:00:00Z"
+      }
+    },
+    {
+      "sequence": 37,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "transaction": "stop-type-exchange",
+      "document": {
+        "tenantId": "acme",
+        "orderStopId": "stop-2002-pickup",
+        "orderId": "order-2002",
+        "sequence": 10,
+        "stopType": "Drop",
+        "locationId": "location-dallas",
+        "scheduledStart": "2026-08-03T08:00:00Z",
+        "scheduledEnd": "2026-08-03T09:00:00Z"
+      }
+    },
+    {
+      "sequence": 38,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "transaction": "stop-type-exchange",
+      "document": {
+        "tenantId": "acme",
+        "orderStopId": "stop-2002-drop",
+        "orderId": "order-2002",
+        "sequence": 20,
+        "stopType": "Pickup",
+        "locationId": "location-houston",
+        "scheduledStart": "2026-08-03T15:00:00Z",
+        "scheduledEnd": "2026-08-03T17:00:00Z"
+      }
+    },
+    {
+      "sequence": 39,
+      "entity": "orderStop",
+      "operation": "upsert",
+      "transaction": "stop-location-move",
+      "document": {
+        "tenantId": "northwind",
+        "orderStopId": "stop-1001-drop",
+        "orderId": "order-1001",
+        "sequence": 20,
+        "stopType": "Drop",
+        "locationId": "location-boise",
+        "scheduledStart": "2026-08-03T08:00:00Z",
+        "scheduledEnd": "2026-08-03T10:00:00Z"
       }
     }
   ]
