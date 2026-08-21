@@ -273,6 +273,72 @@ public sealed class PostgresSqlUpdateBuilder
     }
 }
 
+/// <summary>Mutable, single-threaded builder for an injection-safe, predicate-guarded PostgreSQL <c>DELETE</c>.</summary>
+public sealed class PostgresSqlDeleteBuilder
+{
+    readonly PostgresSqlQualifiedTable table;
+    readonly List<PostgresSqlExpression> predicates = [];
+    readonly List<PostgresSqlReturningItem> returning = [];
+    readonly HashSet<PostgresSqlIdentifier> returningAliases = [];
+
+    /// <summary>Creates a delete builder for one physical table.</summary>
+    /// <param name="table">Injection-safe physical table name.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="table"/> is <see langword="null"/>.</exception>
+    public PostgresSqlDeleteBuilder(PostgresSqlQualifiedTable table)
+    {
+        this.table = Guard.RequireNotNull(table);
+    }
+
+    /// <summary>Adds a required predicate combined with prior predicates using conjunction.</summary>
+    /// <param name="predicate">Boolean predicate restricting deleted rows.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="predicate"/> is <see langword="null"/>.</exception>
+    public PostgresSqlDeleteBuilder Where(PostgresSqlExpression predicate)
+    {
+        predicates.Add(Guard.RequireNotNull(predicate));
+        return this;
+    }
+
+    /// <summary>Adds one expression returned from each deleted row.</summary>
+    /// <param name="expression">Expression evaluated by the <c>RETURNING</c> clause.</param>
+    /// <param name="alias">Unique result-column alias.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="expression"/> or <paramref name="alias"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="alias"/> is invalid or repeated.</exception>
+    public PostgresSqlDeleteBuilder Returning(PostgresSqlExpression expression, string alias)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        var identifier = new PostgresSqlIdentifier(alias);
+        if (!returningAliases.Add(identifier))
+            throw new ArgumentException($"PostgreSQL returning alias '{alias}' is already present.", nameof(alias));
+        returning.Add(new(expression, identifier));
+        return this;
+    }
+
+    /// <summary>Builds an immutable reusable PostgreSQL command template.</summary>
+    /// <returns>Normalized SQL and deterministic positional-parameter slots.</returns>
+    /// <exception cref="InvalidOperationException">No row-restricting predicate is configured.</exception>
+    public PostgresSqlCommandTemplate BuildTemplate()
+    {
+        if (predicates.Count == 0)
+            throw new InvalidOperationException("A PostgreSQL DELETE requires at least one predicate; unrestricted deletes are not implicit.");
+
+        PostgresSqlRenderContext context = new();
+        StringBuilder builder = new("DELETE FROM ");
+        table.WriteTo(builder);
+        builder.Append(" WHERE ");
+        for (var index = 0; index < predicates.Count; index++)
+        {
+            if (index != 0)
+                builder.Append(" AND ");
+            predicates[index].WriteTo(context, builder);
+        }
+
+        PostgresSqlMutationWriter.WriteReturning(builder, context, returning);
+        return new(builder.ToString(), context.Parameters);
+    }
+}
+
 internal sealed record PostgresSqlColumnValue(
     PostgresSqlIdentifier Column,
     PostgresSqlExpression Value);

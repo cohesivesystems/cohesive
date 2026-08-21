@@ -79,6 +79,24 @@ verify() {
     --verify-only
 }
 
+mutate() {
+  configure_runtime
+  dotnet run \
+    --project "$script_dir/seed/Cohesive.MaterializationHarness.Seed.csproj" \
+    --configuration Release \
+    -- \
+    --apply-changes
+}
+
+verify_final() {
+  configure_runtime
+  dotnet run \
+    --project "$script_dir/seed/Cohesive.MaterializationHarness.Seed.csproj" \
+    --configuration Release \
+    -- \
+    --verify-final
+}
+
 materialize() {
   configure_runtime
   dotnet run \
@@ -125,10 +143,14 @@ test_harness() {
   seed --cohesive
   verify
   materialize
+  mutate
+  verify_final
+  mutate
+  verify_final
   configure_runtime
   dotnet test "$repo_root/src/Cohesive.Tests/Cohesive.Tests.csproj" \
     --configuration Release \
-    --filter "FullyQualifiedName~FreightOrderHarnessModelTests|FullyQualifiedName~FreightOrderRebuildPlanCompilerTests|FullyQualifiedName~FreightOrderMaterializationRelationTests|FullyQualifiedName~PostgresEntityRepositoryTests|FullyQualifiedName~PostgresProcessDurableStoreTests|FullyQualifiedName~PostgresMaterializationStateStoreTests|FullyQualifiedName~InMemoryProcessDurableStoreTests|FullyQualifiedName~ProcessExecutionCommandApiEndpointRouteBuilderExtensionsTests|FullyQualifiedName~TenantScopedMaterializationPagesBindExactPredicateAndRejectCrossTenantContinuation|FullyQualifiedName~PartitionedReaderRequiresMatchingRuntimeAndPhysicalScopes|FullyQualifiedName~LocalPostgres_TenantScopedMaterializationPagesStayWithinTheExactPartition" \
+    --filter "FullyQualifiedName~FreightScenarioJournalTests|FullyQualifiedName~FreightOrderHarnessModelTests|FullyQualifiedName~FreightOrderRebuildPlanCompilerTests|FullyQualifiedName~FreightOrderMaterializationRelationTests|FullyQualifiedName~PostgresEntityRepositoryTests|FullyQualifiedName~PostgresProcessDurableStoreTests|FullyQualifiedName~PostgresMaterializationStateStoreTests|FullyQualifiedName~InMemoryProcessDurableStoreTests|FullyQualifiedName~ProcessExecutionCommandApiEndpointRouteBuilderExtensionsTests|FullyQualifiedName~TenantScopedMaterializationPagesBindExactPredicateAndRejectCrossTenantContinuation|FullyQualifiedName~PartitionedReaderRequiresMatchingRuntimeAndPhysicalScopes|FullyQualifiedName~LocalPostgres_TenantScopedMaterializationPagesStayWithinTheExactPartition" \
     --logger "console;verbosity=minimal"
 }
 
@@ -142,6 +164,8 @@ Commands:
   seed-direct Replace both source databases through raw Npgsql/Cosmos SDK calls as an independent oracle.
   validate Validate the canonical scenario journal without starting Docker.
   verify   Verify that both source databases still equal the journal; do not mutate them.
+  mutate   Apply the deterministic incremental journal suffix to both source replicas.
+  verify-final Verify both source replicas equal the journal's final semantic state.
   materialize Build and atomically promote equivalent Postgres and Cosmos Elasticsearch generations.
   host     Run the restartable Process/API host in the foreground.
   process-start [provider|all] Start provider rebuild Processes through the canonical SDK dispatcher.
@@ -182,6 +206,14 @@ case "$command" in
   verify)
     up
     verify
+    ;;
+  mutate)
+    up
+    mutate
+    ;;
+  verify-final)
+    up
+    verify_final
     ;;
   materialize)
     up

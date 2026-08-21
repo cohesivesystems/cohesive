@@ -205,6 +205,26 @@ public sealed class PostgresSqlConstructionTests
         Assert.Equal(
             ["id", "status", "expected-concurrency"],
             update.Parameters.Select(static parameter => parameter.Binding));
+
+        var delete = new PostgresSqlDeleteBuilder(table)
+            .Where(PostgresSqlExpression.Binary(
+                @operator: PostgresSqlBinaryOperator.Equal,
+                left: PostgresSqlExpression.UnqualifiedColumn("tenant_id"),
+                right: PostgresSqlExpression.RuntimeParameter("tenant")))
+            .Where(PostgresSqlExpression.Binary(
+                @operator: PostgresSqlBinaryOperator.Equal,
+                left: PostgresSqlExpression.UnqualifiedColumn("load_id"),
+                right: PostgresSqlExpression.RuntimeParameter("id")))
+            .Returning(PostgresSqlExpression.UnqualifiedColumn("load_id"), "deleted_id")
+            .BuildTemplate();
+
+        Assert.Equal(
+            "DELETE FROM \"transport\".\"loads\" WHERE (\"tenant_id\" = $1) AND (\"load_id\" = $2) "
+            + "RETURNING \"load_id\" AS \"deleted_id\"",
+            delete.Text);
+        Assert.Equal(
+            ["tenant", "id"],
+            delete.Parameters.Select(static parameter => parameter.Binding));
     }
 
     [Fact]
@@ -213,6 +233,7 @@ public sealed class PostgresSqlConstructionTests
         PostgresSqlQualifiedTable table = new("transport", "loads");
         var unrestricted = new PostgresSqlUpdateBuilder(table)
             .Set("status", PostgresSqlExpression.RuntimeParameter("status"));
+        var unrestrictedDelete = new PostgresSqlDeleteBuilder(table);
         var incompleteUpsert = new PostgresSqlInsertBuilder(table)
             .Value("load_id", PostgresSqlExpression.RuntimeParameter("id"))
             .OnConflictDoUpdate(
@@ -220,6 +241,7 @@ public sealed class PostgresSqlConstructionTests
                 excludedUpdateColumns: ["status"]);
 
         Assert.Throws<InvalidOperationException>(unrestricted.BuildTemplate);
+        Assert.Throws<InvalidOperationException>(unrestrictedDelete.BuildTemplate);
         Assert.Throws<InvalidOperationException>(incompleteUpsert.BuildTemplate);
     }
 
