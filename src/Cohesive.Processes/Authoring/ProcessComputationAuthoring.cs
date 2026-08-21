@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using Cohesive.Execution;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
