@@ -93,7 +93,10 @@ public enum PostgresSqlFunction
     Left = 4,
 
     /// <summary>Returns the one-based position of a text substring, or zero when absent.</summary>
-    StringPosition = 5
+    StringPosition = 5,
+
+    /// <summary>Returns the current wall-clock instant at statement evaluation time.</summary>
+    ClockTimestamp = 6
 }
 
 /// <summary>Supported PostgreSQL aggregate functions.</summary>
@@ -1877,6 +1880,7 @@ static class PostgresSqlFunctions
 {
     public static string Name(PostgresSqlFunction function) => function switch
     {
+        PostgresSqlFunction.ClockTimestamp => "CLOCK_TIMESTAMP",
         PostgresSqlFunction.Length => "LENGTH",
         PostgresSqlFunction.Right => "RIGHT",
         PostgresSqlFunction.Lower => "LOWER",
@@ -1902,6 +1906,7 @@ static class PostgresSqlFunctions
     {
         var valid = function switch
         {
+            PostgresSqlFunction.ClockTimestamp => count == 0,
             PostgresSqlFunction.Length or PostgresSqlFunction.Lower or PostgresSqlFunction.Upper => count == 1,
             PostgresSqlFunction.Right or PostgresSqlFunction.Left or PostgresSqlFunction.StringPosition => count == 2,
             _ => false

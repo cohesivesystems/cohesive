@@ -23,7 +23,6 @@ sealed class MaterializationHarnessExecutionController :
     IAsyncDisposable
 {
     const string ProcessDispositionDiagnosticPrefix = "materialization-harness.process-disposition";
-    const long ProcessAuthorityMaximumDocumentBytes = 256L * 1024 * 1024;
     const int ProviderMismatchFailureThreshold = 2;
 
     readonly NpgsqlDataSource dataSource;
@@ -80,8 +79,7 @@ sealed class MaterializationHarnessExecutionController :
             var processStore = new PostgresProcessDurableStore(
                 dataSource: dataSource,
                 options: new(
-                    authorityId: $"{options.ProcessInstance(provider.Provider).Value}/durability",
-                    maximumDocumentBytes: ProcessAuthorityMaximumDocumentBytes));
+                    authorityId: $"{options.ProcessInstance(provider.Provider).Value}/durability"));
             await processStore.EnsureCreatedAsync(context).ConfigureAwait(false);
             var process = await MaterializationHarnessProviderProcess.CreateAsync(
                     provider: provider,

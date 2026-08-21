@@ -183,6 +183,21 @@ public sealed class PostgresSqlConstructionTests
             ["tenant", "id", "status"],
             insert.Parameters.Select(static parameter => parameter.Binding));
 
+        var deduplicatedInsert = new PostgresSqlInsertBuilder(table)
+            .Value("tenant_id", PostgresSqlExpression.RuntimeParameter("tenant"))
+            .Value("load_id", PostgresSqlExpression.RuntimeParameter("id"))
+            .OnConflictDoNothing(["tenant_id", "load_id"])
+            .BuildTemplate();
+        Assert.Equal(
+            "INSERT INTO \"transport\".\"loads\" (\"tenant_id\", \"load_id\") VALUES ($1, $2) "
+            + "ON CONFLICT (\"tenant_id\", \"load_id\") DO NOTHING",
+            deduplicatedInsert.Text);
+
+        var clock = new PostgresSqlSelectBuilder()
+            .Select(PostgresSqlExpression.Function(PostgresSqlFunction.ClockTimestamp), "provider_now")
+            .BuildTemplate();
+        Assert.Equal("SELECT CLOCK_TIMESTAMP() AS \"provider_now\"", clock.Text);
+
         var update = new PostgresSqlUpdateBuilder(table)
             .Set("load_id", PostgresSqlExpression.RuntimeParameter("id"))
             .Set("status", PostgresSqlExpression.RuntimeParameter("status"))
