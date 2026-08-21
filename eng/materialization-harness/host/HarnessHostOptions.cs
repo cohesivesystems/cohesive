@@ -8,21 +8,23 @@ sealed record HarnessHostOptions(
     string Url,
     string ProcessInstancePrefix,
     InteractionAuthorityScope AuthorityScope,
-    TimeSpan OperationBoundaryDelay)
+    TimeSpan OperationBoundaryDelay,
+    MaterializationHarnessBoundaryFaultPlan? BoundaryFaultPlan)
 {
     internal static HarnessHostOptions FromEnvironment() => new(
-        Required("COHESIVE_MATERIALIZATION_POSTGRES_CONNECTION_STRING"),
-        Environment.GetEnvironmentVariable("COHESIVE_MATERIALIZATION_HOST_URL")
+        PostgresConnectionString: Required("COHESIVE_MATERIALIZATION_POSTGRES_CONNECTION_STRING"),
+        Url: Environment.GetEnvironmentVariable("COHESIVE_MATERIALIZATION_HOST_URL")
             ?? "http://localhost:59399",
-        Environment.GetEnvironmentVariable("COHESIVE_MATERIALIZATION_PROCESS_INSTANCE_ID")
+        ProcessInstancePrefix: Environment.GetEnvironmentVariable("COHESIVE_MATERIALIZATION_PROCESS_INSTANCE_ID")
             ?? "process/materialization-harness/freight-rebuild",
-        new(
+        AuthorityScope: new(
             authority: "authority/materialization-harness",
             tenant: "tenant/materialization-harness"),
-        TimeSpan.FromMilliseconds(OptionalNonNegativeInt(
+        OperationBoundaryDelay: TimeSpan.FromMilliseconds(OptionalNonNegativeInt(
             name: "COHESIVE_MATERIALIZATION_PAGE_DELAY_MS",
             defaultValue: 0,
-            maximumValue: 60_000)));
+            maximumValue: 60_000)),
+        BoundaryFaultPlan: MaterializationHarnessBoundaryFaultPlan.FromEnvironment());
 
     internal ProcessInstanceId ProcessInstance(string provider)
     {

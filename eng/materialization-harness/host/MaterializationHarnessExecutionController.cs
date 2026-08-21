@@ -74,6 +74,15 @@ sealed class MaterializationHarnessExecutionController :
             StringComparer.Ordinal);
         var byInstance = ImmutableDictionary.CreateBuilder<ProcessInstanceId, MaterializationHarnessProviderProcess>();
         var states = ImmutableDictionary.CreateBuilder<string, ProviderExecutionState>(StringComparer.Ordinal);
+        if (options.BoundaryFaultPlan is { } faultPlan
+            && !runtimeCatalog.Providers.Any(provider => string.Equals(
+                provider.Provider,
+                faultPlan.Provider,
+                StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                $"The materialization boundary fault plan selects unknown provider '{faultPlan.Provider}'.");
+        }
         foreach (var provider in runtimeCatalog.Providers)
         {
             var processStore = new PostgresProcessDurableStore(
@@ -89,7 +98,10 @@ sealed class MaterializationHarnessExecutionController :
                     materializationStore: materializationStore,
                     authorityScope: options.AuthorityScope,
                     workerIncarnation: workerIncarnation,
-                    operationBoundaryDelay: options.OperationBoundaryDelay,
+                    boundaryObserver: MaterializationHarnessBoundaryObserver.Create(
+                        provider: provider.Provider,
+                        delay: options.OperationBoundaryDelay,
+                        faultPlan: options.BoundaryFaultPlan),
                     context: context)
                 .ConfigureAwait(false);
             byProvider.Add(provider.Provider, process);
@@ -215,6 +227,70 @@ sealed class MaterializationHarnessExecutionController :
             endpoint: Catalog.UpdateLimits,
             request: command,
             invocation: Invocation(Catalog.UpdateLimits, process, issuedAtUtc));
+    }
+
+    internal async Task<MaterializationHarnessFailureEvidence> CaptureFailureEvidenceAsync(
+        string provider,
+        MaterializationGenerationId? selectedGeneration,
+        OperationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var process = GetProvider(provider);
+        var snapshot = await process.LoadAsync(context).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"The {provider} materialization Process has not been started.");
+        var execution = await process.ResolveCurrentExecutionAsync(context).ConfigureAwait(false);
+        var generation = selectedGeneration ?? execution?.Generation;
+        var target = await process.Provider.ResolvedPlan.Target.InspectAsync(context).ConfigureAwait(false);
+        var candidate = generation is { } exactGeneration
+            ? await process.Provider.ResolvedPlan.Target.InspectGenerationAsync(context, exactGeneration)
+                .ConfigureAwait(false)
+            : null;
+        var progress = ImmutableArray<MaterializationHarnessProgressEvidence>.Empty;
+        if (generation is { } progressGeneration)
+        {
+            var scopes = process.Provider.Compilation.Plan.Shards.Select(static shard => shard.Scope)
+                .Concat(process.Provider.Compilation.Plan.ChangeFeeds.Select(static feed => feed.Scope))
+                .Distinct()
+                .OrderBy(static scope => scope.Input.Value, StringComparer.Ordinal)
+                .ThenBy(static scope => scope.Partition.Value, StringComparer.Ordinal)
+                .ToImmutableArray();
+            var progressBuilder = ImmutableArray.CreateBuilder<MaterializationHarnessProgressEvidence>(scopes.Length);
+            foreach (var scope in scopes)
+            {
+                var key = new MaterializationProgressKey(
+                    materialization: process.Provider.Compilation.Plan.Materialization.Definition.Id,
+                    definitionFingerprint: process.Provider.Compilation.Plan.Materialization.DefinitionFingerprint,
+                    generation: progressGeneration,
+                    scope: scope);
+                var retained = await process.Provider.ResolvedPlan.ProgressStore.LoadAsync(context, key)
+                    .ConfigureAwait(false);
+                progressBuilder.Add(MaterializationHarnessProgressEvidence.From(scope, retained));
+            }
+            progress = progressBuilder.MoveToImmutable();
+        }
+
+        return new(
+            Provider: provider,
+            ProcessInstanceId: process.ProcessInstanceId.Value,
+            CurrentAttemptId: snapshot.Checkpoint.ContinuationIdentity.ProcessAttemptId.Value,
+            ControlRevision: snapshot.Checkpoint.Control.Revision.Value,
+            ControlMode: snapshot.Checkpoint.Control.Mode,
+            TerminalOutcome: snapshot.Checkpoint.Continuation.Terminal.Kind,
+            CurrentGeneration: execution?.Generation.Value,
+            SelectedGeneration: generation?.Value,
+            TargetRevision: target.Revision.Value,
+            ActiveGeneration: target.ActiveGenerationId?.Value,
+            SelectedGenerationState: candidate?.State,
+            SelectedGenerationRevision: candidate?.Revision.Value,
+            SelectedVisibleItemCount: candidate?.VisibleItemCount,
+            SelectedTombstoneCount: candidate?.TombstoneCount,
+            DurableOperations:
+            [
+                .. snapshot.Checkpoint.DurableOperations.Select(
+                    MaterializationHarnessDurableOperationEvidence.From)
+            ],
+            Progress: progress,
+            CapturedAtUtc: context.UtcNow);
     }
 
     public async ValueTask<ExecutionApiDispatchResult> DispatchAsync(

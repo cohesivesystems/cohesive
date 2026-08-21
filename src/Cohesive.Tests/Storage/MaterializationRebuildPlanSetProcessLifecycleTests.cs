@@ -717,6 +717,114 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
     }
 
     [Fact]
+    public async Task PlanSetLifecycle_RestartTombstonesCandidateBeforeCancelledLeafDescendantSettles()
+    {
+        using var fixture = await PlanSetLifecycleFixture.CreateAsync(
+            delayWorkerInvocation: true,
+            advanceLeaf: false);
+        var operation = Assert.Single(fixture.Snapshot.Checkpoint.DurableOperations, operation =>
+            operation.Request.Contract == fixture.Artifacts.LeafInvocationRequest);
+        var delay = Assert.IsType<DelayedOperationAdapter>(fixture.WorkerDelay);
+        var advanceTask = fixture.ParentRuntime.AdvanceOperationAsync(
+            fixture.Context(StartedAtUtc.AddMinutes(1)),
+            fixture.Artifacts.ParentPlan,
+            fixture.Snapshot.Checkpoint.ContinuationIdentity.ProcessInstanceId,
+            operation.OperationId);
+        await delay.Entered.WaitAsync(TimeSpan.FromSeconds(10));
+        var execution = fixture.ExecutionResolver.Single;
+        Assert.Equal(
+            MaterializationGenerationState.Loading,
+            Assert.IsType<MaterializationGenerationSnapshot>(await fixture.Materialization.Target.InspectGenerationAsync(
+                fixture.Context(StartedAtUtc.AddMinutes(1)),
+                execution.Generation)).State);
+
+        var restartAtUtc = StartedAtUtc.AddMinutes(10);
+        var parent = Assert.IsType<ProcessDurableStoreSnapshot>((await fixture.ParentRuntime.InspectAsync(
+            fixture.Context(restartAtUtc),
+            fixture.Artifacts.ParentPlan,
+            fixture.Snapshot.Checkpoint.ContinuationIdentity)).Snapshot);
+        var command = ProcessControlTestFixture.Create().Restart(
+            parent.Checkpoint.Control,
+            newAttemptId: "process-attempt/materialization-plan-set/cancelled-descendant",
+            id: "restart/materialization-plan-set/cancelled-descendant",
+            issuedAtUtc: restartAtUtc);
+        var restarted = await fixture.Lifecycle.ApplyControlAsync(fixture.Context(restartAtUtc), command);
+
+        Assert.Equal(MaterializationRebuildPlanSetProcessRealization.Closed, restarted.Realization);
+        var closure = Assert.Single(restarted.Leaves);
+        Assert.Equal(MaterializationRebuildPlanSetLeafClosureDisposition.CandidateAbandoned, closure.Disposition);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Cancelled, closure.ChildTerminal);
+        Assert.Equal(execution.Generation, closure.Generation);
+        Assert.Equal(
+            MaterializationGenerationState.Retired,
+            Assert.IsType<MaterializationGenerationSnapshot>(await fixture.Materialization.Target.InspectGenerationAsync(
+                fixture.Context(restartAtUtc),
+                execution.Generation)).State);
+
+        delay.Release();
+        _ = await advanceTask;
+        var replayed = await fixture.Lifecycle.ApplyControlAsync(
+            fixture.Context(restartAtUtc.AddSeconds(1)),
+            command);
+        Assert.Equal(MaterializationRebuildPlanSetProcessRealization.Closed, replayed.Realization);
+        Assert.Equal(closure, Assert.Single(replayed.Leaves));
+    }
+
+    [Fact]
+    public async Task PlanSetLifecycle_RestartAfterInterruptedDescendantFinalizesReplacementAttempt()
+    {
+        using var fixture = await PlanSetLifecycleFixture.CreateAsync(
+            delayWorkerInvocation: true,
+            advanceLeaf: false);
+        var operation = Assert.Single(fixture.Snapshot.Checkpoint.DurableOperations, operation =>
+            operation.Request.Contract == fixture.Artifacts.LeafInvocationRequest);
+        var delay = Assert.IsType<DelayedOperationAdapter>(fixture.WorkerDelay);
+        var advanceTask = fixture.ParentRuntime.AdvanceOperationAsync(
+            fixture.Context(StartedAtUtc.AddMinutes(1)),
+            fixture.Artifacts.ParentPlan,
+            fixture.Snapshot.Checkpoint.ContinuationIdentity.ProcessInstanceId,
+            operation.OperationId);
+        await delay.Entered.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var restartAtUtc = StartedAtUtc.AddMinutes(10);
+        var parent = Assert.IsType<ProcessDurableStoreSnapshot>((await fixture.ParentRuntime.InspectAsync(
+            fixture.Context(restartAtUtc),
+            fixture.Artifacts.ParentPlan,
+            fixture.Snapshot.Checkpoint.ContinuationIdentity)).Snapshot);
+        var command = ProcessControlTestFixture.Create().Restart(
+            parent.Checkpoint.Control,
+            newAttemptId: "process-attempt/materialization-plan-set/replacement-finalizes",
+            id: "restart/materialization-plan-set/replacement-finalizes",
+            issuedAtUtc: restartAtUtc);
+        var restarted = await fixture.Lifecycle.ApplyControlAsync(fixture.Context(restartAtUtc), command);
+        delay.Release();
+        _ = await advanceTask;
+        var replayed = await fixture.Lifecycle.ApplyControlAsync(
+            fixture.Context(restartAtUtc.AddSeconds(1)),
+            command);
+        var replacement = Assert.IsType<ProcessDurableStoreSnapshot>(replayed.Snapshot);
+
+        var terminal = await DrivePlanSetToTerminalAsync(
+            fixture.ParentRuntime,
+            fixture.Context(restartAtUtc.AddSeconds(2)),
+            fixture.Artifacts,
+            replacement.Checkpoint.ContinuationIdentity,
+            replacement);
+
+        Assert.Equal(MaterializationRebuildPlanSetProcessRealization.Closed, restarted.Realization);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Completed, terminal.Checkpoint.Continuation.Terminal.Kind);
+        var receipt = MaterializationRebuildPlanSetReceiptJsonSerializer.DeserializeStructural(
+            RequireString(terminal.Checkpoint.Continuation.Terminal.Detail?.Value));
+        receipt.ValidateAgainst(
+            planSet: fixture.PlanSet,
+            parentPlan: fixture.Artifacts.ParentPlan,
+            checkpoint: terminal.Checkpoint);
+        Assert.Equal(replacement.Checkpoint.ContinuationIdentity, receipt.ParentContinuation);
+        Assert.Equal(MaterializationRebuildPlanSetOutcome.Completed, receipt.Outcome);
+        Assert.Equal(2, fixture.ExecutionResolver.Count);
+    }
+
+    [Fact]
     public async Task PlanSetLifecycle_ExpiredClaimedLeafNormalizesToConclusiveNotStartedWithoutAdapterIo()
     {
         using var fixture = await PlanSetLifecycleFixture.CreateAsync(
@@ -839,6 +947,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
             ProcessDurableRuntime parentRuntime,
             ProcessDurableStoreSnapshot snapshot,
             MaterializationRebuildPlanSetProcessLifecycle lifecycle,
+            DelayedOperationAdapter? workerDelay,
             DelayedOperationAdapter? leafDelay,
             DelayedOperationAdapter? promotionDelay,
             ArmableCrashOnce? parentCrash)
@@ -854,6 +963,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
             ParentRuntime = parentRuntime;
             Snapshot = snapshot;
             Lifecycle = lifecycle;
+            WorkerDelay = workerDelay;
             LeafDelay = leafDelay;
             PromotionDelay = promotionDelay;
             ParentCrash = parentCrash;
@@ -881,6 +991,8 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
 
         internal MaterializationRebuildPlanSetProcessLifecycle Lifecycle { get; }
 
+        internal DelayedOperationAdapter? WorkerDelay { get; }
+
         internal DelayedOperationAdapter? LeafDelay { get; }
 
         internal DelayedOperationAdapter? PromotionDelay { get; }
@@ -888,6 +1000,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
         internal ArmableCrashOnce? ParentCrash { get; }
 
         internal static async Task<PlanSetLifecycleFixture> CreateAsync(
+            bool delayWorkerInvocation = false,
             bool delayLeafInvocation = false,
             bool delayPromotionInvocation = false,
             bool advanceLeaf = true,
@@ -911,6 +1024,13 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                         request: artifacts.Leaf.ShardRebuildRequest,
                         resolver: executionResolver)
                 ]));
+            var workerChildAdapter = new ProcessChildDurableOperationAdapter(
+                runtime: workerRuntime,
+                planResolver: new ProcessChildPlanCatalog([artifacts.Leaf.WorkerPlan]),
+                supportedRequests: [artifacts.Leaf.WorkerInvocationRequest]);
+            var workerDelay = delayWorkerInvocation
+                ? new DelayedOperationAdapter(workerChildAdapter)
+                : null;
             var leafRuntime = new ProcessDurableRuntime(
                 store: new InMemoryProcessDurableStore(),
                 host: RejectingHost.Instance,
@@ -926,10 +1046,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                     new MaterializationRebuildInitializationDurableOperationAdapter(
                         request: artifacts.Leaf.InitializationRequest,
                         resolver: executionResolver),
-                    new ProcessChildDurableOperationAdapter(
-                        runtime: workerRuntime,
-                        planResolver: new ProcessChildPlanCatalog([artifacts.Leaf.WorkerPlan]),
-                        supportedRequests: [artifacts.Leaf.WorkerInvocationRequest]),
+                    (IDurableOperationAdapter?)workerDelay ?? workerChildAdapter,
                     new MaterializationSynchronizationPreparationDurableOperationAdapter(
                         request: artifacts.Leaf.SynchronizationPreparationRequest,
                         resolver: executionResolver)
@@ -1000,7 +1117,8 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                     artifacts.InitializationBinding,
                     artifacts.LeafInvocationBinding,
                     artifacts.ReadinessBarrierBinding,
-                    artifacts.PromotionInvocationBinding
+                    artifacts.PromotionInvocationBinding,
+                    artifacts.FinalizeBinding
                 ]),
                 operationAdapterResolver: new DurableOperationAdapterCatalog(
                 [
@@ -1014,7 +1132,12 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                         resolver: planSetResolver,
                         store: parentStore,
                         parentPlan: artifacts.ParentPlan),
-                    (IDurableOperationAdapter?)promotionDelay ?? promotionChildAdapter
+                    (IDurableOperationAdapter?)promotionDelay ?? promotionChildAdapter,
+                    new MaterializationRebuildPlanSetFinalizationDurableOperationAdapter(
+                        request: artifacts.FinalizeRequest,
+                        resolver: planSetResolver,
+                        store: parentStore,
+                        parentPlan: artifacts.ParentPlan)
                 ]));
             var lifecycle = new MaterializationRebuildPlanSetProcessLifecycle(
                 parentRuntime,
@@ -1084,6 +1207,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 parentRuntime,
                 snapshot,
                 lifecycle,
+                workerDelay,
                 leafDelay,
                 promotionDelay,
                 parentCrash);
