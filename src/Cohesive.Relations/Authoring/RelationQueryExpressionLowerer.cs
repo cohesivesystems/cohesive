@@ -564,6 +564,16 @@ public sealed class RelationQueryExpressionLowerer
         if (binary.NodeType == ExpressionType.Coalesce)
             return TranslateExactCoalesce(binary, scope, sourceReference, expressionPath);
 
+        if (TryTranslateExactEnumComparison(
+                binary,
+                scope,
+                sourceReference,
+                expressionPath,
+                out var enumComparison))
+        {
+            return enumComparison;
+        }
+
         if (TryTranslateGuardableNullComparison(
                 binary,
                 scope,
@@ -661,6 +671,114 @@ public sealed class RelationQueryExpressionLowerer
             right);
     }
 
+    bool TryTranslateExactEnumComparison(
+        BinaryExpression binary,
+        RootScope scope,
+        string sourceReference,
+        string expressionPath,
+        out Expr expression)
+    {
+        expression = null!;
+        if (binary.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual)
+            || binary.Method is not null
+            || binary.IsLifted
+            || binary.IsLiftedToNull)
+        {
+            return false;
+        }
+
+        var leftIsEnum = TryGetConvertedEnumOperand(binary.Left, out var leftOperand, out var leftEnumType);
+        var rightIsEnum = TryGetConvertedEnumOperand(binary.Right, out var rightOperand, out var rightEnumType);
+        if (!leftIsEnum && !rightIsEnum)
+            return false;
+
+        var enumType = leftIsEnum ? leftEnumType : rightEnumType;
+        if (leftIsEnum && rightIsEnum && leftEnumType != rightEnumType)
+            return false;
+
+        if ((!leftIsEnum && !IsExactEnumConstant(binary.Left, enumType))
+            || (!rightIsEnum && !IsExactEnumConstant(binary.Right, enumType)))
+        {
+            return false;
+        }
+
+        var left = leftIsEnum
+            ? Translate(leftOperand, scope, sourceReference, expressionPath + "/left")
+            : TranslateExactEnumConstant(binary.Left, enumType, sourceReference, expressionPath + "/left");
+        var right = rightIsEnum
+            ? Translate(rightOperand, scope, sourceReference, expressionPath + "/right")
+            : TranslateExactEnumConstant(binary.Right, enumType, sourceReference, expressionPath + "/right");
+        expression = new BinaryExpr(
+            binary.NodeType == ExpressionType.Equal ? BinaryOperator.Eq : BinaryOperator.Ne,
+            left,
+            right);
+        return true;
+    }
+
+    static bool TryGetConvertedEnumOperand(
+        Expression expression,
+        out Expression operand,
+        out Type enumType)
+    {
+        if (expression is UnaryExpression
+            {
+                NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked,
+                Method: null,
+                IsLifted: false,
+                IsLiftedToNull: false
+            } conversion
+            && conversion.Operand.Type.IsEnum
+            && conversion.Type == GetEnumComparisonCarrierType(conversion.Operand.Type)
+            && (conversion.Operand is not MemberExpression member
+                || !IsParameterMarkerMember(member, out _)))
+        {
+            operand = conversion.Operand;
+            enumType = conversion.Operand.Type;
+            return true;
+        }
+
+        operand = null!;
+        enumType = null!;
+        return false;
+    }
+
+    static bool IsExactEnumConstant(Expression expression, Type enumType) =>
+        expression is ConstantExpression { Value: not null } constant
+        && constant.Type == GetEnumComparisonCarrierType(enumType);
+
+    static Type GetEnumComparisonCarrierType(Type enumType)
+    {
+        var underlying = Enum.GetUnderlyingType(enumType);
+        return underlying == typeof(byte)
+               || underlying == typeof(sbyte)
+               || underlying == typeof(short)
+               || underlying == typeof(ushort)
+            ? typeof(int)
+            : underlying;
+    }
+
+    Expr TranslateExactEnumConstant(
+        Expression expression,
+        Type enumType,
+        string sourceReference,
+        string expressionPath)
+    {
+        var constant = (ConstantExpression)expression;
+        var value = (Enum)Enum.ToObject(enumType, constant.Value!);
+        if (!TryGetUnambiguousEnumMember(value, out var member))
+        {
+            throw Fail(
+                RelationQueryExpressionDiagnosticCodes.LiteralUnsupported,
+                $"Enum value '{constant.Value}' is not one exact, unambiguous named member of '{Display(enumType)}'.",
+                expressionPath,
+                sourceReference,
+                symbol: $"{Display(enumType)}:{constant.Value}",
+                suggestion: "Compare against one uniquely named enum member or author the intended numeric/flags semantics structurally.");
+        }
+
+        return CreateTypedLiteralOrConstant(enumType, ObservationValue.FromString(member));
+    }
+
     Expr TranslateExactCoalesce(
         BinaryExpression binary,
         RootScope scope,
@@ -708,6 +826,13 @@ public sealed class RelationQueryExpressionLowerer
         string sourceReference,
         string expressionPath)
     {
+        if (IsDateTimeOffsetEqualsExact(call))
+        {
+            return Expr.Eq(
+                Translate(call.Object!, scope, sourceReference, expressionPath + "/left"),
+                Translate(call.Arguments[0], scope, sourceReference, expressionPath + "/right"));
+        }
+
         if (IsOrdinalEndsWith(call))
         {
             return Expr.EndsWith(
@@ -2204,8 +2329,6 @@ public sealed class RelationQueryExpressionLowerer
         expression = null!;
         if (binary.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual))
             return false;
-        if (binary.Method is not null && binary.Method.DeclaringType != typeof(string))
-            return false;
 
         var left = StripExactConversions(binary.Left, sourceReference, expressionPath + "/left");
         var right = StripExactConversions(binary.Right, sourceReference, expressionPath + "/right");
@@ -2214,12 +2337,36 @@ public sealed class RelationQueryExpressionLowerer
             : null;
         if (member is null || !TryGetGuardableMemberAccess(member, scope, out _))
             return false;
+        if (binary.Method is not null
+            && binary.Method.DeclaringType != typeof(string)
+            && !IsCompilerGeneratedReferenceNullOperator(binary.Method, member.Type))
+        {
+            return false;
+        }
 
         var value = TranslateMember(member, scope, sourceReference, expressionPath + "/member");
         expression = binary.NodeType == ExpressionType.Equal
             ? Expr.Eq(value, Expr.Null())
             : Expr.Ne(value, Expr.Null());
         return true;
+    }
+
+    static bool IsCompilerGeneratedReferenceNullOperator(MethodInfo method, Type operandType)
+    {
+        if (!method.IsStatic
+            || !method.IsSpecialName
+            || !method.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false)
+            || method.ReturnType != typeof(bool)
+            || method.DeclaringType != operandType
+            || method.Name is not ("op_Equality" or "op_Inequality"))
+        {
+            return false;
+        }
+
+        var parameters = method.GetParameters();
+        return parameters.Length == 2
+               && parameters[0].ParameterType == operandType
+               && parameters[1].ParameterType == operandType;
     }
 
     static Expression StripExactConversions(
@@ -2690,8 +2837,6 @@ public sealed class RelationQueryExpressionLowerer
         member = null!;
         if (binary.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual))
             return false;
-        if (binary.Method is not null && binary.Method.DeclaringType != typeof(string))
-            return false;
 
         var left = StripConditionConversions(binary.Left);
         var right = StripConditionConversions(binary.Right);
@@ -2700,6 +2845,12 @@ public sealed class RelationQueryExpressionLowerer
             : null;
         if (candidate is null)
             return false;
+        if (binary.Method is not null
+            && binary.Method.DeclaringType != typeof(string)
+            && !IsCompilerGeneratedReferenceNullOperator(binary.Method, candidate.Type))
+        {
+            return false;
+        }
 
         member = candidate;
         return true;
@@ -2918,6 +3069,14 @@ public sealed class RelationQueryExpressionLowerer
     static bool IsStringEndsWith(MethodCallExpression call) =>
         call.Object?.Type == typeof(string)
         && string.Equals(call.Method.Name, nameof(string.EndsWith), StringComparison.Ordinal);
+
+    static bool IsDateTimeOffsetEqualsExact(MethodCallExpression call) =>
+        call.Object?.Type == typeof(DateTimeOffset)
+        && call.Method.DeclaringType == typeof(DateTimeOffset)
+        && string.Equals(call.Method.Name, nameof(DateTimeOffset.EqualsExact), StringComparison.Ordinal)
+        && call.Method.ReturnType == typeof(bool)
+        && call.Arguments is [{ Type: var argumentType }]
+        && argumentType == typeof(DateTimeOffset);
 
     static bool IsOrdinalEndsWith(MethodCallExpression call)
         => IsOrdinalStringPredicate(call, nameof(string.EndsWith));

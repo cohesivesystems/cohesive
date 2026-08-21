@@ -97,6 +97,36 @@ public sealed class RelationQueryExpressionAuthoringTests
     }
 
     [Fact]
+    public void EnumFilter_LowersNamedMembersAndFieldsThroughTheFluentSurface()
+    {
+        var author = RelationQuery.Expression();
+        var loads = author.Source<Load>();
+        var filtered = author.Filter(
+            loads.Node,
+            (Load load) => load.ProcessingStatus == LoadProcessingStatus.Ready
+                           && load.ExpectedProcessingStatus == load.ProcessingStatus
+                           && load.OccurredAt.EqualsExact(load.ExpectedOccurredAt),
+            loads.Binding,
+            sourceReference: "load/filter-status");
+        var rows = author.Rows(filtered, loads.Binding, id: "rows");
+        var query = author.BuildQuery(
+            new("load-status-query"),
+            new("LoadStatusQuery"),
+            rows);
+
+        Assert.True(query.Validation.IsValid, Format(query.Validation));
+        var predicate = Assert.Single(query.Definition.Body.Nodes.OfType<FilterQueryNode>()).Predicate;
+        var enumLiteral = Assert.Single(Descendants(predicate).OfType<LiteralExpr>());
+        Assert.Equal(
+            nameof(LoadProcessingStatus),
+            Assert.IsType<EnumTypeRef>(enumLiteral.Type).Name);
+        Assert.Equal(
+            ObservationValue.FromString(nameof(LoadProcessingStatus.Ready)),
+            enumLiteral.Value);
+        Assert.Equal(5, Descendants(predicate).OfType<FieldExpr>().Count());
+    }
+
+    [Fact]
     public void EagerCollectionProjectionAndInt64Count_AuthorThroughTheFluentSurface()
     {
         var author = RelationQuery.Expression();
@@ -1071,8 +1101,22 @@ public sealed class RelationQueryExpressionAuthoringTests
         [JsonPropertyName("status")]
         public string Status { get; init; } = string.Empty;
 
+        public LoadProcessingStatus ProcessingStatus { get; init; }
+
+        public LoadProcessingStatus ExpectedProcessingStatus { get; init; }
+
+        public DateTimeOffset OccurredAt { get; init; }
+
+        public DateTimeOffset ExpectedOccurredAt { get; init; }
+
         [JsonPropertyName("stops")]
         public Stop[] Stops { get; init; } = [];
+    }
+
+    enum LoadProcessingStatus : byte
+    {
+        Pending,
+        Ready
     }
 
     sealed record ParameterObject(string Name);
