@@ -105,6 +105,59 @@ public sealed partial class MaterializationRebuildExecutorTests
         Assert.Equal(1, target.PromotionCalls);
     }
 
+    [Theory]
+    [InlineData(MaterializationExecutionBoundaryPoint.BeforeGenerationPromotion)]
+    [InlineData(MaterializationExecutionBoundaryPoint.AfterGenerationPromotion)]
+    public async Task Activation_InterruptedPromotionReplaysTheExactDurableOperation(
+        MaterializationExecutionBoundaryPoint boundaryPoint)
+    {
+        var harness = await CreateSynchronizationHarnessAsync();
+        var workStore = new InMemoryMaterializationSynchronizationWorkStore();
+        var time = new MutableActivationTimeProvider(DateTimeOffset.UtcNow);
+        var target = new ObservedActivationTarget(harness.Rebuild.Target, time);
+        var observer = new ThrowOnceBoundaryObserver(boundaryPoint);
+        var executor = ActivationExecutor(
+            harness: harness,
+            target: target,
+            workStore: workStore,
+            boundaryObserver: observer);
+        var invocation = Invocation($"activation/promotion-boundary/{boundaryPoint}");
+        var worker = Worker($"activation/promotion-boundary/{boundaryPoint}");
+
+        await Assert.ThrowsAsync<InjectedMaterializationInterruptionException>(async () =>
+            await executor.ActivateAsync(
+                OperationContext.Create(time),
+                harness.Attempt,
+                invocation,
+                worker));
+        var interrupted = Assert.Single(
+            observer.Observations,
+            observation => observation.Point == boundaryPoint);
+
+        var resumed = await executor.ActivateAsync(
+            OperationContext.Create(time),
+            harness.Attempt,
+            invocation,
+            worker);
+        var repeated = observer.Observations
+            .Where(observation => observation.Point == boundaryPoint
+                && observation.OperationIdentity == interrupted.OperationIdentity)
+            .ToArray();
+
+        Assert.Equal(MaterializationGenerationActivationDisposition.Active, resumed.Disposition);
+        Assert.Equal(2, repeated.Length);
+        Assert.All(repeated, observation =>
+        {
+            Assert.Equal(harness.Attempt, observation.Attempt);
+            Assert.Equal(harness.Generation, observation.Generation);
+            Assert.Equal(target.Descriptor.Id.Value, observation.ScopeIdentity);
+            Assert.Equal(0, observation.Occurrence);
+        });
+        Assert.Equal(
+            boundaryPoint == MaterializationExecutionBoundaryPoint.BeforeGenerationPromotion ? 1 : 2,
+            target.PromotionCalls);
+    }
+
     [Fact]
     public async Task Activation_CallerCancellationPropagatesWithoutStartingDurableWork()
     {
@@ -278,7 +331,8 @@ public sealed partial class MaterializationRebuildExecutorTests
     static MaterializationGenerationActivationExecutor ActivationExecutor(
         SynchronizationHarness harness,
         IMaterializationTarget target,
-        IMaterializationSynchronizationWorkStore workStore)
+        IMaterializationSynchronizationWorkStore workStore,
+        IMaterializationExecutionBoundaryObserver? boundaryObserver = null)
     {
         var retained = harness.Rebuild.Resolved;
         var resolved = new ResolvedMaterializationRebuildPlan(
@@ -288,7 +342,10 @@ public sealed partial class MaterializationRebuildExecutorTests
             progressStore: retained.ProgressStore,
             shardBindings: harness.Rebuild.Plan.Shards.Select(shard => retained.GetShard(shard.Id)),
             changeFeedBindings: harness.Rebuild.Plan.ChangeFeeds.Select(feed => retained.GetChangeFeed(feed.Id)));
-        return new(resolved, workStore);
+        return new(
+            resolved: resolved,
+            workStore: workStore,
+            boundaryObserver: boundaryObserver);
     }
 
     static async Task<MaterializationGenerationId> PromoteReplacementAsync(

@@ -215,7 +215,7 @@ public sealed class MaterializationRebuildExecution
     /// <param name="synchronizationWorkStore">
     /// Shared durable generation-wide synchronization, version-allocation, and activation authority.
     /// </param>
-    /// <param name="crashInjector">Optional deterministic conformance and crash-injection hook.</param>
+    /// <param name="boundaryObserver">Optional provider-neutral lifecycle boundary observer.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="resolved"/>, <paramref name="attempt"/>, or <paramref name="synchronizationWorkStore"/> is
     /// <see langword="null"/>.
@@ -224,7 +224,7 @@ public sealed class MaterializationRebuildExecution
         ResolvedMaterializationRebuildPlan resolved,
         MaterializationRebuildAttempt attempt,
         IMaterializationSynchronizationWorkStore synchronizationWorkStore,
-        IMaterializationRebuildCrashInjector? crashInjector = null)
+        IMaterializationExecutionBoundaryObserver? boundaryObserver = null)
     {
         ArgumentNullException.ThrowIfNull(resolved);
         ArgumentNullException.ThrowIfNull(synchronizationWorkStore);
@@ -235,10 +235,13 @@ public sealed class MaterializationRebuildExecution
         Generation = MaterializationRebuildIdentities.Generation(resolved.Plan, attempt);
         Materialization = resolved.Plan.Materialization.Definition.Id;
         Target = resolved.Plan.Target.Id;
-        var executor = new MaterializationRebuildExecutor(resolved, crashInjector);
+        var executor = new MaterializationRebuildExecutor(
+            resolved: resolved,
+            boundaryObserver: boundaryObserver);
         var activationExecutor = new MaterializationGenerationActivationExecutor(
-            resolved,
-            synchronizationWorkStore);
+            resolved: resolved,
+            workStore: synchronizationWorkStore,
+            boundaryObserver: boundaryObserver);
         beginAttempt = context => executor.BeginAttemptAsync(context, attempt);
         runShard = (context, shard) => executor.RunShardAsync(context, attempt, shard);
         synchronizeAndPrepare = (context, invocation, worker) =>

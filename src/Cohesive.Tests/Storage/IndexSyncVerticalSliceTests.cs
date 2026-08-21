@@ -64,7 +64,9 @@ public sealed class IndexSyncVerticalSliceTests
         target.Observer.Bind(fixture.ControlProvider, fixture.Clock);
         target.Transport.EnqueueRetryableBulkItemFailure(itemOrdinal: 0);
         var interrupted = new ThrowAfterFirstCheckpoint();
-        var firstExecutor = new MaterializationRebuildExecutor(fixture.Resolved, interrupted);
+        var firstExecutor = new MaterializationRebuildExecutor(
+            resolved: fixture.Resolved,
+            boundaryObserver: interrupted);
 
         var begun = await firstExecutor.BeginAttemptAsync(context, attempt);
         Assert.Equal(MaterializationRebuildInitializationDisposition.Ready, begun.Disposition);
@@ -2284,18 +2286,18 @@ public sealed class IndexSyncVerticalSliceTests
         }
     }
 
-    sealed class ThrowAfterFirstCheckpoint : IMaterializationRebuildCrashInjector
+    sealed class ThrowAfterFirstCheckpoint : IMaterializationExecutionBoundaryObserver
     {
         bool thrown;
 
         public ValueTask ObserveAsync(
             OperationContext context,
-            MaterializationRebuildCrashObservation observation)
+            MaterializationExecutionBoundaryObservation observation)
         {
             ArgumentNullException.ThrowIfNull(context);
             ArgumentNullException.ThrowIfNull(observation);
             context.ThrowIfCancellationRequested();
-            if (!thrown && observation.Point == MaterializationRebuildCrashPoint.AfterCheckpoint)
+            if (!thrown && observation.Point == MaterializationExecutionBoundaryPoint.AfterCheckpointCommit)
             {
                 thrown = true;
                 throw new InjectedRebuildInterruption();

@@ -60,7 +60,10 @@ internal static class MaterializationTargetBatchWriter
     /// Deterministic identity projection from a canonical digest of the exact selected mutation content and each
     /// mutation's zero-based attempt ordinal.
     /// </param>
-    /// <param name="afterBulkObservation">
+    /// <param name="beforeTargetBatchObservation">
+    /// Optional observation invoked after exact request construction and immediately before target submission.
+    /// </param>
+    /// <param name="afterTargetBatchObservation">
     /// Optional observation invoked after exact result validation and before the outcome is interpreted.
     /// </param>
     /// <param name="acquireAdmission">Optional target-stage admission acquired immediately before each physical request.</param>
@@ -81,8 +84,10 @@ internal static class MaterializationTargetBatchWriter
         Func<OperationContext, ValueTask<MaterializationTargetBatchOperatingLimits>> resolveLimits,
         int maximumAttempts,
         Func<string, MaterializationBatchId> createBatchId,
+        Func<OperationContext, MaterializationApplyBatchRequest, ValueTask>?
+            beforeTargetBatchObservation = null,
         Func<OperationContext, MaterializationApplyBatchRequest, MaterializationBatchResult, ValueTask>?
-            afterBulkObservation = null,
+            afterTargetBatchObservation = null,
         Func<OperationContext, ValueTask<IAsyncDisposable?>>? acquireAdmission = null)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -170,6 +175,8 @@ internal static class MaterializationTargetBatchWriter
             MaterializationBatchResult result;
             try
             {
+                if (beforeTargetBatchObservation is not null)
+                    await beforeTargetBatchObservation(context, request).ConfigureAwait(false);
                 result = await target.ApplyBatchAsync(context, request).ConfigureAwait(false);
             }
             finally
@@ -188,8 +195,8 @@ internal static class MaterializationTargetBatchWriter
                     $"The target returned inexact per-item evidence: {exception.Message}");
             }
 
-            if (afterBulkObservation is not null)
-                await afterBulkObservation(context, request, result).ConfigureAwait(false);
+            if (afterTargetBatchObservation is not null)
+                await afterTargetBatchObservation(context, request, result).ConfigureAwait(false);
 
             if (result.Disposition == MaterializationBatchDisposition.IdentityConflict)
             {

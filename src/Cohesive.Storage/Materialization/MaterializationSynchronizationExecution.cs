@@ -355,22 +355,26 @@ public sealed class MaterializationSynchronizationExecutor
     readonly ResolvedMaterializationRebuildPlan resolved;
     readonly IMaterializationSynchronizationWorkStore workStore;
     readonly MaterializationIndexSyncWorkloadKind workload;
+    readonly IMaterializationExecutionBoundaryObserver boundaryObserver;
 
     /// <summary>Creates a synchronization executor over exact runtime bindings and one durable work authority.</summary>
     /// <param name="resolved">Exact persisted plan resolved to source, Relations, progress, and target ports.</param>
     /// <param name="workStore">Generation-wide durable target-work and item-version authority.</param>
     /// <param name="workload">Explicit rebuild catch-up or realtime maintenance workload.</param>
+    /// <param name="boundaryObserver">Optional provider-neutral lifecycle boundary observer.</param>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
     public MaterializationSynchronizationExecutor(
         ResolvedMaterializationRebuildPlan resolved,
         IMaterializationSynchronizationWorkStore workStore,
-        MaterializationIndexSyncWorkloadKind workload)
+        MaterializationIndexSyncWorkloadKind workload,
+        IMaterializationExecutionBoundaryObserver? boundaryObserver = null)
     {
         this.resolved = resolved ?? throw new ArgumentNullException(nameof(resolved));
         this.workStore = workStore ?? throw new ArgumentNullException(nameof(workStore));
         if (!Enum.IsDefined(workload))
             throw new ArgumentOutOfRangeException(nameof(workload), workload, "Unsupported index-sync workload.");
         this.workload = workload;
+        this.boundaryObserver = boundaryObserver ?? NoOpMaterializationExecutionBoundaryObserver.Instance;
     }
 
     /// <summary>Exact persisted synchronization plan interpreted by this executor.</summary>
@@ -589,7 +593,14 @@ public sealed class MaterializationSynchronizationExecutor
                 "The feed lacks its exact initialized change cut or current progress ownership.");
         }
 
-        var settled = await DrainSettlementAsync(context, feed, binding, progress, owner).ConfigureAwait(false);
+        var settled = await DrainSettlementAsync(
+                context: context,
+                attempt: attempt,
+                feed: feed,
+                binding: binding,
+                progress: progress,
+                owner: owner)
+            .ConfigureAwait(false);
         if (settled.Failure is not null)
             return WithCounts(settled.Failure, pagesRead: 0, mutationsApplied);
         progress = settled.Progress;
@@ -627,6 +638,14 @@ public sealed class MaterializationSynchronizationExecutor
             }
             var readStartedAtUtc = context.UtcNow;
             MaterializationChangePage page;
+            await ObserveBoundaryAsync(
+                    context: context,
+                    attempt: attempt,
+                    generation: generation,
+                    point: MaterializationExecutionBoundaryPoint.BeforeSourceRead,
+                    scopeIdentity: feed.Id.Value,
+                    operationIdentity: readReference)
+                .ConfigureAwait(false);
             try
             {
                 await using var sourceAdmission = control is null
@@ -690,6 +709,14 @@ public sealed class MaterializationSynchronizationExecutor
             }
             var readCompletedAtUtc = context.UtcNow;
             pagesRead++;
+            await ObserveBoundaryAsync(
+                    context: context,
+                    attempt: attempt,
+                    generation: generation,
+                    point: MaterializationExecutionBoundaryPoint.AfterSourceRead,
+                    scopeIdentity: feed.Id.Value,
+                    operationIdentity: readReference)
+                .ConfigureAwait(false);
 
             var preparationId = MaterializationSynchronizationIdentities.Preparation(
                 workKey,
@@ -708,6 +735,14 @@ public sealed class MaterializationSynchronizationExecutor
                 readCompletedAtUtc);
 
             ImmutableArray<MaterializationSynchronizationItemIntent> itemIntents;
+            await ObserveBoundaryAsync(
+                    context: context,
+                    attempt: attempt,
+                    generation: generation,
+                    point: MaterializationExecutionBoundaryPoint.BeforeHydration,
+                    scopeIdentity: feed.Id.Value,
+                    operationIdentity: readReference)
+                .ConfigureAwait(false);
             try
             {
                 await using var transformAdmission = control is null
@@ -746,6 +781,14 @@ public sealed class MaterializationSynchronizationExecutor
                     MaterializationSynchronizationDiagnosticCodes.SourceOrImpactFailed,
                     exception.Message);
             }
+            await ObserveBoundaryAsync(
+                    context: context,
+                    attempt: attempt,
+                    generation: generation,
+                    point: MaterializationExecutionBoundaryPoint.AfterHydration,
+                    scopeIdentity: feed.Id.Value,
+                    operationIdentity: readReference)
+                .ConfigureAwait(false);
 
             var preparedResult = await workStore.PrepareAsync(
                     context,
@@ -781,7 +824,14 @@ public sealed class MaterializationSynchronizationExecutor
             {
                 progress = await resolved.ProgressStore.LoadAsync(context, progressKey).ConfigureAwait(false)
                     ?? progress;
-                settled = await DrainSettlementAsync(context, feed, binding, progress, owner).ConfigureAwait(false);
+                settled = await DrainSettlementAsync(
+                        context: context,
+                        attempt: attempt,
+                        feed: feed,
+                        binding: binding,
+                        progress: progress,
+                        owner: owner)
+                    .ConfigureAwait(false);
                 if (settled.Failure is not null)
                     return WithCounts(settled.Failure, pagesRead, mutationsApplied);
                 progress = settled.Progress;
@@ -803,7 +853,13 @@ public sealed class MaterializationSynchronizationExecutor
                 continue;
             }
 
-            var applied = await ApplyPreparedWorkAsync(context, prepared, generation, work.Fence).ConfigureAwait(false);
+            var applied = await ApplyPreparedWorkAsync(
+                    context: context,
+                    attempt: attempt,
+                    work: prepared,
+                    generation: generation,
+                    workFence: work.Fence)
+                .ConfigureAwait(false);
             if (applied is not null)
                 return ApplyFailure(feed, generation, pagesRead, mutationsApplied, progress, applied.Value);
             mutationsApplied = checked(mutationsApplied + prepared.Mutations.Length);
@@ -813,11 +869,13 @@ public sealed class MaterializationSynchronizationExecutor
             if (!noProgress || !prepared.Mutations.IsDefaultOrEmpty)
             {
                 var saved = await SavePageCheckpointAsync(
-                        context,
-                        progressKey,
-                        owner,
-                        progress,
-                        pageIntent)
+                        context: context,
+                        attempt: attempt,
+                        feed: feed,
+                        key: progressKey,
+                        owner: owner,
+                        progress: progress,
+                        page: pageIntent)
                     .ConfigureAwait(false);
                 if (saved.Disposition is not (
                     MaterializationProgressMutationDisposition.Applied
@@ -871,7 +929,14 @@ public sealed class MaterializationSynchronizationExecutor
             }
             work = completed.Snapshot!;
 
-            settled = await DrainSettlementAsync(context, feed, binding, progress, owner).ConfigureAwait(false);
+            settled = await DrainSettlementAsync(
+                    context: context,
+                    attempt: attempt,
+                    feed: feed,
+                    binding: binding,
+                    progress: progress,
+                    owner: owner)
+                .ConfigureAwait(false);
             if (settled.Failure is not null)
                 return WithCounts(settled.Failure, pagesRead, mutationsApplied);
             progress = settled.Progress;
@@ -984,7 +1049,13 @@ public sealed class MaterializationSynchronizationExecutor
         var checkpointAlreadyDurable = IsExactCheckpoint(progress.LatestChangeCheckpoint, pending.Page);
         if (!checkpointAlreadyDurable)
         {
-            var applied = await ApplyPreparedWorkAsync(context, pending, generation, work.Fence).ConfigureAwait(false);
+            var applied = await ApplyPreparedWorkAsync(
+                    context: context,
+                    attempt: attempt,
+                    work: pending,
+                    generation: generation,
+                    workFence: work.Fence)
+                .ConfigureAwait(false);
             if (applied is not null)
             {
                 return new(
@@ -995,11 +1066,13 @@ public sealed class MaterializationSynchronizationExecutor
             }
 
             var saved = await SavePageCheckpointAsync(
-                    context,
-                    progressKey,
-                    owner,
-                    progress,
-                    pending.Page)
+                    context: context,
+                    attempt: attempt,
+                    feed: feed,
+                    key: progressKey,
+                    owner: owner,
+                    progress: progress,
+                    page: pending.Page)
                 .ConfigureAwait(false);
             if (saved.Disposition is not (
                 MaterializationProgressMutationDisposition.Applied
@@ -1065,7 +1138,14 @@ public sealed class MaterializationSynchronizationExecutor
         }
         work = completed.Snapshot!;
 
-        var settled = await DrainSettlementAsync(context, feed, binding, progress, owner).ConfigureAwait(false);
+        var settled = await DrainSettlementAsync(
+                context: context,
+                attempt: attempt,
+                feed: feed,
+                binding: binding,
+                progress: progress,
+                owner: owner)
+            .ConfigureAwait(false);
         if (settled.Failure is not null)
             return new(work, pending.Mutations.Length, null, settled.Failure);
 
@@ -1081,6 +1161,7 @@ public sealed class MaterializationSynchronizationExecutor
 
     async ValueTask<MaterializationTargetWriteResult?> ApplyPreparedWorkAsync(
         OperationContext context,
+        MaterializationRebuildAttempt attempt,
         MaterializationPreparedSynchronizationWork work,
         MaterializationGenerationId generation,
         MaterializationProgressFence workFence)
@@ -1102,6 +1183,22 @@ public sealed class MaterializationSynchronizationExecutor
                         $"{work.PreparationId.Value}/target-batch"),
                 resolved.Plan.Materialization.Definition.FailurePolicy.MaximumAttempts,
                 contentIdentity => MaterializationSynchronizationIdentities.Batch(work, contentIdentity),
+                beforeTargetBatchObservation: async (operation, request) => await ObserveBoundaryAsync(
+                        context: operation,
+                        attempt: attempt,
+                        generation: generation,
+                        point: MaterializationExecutionBoundaryPoint.BeforeTargetBatch,
+                        scopeIdentity: work.Page.Feed.Value,
+                        operationIdentity: request.BatchId.Value)
+                    .ConfigureAwait(false),
+                afterTargetBatchObservation: async (operation, request, _) => await ObserveBoundaryAsync(
+                        context: operation,
+                        attempt: attempt,
+                        generation: generation,
+                        point: MaterializationExecutionBoundaryPoint.AfterTargetBatch,
+                        scopeIdentity: work.Page.Feed.Value,
+                        operationIdentity: request.BatchId.Value)
+                    .ConfigureAwait(false),
                 acquireAdmission: control is null
                     ? null
                     : async operation => await control.AcquireStageAsync(
@@ -1116,6 +1213,8 @@ public sealed class MaterializationSynchronizationExecutor
 
     async Task<MaterializationProgressMutationResult> SavePageCheckpointAsync(
         OperationContext context,
+        MaterializationRebuildAttempt attempt,
+        MaterializationChangeFeedPlan feed,
         MaterializationProgressKey key,
         string owner,
         MaterializationProgressSnapshot progress,
@@ -1131,7 +1230,15 @@ public sealed class MaterializationSynchronizationExecutor
             committedAtUtc: context.UtcNow,
             evidenceReference: page.Feed.Value,
             channelProgress: MaterializationChannelSemantics.CreatePositionedDurableProgress(page.ThroughPosition));
-        return await resolved.ProgressStore.SaveCheckpointAsync(
+        await ObserveBoundaryAsync(
+                context: context,
+                attempt: attempt,
+                generation: key.Generation,
+                point: MaterializationExecutionBoundaryPoint.BeforeCheckpointCommit,
+                scopeIdentity: feed.Id.Value,
+                operationIdentity: checkpoint.Id.Value)
+            .ConfigureAwait(false);
+        var saved = await resolved.ProgressStore.SaveCheckpointAsync(
                 context,
                 key,
                 MaterializationSynchronizationIdentities.CheckpointMutation(page.Checkpoint),
@@ -1140,6 +1247,19 @@ public sealed class MaterializationSynchronizationExecutor
                 progress.Fence,
                 checkpoint)
             .ConfigureAwait(false);
+        if (saved.Disposition is MaterializationProgressMutationDisposition.Applied
+            or MaterializationProgressMutationDisposition.Replayed)
+        {
+            await ObserveBoundaryAsync(
+                    context: context,
+                    attempt: attempt,
+                    generation: key.Generation,
+                    point: MaterializationExecutionBoundaryPoint.AfterCheckpointCommit,
+                    scopeIdentity: feed.Id.Value,
+                    operationIdentity: checkpoint.Id.Value)
+                .ConfigureAwait(false);
+        }
+        return saved;
     }
 
     async Task<MaterializationSynchronizationWorkMutationResult> CompletePreparedWorkAsync(
@@ -1163,6 +1283,7 @@ public sealed class MaterializationSynchronizationExecutor
 
     async Task<SettlementDrainResult> DrainSettlementAsync(
         OperationContext context,
+        MaterializationRebuildAttempt attempt,
         MaterializationChangeFeedPlan feed,
         MaterializationChangeFeedBinding binding,
         MaterializationProgressSnapshot progress,
@@ -1188,13 +1309,22 @@ public sealed class MaterializationSynchronizationExecutor
                     "The selected source advertises explicit settlement but does not bind its settlement port."));
         }
 
+        var request = new MaterializationSourceSettlementRequest(
+            id: MaterializationSynchronizationIdentities.Settlement(checkpoint),
+            checkpoint: checkpoint.Id,
+            position: checkpoint.Position!,
+            requestedAtUtc: checkpoint.CommittedAtUtc);
+        await ObserveBoundaryAsync(
+                context: context,
+                attempt: attempt,
+                generation: progress.Key.Generation,
+                point: MaterializationExecutionBoundaryPoint.BeforeSourceSettlement,
+                scopeIdentity: feed.Id.Value,
+                operationIdentity: request.Id.Value)
+            .ConfigureAwait(false);
         var settled = await settlingSource.SettleAsync(
-                context,
-                new MaterializationSourceSettlementRequest(
-                    id: MaterializationSynchronizationIdentities.Settlement(checkpoint),
-                    checkpoint: checkpoint.Id,
-                    position: checkpoint.Position!,
-                    requestedAtUtc: checkpoint.CommittedAtUtc))
+                context: context,
+                request: request)
             .ConfigureAwait(false);
         if (settled.Disposition is not (
                 MaterializationSourceSettlementDisposition.Acknowledged
@@ -1217,6 +1347,15 @@ public sealed class MaterializationSynchronizationExecutor
                         : MaterializationSynchronizationDiagnosticCodes.SettlementFailed,
                     $"Explicit source settlement was rejected with '{settled.Disposition}'."));
         }
+
+        await ObserveBoundaryAsync(
+                context: context,
+                attempt: attempt,
+                generation: progress.Key.Generation,
+                point: MaterializationExecutionBoundaryPoint.AfterSourceSettlement,
+                scopeIdentity: feed.Id.Value,
+                operationIdentity: request.Id.Value)
+            .ConfigureAwait(false);
 
         var saved = await resolved.ProgressStore.SaveSettlementAsync(
                 context,
@@ -1249,6 +1388,23 @@ public sealed class MaterializationSynchronizationExecutor
         }
         return new(saved.Snapshot!, null);
     }
+
+    async ValueTask ObserveBoundaryAsync(
+        OperationContext context,
+        MaterializationRebuildAttempt attempt,
+        MaterializationGenerationId generation,
+        MaterializationExecutionBoundaryPoint point,
+        string scopeIdentity,
+        string operationIdentity) => await boundaryObserver.ObserveAsync(
+            context: context,
+            observation: new(
+                attempt: attempt,
+                generation: generation,
+                point: point,
+                scopeIdentity: scopeIdentity,
+                operationIdentity: operationIdentity,
+                occurrence: 0))
+        .ConfigureAwait(false);
 
     bool RequiresExplicitSettlement(MaterializationChangeFeedPlan feed)
     {

@@ -317,6 +317,66 @@ public sealed partial class MaterializationRebuildExecutorTests
         Assert.Equal(checkpoint.Id, resumed.Progress!.LatestSettlement!.Checkpoint);
     }
 
+    [Theory]
+    [InlineData(MaterializationExecutionBoundaryPoint.BeforeSourceSettlement)]
+    [InlineData(MaterializationExecutionBoundaryPoint.AfterSourceSettlement)]
+    public async Task Synchronization_InterruptedSettlementReplaysTheExactDurableOperation(
+        MaterializationExecutionBoundaryPoint boundaryPoint)
+    {
+        var harness = await CreateSynchronizationHarnessAsync();
+        var feed = RootFeed(harness.Rebuild);
+        var source = new ScriptedChangeSource(
+            harness.Rebuild.Resolved.GetChangeFeed(feed.Id).Source,
+            read: static (_, request) =>
+                new([], request.AfterPosition, MaterializationChangePageState.CaughtUp));
+        var observer = new ThrowOnceBoundaryObserver(boundaryPoint);
+        var executor = Executor(
+            harness: harness,
+            selectedFeed: feed,
+            source: source,
+            runtime: ImpactRuntime(harness.Rebuild),
+            workStore: new InMemoryMaterializationSynchronizationWorkStore(),
+            boundaryObserver: observer);
+
+        await Assert.ThrowsAsync<InjectedMaterializationInterruptionException>(async () =>
+            await executor.RunFeedAsync(
+                OperationContext.Create(),
+                harness.Attempt,
+                feed.Id,
+                Invocation($"settlement-boundary/{boundaryPoint}"),
+                Worker("primary")));
+        var interruptedOperation = Assert.Single(
+            observer.Observations,
+            observation => observation.Point == boundaryPoint).OperationIdentity;
+
+        var resumed = await executor.RunFeedAsync(
+            OperationContext.Create(),
+            harness.Attempt,
+            feed.Id,
+            Invocation($"settlement-boundary/{boundaryPoint}"),
+            Worker("primary"));
+        var repeated = observer.Observations
+            .Where(observation => observation.Point == boundaryPoint
+                && observation.OperationIdentity == interruptedOperation)
+            .ToArray();
+
+        Assert.Equal(MaterializationCatchUpFeedDisposition.CaughtUp, resumed.Disposition);
+        Assert.Equal(2, repeated.Length);
+        Assert.All(repeated, observation =>
+        {
+            Assert.Equal(harness.Attempt, observation.Attempt);
+            Assert.Equal(harness.Generation, observation.Generation);
+            Assert.Equal(feed.Id.Value, observation.ScopeIdentity);
+            Assert.Equal(0, observation.Occurrence);
+        });
+        if (boundaryPoint == MaterializationExecutionBoundaryPoint.AfterSourceSettlement)
+        {
+            Assert.Equal(
+                source.SettlementRequests[0].Id,
+                source.SettlementRequests[1].Id);
+        }
+    }
+
     [Fact]
     public async Task Synchronization_RepeatedEmptyCaughtUpReadReusesCheckpointWithoutMutations()
     {
@@ -904,23 +964,26 @@ public sealed partial class MaterializationRebuildExecutorTests
         IMaterializationPullChangeSource source,
         IMaterializationImpactRuntime runtime,
         IMaterializationSynchronizationWorkStore workStore,
-        IMaterializationProgressStore? progressStore = null) =>
+        IMaterializationProgressStore? progressStore = null,
+        IMaterializationExecutionBoundaryObserver? boundaryObserver = null) =>
         Executor(
-            harness,
-            new Dictionary<MaterializationChangeFeedId, IMaterializationPullChangeSource>
+            harness: harness,
+            sources: new Dictionary<MaterializationChangeFeedId, IMaterializationPullChangeSource>
             {
                 [selectedFeed.Id] = source
             },
-            runtime,
-            workStore,
-            progressStore);
+            runtime: runtime,
+            workStore: workStore,
+            progressStore: progressStore,
+            boundaryObserver: boundaryObserver);
 
     static MaterializationSynchronizationExecutor Executor(
         SynchronizationHarness harness,
         IReadOnlyDictionary<MaterializationChangeFeedId, IMaterializationPullChangeSource> sources,
         IMaterializationImpactRuntime runtime,
         IMaterializationSynchronizationWorkStore workStore,
-        IMaterializationProgressStore? progressStore = null)
+        IMaterializationProgressStore? progressStore = null,
+        IMaterializationExecutionBoundaryObserver? boundaryObserver = null)
     {
         var interpreter = new MaterializationImpactPlanInterpreter(
             harness.Rebuild.Plan.ImpactPlan,
@@ -943,7 +1006,11 @@ public sealed partial class MaterializationRebuildExecutorTests
                         interpreter: interpreter)
                     : retained;
             }));
-        return new(resolved, workStore, MaterializationIndexSyncWorkloadKind.Rebuild);
+        return new(
+            resolved: resolved,
+            workStore: workStore,
+            workload: MaterializationIndexSyncWorkloadKind.Rebuild,
+            boundaryObserver: boundaryObserver);
     }
 
     static InMemoryMaterializationSource Source(
@@ -1140,6 +1207,8 @@ public sealed partial class MaterializationRebuildExecutorTests
 
         public int SettlementCalls { get; private set; }
 
+        public List<MaterializationSourceSettlementRequest> SettlementRequests { get; } = [];
+
         public ValueTask<MaterializationSourcePage> ReadPageAsync(
             OperationContext context,
             MaterializationSourcePageRequest request) =>
@@ -1171,6 +1240,7 @@ public sealed partial class MaterializationRebuildExecutorTests
             context.ThrowIfCancellationRequested();
             Events.Add("settle");
             SettlementCalls++;
+            SettlementRequests.Add(request);
             if (SettlementCalls == rejectSettlementOrdinal)
             {
                 return ValueTask.FromResult(new MaterializationSourceSettlementResult(
