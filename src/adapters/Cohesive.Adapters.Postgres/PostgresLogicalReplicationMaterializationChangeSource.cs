@@ -42,6 +42,8 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
     readonly IPostgresLogicalReplicationProtocol protocol;
     readonly IPostgresLogicalReplicationObserver? observer;
     readonly PostgresRelationQueryTableBinding table;
+    readonly PostgresRelationQueryPartitionBinding? partition;
+    readonly PostgresRelationQueryPartitionScope? partitionScope;
     readonly RelationQuerySourcePlacementBinding placement;
     readonly ImmutableArray<ChangeProjectionColumn> projection;
     readonly MaterializationAuthenticatedValueCodec positionCodec;
@@ -72,6 +74,14 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
         this.protocol = protocol;
         this.observer = observer;
         this.table = table;
+        partition = table.Partition;
+        partitionScope = reader.Policy.PartitionScope;
+        if ((partition is null) != (partitionScope is null))
+        {
+            throw new ArgumentException(
+                "A partition-scoped logical-replication source requires matching runtime and table partition evidence.",
+                nameof(reader));
+        }
         projection = CreateProjection(placement, table);
         affinity = DeploymentAffinity.From(
             deployment,
@@ -1104,21 +1114,28 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
                         {
                             throw ChangeEvidenceFailure("insert-row-image-invalid");
                         }
+                        if (!MatchesPartition(
+                                mutation.NewRow,
+                                unchangedToastSource: null,
+                                allowUnchangedToast: false))
+                        {
+                            break;
+                        }
                         var after = ProjectObservation(
                             mutation.NewRow,
                             unchangedToastSource: null,
                             allowUnchangedToast: false,
                             "insert-after");
                         deliveries.Add(CreateDelivery(
-                            transaction,
-                            mutation,
+                            transaction: transaction,
+                            mutation: mutation,
                             subordinal: 0,
-                            MaterializationChangeKind.Create,
+                            kind: MaterializationChangeKind.Create,
                             before: null,
-                            after,
-                            after.Identity,
-                            position,
-                            observedAtUtc));
+                            after: after,
+                            subjectIdentity: after.Identity,
+                            position: position,
+                            observedAtUtc: observedAtUtc));
                         break;
                     }
                 case PostgresLogicalReplicationMutationKind.Update:
@@ -1129,6 +1146,17 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
                         {
                             throw ChangeEvidenceFailure("update-row-image-invalid");
                         }
+                        var beforeMatchesPartition = partitionScope is null
+                            || MatchesPartition(
+                                mutation.OldRow!,
+                                unchangedToastSource: null,
+                                allowUnchangedToast: false);
+                        var afterMatchesPartition = MatchesPartition(
+                            mutation.NewRow,
+                            unchangedToastSource: mutation.OldRow,
+                            allowUnchangedToast: binding.ExpectedReplicaIdentity.ProvidesCompleteBeforeImage);
+                        if (!beforeMatchesPartition && !afterMatchesPartition)
+                            break;
                         var before = binding.ExpectedReplicaIdentity.ProvidesCompleteBeforeImage
                             ? ProjectObservation(
                                 mutation.OldRow!,
@@ -1143,41 +1171,67 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
                             "update-after");
                         var oldIdentity = before?.Identity
                             ?? (mutation.OldRow is null ? after.Identity : ProjectIdentity(mutation.OldRow));
-                        if (string.Equals(oldIdentity, after.Identity, StringComparison.Ordinal))
+                        if (beforeMatchesPartition && !afterMatchesPartition)
                         {
                             deliveries.Add(CreateDelivery(
-                                transaction,
-                                mutation,
+                                transaction: transaction,
+                                mutation: mutation,
                                 subordinal: 0,
-                                MaterializationChangeKind.Update,
-                                before,
-                                after,
-                                after.Identity,
-                                position,
-                                observedAtUtc));
+                                kind: MaterializationChangeKind.Delete,
+                                before: before,
+                                after: null,
+                                subjectIdentity: oldIdentity,
+                                position: position,
+                                observedAtUtc: observedAtUtc));
+                        }
+                        else if (!beforeMatchesPartition)
+                        {
+                            deliveries.Add(CreateDelivery(
+                                transaction: transaction,
+                                mutation: mutation,
+                                subordinal: 0,
+                                kind: MaterializationChangeKind.Create,
+                                before: null,
+                                after: after,
+                                subjectIdentity: after.Identity,
+                                position: position,
+                                observedAtUtc: observedAtUtc));
+                        }
+                        else if (string.Equals(oldIdentity, after.Identity, StringComparison.Ordinal))
+                        {
+                            deliveries.Add(CreateDelivery(
+                                transaction: transaction,
+                                mutation: mutation,
+                                subordinal: 0,
+                                kind: MaterializationChangeKind.Update,
+                                before: before,
+                                after: after,
+                                subjectIdentity: after.Identity,
+                                position: position,
+                                observedAtUtc: observedAtUtc));
                         }
                         else
                         {
                             deliveries.Add(CreateDelivery(
-                                transaction,
-                                mutation,
+                                transaction: transaction,
+                                mutation: mutation,
                                 subordinal: 0,
-                                MaterializationChangeKind.Delete,
-                                before,
+                                kind: MaterializationChangeKind.Delete,
+                                before: before,
                                 after: null,
-                                oldIdentity,
-                                position,
-                                observedAtUtc));
+                                subjectIdentity: oldIdentity,
+                                position: position,
+                                observedAtUtc: observedAtUtc));
                             deliveries.Add(CreateDelivery(
-                                transaction,
-                                mutation,
+                                transaction: transaction,
+                                mutation: mutation,
                                 subordinal: 1,
-                                MaterializationChangeKind.Create,
+                                kind: MaterializationChangeKind.Create,
                                 before: null,
-                                after,
-                                after.Identity,
-                                position,
-                                observedAtUtc));
+                                after: after,
+                                subjectIdentity: after.Identity,
+                                position: position,
+                                observedAtUtc: observedAtUtc));
                         }
                         break;
                     }
@@ -1186,6 +1240,13 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
                         if (mutation.OldRow is null || mutation.NewRow is not null)
                         {
                             throw ChangeEvidenceFailure("delete-row-image-invalid");
+                        }
+                        if (!MatchesPartition(
+                                mutation.OldRow,
+                                unchangedToastSource: null,
+                                allowUnchangedToast: false))
+                        {
+                            break;
                         }
                         var before = binding.ExpectedReplicaIdentity.ProvidesCompleteBeforeImage
                             ? ProjectObservation(
@@ -1196,15 +1257,15 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
                             : null;
                         var identity = before?.Identity ?? ProjectIdentity(mutation.OldRow);
                         deliveries.Add(CreateDelivery(
-                            transaction,
-                            mutation,
+                            transaction: transaction,
+                            mutation: mutation,
                             subordinal: 0,
-                            MaterializationChangeKind.Delete,
-                            before,
+                            kind: MaterializationChangeKind.Delete,
+                            before: before,
                             after: null,
-                            identity,
-                            position,
-                            observedAtUtc));
+                            subjectIdentity: identity,
+                            position: position,
+                            observedAtUtc: observedAtUtc));
                         break;
                     }
                 default:
@@ -1312,6 +1373,48 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
             fields.Add(ProjectField(column, cell, evidenceSuffix));
         }
         return new(identity, Scope.Shape, fields.MoveToImmutable());
+    }
+
+    bool MatchesPartition(
+        PostgresLogicalReplicationRow row,
+        PostgresLogicalReplicationRow? unchangedToastSource,
+        bool allowUnchangedToast)
+    {
+        if (partitionScope is null || partition is null)
+            return true;
+
+        var cells = ValidateRow(row, "partition-row-invalid");
+        if (!cells.TryGetValue(partition.ColumnName, out var cell))
+            throw ChangeEvidenceFailure("partition-column-unavailable");
+        if (cell.Kind == PostgresLogicalReplicationCellKind.UnchangedToast)
+        {
+            if (!allowUnchangedToast
+                || unchangedToastSource is null
+                || !ValidateRow(unchangedToastSource, "partition-source-row-invalid")
+                    .TryGetValue(partition.ColumnName, out cell)
+                || cell.Kind == PostgresLogicalReplicationCellKind.UnchangedToast)
+            {
+                throw ChangeEvidenceFailure("unchanged-toast-partition-evidence-unavailable");
+            }
+        }
+        if (cell.Kind != PostgresLogicalReplicationCellKind.Value || cell.Value is null)
+            throw ChangeEvidenceFailure("partition-value-unavailable");
+
+        try
+        {
+            return string.Equals(
+                PostgresRelationQueryScalarCatalog.FormatKey(cell.Value, partition.ScalarType),
+                partitionScope.CanonicalValue,
+                StringComparison.Ordinal);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+        {
+            throw new PostgresLogicalReplicationProtocolException(
+                PostgresLogicalReplicationFailureKind.ChangeEvidenceUnavailable,
+                isTransient: false,
+                Evidence("partition-value-invalid"),
+                exception);
+        }
     }
 
     string ProjectIdentity(PostgresLogicalReplicationRow row) =>
@@ -1649,6 +1752,13 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
                 PostgresLogicalReplicationFailureKind.ReplicaIdentityMismatch,
                 "non-full-replica-identity-cannot-reconstruct-unchanged-toast");
         }
+        if (reader.Policy.PartitionScope is not null
+            && !binding.ExpectedReplicaIdentity.ProvidesCompleteBeforeImage)
+        {
+            throw ProtocolFailure(
+                PostgresLogicalReplicationFailureKind.ReplicaIdentityMismatch,
+                "partition-scoped-change-delivery-requires-complete-before-image");
+        }
         if (!string.Equals(deployment.SlotName, binding.SlotName, StringComparison.Ordinal)
             || !string.Equals(deployment.OutputPlugin, OutputPlugin, StringComparison.Ordinal)
             || !deployment.IsLogicalSlot
@@ -1687,6 +1797,8 @@ public sealed class PostgresLogicalReplicationMaterializationChangeSource :
         }
         Dictionary<string, PostgresRelationQueryScalarType> requiredColumns = new(StringComparer.Ordinal);
         AddRequiredColumn(table.Identity.ColumnName, table.Identity.ScalarType);
+        if (table.Partition is { } partition)
+            AddRequiredColumn(partition.ColumnName, partition.ScalarType);
         foreach (var field in table.Fields)
             AddRequiredColumn(field.ColumnName, field.ScalarType);
         foreach (var reference in table.RelationshipReferences)

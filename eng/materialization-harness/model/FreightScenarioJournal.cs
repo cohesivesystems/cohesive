@@ -372,7 +372,7 @@ public sealed class FreightScenarioJournal
             if (operation.Sequence == document.BaselineThroughSequence)
             {
                 baseline = CreateState(document, operation.Sequence, entities);
-                ValidateState(baseline, "baseline");
+                ValidateState(baseline, "baseline", requireCoverage: true);
             }
             else if (operation.Sequence > document.BaselineThroughSequence)
             {
@@ -384,7 +384,7 @@ public sealed class FreightScenarioJournal
             ?? throw new InvalidOperationException("The scenario journal did not materialize its declared baseline cut.");
         var transactions = GroupTransactions(document, mutations.MoveToImmutable(), entities);
         var final = CreateState(document, document.Operations[^1].Sequence, entities);
-        ValidateState(final, "final");
+        ValidateState(final, "final", requireCoverage: true);
         return new(
             scenarioId: document.ScenarioId,
             occurredAtUtc: document.OccurredAtUtc,
@@ -499,11 +499,11 @@ public sealed class FreightScenarioJournal
                 _ = Apply(document, operation, replay);
             }
             var state = CreateState(document, transaction.Transitions[^1].Sequence, replay);
-            ValidateState(state, $"transaction '{transaction.Id}'");
+            ValidateState(state, $"transaction '{transaction.Id}'", requireCoverage: false);
         }
         if (!Equivalent(replay, finalEntities))
             throw new InvalidOperationException("Scenario transaction replay differs from the final journal projection.");
-        return transactions.MoveToImmutable();
+        return transactions.ToImmutable();
     }
 
     static FreightScenarioState CreateState(
@@ -548,14 +548,20 @@ public sealed class FreightScenarioJournal
             versions: entities.ToImmutableDictionary(static pair => pair.Key, static pair => pair.Value.Version));
     }
 
-    static void ValidateState(FreightScenarioState state, string cut)
+    static void ValidateState(
+        FreightScenarioState state,
+        string cut,
+        bool requireCoverage)
     {
-        if (state.Orders.Length < 6)
-            throw new InvalidOperationException($"Scenario {cut} must cross the two-item root-page boundary.");
-        if (state.Stops.Length < 12)
-            throw new InvalidOperationException($"Scenario {cut} must cross contributor lookup boundaries.");
-        if (state.TenantCount < 2)
-            throw new InvalidOperationException($"Scenario {cut} requires at least two tenants.");
+        if (requireCoverage)
+        {
+            if (state.Orders.Length < 6)
+                throw new InvalidOperationException($"Scenario {cut} must cross the two-item root-page boundary.");
+            if (state.Stops.Length < 12)
+                throw new InvalidOperationException($"Scenario {cut} must cross contributor lookup boundaries.");
+            if (state.TenantCount < 2)
+                throw new InvalidOperationException($"Scenario {cut} requires at least two tenants.");
+        }
         HashSet<FreightScenarioEntityKey> customers = state.Customers
             .Select(static value => new FreightScenarioEntityKey(value.TenantId, value.Id))
             .ToHashSet();
@@ -601,20 +607,23 @@ public sealed class FreightScenarioJournal
             if (!group.Any(static stop => stop.StopType == "Drop"))
                 throw new InvalidOperationException($"Scenario {cut} Order '{group.Key}' requires a drop.");
         }
-        if (!state.Stops.Select(static stop => new FreightScenarioEntityKey(stop.TenantId, stop.OrderId)).ToHashSet()
-            .SetEquals(orders))
+        if (requireCoverage)
         {
-            throw new InvalidOperationException($"Scenario {cut} requires stops for every order.");
-        }
-        if (!state.Orders.GroupBy(static order => new FreightScenarioEntityKey(order.TenantId, order.CustomerAccountId))
-            .Any(static group => group.Count() > 1))
-        {
-            throw new InvalidOperationException($"Scenario {cut} requires a customer shared by multiple orders.");
-        }
-        if (!state.Stops.GroupBy(static stop => new FreightScenarioEntityKey(stop.TenantId, stop.LocationId))
-            .Any(static group => group.Select(static stop => stop.OrderId).Distinct(StringComparer.Ordinal).Count() > 1))
-        {
-            throw new InvalidOperationException($"Scenario {cut} requires a location shared by multiple orders.");
+            if (!state.Stops.Select(static stop => new FreightScenarioEntityKey(stop.TenantId, stop.OrderId)).ToHashSet()
+                .SetEquals(orders))
+            {
+                throw new InvalidOperationException($"Scenario {cut} requires stops for every order.");
+            }
+            if (!state.Orders.GroupBy(static order => new FreightScenarioEntityKey(order.TenantId, order.CustomerAccountId))
+                .Any(static group => group.Count() > 1))
+            {
+                throw new InvalidOperationException($"Scenario {cut} requires a customer shared by multiple orders.");
+            }
+            if (!state.Stops.GroupBy(static stop => new FreightScenarioEntityKey(stop.TenantId, stop.LocationId))
+                .Any(static group => group.Select(static stop => stop.OrderId).Distinct(StringComparer.Ordinal).Count() > 1))
+            {
+                throw new InvalidOperationException($"Scenario {cut} requires a location shared by multiple orders.");
+            }
         }
     }
 

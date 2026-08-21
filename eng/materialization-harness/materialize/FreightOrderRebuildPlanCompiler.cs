@@ -13,6 +13,14 @@ using Cohesive.Storage.Materialization;
 
 namespace Cohesive.MaterializationHarness.Materialize;
 
+/// <summary>Creates one tenant/provider physical impact runtime for an exact persisted impact plan.</summary>
+/// <param name="impactPlan">Exact plan whose inverse reads and canonical hydration are bound.</param>
+/// <returns>A runtime implementing the plan fingerprint.</returns>
+/// <exception cref="ArgumentNullException"><paramref name="impactPlan"/> is <see langword="null"/>.</exception>
+/// <exception cref="ArgumentException">The plan differs from the runtime's canonical freight semantics.</exception>
+public delegate IMaterializationImpactRuntime FreightOrderMaterializationImpactRuntimeFactory(
+    MaterializationImpactPlan impactPlan);
+
 /// <summary>One exact provider source binding for a canonical freight acquisition input and tenant scope.</summary>
 public sealed class FreightOrderRebuildSourceBinding
 {
@@ -55,19 +63,22 @@ public sealed class FreightOrderRebuildSourceBinding
 public sealed class FreightOrderRebuildTenantBinding
 {
     readonly ImmutableDictionary<RelationQueryInputId, FreightOrderRebuildSourceBinding> sources;
+    readonly FreightOrderMaterializationImpactRuntimeFactory impactRuntimeFactory;
 
     /// <summary>Creates one tenant binding covering every canonical acquisition input exactly once.</summary>
     /// <param name="tenant">Stable tenant identity.</param>
     /// <param name="rootRead">Exact bounded root enumeration used by this tenant shard.</param>
     /// <param name="hydrator">Exact canonical relation hydration interpretation.</param>
     /// <param name="sourceBindings">One source binding for every canonical acquisition input.</param>
+    /// <param name="impactRuntimeFactory">Exact provider inverse-read and canonical hydration runtime factory.</param>
     /// <exception cref="ArgumentNullException">A required runtime binding is null.</exception>
     /// <exception cref="ArgumentException">An identity is absent, repeated, or inconsistent.</exception>
     public FreightOrderRebuildTenantBinding(
         string tenant,
         RelationQuerySourceReadRequest rootRead,
         IMaterializationRebuildHydrator hydrator,
-        IEnumerable<FreightOrderRebuildSourceBinding> sourceBindings)
+        IEnumerable<FreightOrderRebuildSourceBinding> sourceBindings,
+        FreightOrderMaterializationImpactRuntimeFactory impactRuntimeFactory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tenant);
         Tenant = tenant;
@@ -80,6 +91,7 @@ public sealed class FreightOrderRebuildTenantBinding
         if (normalized.GroupBy(static binding => binding.Input).Any(static group => group.Skip(1).Any()))
             throw new ArgumentException("A tenant source catalog cannot repeat an acquisition input.", nameof(sourceBindings));
         sources = normalized.ToImmutableDictionary(static binding => binding.Input);
+        this.impactRuntimeFactory = Guard.RequireNotNull(impactRuntimeFactory);
     }
 
     /// <summary>Stable tenant identity.</summary>
@@ -100,6 +112,9 @@ public sealed class FreightOrderRebuildTenantBinding
     /// <returns>The exact tenant/provider source binding.</returns>
     /// <exception cref="KeyNotFoundException"><paramref name="input"/> is absent.</exception>
     public FreightOrderRebuildSourceBinding GetSource(RelationQueryInputId input) => sources[input];
+
+    internal IMaterializationImpactRuntime CreateImpactRuntime(MaterializationImpactPlan impactPlan) =>
+        impactRuntimeFactory(impactPlan);
 }
 
 /// <summary>Canonical single-provider plan-set artifacts and their exact tenant runtime bindings.</summary>
@@ -107,6 +122,7 @@ public sealed class FreightOrderRebuildPlanCompilation
 {
     readonly ImmutableDictionary<MaterializationRebuildShardId, FreightOrderRebuildTenantBinding> tenantsByShard;
     readonly ImmutableDictionary<MaterializationChangeFeedId, IMaterializationPullChangeSource> sourcesByFeed;
+    readonly ImmutableDictionary<MaterializationChangeFeedId, IMaterializationImpactRuntime> impactRuntimesByFeed;
 
     internal FreightOrderRebuildPlanCompilation(
         string provider,
@@ -116,7 +132,8 @@ public sealed class FreightOrderRebuildPlanCompilation
         MaterializationRebuildPlan plan,
         MaterializationRebuildPlanSet planSet,
         ImmutableDictionary<MaterializationRebuildShardId, FreightOrderRebuildTenantBinding> tenantsByShard,
-        ImmutableDictionary<MaterializationChangeFeedId, IMaterializationPullChangeSource> sourcesByFeed)
+        ImmutableDictionary<MaterializationChangeFeedId, IMaterializationPullChangeSource> sourcesByFeed,
+        ImmutableDictionary<MaterializationChangeFeedId, IMaterializationImpactRuntime> impactRuntimesByFeed)
     {
         Provider = provider;
         Request = request;
@@ -126,6 +143,7 @@ public sealed class FreightOrderRebuildPlanCompilation
         PlanSet = planSet;
         this.tenantsByShard = tenantsByShard;
         this.sourcesByFeed = sourcesByFeed;
+        this.impactRuntimesByFeed = impactRuntimesByFeed;
     }
 
     /// <summary>Stable provider interpretation identity.</summary>
@@ -149,9 +167,6 @@ public sealed class FreightOrderRebuildPlanCompilation
     /// <summary>Resolves the portable plan against exact runtime target, progress, and impact interpretations.</summary>
     /// <param name="target">Runtime target matching the persisted target descriptor.</param>
     /// <param name="progressStore">Durable application-progress authority.</param>
-    /// <param name="impactInterpreter">
-    /// Factory returning the definition-linked impact interpreter for one exact persisted feed.
-    /// </param>
     /// <param name="controlRuntimeProvider">
     /// Durable Control runtime provider implementing this exact plan's declared safe-point policy.
     /// </param>
@@ -161,12 +176,10 @@ public sealed class FreightOrderRebuildPlanCompilation
     public ResolvedMaterializationRebuildPlan Resolve(
         IMaterializationTarget target,
         IMaterializationProgressStore progressStore,
-        Func<MaterializationChangeFeedPlan, MaterializationImpactPlanInterpreter> impactInterpreter,
         MaterializationIndexSyncControlRuntimeProvider? controlRuntimeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(progressStore);
-        ArgumentNullException.ThrowIfNull(impactInterpreter);
         var shards = Plan.Shards.Select(shard =>
         {
             var tenant = tenantsByShard[shard.Id];
@@ -179,7 +192,10 @@ public sealed class FreightOrderRebuildPlanCompilation
             feed: feed,
             channel: feed.Channel,
             source: sourcesByFeed[feed.Id],
-            interpreter: impactInterpreter(feed)));
+            interpreter: new(
+                plan: Plan.ImpactPlan,
+                definition: Plan.Materialization.Definition,
+                runtime: impactRuntimesByFeed[feed.Id])));
         return new(
             planSet: PlanSet,
             plan: Plan,
@@ -204,6 +220,7 @@ public static class FreightOrderRebuildPlanCompiler
     /// <param name="provider">Stable provider interpretation identity.</param>
     /// <param name="target">Exact generational index target descriptor for this provider interpretation.</param>
     /// <param name="tenantBindings">Complete tenant runtime bindings; input order is immaterial.</param>
+    /// <param name="impactPlan">Exact persisted impact plan already bound by every tenant runtime.</param>
     /// <returns>Linked canonical plan-set artifacts with exact runtime source bindings.</returns>
     /// <exception cref="ArgumentNullException">A required artifact or collection is null.</exception>
     /// <exception cref="ArgumentException">Tenant, source, profile, scope, or relation-plan evidence is incomplete or inconsistent.</exception>
@@ -212,12 +229,15 @@ public static class FreightOrderRebuildPlanCompiler
         FreightOrderMaterializationSemantics semantics,
         string provider,
         MaterializationTargetDescriptor target,
-        IEnumerable<FreightOrderRebuildTenantBinding> tenantBindings)
+        IEnumerable<FreightOrderRebuildTenantBinding> tenantBindings,
+        MaterializationImpactPlan impactPlan)
     {
         ArgumentNullException.ThrowIfNull(semantics);
         ArgumentException.ThrowIfNullOrWhiteSpace(provider);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(tenantBindings);
+        ArgumentNullException.ThrowIfNull(impactPlan);
+        _ = MaterializationImpactPlanLinker.Link(impactPlan, semantics.Definition);
         var tenants = tenantBindings.OrderBy(static tenant => tenant.Tenant, StringComparer.Ordinal).ToArray();
         if (tenants.Length == 0)
             throw new ArgumentException("A freight rebuild requires at least one tenant shard.", nameof(tenantBindings));
@@ -289,16 +309,6 @@ public static class FreightOrderRebuildPlanCompiler
                 capabilityMatch: rebuildMatch);
         }).ToImmutableArray();
 
-        var impactCompilation = MaterializationImpactPlanCompiler.Compile(
-            document: semantics.Document,
-            policy: new(
-                id: new($"materialization-harness/{provider}/freight-impact/v1"),
-                strategyPreference: [MaterializationImpactStrategyKind.InverseTraversal],
-                maximumAffectedRoots: 64,
-                maximumReadBytes: MaximumPageBytes));
-        var impactPlan = Require(
-            artifact: impactCompilation.Plan,
-            diagnostics: impactCompilation.Diagnostics.Select(static diagnostic => diagnostic.Message));
         var subjects = tenants
             .Select(static tenant => new MaterializationPlacementSubjectId($"tenant/{tenant.Tenant}"))
             .ToImmutableArray();
@@ -325,7 +335,7 @@ public static class FreightOrderRebuildPlanCompiler
                 authority: new(
                     authority: $"materialization-harness/{provider}/seed-membership",
                     revision: "freight-baseline/v1",
-                    cut: "frozen-seed/v1",
+                    cut: "provider-positioned-change-feed/v1",
                     completeness: MaterializationRebuildMembershipCompleteness.Complete,
                     evidenceReferences: [$"materialization-harness/{provider}/seed/freight-baseline.json"]),
                 provenance: Provenance(provider, "membership")),
@@ -367,8 +377,16 @@ public static class FreightOrderRebuildPlanCompiler
 
         var feeds = ImmutableArray.CreateBuilder<MaterializationChangeFeedPlan>(tenants.Length * expectedInputs.Length);
         var sourcesByFeed = ImmutableDictionary.CreateBuilder<MaterializationChangeFeedId, IMaterializationPullChangeSource>();
+        var impactRuntimesByFeed = ImmutableDictionary.CreateBuilder<MaterializationChangeFeedId, IMaterializationImpactRuntime>();
         foreach (var tenant in tenants)
         {
+            var impactRuntime = tenant.CreateImpactRuntime(impactPlan);
+            if (impactRuntime.ImpactPlan != impactPlan.Fingerprint)
+            {
+                throw new ArgumentException(
+                    $"Tenant '{tenant.Tenant}' impact runtime implements another persisted plan.",
+                    nameof(tenantBindings));
+            }
             foreach (var input in expectedInputs)
             {
                 var binding = tenant.GetSource(input);
@@ -379,6 +397,7 @@ public static class FreightOrderRebuildPlanCompiler
                     channel: Channel(binding.Scope));
                 feeds.Add(feed);
                 sourcesByFeed.Add(feedId, binding.Source);
+                impactRuntimesByFeed.Add(feedId, impactRuntime);
             }
         }
         var exactFeeds = feeds.MoveToImmutable();
@@ -440,7 +459,8 @@ public static class FreightOrderRebuildPlanCompiler
             plan: plan,
             planSet: planSet,
             tenantsByShard: tenantsByShard,
-            sourcesByFeed: sourcesByFeed.ToImmutable());
+            sourcesByFeed: sourcesByFeed.ToImmutable(),
+            impactRuntimesByFeed: impactRuntimesByFeed.ToImmutable());
     }
 
     /// <summary>Returns the canonical logical partition identity for one freight tenant.</summary>
@@ -453,6 +473,24 @@ public static class FreightOrderRebuildPlanCompiler
         return new($"materialization-harness/freight/tenant/{tenant}");
     }
 
+    internal static MaterializationImpactPlan CompileImpactPlan(
+        FreightOrderMaterializationSemantics semantics,
+        string provider)
+    {
+        ArgumentNullException.ThrowIfNull(semantics);
+        ArgumentException.ThrowIfNullOrWhiteSpace(provider);
+        var compilation = MaterializationImpactPlanCompiler.Compile(
+            document: semantics.Document,
+            policy: new(
+                id: new($"materialization-harness/{provider}/freight-impact/v1"),
+                strategyPreference: [MaterializationImpactStrategyKind.InverseTraversal],
+                maximumAffectedRoots: 64,
+                maximumReadBytes: MaximumPageBytes));
+        return Require(
+            artifact: compilation.Plan,
+            diagnostics: compilation.Diagnostics.Select(static diagnostic => diagnostic.Message));
+    }
+
     static MaterializationRebuildShardId Shard(string tenant) => new($"tenant/{tenant}");
 
     static ChannelRealizationPlanFingerprint Channel(MaterializationSourceScope scope)
@@ -461,7 +499,7 @@ public static class FreightOrderRebuildPlanCompiler
             MaterializationChannelSemantics.ToChannelScopeId(scope).Value);
         return new(
             algorithm: "sha256",
-            canonicalization: "materialization-harness/frozen-source-channel/v1",
+            canonicalization: "materialization-harness/provider-positioned-source-channel/v1",
             value: Convert.ToHexStringLower(SHA256.HashData(canonical)));
     }
 

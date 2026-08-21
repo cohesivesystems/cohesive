@@ -21,6 +21,8 @@ sealed class MaterializationHarnessProviderProcess
     readonly InteractionAuthorityScope authorityScope;
     readonly ProcessDurableRuntime parentRuntime;
     readonly AttemptExecutionResolver executionResolver;
+    readonly MaterializationSynchronizationExecutor realtimeSynchronization;
+    readonly MaterializationSynchronizationWorkerId realtimeWorker;
 
     MaterializationHarnessProviderProcess(
         FreightOrderRebuildProviderRuntime provider,
@@ -30,6 +32,8 @@ sealed class MaterializationHarnessProviderProcess
         MaterializationRebuildPlanSetProcessArtifacts artifacts,
         ProcessDurableRuntime parentRuntime,
         AttemptExecutionResolver executionResolver,
+        MaterializationSynchronizationExecutor realtimeSynchronization,
+        MaterializationSynchronizationWorkerId realtimeWorker,
         PostgresMaterializationBackendRouter router,
         MaterializationRebuildPlanSetProcessLifecycle lifecycle)
     {
@@ -40,6 +44,8 @@ sealed class MaterializationHarnessProviderProcess
         Artifacts = artifacts;
         this.parentRuntime = parentRuntime;
         this.executionResolver = executionResolver;
+        this.realtimeSynchronization = realtimeSynchronization;
+        this.realtimeWorker = realtimeWorker;
         Router = router;
         Lifecycle = lifecycle;
     }
@@ -201,6 +207,11 @@ sealed class MaterializationHarnessProviderProcess
             artifacts: artifacts,
             parentRuntime: parentRuntime,
             executionResolver: executionResolver,
+            realtimeSynchronization: new(
+                resolved: provider.ResolvedPlan,
+                workStore: materializationStore,
+                workload: MaterializationIndexSyncWorkloadKind.Realtime),
+            realtimeWorker: new($"materialization-harness/realtime/{provider.Provider}/{workerIncarnation}"),
             router: router,
             lifecycle: lifecycle);
         return result;
@@ -336,6 +347,35 @@ sealed class MaterializationHarnessProviderProcess
 
         throw new InvalidOperationException(
             $"Provider '{Provider.Provider}' exceeded its finite {MaximumParentStepsPerDrive}-step parent drive budget.");
+    }
+
+    internal async Task MaintainActiveGenerationAsync(CancellationToken cancellationToken)
+    {
+        var context = OperationContext.Create(cancellationToken: cancellationToken);
+        var snapshot = await LoadAsync(context).ConfigureAwait(false);
+        if (snapshot?.Checkpoint.Continuation.Terminal.Kind != ExecutionTerminalOutcomeKind.Completed)
+            return;
+        var execution = await ResolveCurrentExecutionAsync(context).ConfigureAwait(false);
+        if (execution is null
+            || await execution.InspectGenerationAsync(context).ConfigureAwait(false) is not
+                { State: MaterializationGenerationState.Active })
+        {
+            return;
+        }
+
+        var result = await realtimeSynchronization.ConvergeAsync(
+                context: context,
+                attempt: execution.Attempt,
+                invocation: new($"materialization-harness/realtime/{Provider.Provider}/{execution.Generation.Value}"),
+                worker: realtimeWorker)
+            .ConfigureAwait(false);
+        if (result.Disposition is MaterializationSynchronizationRunDisposition.Failed
+            or MaterializationSynchronizationRunDisposition.RestartRequired)
+        {
+            throw new InvalidOperationException(
+                $"Provider '{Provider.Provider}' active-generation synchronization failed: "
+                + string.Join(" ", result.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+        }
     }
 
     internal async ValueTask<ControlLimitUpdateDecision> SubmitLimitUpdateAsync(

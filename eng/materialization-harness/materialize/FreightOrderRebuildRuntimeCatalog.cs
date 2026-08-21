@@ -102,6 +102,10 @@ public sealed class FreightOrderRebuildRuntimeCatalog : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(authorityScope);
         var options = Program.HarnessOptions.FromEnvironment();
         var semantics = FreightOrderMaterializationModel.Create();
+        var journal = await FreightScenarioJournal.LoadAsync(
+                path: options.ScenarioPath,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
         HttpClient elasticHttp = new() { BaseAddress = options.ElasticsearchEndpoint };
         CosmosClient? cosmosClient = null;
         try
@@ -121,34 +125,39 @@ public sealed class FreightOrderRebuildRuntimeCatalog : IAsyncDisposable
                 await Program.EnsureLocalElasticTemplatesAsync(elasticHttp, targetBinding, name)
                     .ConfigureAwait(false);
                 var target = Program.CreateTarget(targetBinding, options.ElasticsearchEndpoint);
-                var compilation = provider == Program.ProviderKind.Postgres
-                    ? Program.CompilePostgresRebuildPlan(
+                FreightOrderRebuildPlanCompilation compilation;
+                if (provider == Program.ProviderKind.Postgres)
+                {
+                    compilation = await Program.CompilePostgresRebuildPlanAsync(
                         semantics: semantics,
                         plan: providerPlan,
                         target: target,
                         dataSource: dataSource,
-                        tenants: options.Tenants)
-                    : Program.CompileCosmosRebuildPlan(
+                        connectionString: options.PostgresConnectionString,
+                        tenants: options.Tenants,
+                        journal: journal,
+                        cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    compilation = Program.CompileCosmosRebuildPlan(
                         semantics: semantics,
                         plan: providerPlan,
                         target: target,
                         database: cosmosDatabase,
                         databaseId: options.CosmosDatabase,
-                        tenants: options.Tenants);
+                        tenants: options.Tenants,
+                        journal: journal);
+                }
                 var controlProvider = new MaterializationIndexSyncControlRuntimeProvider(
                     plan: compilation.Plan,
                     store: stateStore,
                     admission: admission,
                     authorityScope: authorityScope);
-                var impactRuntime = new FrozenSeedMaterializationImpactRuntime(
-                    impactPlan: compilation.Plan.ImpactPlan.Fingerprint);
                 var resolved = compilation.Resolve(
                     target: target,
                     progressStore: stateStore,
-                    impactInterpreter: _ => new(
-                        plan: compilation.Plan.ImpactPlan,
-                        definition: semantics.Definition,
-                        runtime: impactRuntime),
                     controlRuntimeProvider: controlProvider);
                 var targetPool = new InMemoryMaterializationTargetPool(
                     definition: compilation.Placement.BackendPool.Definition,
@@ -207,33 +216,5 @@ public sealed class FreightOrderRebuildRuntimeCatalog : IAsyncDisposable
         cosmosClient.Dispose();
         elasticHttp.Dispose();
         return ValueTask.CompletedTask;
-    }
-
-    sealed class FrozenSeedMaterializationImpactRuntime(
-        MaterializationImpactPlanFingerprint impactPlan) : IMaterializationImpactRuntime
-    {
-        public MaterializationImpactPlanFingerprint ImpactPlan { get; } = impactPlan;
-
-        public ValueTask<ImmutableArray<MaterializationAffectedRoot>> ResolveRootsAsync(
-            OperationContext context,
-            MaterializationImpactRootResolutionRequest request)
-        {
-            ArgumentNullException.ThrowIfNull(context);
-            ArgumentNullException.ThrowIfNull(request);
-            context.ThrowIfCancellationRequested();
-            throw new InvalidOperationException(
-                "The frozen harness seed emitted contributor changes; its empty change-interval contract was violated.");
-        }
-
-        public ValueTask<ImmutableArray<MaterializationRootProjection>> HydrateAsync(
-            OperationContext context,
-            MaterializationImpactHydrationRequest request)
-        {
-            ArgumentNullException.ThrowIfNull(context);
-            ArgumentNullException.ThrowIfNull(request);
-            context.ThrowIfCancellationRequested();
-            throw new InvalidOperationException(
-                "The frozen harness seed emitted root changes; its empty change-interval contract was violated.");
-        }
     }
 }

@@ -438,6 +438,88 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
     }
 
     [Fact]
+    public async Task LogicalReplication_FixedPartitionFiltersRowsAndProjectsPartitionMoves()
+    {
+        await using var fixture = await CreateLogicalFixtureAsync(
+            replicaIdentityKind: PostgresLogicalReplicationReplicaIdentityKind.Full,
+            partitionTenant: "tenant-a");
+        fixture.Protocol.Batch = new(
+        [
+            Transaction(
+                transactionId: 181,
+                endPosition: 200,
+                new(
+                    Ordinal: 0,
+                    Kind: PostgresLogicalReplicationMutationKind.Insert,
+                    ReplicaIdentity: PostgresLogicalReplicationReplicaIdentityKind.Full,
+                    OldRow: null,
+                    NewRow: Row(Value("load_id", "outside-create"), Value("load_name", "Outside"), Value("tenant_id", "tenant-b"))),
+                new(
+                    Ordinal: 1,
+                    Kind: PostgresLogicalReplicationMutationKind.Insert,
+                    ReplicaIdentity: PostgresLogicalReplicationReplicaIdentityKind.Full,
+                    OldRow: null,
+                    NewRow: Row(Value("load_id", "inside-create"), Value("load_name", "Inside"), Value("tenant_id", "tenant-a"))),
+                new(
+                    Ordinal: 2,
+                    Kind: PostgresLogicalReplicationMutationKind.Update,
+                    ReplicaIdentity: PostgresLogicalReplicationReplicaIdentityKind.Full,
+                    OldRow: Row(Value("load_id", "move-out"), Value("load_name", "Move out"), Value("tenant_id", "tenant-a")),
+                    NewRow: Row(Value("load_id", "move-out"), Value("load_name", "Move out"), Value("tenant_id", "tenant-b"))),
+                new(
+                    Ordinal: 3,
+                    Kind: PostgresLogicalReplicationMutationKind.Update,
+                    ReplicaIdentity: PostgresLogicalReplicationReplicaIdentityKind.Full,
+                    OldRow: Row(Value("load_id", "move-in"), Value("load_name", "Move in"), Value("tenant_id", "tenant-b")),
+                    NewRow: Row(Value("load_id", "move-in"), Value("load_name", "Move in"), Value("tenant_id", "tenant-a"))),
+                new(
+                    Ordinal: 4,
+                    Kind: PostgresLogicalReplicationMutationKind.Update,
+                    ReplicaIdentity: PostgresLogicalReplicationReplicaIdentityKind.Full,
+                    OldRow: Row(Value("load_id", "outside-update"), Value("load_name", "Before"), Value("tenant_id", "tenant-b")),
+                    NewRow: Row(Value("load_id", "outside-update"), Value("load_name", "After"), Value("tenant_id", "tenant-b"))),
+                new(
+                    Ordinal: 5,
+                    Kind: PostgresLogicalReplicationMutationKind.Delete,
+                    ReplicaIdentity: PostgresLogicalReplicationReplicaIdentityKind.Full,
+                    OldRow: Row(Value("load_id", "outside-delete"), Value("load_name", "Outside"), Value("tenant_id", "tenant-b")),
+                    NewRow: null),
+                new(
+                    Ordinal: 6,
+                    Kind: PostgresLogicalReplicationMutationKind.Delete,
+                    ReplicaIdentity: PostgresLogicalReplicationReplicaIdentityKind.Full,
+                    OldRow: Row(Value("load_id", "inside-delete"), Value("load_name", "Inside"), Value("tenant_id", "tenant-a")),
+                    NewRow: null))
+        ],
+            ScannedThrough: new(200),
+            ReachedUpperBoundary: true);
+        var retained = await fixture.Source.CaptureRetainedStartPositionAsync(
+            OperationContext.Create(),
+            fixture.Source.Scope);
+
+        var page = await fixture.Source.ReadChangesAsync(
+            OperationContext.Create(),
+            new(
+                fixture.Source.Scope,
+                retained,
+                maximumDeliveries: 10,
+                maximumBytes: fixture.Policy.MaximumTransactionBytes));
+
+        Assert.Equal(
+            [
+                MaterializationChangeKind.Create,
+                MaterializationChangeKind.Delete,
+                MaterializationChangeKind.Create,
+                MaterializationChangeKind.Delete
+            ],
+            page.Deliveries.Select(static delivery => delivery.Change.Kind));
+        Assert.Equal(
+            ["inside-create", "move-out", "move-in", "inside-delete"],
+            page.Deliveries.Select(static delivery => delivery.Change.SubjectIdentity));
+        Assert.All(page.Deliveries, delivery => Assert.Equal(fixture.Source.Scope, delivery.Change.Scope));
+    }
+
+    [Fact]
     public async Task LogicalReplication_SettlementIsExactIdempotentAndNeverOccursDuringRead()
     {
         await using var fixture = await CreateLogicalFixtureAsync(
@@ -1000,7 +1082,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         PostgresLogicalReplicationSourcePolicy? policy = null,
         bool fixedWidthOnly = false,
         IPostgresLogicalReplicationObserver? observer = null,
-        PostgresNpgsqlCommandExecutor? baselineExecutor = null)
+        PostgresNpgsqlCommandExecutor? baselineExecutor = null,
+        string? partitionTenant = null)
     {
         static ValueTask<PostgresNpgsqlCommandResult> Execute(
             PostgresNpgsqlCommand command,
@@ -1011,7 +1094,7 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         }
         var canonical = fixedWidthOnly
             ? CreateFixedWidthCanonicalExecutionFixture(Execute)
-            : CreateCanonicalExecutionFixture(Execute);
+            : CreateCanonicalExecutionFixture(Execute, partitionTenant: partitionTenant);
         var dataSource = NpgsqlDataSource.Create(
             "Host=localhost;Port=5432;Database=cohesive_tests;Username=postgres;Password=not-used;Timeout=1");
         try
@@ -1027,7 +1110,7 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
                 canonical.Storage,
                 dataSource,
                 runtime,
-                Policy);
+                partitionTenant is null ? Policy : TenantPolicy(partitionTenant));
             if (baselineExecutor is not null)
             {
                 reader = reader.WithCommandExecutor(baselineExecutor);
@@ -1084,6 +1167,9 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         var expected = table.Fields
             .Select(static field => (field.ColumnName, field.ScalarType))
             .Append((table.Identity!.ColumnName, table.Identity.ScalarType))
+            .Concat(table.Partition is { } partition
+                ? [(partition.ColumnName, partition.ScalarType)]
+                : [])
             .Concat(table.RelationshipReferences.Select(static reference =>
                 (reference.ColumnName, reference.ScalarType)))
             .GroupBy(static column => column.ColumnName, StringComparer.Ordinal)

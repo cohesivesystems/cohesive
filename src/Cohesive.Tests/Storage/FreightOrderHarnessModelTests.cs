@@ -30,18 +30,27 @@ public sealed class FreightOrderHarnessModelTests
 
         Assert.Equal(first.DefinitionFingerprint, second.DefinitionFingerprint);
         Assert.Equal(
-            "b938e9df3a38b20c1331941f255e93cb68628db7922bb64e361f7132b36fc1d9",
+            "e324ee44d26496d2d1e799cfcbd1f22592cc2b0fe64920700da6dae358451982",
             first.DefinitionFingerprint.Value);
         Assert.Equal(MaterializationSynchronizationMode.All, first.Definition.UpdatePolicy.SupportedModes);
         Assert.Equal(MaterializationConsistencyKind.BaselinePlusCatchUp, first.Definition.UpdatePolicy.Consistency);
         Assert.Single(first.Plan.InputContract.Sources);
         Assert.Equal(5, first.Plan.InputContract.Traversals.Length);
         Assert.Equal(6, first.Definition.Sources.Length);
-        var control = Assert.Single(first.Definition.ControlLoops);
-        var workload = Assert.Single(first.Definition.ControlWorkloads);
-        Assert.Equal(ControlStageKind.Target, control.Stage);
-        Assert.Equal(MaterializationIndexSyncWorkloadKind.Rebuild, workload.Workload);
-        Assert.Equal(control.Id, workload.LoopId);
+        Assert.Equal(2, first.Definition.ControlLoops.Length);
+        Assert.Equal(2, first.Definition.ControlWorkloads.Length);
+        Assert.All(first.Definition.ControlLoops, static control => Assert.Equal(ControlStageKind.Target, control.Stage));
+        Assert.Contains(
+            first.Definition.ControlWorkloads,
+            static workload => workload.Workload == MaterializationIndexSyncWorkloadKind.Rebuild);
+        Assert.Contains(
+            first.Definition.ControlWorkloads,
+            static workload => workload.Workload == MaterializationIndexSyncWorkloadKind.Realtime);
+        Assert.All(
+            first.Definition.ControlWorkloads,
+            workload => Assert.Contains(
+                first.Definition.ControlLoops,
+                control => control.Id == workload.LoopId));
         Assert.Equal(
             2,
             first.Plan.InputContract.Traversals.Count(static traversal =>
@@ -291,7 +300,12 @@ public sealed class FreightOrderHarnessModelTests
             Target("target/retirement", MaterializationCapabilityKind.TargetRetirement),
             Target("target/cleanup", MaterializationCapabilityKind.TargetCleanup)
         ];
-        var targetBatchControl = TargetBatchControl(maximumWriteItems);
+        var rebuildTargetBatchControl = TargetBatchControl(
+            maximumWriteItems,
+            MaterializationIndexSyncWorkloadKind.Rebuild);
+        var realtimeTargetBatchControl = TargetBatchControl(
+            maximumWriteItems,
+            MaterializationIndexSyncWorkloadKind.Realtime);
         return new(
             id: new("freight/order-search"),
             relation: MaterializationRelationReference.From(semantics.CompilationRequest, semantics.Output.Id),
@@ -303,13 +317,16 @@ public sealed class FreightOrderHarnessModelTests
                 MaterializationIdempotencyKind.StableOutputIdentityAndVersion),
             failurePolicy: new(maximumAttempts: 3, MaterializationFailureDisposition.Stop),
             freshnessPolicy: new(maximumLagMilliseconds: 1_800_000),
-            controlLoops: [targetBatchControl],
+            controlLoops: [rebuildTargetBatchControl, realtimeTargetBatchControl],
             provenance: Provenance("freight-order-search"),
             controlWorkloads:
             [
                 new(
-                    loopId: targetBatchControl.Id,
-                    workload: MaterializationIndexSyncWorkloadKind.Rebuild)
+                    loopId: rebuildTargetBatchControl.Id,
+                    workload: MaterializationIndexSyncWorkloadKind.Rebuild),
+                new(
+                    loopId: realtimeTargetBatchControl.Id,
+                    workload: MaterializationIndexSyncWorkloadKind.Realtime)
             ]);
 
         static MaterializationCapabilityRequirement Target(
@@ -352,9 +369,11 @@ public sealed class FreightOrderHarnessModelTests
                 : MaterializationSynchronizationMode.Rebuild);
     }
 
-    static ControlLoopDefinition TargetBatchControl(long maximumWriteItems) => new(
+    static ControlLoopDefinition TargetBatchControl(
+        long maximumWriteItems,
+        MaterializationIndexSyncWorkloadKind workload) => new(
         schemaVersion: ControlLoopDefinition.CurrentSchemaVersion,
-        id: new("freight-order-search/elastic-target-batch"),
+        id: new($"freight-order-search/elastic-target-batch/{workload.ToString().ToLowerInvariant()}"),
         target: "freight/order-search",
         applicationAuthority: MaterializationIndexSyncControlCompiler.ApplicationAuthority,
         stage: ControlStageKind.Target,

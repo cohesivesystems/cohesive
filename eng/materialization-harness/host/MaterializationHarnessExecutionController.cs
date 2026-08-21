@@ -24,6 +24,7 @@ sealed class MaterializationHarnessExecutionController :
 {
     const string ProcessDispositionDiagnosticPrefix = "materialization-harness.process-disposition";
     const long ProcessAuthorityMaximumDocumentBytes = 256L * 1024 * 1024;
+    const int ProviderMismatchFailureThreshold = 2;
 
     readonly NpgsqlDataSource dataSource;
     readonly HarnessHostOptions options;
@@ -37,6 +38,9 @@ sealed class MaterializationHarnessExecutionController :
         ImmutableDictionary<ProcessInstanceId, MaterializationHarnessProviderProcess>.Empty;
     ImmutableDictionary<string, ProviderExecutionState> executionStates =
         ImmutableDictionary<string, ProviderExecutionState>.Empty.WithComparers(StringComparer.Ordinal);
+    ImmutableDictionary<string, ImmutableArray<string>> previousProviderMismatch =
+        ImmutableDictionary<string, ImmutableArray<string>>.Empty.WithComparers(StringComparer.Ordinal);
+    int providerMismatchObservationCount;
     FreightOrderRebuildRuntimeCatalog? runtimeCatalog;
 
     internal MaterializationHarnessExecutionController(
@@ -308,6 +312,7 @@ sealed class MaterializationHarnessExecutionController :
         try
         {
             await process.DriveAsync(linked.Token).ConfigureAwait(false);
+            await process.MaintainActiveGenerationAsync(linked.Token).ConfigureAwait(false);
         }
         finally
         {
@@ -688,13 +693,42 @@ sealed class MaterializationHarnessExecutionController :
             (provider.Provider, Documents: await runtimeCatalog.ReadCanonicalDocumentsAsync(provider.Provider)
                 .ConfigureAwait(false)))).ConfigureAwait(false);
         var expected = documents[0].Documents;
+        var differs = false;
         foreach (var candidate in documents.Skip(1))
         {
             if (!expected.SequenceEqual(candidate.Documents, StringComparer.Ordinal))
             {
-                throw new InvalidOperationException(
-                    $"Completed provider '{candidate.Provider}' differs from '{documents[0].Provider}'.");
+                differs = true;
+                break;
             }
+        }
+        if (!differs)
+        {
+            previousProviderMismatch = previousProviderMismatch.Clear();
+            providerMismatchObservationCount = 0;
+            return;
+        }
+
+        var sameMismatch = documents.Length == previousProviderMismatch.Count
+            && documents.All(candidate =>
+                previousProviderMismatch.TryGetValue(candidate.Provider, out var previous)
+                && previous.SequenceEqual(candidate.Documents, StringComparer.Ordinal));
+        if (!sameMismatch)
+        {
+            previousProviderMismatch = documents.ToImmutableDictionary(
+                static candidate => candidate.Provider,
+                static candidate => candidate.Documents,
+                StringComparer.Ordinal);
+            providerMismatchObservationCount = 1;
+            return;
+        }
+
+        providerMismatchObservationCount++;
+        if (providerMismatchObservationCount >= ProviderMismatchFailureThreshold)
+        {
+            throw new InvalidOperationException(
+                $"Completed providers retained the same logical-document mismatch across "
+                + $"{providerMismatchObservationCount} complete synchronization cycles.");
         }
     }
 

@@ -17,7 +17,6 @@ namespace Cohesive.MaterializationHarness.Seed;
 static class Program
 {
     const string PostgresSchema = "freight_harness";
-    const string PostgresPublication = "cohesive_freight_harness";
     static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -51,6 +50,15 @@ static class Program
         var state = mode is ExecutionMode.ApplyChanges or ExecutionMode.VerifyFinal
             ? journal.Final
             : journal.Baseline;
+        var isSeed = mode is ExecutionMode.SeedDirect or ExecutionMode.SeedCohesive;
+        var semantics = isSeed ? FreightOrderMaterializationModel.Create() : null;
+        if (isSeed)
+        {
+            await ResetPostgresChangeFeedSlotsAsync(
+                connectionString: options.PostgresConnectionString,
+                journal: journal,
+                semantics: semantics!);
+        }
         if (mode == ExecutionMode.SeedDirect)
         {
             await SeedPostgresDirectAsync(options.PostgresConnectionString, state);
@@ -58,8 +66,7 @@ static class Program
         }
         else if (mode == ExecutionMode.SeedCohesive)
         {
-            var semantics = FreightOrderMaterializationModel.Create();
-            await SeedPostgresWithRepositoriesAsync(options.PostgresConnectionString, state, semantics.Storage);
+            await SeedPostgresWithRepositoriesAsync(options.PostgresConnectionString, state, semantics!.Storage);
             await SeedCosmosWithRepositoriesAsync(
                 options.CosmosConnectionString,
                 options.CosmosDatabase,
@@ -80,6 +87,13 @@ static class Program
         {
             await VerifyPostgresAsync(options.PostgresConnectionString, state);
             await VerifyCosmosAsync(options.CosmosConnectionString, options.CosmosDatabase, state);
+        }
+        if (isSeed)
+        {
+            await CreatePostgresChangeFeedSlotsAsync(
+                connectionString: options.PostgresConnectionString,
+                journal: journal,
+                semantics: semantics!);
         }
         if (mode is ExecutionMode.ApplyChanges or ExecutionMode.VerifyFinal)
         {
@@ -177,7 +191,7 @@ static class Program
         NpgsqlTransaction transaction)
     {
         await using var schema = new NpgsqlCommand($$"""
-            DROP PUBLICATION IF EXISTS {{PostgresPublication}};
+            DROP PUBLICATION IF EXISTS {{FreightMaterializationChangeFeedConventions.PostgresPublicationName}};
             DROP SCHEMA IF EXISTS {{PostgresSchema}} CASCADE;
             CREATE SCHEMA {{PostgresSchema}};
 
@@ -255,14 +269,59 @@ static class Program
             ALTER TABLE {{PostgresSchema}}.locations REPLICA IDENTITY FULL;
             ALTER TABLE {{PostgresSchema}}.orders REPLICA IDENTITY FULL;
             ALTER TABLE {{PostgresSchema}}.order_stops REPLICA IDENTITY FULL;
-            CREATE PUBLICATION {{PostgresPublication}} FOR TABLE
+            CREATE PUBLICATION {{FreightMaterializationChangeFeedConventions.PostgresPublicationName}} FOR TABLE
                 {{PostgresSchema}}.customer_accounts,
                 {{PostgresSchema}}.locations,
                 {{PostgresSchema}}.orders,
-                {{PostgresSchema}}.order_stops;
+                {{PostgresSchema}}.order_stops
+                WITH (publish = 'insert, update, delete', publish_via_partition_root = false);
             """, connection, transaction);
         await schema.ExecuteNonQueryAsync();
     }
+
+    static async Task ResetPostgresChangeFeedSlotsAsync(
+        string connectionString,
+        FreightScenarioJournal journal,
+        FreightOrderMaterializationSemantics semantics)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync().ConfigureAwait(false);
+        foreach (var slotName in PostgresChangeFeedSlots(journal, semantics))
+        {
+            await using var command = new NpgsqlCommand(
+                "SELECT pg_drop_replication_slot(@slot_name) WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = @slot_name);",
+                connection);
+            command.Parameters.AddWithValue("slot_name", slotName);
+            await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+    }
+
+    static async Task CreatePostgresChangeFeedSlotsAsync(
+        string connectionString,
+        FreightScenarioJournal journal,
+        FreightOrderMaterializationSemantics semantics)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync().ConfigureAwait(false);
+        foreach (var slotName in PostgresChangeFeedSlots(journal, semantics))
+        {
+            await using var command = new NpgsqlCommand(
+                "SELECT slot_name FROM pg_create_logical_replication_slot(@slot_name, 'pgoutput');",
+                connection);
+            command.Parameters.AddWithValue("slot_name", slotName);
+            _ = await command.ExecuteScalarAsync().ConfigureAwait(false);
+        }
+    }
+
+    static IEnumerable<string> PostgresChangeFeedSlots(
+        FreightScenarioJournal journal,
+        FreightOrderMaterializationSemantics semantics) =>
+        from tenant in journal.Baseline.Orders
+            .Select(static order => order.TenantId)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+        from source in semantics.Definition.Sources.OrderBy(static source => source.Input.Value, StringComparer.Ordinal)
+        select FreightMaterializationChangeFeedConventions.PostgresSlotName(tenant, source.Input);
 
     static async Task SeedPostgresWithRepositoriesAsync(
         string connectionString,
@@ -385,7 +444,7 @@ static class Program
                 (SELECT count(*) FROM {{PostgresSchema}}.customer_accounts),
                 (SELECT count(*) FROM {{PostgresSchema}}.order_stops),
                 (SELECT count(*) FROM {{PostgresSchema}}.locations),
-                (SELECT count(*) FROM pg_publication WHERE pubname = '{{PostgresPublication}}');
+                (SELECT count(*) FROM pg_publication WHERE pubname = '{{FreightMaterializationChangeFeedConventions.PostgresPublicationName}}');
             """, connection);
         await using (var reader = await verify.ExecuteReaderAsync())
         {
