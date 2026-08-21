@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../control/Cohesive.MaterializationHarness.Control.csproj" />
     <ProjectReference Include="../materialize/Cohesive.MaterializationHarness.Materialize.csproj" />
     <ProjectReference Include="../../../src/Cohesive.Api.Execution/Cohesive.Api.Execution.csproj" />
     <ProjectReference Include="../../../src/adapters/Cohesive.Adapters.AspNet/Cohesive.Adapters.AspNet.csproj" />

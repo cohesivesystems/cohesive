@@ -155,6 +155,31 @@ failure_test() {
   printf 'failure-artifacts=%s\n' "$artifact_root"
 }
 
+control_equivalence_test() {
+  local provider="${1:-postgres}"
+  local run_id
+  run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  local artifact_root="$script_dir/artifacts/control-equivalence-$run_id"
+
+  compose down --volumes --remove-orphans
+  up
+  seed --cohesive
+  configure_runtime
+  export COHESIVE_MATERIALIZATION_REPOSITORY_ROOT="$repo_root"
+  dotnet build \
+    "$script_dir/host/Cohesive.MaterializationHarness.Host.csproj" \
+    --configuration Release
+  dotnet build \
+    "$script_dir/supervise/Cohesive.MaterializationHarness.Supervise.csproj" \
+    --configuration Release
+  dotnet \
+    "$script_dir/supervise/bin/Release/net10.0/Cohesive.MaterializationHarness.Supervise.dll" \
+    control-equivalence \
+    "$provider" \
+    "$artifact_root"
+  printf 'control-equivalence-artifacts=%s\n' "$artifact_root"
+}
+
 verify_index() {
   configure_runtime
   curl --fail --silent --show-error \
@@ -183,7 +208,7 @@ test_harness() {
   configure_runtime
   dotnet test "$repo_root/src/Cohesive.Tests/Cohesive.Tests.csproj" \
     --configuration Release \
-    --filter "FullyQualifiedName~MaterializationConformanceRunnerTests|FullyQualifiedName~FreightScenarioJournalTests|FullyQualifiedName~FreightOrderHarnessModelTests|FullyQualifiedName~FreightOrderRebuildPlanCompilerTests|FullyQualifiedName~FreightOrderMaterializationInverseExecutorTests|FullyQualifiedName~LogicalReplication_FixedPartitionFiltersRowsAndProjectsPartitionMoves|FullyQualifiedName~PostgresEntityRepositoryTests|FullyQualifiedName~PostgresProcessDurableStoreTests|FullyQualifiedName~PostgresMaterializationStateStoreTests|FullyQualifiedName~InMemoryProcessDurableStoreTests|FullyQualifiedName~ProcessExecutionCommandApiEndpointRouteBuilderExtensionsTests|FullyQualifiedName~TenantScopedMaterializationPagesBindExactPredicateAndRejectCrossTenantContinuation|FullyQualifiedName~PartitionedReaderRequiresMatchingRuntimeAndPhysicalScopes|FullyQualifiedName~LocalPostgres_TenantScopedMaterializationPagesStayWithinTheExactPartition" \
+    --filter "FullyQualifiedName~MaterializationConformanceRunnerTests|FullyQualifiedName~FreightScenarioJournalTests|FullyQualifiedName~FreightOrderHarnessModelTests|FullyQualifiedName~FreightOrderRebuildPlanCompilerTests|FullyQualifiedName~FreightOrderMaterializationInverseExecutorTests|FullyQualifiedName~LogicalReplication_FixedPartitionFiltersRowsAndProjectsPartitionMoves|FullyQualifiedName~PostgresEntityRepositoryTests|FullyQualifiedName~PostgresProcessDurableStoreTests|FullyQualifiedName~PostgresMaterializationStateStoreTests|FullyQualifiedName~InMemoryProcessDurableStoreTests|FullyQualifiedName~ProcessExecutionCommandApiEndpointRouteBuilderExtensionsTests|FullyQualifiedName~MaterializationHarnessControlScenarioResultTests|FullyQualifiedName~TenantScopedMaterializationPagesBindExactPredicateAndRejectCrossTenantContinuation|FullyQualifiedName~PartitionedReaderRequiresMatchingRuntimeAndPhysicalScopes|FullyQualifiedName~LocalPostgres_TenantScopedMaterializationPagesStayWithinTheExactPartition" \
     --logger "console;verbosity=minimal"
 }
 
@@ -212,6 +237,7 @@ Commands:
   process-limits <provider> <items> Update the canonical rebuild batch-item limit.
   process-evidence <provider> [generation] Capture bounded Process, checkpoint, and target evidence.
   failure-test [provider] [boundary] Clean-reset, kill/restart the real host, and emit bounded artifacts.
+  control-equivalence-test [provider] Clean-reset and compare SDK/HTTP control semantics.
   verify-index Show active generation aliases and document counts without mutating Elasticsearch.
   test     Start, seed, materialize, and run the focused verification suite.
   status   Show service and health state.
@@ -316,6 +342,13 @@ case "$command" in
       exit 2
     fi
     failure_test "${2:-postgres}" "${3:-AfterTargetBatch}"
+    ;;
+  control-equivalence-test)
+    if [[ "$#" -gt 2 ]]; then
+      usage
+      exit 2
+    fi
+    control_equivalence_test "${2:-postgres}"
     ;;
   verify-index)
     up

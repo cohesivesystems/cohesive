@@ -108,6 +108,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Infra", "src\Cohes
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Infra.Tests", "src\Cohesive.Infra.Tests\Cohesive.Infra.Tests.csproj", "{45109B51-0D75-443A-9D50-329E760CF53D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.MaterializationHarness.Control", "eng\materialization-harness\control\Cohesive.MaterializationHarness.Control.csproj", "{050A78EF-194C-4931-95F0-3ADA2951522E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -706,6 +708,18 @@ Global
 		{45109B51-0D75-443A-9D50-329E760CF53D}.Release|x64.Build.0 = Release|Any CPU
 		{45109B51-0D75-443A-9D50-329E760CF53D}.Release|x86.ActiveCfg = Release|Any CPU
 		{45109B51-0D75-443A-9D50-329E760CF53D}.Release|x86.Build.0 = Release|Any CPU
+		{050A78EF-194C-4931-95F0-3ADA2951522E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{050A78EF-194C-4931-95F0-3ADA2951522E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{050A78EF-194C-4931-95F0-3ADA2951522E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{050A78EF-194C-4931-95F0-3ADA2951522E}.Debug|x64.Build.0 = Debug|Any CPU
+		{050A78EF-194C-4931-95F0-3ADA2951522E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{050A78EF-194C-4931-95F0-3ADA2951522E}.Debug|x86.Build.0 = Debug|Any CPU
+		{050A78EF-194C-4931-95F0-3ADA2951522E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{050A78EF-194C-4931-95F0-3ADA2951522E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{050A78EF-194C-4931-95F0-3ADA2951522E}.Release|x64.ActiveCfg = Release|Any CPU
+		{050A78EF-194C-4931-95F0-3ADA2951522E}.Release|x64.Build.0 = Release|Any CPU
+		{050A78EF-194C-4931-95F0-3ADA2951522E}.Release|x86.ActiveCfg = Release|Any CPU
+		{050A78EF-194C-4931-95F0-3ADA2951522E}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

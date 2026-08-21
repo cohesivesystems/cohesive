@@ -3,7 +3,7 @@ using Cohesive.Execution;
 using Cohesive.Processes.Execution;
 using Cohesive.Storage.Materialization;
 
-namespace Cohesive.MaterializationHarness.Host;
+namespace Cohesive.MaterializationHarness.Control;
 
 sealed record MaterializationHarnessFailureEvidence(
     string Provider,
@@ -20,6 +20,7 @@ sealed record MaterializationHarnessFailureEvidence(
     string? SelectedGenerationRevision,
     long? SelectedVisibleItemCount,
     long? SelectedTombstoneCount,
+    ImmutableArray<string> SelectedControlEpochs,
     ImmutableArray<MaterializationHarnessDurableOperationEvidence> DurableOperations,
     ImmutableArray<MaterializationHarnessProgressEvidence> Progress,
     DateTimeOffset CapturedAtUtc);
