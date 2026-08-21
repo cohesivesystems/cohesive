@@ -2329,8 +2329,6 @@ public sealed class RelationQueryExpressionLowerer
         expression = null!;
         if (binary.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual))
             return false;
-        if (binary.Method is not null && binary.Method.DeclaringType != typeof(string))
-            return false;
 
         var left = StripExactConversions(binary.Left, sourceReference, expressionPath + "/left");
         var right = StripExactConversions(binary.Right, sourceReference, expressionPath + "/right");
@@ -2339,12 +2337,36 @@ public sealed class RelationQueryExpressionLowerer
             : null;
         if (member is null || !TryGetGuardableMemberAccess(member, scope, out _))
             return false;
+        if (binary.Method is not null
+            && binary.Method.DeclaringType != typeof(string)
+            && !IsCompilerGeneratedReferenceNullOperator(binary.Method, member.Type))
+        {
+            return false;
+        }
 
         var value = TranslateMember(member, scope, sourceReference, expressionPath + "/member");
         expression = binary.NodeType == ExpressionType.Equal
             ? Expr.Eq(value, Expr.Null())
             : Expr.Ne(value, Expr.Null());
         return true;
+    }
+
+    static bool IsCompilerGeneratedReferenceNullOperator(MethodInfo method, Type operandType)
+    {
+        if (!method.IsStatic
+            || !method.IsSpecialName
+            || !method.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false)
+            || method.ReturnType != typeof(bool)
+            || method.DeclaringType != operandType
+            || method.Name is not ("op_Equality" or "op_Inequality"))
+        {
+            return false;
+        }
+
+        var parameters = method.GetParameters();
+        return parameters.Length == 2
+               && parameters[0].ParameterType == operandType
+               && parameters[1].ParameterType == operandType;
     }
 
     static Expression StripExactConversions(
@@ -2815,8 +2837,6 @@ public sealed class RelationQueryExpressionLowerer
         member = null!;
         if (binary.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual))
             return false;
-        if (binary.Method is not null && binary.Method.DeclaringType != typeof(string))
-            return false;
 
         var left = StripConditionConversions(binary.Left);
         var right = StripConditionConversions(binary.Right);
@@ -2825,6 +2845,12 @@ public sealed class RelationQueryExpressionLowerer
             : null;
         if (candidate is null)
             return false;
+        if (binary.Method is not null
+            && binary.Method.DeclaringType != typeof(string)
+            && !IsCompilerGeneratedReferenceNullOperator(binary.Method, candidate.Type))
+        {
+            return false;
+        }
 
         member = candidate;
         return true;

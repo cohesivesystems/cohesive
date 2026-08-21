@@ -607,8 +607,10 @@ The translator accepts sequence syntax only where its CLR behavior identifies th
 canonical Int64 count domain. An exact named enum member lowers to a portable typed enum literal, including
 equality or inequality against an enum field. Same-type enum fields can also be compared directly. Unnamed flag
 combinations and ambiguous enum aliases remain unsupported. A convention-inferred nullable CLR member,
-whose semantic field has required presence, may be read inside a branch guarded by `HasValue`; `??` over the
-same kind of member lowers to an explicit canonical conditional. `DateTimeOffset.EqualsExact(...)` lowers to
+whose semantic field has required presence, may be read inside a branch guarded by `HasValue` or an exact null
+comparison. Compiler-synthesized record equality operators retain that null-guard meaning; arbitrary user-defined
+operators remain unsupported. `??` over the same kind of member lowers to an explicit canonical conditional.
+`DateTimeOffset.EqualsExact(...)` lowers to
 canonical representation equality; ordinary `DateTimeOffset` equality remains unsupported because its instant-based
 CLR semantics differ from canonical observation equality. Imported mappings remain fail-closed until
 they can supply equivalent per-path presence evidence. Unguarded nullable navigation, Int32-returning

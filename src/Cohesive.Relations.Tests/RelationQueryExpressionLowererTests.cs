@@ -1167,7 +1167,7 @@ public sealed class RelationQueryExpressionLowererTests
         public OptionalObservation ExpectedObservation { get; init; } = new();
     }
 
-    sealed class OptionalObservation
+    sealed record OptionalObservation
     {
         public DateTimeOffset ObservedAt { get; init; }
 
