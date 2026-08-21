@@ -8,7 +8,7 @@ using Cohesive.Storage.Processes;
 
 namespace Cohesive.MaterializationHarness.Supervise;
 
-static class MaterializationHarnessSupervisor
+static partial class MaterializationHarnessSupervisor
 {
     static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web)
     {
@@ -130,15 +130,30 @@ static class MaterializationHarnessSupervisor
     }
 
     static SupervisedHost StartHost(SupervisorOptions options, bool armFault)
+        => StartHost(
+            options,
+            armFault
+                ? new HostFaultPlan(
+                    Point: options.Boundary,
+                    MarkerPath: options.MarkerPath,
+                    ScopeIdentity: null,
+                    OperationIdentity: null)
+                : null);
+
+    static SupervisedHost StartHost(SupervisorOptions options, HostFaultPlan? fault)
     {
         var start = HostProcessStartInfo(options);
-        if (armFault)
+        if (fault is not null)
         {
-            start.Environment["COHESIVE_MATERIALIZATION_FAULT_BOUNDARY"] = options.Boundary.ToString();
-            start.Environment["COHESIVE_MATERIALIZATION_FAULT_MARKER_PATH"] = options.MarkerPath;
+            start.Environment["COHESIVE_MATERIALIZATION_FAULT_BOUNDARY"] = fault.Point.ToString();
+            start.Environment["COHESIVE_MATERIALIZATION_FAULT_MARKER_PATH"] = fault.MarkerPath;
             start.Environment["COHESIVE_MATERIALIZATION_FAULT_OCCURRENCE"] = "0";
             start.Environment["COHESIVE_MATERIALIZATION_FAULT_PROVIDER"] = options.Provider;
             start.Environment["COHESIVE_MATERIALIZATION_FAULT_RUN_ID"] = options.RunIdentity;
+            if (fault.ScopeIdentity is not null)
+                start.Environment["COHESIVE_MATERIALIZATION_FAULT_SCOPE"] = fault.ScopeIdentity;
+            if (fault.OperationIdentity is not null)
+                start.Environment["COHESIVE_MATERIALIZATION_FAULT_OPERATION"] = fault.OperationIdentity;
         }
         var process = new Process { StartInfo = start, EnableRaisingEvents = true };
         var stdout = new BoundedLineCapture(SupervisorOptions.MaximumArtifactBytes);
@@ -155,9 +170,21 @@ static class MaterializationHarnessSupervisor
     static async Task<ReachedBoundary> WaitForMarkerAsync(
         SupervisorOptions options,
         SupervisedHost host,
+        CancellationToken cancellationToken) => await WaitForMarkerAsync(
+            options,
+            host,
+            markerPath: options.MarkerPath,
+            point: options.Boundary,
+            cancellationToken).ConfigureAwait(false);
+
+    static async Task<ReachedBoundary> WaitForMarkerAsync(
+        SupervisorOptions options,
+        SupervisedHost host,
+        string markerPath,
+        MaterializationExecutionBoundaryPoint point,
         CancellationToken cancellationToken)
     {
-        while (!File.Exists(options.MarkerPath))
+        while (!File.Exists(markerPath))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (host.Process.HasExited)
@@ -165,11 +192,11 @@ static class MaterializationHarnessSupervisor
             await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
         }
         var marker = JsonSerializer.Deserialize<ReachedBoundary>(
-            await File.ReadAllTextAsync(options.MarkerPath, cancellationToken).ConfigureAwait(false),
+            await File.ReadAllTextAsync(markerPath, cancellationToken).ConfigureAwait(false),
             WebJson) ?? throw new InvalidOperationException("The reached-boundary marker was empty.");
         if (marker.RunIdentity != options.RunIdentity
             || marker.Provider != options.Provider
-            || marker.Point != options.Boundary
+            || marker.Point != point
             || marker.Occurrence != 0
             || marker.HostProcessId != host.Process.Id)
         {
@@ -379,9 +406,10 @@ static class MaterializationHarnessSupervisor
         BoundedArtifactWriter artifacts,
         string artifactPrefix,
         IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? assemblyPath = null)
     {
-        var start = HostProcessStartInfo(options);
+        var start = AssemblyProcessStartInfo(options, assemblyPath ?? options.HostAssemblyPath);
         foreach (var argument in arguments)
             start.ArgumentList.Add(argument);
         var process = new Process { StartInfo = start };
@@ -444,6 +472,9 @@ static class MaterializationHarnessSupervisor
     }
 
     static ProcessStartInfo HostProcessStartInfo(SupervisorOptions options)
+        => AssemblyProcessStartInfo(options, options.HostAssemblyPath);
+
+    static ProcessStartInfo AssemblyProcessStartInfo(SupervisorOptions options, string assemblyPath)
     {
         var start = new ProcessStartInfo
         {
@@ -453,7 +484,7 @@ static class MaterializationHarnessSupervisor
             UseShellExecute = false,
             WorkingDirectory = options.RepositoryRoot
         };
-        start.ArgumentList.Add(options.HostAssemblyPath);
+        start.ArgumentList.Add(assemblyPath);
         start.Environment["COHESIVE_MATERIALIZATION_PROCESS_INSTANCE_ID"] = options.ProcessInstancePrefix;
         foreach (var name in new[]
         {
@@ -517,6 +548,12 @@ static class MaterializationHarnessSupervisor
         JsonElement DurableOperations);
 
     sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
+
+    sealed record HostFaultPlan(
+        MaterializationExecutionBoundaryPoint Point,
+        string MarkerPath,
+        string? ScopeIdentity,
+        string? OperationIdentity);
 
     sealed record SupervisedHost(
         Process Process,

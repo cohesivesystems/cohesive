@@ -98,6 +98,25 @@ static class ProgramEntry
             await controller.DisposeAsync();
             return 0;
         }
+        if (args is ["--probe-incompatible-replay", var replayProvider])
+        {
+            var result = await controller.ProbeIncompatibleReplayAsync(
+                provider: replayProvider,
+                context: OperationContext.Create());
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+            await controller.DisposeAsync();
+            return 0;
+        }
+        if (args is ["--probe-target-ordering", var orderingProvider, var staleWorkerFence])
+        {
+            var result = await controller.ProbeTargetOrderingAsync(
+                provider: orderingProvider,
+                staleWorkerFence: new(staleWorkerFence),
+                context: OperationContext.Create());
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+            await controller.DisposeAsync();
+            return 0;
+        }
         if (args.Length is 1 or 2
             && TryResolveOperatorEndpoint(args[0], catalog, out var endpoint))
         {
@@ -120,7 +139,7 @@ static class ProgramEntry
         if (args.Length != 0)
         {
             throw new ArgumentException(
-                "The materialization host accepts --start, --inspect, --explain, --traces, --pause, --continue, --restart-attempt, --cancel, or --failure-evidence, followed by an optional provider; --failure-evidence also accepts a generation, --update-limits requires a provider and maximum batch items, and --control-scenario-sdk requires one provider.",
+                "The materialization host accepts --start, --inspect, --explain, --traces, --pause, --continue, --restart-attempt, --cancel, or --failure-evidence, followed by an optional provider; --failure-evidence also accepts a generation, --update-limits requires a provider and maximum batch items, --control-scenario-sdk requires one provider, and the source-matrix probe commands require their explicit provider and fence inputs.",
                 nameof(args));
         }
 

@@ -60,6 +60,8 @@ sealed class MaterializationHarnessProviderProcess
 
     internal MaterializationRebuildPlanSetProcessLifecycle Lifecycle { get; }
 
+    internal MaterializationSynchronizationRunResult? LastSynchronization { get; private set; }
+
     internal static async Task<MaterializationHarnessProviderProcess> CreateAsync(
         FreightOrderRebuildProviderRuntime provider,
         ProcessInstanceId processInstanceId,
@@ -209,7 +211,8 @@ sealed class MaterializationHarnessProviderProcess
             realtimeSynchronization: new(
                 resolved: provider.ResolvedPlan,
                 workStore: materializationStore,
-                workload: MaterializationIndexSyncWorkloadKind.Realtime),
+                workload: MaterializationIndexSyncWorkloadKind.Realtime,
+                boundaryObserver: boundaryObserver),
             realtimeWorker: new($"materialization-harness/realtime/{provider.Provider}/{workerIncarnation}"),
             router: router,
             lifecycle: lifecycle);
@@ -368,6 +371,7 @@ sealed class MaterializationHarnessProviderProcess
                 invocation: new($"materialization-harness/realtime/{Provider.Provider}/{execution.Generation.Value}"),
                 worker: realtimeWorker)
             .ConfigureAwait(false);
+        LastSynchronization = result;
         if (result.Disposition is MaterializationSynchronizationRunDisposition.Failed
             or MaterializationSynchronizationRunDisposition.RestartRequired)
         {
