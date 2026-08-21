@@ -123,6 +123,7 @@ tests, and eventually a repository-wide maturity matrix.
 | [ASP.NET API adapter boundary](decisions/aspnet-api-adapter-boundary.md) | Implemented | Portable API authority, Minimal API projection ownership, and package dependency direction |
 | [Reconciliable training submissions](decisions/reconciliable-training-submissions.md) | Implemented | Stable logical submission identity, exact request binding, provider reconciliation, and conflict semantics |
 | [Typed Request outcome projection](decisions/typed-request-outcome-projection.md) | Implemented | Canonical Request authority, exhaustive source-only C# cases, typed Effect lowering, and native-union migration boundary |
+| [Typed durable Request handlers](decisions/typed-durable-request-handlers.md) | Implemented | Exact-reference adapter routing, typed handler projection, explicit target capabilities, and reconciliation evidence |
 
 ## Package documentation
 

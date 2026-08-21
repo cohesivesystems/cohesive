@@ -120,6 +120,31 @@ emission/attempt/fence-keyed observation per item. Neither boundary receives agg
 a Transition callback, or a Process runtime service, so adapter registration cannot become semantic authority and
 a handler cannot mutate authoritative entity state through this contract.
 
+Ordinary single-protocol handlers can implement `IDurableRequestHandler<TRequest, TOutcome>` and select a declared
+semantic result without decoding a portable envelope or constructing raw outcome evidence:
+
+```csharp
+public ValueTask<DurableRequestOutcome<SubmitTrainingOutcome>> ExecuteAsync(
+    DurableRequestExecutionContext<SubmitTrainingOutcome> context,
+    SubmitTraining request) =>
+    ValueTask.FromResult(context.Outcome(
+        TrainingProviderProtocols.SubmitTraining.Outcomes.Accepted,
+        new TrainingSubmissionAccepted("provider/job/42")));
+
+services
+    .AddDurableOperation(TrainingProviderProtocols.SubmitTraining)
+    .HandledBy<TrainingSubmissionHandler>()
+    .WithIdempotency(DurableOperationIdempotencyEvidence.TargetDeduplication)
+    .WithReconciliation();
+```
+
+The registration derives `SupportedRequests` from the protocol's exact definition, revision, and fingerprint. It
+requires explicit idempotency and reconciliation choices because CLR types are not target-capability evidence.
+Typed reconciliation receives the retained failed attempt and returns the existing confirmed outcome,
+confirmed-not-executed, or unresolved observation. Raw `IDurableOperationAdapter` remains the escape hatch for
+multi-protocol, batch, streaming, target-native, and specialized implementations. See the
+[typed durable Request handler decision](../../docs/decisions/typed-durable-request-handlers.md).
+
 `DurableOperationReferenceExecutor` is a deterministic state transformer, not a production dispatcher or durable
 store. It defines fenced claim and renewal, dispatch, bounded retry, semantic timeout and cancellation, explicit
 reconciliation and escalation intents, acknowledgement, and target admission. It makes the EK-06 crash cuts
