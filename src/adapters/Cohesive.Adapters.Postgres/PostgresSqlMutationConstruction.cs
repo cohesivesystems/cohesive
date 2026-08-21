@@ -13,6 +13,7 @@ public sealed class PostgresSqlInsertBuilder
     readonly HashSet<PostgresSqlIdentifier> returningAliases = [];
     ImmutableArray<PostgresSqlIdentifier> conflictColumns;
     ImmutableArray<PostgresSqlIdentifier> excludedUpdateColumns;
+    bool conflictDoNothing;
 
     /// <summary>Creates an insert builder for one physical table.</summary>
     /// <param name="table">Injection-safe physical table name.</param>
@@ -59,6 +60,22 @@ public sealed class PostgresSqlInsertBuilder
         return this;
     }
 
+    /// <summary>Configures an idempotent insert that retains the existing row on a key conflict.</summary>
+    /// <param name="conflictColumns">One or more physical columns forming the conflict target.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="conflictColumns"/> or a column name is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="conflictColumns"/> is empty or contains an invalid or repeated column.</exception>
+    /// <exception cref="InvalidOperationException">Conflict behavior has already been configured.</exception>
+    public PostgresSqlInsertBuilder OnConflictDoNothing(IEnumerable<string> conflictColumns)
+    {
+        if (!this.conflictColumns.IsDefault)
+            throw new InvalidOperationException("PostgreSQL insert conflict behavior has already been configured.");
+        this.conflictColumns = CaptureIdentifiers(conflictColumns, nameof(conflictColumns));
+        excludedUpdateColumns = [];
+        conflictDoNothing = true;
+        return this;
+    }
+
     /// <summary>Adds one expression returned from the inserted or updated row.</summary>
     /// <param name="expression">Expression evaluated by the <c>RETURNING</c> clause.</param>
     /// <param name="alias">Unique result-column alias.</param>
@@ -99,15 +116,22 @@ public sealed class PostgresSqlInsertBuilder
         {
             builder.Append(" ON CONFLICT (");
             WriteIdentifiers(builder, conflictColumns);
-            builder.Append(") DO UPDATE SET ");
-            for (var index = 0; index < excludedUpdateColumns.Length; index++)
+            if (conflictDoNothing)
             {
-                if (index != 0)
-                    builder.Append(", ");
-                var column = excludedUpdateColumns[index];
-                column.WriteQuoted(builder);
-                builder.Append(" = EXCLUDED.");
-                column.WriteQuoted(builder);
+                builder.Append(") DO NOTHING");
+            }
+            else
+            {
+                builder.Append(") DO UPDATE SET ");
+                for (var index = 0; index < excludedUpdateColumns.Length; index++)
+                {
+                    if (index != 0)
+                        builder.Append(", ");
+                    var column = excludedUpdateColumns[index];
+                    column.WriteQuoted(builder);
+                    builder.Append(" = EXCLUDED.");
+                    column.WriteQuoted(builder);
+                }
             }
         }
 

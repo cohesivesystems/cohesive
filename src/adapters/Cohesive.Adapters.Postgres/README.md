@@ -7,6 +7,58 @@ ledger for `Cohesive.Processes.Distribution`. The builder can be used
 without Cohesive.Relations query compilation; the storage binding remains the shared physical authority for
 compilation and runtime source execution.
 
+## Process durability authority
+
+`PostgresProcessDurableStore` preserves `ProcessDurableStoreDocument` as the provider-neutral semantic authority while
+projecting each `ProcessDurableAggregateDocument` into a normalized PostgreSQL representation. Each Process instance
+has an independently compare-and-swapped root containing its canonical aggregate fingerprint, byte length, storage
+format, and ordered page manifest. Immutable content-addressed pages retain the canonical aggregate bytes. This makes
+cross-instance writes independent and lets a mutation write only content-defined pages that are not already retained;
+it does not introduce a second Process lifecycle or replay model.
+
+The default paging policy uses 16 KiB minimum, 32 KiB target, and 64 KiB maximum pages. The target must be a power of
+two, and every physical page remains bounded even when no optional aggregate reconstruction limit is configured. A
+read reconstructs the complete aggregate in memory and verifies every page fingerprint, the aggregate fingerprint,
+the declared byte length, the exact canonical JSON encoding, and the addressed Process identity before evaluating an
+operation. The current format therefore reduces database write amplification and lock scope, but it does not yet
+provide partial semantic reconstruction: memory and canonical serialization cost still scale with one Process
+aggregate. The ordered root manifest is also rewritten on a changed aggregate, although it is substantially smaller
+than the retained evidence it references.
+
+Mutations run against the reference in-memory interpretation, insert missing pages, and compare-and-swap the root in
+one transaction. A failed root comparison rolls back newly inserted pages and retries from the committed aggregate.
+Concurrent mutations for one instance serialize through its root revision; unrelated instances do not share an
+authority-row lock. Commit receipts, replay evidence, worker fences, checkpoints, and traces remain inside the exact
+canonical aggregate, so restart and ambiguous-commit replay preserve the portable store contract.
+
+Call `EnsureCreatedAsync` explicitly during bootstrap. It creates the normalized root and page tables and, when the
+first-generation single-document row exists, transactionally imports every aggregate after verifying the legacy
+fingerprint. The legacy row is retained as migration evidence and is no longer updated. Run this migration with
+exclusive ownership of the configured authority; an older writer must not remain active after normalized roots become
+authoritative. Ordinary operations perform no DDL or migration.
+
+Content-addressed pages are append-only in this storage format. Pages no longer referenced by a current root remain
+retained, which makes ambiguous retries and reconstruction fail-safe without a global authority lock but can preserve
+obsolete physical versions after canonical evidence is pruned. Deployments may account for those bytes separately;
+online reference-safe garbage collection is intentionally deferred rather than being hidden inside ordinary Process
+mutations.
+
+```csharp
+var options = new PostgresProcessDurableStoreOptions(
+    authorityId: "freight/materialization/processes",
+    maximumAggregateBytes: null);
+var processStore = new PostgresProcessDurableStore(
+    dataSource: dataSource,
+    options: options);
+
+await processStore.EnsureCreatedAsync(context);
+```
+
+The adapter's PostgreSQL integration tests measure retained page count, unique page bytes, maximum page size, and
+aggregate bytes before and after representative mutations. They also exercise same-instance compare-and-swap,
+adapter reconstruction, exact replay, and legacy migration. These measurements intentionally distinguish physical
+write growth from the logical aggregate size; PostgreSQL WAL and table overhead remain deployment-level concerns.
+
 ## Process distribution ledger
 
 `PostgresProcessDistributionStore` is the first durable reference realization of the portable
@@ -95,10 +147,11 @@ var statement = template.Bind(new Dictionary<string, object?>
 ```
 
 `PostgresSqlSelectBuilder` also composes derived-table joins, aggregate `FILTER` clauses, explicit null placement,
-offset paging, and null-aware structural keyset predicates. `PostgresSqlInsertBuilder` supports parameterized inserts
-and `ON CONFLICT DO UPDATE` from `EXCLUDED` values, while `PostgresSqlUpdateBuilder` requires at least one predicate so
-an unrestricted update cannot be produced accidentally. Both mutation builders use the same safe identifiers,
-expression tree, deterministic positional parameters, and immutable command templates as the select builder.
+offset paging, and null-aware structural keyset predicates. `PostgresSqlInsertBuilder` supports parameterized inserts,
+`ON CONFLICT DO UPDATE` from `EXCLUDED` values, and conflict-retaining `ON CONFLICT DO NOTHING`, while
+`PostgresSqlUpdateBuilder` requires at least one predicate so an unrestricted update cannot be produced accidentally.
+Both mutation builders use the same safe identifiers, expression tree, deterministic positional parameters, and
+immutable command templates as the select builder.
 
 Captured constants remain portable when a compiled artifact is serialized, and runtime bindings accept the same
 closed provider-neutral CLR domain. The supported values are `null`, `bool`, `int`, `long`, `decimal`, `string`,
