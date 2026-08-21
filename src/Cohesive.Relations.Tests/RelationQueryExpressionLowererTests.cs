@@ -393,6 +393,27 @@ public sealed class RelationQueryExpressionLowererTests
     }
 
     [Fact]
+    public void GuardedOptionalEvidence_ComposesExactInstantAndEnumComparisons()
+    {
+        var author = RelationQuery.Expression();
+        var source = author.Source<OptionalEvidence>();
+        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        Expression<Func<OptionalEvidence, bool>> exact = input =>
+            input.LastObservation != null
+            && input.LastObservation.ObservedAt.EqualsExact(input.ExpectedObservation.ObservedAt)
+            && input.LastObservation.Status == input.ExpectedObservation.Status;
+
+        var lowered = lowerer.LowerValue(
+            exact,
+            [source.Binding],
+            sourceReference: "optional-evidence/exact").RequireValue();
+
+        Assert.Equal(3, Descendants(lowered.Value).OfType<BinaryExpr>().Count(
+            static expression => expression.Operator is BinaryOperator.Eq or BinaryOperator.Ne));
+        Assert.Equal(5, Descendants(lowered.Value).OfType<FieldExpr>().Count());
+    }
+
+    [Fact]
     public void AggregateNumericLiteralTypes_SurviveCanonicalJsonNormalization()
     {
         var author = RelationQuery.Expression();
@@ -1137,6 +1158,20 @@ public sealed class RelationQueryExpressionLowererTests
     {
         Pending,
         Complete
+    }
+
+    sealed class OptionalEvidence
+    {
+        public OptionalObservation? LastObservation { get; init; }
+
+        public OptionalObservation ExpectedObservation { get; init; } = new();
+    }
+
+    sealed class OptionalObservation
+    {
+        public DateTimeOffset ObservedAt { get; init; }
+
+        public LoadStatus Status { get; init; }
     }
 
     sealed class TransformingDto
