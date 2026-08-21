@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
 using Cohesive.Model;
 using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
@@ -164,6 +165,171 @@ public sealed class RequestProtocolOutcome<TPayload> : RequestProtocolOutcome
     }
 }
 
+/// <summary>Source-only C# case projection for one canonical Request terminal outcome.</summary>
+/// <remarks>
+/// <see cref="Outcome"/> remains the authority for outcome identity, kind, and portable payload schema.
+/// <see cref="CaseType"/> is authoring metadata used to bind an exhaustive C# type switch and is never
+/// serialized into canonical Request or Process documents. It may therefore be replaced by a future native C#
+/// union case without a canonical-model or runtime migration.
+/// </remarks>
+public abstract class RequestProtocolCase
+{
+    private protected RequestProtocolCase(RequestProtocolOutcome outcome, Type caseType)
+    {
+        Outcome = Guard.RequireNotNull(outcome);
+        CaseType = Guard.RequireNotNull(caseType);
+    }
+
+    internal object Owner => Outcome.Owner;
+
+    /// <summary>Canonical terminal-outcome descriptor projected by this source-only case.</summary>
+    public RequestProtocolOutcome Outcome { get; }
+
+    /// <summary>Closed-family CLR case type used only while authoring typed callers and handlers.</summary>
+    public Type CaseType { get; }
+
+    /// <summary>Stable canonical terminal-outcome identity.</summary>
+    public RequestTerminalOutcomeId Id => Outcome.Id;
+
+    /// <summary>CLR payload type projected into the canonical portable outcome schema.</summary>
+    public Type PayloadType => Outcome.PayloadType;
+}
+
+/// <summary>Typed source-only C# case projection for one canonical Request terminal outcome.</summary>
+/// <typeparam name="TCase">Distinct CLR case in the protocol's closed outcome family.</typeparam>
+/// <typeparam name="TPayload">CLR payload carried by the canonical terminal outcome.</typeparam>
+public sealed class RequestProtocolCase<TCase, TPayload> : RequestProtocolCase
+    where TCase : class
+{
+    internal RequestProtocolCase(RequestProtocolOutcome<TPayload> outcome)
+        : base(outcome, typeof(TCase))
+    {
+        TypedOutcome = outcome;
+    }
+
+    /// <summary>Typed canonical terminal-outcome descriptor projected by this source-only case.</summary>
+    public RequestProtocolOutcome<TPayload> TypedOutcome { get; }
+}
+
+/// <summary>Finite source-only case-declaration surface for a typed Request outcome family.</summary>
+/// <remarks>
+/// The builder records only a case type-to-canonical-outcome association. It constructs no case values, retains
+/// no callbacks, and contributes no CLR case metadata to canonical Request documents.
+/// </remarks>
+/// <typeparam name="TOutcome">Closed CLR result-family root returned by typed Process effects and handlers.</typeparam>
+public sealed class RequestProtocolCaseBuilder<TOutcome>
+    where TOutcome : class
+{
+    readonly RequestProtocolOutcomeBuilder outcomes = new();
+    readonly List<RequestProtocolCase> cases = [];
+    bool completed;
+
+    internal RequestProtocolCaseBuilder()
+    {
+    }
+
+    internal object Owner => outcomes.Owner;
+
+    /// <summary>Declares a typed successful terminal result and its distinct source-only case.</summary>
+    /// <typeparam name="TCase">Concrete source-only case assignable to <typeparamref name="TOutcome"/>.</typeparam>
+    /// <typeparam name="TPayload">CLR payload type projected into the portable result schema.</typeparam>
+    /// <param name="id">Stable canonical result identity.</param>
+    /// <param name="payloadRevision">Exact semantic revision of the payload schema.</param>
+    /// <returns>A typed case projection over the canonical outcome descriptor.</returns>
+    /// <exception cref="ArgumentException"><paramref name="id"/> or <typeparamref name="TCase"/> is invalid or duplicated.</exception>
+    /// <exception cref="InvalidOperationException">The authoring callback already completed.</exception>
+    /// <exception cref="NotSupportedException">The CLR payload cannot be projected into a portable contract.</exception>
+    public RequestProtocolCase<TCase, TPayload> Result<TCase, TPayload>(
+        RequestTerminalOutcomeId id,
+        InteractionValueSchemaRevision payloadRevision)
+        where TCase : class, TOutcome => Add<TCase, TPayload>(outcomes.Result<TPayload>(id, payloadRevision));
+
+    /// <summary>Declares a typed terminal failure and its distinct source-only case.</summary>
+    /// <typeparam name="TCase">Concrete source-only case assignable to <typeparamref name="TOutcome"/>.</typeparam>
+    /// <typeparam name="TPayload">CLR payload type projected into the portable failure schema.</typeparam>
+    /// <param name="id">Stable canonical failure identity.</param>
+    /// <param name="payloadRevision">Exact semantic revision of the payload schema.</param>
+    /// <returns>A typed case projection over the canonical outcome descriptor.</returns>
+    /// <exception cref="ArgumentException"><paramref name="id"/> or <typeparamref name="TCase"/> is invalid or duplicated.</exception>
+    /// <exception cref="InvalidOperationException">The authoring callback already completed.</exception>
+    /// <exception cref="NotSupportedException">The CLR payload cannot be projected into a portable contract.</exception>
+    public RequestProtocolCase<TCase, TPayload> Failure<TCase, TPayload>(
+        RequestTerminalOutcomeId id,
+        InteractionValueSchemaRevision payloadRevision)
+        where TCase : class, TOutcome => Add<TCase, TPayload>(outcomes.Failure<TPayload>(id, payloadRevision));
+
+    /// <summary>Declares a typed terminal timeout and its distinct source-only case.</summary>
+    /// <typeparam name="TCase">Concrete source-only case assignable to <typeparamref name="TOutcome"/>.</typeparam>
+    /// <typeparam name="TPayload">CLR payload type projected into the portable timeout schema.</typeparam>
+    /// <param name="id">Stable canonical timeout identity.</param>
+    /// <param name="payloadRevision">Exact semantic revision of the payload schema.</param>
+    /// <returns>A typed case projection over the canonical outcome descriptor.</returns>
+    /// <exception cref="ArgumentException"><paramref name="id"/> or <typeparamref name="TCase"/> is invalid or duplicated.</exception>
+    /// <exception cref="InvalidOperationException">The authoring callback already completed.</exception>
+    /// <exception cref="NotSupportedException">The CLR payload cannot be projected into a portable contract.</exception>
+    public RequestProtocolCase<TCase, TPayload> Timeout<TCase, TPayload>(
+        RequestTerminalOutcomeId id,
+        InteractionValueSchemaRevision payloadRevision)
+        where TCase : class, TOutcome => Add<TCase, TPayload>(outcomes.Timeout<TPayload>(id, payloadRevision));
+
+    /// <summary>Declares a typed terminal cancellation and its distinct source-only case.</summary>
+    /// <typeparam name="TCase">Concrete source-only case assignable to <typeparamref name="TOutcome"/>.</typeparam>
+    /// <typeparam name="TPayload">CLR payload type projected into the portable cancellation schema.</typeparam>
+    /// <param name="id">Stable canonical cancellation identity.</param>
+    /// <param name="payloadRevision">Exact semantic revision of the payload schema.</param>
+    /// <returns>A typed case projection over the canonical outcome descriptor.</returns>
+    /// <exception cref="ArgumentException"><paramref name="id"/> or <typeparamref name="TCase"/> is invalid or duplicated.</exception>
+    /// <exception cref="InvalidOperationException">The authoring callback already completed.</exception>
+    /// <exception cref="NotSupportedException">The CLR payload cannot be projected into a portable contract.</exception>
+    public RequestProtocolCase<TCase, TPayload> Cancellation<TCase, TPayload>(
+        RequestTerminalOutcomeId id,
+        InteractionValueSchemaRevision payloadRevision)
+        where TCase : class, TOutcome => Add<TCase, TPayload>(outcomes.Cancellation<TPayload>(id, payloadRevision));
+
+    internal (ImmutableArray<RequestProtocolOutcome> Outcomes, ImmutableArray<RequestProtocolCase> Cases) Complete()
+    {
+        completed = true;
+        return (outcomes.Complete(), [.. cases]);
+    }
+
+    RequestProtocolCase<TCase, TPayload> Add<TCase, TPayload>(RequestProtocolOutcome<TPayload> outcome)
+        where TCase : class, TOutcome
+    {
+        if (completed)
+        {
+            throw new InvalidOperationException("A completed Request protocol case builder cannot be reused.");
+        }
+        if (typeof(TCase).IsAbstract || typeof(TCase).IsInterface)
+        {
+            throw new ArgumentException(
+                $"Request protocol case '{typeof(TCase)}' must be a concrete closed-family case.",
+                nameof(TCase));
+        }
+        var payloadProperties = typeof(TCase)
+            .GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
+            .Where(static property =>
+                property.GetMethod is { IsStatic: false }
+                && property.GetIndexParameters().Length == 0)
+            .ToArray();
+        if (payloadProperties.Length != 1 || payloadProperties[0].PropertyType != typeof(TPayload))
+        {
+            throw new ArgumentException(
+                $"Request protocol case '{typeof(TCase)}' must declare exactly one public '{typeof(TPayload)}' payload property.",
+                nameof(TCase));
+        }
+        if (cases.Any(candidate => candidate.CaseType == typeof(TCase)))
+        {
+            throw new ArgumentException(
+                $"Request protocol case '{typeof(TCase)}' is declared more than once.",
+                nameof(TCase));
+        }
+
+        var result = new RequestProtocolCase<TCase, TPayload>(outcome);
+        cases.Add(result);
+        return result;
+    }
+}
+
 /// <summary>Finite typed outcome-declaration surface used while authoring a Request protocol.</summary>
 /// <remarks>
 /// The builder emits immutable typed descriptors and is closed after the authoring callback returns. It is an
@@ -281,7 +447,7 @@ public sealed class RequestProtocolOutcomeBuilder
 /// </remarks>
 /// <typeparam name="TRequest">CLR request payload type projected into the canonical Request schema.</typeparam>
 /// <typeparam name="TOutcomes">Caller-owned typed descriptor set returned by the outcome authoring callback.</typeparam>
-public sealed class RequestProtocol<TRequest, TOutcomes>
+public class RequestProtocol<TRequest, TOutcomes>
     where TOutcomes : notnull
 {
     readonly object outcomeOwner;
@@ -476,6 +642,74 @@ public sealed class RequestProtocol<TRequest, TOutcomes>
     }
 }
 
+/// <summary>Typed Request protocol with a closed source-only C# outcome-family projection.</summary>
+/// <remarks>
+/// The inherited canonical documents and terminal outcomes remain the sole durable authority. <see cref="Cases"/>
+/// only associates each canonical outcome with one distinct CLR case for exhaustive caller and handler authoring.
+/// </remarks>
+/// <typeparam name="TRequest">CLR request payload type projected into the canonical Request schema.</typeparam>
+/// <typeparam name="TOutcome">Closed CLR result-family root selected by the Request.</typeparam>
+/// <typeparam name="TOutcomes">Caller-owned typed case-descriptor set.</typeparam>
+public sealed class RequestProtocol<TRequest, TOutcome, TOutcomes> : RequestProtocol<TRequest, TOutcomes>
+    where TOutcome : class
+    where TOutcomes : notnull
+{
+    internal RequestProtocol(
+        object outcomeOwner,
+        TOutcomes outcomes,
+        ImmutableArray<RequestProtocolOutcome> terminalOutcomes,
+        ImmutableArray<RequestProtocolCase> cases,
+        ExecutionDefinitionDocument requestDocument,
+        RequestContractReference request,
+        ImmutableArray<DurableReplyBinding> replies,
+        ImmutableArray<ExecutionDefinitionDocument> documents,
+        DocumentValidationResult validation,
+        InteractionContractCatalog? catalog)
+        : base(
+            outcomeOwner,
+            outcomes,
+            terminalOutcomes,
+            requestDocument,
+            request,
+            replies,
+            documents,
+            validation,
+            catalog)
+    {
+        Cases = cases.IsDefault ? [] : cases;
+    }
+
+    /// <summary>Complete case type-to-canonical-outcome projection in protocol declaration order.</summary>
+    public ImmutableArray<RequestProtocolCase> Cases { get; }
+
+    /// <summary>Resolves the exact source-only case projection for one closed-family case type.</summary>
+    /// <typeparam name="TCase">Concrete case assignable to <typeparamref name="TOutcome"/>.</typeparam>
+    /// <returns>The unique case projection declared by this protocol.</returns>
+    /// <exception cref="InvalidOperationException"><typeparamref name="TCase"/> is absent or duplicated.</exception>
+    public RequestProtocolCase CaseFor<TCase>()
+        where TCase : class, TOutcome
+    {
+        RequestProtocolCase? resolved = null;
+        foreach (var candidate in Cases)
+        {
+            if (candidate.CaseType != typeof(TCase))
+            {
+                continue;
+            }
+            if (resolved is not null)
+            {
+                throw new InvalidOperationException(
+                    $"Request protocol case '{typeof(TCase)}' is declared more than once.");
+            }
+            resolved = candidate;
+        }
+
+        return resolved
+            ?? throw new InvalidOperationException(
+                $"Request protocol does not declare source-only case '{typeof(TCase)}'.");
+    }
+}
+
 public static partial class InteractionContractAuthoring
 {
     /// <summary>Authors a canonical typed Request and one exact Reply contract per declared terminal outcome.</summary>
@@ -536,9 +770,138 @@ public static partial class InteractionContractAuthoring
         var typedOutcomes = createOutcomes(outcomeBuilder);
         ArgumentNullException.ThrowIfNull(typedOutcomes);
         var outcomes = outcomeBuilder.Complete();
+        var authored = CreateRequestProtocolDocuments<TRequest>(
+            definitionId,
+            revisionId,
+            payloadRevision,
+            outcomes,
+            responsePolicy,
+            provenance,
+            replyDefinitionPrefix,
+            replyRevisionId,
+            replyProvenance,
+            extensions,
+            displayName,
+            description);
+        return new(
+            outcomeBuilder.Owner,
+            typedOutcomes,
+            outcomes,
+            authored.RequestDocument,
+            authored.Request,
+            authored.Replies,
+            authored.Documents,
+            authored.Validation,
+            authored.Catalog);
+    }
+
+    /// <summary>Authors a canonical typed Request with a closed source-only C# outcome-family projection.</summary>
+    /// <typeparam name="TRequest">CLR request payload type projected into the portable Request schema.</typeparam>
+    /// <typeparam name="TOutcome">Closed CLR result-family root selected by typed callers and handlers.</typeparam>
+    /// <typeparam name="TOutcomes">Typed caller-owned case-descriptor set.</typeparam>
+    /// <param name="definitionId">Stable identity shared by revisions of the Request contract.</param>
+    /// <param name="revisionId">Exact semantic Request revision.</param>
+    /// <param name="payloadRevision">Exact semantic revision of the request payload schema.</param>
+    /// <param name="createOutcomes">Finite callback declaring every canonical outcome and source-only case.</param>
+    /// <param name="responsePolicy">Explicit semantic response, retry, resolution, and retention policy.</param>
+    /// <param name="provenance">Producer and root-source attribution for the Request document.</param>
+    /// <param name="replyDefinitionPrefix">
+    /// Optional stable Reply identity prefix; defaults to the Request identity followed by <c>/reply</c>.
+    /// </param>
+    /// <param name="replyRevisionId">Optional Reply revision; defaults to the Request revision.</param>
+    /// <param name="replyProvenance">
+    /// Optional finite attribution projection for Reply documents; defaults to <paramref name="provenance"/>.
+    /// The callback is evaluated during authoring and is not retained.
+    /// </param>
+    /// <param name="extensions">Optional exact-versioned Request extensions.</param>
+    /// <param name="displayName">Optional human-facing Request name excluded from fingerprinting.</param>
+    /// <param name="description">Optional human-facing Request description excluded from fingerprinting.</param>
+    /// <returns>
+    /// A typed immutable protocol handle containing canonical documents plus a non-canonical exhaustive C# case
+    /// projection.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="createOutcomes"/>, <paramref name="responsePolicy"/>, <paramref name="provenance"/>, or the
+    /// returned case descriptor set is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// An identity, revision, outcome, case projection, extension, or descriptive metadata value is invalid; the
+    /// response policy is incompatible; or <typeparamref name="TOutcomes"/> does not publicly expose each case
+    /// descriptor exactly once in protocol declaration order.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">Canonical content has no stable representation.</exception>
+    /// <exception cref="NotSupportedException">A CLR request or outcome type cannot be represented portably.</exception>
+    /// <exception cref="System.Text.Json.JsonException">Canonical content cannot be encoded by the strict serializer.</exception>
+    public static RequestProtocol<TRequest, TOutcome, TOutcomes> CreateRequestProtocol<TRequest, TOutcome, TOutcomes>(
+        ExecutionDefinitionId definitionId,
+        ExecutionRevisionId revisionId,
+        InteractionValueSchemaRevision payloadRevision,
+        Func<RequestProtocolCaseBuilder<TOutcome>, TOutcomes> createOutcomes,
+        RequestProtocolResponsePolicy responsePolicy,
+        ExecutionProvenance provenance,
+        ExecutionDefinitionId? replyDefinitionPrefix = null,
+        ExecutionRevisionId? replyRevisionId = null,
+        Func<RequestTerminalOutcomeId, ExecutionProvenance>? replyProvenance = null,
+        ImmutableArray<ExecutionDefinitionExtension> extensions = default,
+        string? displayName = null,
+        string? description = null)
+        where TOutcome : class
+        where TOutcomes : notnull
+    {
+        ArgumentNullException.ThrowIfNull(createOutcomes);
+        ArgumentNullException.ThrowIfNull(responsePolicy);
+        ArgumentNullException.ThrowIfNull(provenance);
+
+        var caseBuilder = new RequestProtocolCaseBuilder<TOutcome>();
+        var typedOutcomes = createOutcomes(caseBuilder);
+        ArgumentNullException.ThrowIfNull(typedOutcomes);
+        var (outcomes, cases) = caseBuilder.Complete();
+        ValidateCaseSet(typedOutcomes, cases);
+        var authored = CreateRequestProtocolDocuments<TRequest>(
+            definitionId,
+            revisionId,
+            payloadRevision,
+            outcomes,
+            responsePolicy,
+            provenance,
+            replyDefinitionPrefix,
+            replyRevisionId,
+            replyProvenance,
+            extensions,
+            displayName,
+            description);
+        return new(
+            caseBuilder.Owner,
+            typedOutcomes,
+            outcomes,
+            cases,
+            authored.RequestDocument,
+            authored.Request,
+            authored.Replies,
+            authored.Documents,
+            authored.Validation,
+            authored.Catalog);
+    }
+
+    static RequestProtocolDocuments CreateRequestProtocolDocuments<TRequest>(
+        ExecutionDefinitionId definitionId,
+        ExecutionRevisionId revisionId,
+        InteractionValueSchemaRevision payloadRevision,
+        ImmutableArray<RequestProtocolOutcome> outcomes,
+        RequestProtocolResponsePolicy responsePolicy,
+        ExecutionProvenance provenance,
+        ExecutionDefinitionId? replyDefinitionPrefix,
+        ExecutionRevisionId? replyRevisionId,
+        Func<RequestTerminalOutcomeId, ExecutionProvenance>? replyProvenance,
+        ImmutableArray<ExecutionDefinitionExtension> extensions,
+        string? displayName,
+        string? description)
+    {
         var definitions = ImmutableArray.CreateBuilder<RequestTerminalOutcomeDefinition>(outcomes.Length);
         foreach (var outcome in outcomes)
+        {
             definitions.Add(outcome.Definition);
+        }
 
         var requestDefinition = new RequestContractDefinition(
             new(
@@ -594,10 +957,7 @@ public static partial class InteractionContractAuthoring
 
         var exactDocuments = documents.MoveToImmutable();
         var validation = InteractionContractCatalog.TryCreate(exactDocuments, out var catalog);
-        return new(
-            outcomeBuilder.Owner,
-            typedOutcomes,
-            outcomes,
+        return new RequestProtocolDocuments(
             requestDocument,
             request,
             replies.MoveToImmutable(),
@@ -605,6 +965,40 @@ public static partial class InteractionContractAuthoring
             validation,
             catalog);
     }
+
+    static void ValidateCaseSet<TOutcomes>(
+        TOutcomes typedOutcomes,
+        ImmutableArray<RequestProtocolCase> cases)
+        where TOutcomes : notnull
+    {
+        var exposed = typeof(TOutcomes)
+            .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+            .Where(static property =>
+                property.GetMethod is { IsStatic: false }
+                && property.GetIndexParameters().Length == 0
+                && property.PropertyType.IsGenericType
+                && property.PropertyType.GetGenericTypeDefinition() == typeof(RequestProtocolCase<,>))
+            .Select(property => property.GetValue(typedOutcomes) as RequestProtocolCase
+                ?? throw new ArgumentException(
+                    $"Request protocol case property '{property.Name}' returned null or an incompatible value.",
+                    nameof(typedOutcomes)))
+            .ToArray();
+        if (exposed.Length != cases.Length
+            || exposed.Where((candidate, index) => ReferenceEquals(candidate, cases[index])).Count() != cases.Length)
+        {
+            throw new ArgumentException(
+                "The typed Request outcome set must expose every authored RequestProtocolCase as one public instance property in declaration order.",
+                nameof(typedOutcomes));
+        }
+    }
+
+    sealed record RequestProtocolDocuments(
+        ExecutionDefinitionDocument RequestDocument,
+        RequestContractReference Request,
+        ImmutableArray<DurableReplyBinding> Replies,
+        ImmutableArray<ExecutionDefinitionDocument> Documents,
+        DocumentValidationResult Validation,
+        InteractionContractCatalog? Catalog);
 
     static ExecutionDefinitionReference Reference(ExecutionDefinitionDocument document) => new(
         document.Metadata.DefinitionId,

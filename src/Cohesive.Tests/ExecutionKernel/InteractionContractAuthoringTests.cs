@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
-using Cohesive.Model;
 using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
 
@@ -126,6 +125,50 @@ public sealed class InteractionContractAuthoringTests
         Assert.Equal(
             expected.Skip(1).Select(static document => new ReplyContractReference(Reference(document))),
             protocol.Replies.Select(static reply => reply.Reply));
+    }
+
+    [Fact]
+    public void CreateRequestProtocol_ProjectsClosedClrCasesWithoutCanonicalDrift()
+    {
+        var representationNeutral = CreateRequestProtocol();
+        var projected = CreateProjectedRequestProtocol();
+
+        Assert.Equal(
+            representationNeutral.Documents.Select(Reference),
+            projected.Documents.Select(Reference));
+        Assert.Equal(representationNeutral.Definition, projected.Definition);
+        Assert.Equal(representationNeutral.Request, projected.Request);
+        Assert.Equal(
+            representationNeutral.Replies.Select(static reply => (reply.Outcome, reply.Reply)),
+            projected.Replies.Select(static reply => (reply.Outcome, reply.Reply)));
+        Assert.Equal(3, projected.Cases.Length);
+        Assert.Same(projected.Outcomes.Accepted, projected.CaseFor<SubmissionAcceptedCase>());
+        Assert.Same(projected.Outcomes.Failed, projected.CaseFor<SubmissionFailedCase>());
+        Assert.Equal(typeof(SubmissionFailure), projected.Outcomes.TimedOut.PayloadType);
+    }
+
+    [Fact]
+    public void CreateRequestProtocol_RequiresEveryProjectedCaseToBePubliclyExposedOnce()
+    {
+        var exception = Assert.Throws<ArgumentException>(() =>
+            InteractionContractAuthoring.CreateRequestProtocol<SubmitTraining, SubmissionOutcome, IncompleteSubmissionCaseSet>(
+                new("tests/request/training-submission"),
+                new("revision/1"),
+                new("tests/request/training-submission/v1"),
+                outcomes =>
+                {
+                    var accepted = outcomes.Result<SubmissionAcceptedCase, SubmissionAccepted>(
+                        new("accepted"),
+                        new("tests/result/accepted/v1"));
+                    _ = outcomes.Failure<SubmissionFailedCase, SubmissionFailure>(
+                        new("failed"),
+                        new("tests/result/failure/v1"));
+                    return new(accepted);
+                },
+                ResponsePolicy(timeout: RequestOptionalTerminalSemantics.Unsupported),
+                RequestProvenance()));
+
+        Assert.Contains("expose every authored RequestProtocolCase", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -255,6 +298,25 @@ public sealed class InteractionContractAuthoringTests
             RequestProvenance(),
             replyProvenance: ReplyProvenance);
 
+    static RequestProtocol<SubmitTraining, SubmissionOutcome, SubmissionCaseSet> CreateProjectedRequestProtocol() =>
+        InteractionContractAuthoring.CreateRequestProtocol<SubmitTraining, SubmissionOutcome, SubmissionCaseSet>(
+            new("tests/request/training-submission"),
+            new("revision/1"),
+            new("tests/request/training-submission/v1"),
+            outcomes => new(
+                Accepted: outcomes.Result<SubmissionAcceptedCase, SubmissionAccepted>(
+                    new("accepted"),
+                    new("tests/result/accepted/v1")),
+                Failed: outcomes.Failure<SubmissionFailedCase, SubmissionFailure>(
+                    new("failed"),
+                    new("tests/result/failure/v1")),
+                TimedOut: outcomes.Timeout<SubmissionTimedOutCase, SubmissionFailure>(
+                    new("timed-out"),
+                    new("tests/result/timeout/v1"))),
+            ResponsePolicy(),
+            RequestProvenance(),
+            replyProvenance: ReplyProvenance);
+
     static ImmutableArray<ExecutionDefinitionDocument> CreateRequestDocumentsDirectly()
     {
         var mapper = new DefaultClrTypeRefMapper();
@@ -358,6 +420,22 @@ public sealed class InteractionContractAuthoringTests
         RequestProtocolOutcome<SubmissionAccepted> Accepted,
         RequestProtocolOutcome<SubmissionFailure> Failed,
         RequestProtocolOutcome<SubmissionFailure> TimedOut);
+
+    abstract record SubmissionOutcome;
+
+    sealed record SubmissionAcceptedCase(SubmissionAccepted Payload) : SubmissionOutcome;
+
+    sealed record SubmissionFailedCase(SubmissionFailure Payload) : SubmissionOutcome;
+
+    sealed record SubmissionTimedOutCase(SubmissionFailure Payload) : SubmissionOutcome;
+
+    sealed record SubmissionCaseSet(
+        RequestProtocolCase<SubmissionAcceptedCase, SubmissionAccepted> Accepted,
+        RequestProtocolCase<SubmissionFailedCase, SubmissionFailure> Failed,
+        RequestProtocolCase<SubmissionTimedOutCase, SubmissionFailure> TimedOut);
+
+    sealed record IncompleteSubmissionCaseSet(
+        RequestProtocolCase<SubmissionAcceptedCase, SubmissionAccepted> Accepted);
 
     sealed class RecursiveEvent
     {

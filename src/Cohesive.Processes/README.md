@@ -160,6 +160,36 @@ reclassified as an operational failure. The raw exact-reference overload remains
 importers. Both forms lower to the same canonical `InvokeProcessProcessNode` and therefore have identical
 interpreter and replay behavior.
 
+Typed Request protocols can also project heterogeneous terminal outcomes into an ordinary closed C# family:
+
+```csharp
+var outcome = await process.Effect(trainingSubmissionProtocol, submission);
+switch (outcome)
+{
+    case TrainingSubmissionAccepted(var accepted):
+        return accepted.SubmissionId;
+    case TrainingSubmissionRejected(var failure):
+        return failure.Reason;
+    case TrainingSubmissionTimedOut(var failure):
+        return failure.Reason;
+}
+return process.Unreachable<string>();
+```
+
+The three-generic protocol projection names the request payload, closed result-family root, and its typed case
+descriptor set. Each case has one public payload property, and each public descriptor property associates one
+source-only case with one canonical protocol outcome in declaration order. The analyzer uses that metadata as the
+complete case inventory, requires every case exactly once in the immediately following switch, and binds the case's
+direct positional or property payload to the existing canonical Request output. Outcomes that share a payload type
+remain distinct because their case types differ.
+
+The record family is not persisted and no case object is created at runtime. Outcome identity, kind, schema, and
+Reply mapping remain owned by the canonical Request protocol; generated branches lower to the existing
+`RequestProcessNode` and `RequestProcessOutcome` model. Default branch identity is derived from the Request node and
+canonical outcome id. The raw outcome-array overload retains explicit identity control for imported or established
+graphs. See [the typed Request outcome projection decision](../../docs/decisions/typed-request-outcome-projection.md)
+for the native C# union replacement boundary.
+
 Typed durable races bind a closed source-only result family and consume it with an immediately following exhaustive
 type switch:
 

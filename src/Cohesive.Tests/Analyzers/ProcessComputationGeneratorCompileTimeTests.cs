@@ -1162,6 +1162,155 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
     }
 
     [Fact]
+    public void Generator_FusesTypedEffectSwitchIntoCanonicalRequestOutcomes()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     public sealed record Submission(string DatasetId);
+                     public sealed record AcceptedPayload(string SubmissionId);
+                     public sealed record FailurePayload(string Reason);
+                     public abstract record SubmissionOutcome;
+                     public sealed record Accepted(AcceptedPayload Payload) : SubmissionOutcome;
+                     public sealed record Rejected(FailurePayload Payload) : SubmissionOutcome;
+                     public sealed record SubmissionCases(
+                         RequestProtocolCase<Accepted, AcceptedPayload> Accepted,
+                         RequestProtocolCase<Rejected, FailurePayload> Rejected);
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class SubmissionProcess
+                     {
+                         private static RequestProtocol<Submission, SubmissionOutcome, SubmissionCases> Protocol => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, Submission input)
+                         {
+                             var outcome = await process.Effect(Protocol, input);
+                             switch (outcome)
+                             {
+                                 case Accepted(var accepted):
+                                     return accepted.SubmissionId;
+                                 case Rejected(var failure):
+                                     return failure.Reason;
+                             }
+                             return process.Unreachable<string>();
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Contains("__builder.Request", generated);
+        Assert.Contains("CaseFor<global::Sample.Accepted>().Id", generated);
+        Assert.Contains("CaseFor<global::Sample.Rejected>().Id", generated);
+        Assert.Contains("Output<global::Sample.AcceptedPayload>", generated);
+        Assert.Contains("Output<global::Sample.FailurePayload>", generated);
+        Assert.Contains("NodeForRequestOutcome", generated);
+        Assert.DoesNotContain("SubmissionOutcome", generated);
+        Assert.DoesNotContain("callback", generated, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Generator_RejectsNonExhaustiveTypedEffectAtTheSwitch()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     public sealed record Submission(string DatasetId);
+                     public sealed record AcceptedPayload(string SubmissionId);
+                     public sealed record FailurePayload(string Reason);
+                     public abstract record SubmissionOutcome;
+                     public sealed record Accepted(AcceptedPayload Payload) : SubmissionOutcome;
+                     public sealed record Rejected(FailurePayload Payload) : SubmissionOutcome;
+                     public sealed record SubmissionCases(
+                         RequestProtocolCase<Accepted, AcceptedPayload> Accepted,
+                         RequestProtocolCase<Rejected, FailurePayload> Rejected);
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class SubmissionProcess
+                     {
+                         private static RequestProtocol<Submission, SubmissionOutcome, SubmissionCases> Protocol => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, Submission input)
+                         {
+                             var outcome = await process.Effect(Protocol, input);
+                             switch (outcome)
+                             {
+                                 case Accepted(var accepted):
+                                     return accepted.SubmissionId;
+                             }
+                             return process.Unreachable<string>();
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("typed Effect switch is not exhaustive", diagnostic.GetMessage());
+        Assert.Contains("Rejected", diagnostic.GetMessage());
+    }
+
+    [Fact]
+    public void Generator_RejectsDuplicateTypedEffectCaseAtTheSecondCase()
+    {
+        var compilation = CreateCompilation(TypedEffectSource("""
+            case Accepted(var accepted):
+                return accepted.SubmissionId;
+            case Accepted(var duplicate):
+                return duplicate.SubmissionId;
+            case Rejected(var failure):
+                return failure.Reason;
+            """));
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("Accepted", diagnostic.GetMessage());
+        Assert.Contains("handled more than once", diagnostic.GetMessage());
+        Assert.Contains("case Accepted(var duplicate)", diagnostic.Location.SourceTree!.GetText()
+            .GetSubText(diagnostic.Location.SourceSpan).ToString());
+    }
+
+    [Fact]
+    public void Generator_RejectsDefaultFallbackOnOtherwiseExhaustiveTypedEffect()
+    {
+        var compilation = CreateCompilation(TypedEffectSource("""
+            case Accepted(var accepted):
+                return accepted.SubmissionId;
+            case Rejected(var failure):
+                return failure.Reason;
+            default:
+                return input.DatasetId;
+            """));
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("unguarded type case", diagnostic.GetMessage());
+        Assert.Contains("default", diagnostic.Location.SourceTree!.GetText()
+            .GetSubText(diagnostic.Location.SourceSpan).ToString());
+    }
+
+    [Fact]
     public void Generator_RejectsCallbackLambdaForDurableOutcomeAtItsSource()
     {
         var source = """
@@ -2317,6 +2466,39 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
                  }
                  """;
     }
+
+    static string TypedEffectSource(string switchSections) => $$"""
+        using Cohesive.Execution;
+        using Cohesive.Processes.Authoring;
+
+        namespace Sample;
+
+        public sealed record Submission(string DatasetId);
+        public sealed record AcceptedPayload(string SubmissionId);
+        public sealed record FailurePayload(string Reason);
+        public abstract record SubmissionOutcome;
+        public sealed record Accepted(AcceptedPayload Payload) : SubmissionOutcome;
+        public sealed record Rejected(FailurePayload Payload) : SubmissionOutcome;
+        public sealed record SubmissionCases(
+            RequestProtocolCase<Accepted, AcceptedPayload> Accepted,
+            RequestProtocolCase<Rejected, FailurePayload> Rejected);
+
+        [GenerateProcessDefinition(nameof(Run))]
+        public static partial class SubmissionProcess
+        {
+            private static RequestProtocol<Submission, SubmissionOutcome, SubmissionCases> Protocol => null!;
+
+            private static async ProcessTask<string> Run(ProcessContext process, Submission input)
+            {
+                var outcome = await process.Effect(Protocol, input);
+                switch (outcome)
+                {
+        {{switchSections}}
+                }
+                return process.Unreachable<string>();
+            }
+        }
+        """;
 
     static ImmutableArray<MetadataReference> GetMetadataReferences()
     {

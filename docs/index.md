@@ -122,6 +122,7 @@ tests, and eventually a repository-wide maturity matrix.
 | [Execution-control API package boundary](decisions/execution-control-api-package-boundary.md) | Implemented | Generic API dependency direction, execution API composition, and transport ownership |
 | [ASP.NET API adapter boundary](decisions/aspnet-api-adapter-boundary.md) | Implemented | Portable API authority, Minimal API projection ownership, and package dependency direction |
 | [Reconciliable training submissions](decisions/reconciliable-training-submissions.md) | Implemented | Stable logical submission identity, exact request binding, provider reconciliation, and conflict semantics |
+| [Typed Request outcome projection](decisions/typed-request-outcome-projection.md) | Implemented | Canonical Request authority, exhaustive source-only C# cases, typed Effect lowering, and native-union migration boundary |
 
 ## Package documentation
 
