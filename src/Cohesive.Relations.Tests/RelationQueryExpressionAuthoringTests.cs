@@ -104,7 +104,8 @@ public sealed class RelationQueryExpressionAuthoringTests
         var filtered = author.Filter(
             loads.Node,
             (Load load) => load.ProcessingStatus == LoadProcessingStatus.Ready
-                           && load.ExpectedProcessingStatus == load.ProcessingStatus,
+                           && load.ExpectedProcessingStatus == load.ProcessingStatus
+                           && load.OccurredAt.EqualsExact(load.ExpectedOccurredAt),
             loads.Binding,
             sourceReference: "load/filter-status");
         var rows = author.Rows(filtered, loads.Binding, id: "rows");
@@ -122,7 +123,7 @@ public sealed class RelationQueryExpressionAuthoringTests
         Assert.Equal(
             ObservationValue.FromString(nameof(LoadProcessingStatus.Ready)),
             enumLiteral.Value);
-        Assert.Equal(3, Descendants(predicate).OfType<FieldExpr>().Count());
+        Assert.Equal(5, Descendants(predicate).OfType<FieldExpr>().Count());
     }
 
     [Fact]
@@ -1103,6 +1104,10 @@ public sealed class RelationQueryExpressionAuthoringTests
         public LoadProcessingStatus ProcessingStatus { get; init; }
 
         public LoadProcessingStatus ExpectedProcessingStatus { get; init; }
+
+        public DateTimeOffset OccurredAt { get; init; }
+
+        public DateTimeOffset ExpectedOccurredAt { get; init; }
 
         [JsonPropertyName("stops")]
         public Stop[] Stops { get; init; } = [];

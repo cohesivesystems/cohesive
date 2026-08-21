@@ -608,7 +608,9 @@ canonical Int64 count domain. An exact named enum member lowers to a portable ty
 equality or inequality against an enum field. Same-type enum fields can also be compared directly. Unnamed flag
 combinations and ambiguous enum aliases remain unsupported. A convention-inferred nullable CLR member,
 whose semantic field has required presence, may be read inside a branch guarded by `HasValue`; `??` over the
-same kind of member lowers to an explicit canonical conditional. Imported mappings remain fail-closed until
+same kind of member lowers to an explicit canonical conditional. `DateTimeOffset.EqualsExact(...)` lowers to
+canonical representation equality; ordinary `DateTimeOffset` equality remains unsupported because its instant-based
+CLR semantics differ from canonical observation equality. Imported mappings remain fail-closed until
 they can supply equivalent per-path presence evidence. Unguarded nullable navigation, Int32-returning
 `Count`/`Length`, unmaterialized lazy
 `Select`, custom constructors or

@@ -826,6 +826,13 @@ public sealed class RelationQueryExpressionLowerer
         string sourceReference,
         string expressionPath)
     {
+        if (IsDateTimeOffsetEqualsExact(call))
+        {
+            return Expr.Eq(
+                Translate(call.Object!, scope, sourceReference, expressionPath + "/left"),
+                Translate(call.Arguments[0], scope, sourceReference, expressionPath + "/right"));
+        }
+
         if (IsOrdinalEndsWith(call))
         {
             return Expr.EndsWith(
@@ -3036,6 +3043,14 @@ public sealed class RelationQueryExpressionLowerer
     static bool IsStringEndsWith(MethodCallExpression call) =>
         call.Object?.Type == typeof(string)
         && string.Equals(call.Method.Name, nameof(string.EndsWith), StringComparison.Ordinal);
+
+    static bool IsDateTimeOffsetEqualsExact(MethodCallExpression call) =>
+        call.Object?.Type == typeof(DateTimeOffset)
+        && call.Method.DeclaringType == typeof(DateTimeOffset)
+        && string.Equals(call.Method.Name, nameof(DateTimeOffset.EqualsExact), StringComparison.Ordinal)
+        && call.Method.ReturnType == typeof(bool)
+        && call.Arguments is [{ Type: var argumentType }]
+        && argumentType == typeof(DateTimeOffset);
 
     static bool IsOrdinalEndsWith(MethodCallExpression call)
         => IsOrdinalStringPredicate(call, nameof(string.EndsWith));

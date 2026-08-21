@@ -369,6 +369,30 @@ public sealed class RelationQueryExpressionLowererTests
     }
 
     [Fact]
+    public void DateTimeOffsetEqualsExact_LowersToCanonicalRepresentationEquality()
+    {
+        var author = RelationQuery.Expression();
+        var load = author.Source<Load>(LoadShape);
+        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        Expression<Func<Load, bool>> exact = source =>
+            source.OccurredAt.EqualsExact(source.ExpectedOccurredAt);
+
+        var lowered = lowerer.LowerValue(
+            exact,
+            [load.Binding],
+            sourceReference: "instant-comparison/exact").RequireValue();
+
+        var comparison = Assert.IsType<BinaryExpr>(lowered.Value);
+        Assert.Equal(BinaryOperator.Eq, comparison.Operator);
+        Assert.Equal(
+            FieldPath.FromField("load_occurred_at"),
+            Assert.IsType<FieldExpr>(comparison.Left).Path);
+        Assert.Equal(
+            FieldPath.FromField(nameof(Load.ExpectedOccurredAt)),
+            Assert.IsType<FieldExpr>(comparison.Right).Path);
+    }
+
+    [Fact]
     public void AggregateNumericLiteralTypes_SurviveCanonicalJsonNormalization()
     {
         var author = RelationQuery.Expression();
@@ -739,13 +763,15 @@ public sealed class RelationQueryExpressionLowererTests
         Expression<Func<Load, bool>> date = source => source.ServiceDate == serviceDate.Value;
         Expression<Func<Load, bool>> time = source => source.ServiceTime == serviceTime.Value;
         Expression<Func<Load, bool>> enumeration = source => source.ProcessingStatus == status.Value;
+        Expression<Func<Load, bool>> instantEquality = source => source.OccurredAt == source.ExpectedOccurredAt;
 
         var results = new[]
         {
             lowerer.LowerValue(guid, [load.Binding], "inexact/guid-equality"),
             lowerer.LowerValue(date, [load.Binding], "inexact/date-equality"),
             lowerer.LowerValue(time, [load.Binding], "inexact/time-equality"),
-            lowerer.LowerValue(enumeration, [load.Binding], "inexact/enum-equality")
+            lowerer.LowerValue(enumeration, [load.Binding], "inexact/enum-equality"),
+            lowerer.LowerValue(instantEquality, [load.Binding], "inexact/instant-equality")
         };
 
         Assert.All(results, static result =>
@@ -952,6 +978,8 @@ public sealed class RelationQueryExpressionLowererTests
 
         [JsonPropertyName("load_occurred_at")]
         public DateTimeOffset OccurredAt { get; init; }
+
+        public DateTimeOffset ExpectedOccurredAt { get; init; }
     }
 
     sealed class Stop
