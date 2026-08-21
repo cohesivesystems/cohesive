@@ -57,12 +57,13 @@ public static class Program
         var semantics = FreightOrderMaterializationModel.Create();
         if (validateOnly)
         {
-            var postgresPlan = CreateProviderPlan(ProviderKind.Postgres, semantics);
-            var cosmosPlan = CreateProviderPlan(ProviderKind.Cosmos, semantics);
             Console.WriteLine($"Validated canonical definition: {semantics.DefinitionFingerprint.Value}.");
-            Console.WriteLine(
-                $"Validated provider plans: postgres={postgresPlan.HydrationPhysicalPlan.Fingerprint.Value}, "
-                + $"cosmos={cosmosPlan.HydrationPhysicalPlan.Fingerprint.Value}.");
+            foreach (var dialect in FreightOrderMaterializationReplicaDialects.All)
+            {
+                var plan = CreateProviderPlan(dialect, semantics);
+                Console.WriteLine(
+                    $"Validated provider plan: {dialect.Provider}={plan.HydrationPhysicalPlan.Fingerprint.Value}.");
+            }
             return 0;
         }
 
@@ -89,37 +90,26 @@ public static class Program
         using HttpClient elasticHttp = new() { BaseAddress = options.ElasticsearchEndpoint };
         var clusterId = await ReadClusterIdAsync(elasticHttp);
         var context = OperationContext.Create(cancellationToken: run.CancellationToken);
-
-        var postgres = await MaterializeProviderAsync(
-            ProviderKind.Postgres,
-            semantics,
-            options,
-            clusterId,
-            elasticHttp,
-            context,
-            run,
-            journal);
-        var cosmos = await MaterializeProviderAsync(
-            ProviderKind.Cosmos,
-            semantics,
-            options,
-            clusterId,
-            elasticHttp,
-            context,
-            run,
-            journal);
-
-        Require(
-            postgres.Documents.SequenceEqual(cosmos.Documents, StringComparer.Ordinal),
-            "Postgres and Cosmos produced different canonical Elasticsearch documents.");
-        Require(
-            postgres.DefinitionFingerprint == cosmos.DefinitionFingerprint,
-            "Provider realizations did not retain one canonical materialization definition fingerprint.");
+        await using var fixtures = FreightOrderMaterializationReplicaFixtureCatalog.Create(options);
+        var replicas = fixtures.Fixtures.Select(fixture =>
+            (IMaterializationConformanceReplica<ProviderResult>)new StandaloneConformanceReplica(
+                fixture: fixture,
+                semantics: semantics,
+                options: options,
+                clusterId: clusterId,
+                elasticHttp: elasticHttp,
+                run: run,
+                journal: journal));
+        var results = await new MaterializationConformanceRunner<ProviderResult>(
+                expectedDefinitionFingerprint: semantics.DefinitionFingerprint.Value,
+                replicas: replicas)
+            .RunAsync(context)
+            .ConfigureAwait(false);
 
         Console.WriteLine($"Canonical definition: {semantics.DefinitionFingerprint.Value}");
-        PrintResult(postgres);
-        PrintResult(cosmos);
-        Console.WriteLine($"Verified {postgres.Documents.Length} canonically equivalent freight documents.");
+        foreach (var result in results)
+            PrintResult(result);
+        Console.WriteLine($"Verified {results[0].Documents.Length} canonically equivalent freight documents.");
     }
 
     /// <summary>
@@ -148,12 +138,13 @@ public static class Program
         using HttpClient elasticHttp = new() { BaseAddress = options.ElasticsearchEndpoint };
         var clusterId = await ReadClusterIdAsync(elasticHttp);
         var context = OperationContext.Create(cancellationToken: cancellationToken);
-        foreach (var provider in new[] { ProviderKind.Postgres, ProviderKind.Cosmos })
+        foreach (var dialect in FreightOrderMaterializationReplicaDialects.All)
         {
+            var provider = dialect.Provider;
             var targetBinding = CreateTargetBinding(provider, semantics, clusterId);
-            await EnsureLocalElasticTemplatesAsync(elasticHttp, targetBinding, ProviderName(provider));
+            await EnsureLocalElasticTemplatesAsync(elasticHttp, targetBinding, provider);
             var target = CreateTarget(targetBinding, options.ElasticsearchEndpoint);
-            var generationId = new MaterializationGenerationId($"{ProviderName(provider)}/{runId}");
+            var generationId = new MaterializationGenerationId($"{provider}/{runId}");
             var generation = await target.InspectGenerationAsync(context, generationId);
             if (generation?.State == MaterializationGenerationState.Active)
                 continue;
@@ -161,7 +152,7 @@ public static class Program
             var abandoned = await target.AbandonGenerationAsync(
                 context,
                 new(
-                    abandonmentId: new($"abandon/{ProviderName(provider)}/{runId}"),
+                    abandonmentId: new($"abandon/{provider}/{runId}"),
                     generationId: generationId,
                     abandonedAtUtc: abandonedAtUtc));
             Require(
@@ -173,7 +164,7 @@ public static class Program
     }
 
     static async Task<ProviderResult> MaterializeProviderAsync(
-        ProviderKind provider,
+        IFreightOrderMaterializationReplicaFixture fixture,
         FreightOrderMaterializationSemantics semantics,
         HarnessOptions options,
         ElasticClusterId clusterId,
@@ -182,18 +173,19 @@ public static class Program
         MaterializationHarnessRunOptions run,
         FreightScenarioJournal journal)
     {
-        var plan = CreateProviderPlan(provider, semantics);
+        var provider = fixture.Dialect.Provider;
+        var plan = CreateProviderPlan(fixture.Dialect, semantics);
         var targetBinding = CreateTargetBinding(provider, semantics, clusterId);
-        await EnsureLocalElasticTemplatesAsync(elasticHttp, targetBinding, ProviderName(provider));
+        await EnsureLocalElasticTemplatesAsync(elasticHttp, targetBinding, provider);
         var target = CreateTarget(targetBinding, options.ElasticsearchEndpoint);
         var before = await target.InspectAsync(context);
-        var generationId = new MaterializationGenerationId($"{ProviderName(provider)}/{run.RunId}");
+        var generationId = new MaterializationGenerationId($"{provider}/{run.RunId}");
         var generationIndex = targetBinding.GetGenerationIndexName(generationId);
         if (before.ActiveGenerationId == generationId)
         {
             var replayedDocuments = await ReadCanonicalDocumentsAsync(elasticHttp, targetBinding.ReadAlias);
             return new(
-                ProviderName(provider),
+                provider,
                 targetBinding.ReadAlias,
                 generationIndex,
                 semantics.DefinitionFingerprint.Value,
@@ -215,147 +207,26 @@ public static class Program
         var generation = RequireValue(begun.Generation, $"{provider} generation begin returned no snapshot.");
         if (generation.State == MaterializationGenerationState.Loading)
         {
-            var pageOrdinal = 0;
-            if (provider == ProviderKind.Postgres)
-            {
-                await using var dataSource = NpgsqlDataSource.Create(options.PostgresConnectionString);
-                var canonicalPlan = await CompilePostgresRebuildPlanAsync(
+            var canonicalPlan = await fixture.CompileAsync(
                     semantics: semantics,
                     plan: plan,
                     target: target,
-                    dataSource: dataSource,
-                    connectionString: options.PostgresConnectionString,
-                    tenants: options.Tenants,
                     journal: journal,
-                    cancellationToken: context.CancellationToken);
-                Console.WriteLine(
-                    $"Compiled canonical postgres rebuild plan {canonicalPlan.Plan.Fingerprint.Value} "
-                    + $"with {canonicalPlan.Plan.Shards.Length} tenant shards.");
-                var hydrationStorage = CreatePostgresStorageBinding(
-                    plan.HydrationPlacement,
-                    semantics.Plan,
-                    "hydration");
-                var scanStorage = CreatePostgresStorageBinding(plan.ScanPlacement, semantics.Plan, "scan");
-                foreach (var tenant in options.Tenants)
-                {
-                    var policy = PostgresPolicy(tenant);
-                    var scanRuntime = new PostgresNpgsqlRuntimeBinding(
-                        scanStorage.Database,
-                        dataSource,
-                        "materialization-harness/postgres/scan");
-                    var rootReader = new PostgresRelationQuerySourceReader(
-                        semantics.Plan,
-                        plan.ScanPhysicalPlan,
-                        plan.OrderSource,
-                        scanStorage,
-                        dataSource,
-                        scanRuntime,
-                        policy);
-                    var source = new PostgresMaterializationSource(
-                        rootReader,
-                        plan.ScanRoot,
-                        ContinuationKey);
-                    var readers = plan.HydrationSources
-                        .Select(sourceId =>
-                        {
-                            var runtime = new PostgresNpgsqlRuntimeBinding(
-                                hydrationStorage.Database,
-                                dataSource,
-                                "materialization-harness/postgres/hydration");
-                            return (IRelationQuerySourceReader)new PostgresRelationQuerySourceReader(
-                                semantics.Plan,
-                                plan.HydrationPhysicalPlan,
-                                sourceId,
-                                hydrationStorage,
-                                dataSource,
-                                runtime,
-                                policy);
-                        })
-                        .ToImmutableArray();
-                    await MaterializeTenantAsync(
-                        provider,
-                        tenant,
-                        semantics,
-                        plan,
-                        source,
-                        source.Scope,
-                        readers,
-                        target,
-                        generationId,
-                        workerFence,
-                        generation.Revision,
-                        pageOrdinal,
-                        context,
-                        run);
-                    pageOrdinal += 1_000;
-                    generation = RequireValue(
-                        await target.InspectGenerationAsync(context, generationId),
-                        $"{provider} generation disappeared while loading.");
-                }
-            }
-            else
-            {
-                using var cosmosClient = CreateCosmosClient(options.CosmosConnectionString);
-                var database = cosmosClient.GetDatabase(options.CosmosDatabase);
-                var canonicalPlan = CompileCosmosRebuildPlan(
-                    semantics: semantics,
-                    plan: plan,
-                    target: target,
-                    database: database,
-                    databaseId: options.CosmosDatabase,
-                    tenants: options.Tenants,
-                    journal: journal);
-                Console.WriteLine(
-                    $"Compiled canonical cosmos rebuild plan {canonicalPlan.Plan.Fingerprint.Value} "
-                    + $"with {canonicalPlan.Plan.Shards.Length} tenant shards.");
-                foreach (var tenant in options.Tenants)
-                {
-                    var policy = CosmosPolicy(tenant);
-                    var rootReader = CreateCosmosReader(
-                        semantics.Root.Shape,
-                        plan.OrderSource,
-                        database.GetContainer("orders"),
-                        options.CosmosDatabase,
-                        "orders",
-                        policy);
-                    var source = CreateCosmosReconciliationSource(rootReader);
-                    var sourceScope = new MaterializationSourceScope(
-                        plan.ScanPhysicalPlan.Fingerprint,
-                        plan.ScanRoot,
-                        LogicalPartition(tenant),
-                        new($"cosmos/reconciliation/{tenant}"),
-                        new($"cosmos/reconciliation/{tenant}/canonical-order"));
-                    var readers = plan.HydrationSources
-                        .Select(sourceId => CreateCosmosHydrationReader(
-                            semantics,
-                            plan,
-                            sourceId,
-                            database,
-                            options.CosmosDatabase,
-                            policy))
-                        .Cast<IRelationQuerySourceReader>()
-                        .ToImmutableArray();
-                    await MaterializeTenantAsync(
-                        provider,
-                        tenant,
-                        semantics,
-                        plan,
-                        source,
-                        sourceScope,
-                        readers,
-                        target,
-                        generationId,
-                        workerFence,
-                        generation.Revision,
-                        pageOrdinal,
-                        context,
-                        run);
-                    pageOrdinal += 1_000;
-                    generation = RequireValue(
-                        await target.InspectGenerationAsync(context, generationId),
-                        $"{provider} generation disappeared while loading.");
-                }
-            }
+                    cancellationToken: context.CancellationToken)
+                .ConfigureAwait(false);
+            Console.WriteLine(
+                $"Compiled canonical {provider} rebuild plan {canonicalPlan.Plan.Fingerprint.Value} "
+                + $"with {canonicalPlan.Plan.Shards.Length} tenant shards.");
+            generation = await fixture.LoadGenerationAsync(new(
+                    Semantics: semantics,
+                    Plan: plan,
+                    Target: target,
+                    GenerationId: generationId,
+                    WorkerFence: workerFence,
+                    Generation: generation,
+                    Context: context,
+                    Run: run))
+                .ConfigureAwait(false);
         }
 
         Require(
@@ -378,7 +249,7 @@ public static class Program
             var sealedResult = await target.SealGenerationAsync(
                 context,
                 new(
-                    sealId: new($"seal/{ProviderName(provider)}/{run.RunId}"),
+                    sealId: new($"seal/{provider}/{run.RunId}"),
                     generationId: generationId,
                     expectedRevision: generation.Revision,
                     workerFence: workerFence,
@@ -401,7 +272,7 @@ public static class Program
             var validated = await target.ValidateGenerationAsync(
                 context,
                 new(
-                    validationId: new($"validate/{ProviderName(provider)}/{run.RunId}"),
+                    validationId: new($"validate/{provider}/{run.RunId}"),
                     generationId: generationId,
                     expectedRevision: generation.Revision,
                     expectedSealFingerprint: sealReceipt.Fingerprint,
@@ -428,7 +299,7 @@ public static class Program
         var promoted = await target.PromoteGenerationAsync(
             context,
             new(
-                promotionId: new($"promote/{ProviderName(provider)}/{run.RunId}"),
+                promotionId: new($"promote/{provider}/{run.RunId}"),
                 generationId: generationId,
                 expectedGenerationRevision: generation.Revision,
                 validationFingerprint: validationReceipt.Fingerprint,
@@ -451,22 +322,22 @@ public static class Program
             documents.Length == generation.VisibleItemCount,
             $"{provider} alias readback count differs from materialized output.");
         return new(
-            ProviderName(provider),
+            provider,
             targetBinding.ReadAlias,
             generationIndex,
             semantics.DefinitionFingerprint.Value,
             documents);
     }
 
-    static async Task MaterializeTenantAsync(
-        ProviderKind provider,
+    internal static async Task MaterializeTenantAsync(
+        string provider,
         string tenant,
         FreightOrderMaterializationSemantics semantics,
         ProviderPlan plan,
         IMaterializationSource source,
         MaterializationSourceScope sourceScope,
         ImmutableArray<IRelationQuerySourceReader> readers,
-        ElasticMaterializationTarget target,
+        IMaterializationTarget target,
         MaterializationGenerationId generationId,
         MaterializationWorkerFence workerFence,
         MaterializationGenerationRevision initialRevision,
@@ -491,31 +362,17 @@ public static class Program
         {
             await run.Control.BeforePageAsync(
                 context,
-                ProviderName(provider),
+                provider,
                 tenant,
                 pageOrdinal);
-            MaterializationSourcePage page;
-            try
-            {
-                page = await source.ReadPageAsync(
-                    context: context,
-                    request: new(
-                        read: read,
-                        scope: sourceScope,
-                        continuation: continuation,
-                        maximumItems: RootPageItems,
-                        maximumBytes: MaximumBytes));
-            }
-            catch (CosmosMaterializationSourceException exception)
-            {
-                throw new InvalidOperationException(
-                    $"{provider}/{tenant} Cosmos page failed: kind={exception.FailureKind}, "
-                    + $"disposition={exception.Observation.Disposition}, "
-                    + $"status={exception.Observation.StatusCode}, "
-                    + $"substatus={exception.Observation.SubStatusCode}, "
-                    + $"evidence={exception.Observation.EvidenceReference}.",
-                    exception);
-            }
+            var page = await source.ReadPageAsync(
+                context: context,
+                request: new(
+                    read: read,
+                    scope: sourceScope,
+                    continuation: continuation,
+                    maximumItems: RootPageItems,
+                    maximumBytes: MaximumBytes));
             Require(
                 page.State == MaterializationSourcePageState.MoreAvailable
                     ? page.Read.State == RelationQuerySourceReadState.Partial
@@ -535,7 +392,7 @@ public static class Program
                     plan: semantics.Plan,
                     physicalPlan: plan.HydrationPhysicalPlan,
                     realization: semantics.Realization,
-                    evaluation: new($"materialization-harness/{ProviderName(provider)}/{tenant}/{pageOrdinal}"),
+                    evaluation: new($"materialization-harness/{provider}/{tenant}/{pageOrdinal}"),
                     suppliedSources: [supplied],
                     capabilities: RelationQueryRealizationRuntimeEvidence.ProjectCapabilities(
                         semantics.Plan,
@@ -679,16 +536,13 @@ public static class Program
     }
 
     internal static ProviderPlan CreateProviderPlan(
-        ProviderKind provider,
+        FreightOrderMaterializationReplicaDialect provider,
         FreightOrderMaterializationSemantics semantics)
     {
-        var prefix = ProviderName(provider);
-        var profile = provider == ProviderKind.Postgres
-            ? PostgresRelationQuerySourceTargetProfile.Default
-            : CosmosRelationQuerySourceReader.TargetProfile;
-        var partitionSelector = provider == ProviderKind.Postgres
-            ? "tenantId"
-            : CosmosRelationQuerySourceReader.ObservationPartitionSourceSelector;
+        ArgumentNullException.ThrowIfNull(provider);
+        var prefix = provider.Provider;
+        var profile = provider.TargetProfile;
+        var partitionSelector = provider.PartitionSelector;
         var limits = new RelationQuerySourcePlacementLimits(
             MaximumBatchItems,
             MaximumRows,
@@ -719,7 +573,7 @@ public static class Program
                 RelationQuerySourcePlacementBindingKind.SourceSet,
                 RelationQuerySourceAcquisitionKind.Supplied,
                 RelationQuerySourcePlacementOrigin.Explicit,
-                new(source.Shape, IdentitySelector(provider), FieldPath.FromField("id")),
+                new(source.Shape, provider.IdentitySelector, FieldPath.FromField("id")),
                 Fields(provider, source.Shape, source.Fields),
                 partition: new(partitionSelector)));
         }
@@ -739,16 +593,15 @@ public static class Program
                 RelationQuerySourcePlacementBindingKind.RelationshipTraversal,
                 RelationQuerySourceAcquisitionKind.BoundedLookup,
                 RelationQuerySourcePlacementOrigin.Explicit,
-                new(traversal.ResultShape, IdentitySelector(provider), FieldPath.FromField("id")),
+                new(traversal.ResultShape, provider.IdentitySelector, FieldPath.FromField("id")),
                 Fields(provider, traversal.ResultShape, traversal.Fields),
                 relationshipKeys: traversal.Input.Direction == RelationshipTraversalDirection.Inverse
                     ? [new(
                         traversal.Input.Id,
                         traversal.Definition.SourceReference,
-                        provider == ProviderKind.Postgres
-                            ? Column(traversal.ResultShape, traversal.Definition.SourceReference)
-                            : CosmosRelationQuerySourceReader.GetObservationFieldSourceSelector(
-                                traversal.Definition.SourceReference))]
+                        provider.FieldSelector(
+                            traversal.ResultShape,
+                            traversal.Definition.SourceReference))]
                     : [],
                 partition: new(partitionSelector)));
         }
@@ -859,7 +712,7 @@ public static class Program
     }
 
     static RelationQuerySourcePlacement CreateImpactPlacement(
-        ProviderKind provider,
+        FreightOrderMaterializationReplicaDialect provider,
         FreightOrderMaterializationSemantics semantics,
         RelationQuerySourcePlacement hydrationPlacement,
         MaterializationImpactPlan impactPlan)
@@ -889,10 +742,9 @@ public static class Program
                 relationshipKeys.Add(new(
                     input: relationshipInput,
                     semanticPath: traversal.Definition.SourceReference,
-                    sourceSelector: provider == ProviderKind.Postgres
-                        ? Column(binding.Shape, traversal.Definition.SourceReference)
-                        : CosmosRelationQuerySourceReader.GetObservationFieldSourceSelector(
-                            traversal.Definition.SourceReference)));
+                    sourceSelector: provider.FieldSelector(
+                        binding.Shape,
+                        traversal.Definition.SourceReference)));
             }
             return new RelationQuerySourcePlacementBinding(
                 id: binding.Id,
@@ -916,7 +768,7 @@ public static class Program
         return new(
             schemaVersion: RelationQuerySourcePlacement.CurrentSchemaVersion,
             plan: RelationQueryCompiledPlanReference.From(semantics.Plan),
-            conventionSetVersion: $"materialization-harness/{ProviderName(provider)}/impact-placement/v1",
+            conventionSetVersion: $"materialization-harness/{provider.Provider}/impact-placement/v1",
             sourceInstances: hydrationPlacement.SourceInstances,
             bindings: bindings);
     }
@@ -972,7 +824,7 @@ public static class Program
     internal static async Task<FreightOrderRebuildPlanCompilation> CompilePostgresRebuildPlanAsync(
         FreightOrderMaterializationSemantics semantics,
         ProviderPlan plan,
-        ElasticMaterializationTarget target,
+        IMaterializationTarget target,
         NpgsqlDataSource dataSource,
         string connectionString,
         ImmutableArray<string> tenants,
@@ -1140,7 +992,7 @@ public static class Program
     internal static FreightOrderRebuildPlanCompilation CompileCosmosRebuildPlan(
         FreightOrderMaterializationSemantics semantics,
         ProviderPlan plan,
-        ElasticMaterializationTarget target,
+        IMaterializationTarget target,
         Database database,
         string databaseId,
         ImmutableArray<string> tenants,
@@ -1250,7 +1102,7 @@ public static class Program
             impactPlan: plan.ImpactPlan);
     }
 
-    static PostgresRelationQueryStorageBinding CreatePostgresStorageBinding(
+    internal static PostgresRelationQueryStorageBinding CreatePostgresStorageBinding(
         RelationQuerySourcePlacement placement,
         CompiledRelationQueryPlan plan,
         string purpose)
@@ -1263,7 +1115,7 @@ public static class Program
             var identitySemantics = IdentityTextSemantics(table.Constraint);
             var fields = binding.Fields.Select(field =>
             {
-                var column = Column(binding.Shape, field.SemanticPath);
+                var column = PostgresColumn(binding.Shape, field.SemanticPath);
                 var isIdentity = field.SemanticPath.Matches("id");
                 return new PostgresRelationQueryFieldBinding(
                     field.Input,
@@ -1324,11 +1176,12 @@ public static class Program
     }
 
     internal static ElasticMaterializationTargetBinding CreateTargetBinding(
-        ProviderKind provider,
+        string provider,
         FreightOrderMaterializationSemantics semantics,
         ElasticClusterId clusterId)
     {
-        var name = ProviderName(provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(provider);
+        var name = provider;
         var alias = $"freight-order-search-{name}";
         return new(
             new($"materialization-harness/elastic/{name}/v1"),
@@ -1394,7 +1247,15 @@ public static class Program
             MaximumRows);
     }
 
-    static CosmosRelationQuerySourceReader CreateCosmosHydrationReader(
+    internal static PostgresMaterializationSource CreatePostgresBaselineSource(
+        PostgresRelationQuerySourceReader reader,
+        RelationQuerySourcePlacementBinding placement) =>
+        new(
+            reader: reader,
+            placement: placement,
+            continuationAuthenticationKey: ContinuationKey);
+
+    internal static CosmosRelationQuerySourceReader CreateCosmosHydrationReader(
         FreightOrderMaterializationSemantics semantics,
         ProviderPlan plan,
         RelationQuerySourceInstanceId sourceId,
@@ -1445,7 +1306,7 @@ public static class Program
                         ? "locations"
                         : throw new ArgumentException($"Unsupported freight shape '{shape}'.", nameof(shape));
 
-    static CosmosRelationQuerySourceReader CreateCosmosReader(
+    internal static CosmosRelationQuerySourceReader CreateCosmosReader(
         QualifiedShapeId shape,
         RelationQuerySourceInstanceId sourceId,
         Container container,
@@ -1465,7 +1326,7 @@ public static class Program
         return new(shape, source, container, databaseId, containerId, policy);
     }
 
-    static CosmosRelationQuerySourcePolicy CosmosPolicy(string tenant) => new(
+    internal static CosmosRelationQuerySourcePolicy CosmosPolicy(string tenant) => new(
         CosmosRelationQuerySourceReader.ObservationPartitionSourceSelector,
         LogicalPartition(tenant),
         CosmosRelationQueryCrossPartitionPolicy.Prohibit,
@@ -1475,7 +1336,7 @@ public static class Program
         maximumQueryChunks: 4,
         maximumSdkPageSize: RootPageItems);
 
-    static PostgresRelationQuerySourcePolicy PostgresPolicy(string tenant) => new(
+    internal static PostgresRelationQuerySourcePolicy PostgresPolicy(string tenant) => new(
         MaximumBatchItems,
         MaximumRows,
         MaximumRows,
@@ -1485,10 +1346,10 @@ public static class Program
             "tenantId",
             tenant));
 
-    static RelationQueryLogicalPartitionIdentity LogicalPartition(string tenant) =>
+    internal static RelationQueryLogicalPartitionIdentity LogicalPartition(string tenant) =>
         new($"materialization-harness/freight/tenant/{tenant}");
 
-    static InMemoryMaterializationSource CreateCosmosReconciliationSource(
+    internal static InMemoryMaterializationSource CreateCosmosReconciliationSource(
         CosmosRelationQuerySourceReader reader)
     {
         ImmutableArray<string> references =
@@ -1556,21 +1417,15 @@ public static class Program
     }
 
     static ImmutableArray<RelationQuerySourceFieldBinding> Fields(
-        ProviderKind provider,
+        FreightOrderMaterializationReplicaDialect provider,
         QualifiedShapeId shape,
         ImmutableArray<RelationQueryFieldInputContract> fields) =>
     [
         .. fields.Select(field => new RelationQuerySourceFieldBinding(
             field.Input.Id,
             field.Input.Field.Path,
-            provider == ProviderKind.Postgres
-                ? Column(shape, field.Input.Field.Path)
-                : CosmosRelationQuerySourceReader.GetObservationFieldSourceSelector(field.Input.Field.Path)))
+            provider.FieldSelector(shape, field.Input.Field.Path)))
     ];
-
-    static string IdentitySelector(ProviderKind provider) => provider == ProviderKind.Postgres
-        ? "id"
-        : CosmosRelationQuerySourceReader.ObservationIdentitySourceSelector;
 
     static RelationQuerySourceInstanceId SourceForShape(
         QualifiedShapeId shape,
@@ -1595,7 +1450,7 @@ public static class Program
                     ? ("locations", "location_id", "ck_freight_harness_location_id_ascii")
                     : throw new InvalidOperationException($"No PostgreSQL table is registered for shape '{shape}'.");
 
-    static string Column(QualifiedShapeId shape, FieldPath path)
+    internal static string PostgresColumn(QualifiedShapeId shape, FieldPath path)
     {
         var field = path.ToString();
         if (field == "tenantId") return "tenant_id";
@@ -1752,21 +1607,14 @@ public static class Program
     }
 
     static string FormatExecutionFailure(
-        ProviderKind provider,
+        string provider,
         string tenant,
         RelationQueryPhysicalExecutionResult result) =>
         $"{provider}/{tenant} hydration failed ({result.Status}): "
         + string.Join(" ", result.Diagnostics.Select(static diagnostic => diagnostic.Message));
 
-    internal static string ProviderName(ProviderKind provider) => provider switch
-    {
-        ProviderKind.Postgres => "postgres",
-        ProviderKind.Cosmos => "cosmos",
-        _ => throw new ArgumentOutOfRangeException(nameof(provider), provider, "Unsupported source provider.")
-    };
-
     static void PrintResult(ProviderResult result) => Console.WriteLine(
-        $"{result.Provider}: alias={result.ReadAlias}, index={result.GenerationIndex}, documents={result.Documents.Length}");
+        $"{result.Replica}: alias={result.ReadAlias}, index={result.GenerationIndex}, documents={result.Documents.Length}");
 
     static T RequireValue<T>(T? value, string message)
         where T : class => value ?? throw new InvalidOperationException(message);
@@ -1775,12 +1623,6 @@ public static class Program
     {
         if (!condition)
             throw new InvalidOperationException(message);
-    }
-
-    internal enum ProviderKind
-    {
-        Postgres,
-        Cosmos
     }
 
     internal sealed record ProviderPlan(
@@ -1795,12 +1637,55 @@ public static class Program
         RelationQuerySourceInstanceId OrderSource,
         ImmutableArray<RelationQuerySourceInstanceId> HydrationSources);
 
+    sealed class StandaloneConformanceReplica : IMaterializationConformanceReplica<ProviderResult>
+    {
+        readonly IFreightOrderMaterializationReplicaFixture fixture;
+        readonly FreightOrderMaterializationSemantics semantics;
+        readonly HarnessOptions options;
+        readonly ElasticClusterId clusterId;
+        readonly HttpClient elasticHttp;
+        readonly MaterializationHarnessRunOptions run;
+        readonly FreightScenarioJournal journal;
+
+        internal StandaloneConformanceReplica(
+            IFreightOrderMaterializationReplicaFixture fixture,
+            FreightOrderMaterializationSemantics semantics,
+            HarnessOptions options,
+            ElasticClusterId clusterId,
+            HttpClient elasticHttp,
+            MaterializationHarnessRunOptions run,
+            FreightScenarioJournal journal)
+        {
+            this.fixture = fixture ?? throw new ArgumentNullException(nameof(fixture));
+            this.semantics = semantics ?? throw new ArgumentNullException(nameof(semantics));
+            this.options = options ?? throw new ArgumentNullException(nameof(options));
+            this.clusterId = clusterId;
+            this.elasticHttp = elasticHttp ?? throw new ArgumentNullException(nameof(elasticHttp));
+            this.run = run ?? throw new ArgumentNullException(nameof(run));
+            this.journal = journal ?? throw new ArgumentNullException(nameof(journal));
+        }
+
+        public string Replica => fixture.Dialect.Provider;
+
+        public async ValueTask<ProviderResult> ExecuteAsync(OperationContext context) =>
+            await MaterializeProviderAsync(
+                    fixture: fixture,
+                    semantics: semantics,
+                    options: options,
+                    clusterId: clusterId,
+                    elasticHttp: elasticHttp,
+                    context: context,
+                    run: run,
+                    journal: journal)
+                .ConfigureAwait(false);
+    }
+
     sealed record ProviderResult(
-        string Provider,
+        string Replica,
         string ReadAlias,
         string GenerationIndex,
         string DefinitionFingerprint,
-        ImmutableArray<string> Documents);
+        ImmutableArray<string> Documents) : IMaterializationConformanceResult;
 
     internal sealed record HarnessOptions(
         string PostgresConnectionString,

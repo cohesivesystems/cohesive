@@ -20,7 +20,9 @@ public sealed class FreightOrderRebuildPlanCompilerTests
     public void ProviderPlansAreDeterministicAcrossTenantInputOrder()
     {
         var semantics = FreightOrderMaterializationModel.Create();
-        var postgresPhysical = Program.CreateProviderPlan(Program.ProviderKind.Postgres, semantics);
+        var postgresPhysical = Program.CreateProviderPlan(
+            FreightOrderMaterializationReplicaDialects.Get("postgres"),
+            semantics);
         var target = Target(semantics, "postgres");
         var forwardBindings = Bindings(semantics, "postgres", postgresPhysical, ["acme", "northwind"]);
         var reverseBindings = Bindings(semantics, "postgres", postgresPhysical, ["northwind", "acme"]);
@@ -61,8 +63,12 @@ public sealed class FreightOrderRebuildPlanCompilerTests
     public void ProviderInterpretationsShareCanonicalSemanticsButRetainDistinctPhysicalEvidence()
     {
         var semantics = FreightOrderMaterializationModel.Create();
-        var postgresPhysical = Program.CreateProviderPlan(Program.ProviderKind.Postgres, semantics);
-        var cosmosPhysical = Program.CreateProviderPlan(Program.ProviderKind.Cosmos, semantics);
+        var postgresPhysical = Program.CreateProviderPlan(
+            FreightOrderMaterializationReplicaDialects.Get("postgres"),
+            semantics);
+        var cosmosPhysical = Program.CreateProviderPlan(
+            FreightOrderMaterializationReplicaDialects.Get("cosmos"),
+            semantics);
 
         var postgres = FreightOrderRebuildPlanCompiler.Compile(
             semantics: semantics,
@@ -96,7 +102,9 @@ public sealed class FreightOrderRebuildPlanCompilerTests
     public void MixedTenantBindingIsRejectedBeforeSourceIo()
     {
         var semantics = FreightOrderMaterializationModel.Create();
-        var physical = Program.CreateProviderPlan(Program.ProviderKind.Postgres, semantics);
+        var physical = Program.CreateProviderPlan(
+            FreightOrderMaterializationReplicaDialects.Get("postgres"),
+            semantics);
         var valid = Bindings(semantics, "postgres", physical, ["acme", "northwind"]);
         var mixed = new FreightOrderRebuildTenantBinding(
             tenant: "acme",
@@ -122,8 +130,12 @@ public sealed class FreightOrderRebuildPlanCompilerTests
     public void MixedProviderBindingIsRejectedBeforeSourceIo()
     {
         var semantics = FreightOrderMaterializationModel.Create();
-        var postgresPhysical = Program.CreateProviderPlan(Program.ProviderKind.Postgres, semantics);
-        var cosmosPhysical = Program.CreateProviderPlan(Program.ProviderKind.Cosmos, semantics);
+        var postgresPhysical = Program.CreateProviderPlan(
+            FreightOrderMaterializationReplicaDialects.Get("postgres"),
+            semantics);
+        var cosmosPhysical = Program.CreateProviderPlan(
+            FreightOrderMaterializationReplicaDialects.Get("cosmos"),
+            semantics);
         var postgres = Bindings(semantics, "postgres", postgresPhysical, ["acme", "northwind"]);
         var cosmos = Bindings(semantics, "cosmos", cosmosPhysical, ["northwind"]);
 
