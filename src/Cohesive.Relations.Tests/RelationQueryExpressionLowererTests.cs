@@ -307,6 +307,68 @@ public sealed class RelationQueryExpressionLowererTests
     }
 
     [Fact]
+    public void ExactEnumComparisons_LowerFieldsAndNamedMembers()
+    {
+        var author = RelationQuery.Expression();
+        var load = author.Source<Load>(LoadShape);
+        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        Expression<Func<Load, bool>> namedMember = source =>
+            source.ProcessingStatus == LoadStatus.Complete;
+        Expression<Func<Load, bool>> field = source =>
+            source.ProcessingStatus != source.ExpectedProcessingStatus;
+
+        var namedMemberResult = lowerer.LowerValue(
+            namedMember,
+            [load.Binding],
+            sourceReference: "enum-comparison/named-member").RequireValue();
+        var fieldResult = lowerer.LowerValue(
+            field,
+            [load.Binding],
+            sourceReference: "enum-comparison/field").RequireValue();
+
+        var namedMemberComparison = Assert.IsType<BinaryExpr>(namedMemberResult.Value);
+        Assert.Equal(BinaryOperator.Eq, namedMemberComparison.Operator);
+        Assert.Equal(
+            FieldPath.FromField(nameof(Load.ProcessingStatus)),
+            Assert.IsType<FieldExpr>(namedMemberComparison.Left).Path);
+        var enumLiteral = Assert.IsType<LiteralExpr>(namedMemberComparison.Right);
+        Assert.Equal(nameof(LoadStatus), Assert.IsType<EnumTypeRef>(enumLiteral.Type).Name);
+        Assert.Equal(ObservationValue.FromString(nameof(LoadStatus.Complete)), enumLiteral.Value);
+
+        var fieldComparison = Assert.IsType<BinaryExpr>(fieldResult.Value);
+        Assert.Equal(BinaryOperator.Ne, fieldComparison.Operator);
+        Assert.Equal(
+            FieldPath.FromField(nameof(Load.ExpectedProcessingStatus)),
+            Assert.IsType<FieldExpr>(fieldComparison.Right).Path);
+    }
+
+    [Fact]
+    public void UndefinedAndAmbiguousEnumComparisons_FailClosed()
+    {
+        var author = RelationQuery.Expression();
+        var load = author.Source<Load>(LoadShape);
+        var source = author.Source<NormalizationSource>();
+        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        Expression<Func<Load, bool>> undefined = value =>
+            value.ProcessingStatus == (LoadStatus)17;
+        Expression<Func<NormalizationSource, bool>> unnamedFlags = value =>
+            value.Flags == (NormalizationSourceFlags.Imported | NormalizationSourceFlags.Generated);
+        Expression<Func<NormalizationSource, bool>> ambiguousAlias = value =>
+            value.AmbiguousKind == AmbiguousNormalizationSourceKind.SchemaMapping;
+
+        var results = new[]
+        {
+            lowerer.LowerValue(undefined, [load.Binding], "enum-comparison/undefined"),
+            lowerer.LowerValue(unnamedFlags, [source.Binding], "enum-comparison/unnamed-flags"),
+            lowerer.LowerValue(ambiguousAlias, [source.Binding], "enum-comparison/ambiguous-alias")
+        };
+
+        Assert.All(results, static result => Assert.Equal(
+            RelationQueryExpressionDiagnosticCodes.LiteralUnsupported,
+            Assert.Single(result.Diagnostics).Code));
+    }
+
+    [Fact]
     public void AggregateNumericLiteralTypes_SurviveCanonicalJsonNormalization()
     {
         var author = RelationQuery.Expression();
@@ -867,6 +929,8 @@ public sealed class RelationQueryExpressionLowererTests
 
         public LoadStatus ProcessingStatus { get; init; }
 
+        public LoadStatus ExpectedProcessingStatus { get; init; }
+
         [JsonPropertyName("load_tags")]
         public string[] Tags { get; init; } = [];
 
@@ -979,6 +1043,10 @@ public sealed class RelationQueryExpressionLowererTests
 
         public string? SelectedCandidateId { get; init; }
 
+        public NormalizationSourceFlags Flags { get; init; }
+
+        public AmbiguousNormalizationSourceKind AmbiguousKind { get; init; }
+
         public NormalizationSignals? Signals { get; init; }
 
         public NormalizationMetadata Metadata { get; init; } = new();
@@ -1037,7 +1105,7 @@ public sealed class RelationQueryExpressionLowererTests
         ImportedMapping = 1
     }
 
-    enum LoadStatus
+    enum LoadStatus : byte
     {
         Pending,
         Complete

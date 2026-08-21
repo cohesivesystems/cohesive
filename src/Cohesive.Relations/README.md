@@ -604,8 +604,9 @@ references, and suggested alternatives; arbitrary captured getters are never eva
 
 The translator accepts sequence syntax only where its CLR behavior identifies the canonical behavior exactly:
 `Select(...).ToArray()` is an eager, order-preserving projection and predicate-free `LongCount()` has the
-canonical Int64 count domain. An exact named enum member lowers to a portable typed enum literal; unnamed
-flag combinations and ambiguous enum aliases remain unsupported. A convention-inferred nullable CLR member,
+canonical Int64 count domain. An exact named enum member lowers to a portable typed enum literal, including
+equality or inequality against an enum field. Same-type enum fields can also be compared directly. Unnamed flag
+combinations and ambiguous enum aliases remain unsupported. A convention-inferred nullable CLR member,
 whose semantic field has required presence, may be read inside a branch guarded by `HasValue`; `??` over the
 same kind of member lowers to an explicit canonical conditional. Imported mappings remain fail-closed until
 they can supply equivalent per-path presence evidence. Unguarded nullable navigation, Int32-returning
