@@ -4,6 +4,8 @@ This harness is the local infrastructure boundary for ARI-399 and its materializ
 
 The journal at `scenarios/freight-baseline.json` is the only seed-data authority. The .NET seed projection validates tenant-local references and cardinality before replacing the harness PostgreSQL schema and Cosmos database. The default seed path creates canonical entity states and sends them through `GenericRepositorySeedDataService`, `PostgresEntityRepository`, and `CosmosEntityOutboxRepository`. A separate direct path retains raw Npgsql and Cosmos SDK writes as an independent oracle. Elasticsearch starts empty after a fresh reset; `materialize` creates candidate generations and promotes their read aliases.
 
+Common materialization conformance orchestration consumes an open catalog of explicit replica fixtures. The runner owns deterministic replica ordering, semantic-fingerprint fencing, and canonical document equality; it has no PostgreSQL/Cosmos switch. Each fixture owns its physical Relations dialect, source construction, capability preflight, and provider diagnostics. Elasticsearch remains an explicit materialization-target adapter, while raw source seeding and verification remain independent provider oracles. This follows the Cohesive.Storage semantic/adapter model without introducing a lowest-common-denominator datastore facade. Compose owns only local resource lifecycle and can later be replaced by a Cohesive.Infra interpretation without changing the conformance workflow.
+
 ## Prerequisites
 
 - Docker with Compose support.

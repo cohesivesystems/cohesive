@@ -4,7 +4,6 @@ using Cohesive.Adapters.Postgres;
 using Cohesive.Execution;
 using Cohesive.MaterializationHarness.Model;
 using Cohesive.Storage.Materialization;
-using Microsoft.Azure.Cosmos;
 using Npgsql;
 
 namespace Cohesive.MaterializationHarness.Materialize;
@@ -61,18 +60,18 @@ public sealed class FreightOrderRebuildRuntimeCatalog : IAsyncDisposable
 {
     readonly ImmutableDictionary<string, FreightOrderRebuildProviderRuntime> providers;
     readonly HttpClient elasticHttp;
-    readonly CosmosClient cosmosClient;
+    readonly FreightOrderMaterializationReplicaFixtureCatalog fixtures;
 
     FreightOrderRebuildRuntimeCatalog(
         FreightOrderMaterializationSemantics semantics,
         ImmutableDictionary<string, FreightOrderRebuildProviderRuntime> providers,
         HttpClient elasticHttp,
-        CosmosClient cosmosClient)
+        FreightOrderMaterializationReplicaFixtureCatalog fixtures)
     {
         Semantics = semantics;
         this.providers = providers;
         this.elasticHttp = elasticHttp;
-        this.cosmosClient = cosmosClient;
+        this.fixtures = fixtures;
     }
 
     /// <summary>Canonical provider-neutral freight materialization semantics.</summary>
@@ -107,49 +106,32 @@ public sealed class FreightOrderRebuildRuntimeCatalog : IAsyncDisposable
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
         HttpClient elasticHttp = new() { BaseAddress = options.ElasticsearchEndpoint };
-        CosmosClient? cosmosClient = null;
+        FreightOrderMaterializationReplicaFixtureCatalog? fixtures = null;
         try
         {
             var clusterId = await Program.ReadClusterIdAsync(elasticHttp).ConfigureAwait(false);
-            cosmosClient = Program.CreateCosmosClient(options.CosmosConnectionString);
-            var cosmosDatabase = cosmosClient.GetDatabase(options.CosmosDatabase);
+            fixtures = FreightOrderMaterializationReplicaFixtureCatalog.Create(
+                options: options,
+                postgresDataSource: dataSource);
             var admission = new MaterializationIndexSyncAdmissionGate();
             var builder = ImmutableDictionary.CreateBuilder<string, FreightOrderRebuildProviderRuntime>(
                 StringComparer.Ordinal);
-            foreach (var provider in new[] { Program.ProviderKind.Postgres, Program.ProviderKind.Cosmos })
+            foreach (var fixture in fixtures.Fixtures)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var name = Program.ProviderName(provider);
-                var providerPlan = Program.CreateProviderPlan(provider, semantics);
-                var targetBinding = Program.CreateTargetBinding(provider, semantics, clusterId);
+                var name = fixture.Dialect.Provider;
+                var providerPlan = Program.CreateProviderPlan(fixture.Dialect, semantics);
+                var targetBinding = Program.CreateTargetBinding(name, semantics, clusterId);
                 await Program.EnsureLocalElasticTemplatesAsync(elasticHttp, targetBinding, name)
                     .ConfigureAwait(false);
                 var target = Program.CreateTarget(targetBinding, options.ElasticsearchEndpoint);
-                FreightOrderRebuildPlanCompilation compilation;
-                if (provider == Program.ProviderKind.Postgres)
-                {
-                    compilation = await Program.CompilePostgresRebuildPlanAsync(
+                var compilation = await fixture.CompileAsync(
                         semantics: semantics,
                         plan: providerPlan,
                         target: target,
-                        dataSource: dataSource,
-                        connectionString: options.PostgresConnectionString,
-                        tenants: options.Tenants,
                         journal: journal,
                         cancellationToken: cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                else
-                {
-                    compilation = Program.CompileCosmosRebuildPlan(
-                        semantics: semantics,
-                        plan: providerPlan,
-                        target: target,
-                        database: cosmosDatabase,
-                        databaseId: options.CosmosDatabase,
-                        tenants: options.Tenants,
-                        journal: journal);
-                }
+                    .ConfigureAwait(false);
                 var controlProvider = new MaterializationIndexSyncControlRuntimeProvider(
                     plan: compilation.Plan,
                     store: stateStore,
@@ -178,11 +160,12 @@ public sealed class FreightOrderRebuildRuntimeCatalog : IAsyncDisposable
                 semantics: semantics,
                 providers: builder.ToImmutable(),
                 elasticHttp: elasticHttp,
-                cosmosClient: cosmosClient);
+                fixtures: fixtures);
         }
         catch
         {
-            cosmosClient?.Dispose();
+            if (fixtures is not null)
+                await fixtures.DisposeAsync().ConfigureAwait(false);
             elasticHttp.Dispose();
             throw;
         }
@@ -211,10 +194,9 @@ public sealed class FreightOrderRebuildRuntimeCatalog : IAsyncDisposable
     }
 
     /// <inheritdoc />
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        cosmosClient.Dispose();
+        await fixtures.DisposeAsync().ConfigureAwait(false);
         elasticHttp.Dispose();
-        return ValueTask.CompletedTask;
     }
 }

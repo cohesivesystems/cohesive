@@ -156,7 +156,9 @@ public sealed class FreightOrderMaterializationInverseExecutorTests
     static FixtureData Fixture()
     {
         var semantics = FreightOrderMaterializationModel.Create();
-        var provider = Program.CreateProviderPlan(Program.ProviderKind.Postgres, semantics);
+        var provider = Program.CreateProviderPlan(
+            FreightOrderMaterializationReplicaDialects.Get("postgres"),
+            semantics);
         return new(semantics, provider, provider.ImpactPlan);
     }
 
