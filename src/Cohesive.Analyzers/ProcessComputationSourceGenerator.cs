@@ -17,6 +17,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
     const string ContextName = "Cohesive.Processes.Authoring.ProcessContext";
     const string TaskName = "Cohesive.Processes.Authoring.ProcessTask<TResult>";
     const string BranchTaskName = "Cohesive.Processes.Authoring.ProcessTask";
+    const string RequestProtocolCaseName = "Cohesive.Execution.RequestProtocolCase<TCase, TPayload>";
 
     static readonly SymbolDisplayFormat FullyQualifiedNullableFormat =
         SymbolDisplayFormat.FullyQualifiedFormat.WithMiscellaneousOptions(
@@ -465,8 +466,9 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 switch (statement)
                 {
                     case LocalDeclarationStatementSyntax localDeclaration:
-                        if (TryGetTypedAwaitMatchInvocation(
+                        if (TryGetTypedSelectionInvocation(
                                 localDeclaration,
+                                "AwaitMatch",
                                 out var awaitResult,
                                 out var typedAwaitInvocation))
                         {
@@ -497,6 +499,44 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                             }
 
                             flows.Add(typedAwaitMatch);
+                            statementIndex = selectionIndex;
+                            break;
+                        }
+
+                        if (TryGetTypedSelectionInvocation(
+                                localDeclaration,
+                                "Effect",
+                                out var effectResult,
+                                out var typedEffectInvocation)
+                            && Argument(typedEffectInvocation, "protocol") is not null)
+                        {
+                            var selectionIndex = statementIndex + 1;
+                            while (selectionIndex < statements.Count
+                                   && statements[selectionIndex] is LocalFunctionStatementSyntax)
+                            {
+                                selectionIndex++;
+                            }
+                            if (selectionIndex >= statements.Count
+                                || statements[selectionIndex] is not SwitchStatementSyntax selection)
+                            {
+                                return Failure(
+                                    localDeclaration,
+                                    "a typed Effect result must be consumed by an immediately following exhaustive type switch",
+                                    out block);
+                            }
+                            if (!TryParseTypedEffect(
+                                    localDeclaration,
+                                    effectResult,
+                                    selection,
+                                    structuralPath,
+                                    typedEffectInvocation,
+                                    out var typedEffect))
+                            {
+                                block = null!;
+                                return false;
+                            }
+
+                            flows.Add(typedEffect);
                             statementIndex = selectionIndex;
                             break;
                         }
@@ -656,8 +696,9 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             return true;
         }
 
-        bool TryGetTypedAwaitMatchInvocation(
+        bool TryGetTypedSelectionInvocation(
             LocalDeclarationStatementSyntax declaration,
+            string methodName,
             out ILocalSymbol result,
             out IInvocationOperation invocation)
         {
@@ -673,7 +714,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 || semanticModel.GetDeclaredSymbol(declarator) is not ILocalSymbol local
                 || semanticModel.GetOperation(initializer) is not IAwaitOperation awaited
                 || Strip(awaited.Operation) is not IInvocationOperation candidate
-                || candidate.TargetMethod.Name != "AwaitMatch"
+                || candidate.TargetMethod.Name != methodName
                 || !candidate.TargetMethod.IsGenericMethod
                 || !SymbolEqualityComparer.Default.Equals(candidate.TargetMethod.ContainingType, contextParameter.Type)
                 || candidate.Instance is null
@@ -1029,6 +1070,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     parameter,
                     declaration.Declaration,
                     declaration.ChildTerminalMember,
+                    null,
                     SourceLocation(declaration.Syntax),
                     declaration.Syntax));
             }
@@ -1040,6 +1082,282 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 invocation,
                 SourceLocation(statement),
                 statement);
+            return true;
+        }
+
+        bool TryParseTypedEffect(
+            LocalDeclarationStatementSyntax statement,
+            ILocalSymbol resultLocal,
+            SwitchStatementSyntax selection,
+            ImmutableArray<string> structuralPath,
+            IInvocationOperation invocation,
+            out RequestFlow flow)
+        {
+            flow = null!;
+            if (semanticModel.GetOperation(selection.Expression) is not { } selected
+                || Strip(selected) is not ILocalReferenceOperation selectedLocal
+                || !SymbolEqualityComparer.Default.Equals(selectedLocal.Local, resultLocal))
+            {
+                return StatementFailure(
+                    selection.Expression,
+                    $"the type switch following Effect must select its bound result '{resultLocal.Name}'");
+            }
+            if (invocation.TargetMethod.TypeArguments.Length != 3
+                || invocation.TargetMethod.TypeArguments[2] is not INamedTypeSymbol outcomeSetType)
+            {
+                return StatementFailure(
+                    statement,
+                    "a typed Effect requires a RequestProtocol with a closed outcome family and public case set");
+            }
+
+            var resultType = invocation.TargetMethod.TypeArguments[1];
+            List<TypedRequestCaseDeclaration> declaredCases = [];
+            HashSet<ITypeSymbol> observedCases = new(SymbolEqualityComparer.Default);
+            foreach (var property in outcomeSetType.GetMembers().OfType<IPropertySymbol>())
+            {
+                if (property.IsStatic
+                    || property.DeclaredAccessibility != Accessibility.Public
+                    || property.GetMethod is null
+                    || property.Type is not INamedTypeSymbol
+                    {
+                        IsGenericType: true,
+                        TypeArguments.Length: 2
+                    } descriptor
+                    || descriptor.ConstructedFrom.ToDisplayString() != RequestProtocolCaseName)
+                {
+                    continue;
+                }
+
+                var caseType = descriptor.TypeArguments[0];
+                var payloadType = descriptor.TypeArguments[1];
+                if (!caseType.IsReferenceType
+                    || caseType is not INamedTypeSymbol namedCase
+                    || !IsAssignableTo(caseType, resultType))
+                {
+                    return StatementFailure(
+                        statement,
+                        $"typed Effect case '{caseType.ToDisplayString()}' must be a reference type assignable to result '{resultType.ToDisplayString()}'");
+                }
+                if (!observedCases.Add(caseType))
+                {
+                    return StatementFailure(
+                        statement,
+                        $"typed Effect result case '{caseType.ToDisplayString()}' is exposed more than once by '{outcomeSetType.ToDisplayString()}'");
+                }
+                var payloadProperties = namedCase.GetMembers()
+                    .OfType<IPropertySymbol>()
+                    .Where(candidate =>
+                        !candidate.IsStatic
+                        && candidate.DeclaredAccessibility == Accessibility.Public
+                        && candidate.GetMethod is not null)
+                    .ToArray();
+                if (payloadProperties.Length != 1
+                    || !SymbolEqualityComparer.Default.Equals(payloadProperties[0].Type, payloadType))
+                {
+                    return StatementFailure(
+                        statement,
+                        $"typed Effect case '{caseType.ToDisplayString()}' must declare exactly one public '{payloadType.ToDisplayString()}' payload property");
+                }
+                declaredCases.Add(new(caseType, payloadType, payloadProperties[0]));
+            }
+            if (declaredCases.Count == 0)
+            {
+                return StatementFailure(
+                    statement,
+                    $"typed Effect outcome set '{outcomeSetType.ToDisplayString()}' must expose each RequestProtocolCase as one public property");
+            }
+
+            Dictionary<ITypeSymbol, TypedEffectSelection> selections = new(SymbolEqualityComparer.Default);
+            foreach (var section in selection.Sections)
+            {
+                if (section.Labels.Count != 1
+                    || section.Labels[0] is not CasePatternSwitchLabelSyntax label
+                    || label.WhenClause is not null
+                    || !TryGetTypedEffectCase(
+                        label,
+                        out var caseType,
+                        out var payloadLocal,
+                        out var payloadProperty))
+                {
+                    return StatementFailure(
+                        section,
+                        "typed Effect switch sections require one unguarded type case with zero or one direct payload binding");
+                }
+
+                var declared = declaredCases.SingleOrDefault(candidate =>
+                    SymbolEqualityComparer.Default.Equals(candidate.CaseType, caseType));
+                if (declared is null)
+                {
+                    return StatementFailure(
+                        label,
+                        $"switch case '{caseType.ToDisplayString()}' is not declared by the Request protocol");
+                }
+                if (payloadLocal is not null
+                    && !SymbolEqualityComparer.Default.Equals(payloadLocal.Type, declared.PayloadType))
+                {
+                    return StatementFailure(
+                        label,
+                        $"typed Effect case '{caseType.ToDisplayString()}' must bind its canonical payload as '{declared.PayloadType.ToDisplayString()}'");
+                }
+                if (payloadProperty is not null
+                    && !SymbolEqualityComparer.Default.Equals(payloadProperty, declared.PayloadProperty))
+                {
+                    return StatementFailure(
+                        label,
+                        $"typed Effect case '{caseType.ToDisplayString()}' must bind its declared canonical payload property '{declared.PayloadProperty.Name}'");
+                }
+                if (selections.ContainsKey(caseType))
+                {
+                    return StatementFailure(
+                        label,
+                        $"switch case '{caseType.ToDisplayString()}' is handled more than once");
+                }
+                selections.Add(caseType, new(section, payloadLocal, SourceLocation(label), label));
+            }
+
+            var missing = declaredCases
+                .Where(declared => !selections.ContainsKey(declared.CaseType))
+                .Select(declared => declared.CaseType.ToDisplayString())
+                .ToArray();
+            if (missing.Length != 0)
+            {
+                return StatementFailure(
+                    selection,
+                    $"typed Effect switch is not exhaustive; add case(s): {string.Join(", ", missing)}");
+            }
+
+            var requestIdentity = NextIdentity("request", structuralPath);
+            List<RequestOutcomeFlow> outcomes = [];
+            foreach (var declared in declaredCases)
+            {
+                var selectedCase = selections[declared.CaseType];
+                var outcomeIdentity = NextIdentity(
+                    "outcome",
+                    structuralPath.Add(requestIdentity.PathSegment),
+                    declared.CaseType.Name);
+                ISymbol? payloadSymbol = null;
+                if (selectedCase.PayloadLocal is not null)
+                {
+                    payloadSymbol = selectedCase.PayloadLocal;
+                    authoredOutputs.Add(new(
+                        payloadSymbol,
+                        declared.PayloadType,
+                        outcomeIdentity,
+                        "result",
+                        $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
+                        null,
+                        selectedCase.Source));
+                }
+                if (!TryParse(
+                        selectedCase.Section.Statements,
+                        structuralPath.Add(requestIdentity.PathSegment).Add(outcomeIdentity.PathSegment),
+                        out var body,
+                        ignoreTerminalBreak: true))
+                {
+                    return false;
+                }
+
+                outcomes.Add(new(
+                    outcomeIdentity,
+                    declared.CaseType.Name,
+                    body,
+                    payloadSymbol,
+                    null,
+                    null,
+                    declared.CaseType,
+                    selectedCase.Source,
+                    selectedCase.Syntax));
+            }
+
+            flow = new(
+                requestIdentity,
+                RequestAuthoringKind.Request,
+                [.. outcomes],
+                invocation,
+                SourceLocation(statement),
+                statement);
+            return true;
+        }
+
+        bool TryGetTypedEffectCase(
+            CasePatternSwitchLabelSyntax label,
+            out ITypeSymbol caseType,
+            out ILocalSymbol? payloadLocal,
+            out IPropertySymbol? payloadProperty)
+        {
+            caseType = null!;
+            payloadLocal = null;
+            payloadProperty = null;
+            TypeSyntax? typeSyntax;
+            PatternSyntax? payloadPattern = null;
+            string? propertyName = null;
+            switch (label.Pattern)
+            {
+                case TypePatternSyntax type:
+                    typeSyntax = type.Type;
+                    break;
+                case DeclarationPatternSyntax declaration
+                    when declaration.Designation is DiscardDesignationSyntax:
+                    typeSyntax = declaration.Type;
+                    break;
+                case RecursivePatternSyntax
+                {
+                    Type: { } recursiveType,
+                    Designation: null,
+                    PositionalPatternClause.Subpatterns.Count: 1,
+                    PropertyPatternClause: null
+                } positional:
+                    typeSyntax = recursiveType;
+                    payloadPattern = positional.PositionalPatternClause!.Subpatterns[0].Pattern;
+                    break;
+                case RecursivePatternSyntax
+                {
+                    Type: { } recursiveType,
+                    Designation: null,
+                    PositionalPatternClause: null,
+                    PropertyPatternClause.Subpatterns.Count: 1
+                } property:
+                    typeSyntax = recursiveType;
+                    payloadPattern = property.PropertyPatternClause!.Subpatterns[0].Pattern;
+                    var subpattern = property.PropertyPatternClause.Subpatterns[0];
+                    propertyName = subpattern.NameColon?.Name.Identifier.ValueText
+                                   ?? subpattern.ExpressionColon?.Expression.ToString();
+                    break;
+                default:
+                    return false;
+            }
+
+            if (semanticModel.GetTypeInfo(typeSyntax).Type is not INamedTypeSymbol resolved)
+            {
+                return false;
+            }
+            caseType = resolved;
+            if (propertyName is not null)
+            {
+                payloadProperty = resolved.GetMembers(propertyName).OfType<IPropertySymbol>().SingleOrDefault();
+                if (payloadProperty is null)
+                {
+                    return false;
+                }
+            }
+            if (payloadPattern is null or DiscardPatternSyntax)
+            {
+                return true;
+            }
+
+            var designation = payloadPattern switch
+            {
+                VarPatternSyntax variable => variable.Designation as SingleVariableDesignationSyntax,
+                DeclarationPatternSyntax declaration => declaration.Designation as SingleVariableDesignationSyntax,
+                _ => null
+            };
+            if (designation is null
+                || semanticModel.GetDeclaredSymbol(designation) is not ILocalSymbol local)
+            {
+                return false;
+            }
+
+            payloadLocal = local;
             return true;
         }
 
@@ -2581,6 +2899,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly Dictionary<IParameterSymbol, string> obligationByParameter;
         readonly Dictionary<string, SyntaxNode> exactIdentities = new(StringComparer.Ordinal);
         readonly Dictionary<string, string> emittedExactTerminals = new(StringComparer.Ordinal);
+        readonly Dictionary<FlowIdentity, string> protocolByRequestIdentity = [];
         readonly List<string> builderStatements = [];
         readonly HashSet<ILocalSymbol> resolvingPureLocals = new(SymbolEqualityComparer.Default);
         int valueOrdinal;
@@ -2691,15 +3010,52 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 }
                 else if (statement is RequestFlow request)
                 {
+                    var protocol = Argument(request.Invocation, "protocol");
+                    if (protocol is not null)
+                    {
+                        if (!TryEmitExactArgument(protocol, request.Syntax, out var protocolExpression))
+                        {
+                            return false;
+                        }
+                        var protocolVariable =
+                            $"__protocol_{request.Identity.Variable.Substring("__node_".Length)}";
+                        identities.Add($"var {protocolVariable} = {protocolExpression};");
+                        protocolByRequestIdentity.Add(request.Identity, protocolVariable);
+                    }
                     foreach (var outcome in request.Outcomes)
                     {
-                        if (!TryDeclareOwnedIdentity(
+                        bool declared;
+                        if (outcome.ProtocolCaseType is not null)
+                        {
+                            if (!protocolByRequestIdentity.TryGetValue(
+                                    request.Identity,
+                                    out var protocolExpression))
+                            {
+                                return StatementFailure(
+                                    outcome.Syntax,
+                                    "a typed Effect outcome requires its exact Request protocol");
+                            }
+                            var conventional =
+                                "global::Cohesive.Processes.Authoring.ProcessAuthoringIdentities.NodeForRequestOutcome(" +
+                                $"owner: {request.Identity.Variable}, outcome: {protocolExpression}.CaseFor<{FormatType(outcome.ProtocolCaseType)}>().Id)";
+                            declared = TryDeclareIdentity(
+                                outcome.Identity,
+                                explicitId: null,
+                                conventional,
+                                outcome.Syntax,
+                                identities);
+                        }
+                        else
+                        {
+                            declared = TryDeclareOwnedIdentity(
                                 outcome.Identity,
                                 outcome.Declaration is null ? null : Argument(outcome.Declaration, "id"),
                                 request.Identity,
                                 outcome.Identity.PathSegment,
                                 outcome.Syntax,
-                                identities))
+                                identities);
+                        }
+                        if (!declared)
                         {
                             return false;
                         }
@@ -3466,16 +3822,14 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             string requestContract;
             string? protocolExpression = null;
             var protocol = Argument(request.Invocation, "protocol");
-            if (request.Kind == RequestAuthoringKind.ChildProcess && protocol is not null)
+            if (protocol is not null)
             {
-                if (!TryEmitExactArgument(protocol, request.Syntax, out protocolExpression))
+                if (!protocolByRequestIdentity.TryGetValue(request.Identity, out protocolExpression))
                 {
-                    return false;
+                    return StatementFailure(
+                        request.Syntax,
+                        "a typed Request requires one exact cached protocol projection");
                 }
-                var protocolVariable =
-                    $"__protocol_{request.Identity.Variable.Substring("__node_".Length)}";
-                builderStatements.Add($"var {protocolVariable} = {protocolExpression};");
-                protocolExpression = protocolVariable;
                 requestContract = $"{protocolExpression}.Request";
             }
             else
@@ -3511,6 +3865,19 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     }
                     terminalOutcomeExpression =
                         $"{protocolExpression}.OutcomeMapping.{outcome.ChildTerminalMember}";
+                    role = "\"next\"";
+                    edgeOwner = outcome.Identity.Variable;
+                }
+                else if (outcome.ProtocolCaseType is not null)
+                {
+                    if (protocolExpression is null)
+                    {
+                        return StatementFailure(
+                            outcome.Syntax,
+                            "a typed Effect outcome requires its exact Request protocol");
+                    }
+                    terminalOutcomeExpression =
+                        $"{protocolExpression}.CaseFor<{FormatType(outcome.ProtocolCaseType)}>().Id";
                     role = "\"next\"";
                     edgeOwner = outcome.Identity.Variable;
                 }
@@ -5322,9 +5689,21 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         FlowIdentity Identity,
         string Name,
         FlowBlock Body,
-        IParameterSymbol? Input,
+        ISymbol? Input,
         IInvocationOperation? Declaration,
         string? ChildTerminalMember,
+        ITypeSymbol? ProtocolCaseType,
+        SourceReference Source,
+        SyntaxNode Syntax);
+
+    sealed record TypedRequestCaseDeclaration(
+        ITypeSymbol CaseType,
+        ITypeSymbol PayloadType,
+        IPropertySymbol PayloadProperty);
+
+    sealed record TypedEffectSelection(
+        SwitchSectionSyntax Section,
+        ILocalSymbol? PayloadLocal,
         SourceReference Source,
         SyntaxNode Syntax);
 

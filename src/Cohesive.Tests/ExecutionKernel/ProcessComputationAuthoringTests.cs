@@ -964,6 +964,83 @@ public sealed class ProcessComputationAuthoringTests
     }
 
     [Fact]
+    public void TypedRequestProtocolEffect_IsByteEquivalentAndExecutesIdenticallyToRawAuthoring()
+    {
+        var metadata = new ProcessAuthoringMetadata(
+            new("process/tests/typed-request-effect"),
+            new("1"),
+            ProcessRecoveryPolicy.ContinueAttempt,
+            new(
+                new("tests.process-computation", "1"),
+                new("tests/ari-423/typed-request-effect"),
+                DocumentOrigin.User));
+        var typed = GeneratedTypedRequestEffectProcess.Define(metadata);
+        var raw = GeneratedRawRequestEffectProcess.Define(metadata);
+
+        Assert.True(typed.IsValid, Format(typed.Validation));
+        Assert.True(raw.IsValid, Format(raw.Validation));
+        Assert.Equal(raw.Definition, typed.Definition);
+        Assert.Equal(raw.Document.Metadata.Fingerprint, typed.Document.Metadata.Fingerprint);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(raw.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(typed.Document));
+
+        var request = Assert.Single(typed.Definition.Nodes.OfType<RequestProcessNode>());
+        Assert.Equal(GeneratedTypedRequestEffectProtocol.Protocol.Request, request.Contract);
+        Assert.Equal(
+            GeneratedTypedRequestEffectProtocol.Protocol.Cases.Select(static item => item.Id),
+            request.Outcomes.Select(static item => item.Outcome));
+        Assert.All(
+            request.Outcomes,
+            outcome => Assert.Equal(
+                ProcessAuthoringIdentities.NodeForRequestOutcome(request.Id, outcome.Outcome),
+                outcome.Id));
+
+        var context = new ProcessDefinitionValidationContext(
+            interactionContracts: GeneratedTypedRequestEffectProtocol.Protocol.Catalog);
+        var typedCompilation = typed.Compile(context);
+        var rawCompilation = raw.Compile(context);
+        Assert.True(typedCompilation.IsSuccessful, Format(typedCompilation.Validation));
+        Assert.True(rawCompilation.IsSuccessful, Format(rawCompilation.Validation));
+        var typedPlan = Assert.IsType<CompiledProcessPlan>(typedCompilation.Plan);
+        var rawPlan = Assert.IsType<CompiledProcessPlan>(rawCompilation.Plan);
+        Assert.Equivalent(rawPlan.EffectSummary, typedPlan.EffectSummary, strict: true);
+
+        var continuation = new ProcessContinuationIdentity(
+            new("process-instance/typed-request-effect"),
+            new("attempt/1"));
+        var input = PortableValue.Concrete(
+            typed.Definition.Input,
+            ObservationValue.FromObject(new TrainingSubmission("dataset/42")));
+        var activation = Activation(
+            typedPlan,
+            continuation,
+            id: "activation/typed-request-effect/start",
+            cause: ProcessActivationCause.Start,
+            observedAtUtc: new DateTimeOffset(2026, 8, 20, 12, 0, 0, TimeSpan.Zero));
+        var typedCut = ProcessReferenceInterpreter.Activate(
+            typedPlan,
+            ProcessReferenceInterpreter.Create(typedPlan, continuation, input),
+            activation,
+            EchoRelationHost.Instance);
+        var rawCut = ProcessReferenceInterpreter.Activate(
+            rawPlan,
+            ProcessReferenceInterpreter.Create(rawPlan, continuation, input),
+            activation,
+            EchoRelationHost.Instance);
+        Assert.Equal(rawCut.Disposition, typedCut.Disposition);
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        Assert.Equal(
+            JsonSerializer.Serialize(rawCut.State, options),
+            JsonSerializer.Serialize(typedCut.State, options));
+        Assert.Equal(
+            rawCut.Evidence.Trace.Select(static trace =>
+                (trace.Sequence, trace.Kind, trace.Node, trace.BranchOrClause, trace.Detail)),
+            typedCut.Evidence.Trace.Select(static trace =>
+                (trace.Sequence, trace.Kind, trace.Node, trace.BranchOrClause, trace.Detail)));
+    }
+
+    [Fact]
     public void CompensationComputation_PreservesTheCanonicalChildPurposeAndDurabilityProtocol()
     {
         var generated = GeneratedCompensationProcess.Define(CompensationMetadata());
@@ -2547,6 +2624,162 @@ public static partial class GeneratedRawProtocolChildInvocationProcess
         async ProcessTask Terminated() { }
     }
 }
+
+/// <summary>Canonical Request protocol with a source-only closed outcome family for typed Effect tests.</summary>
+public static class GeneratedTypedRequestEffectProtocol
+{
+    /// <summary>Typed canonical protocol consumed by generated typed and raw Process authoring.</summary>
+    public static RequestProtocol<TrainingSubmission, TrainingSubmissionOutcome, TrainingSubmissionCases> Protocol { get; } =
+        InteractionContractAuthoring.CreateRequestProtocol<
+            TrainingSubmission,
+            TrainingSubmissionOutcome,
+            TrainingSubmissionCases>(
+            new("request/tests/training-submission"),
+            new("1"),
+            new("request/tests/training-submission/payload/v1"),
+            outcomes => new(
+                Accepted: outcomes.Result<TrainingSubmissionAccepted, TrainingAccepted>(
+                    new("accepted"),
+                    new("request/tests/training-submission/accepted/v1")),
+                Rejected: outcomes.Failure<TrainingSubmissionRejected, TrainingFailure>(
+                    new("rejected"),
+                    new("request/tests/training-submission/rejected/v1")),
+                TimedOut: outcomes.Timeout<TrainingSubmissionTimedOut, TrainingFailure>(
+                    new("timed-out"),
+                    new("request/tests/training-submission/timed-out/v1"))),
+            new(
+                RequestOptionalTerminalSemantics.TerminalOutcome,
+                RequestOptionalTerminalSemantics.Unsupported,
+                RequestResultDisposition.Observe,
+                RequestResultDisposition.Reject,
+                RequestResultDisposition.ReusePriorDisposition,
+                RequestRetrySemantics.ReconcileBeforeRetry,
+                RequestResolutionSemantics.Reconcile,
+                RequestResolutionSemantics.Reconcile,
+                TimeSpan.FromDays(30)),
+            new(
+                new("tests.process-computation", "1"),
+                new("tests/ari-423/training-submission-protocol"),
+                DocumentOrigin.Generated));
+}
+
+/// <summary>Representative typed protocol Effect consumed through an exhaustive C# switch.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedTypedRequestEffectProcess
+{
+    static async ProcessTask<string> Run(ProcessContext process, TrainingSubmission input)
+    {
+        var outcome = await process.Effect(
+            GeneratedTypedRequestEffectProtocol.Protocol,
+            input,
+            id: new("submission/provider"));
+        switch (outcome)
+        {
+            case TrainingSubmissionAccepted(var accepted):
+                return accepted.SubmissionId;
+            case TrainingSubmissionRejected(var failure):
+                return failure.Reason;
+            case TrainingSubmissionTimedOut(var failure):
+                return failure.Reason;
+        }
+        return process.Unreachable<string>();
+    }
+}
+
+/// <summary>Raw exact-reference equivalent of <see cref="GeneratedTypedRequestEffectProcess"/>.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedRawRequestEffectProcess
+{
+    static async ProcessTask<string> Run(ProcessContext process, TrainingSubmission input)
+    {
+        await process.Effect(
+            GeneratedTypedRequestEffectProtocol.Protocol.Request,
+            input,
+            outcomes:
+            [
+                process.Outcome<TrainingAccepted>(
+                    GeneratedTypedRequestEffectProtocol.Protocol.Outcomes.Accepted.Id,
+                    TrainingSubmissionAccepted,
+                    id: ProcessAuthoringIdentities.NodeForRequestOutcome(
+                        new("submission/provider"),
+                        GeneratedTypedRequestEffectProtocol.Protocol.Outcomes.Accepted.Id)),
+                process.Outcome<TrainingFailure>(
+                    GeneratedTypedRequestEffectProtocol.Protocol.Outcomes.Rejected.Id,
+                    TrainingSubmissionRejected,
+                    id: ProcessAuthoringIdentities.NodeForRequestOutcome(
+                        new("submission/provider"),
+                        GeneratedTypedRequestEffectProtocol.Protocol.Outcomes.Rejected.Id)),
+                process.Outcome<TrainingFailure>(
+                    GeneratedTypedRequestEffectProtocol.Protocol.Outcomes.TimedOut.Id,
+                    TrainingSubmissionTimedOut,
+                    id: ProcessAuthoringIdentities.NodeForRequestOutcome(
+                        new("submission/provider"),
+                        GeneratedTypedRequestEffectProtocol.Protocol.Outcomes.TimedOut.Id))
+            ],
+            id: new("submission/provider"));
+        return process.Unreachable<string>();
+
+        async ProcessTask TrainingSubmissionAccepted(TrainingAccepted accepted)
+        {
+            await process.Succeed(
+                accepted.SubmissionId,
+                id: ProcessAuthoringIdentities.NodeFor(new(
+                    ["body", "request-0", "outcome-TrainingSubmissionAccepted", "return-0"])));
+        }
+
+        async ProcessTask TrainingSubmissionRejected(TrainingFailure failure)
+        {
+            await process.Succeed(
+                failure.Reason,
+                id: ProcessAuthoringIdentities.NodeFor(new(
+                    ["body", "request-0", "outcome-TrainingSubmissionRejected", "return-0"])));
+        }
+
+        async ProcessTask TrainingSubmissionTimedOut(TrainingFailure failure)
+        {
+            await process.Succeed(
+                failure.Reason,
+                id: ProcessAuthoringIdentities.NodeFor(new(
+                    ["body", "request-0", "outcome-TrainingSubmissionTimedOut", "return-0"])));
+        }
+    }
+}
+
+/// <summary>Portable Request payload used by typed Effect fixtures.</summary>
+/// <param name="DatasetId">Dataset submitted to an external training provider.</param>
+public sealed record TrainingSubmission(string DatasetId);
+
+/// <summary>Portable successful provider-submission result.</summary>
+/// <param name="SubmissionId">Provider-owned submission identity.</param>
+public sealed record TrainingAccepted(string SubmissionId);
+
+/// <summary>Portable failed or timed-out provider-submission evidence.</summary>
+/// <param name="Reason">Provider or timeout failure reason.</param>
+public sealed record TrainingFailure(string Reason);
+
+/// <summary>Closed source-only result family selected by the training-submission Request protocol.</summary>
+public abstract record TrainingSubmissionOutcome;
+
+/// <summary>Source-only successful result case.</summary>
+/// <param name="Payload">Canonical successful outcome payload.</param>
+public sealed record TrainingSubmissionAccepted(TrainingAccepted Payload) : TrainingSubmissionOutcome;
+
+/// <summary>Source-only rejected result case.</summary>
+/// <param name="Payload">Canonical failure outcome payload.</param>
+public sealed record TrainingSubmissionRejected(TrainingFailure Payload) : TrainingSubmissionOutcome;
+
+/// <summary>Source-only timed-out result case distinct from rejection despite sharing its payload type.</summary>
+/// <param name="Payload">Canonical timeout outcome payload.</param>
+public sealed record TrainingSubmissionTimedOut(TrainingFailure Payload) : TrainingSubmissionOutcome;
+
+/// <summary>Named protocol-owned case descriptors exposed for analyzer and handler projection.</summary>
+/// <param name="Accepted">Successful terminal result case.</param>
+/// <param name="Rejected">Rejected terminal failure case.</param>
+/// <param name="TimedOut">Timed-out terminal case.</param>
+public sealed record TrainingSubmissionCases(
+    RequestProtocolCase<TrainingSubmissionAccepted, TrainingAccepted> Accepted,
+    RequestProtocolCase<TrainingSubmissionRejected, TrainingFailure> Rejected,
+    RequestProtocolCase<TrainingSubmissionTimedOut, TrainingFailure> TimedOut);
 
 /// <summary>Representative generated child Process invocation authored as compensation work.</summary>
 [GenerateProcessDefinition(nameof(Run))]

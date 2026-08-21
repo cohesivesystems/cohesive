@@ -210,6 +210,28 @@ public static class ProcessAuthoringIdentities
     public static ExecutionNodeId NodeFor(ExecutionNodeId owner, string role) =>
         new($"{RequireOwner(owner)}/{RequireRole(role)}/node");
 
+    /// <summary>Derives a Request outcome-branch identity from its Request node and canonical outcome identity.</summary>
+    /// <param name="owner">Stable owning Request-node identity.</param>
+    /// <param name="outcome">Canonical terminal-outcome identity declared by the Request protocol.</param>
+    /// <returns>
+    /// A node identity whose outcome segment uses the canonical semantic-path escaping convention and is
+    /// independent of CLR case names, declaration order, source location, and runtime state.
+    /// </returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="owner"/> or <paramref name="outcome"/> is default.
+    /// </exception>
+    public static ExecutionNodeId NodeForRequestOutcome(
+        ExecutionNodeId owner,
+        RequestTerminalOutcomeId outcome)
+    {
+        if (string.IsNullOrWhiteSpace(outcome.Value))
+        {
+            throw new ArgumentException("A derived Request outcome identity requires a canonical outcome identity.", nameof(outcome));
+        }
+        var outcomePath = ExecutionSemanticPath.From(outcome.Value).ToString();
+        return new($"{RequireOwner(owner)}/outcome{outcomePath}/node");
+    }
+
     /// <summary>Derives an ordinal node identity from an owning node and semantic role.</summary>
     /// <param name="owner">Stable owning node identity.</param>
     /// <param name="role">Stable semantic role local to <paramref name="owner"/>.</param>

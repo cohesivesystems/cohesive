@@ -3,7 +3,6 @@ using System.Runtime.CompilerServices;
 using Cohesive.Execution;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
-using Cohesive.Relations.Authoring;
 
 namespace Cohesive.Processes.Authoring;
 
@@ -244,6 +243,27 @@ public sealed class ProcessContext
         RequestTerminalOutcomeId outcome,
         object? input,
         ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
+    /// <summary>Declares a typed canonical Request and binds its selected closed-family outcome case.</summary>
+    /// <remarks>
+    /// The result must be consumed by an immediately following exhaustive type switch. The generator erases the
+    /// source-only case family and fuses each switch arm into the corresponding canonical Request continuation.
+    /// </remarks>
+    /// <typeparam name="TRequest">Portable Request payload type fixed by the protocol.</typeparam>
+    /// <typeparam name="TOutcome">Closed source-only result-family root fixed by the protocol.</typeparam>
+    /// <typeparam name="TOutcomes">Typed case-descriptor set fixed by the protocol.</typeparam>
+    /// <param name="protocol">Typed canonical Request protocol and complete source-only case projection.</param>
+    /// <param name="input">Pure statically typed Request payload fused into the canonical Request node.</param>
+    /// <param name="id">Optional explicit canonical Request-node identity.</param>
+    /// <returns>A syntax-only awaitable whose result selects one protocol-owned source-only case.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public ProcessAwaitable<TOutcome> Effect<TRequest, TOutcome, TOutcomes>(
+        RequestProtocol<TRequest, TOutcome, TOutcomes> protocol,
+        TRequest input,
+        ExecutionNodeId? id = null)
+        where TOutcome : class
+        where TOutcomes : notnull =>
         throw SyntaxOnly();
 
     /// <summary>Declares a durable Request whose terminal outcomes select typed source-only branches.</summary>
