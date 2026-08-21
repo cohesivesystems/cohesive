@@ -4,6 +4,7 @@ using Cohesive.Api;
 using Cohesive.Api.Execution;
 using Cohesive.Control;
 using Cohesive.Execution;
+using Cohesive.MaterializationHarness.Control;
 using Cohesive.MaterializationHarness.Materialize;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Execution;
@@ -118,6 +119,77 @@ sealed class MaterializationHarnessExecutionController :
         ProcessAttemptId attemptId,
         DateTimeOffset issuedAtUtc) => GetProvider(provider).CreateStartRequest(attemptId, issuedAtUtc);
 
+    internal async Task<ExecutionApiDispatchResult> DispatchStartAsync(
+        string provider,
+        DateTimeOffset issuedAtUtc)
+    {
+        var suffix = issuedAtUtc.ToString(
+            "yyyyMMddHHmmssfffffff",
+            System.Globalization.CultureInfo.InvariantCulture);
+        var request = CreateStartRequest(
+            provider: provider,
+            attemptId: new($"attempt/{provider}/{suffix}"),
+            issuedAtUtc: issuedAtUtc);
+        var process = GetProvider(provider);
+        return await DispatchAsync(
+            context: OperationContext.Create(),
+            endpoint: Catalog.Start,
+            request: request,
+            invocation: Invocation(Catalog.Start, process, issuedAtUtc));
+    }
+
+    internal async Task<MaterializationHarnessControlRequestProjection> ProjectControlRequestAsync(
+        string provider,
+        string operation,
+        long? maximumBatchItems,
+        DateTimeOffset issuedAtUtc)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operation);
+        var endpoint = ResolveCommandEndpoint(operation);
+        object request;
+        if (ReferenceEquals(endpoint, Catalog.Start))
+        {
+            var suffix = issuedAtUtc.ToString(
+                "yyyyMMddHHmmssfffffff",
+                System.Globalization.CultureInfo.InvariantCulture);
+            request = CreateStartRequest(
+                provider: provider,
+                attemptId: new($"attempt/{provider}/{suffix}"),
+                issuedAtUtc: issuedAtUtc);
+        }
+        else if (ReferenceEquals(endpoint, Catalog.UpdateLimits))
+        {
+            request = await CreateLimitUpdateRequestAsync(
+                    provider: provider,
+                    maximumBatchItems: maximumBatchItems
+                        ?? throw new ArgumentException(
+                            "The updateLimits request projection requires maximumBatchItems.",
+                            nameof(maximumBatchItems)),
+                    issuedAtUtc: issuedAtUtc)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            if (maximumBatchItems.HasValue)
+            {
+                throw new ArgumentException(
+                    "Only updateLimits accepts maximumBatchItems.",
+                    nameof(maximumBatchItems));
+            }
+            request = await CreateOperatorRequestAsync(
+                    provider: provider,
+                    endpoint: endpoint,
+                    issuedAtUtc: issuedAtUtc)
+                .ConfigureAwait(false);
+        }
+
+        return new(
+            Operation: endpoint.Operation.Name,
+            Method: "POST",
+            Route: MaterializationHarnessExecutionRoutes.Command(endpoint.Operation.Name),
+            Request: request);
+    }
+
     internal async Task<ExecutionApiDispatchResult> DispatchOperatorAsync(
         string provider,
         ApiEndpoint endpoint,
@@ -127,6 +199,28 @@ sealed class MaterializationHarnessExecutionController :
         EnsureOwned(endpoint);
         if (ReferenceEquals(endpoint, Catalog.Start))
             throw new ArgumentException("Use CreateStartRequest for Process start admission.", nameof(endpoint));
+        if (ReferenceEquals(endpoint, Catalog.UpdateLimits))
+            throw new ArgumentException("Use DispatchLimitUpdateAsync for Control limit updates.", nameof(endpoint));
+        var request = await CreateOperatorRequestAsync(
+                provider: provider,
+                endpoint: endpoint,
+                issuedAtUtc: issuedAtUtc)
+            .ConfigureAwait(false);
+        var process = GetProvider(provider);
+        return await DispatchAsync(
+            context: OperationContext.Create(),
+            endpoint: endpoint,
+            request: request,
+            invocation: Invocation(endpoint, process, issuedAtUtc));
+    }
+
+    async Task<ProcessControlCommand> CreateOperatorRequestAsync(
+        string provider,
+        ApiEndpoint endpoint,
+        DateTimeOffset issuedAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        EnsureOwned(endpoint);
         var process = GetProvider(provider);
         var suffix = $"{endpoint.Operation.Name}/{issuedAtUtc:yyyyMMddHHmmssfffffff}";
         var commandContext = new ProcessControlCommandContext(
@@ -182,11 +276,7 @@ sealed class MaterializationHarnessExecutionController :
                                 $"The local SDK helper does not construct '{endpoint.Operation.Name}'.");
         }
 
-        return await DispatchAsync(
-            context: OperationContext.Create(),
-            endpoint: endpoint,
-            request: request,
-            invocation: Invocation(endpoint, process, issuedAtUtc));
+        return request;
     }
 
     internal async Task<ExecutionApiDispatchResult> DispatchLimitUpdateAsync(
@@ -194,8 +284,31 @@ sealed class MaterializationHarnessExecutionController :
         long maximumBatchItems,
         DateTimeOffset issuedAtUtc)
     {
+        var command = await CreateLimitUpdateRequestAsync(
+                provider: provider,
+                maximumBatchItems: maximumBatchItems,
+                issuedAtUtc: issuedAtUtc)
+            .ConfigureAwait(false);
+        var process = GetProvider(provider);
+        return await DispatchAsync(
+            context: OperationContext.Create(),
+            endpoint: Catalog.UpdateLimits,
+            request: command,
+            invocation: Invocation(Catalog.UpdateLimits, process, issuedAtUtc));
+    }
+
+    async Task<ControlLimitUpdateCommand> CreateLimitUpdateRequestAsync(
+        string provider,
+        long maximumBatchItems,
+        DateTimeOffset issuedAtUtc)
+    {
         if (maximumBatchItems <= 0)
-            throw new ArgumentOutOfRangeException(nameof(maximumBatchItems), maximumBatchItems, "Batch items must be positive.");
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumBatchItems),
+                maximumBatchItems,
+                "Batch items must be positive.");
+        }
         var process = GetProvider(provider);
         var context = OperationContext.Create();
         var execution = await process.ResolveCurrentExecutionAsync(context).ConfigureAwait(false)
@@ -204,12 +317,13 @@ sealed class MaterializationHarnessExecutionController :
                 .ForGeneration(execution.Generation)
                 .GetSnapshotsAsync(context)
                 .ConfigureAwait(false))
-            .Single();
+            .Single(static candidate =>
+                candidate.Key.Workload == MaterializationIndexSyncWorkloadKind.Rebuild);
         var requested = snapshot.State.OperatingPoint.With(new(
             actuator: ControlActuatorKind.BatchItems,
             quantity: new(maximumBatchItems, ControlUnit.Count)));
         var suffix = issuedAtUtc.ToString("yyyyMMddHHmmssfffffff", System.Globalization.CultureInfo.InvariantCulture);
-        var command = new ControlLimitUpdateCommand(
+        return new ControlLimitUpdateCommand(
             schemaVersion: ControlLoopDefinition.CurrentSchemaVersion,
             commandId: new($"command/materialization-harness/{provider}/update-limits/{suffix}"),
             idempotencyKey: new($"idempotency/materialization-harness/{provider}/update-limits/{suffix}"),
@@ -222,11 +336,6 @@ sealed class MaterializationHarnessExecutionController :
             authorization: process.Authorization(),
             issuedAtUtc: issuedAtUtc,
             provenance: process.Provenance("sdk-update-limits"));
-        return await DispatchAsync(
-            context: context,
-            endpoint: Catalog.UpdateLimits,
-            request: command,
-            invocation: Invocation(Catalog.UpdateLimits, process, issuedAtUtc));
     }
 
     internal async Task<MaterializationHarnessFailureEvidence> CaptureFailureEvidenceAsync(
@@ -246,8 +355,18 @@ sealed class MaterializationHarnessExecutionController :
                 .ConfigureAwait(false)
             : null;
         var progress = ImmutableArray<MaterializationHarnessProgressEvidence>.Empty;
+        var controlEpochs = ImmutableArray<string>.Empty;
         if (generation is { } progressGeneration)
         {
+            controlEpochs =
+            [
+                .. (await process.Provider.ControlRuntimeProvider
+                        .ForGeneration(progressGeneration)
+                        .GetSnapshotsAsync(context)
+                        .ConfigureAwait(false))
+                    .Select(static snapshot => snapshot.State.Epoch.Value)
+                    .Order(StringComparer.Ordinal)
+            ];
             var scopes = process.Provider.Compilation.Plan.Shards.Select(static shard => shard.Scope)
                 .Concat(process.Provider.Compilation.Plan.ChangeFeeds.Select(static feed => feed.Scope))
                 .Distinct()
@@ -284,6 +403,7 @@ sealed class MaterializationHarnessExecutionController :
             SelectedGenerationRevision: candidate?.Revision.Value,
             SelectedVisibleItemCount: candidate?.VisibleItemCount,
             SelectedTombstoneCount: candidate?.TombstoneCount,
+            SelectedControlEpochs: controlEpochs,
             DurableOperations:
             [
                 .. snapshot.Checkpoint.DurableOperations.Select(
@@ -503,7 +623,9 @@ sealed class MaterializationHarnessExecutionController :
                             delivery: new(
                                 durability: InteractionDurabilityDemand.Durable,
                                 visibility: InteractionVisibilityDemand.AfterOriginCommit),
-                            provenance: invocation.Provenance))
+                            // Command provenance remains on the retained Cancel command. The interpreter-owned
+                            // terminal activation must retain the canonical Process document's provenance.
+                            provenance: process.Artifacts.ParentPlan.Document.Metadata.Provenance))
                     .ConfigureAwait(false);
             }
             else
@@ -848,6 +970,20 @@ sealed class MaterializationHarnessExecutionController :
     static bool IsAuthorized(ApiEndpoint endpoint, ExecutionApiInvocationContext invocation) =>
         endpoint.Operation.AuthorizationRequirements.All(requirement =>
             invocation.GrantedRequirements.Contains(requirement.Id, StringComparer.Ordinal));
+
+    ApiEndpoint ResolveCommandEndpoint(string operation) => operation switch
+    {
+        ProcessStartWireNames.Start => Catalog.Start,
+        ExecutionControlWireNames.Pause => Catalog.Pause,
+        ExecutionControlWireNames.Continue => Catalog.Continue,
+        ExecutionControlWireNames.RestartAttempt => Catalog.RestartAttempt,
+        ExecutionControlWireNames.Cancel => Catalog.Cancel,
+        ControlLimitUpdateWireNames.UpdateLimits => Catalog.UpdateLimits,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(operation),
+            operation,
+            "The materialization host cannot project this execution-control command.")
+    };
 
     void EnsureOwned(ApiEndpoint endpoint)
     {

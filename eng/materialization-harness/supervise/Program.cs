@@ -1,3 +1,5 @@
 using Cohesive.MaterializationHarness.Supervise;
 
-return await MaterializationHarnessSupervisor.RunAsync(args);
+return args.FirstOrDefault() == "control-equivalence"
+    ? await MaterializationHarnessControlEquivalenceSupervisor.RunAsync(args)
+    : await MaterializationHarnessSupervisor.RunAsync(args);

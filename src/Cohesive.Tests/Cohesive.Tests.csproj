@@ -51,6 +51,7 @@
     <ProjectReference Include="..\Cohesive.Analyzers\Cohesive.Analyzers.csproj" OutputItemType="Analyzer" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.Json\Cohesive.Adapters.Json.csproj" />
     <ProjectReference Include="..\..\eng\materialization-harness\model\Cohesive.MaterializationHarness.Model.csproj" />
+    <ProjectReference Include="..\..\eng\materialization-harness\control\Cohesive.MaterializationHarness.Control.csproj" />
     <ProjectReference Include="..\..\eng\materialization-harness\materialize\Cohesive.MaterializationHarness.Materialize.csproj" />
   </ItemGroup>
   

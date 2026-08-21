@@ -1,9 +1,11 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Cohesive.Adapters.AspNet.Processes;
 using Cohesive.Api;
 using Cohesive.Api.Execution;
 using Cohesive.Control;
 using Cohesive.Execution;
+using Cohesive.MaterializationHarness.Control;
 using Cohesive.MaterializationHarness.Host;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Runtime;
@@ -25,6 +27,23 @@ static class ProgramEntry
             options: options,
             catalog: catalog);
         await controller.EnsureCreatedAsync(OperationContext.Create());
+
+        if (args is ["--control-scenario-sdk", var scenarioProvider])
+        {
+            var result = await MaterializationHarnessSdkControlScenario.RunAsync(
+                controller: controller,
+                provider: scenarioProvider,
+                timeout: TimeSpan.FromMinutes(15));
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(
+                result,
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)
+                {
+                    WriteIndented = true,
+                    Converters = { new JsonStringEnumConverter() }
+                }));
+            await controller.DisposeAsync();
+            return 0;
+        }
 
         if (args is ["--start"] or ["--start", _])
         {
@@ -101,7 +120,7 @@ static class ProgramEntry
         if (args.Length != 0)
         {
             throw new ArgumentException(
-                "The materialization host accepts --start, --inspect, --explain, --traces, --pause, --continue, --restart-attempt, --cancel, or --failure-evidence, followed by an optional provider; --failure-evidence also accepts a generation and --update-limits requires a provider and maximum batch items.",
+                "The materialization host accepts --start, --inspect, --explain, --traces, --pause, --continue, --restart-attempt, --cancel, or --failure-evidence, followed by an optional provider; --failure-evidence also accepts a generation, --update-limits requires a provider and maximum batch items, and --control-scenario-sdk requires one provider.",
                 nameof(args));
         }
 
@@ -134,27 +153,42 @@ static class ProgramEntry
         app.UseAuthorization();
         MapCommands(app, catalog, options);
         app.MapGet(
-            "/materialization-harness/providers/{provider}/failure-evidence",
+            MaterializationHarnessExecutionRoutes.RequestProjection,
             async (
                 string provider,
+                string operation,
+                long? maximumBatchItems,
+                MaterializationHarnessExecutionController executionController) => Results.Json(
+                    await executionController.ProjectControlRequestAsync(
+                        provider: provider,
+                        operation: operation,
+                        maximumBatchItems: maximumBatchItems,
+                        issuedAtUtc: DateTimeOffset.UtcNow)));
+        app.MapGet(
+            MaterializationHarnessExecutionRoutes.FailureEvidence,
+            async (
+                string provider,
+                string? generation,
                 MaterializationHarnessExecutionController executionController,
                 HttpContext httpContext) => Results.Json(await executionController.CaptureFailureEvidenceAsync(
                 provider: provider,
-                selectedGeneration: null,
+                selectedGeneration: string.IsNullOrWhiteSpace(generation)
+                    ? null
+                    : new MaterializationGenerationId(generation),
                 context: OperationContext.Create(cancellationToken: httpContext.RequestAborted))));
         app.MapProcessExecutionInspectApi(
             catalog.Inspect,
-            "/execution-control/processes/{processInstanceId}",
+            MaterializationHarnessExecutionRoutes.Inspect,
             (_, _, _) => options.AuthorityScope,
             ResolvePolicy);
         app.MapProcessExecutionExplainApi(
             catalog.Explain,
-            "/execution-control/processes/{processInstanceId}/explain",
+            MaterializationHarnessExecutionRoutes.Explain,
             (_, _, _) => options.AuthorityScope,
             ResolvePolicy);
         app.MapProcessExecutionTracesApi(
             catalog.Traces,
-            "/execution-control/processes/{processInstanceId}/traces",
+            MaterializationHarnessExecutionRoutes.Traces,
             (_, _, _) => options.AuthorityScope,
             ResolvePolicy);
         await app.RunAsync();
@@ -169,37 +203,37 @@ static class ProgramEntry
         app.MapProcessExecutionCommandApi<ProcessStartRequest>(
             catalog,
             catalog.Start,
-            "/execution-control/processes/start",
+            MaterializationHarnessExecutionRoutes.Start,
             (context, http, operation) => ResolveInvocation(context, http, operation, options),
             ResolvePolicy);
         app.MapProcessExecutionCommandApi<PauseProcessCommand>(
             catalog,
             catalog.Pause,
-            "/execution-control/processes/pause",
+            MaterializationHarnessExecutionRoutes.Pause,
             (context, http, operation) => ResolveInvocation(context, http, operation, options),
             ResolvePolicy);
         app.MapProcessExecutionCommandApi<ContinueProcessCommand>(
             catalog,
             catalog.Continue,
-            "/execution-control/processes/continue",
+            MaterializationHarnessExecutionRoutes.Continue,
             (context, http, operation) => ResolveInvocation(context, http, operation, options),
             ResolvePolicy);
         app.MapProcessExecutionCommandApi<RestartProcessAttemptCommand>(
             catalog,
             catalog.RestartAttempt,
-            "/execution-control/processes/restart-attempt",
+            MaterializationHarnessExecutionRoutes.RestartAttempt,
             (context, http, operation) => ResolveInvocation(context, http, operation, options),
             ResolvePolicy);
         app.MapProcessExecutionCommandApi<CancelProcessCommand>(
             catalog,
             catalog.Cancel,
-            "/execution-control/processes/cancel",
+            MaterializationHarnessExecutionRoutes.Cancel,
             (context, http, operation) => ResolveInvocation(context, http, operation, options),
             ResolvePolicy);
         app.MapProcessExecutionCommandApi<ControlLimitUpdateCommand>(
             catalog,
             catalog.UpdateLimits,
-            "/execution-control/processes/update-limits",
+            MaterializationHarnessExecutionRoutes.UpdateLimits,
             (context, http, operation) => ResolveInvocation(context, http, operation, options),
             ResolvePolicy);
     }
