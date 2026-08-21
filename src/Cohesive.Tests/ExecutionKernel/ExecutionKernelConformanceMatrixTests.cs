@@ -133,7 +133,7 @@ public sealed class ExecutionKernelConformanceMatrixTests
         Semantic(
             "EK-08",
             typeof(MaterializationRebuildExecutorTests),
-            nameof(MaterializationRebuildExecutorTests.CrashAtEveryPageBoundary_ResumesSameGenerationWithoutDuplicateEffects)),
+            nameof(MaterializationRebuildExecutorTests.InterruptionAtEveryPageBoundary_ResumesSameGenerationWithoutDuplicateEffects)),
         Semantic(
             "EK-08",
             typeof(MaterializationRebuildProcessConformanceTests),

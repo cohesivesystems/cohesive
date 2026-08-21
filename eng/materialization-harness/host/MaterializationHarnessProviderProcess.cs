@@ -82,8 +82,8 @@ sealed class MaterializationHarnessProviderProcess
         var executionResolver = new AttemptExecutionResolver(
             resolvedPlan: provider.ResolvedPlan,
             synchronizationWorkStore: materializationStore,
-            crashInjector: operationBoundaryDelay == TimeSpan.Zero
-                ? NoOpMaterializationRebuildCrashInjector.Instance
+            boundaryObserver: operationBoundaryDelay == TimeSpan.Zero
+                ? NoOpMaterializationExecutionBoundaryObserver.Instance
                 : new DelayAtMaterializationBoundary(operationBoundaryDelay));
         var planSetResolver = new ExactPlanSetResolver(provider.Compilation.PlanSet);
 
@@ -548,7 +548,7 @@ sealed class MaterializationHarnessProviderProcess
     sealed class AttemptExecutionResolver(
         ResolvedMaterializationRebuildPlan resolvedPlan,
         IMaterializationSynchronizationWorkStore synchronizationWorkStore,
-        IMaterializationRebuildCrashInjector crashInjector)
+        IMaterializationExecutionBoundaryObserver boundaryObserver)
         : IMaterializationRebuildExecutionResolver
     {
         readonly object gate = new();
@@ -593,7 +593,7 @@ sealed class MaterializationHarnessProviderProcess
                             continuation: continuation,
                             startedAtUtc: startedAtUtc),
                         synchronizationWorkStore: synchronizationWorkStore,
-                        crashInjector: crashInjector);
+                        boundaryObserver: boundaryObserver);
                     executions.Add(continuation, execution);
                 }
                 return true;
@@ -601,11 +601,11 @@ sealed class MaterializationHarnessProviderProcess
         }
     }
 
-    sealed class DelayAtMaterializationBoundary(TimeSpan delay) : IMaterializationRebuildCrashInjector
+    sealed class DelayAtMaterializationBoundary(TimeSpan delay) : IMaterializationExecutionBoundaryObserver
     {
         public async ValueTask ObserveAsync(
             OperationContext context,
-            MaterializationRebuildCrashObservation observation)
+            MaterializationExecutionBoundaryObservation observation)
         {
             ArgumentNullException.ThrowIfNull(context);
             ArgumentNullException.ThrowIfNull(observation);

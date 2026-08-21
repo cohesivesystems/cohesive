@@ -150,21 +150,26 @@ public sealed class MaterializationGenerationActivationExecutor
     readonly ResolvedMaterializationRebuildPlan resolved;
     readonly IMaterializationSynchronizationWorkStore workStore;
     readonly MaterializationSynchronizationExecutor synchronization;
+    readonly IMaterializationExecutionBoundaryObserver boundaryObserver;
 
     /// <summary>Creates one activation executor over exact plan bindings and durable work authority.</summary>
     /// <param name="resolved">Exact persisted rebuild plan resolved to source, progress, and target ports.</param>
     /// <param name="workStore">Generation-wide synchronization and activation state authority.</param>
+    /// <param name="boundaryObserver">Optional provider-neutral lifecycle boundary observer.</param>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
     public MaterializationGenerationActivationExecutor(
         ResolvedMaterializationRebuildPlan resolved,
-        IMaterializationSynchronizationWorkStore workStore)
+        IMaterializationSynchronizationWorkStore workStore,
+        IMaterializationExecutionBoundaryObserver? boundaryObserver = null)
     {
         this.resolved = resolved ?? throw new ArgumentNullException(nameof(resolved));
         this.workStore = workStore ?? throw new ArgumentNullException(nameof(workStore));
+        this.boundaryObserver = boundaryObserver ?? NoOpMaterializationExecutionBoundaryObserver.Instance;
         synchronization = new(
-            resolved,
-            workStore,
-            MaterializationIndexSyncWorkloadKind.Rebuild);
+            resolved: resolved,
+            workStore: workStore,
+            workload: MaterializationIndexSyncWorkloadKind.Rebuild,
+            boundaryObserver: this.boundaryObserver);
     }
 
     /// <summary>Exact persisted plan interpreted by this executor.</summary>
@@ -463,11 +468,12 @@ public sealed class MaterializationGenerationActivationExecutor
         }
 
         var outcome = await ReconcilePromotionAsync(
-                context,
-                generation,
+                context: context,
+                attempt: attempt,
+                generation: generation,
                 synchronizationResult: null,
-                work,
-                activation)
+                work: work,
+                activation: activation)
             .ConfigureAwait(false);
         if (outcome.Result is not null)
             return outcome.Result;
@@ -645,6 +651,7 @@ public sealed class MaterializationGenerationActivationExecutor
 
     async Task<ActivationStep> ReconcilePromotionAsync(
         OperationContext context,
+        MaterializationRebuildAttempt attempt,
         MaterializationGenerationId generation,
         MaterializationSynchronizationRunResult? synchronizationResult,
         MaterializationSynchronizationWorkSnapshot work,
@@ -665,6 +672,13 @@ public sealed class MaterializationGenerationActivationExecutor
                 return new(null, RestartForStaleProof(generation, synchronizationResult, activation, authorization));
         }
 
+        await ObserveBoundaryAsync(
+                context: context,
+                attempt: attempt,
+                generation: generation,
+                point: MaterializationExecutionBoundaryPoint.BeforeGenerationPromotion,
+                operationIdentity: request.PromotionId.Value)
+            .ConfigureAwait(false);
         var result = await resolved.Target.PromoteGenerationAsync(context, request).ConfigureAwait(false);
         if (result.Disposition is not (
             MaterializationTargetOperationDisposition.Applied
@@ -672,6 +686,13 @@ public sealed class MaterializationGenerationActivationExecutor
         {
             return new(null, TargetFailure(generation, synchronizationResult, activation, result.Disposition, "promotion"));
         }
+        await ObserveBoundaryAsync(
+                context: context,
+                attempt: attempt,
+                generation: generation,
+                point: MaterializationExecutionBoundaryPoint.AfterGenerationPromotion,
+                operationIdentity: request.PromotionId.Value)
+            .ConfigureAwait(false);
 
         var next = new MaterializationGenerationActivationState(
             convergence: activation.Convergence,
@@ -718,6 +739,23 @@ public sealed class MaterializationGenerationActivationExecutor
                 work.FenceOwner,
                 work.Fence,
                 activation)
+            .ConfigureAwait(false);
+
+    async ValueTask ObserveBoundaryAsync(
+        OperationContext context,
+        MaterializationRebuildAttempt attempt,
+        MaterializationGenerationId generation,
+        MaterializationExecutionBoundaryPoint point,
+        string operationIdentity) =>
+        await boundaryObserver.ObserveAsync(
+                context: context,
+                observation: new(
+                    attempt: attempt,
+                    generation: generation,
+                    point: point,
+                    scopeIdentity: resolved.Target.Descriptor.Id.Value,
+                    operationIdentity: operationIdentity,
+                    occurrence: 0))
             .ConfigureAwait(false);
 
     async Task<MaterializationSynchronizationWorkSnapshot?> RequireCurrentWorkAsync(

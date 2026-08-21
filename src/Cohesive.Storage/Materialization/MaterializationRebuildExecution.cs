@@ -624,69 +624,6 @@ public sealed class ResolvedMaterializationRebuildPlan
 
 }
 
-/// <summary>Crash-injection boundary exposed by the deterministic reference rebuild executor.</summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
-public enum MaterializationRebuildCrashPoint
-{
-    /// <summary>A bounded source page was observed but not yet hydrated.</summary>
-    AfterScan = 0,
-
-    /// <summary>Canonical Relations hydration completed but no target bulk was acknowledged.</summary>
-    AfterHydration = 1,
-
-    /// <summary>One idempotent target bulk completed but baseline progress was not checkpointed.</summary>
-    AfterBulk = 2,
-
-    /// <summary>The baseline application checkpoint committed.</summary>
-    AfterCheckpoint = 3
-}
-
-/// <summary>Attributable observation at one rebuild crash-injection boundary.</summary>
-/// <param name="Attempt">Exact owning Process attempt.</param>
-/// <param name="Generation">Candidate generation owned by the attempt.</param>
-/// <param name="Shard">Stable shard being advanced.</param>
-/// <param name="PageIdentity">Deterministic identity of the page operation.</param>
-/// <param name="Point">Durability boundary that has just been crossed.</param>
-/// <param name="Occurrence">Zero-based observation ordinal within the shard invocation.</param>
-public sealed record MaterializationRebuildCrashObservation(
-    MaterializationRebuildAttempt Attempt,
-    MaterializationGenerationId Generation,
-    MaterializationRebuildShardId Shard,
-    string PageIdentity,
-    MaterializationRebuildCrashPoint Point,
-    int Occurrence);
-
-/// <summary>Optional deterministic fault-injection and boundary-observation hook for rebuild conformance.</summary>
-public interface IMaterializationRebuildCrashInjector
-{
-    /// <summary>Observes one exact post-operation boundary and may throw to simulate interruption.</summary>
-    /// <param name="context">Explicit cancellation and tracing context.</param>
-    /// <param name="observation">Exact attempt, generation, shard, page, point, and occurrence.</param>
-    /// <returns>Completion when execution may continue.</returns>
-    /// <exception cref="OperationCanceledException">The operation is cancelled.</exception>
-    ValueTask ObserveAsync(OperationContext context, MaterializationRebuildCrashObservation observation);
-}
-
-/// <summary>No-op rebuild crash injector used by conventional execution.</summary>
-public sealed class NoOpMaterializationRebuildCrashInjector : IMaterializationRebuildCrashInjector
-{
-    NoOpMaterializationRebuildCrashInjector() { }
-
-    /// <summary>Shared stateless no-op instance.</summary>
-    public static NoOpMaterializationRebuildCrashInjector Instance { get; } = new();
-
-    /// <inheritdoc />
-    public ValueTask ObserveAsync(
-        OperationContext context,
-        MaterializationRebuildCrashObservation observation)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-        ArgumentNullException.ThrowIfNull(observation);
-        context.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
-    }
-}
-
 /// <summary>Observable disposition of one rebuild attempt initialization.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum MaterializationRebuildInitializationDisposition
@@ -992,18 +929,18 @@ public sealed record MaterializationBaselineCompleteCatchUpRequired
 public sealed class MaterializationRebuildExecutor
 {
     readonly ResolvedMaterializationRebuildPlan resolved;
-    readonly IMaterializationRebuildCrashInjector crashInjector;
+    readonly IMaterializationExecutionBoundaryObserver boundaryObserver;
 
     /// <summary>Creates a reference rebuild executor over exact-context runtime bindings.</summary>
     /// <param name="resolved">Exact persisted plan resolved to runtime ports.</param>
-    /// <param name="crashInjector">Optional deterministic boundary hook.</param>
+    /// <param name="boundaryObserver">Optional provider-neutral semantic boundary observer.</param>
     /// <exception cref="ArgumentNullException"><paramref name="resolved"/> is <see langword="null"/>.</exception>
     public MaterializationRebuildExecutor(
         ResolvedMaterializationRebuildPlan resolved,
-        IMaterializationRebuildCrashInjector? crashInjector = null)
+        IMaterializationExecutionBoundaryObserver? boundaryObserver = null)
     {
         this.resolved = Guard.RequireNotNull(resolved);
-        this.crashInjector = crashInjector ?? NoOpMaterializationRebuildCrashInjector.Instance;
+        this.boundaryObserver = boundaryObserver ?? NoOpMaterializationExecutionBoundaryObserver.Instance;
     }
 
     /// <summary>Exact persisted rebuild realization interpreted by this executor.</summary>
@@ -1213,7 +1150,6 @@ public sealed class MaterializationRebuildExecutor
 
         var pages = 0;
         long outputCount = 0;
-        var crashOccurrence = 0;
         while ((progress.LatestBatchCheckpoint?.BatchPageOrdinal ?? 0)
             < plan.Limits.MaximumPagesPerShard)
         {
@@ -1245,6 +1181,14 @@ public sealed class MaterializationRebuildExecutor
                     Math.Min(sourcePoint.MaximumBatchBytes, transformPoint.MaximumBatchBytes));
             }
             MaterializationSourcePage page;
+            await ObserveBoundaryAsync(
+                    context: context,
+                    attempt: attempt,
+                    generation: generation,
+                    point: MaterializationExecutionBoundaryPoint.BeforeSourceRead,
+                    scopeIdentity: shard.Id.Value,
+                    operationIdentity: pageIdentity)
+                .ConfigureAwait(false);
             try
             {
                 await using var sourceAdmission = control is null
@@ -1311,17 +1255,24 @@ public sealed class MaterializationRebuildExecutor
                     $"The source returned incompatible '{page.Read.State}' evidence for a '{page.State}' page.",
                     page.Diagnostics);
             }
-            await ObserveCrashAsync(
-                    context,
-                    attempt,
-                    generation,
-                    shard.Id,
-                    pageIdentity,
-                    MaterializationRebuildCrashPoint.AfterScan,
-                    crashOccurrence++)
+            await ObserveBoundaryAsync(
+                    context: context,
+                    attempt: attempt,
+                    generation: generation,
+                    point: MaterializationExecutionBoundaryPoint.AfterSourceRead,
+                    scopeIdentity: shard.Id.Value,
+                    operationIdentity: pageIdentity)
                 .ConfigureAwait(false);
 
             MaterializationRebuildHydrationResult hydrated;
+            await ObserveBoundaryAsync(
+                    context: context,
+                    attempt: attempt,
+                    generation: generation,
+                    point: MaterializationExecutionBoundaryPoint.BeforeHydration,
+                    scopeIdentity: shard.Id.Value,
+                    operationIdentity: pageIdentity)
+                .ConfigureAwait(false);
             try
             {
                 await using var transformAdmission = control is null
@@ -1356,14 +1307,13 @@ public sealed class MaterializationRebuildExecutor
                     MaterializationRebuildDiagnosticCodes.HydrationIncomplete,
                     exception.Message);
             }
-            await ObserveCrashAsync(
-                    context,
-                    attempt,
-                    generation,
-                    shard.Id,
-                    pageIdentity,
-                    MaterializationRebuildCrashPoint.AfterHydration,
-                    crashOccurrence++)
+            await ObserveBoundaryAsync(
+                    context: context,
+                    attempt: attempt,
+                    generation: generation,
+                    point: MaterializationExecutionBoundaryPoint.AfterHydration,
+                    scopeIdentity: shard.Id.Value,
+                    operationIdentity: pageIdentity)
                 .ConfigureAwait(false);
 
             if (!TryProjectMutations(
@@ -1392,10 +1342,8 @@ public sealed class MaterializationRebuildExecutor
                     shard,
                     generation,
                     pageIdentity,
-                    mutations,
-                    crashOccurrence)
+                    mutations)
                 .ConfigureAwait(false);
-            crashOccurrence = write.NextCrashOccurrence;
             if (write.FailureDisposition is { } failureDisposition)
             {
                 return Failure(
@@ -1443,6 +1391,14 @@ public sealed class MaterializationRebuildExecutor
                     batchPageOrdinal: batchPageOrdinal),
                 _ => throw new InvalidOperationException($"Unsupported source page state '{page.State}'.")
             };
+            await ObserveBoundaryAsync(
+                    context: context,
+                    attempt: attempt,
+                    generation: generation,
+                    point: MaterializationExecutionBoundaryPoint.BeforeCheckpointCommit,
+                    scopeIdentity: shard.Id.Value,
+                    operationIdentity: checkpoint.Id.Value)
+                .ConfigureAwait(false);
             var saved = await resolved.ProgressStore.SaveCheckpointAsync(
                     context,
                     key,
@@ -1468,14 +1424,13 @@ public sealed class MaterializationRebuildExecutor
             progress = saved.Snapshot!;
             pages++;
             outputCount = checked(outputCount + mutations.Length);
-            await ObserveCrashAsync(
-                    context,
-                    attempt,
-                    generation,
-                    shard.Id,
-                    pageIdentity,
-                    MaterializationRebuildCrashPoint.AfterCheckpoint,
-                    crashOccurrence++)
+            await ObserveBoundaryAsync(
+                    context: context,
+                    attempt: attempt,
+                    generation: generation,
+                    point: MaterializationExecutionBoundaryPoint.AfterCheckpointCommit,
+                    scopeIdentity: shard.Id.Value,
+                    operationIdentity: checkpoint.Id.Value)
                 .ConfigureAwait(false);
             if (checkpoint.Kind == MaterializationCheckpointKind.BatchCompleted)
                 return Success(shard, generation, pages, outputCount, progress);
@@ -1620,17 +1575,14 @@ public sealed class MaterializationRebuildExecutor
 
     async Task<(
         MaterializationRebuildShardDisposition? FailureDisposition,
-        string? Message,
-        int NextCrashOccurrence)> ApplyMutationsAsync(
+        string? Message)> ApplyMutationsAsync(
         OperationContext context,
         MaterializationRebuildAttempt attempt,
         MaterializationRebuildShardPlan shard,
         MaterializationGenerationId generation,
         string pageIdentity,
-        ImmutableArray<MaterializationItemMutation> mutations,
-        int crashOccurrence)
+        ImmutableArray<MaterializationItemMutation> mutations)
     {
-        var nextCrashOccurrence = crashOccurrence;
         var control = resolved.GetControlRuntime(generation);
         var write = await MaterializationTargetBatchWriter.ApplyAsync(
                 context: context,
@@ -1649,7 +1601,8 @@ public sealed class MaterializationRebuildExecutor
                 maximumAttempts: resolved.Plan.Materialization.Definition.FailurePolicy.MaximumAttempts,
                 createBatchId: contentIdentity =>
                     MaterializationRebuildIdentities.Batch(pageIdentity, contentIdentity),
-                afterBulkObservation: ObserveBulkAsync,
+                beforeTargetBatchObservation: ObserveBeforeTargetBatchAsync,
+                afterTargetBatchObservation: ObserveAfterTargetBatchAsync,
                 acquireAdmission: control is null
                     ? null
                     : async operation => await control.AcquireStageAsync(
@@ -1661,42 +1614,45 @@ public sealed class MaterializationRebuildExecutor
             .ConfigureAwait(false);
         return write.Disposition switch
         {
-            MaterializationTargetWriteDisposition.Applied => (null, null, nextCrashOccurrence),
+            MaterializationTargetWriteDisposition.Applied => (null, null),
             MaterializationTargetWriteDisposition.BoundaryExceeded => (
                 MaterializationRebuildShardDisposition.BoundaryExceeded,
-                write.Message,
-                nextCrashOccurrence),
+                write.Message),
             MaterializationTargetWriteDisposition.IdentityConflict => (
                 MaterializationRebuildShardDisposition.RestartRequired,
                 $"Page '{pageIdentity}' cannot be replayed safely. {write.Message} "
-                + "Continuing this Process attempt is unsafe.",
-                nextCrashOccurrence),
+                + "Continuing this Process attempt is unsafe."),
             MaterializationTargetWriteDisposition.StaleFence => (
                 MaterializationRebuildShardDisposition.Fenced,
-                write.Message,
-                nextCrashOccurrence),
+                write.Message),
             MaterializationTargetWriteDisposition.Failed => (
                 MaterializationRebuildShardDisposition.TargetFailed,
-                write.Message,
-                nextCrashOccurrence),
+                write.Message),
             _ => throw new InvalidOperationException($"Unsupported target write disposition '{write.Disposition}'.")
         };
 
-        async ValueTask ObserveBulkAsync(
+        async ValueTask ObserveBeforeTargetBatchAsync(
             OperationContext observationContext,
-            MaterializationApplyBatchRequest _,
-            MaterializationBatchResult __)
-        {
-            await ObserveCrashAsync(
-                    observationContext,
-                    attempt,
-                    generation,
-                    shard.Id,
-                    pageIdentity,
-                    MaterializationRebuildCrashPoint.AfterBulk,
-                    nextCrashOccurrence++)
-                .ConfigureAwait(false);
-        }
+            MaterializationApplyBatchRequest request) => await ObserveBoundaryAsync(
+                context: observationContext,
+                attempt: attempt,
+                generation: generation,
+                point: MaterializationExecutionBoundaryPoint.BeforeTargetBatch,
+                scopeIdentity: shard.Id.Value,
+                operationIdentity: request.BatchId.Value)
+            .ConfigureAwait(false);
+
+        async ValueTask ObserveAfterTargetBatchAsync(
+            OperationContext observationContext,
+            MaterializationApplyBatchRequest request,
+            MaterializationBatchResult _) => await ObserveBoundaryAsync(
+                context: observationContext,
+                attempt: attempt,
+                generation: generation,
+                point: MaterializationExecutionBoundaryPoint.AfterTargetBatch,
+                scopeIdentity: shard.Id.Value,
+                operationIdentity: request.BatchId.Value)
+            .ConfigureAwait(false);
     }
 
     static bool TryProjectMutations(
@@ -1755,17 +1711,22 @@ public sealed class MaterializationRebuildExecutor
         return true;
     }
 
-    async ValueTask ObserveCrashAsync(
+    async ValueTask ObserveBoundaryAsync(
         OperationContext context,
         MaterializationRebuildAttempt attempt,
         MaterializationGenerationId generation,
-        MaterializationRebuildShardId shard,
-        string pageIdentity,
-        MaterializationRebuildCrashPoint point,
-        int occurrence) =>
-        await crashInjector.ObserveAsync(
-                context,
-                new(attempt, generation, shard, pageIdentity, point, occurrence))
+        MaterializationExecutionBoundaryPoint point,
+        string scopeIdentity,
+        string operationIdentity) =>
+        await boundaryObserver.ObserveAsync(
+                context: context,
+                observation: new(
+                    attempt: attempt,
+                    generation: generation,
+                    point: point,
+                    scopeIdentity: scopeIdentity,
+                    operationIdentity: operationIdentity,
+                    occurrence: 0))
             .ConfigureAwait(false);
 
     internal static MaterializationProgressKey ProgressKey(

@@ -273,22 +273,27 @@ public sealed partial class MaterializationRebuildExecutorTests
     }
 
     [Theory]
-    [InlineData(MaterializationRebuildCrashPoint.AfterScan)]
-    [InlineData(MaterializationRebuildCrashPoint.AfterHydration)]
-    [InlineData(MaterializationRebuildCrashPoint.AfterBulk)]
-    [InlineData(MaterializationRebuildCrashPoint.AfterCheckpoint)]
-    public async Task CrashAtEveryPageBoundary_ResumesSameGenerationWithoutDuplicateEffects(
-        MaterializationRebuildCrashPoint crashPoint)
+    [InlineData(MaterializationExecutionBoundaryPoint.BeforeSourceRead)]
+    [InlineData(MaterializationExecutionBoundaryPoint.AfterSourceRead)]
+    [InlineData(MaterializationExecutionBoundaryPoint.BeforeHydration)]
+    [InlineData(MaterializationExecutionBoundaryPoint.AfterHydration)]
+    [InlineData(MaterializationExecutionBoundaryPoint.BeforeTargetBatch)]
+    [InlineData(MaterializationExecutionBoundaryPoint.AfterTargetBatch)]
+    [InlineData(MaterializationExecutionBoundaryPoint.BeforeCheckpointCommit)]
+    [InlineData(MaterializationExecutionBoundaryPoint.AfterCheckpointCommit)]
+    public async Task InterruptionAtEveryPageBoundary_ResumesSameGenerationWithoutDuplicateEffects(
+        MaterializationExecutionBoundaryPoint boundaryPoint)
     {
-        var crash = new ThrowOnceCrashInjector(crashPoint);
-        var fixture = CreateFixture(crashInjector: crash);
+        var interruption = new ThrowOnceBoundaryObserver(boundaryPoint);
+        var fixture = CreateFixture(boundaryObserver: interruption);
         var attempt = Attempt("attempt-crash");
         var begun = await fixture.Executor.BeginAttemptAsync(OperationContext.Create(), attempt);
 
-        await Assert.ThrowsAsync<InjectedCrashException>(async () => await fixture.Executor.RunShardAsync(
-            OperationContext.Create(),
-            attempt,
-            new("shard-a")));
+        await Assert.ThrowsAsync<InjectedMaterializationInterruptionException>(async () =>
+            await fixture.Executor.RunShardAsync(
+                OperationContext.Create(),
+                attempt,
+                new("shard-a")));
 
         var resumedExecutor = new MaterializationRebuildExecutor(fixture.Resolved);
         var resumed = await resumedExecutor.RunShardAsync(
@@ -314,23 +319,24 @@ public sealed partial class MaterializationRebuildExecutorTests
             replayedItems.Select(static item => item.MutationId));
         Assert.Equal(0, replayed.Pages);
         Assert.Equal(0, replayed.Outputs);
-        Assert.Equal(1, crash.ThrownCount);
+        Assert.Equal(1, interruption.ThrownCount);
     }
 
     [Fact]
-    public async Task CrashAfterBulk_WithChangedLivePage_RequiresFreshAttemptAndGeneration()
+    public async Task InterruptionAfterTargetBatch_WithChangedLivePage_RequiresFreshAttemptAndGeneration()
     {
-        var crash = new ThrowOnceCrashInjector(MaterializationRebuildCrashPoint.AfterBulk);
-        var fixture = CreateFixture(crashInjector: crash);
-        crash.BeforeThrow = () => fixture.ScanReaders[new("shard-a")]
+        var interruption = new ThrowOnceBoundaryObserver(MaterializationExecutionBoundaryPoint.AfterTargetBatch);
+        var fixture = CreateFixture(boundaryObserver: interruption);
+        interruption.BeforeThrow = () => fixture.ScanReaders[new("shard-a")]
             .ReplaceFirstObservationIdentity("load/replaced-after-uncheckpointed-bulk");
         var firstAttempt = Attempt("attempt-live-page-drift");
         var first = await fixture.Executor.BeginAttemptAsync(OperationContext.Create(), firstAttempt);
 
-        await Assert.ThrowsAsync<InjectedCrashException>(async () => await fixture.Executor.RunShardAsync(
-            OperationContext.Create(),
-            firstAttempt,
-            new("shard-a")));
+        await Assert.ThrowsAsync<InjectedMaterializationInterruptionException>(async () =>
+            await fixture.Executor.RunShardAsync(
+                OperationContext.Create(),
+                firstAttempt,
+                new("shard-a")));
 
         var resumedExecutor = new MaterializationRebuildExecutor(fixture.Resolved);
         var unsafeResume = await resumedExecutor.RunShardAsync(
@@ -375,24 +381,30 @@ public sealed partial class MaterializationRebuildExecutorTests
     [Fact]
     public async Task MaximumPagesPerShard_RemainsCumulativeAcrossCheckpointedCrashResumes()
     {
-        var firstCrash = new ThrowOnceCrashInjector(MaterializationRebuildCrashPoint.AfterCheckpoint);
+        var firstInterruption = new ThrowOnceBoundaryObserver(
+            MaterializationExecutionBoundaryPoint.AfterCheckpointCommit);
         var fixture = CreateFixture(
-            crashInjector: firstCrash,
+            boundaryObserver: firstInterruption,
             maximumPageItems: 1,
             maximumPagesPerShard: 2);
         var attempt = Attempt("attempt-cumulative-page-boundary");
         var initialized = await fixture.Executor.BeginAttemptAsync(OperationContext.Create(), attempt);
 
-        await Assert.ThrowsAsync<InjectedCrashException>(async () => await fixture.Executor.RunShardAsync(
-            OperationContext.Create(),
-            attempt,
-            new("shard-a")));
-        var secondCrash = new ThrowOnceCrashInjector(MaterializationRebuildCrashPoint.AfterCheckpoint);
-        var secondInvocation = new MaterializationRebuildExecutor(fixture.Resolved, secondCrash);
-        await Assert.ThrowsAsync<InjectedCrashException>(async () => await secondInvocation.RunShardAsync(
-            OperationContext.Create(),
-            attempt,
-            new("shard-a")));
+        await Assert.ThrowsAsync<InjectedMaterializationInterruptionException>(async () =>
+            await fixture.Executor.RunShardAsync(
+                OperationContext.Create(),
+                attempt,
+                new("shard-a")));
+        var secondInterruption = new ThrowOnceBoundaryObserver(
+            MaterializationExecutionBoundaryPoint.AfterCheckpointCommit);
+        var secondInvocation = new MaterializationRebuildExecutor(
+            resolved: fixture.Resolved,
+            boundaryObserver: secondInterruption);
+        await Assert.ThrowsAsync<InjectedMaterializationInterruptionException>(async () =>
+            await secondInvocation.RunShardAsync(
+                OperationContext.Create(),
+                attempt,
+                new("shard-a")));
 
         var bounded = await new MaterializationRebuildExecutor(fixture.Resolved).RunShardAsync(
             OperationContext.Create(),
@@ -713,7 +725,7 @@ public sealed partial class MaterializationRebuildExecutorTests
 
     static RebuildFixture CreateFixture(
         bool reversePlanDeclarations = false,
-        IMaterializationRebuildCrashInjector? crashInjector = null,
+        IMaterializationExecutionBoundaryObserver? boundaryObserver = null,
         int maximumPageItems = 2,
         int maximumPagesPerShard = 10,
         bool transactionAlignedChangeDelivery = false)
@@ -925,7 +937,9 @@ public sealed partial class MaterializationRebuildExecutorTests
         return new(
             plan,
             resolved,
-            new MaterializationRebuildExecutor(resolved, crashInjector),
+            new MaterializationRebuildExecutor(
+                resolved: resolved,
+                boundaryObserver: boundaryObserver),
             target,
             semantic,
             root,
@@ -1384,8 +1398,8 @@ public sealed partial class MaterializationRebuildExecutorTests
             inner.ReadChangesAsync(context, request);
     }
 
-    sealed class ThrowOnceCrashInjector(MaterializationRebuildCrashPoint point)
-        : IMaterializationRebuildCrashInjector
+    sealed class ThrowOnceBoundaryObserver(MaterializationExecutionBoundaryPoint point)
+        : IMaterializationExecutionBoundaryObserver
     {
         bool thrown;
 
@@ -1393,24 +1407,27 @@ public sealed partial class MaterializationRebuildExecutorTests
 
         public Action? BeforeThrow { get; set; }
 
+        public List<MaterializationExecutionBoundaryObservation> Observations { get; } = [];
+
         public ValueTask ObserveAsync(
             OperationContext context,
-            MaterializationRebuildCrashObservation observation)
+            MaterializationExecutionBoundaryObservation observation)
         {
             ArgumentNullException.ThrowIfNull(context);
             ArgumentNullException.ThrowIfNull(observation);
             context.ThrowIfCancellationRequested();
+            Observations.Add(observation);
             if (!thrown && observation.Point == point)
             {
                 thrown = true;
                 BeforeThrow?.Invoke();
                 ThrownCount++;
-                throw new InjectedCrashException(point);
+                throw new InjectedMaterializationInterruptionException(point);
             }
             return ValueTask.CompletedTask;
         }
     }
 
-    sealed class InjectedCrashException(MaterializationRebuildCrashPoint point)
-        : Exception($"Injected rebuild crash at '{point}'.");
+    sealed class InjectedMaterializationInterruptionException(MaterializationExecutionBoundaryPoint point)
+        : Exception($"Injected materialization interruption at '{point}'.");
 }
