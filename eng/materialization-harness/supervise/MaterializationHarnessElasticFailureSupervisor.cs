@@ -55,6 +55,9 @@ static partial class MaterializationHarnessSupervisor
             var summary = new
             {
                 schemaVersion = 1,
+                manifestKind = "cell",
+                cellId = $"elastic/{MaterializationHarnessMatrixCatalog.ElasticWireName(fault)}",
+                expectedOutcome = MaterializationHarnessMatrixCatalog.ElasticExpectedOutcome(fault).ToString(),
                 options.RunIdentity,
                 options.Provider,
                 fault = fault.ToString(),

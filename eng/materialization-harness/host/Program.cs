@@ -107,6 +107,17 @@ static class ProgramEntry
             await controller.DisposeAsync();
             return 0;
         }
+        if (args is ["--probe-compatibility-drift", var driftProvider, var driftWireName])
+        {
+            var cell = MaterializationHarnessMatrixCatalog.GetCompatibilityDrift(driftWireName);
+            var result = await controller.ProbeCompatibilityDriftAsync(
+                provider: driftProvider,
+                kind: cell.Kind,
+                context: OperationContext.Create());
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+            await controller.DisposeAsync();
+            return 0;
+        }
         if (args is ["--probe-target-ordering", var orderingProvider, var staleWorkerFence])
         {
             var result = await controller.ProbeTargetOrderingAsync(
@@ -139,7 +150,7 @@ static class ProgramEntry
         if (args.Length != 0)
         {
             throw new ArgumentException(
-                "The materialization host accepts --start, --inspect, --explain, --traces, --pause, --continue, --restart-attempt, --cancel, or --failure-evidence, followed by an optional provider; --failure-evidence also accepts a generation, --update-limits requires a provider and maximum batch items, --control-scenario-sdk requires one provider, and the source-matrix probe commands require their explicit provider and fence inputs.",
+                "The materialization host accepts --start, --inspect, --explain, --traces, --pause, --continue, --restart-attempt, --cancel, or --failure-evidence, followed by an optional provider; --failure-evidence also accepts a generation, --update-limits requires a provider and maximum batch items, --control-scenario-sdk requires one provider, and matrix probe commands require their explicit provider and cell inputs.",
                 nameof(args));
         }
 

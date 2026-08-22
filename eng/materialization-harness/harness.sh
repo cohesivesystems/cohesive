@@ -122,6 +122,28 @@ process_command() {
     "$command" "$@"
 }
 
+matrix_tools_built=false
+
+build_matrix_tools() {
+  if [[ "$matrix_tools_built" == "true" ]]; then
+    return
+  fi
+  dotnet build \
+    "$script_dir/host/Cohesive.MaterializationHarness.Host.csproj" \
+    --configuration Release
+  dotnet build \
+    "$script_dir/supervise/Cohesive.MaterializationHarness.Supervise.csproj" \
+    --configuration Release
+  matrix_tools_built=true
+}
+
+matrix_cells() {
+  dotnet \
+    "$script_dir/supervise/bin/Release/net10.0/Cohesive.MaterializationHarness.Supervise.dll" \
+    catalog \
+    "$1"
+}
+
 failure_test() {
   local provider="${1:-postgres}"
   local boundary="${2:-AfterTargetBatch}"
@@ -182,24 +204,21 @@ control_equivalence_test() {
 
 source_matrix_test() {
   local requested_provider="${1:-all}"
-  if [[ "$requested_provider" != "all" && "$requested_provider" != "postgres" && "$requested_provider" != "cosmos" ]]; then
-    printf 'source-matrix-test provider must be postgres, cosmos, or all.\n' >&2
-    exit 2
-  fi
   local run_id
   run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-  local artifact_root="$script_dir/artifacts/source-matrix-$run_id"
-  local providers=(postgres cosmos)
-  if [[ "$requested_provider" != "all" ]]; then
-    providers=("$requested_provider")
-  fi
+  local artifact_root="${2:-$script_dir/artifacts/source-matrix-$run_id}"
+  local providers=()
 
-  dotnet build \
-    "$script_dir/host/Cohesive.MaterializationHarness.Host.csproj" \
-    --configuration Release
-  dotnet build \
-    "$script_dir/supervise/Cohesive.MaterializationHarness.Supervise.csproj" \
-    --configuration Release
+  build_matrix_tools
+  while IFS= read -r provider; do
+    if [[ "$requested_provider" == "all" || "$requested_provider" == "$provider" ]]; then
+      providers+=("$provider")
+    fi
+  done < <(matrix_cells source-providers)
+  if [[ "${#providers[@]}" -eq 0 ]]; then
+    printf 'source-matrix-test provider must be a catalog provider or all.\n' >&2
+    exit 2
+  fi
   for provider in "${providers[@]}"; do
     compose down --volumes --remove-orphans
     up
@@ -222,25 +241,25 @@ source_matrix_test() {
 
 elastic_failure_test() {
   local provider="${1:-postgres}"
-  if [[ "$provider" != "postgres" && "$provider" != "cosmos" ]]; then
-    printf 'elastic-failure-test provider must be postgres or cosmos.\n' >&2
-    exit 2
-  fi
   local run_id
   run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-  local artifact_root="$script_dir/artifacts/elastic-failure-$run_id"
-  local faults=(
-    retryable-bulk-rejection
-    permanent-bulk-item-failure
-    applied-promotion-response-loss
-  )
+  local artifact_root="${2:-$script_dir/artifacts/elastic-failure-$run_id}"
+  local faults=()
+  local provider_found=false
 
-  dotnet build \
-    "$script_dir/host/Cohesive.MaterializationHarness.Host.csproj" \
-    --configuration Release
-  dotnet build \
-    "$script_dir/supervise/Cohesive.MaterializationHarness.Supervise.csproj" \
-    --configuration Release
+  build_matrix_tools
+  while IFS= read -r candidate; do
+    if [[ "$provider" == "$candidate" ]]; then
+      provider_found=true
+    fi
+  done < <(matrix_cells source-providers)
+  if [[ "$provider_found" != "true" ]]; then
+    printf 'elastic-failure-test provider must be a catalog provider.\n' >&2
+    exit 2
+  fi
+  while IFS= read -r fault; do
+    faults+=("$fault")
+  done < <(matrix_cells elastic-failures)
   for fault in "${faults[@]}"; do
     compose down --volumes --remove-orphans
     up
@@ -255,6 +274,54 @@ elastic_failure_test() {
       "$artifact_root/$fault"
   done
   printf 'elastic-failure-artifacts=%s\n' "$artifact_root"
+}
+
+compatibility_drift_test() {
+  local requested_provider="${1:-all}"
+  local run_id
+  run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  local artifact_root="${2:-$script_dir/artifacts/compatibility-drift-$run_id}"
+  local providers=()
+
+  build_matrix_tools
+  while IFS= read -r provider; do
+    if [[ "$requested_provider" == "all" || "$requested_provider" == "$provider" ]]; then
+      providers+=("$provider")
+    fi
+  done < <(matrix_cells source-providers)
+  if [[ "${#providers[@]}" -eq 0 ]]; then
+    printf 'compatibility-drift-test provider must be a catalog provider or all.\n' >&2
+    exit 2
+  fi
+  for provider in "${providers[@]}"; do
+    compose down --volumes --remove-orphans
+    up
+    seed --cohesive
+    configure_runtime
+    export COHESIVE_MATERIALIZATION_REPOSITORY_ROOT="$repo_root"
+    dotnet \
+      "$script_dir/supervise/bin/Release/net10.0/Cohesive.MaterializationHarness.Supervise.dll" \
+      compatibility-drift \
+      "$provider" \
+      "$artifact_root/$provider"
+  done
+  printf 'compatibility-drift-artifacts=%s\n' "$artifact_root"
+}
+
+matrix_test() {
+  local run_id
+  run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  local artifact_root="$script_dir/artifacts/matrix-$run_id"
+
+  build_matrix_tools
+  source_matrix_test all "$artifact_root/source"
+  elastic_failure_test postgres "$artifact_root/elastic"
+  compatibility_drift_test all "$artifact_root/drift"
+  dotnet \
+    "$script_dir/supervise/bin/Release/net10.0/Cohesive.MaterializationHarness.Supervise.dll" \
+    aggregate-manifest \
+    "$artifact_root"
+  printf 'matrix-artifacts=%s\n' "$artifact_root"
 }
 
 verify_index() {
@@ -317,6 +384,8 @@ Commands:
   control-equivalence-test [provider] Clean-reset and compare SDK/HTTP control semantics.
   source-matrix-test [provider|all] Clean-reset and prove replay, ordering, and fencing for real sources.
   elastic-failure-test [provider] Clean-reset and prove Elastic rejection and promotion recovery.
+  compatibility-drift-test [provider|all] Fail closed on retained plan, binding, schema, generation, and cursor drift.
+  matrix-test Run every source, Elastic, and compatibility cell and write one validated aggregate manifest.
   verify-index Show active generation aliases and document counts without mutating Elasticsearch.
   test     Start, seed, materialize, and run the focused verification suite.
   status   Show service and health state.
@@ -442,6 +511,20 @@ case "$command" in
       exit 2
     fi
     elastic_failure_test "${2:-postgres}"
+    ;;
+  compatibility-drift-test)
+    if [[ "$#" -gt 2 ]]; then
+      usage
+      exit 2
+    fi
+    compatibility_drift_test "${2:-all}"
+    ;;
+  matrix-test)
+    if [[ "$#" -ne 1 ]]; then
+      usage
+      exit 2
+    fi
+    matrix_test
     ;;
   verify-index)
     up
