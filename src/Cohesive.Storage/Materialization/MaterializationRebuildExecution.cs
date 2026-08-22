@@ -464,6 +464,14 @@ public sealed class MaterializationChangeFeedBinding
             throw new ArgumentException("A runtime source must implement the exact persisted change feed.", nameof(source));
         if (channel != feed.Channel)
             throw new ArgumentException("A runtime Channel must implement the exact persisted feed realization.", nameof(channel));
+        if (feed.CurrentStateEnrichment is { Strategy: MaterializationCurrentStateEnrichmentStrategyKind.BatchedIdentityRead } enrichment
+            && (source is not IMaterializationCurrentStateEnrichmentSource enrichedSource
+                || enrichedSource.CurrentStateEnrichment != enrichment))
+        {
+            throw new ArgumentException(
+                "A composed current-state feed requires a runtime source implementing its exact persisted enrichment plan.",
+                nameof(source));
+        }
     }
 
     /// <summary>Persisted physical feed realization.</summary>

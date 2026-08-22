@@ -216,7 +216,19 @@ public enum MaterializationGuaranteeKind
     /// Generation abandonment establishes one atomic durable exclusion cut, retaining a tombstone for an absent
     /// generation and rejecting every delayed operation that could make the identity writable, active, or readable.
     /// </summary>
-    AtomicDurableGenerationExclusion = 20
+    AtomicDurableGenerationExclusion = 20,
+
+    /// <summary>
+    /// Every delivered change carries an authoritative complete observation of the subject's current logical state,
+    /// or authoritative absence, rather than only the physical component that emitted the change signal.
+    /// </summary>
+    /// <remarks>
+    /// A source may prove this natively when its change image is the complete logical observation. An aggregate split
+    /// across physical structures requires attributable composition with a complete current-state read. This guarantee
+    /// describes the current observation used for convergence; it does not turn that read into a historical before
+    /// image or claim a coordinated snapshot with the original change position.
+    /// </remarks>
+    CompleteCurrentObservation = 21
 }
 
 /// <summary>Positive operating bound advertised or required for a materialization operation.</summary>
@@ -1010,7 +1022,8 @@ public static class MaterializationCapabilityCatalog
                 or MaterializationGuaranteeKind.RetainedHistoryStart
                 or MaterializationGuaranteeKind.CompleteMutationDelivery
                 or MaterializationGuaranteeKind.LatestVersionUpsertDelivery
-                or MaterializationGuaranteeKind.TransactionAlignedDelivery =>
+                or MaterializationGuaranteeKind.TransactionAlignedDelivery
+                or MaterializationGuaranteeKind.CompleteCurrentObservation =>
                 capability == MaterializationCapabilityKind.SourceChangeDelivery,
             MaterializationGuaranteeKind.ExplicitSettlement =>
                 capability == MaterializationCapabilityKind.SourceSettlement,

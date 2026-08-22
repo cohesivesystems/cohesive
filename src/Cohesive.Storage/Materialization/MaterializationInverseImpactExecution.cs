@@ -5,8 +5,8 @@ using Cohesive.Relations.Compilation;
 
 namespace Cohesive.Storage.Materialization;
 
-/// <summary>Closed provider-neutral read operations required by affected-root execution.</summary>
-public enum MaterializationImpactObservationReadKind
+/// <summary>Closed provider-neutral observation reads shared by materialization interpretations.</summary>
+public enum MaterializationObservationReadKind
 {
     /// <summary>Reads the current observations having exact stable identities.</summary>
     IdentityLookup = 0,
@@ -18,8 +18,8 @@ public enum MaterializationImpactObservationReadKind
     BoundedEnumeration = 2
 }
 
-/// <summary>One bounded provider-neutral observation read requested by compiled affected-root execution.</summary>
-public sealed record MaterializationImpactObservationReadRequest
+/// <summary>One bounded provider-neutral observation read requested by compiled materialization execution.</summary>
+public sealed record MaterializationObservationReadRequest
 {
     /// <summary>Creates one exact bounded enumeration, identity, or relationship-predicate read.</summary>
     /// <param name="kind">Closed read operation.</param>
@@ -43,8 +43,8 @@ public sealed record MaterializationImpactObservationReadRequest
     /// </param>
     /// <exception cref="ArgumentException">An identity, shape, key, or operation-specific relationship value is invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The read kind or a hard bound is unsupported.</exception>
-    public MaterializationImpactObservationReadRequest(
-        MaterializationImpactObservationReadKind kind,
+    public MaterializationObservationReadRequest(
+        MaterializationObservationReadKind kind,
         RelationQueryInputId input,
         QualifiedShapeId shape,
         RelationQueryLogicalPartitionIdentity logicalPartition,
@@ -56,27 +56,27 @@ public sealed record MaterializationImpactObservationReadRequest
         MaterializationCollectionOccurrenceReference? collectionOccurrence = null)
     {
         if (!Enum.IsDefined(kind))
-            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported materialization impact read kind.");
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported materialization observation read kind.");
         MaterializationContract.RequireDefinedIdentity(input.Value, nameof(input));
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
-            throw new ArgumentException("An impact observation read requires a graph-qualified shape.", nameof(shape));
+            throw new ArgumentException("A materialization observation read requires a graph-qualified shape.", nameof(shape));
         LogicalPartition = Guard.RequireNotNull(logicalPartition);
         var normalizedKeys = keys.IsDefault ? [] : keys;
-        var isEnumeration = kind == MaterializationImpactObservationReadKind.BoundedEnumeration;
+        var isEnumeration = kind == MaterializationObservationReadKind.BoundedEnumeration;
         if (isEnumeration == !normalizedKeys.IsDefaultOrEmpty
             || normalizedKeys.Any(string.IsNullOrWhiteSpace))
         {
             throw new ArgumentException(
-                "An impact identity or predicate read requires non-empty keys; bounded enumeration permits no keys.",
+                "An identity or predicate read requires non-empty keys; bounded enumeration permits no keys.",
                 nameof(keys));
         }
         if (normalizedKeys.Distinct(StringComparer.Ordinal).Count() != normalizedKeys.Length)
-            throw new ArgumentException("An impact observation read cannot repeat a key.", nameof(keys));
+            throw new ArgumentException("A materialization observation read cannot repeat a key.", nameof(keys));
         if (maximumRows <= 0)
-            throw new ArgumentOutOfRangeException(nameof(maximumRows), maximumRows, "An impact read row bound must be positive.");
+            throw new ArgumentOutOfRangeException(nameof(maximumRows), maximumRows, "An observation read row bound must be positive.");
         if (maximumBytes <= 0)
-            throw new ArgumentOutOfRangeException(nameof(maximumBytes), maximumBytes, "An impact read byte bound must be positive.");
-        var isPredicate = kind == MaterializationImpactObservationReadKind.RelationshipPredicateLookup;
+            throw new ArgumentOutOfRangeException(nameof(maximumBytes), maximumBytes, "An observation read byte bound must be positive.");
+        var isPredicate = kind == MaterializationObservationReadKind.RelationshipPredicateLookup;
         if (isPredicate != (relationshipInput is not null) || isPredicate != (relationshipReference is not null))
         {
             throw new ArgumentException(
@@ -106,7 +106,7 @@ public sealed record MaterializationImpactObservationReadRequest
     }
 
     /// <summary>Closed read operation.</summary>
-    public MaterializationImpactObservationReadKind Kind { get; }
+    public MaterializationObservationReadKind Kind { get; }
 
     /// <summary>Canonical Relations acquisition input being read.</summary>
     public RelationQueryInputId Input { get; }
@@ -136,16 +136,16 @@ public sealed record MaterializationImpactObservationReadRequest
     public MaterializationCollectionOccurrenceReference? CollectionOccurrence { get; }
 }
 
-/// <summary>Executes one exact bounded observation read for compiled affected-root resolution.</summary>
+/// <summary>Executes one exact bounded observation read for compiled materialization semantics.</summary>
 /// <param name="context">Explicit cancellation, time, identity, and tracing context.</param>
 /// <param name="request">Exact provider-neutral read request.</param>
 /// <returns>Complete current observations or authoritative absence for the requested boundary.</returns>
 /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
 /// <exception cref="InvalidOperationException">The provider cannot return complete bounded evidence.</exception>
 /// <exception cref="OperationCanceledException">The operation is cancelled.</exception>
-public delegate ValueTask<RelationQuerySourceReadResult> MaterializationImpactObservationReader(
+public delegate ValueTask<RelationQuerySourceReadResult> MaterializationObservationReader(
     OperationContext context,
-    MaterializationImpactObservationReadRequest request);
+    MaterializationObservationReadRequest request);
 
 /// <summary>Provider-neutral interpreter for physical affected-root strategies retained in one impact plan.</summary>
 /// <remarks>
@@ -155,7 +155,7 @@ public delegate ValueTask<RelationQuerySourceReadResult> MaterializationImpactOb
 public sealed class MaterializationImpactRootExecutor
 {
     readonly MaterializationImpactPlanLinkage linkage;
-    readonly MaterializationImpactObservationReader reader;
+    readonly MaterializationObservationReader reader;
     readonly RelationQuerySourceInputContract root;
     readonly ImmutableDictionary<RelationQueryInputId, InputContract> inputs;
     readonly ImmutableDictionary<RelationQueryInputId, RelationQueryTraversalInputContract> relationships;
@@ -169,7 +169,7 @@ public sealed class MaterializationImpactRootExecutor
     public MaterializationImpactRootExecutor(
         MaterializationImpactPlan plan,
         MaterializationDefinition definition,
-        MaterializationImpactObservationReader reader)
+        MaterializationObservationReader reader)
     {
         linkage = MaterializationImpactPlanLinker.Link(plan, definition);
         this.reader = Guard.RequireNotNull(reader);
@@ -222,7 +222,7 @@ public sealed class MaterializationImpactRootExecutor
             var enumeratedRoots = await ReadAsync(
                     context,
                     new(
-                        kind: MaterializationImpactObservationReadKind.BoundedEnumeration,
+                        kind: MaterializationObservationReadKind.BoundedEnumeration,
                         input: global.RootInput,
                         shape: root.Shape,
                         logicalPartition: request.Change.Scope.LogicalPartition,
@@ -269,7 +269,7 @@ public sealed class MaterializationImpactRootExecutor
                     observations = await ReadAsync(
                             context,
                             new(
-                                kind: MaterializationImpactObservationReadKind.RelationshipPredicateLookup,
+                                kind: MaterializationObservationReadKind.RelationshipPredicateLookup,
                                 input: step.ReferenceSourceInput,
                                 shape: input.Shape,
                                 logicalPartition: request.Change.Scope.LogicalPartition,
@@ -296,7 +296,7 @@ public sealed class MaterializationImpactRootExecutor
                     observations = await ReadAsync(
                             context,
                             new(
-                                kind: MaterializationImpactObservationReadKind.RelationshipPredicateLookup,
+                                kind: MaterializationObservationReadKind.RelationshipPredicateLookup,
                                 input: step.ReferenceSourceInput,
                                 shape: input.Shape,
                                 logicalPartition: request.Change.Scope.LogicalPartition,
@@ -366,7 +366,7 @@ public sealed class MaterializationImpactRootExecutor
         var currentRoots = await ReadAsync(
                 context,
                 new(
-                    kind: MaterializationImpactObservationReadKind.IdentityLookup,
+                    kind: MaterializationObservationReadKind.IdentityLookup,
                     input: root.Input.Id,
                     shape: root.Shape,
                     logicalPartition: request.Change.Scope.LogicalPartition,
@@ -392,7 +392,7 @@ public sealed class MaterializationImpactRootExecutor
 
     async ValueTask<ImmutableArray<RelationQuerySourceReadObservation>> ReadAsync(
         OperationContext context,
-        MaterializationImpactObservationReadRequest request)
+        MaterializationObservationReadRequest request)
     {
         var result = await reader(context, request).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The impact observation reader returned no result.");
@@ -409,7 +409,7 @@ public sealed class MaterializationImpactRootExecutor
         {
             if (observation.Shape != request.Shape)
                 throw new InvalidOperationException("An impact observation reader returned another canonical shape.");
-            if (request.Kind == MaterializationImpactObservationReadKind.IdentityLookup
+            if (request.Kind == MaterializationObservationReadKind.IdentityLookup
                 && !request.Keys.Contains(observation.Identity, StringComparer.Ordinal))
             {
                 throw new InvalidOperationException("An impact identity lookup returned an unrequested observation.");

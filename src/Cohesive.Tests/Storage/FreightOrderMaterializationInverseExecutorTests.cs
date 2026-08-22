@@ -31,7 +31,7 @@ public sealed class FreightOrderMaterializationInverseExecutorTests
                 step.Operation);
             var occurrence = Assert.IsType<MaterializationCollectionOccurrenceReference>(
                 step.CollectionOccurrence);
-            var requests = new List<MaterializationImpactObservationReadRequest>();
+            var requests = new List<MaterializationObservationReadRequest>();
             var executor = new MaterializationImpactRootExecutor(
                 plan: fixture.Plan,
                 definition: fixture.Semantics.Definition,
@@ -51,7 +51,7 @@ public sealed class FreightOrderMaterializationInverseExecutorTests
 
             Assert.Equal(2, requests.Count);
             var read = requests[0];
-            Assert.Equal(MaterializationImpactObservationReadKind.RelationshipPredicateLookup, read.Kind);
+            Assert.Equal(MaterializationObservationReadKind.RelationshipPredicateLookup, read.Kind);
             Assert.Equal(step.ReferenceSourceInput, read.Input);
             Assert.Equal("location-a", Assert.Single(read.Keys));
             Assert.Equal(step.RelationshipInput, read.RelationshipInput);
@@ -62,7 +62,7 @@ public sealed class FreightOrderMaterializationInverseExecutorTests
             Assert.Equal(route.MaximumAffectedRoots, read.MaximumRows);
             Assert.Equal(["order-a", "order-b"], roots.Select(static root => root.Identity).ToArray());
             Assert.All(roots, static root => Assert.Equal(MaterializationRootState.Present, root.State));
-            Assert.Equal(MaterializationImpactObservationReadKind.IdentityLookup, requests[1].Kind);
+            Assert.Equal(MaterializationObservationReadKind.IdentityLookup, requests[1].Kind);
             Assert.Equal(
                 ["order-a", "order-b"],
                 requests[1].Keys.Cast<string>().ToArray());
@@ -75,7 +75,7 @@ public sealed class FreightOrderMaterializationInverseExecutorTests
         var fixture = Fixture();
         var route = fixture.Plan.Routes.First(candidate =>
             candidate.ChangeShape == FreightOrderMaterializationModel.LocationShapeId);
-        var requests = new List<MaterializationImpactObservationReadRequest>();
+        var requests = new List<MaterializationObservationReadRequest>();
         var executor = new MaterializationImpactRootExecutor(
             plan: fixture.Plan,
             definition: fixture.Semantics.Definition,
@@ -96,7 +96,7 @@ public sealed class FreightOrderMaterializationInverseExecutorTests
 
         Assert.Contains("complete evidence", exception.Message, StringComparison.Ordinal);
         var read = Assert.Single(requests);
-        Assert.Equal(MaterializationImpactObservationReadKind.RelationshipPredicateLookup, read.Kind);
+        Assert.Equal(MaterializationObservationReadKind.RelationshipPredicateLookup, read.Kind);
         Assert.NotNull(read.CollectionOccurrence);
     }
 
@@ -106,7 +106,7 @@ public sealed class FreightOrderMaterializationInverseExecutorTests
         var fixture = Fixture();
         var route = fixture.Plan.Routes.Single(candidate =>
             candidate.ChangeShape == FreightOrderMaterializationModel.CustomerAccountShapeId);
-        var requests = new List<MaterializationImpactObservationReadRequest>();
+        var requests = new List<MaterializationObservationReadRequest>();
         var executor = new MaterializationImpactRootExecutor(
             plan: fixture.Plan,
             definition: fixture.Semantics.Definition,
@@ -127,7 +127,7 @@ public sealed class FreightOrderMaterializationInverseExecutorTests
 
         Assert.Contains("complete evidence", exception.Message, StringComparison.Ordinal);
         Assert.Single(requests);
-        Assert.Equal(MaterializationImpactObservationReadKind.RelationshipPredicateLookup, requests[0].Kind);
+        Assert.Equal(MaterializationObservationReadKind.RelationshipPredicateLookup, requests[0].Kind);
     }
 
     static FixtureData Fixture()

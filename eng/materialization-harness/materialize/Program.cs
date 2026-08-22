@@ -40,6 +40,9 @@ public static class Program
     static readonly byte[] ContinuationKey =
         "cohesive-materialization-harness-local-key-v1"u8.ToArray();
     static readonly PostgresLogicalReplicationSourcePolicy LocalPostgresChangePolicy = new(
+        maximumTransactionChanges: MaximumBatchItems,
+        maximumTransactionBytes: MaximumBytes,
+        maximumTransactionsPerRead: 1,
         readInactivityTimeout: TimeSpan.FromSeconds(3));
 
     /// <summary>Validates or runs the standalone materialization harness.</summary>
@@ -936,9 +939,9 @@ public static class Program
                 plan: semantics.Plan,
                 physicalPlan: plan.ImpactPhysicalPlan,
                 sourceReaders: impactReaders);
-            MaterializationImpactObservationReader readImpact = (context, request) =>
+            MaterializationObservationReader readImpact = (context, request) =>
             {
-                if (request.Kind != MaterializationImpactObservationReadKind.BoundedEnumeration
+                if (request.Kind != MaterializationObservationReadKind.BoundedEnumeration
                     || request.Input != semantics.Root.Input.Id)
                 {
                     return impactReader.ReadAsync(context, request);
@@ -991,15 +994,16 @@ public static class Program
                     positionAuthenticationKey: ContinuationKey,
                     policy: LocalPostgresChangePolicy,
                     cancellationToken: cancellationToken);
-                var source = new PostgresFreightMaterializationChangeSource(
-                    source: logicalSource,
-                    requirement: requirement,
-                    impactEvidenceReference: $"relations-physical-plan/{plan.ImpactPhysicalPlan.Fingerprint.Value}",
-                    currentRootReader: isRoot ? readImpact : null);
                 var scope = new PostgresMaterializationSource(
                     reader: reader,
                     placement: placement,
                     continuationAuthenticationKey: ContinuationKey).Scope;
+                var source = new PostgresFreightMaterializationChangeSource(
+                    source: logicalSource,
+                    requirement: requirement,
+                    impactEvidenceReference: $"relations-physical-plan/{plan.ImpactPhysicalPlan.Fingerprint.Value}",
+                    currentStateScope: isRoot ? scope : null,
+                    currentStateReader: isRoot ? readImpact : null);
                 sources.Add(new(
                     input: requirement.Input,
                     scope: scope,
