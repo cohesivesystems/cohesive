@@ -26,7 +26,7 @@ public sealed class InfrastructureCapabilityCompilerTests
         Assert.False(report.IsClosed);
         Assert.Empty(report.Decisions);
         var diagnostic = Assert.Single(report.Diagnostics);
-        Assert.Equal(InfrastructureCapabilityDiagnosticCodes.BindingElaborationUnavailable, diagnostic.Code);
+        Assert.Equal(InfrastructureBindingElaborationDiagnosticCodes.ContractUnavailable, diagnostic.Code);
         Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
         Assert.Equal("/definition/bindings/0/contract", diagnostic.Location);
         Assert.Equal("document-read-write", diagnostic.SchemaLocation);
@@ -34,7 +34,12 @@ public sealed class InfrastructureCapabilityCompilerTests
         Assert.Equal("infrastructure-binding-elaboration", evidence.Stage);
         Assert.Equal("bindings/api/store", evidence.Subject);
         Assert.Equal("binding contract not elaborated", evidence.Observed);
-        Assert.StartsWith("bound-system@v1#sha256:", Assert.Single(evidence.SourceReferences), StringComparison.Ordinal);
+        Assert.Contains(
+            evidence.SourceReferences,
+            static source => source.StartsWith("bound-system@v1#sha256:", StringComparison.Ordinal));
+        Assert.Contains(
+            evidence.SourceReferences,
+            static source => source.StartsWith("cohesive.infra.bindings/none/v1#sha256:", StringComparison.Ordinal));
         Assert.Equal(2, evidence.ResolutionOptions.Length);
     }
 

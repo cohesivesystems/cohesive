@@ -21,9 +21,6 @@ public static class InfrastructureCapabilityDiagnosticCodes
     /// <summary>No evidence or complete composition rule preserves one exact requirement.</summary>
     public const string RequirementUnavailable = "infra.capabilities.requirement.unavailable";
 
-    /// <summary>A binding contract has not yet been elaborated into its induced capability and assurance obligations.</summary>
-    public const string BindingElaborationUnavailable = "infra.bindings.elaboration.unavailable";
-
     /// <summary>A constrained proof requires exact environment-policy acceptance before it can close.</summary>
     public const string OperatingBoundaryAcceptanceRequired = "infra.capabilities.boundary.acceptanceRequired";
 
@@ -175,27 +172,27 @@ public sealed record InfrastructureCapabilityDecision
 public sealed record InfrastructureCapabilityClosureReport
 {
     /// <summary>Creates a capability-closure report.</summary>
-    /// <param name="definition">Exact fingerprinted infrastructure definition.</param>
     /// <param name="profile">Exact selected capability-profile reference.</param>
+    /// <param name="bindingElaboration">Exact binding obligations and per-binding explanation decisions.</param>
     /// <param name="target">Stable interpretation-target identity.</param>
     /// <param name="variant">Selected coherent target variant.</param>
-    /// <param name="decisions">One decision for every exact definition requirement.</param>
+    /// <param name="decisions">One decision for every declared or binding-derived requirement.</param>
     /// <param name="diagnostics">Structured capability-closure diagnostics.</param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="definition"/> or <paramref name="profile"/> is <see langword="null"/>.
+    /// <paramref name="profile"/> or <paramref name="bindingElaboration"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">An identity, decision collection, or coverage invariant is invalid.</exception>
     [JsonConstructor]
     public InfrastructureCapabilityClosureReport(
-        InfrastructureDefinitionDocument definition,
         InfrastructureCapabilityProfileReference profile,
+        InfrastructureBindingElaborationReport bindingElaboration,
         InfrastructureTargetId target,
         InfrastructureCapabilityVariantId variant,
         ImmutableArray<InfrastructureCapabilityDecision> decisions = default,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics = default)
     {
-        Definition = Guard.RequireNotNull(definition);
         Profile = Guard.RequireNotNull(profile);
+        BindingElaboration = Guard.RequireNotNull(bindingElaboration);
         if (string.IsNullOrWhiteSpace(target.Value))
             throw new ArgumentException("A capability-closure report requires a target identity.", nameof(target));
         if (string.IsNullOrWhiteSpace(variant.Value))
@@ -208,11 +205,15 @@ public sealed record InfrastructureCapabilityClosureReport
         ValidateCoverage();
     }
 
-    /// <summary>Exact fingerprinted infrastructure definition.</summary>
-    public InfrastructureDefinitionDocument Definition { get; }
-
     /// <summary>Exact schema, identity, and fingerprint of the selected capability profile.</summary>
     public InfrastructureCapabilityProfileReference Profile { get; }
+
+    /// <summary>Exact binding obligations and machine-readable per-binding explanation decisions.</summary>
+    public InfrastructureBindingElaborationReport BindingElaboration { get; }
+
+    /// <summary>Exact fingerprinted infrastructure definition owned by the binding-elaboration stage.</summary>
+    [JsonIgnore]
+    public InfrastructureDefinitionDocument Definition => BindingElaboration.Definition;
 
     /// <summary>Selected interpretation-target identity.</summary>
     public InfrastructureTargetId Target { get; }
@@ -220,16 +221,43 @@ public sealed record InfrastructureCapabilityClosureReport
     /// <summary>Selected coherent target variant.</summary>
     public InfrastructureCapabilityVariantId Variant { get; }
 
-    /// <summary>One decision per exact requirement in requirement-identity order.</summary>
+    /// <summary>One decision per declared or binding-derived requirement in requirement-identity order.</summary>
     public ImmutableArray<InfrastructureCapabilityDecision> Decisions { get; }
 
     /// <summary>Structured diagnostics in deterministic portable-document order.</summary>
     public ImmutableArray<DocumentValidationDiagnostic> Diagnostics { get; }
 
     /// <summary>Whether every requirement is available and no error diagnostic remains.</summary>
+    [JsonIgnore]
     public bool IsClosed =>
-        Decisions.All(static decision => decision.IsAvailable)
+        BindingElaboration.IsComplete
+        && Decisions.All(static decision => decision.IsAvailable)
         && !Diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+
+    /// <summary>Finds the capability decision for one declared or binding-derived requirement.</summary>
+    /// <param name="requirement">Exact definition-local requirement identity.</param>
+    /// <returns>The matching decision, or <see langword="null"/> when the requirement is absent.</returns>
+    /// <exception cref="ArgumentException"><paramref name="requirement"/> is a default identity.</exception>
+    public InfrastructureCapabilityDecision? FindDecision(InfrastructureRequirementId requirement)
+    {
+        if (string.IsNullOrWhiteSpace(requirement.Value))
+            throw new ArgumentException("A default requirement identity cannot be explained.", nameof(requirement));
+
+        var lower = 0;
+        var upper = Decisions.Length - 1;
+        while (lower <= upper)
+        {
+            var middle = lower + ((upper - lower) / 2);
+            var comparison = StringComparer.Ordinal.Compare(Decisions[middle].Requirement.Value, requirement.Value);
+            if (comparison == 0)
+                return Decisions[middle];
+            if (comparison < 0)
+                lower = middle + 1;
+            else
+                upper = middle - 1;
+        }
+        return null;
+    }
 
     /// <summary>Compares capability-closure reports structurally.</summary>
     /// <param name="other">Other report.</param>
@@ -237,8 +265,8 @@ public sealed record InfrastructureCapabilityClosureReport
     public bool Equals(InfrastructureCapabilityClosureReport? other) =>
         ReferenceEquals(this, other)
         || other is not null
-        && Definition == other.Definition
         && Profile == other.Profile
+        && BindingElaboration == other.BindingElaboration
         && Target == other.Target
         && Variant == other.Variant
         && Decisions.SequenceEqual(other.Decisions)
@@ -249,8 +277,8 @@ public sealed record InfrastructureCapabilityClosureReport
     public override int GetHashCode()
     {
         var hash = new HashCode();
-        hash.Add(Definition);
         hash.Add(Profile);
+        hash.Add(BindingElaboration);
         hash.Add(Target);
         hash.Add(Variant);
         foreach (var decision in Decisions)
@@ -265,10 +293,13 @@ public sealed record InfrastructureCapabilityClosureReport
         var expected = Definition.Definition.Workloads
             .SelectMany(static workload => workload.Requirements)
             .Concat(Definition.Definition.Resources.SelectMany(static resource => resource.Requirements))
+            .Concat(BindingElaboration.Obligations.Select(static obligation => obligation.Requirement))
             .OrderBy(static requirement => requirement.Id.Value, StringComparer.Ordinal)
             .ToArray();
         if (expected.Length != Decisions.Length)
-            throw new ArgumentException("A capability-closure report requires one decision for every definition requirement.", nameof(Decisions));
+            throw new ArgumentException(
+                "A capability-closure report requires one decision for every declared or binding-derived requirement.",
+                nameof(Decisions));
 
         for (var index = 0; index < expected.Length; index++)
         {
@@ -276,7 +307,7 @@ public sealed record InfrastructureCapabilityClosureReport
                 || expected[index].Capability != Decisions[index].Capability)
             {
                 throw new ArgumentException(
-                    $"Capability decision '{Decisions[index].Requirement.Value}' does not match the exact definition requirement.",
+                    $"Capability decision '{Decisions[index].Requirement.Value}' does not match the exact compiled requirement.",
                     nameof(Decisions));
             }
         }
@@ -315,7 +346,6 @@ public sealed record InfrastructureCapabilityClosureReport
 public static class InfrastructureCapabilityCompiler
 {
     const string ProfileSelectionStage = "infrastructure-capability-profile-selection";
-    const string BindingElaborationStage = "infrastructure-binding-elaboration";
     const string CapabilityMatchingStage = "infrastructure-capability-matching";
 
     /// <summary>Compiles one exact infrastructure definition against a selected coherent target variant.</summary>
@@ -328,19 +358,42 @@ public static class InfrastructureCapabilityCompiler
     public static InfrastructureCapabilityClosureReport Compile(
         InfrastructureDefinitionDocument definition,
         InfrastructureCapabilityProfile profile,
-        InfrastructureCapabilityVariantId variant)
+        InfrastructureCapabilityVariantId variant) =>
+        Compile(definition, profile, variant, InfrastructureBindingElaborationProfile.Empty);
+
+    /// <summary>
+    /// Compiles one exact infrastructure definition and its binding-induced obligations against a coherent target.
+    /// </summary>
+    /// <param name="definition">Exact fingerprinted infrastructure definition.</param>
+    /// <param name="profile">Versioned target capability profile.</param>
+    /// <param name="variant">Exact coherent target variant to use; evidence from other variants is excluded.</param>
+    /// <param name="bindingElaborationProfile">Exact provider-neutral rules used to elaborate binding contracts.</param>
+    /// <returns>One exact decision per declared or binding-derived requirement and structured diagnostics.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="definition"/>, <paramref name="profile"/>, or <paramref name="bindingElaborationProfile"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="variant"/> is a default uninitialized identity.</exception>
+    public static InfrastructureCapabilityClosureReport Compile(
+        InfrastructureDefinitionDocument definition,
+        InfrastructureCapabilityProfile profile,
+        InfrastructureCapabilityVariantId variant,
+        InfrastructureBindingElaborationProfile bindingElaborationProfile)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(bindingElaborationProfile);
         if (string.IsNullOrWhiteSpace(variant.Value))
             throw new ArgumentException("Infrastructure capability compilation requires a coherent variant identity.", nameof(variant));
 
         var diagnostics = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>();
+        var capabilitySchemasSupported = true;
         if (!string.Equals(
                 profile.SchemaVersion,
                 InfrastructureCapabilityProfile.CurrentSchemaVersion,
                 StringComparison.Ordinal))
         {
+            capabilitySchemasSupported = false;
             diagnostics.Add(new(
                 InfrastructureCapabilityDiagnosticCodes.ProfileSchemaUnsupported,
                 DiagnosticSeverity.Error,
@@ -349,13 +402,14 @@ public static class InfrastructureCapabilityCompiler
                 Evidence: new(
                     stage: ProfileSelectionStage,
                     subject: profile.Id.Value,
-                    sourceReferences: [ProfileReference(profile)],
+                    sourceReferences: [InfrastructureDiagnosticReferences.CapabilityProfile(profile)],
                     resolutionOptions: ["Select an exact capability profile using a schema supported by this compiler."],
                     expected: InfrastructureCapabilityProfile.CurrentSchemaVersion,
                     observed: profile.SchemaVersion)));
         }
         if (!profile.SupportedDefinitionSchemaVersions.Contains(definition.SchemaVersion, StringComparer.Ordinal))
         {
+            capabilitySchemasSupported = false;
             diagnostics.Add(new(
                 InfrastructureCapabilityDiagnosticCodes.DefinitionSchemaUnsupported,
                 DiagnosticSeverity.Error,
@@ -364,7 +418,11 @@ public static class InfrastructureCapabilityCompiler
                 Evidence: new(
                     stage: ProfileSelectionStage,
                     subject: $"{definition.Definition.Id.Value}@{definition.Definition.Revision.Value}",
-                    sourceReferences: [DefinitionReference(definition), ProfileReference(profile)],
+                    sourceReferences:
+                    [
+                        InfrastructureDiagnosticReferences.Definition(definition),
+                        InfrastructureDiagnosticReferences.CapabilityProfile(profile)
+                    ],
                     resolutionOptions:
                     [
                         "Select a capability profile that supports the exact infrastructure-definition schema.",
@@ -385,42 +443,21 @@ public static class InfrastructureCapabilityCompiler
                 Evidence: new(
                     stage: ProfileSelectionStage,
                     subject: variant.Value,
-                    sourceReferences: [ProfileReference(profile)],
+                    sourceReferences: [InfrastructureDiagnosticReferences.CapabilityProfile(profile)],
                     resolutionOptions: ["Select one coherent target variant advertised by the exact capability profile."],
                     expected: "a coherent variant advertised by the exact capability profile",
                     observed: "variant not advertised")));
         }
 
-        var requirements = RequirementSites(definition.Definition);
+        var bindingElaboration = InfrastructureBindingElaborator.Elaborate(definition, bindingElaborationProfile);
+        diagnostics.AddRange(bindingElaboration.Diagnostics);
+        var requirements = RequirementSites(definition, bindingElaboration);
         var decisions = ImmutableArray.CreateBuilder<InfrastructureCapabilityDecision>(requirements.Length);
-        var schemasSupported = diagnostics.Count == 0;
-
-        for (var bindingIndex = 0; bindingIndex < definition.Definition.Bindings.Length; bindingIndex++)
-        {
-            var binding = definition.Definition.Bindings[bindingIndex];
-            diagnostics.Add(new(
-                InfrastructureCapabilityDiagnosticCodes.BindingElaborationUnavailable,
-                DiagnosticSeverity.Error,
-                $"Binding contract '{binding.Contract.Value}' has not been elaborated into capability and assurance obligations by this compiler version.",
-                Location: $"/definition/bindings/{bindingIndex.ToString(CultureInfo.InvariantCulture)}/contract",
-                SchemaLocation: binding.Contract.Value,
-                Evidence: new(
-                    stage: BindingElaborationStage,
-                    subject: binding.Id.Value,
-                    sourceReferences: [DefinitionReference(definition)],
-                    resolutionOptions:
-                    [
-                        "Register a deterministic elaborator for the exact binding contract.",
-                        "Replace the binding contract with one supported by the selected compiler profile."
-                    ],
-                    expected: "capability and assurance obligations induced by the exact binding contract",
-                    observed: "binding contract not elaborated")));
-        }
 
         foreach (var site in requirements)
         {
             var requirement = site.Requirement;
-            if (selected is null || !schemasSupported)
+            if (selected is null || !capabilitySchemasSupported)
             {
                 decisions.Add(new(
                     requirement.Id,
@@ -433,7 +470,7 @@ public static class InfrastructureCapabilityCompiler
             var decision = ToDecision(requirement, resolution);
             decisions.Add(decision);
             if (resolution.Status != CapabilityResolutionStatus.Success)
-                diagnostics.Add(ToDiagnostic(requirement, site.Location, resolution, profile, selected));
+                diagnostics.Add(ToDiagnostic(site, resolution, profile, selected));
             else if (decision.Realization == CapabilityRealizationKind.Constrained)
             {
                 diagnostics.Add(new(
@@ -445,8 +482,10 @@ public static class InfrastructureCapabilityCompiler
                     Evidence: new(
                         stage: CapabilityMatchingStage,
                         subject: requirement.Id.Value,
-                        relatedLocations: DecisionLocations(decision),
-                        sourceReferences: DecisionSourceReferences(profile, selected, decision),
+                        relatedLocations: MergeOrdinalSets(site.RelatedLocations, DecisionLocations(decision)),
+                        sourceReferences: MergeOrdinalSets(
+                            site.SourceReferences,
+                            DecisionSourceReferences(profile, selected, decision)),
                         resolutionOptions:
                         [
                             "Accept every exact operating boundary through attributable environment policy.",
@@ -459,8 +498,8 @@ public static class InfrastructureCapabilityCompiler
         }
 
         return new(
-            definition,
             profile.ToReference(),
+            bindingElaboration,
             profile.Target,
             variant,
             decisions.MoveToImmutable(),
@@ -493,8 +532,7 @@ public static class InfrastructureCapabilityCompiler
     }
 
     static DocumentValidationDiagnostic ToDiagnostic(
-        InfrastructureCapabilityRequirement requirement,
-        string location,
+        RequirementSite site,
         CapabilityResolution resolution,
         InfrastructureCapabilityProfile profile,
         InfrastructureCapabilityVariant variant)
@@ -526,15 +564,19 @@ public static class InfrastructureCapabilityCompiler
             code,
             DiagnosticSeverity.Error,
             resolution.Message,
-            Location: location,
-            SchemaLocation: requirement.Capability.Value,
+            Location: site.Location,
+            SchemaLocation: site.Requirement.Capability.Value,
             Evidence: new(
                 stage: CapabilityMatchingStage,
-                subject: requirement.Id.Value,
-                relatedLocations: CandidateLocations(variant, requirement.Capability),
-                sourceReferences: CandidateSourceReferences(profile, variant, requirement.Capability),
+                subject: site.Requirement.Id.Value,
+                relatedLocations: MergeOrdinalSets(
+                    site.RelatedLocations,
+                    CandidateLocations(variant, site.Requirement.Capability)),
+                sourceReferences: MergeOrdinalSets(
+                    site.SourceReferences,
+                    CandidateSourceReferences(profile, variant, site.Requirement.Capability)),
                 resolutionOptions: resolutionOptions,
-                expected: requirement.Capability.Value,
+                expected: site.Requirement.Capability.Value,
                 observed: resolution.Status switch
                 {
                     CapabilityResolutionStatus.Unavailable => "unavailable",
@@ -545,20 +587,26 @@ public static class InfrastructureCapabilityCompiler
                 }));
     }
 
-    static ImmutableArray<(InfrastructureCapabilityRequirement Requirement, string Location)> RequirementSites(
-        InfrastructureDefinition definition)
+    static ImmutableArray<RequirementSite> RequirementSites(
+        InfrastructureDefinitionDocument document,
+        InfrastructureBindingElaborationReport bindingElaboration)
     {
+        var definition = document.Definition;
         var count = definition.Workloads.Sum(static workload => workload.Requirements.Length)
-            + definition.Resources.Sum(static resource => resource.Requirements.Length);
-        var sites = new List<(InfrastructureCapabilityRequirement Requirement, string Location)>(count);
+            + definition.Resources.Sum(static resource => resource.Requirements.Length)
+            + bindingElaboration.Obligations.Length;
+        var definitionReference = InfrastructureDiagnosticReferences.Definition(document);
+        var sites = new List<RequirementSite>(count);
         for (var workloadIndex = 0; workloadIndex < definition.Workloads.Length; workloadIndex++)
         {
             var workload = definition.Workloads[workloadIndex];
             for (var requirementIndex = 0; requirementIndex < workload.Requirements.Length; requirementIndex++)
             {
-                sites.Add((
+                sites.Add(new(
                     workload.Requirements[requirementIndex],
-                    $"/definition/workloads/{workloadIndex.ToString(CultureInfo.InvariantCulture)}/requirements/{requirementIndex.ToString(CultureInfo.InvariantCulture)}/capability"));
+                    $"/definition/workloads/{workloadIndex.ToString(CultureInfo.InvariantCulture)}/requirements/{requirementIndex.ToString(CultureInfo.InvariantCulture)}/capability",
+                    [],
+                    []));
             }
         }
         for (var resourceIndex = 0; resourceIndex < definition.Resources.Length; resourceIndex++)
@@ -566,10 +614,28 @@ public static class InfrastructureCapabilityCompiler
             var resource = definition.Resources[resourceIndex];
             for (var requirementIndex = 0; requirementIndex < resource.Requirements.Length; requirementIndex++)
             {
-                sites.Add((
+                sites.Add(new(
                     resource.Requirements[requirementIndex],
-                    $"/definition/resources/{resourceIndex.ToString(CultureInfo.InvariantCulture)}/requirements/{requirementIndex.ToString(CultureInfo.InvariantCulture)}/capability"));
+                    $"/definition/resources/{resourceIndex.ToString(CultureInfo.InvariantCulture)}/requirements/{requirementIndex.ToString(CultureInfo.InvariantCulture)}/capability",
+                    [],
+                    []));
             }
+        }
+
+        foreach (var obligation in bindingElaboration.Obligations)
+        {
+            sites.Add(new(
+                obligation.Requirement,
+                obligation.Location,
+                [
+                    $"binding/{Uri.EscapeDataString(obligation.Binding.Value)}",
+                    $"binding-elaboration-rule/{Uri.EscapeDataString(obligation.Rule.Value)}"
+                ],
+                [
+                    .. obligation.SourceReferences,
+                    definitionReference,
+                    InfrastructureDiagnosticReferences.BindingProfileReference(bindingElaboration.Profile)
+                ]));
         }
 
         sites.Sort(static (left, right) =>
@@ -602,7 +668,7 @@ public static class InfrastructureCapabilityCompiler
             .Concat(variant.Rules
                 .Where(item => item.ProvidedCapability == capability)
                 .SelectMany(static item => item.SourceReferences))
-            .Append(ProfileReference(profile))
+            .Append(InfrastructureDiagnosticReferences.CapabilityProfile(profile))
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
     ];
@@ -635,19 +701,26 @@ public static class InfrastructureCapabilityCompiler
                 .Concat(variant.OperatingBoundaries
                     .Where(item => boundaries.Contains(item.Id))
                     .SelectMany(static item => item.SourceReferences))
-                .Append(ProfileReference(profile))
+                .Append(InfrastructureDiagnosticReferences.CapabilityProfile(profile))
                 .Distinct(StringComparer.Ordinal)
                 .Order(StringComparer.Ordinal)
         ];
     }
 
-    static string DefinitionReference(InfrastructureDefinitionDocument document) =>
-        $"{document.Definition.Id.Value}@{document.Definition.Revision.Value}"
-        + $"#{document.Fingerprint.Algorithm}:{document.Fingerprint.Canonicalization}:{document.Fingerprint.Value}";
+    static ImmutableArray<string> MergeOrdinalSets(
+        ImmutableArray<string> first,
+        ImmutableArray<string> second) =>
+    [
+        .. first.Concat(second)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+    ];
 
-    static string ProfileReference(InfrastructureCapabilityProfile profile) =>
-        $"{profile.Id.Value}"
-        + $"#{profile.Fingerprint.Algorithm}:{profile.Fingerprint.Canonicalization}:{profile.Fingerprint.Value}";
+    readonly record struct RequirementSite(
+        InfrastructureCapabilityRequirement Requirement,
+        string Location,
+        ImmutableArray<string> RelatedLocations,
+        ImmutableArray<string> SourceReferences);
 }
 
 enum CapabilityResolutionStatus

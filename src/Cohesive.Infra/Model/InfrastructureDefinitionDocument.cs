@@ -54,6 +54,51 @@ public sealed record InfrastructureDefinitionFingerprint
             definition);
 }
 
+/// <summary>Payload-free exact reference to one canonical infrastructure definition.</summary>
+public sealed record InfrastructureDefinitionReference
+{
+    /// <summary>Creates an exact infrastructure-definition reference.</summary>
+    /// <param name="schemaVersion">Exact portable definition schema.</param>
+    /// <param name="id">Stable definition identity.</param>
+    /// <param name="revision">Exact semantic revision identity.</param>
+    /// <param name="fingerprint">Exact canonical definition fingerprint.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="schemaVersion"/> or <paramref name="fingerprint"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="schemaVersion"/>, <paramref name="id"/>, or <paramref name="revision"/> is empty or default.
+    /// </exception>
+    [JsonConstructor]
+    public InfrastructureDefinitionReference(
+        string schemaVersion,
+        InfrastructureDefinitionId id,
+        InfrastructureRevisionId revision,
+        InfrastructureDefinitionFingerprint fingerprint)
+    {
+        SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
+        if (string.IsNullOrWhiteSpace(id.Value))
+            throw new ArgumentException("An infrastructure-definition reference requires an identity.", nameof(id));
+        if (string.IsNullOrWhiteSpace(revision.Value))
+            throw new ArgumentException("An infrastructure-definition reference requires an exact revision.", nameof(revision));
+
+        Id = id;
+        Revision = revision;
+        Fingerprint = Guard.RequireNotNull(fingerprint);
+    }
+
+    /// <summary>Exact portable definition schema.</summary>
+    public string SchemaVersion { get; }
+
+    /// <summary>Stable definition identity.</summary>
+    public InfrastructureDefinitionId Id { get; }
+
+    /// <summary>Exact semantic revision identity.</summary>
+    public InfrastructureRevisionId Revision { get; }
+
+    /// <summary>Exact canonical definition fingerprint.</summary>
+    public InfrastructureDefinitionFingerprint Fingerprint { get; }
+}
+
 /// <summary>Portable envelope fencing one canonical infrastructure definition with exact content integrity.</summary>
 public sealed record InfrastructureDefinitionDocument
 {
@@ -110,6 +155,11 @@ public sealed record InfrastructureDefinitionDocument
     /// Deterministic fingerprint of the exact schema, definition identity, revision, and canonical semantic topology.
     /// </summary>
     public InfrastructureDefinitionFingerprint Fingerprint { get; }
+
+    /// <summary>Projects a payload-free exact reference to this canonical definition.</summary>
+    /// <returns>The exact schema, identity, revision, and fingerprint fence.</returns>
+    public InfrastructureDefinitionReference ToReference() =>
+        new(SchemaVersion, Definition.Id, Definition.Revision, Fingerprint);
 
     /// <summary>Fences a canonical infrastructure definition in a current-version portable document.</summary>
     /// <param name="definition">Definition to persist.</param>

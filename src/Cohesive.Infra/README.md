@@ -12,7 +12,7 @@ interpretations of that realization; none is the source of infrastructure meanin
 
 This package is the zero-third-party-dependency semantic core. The first slice establishes the portable definition and
 realization model, stable identities, binding and lifecycle invariants, deterministic conventions, coherent target
-variants, capability evidence, and fail-closed compilation diagnostics.
+variants, exactly fingerprinted binding elaboration, capability evidence, and fail-closed compilation diagnostics.
 
 It intentionally does **not** reference Terraform, Pulumi, Aspire, Azure, AWS, GCP, Kubernetes, or their SDKs. Actual
 third-party emitters, CLI integrations, deployment runners, and observation importers are deferred to dedicated
@@ -34,7 +34,8 @@ The normal flow is:
 ```text
 application definitions and explicit Infra authoring
     -> InfrastructureDefinitionDocument
-    -> deterministic convention resolution and requirement derivation
+    -> deterministic convention resolution
+    -> exact binding elaboration and attributable obligation derivation
     -> capability proof against one coherent target variant
     -> InfrastructureRealization
     -> lifecycle-backend projection
@@ -48,16 +49,18 @@ Changing meaning requires an explicit accepted definition revision and a newly a
 
 An `InfrastructureDefinition` is the first provider-neutral requirement-system core. It contains stable identities for
 workloads, logical resource roles, capability requirements, directed contract bindings, and resource lifecycle. The
-broader Infra language will add lifecycle-bearing environments, typed ports and surfaces, binding-induced obligations,
-and explicit target extensions without changing this authority boundary. Requirements should normally reference or be
+broader Infra language will add lifecycle-bearing environments, typed ports and surfaces, and explicit target
+extensions without changing this authority boundary. Requirements should normally reference or be
 derived from their owning Cohesive definitions. Infra must not copy a Process retry contract, Storage durability
 guarantee, or Identity authorization rule into a second independently maintained model.
 
 An `InfrastructureRealization` currently joins an `InfrastructureCapabilityClosureReport` to an
 `InfrastructureLifecyclePlan` for the same exact fingerprinted definition. The closure report identifies the selected
 exactly fingerprinted profile, target, and coherent variant and retains one evidence-backed, unavailable, or unknown
-planning decision for every declared node requirement. The lifecycle plan independently associates logical resources
-with physical identities and one lifecycle authority.
+planning decision for every declared node requirement and every successfully elaborated binding obligation. Its exact
+`InfrastructureBindingElaborationReport` is both compiler state and a machine-readable explanation path from binding
+to selected rule, induced requirements, capability decisions, or residual diagnostics. The lifecycle plan
+independently associates logical resources with physical identities and one lifecycle authority.
 
 This is a realization candidate, not deployment authority. Target-profile evidence describes reusable construction
 strategies and is not yet scoped to a selected node or physical instance; composed auxiliary evidence is not yet a
@@ -70,10 +73,16 @@ authority. A stale, partially matched, or merely capability-closed plan is not d
 Infra is binding-first. A resource declaration says that a role exists; a binding says how a consumer may rely on a
 provider and what that path must preserve.
 
-The first slice's `InfrastructureBindingDefinition` durably identifies source, target, and provider-neutral contract.
-Until the compiler can elaborate that contract, it emits a structured error and closure fails closed. As the compiler
-grows, a workload-to-database, worker-to-scheduler, workload-to-secret, service-to-service, or
-DNS-to-hostname binding is the authority from which it will derive and prove:
+`InfrastructureBindingDefinition` durably identifies source, target, and provider-neutral contract. An exactly
+fingerprinted `InfrastructureBindingElaborationProfile` contains versioned, attributable rules mapping exact contracts
+to capability and assurance obligations. Zero matching rules is unavailable; several matching rules are ambiguous;
+neither state is guessed through. One selected rule produces stable binding-derived requirement identities and an
+exactly fingerprinted report. A workload-to-database, worker-to-scheduler, workload-to-secret, service-to-service, or
+DNS-to-hostname binding is therefore the authority from which compilers derive and prove:
+
+Elaboration rules are pure mappings from exact versioned contract identities. If two semantic contract variants induce
+different obligations, they require distinct contract identities; rules do not inspect ambient services or retain
+host-language callbacks.
 
 - service discovery, endpoint selection, and configuration injection;
 - identity selection and least-privilege grants;
@@ -120,11 +129,12 @@ branches. Recursive resolution constructs a canonical, cycle-free proof and reta
 intermediate evidence. Equally preferred valid proofs are ambiguous unless explicit policy selects one. A capability
 profile supplies evidence; conventions and compiler configuration supply policy.
 
-`InfrastructureCapabilityCompiler` currently resolves every declared node requirement in one exact document against
-one coherent variant. Constrained proofs and unelaborated binding contracts remain structured residuals, so full
-closure must cover the whole binding path, not only one resource. A durable Process requirement may depend on a worker, scheduler,
-identity, secret, network path, state store, and lifecycle backend. Local support at one edge does not establish
-end-to-end assurance.
+`InfrastructureCapabilityCompiler` resolves every declared node requirement and successfully elaborated binding
+obligation in one exact document against one coherent variant. It retains the exact elaboration-profile and report
+fingerprints beside the target-profile fence. Constrained proofs and unavailable or ambiguous contracts remain
+structured residuals, so full closure must cover the whole binding path, not only one resource. A durable Process
+requirement may depend on a worker, scheduler, identity, secret, network path, state store, and lifecycle backend.
+Local support at one edge does not establish end-to-end assurance.
 
 ## Explainable conventions
 
@@ -220,7 +230,8 @@ var document = Infrastructure.Define(
 var closure = InfrastructureCapabilityCompiler.Compile(
     document,
     AzureCapabilities.Profile,
-    AzureCapabilities.TerraformProductionVariant);
+    AzureCapabilities.TerraformProductionVariant,
+    AriBindings.ElaborationProfile);
 
 var lifecycle = new InfrastructureLifecyclePlan(
     document,
@@ -241,9 +252,11 @@ foreach (var diagnostic in realization.CapabilityClosure.Diagnostics)
 
 `Infrastructure.Define` returns an immutable, normalized, fingerprinted `InfrastructureDefinitionDocument`; the
 authoring callback is synchronous and is not retained. `InfrastructureCapabilityCompiler` decides whether the one
-selected variant can plan every declared node requirement. An unavailable scheduler, ambiguous proof, unaccepted
-boundary, or unelaborated binding yields a non-closed report. `InfrastructureLifecyclePlan` rejects a missing,
-duplicated, external, or conflicting manager. The resulting `InfrastructureRealization` deliberately exposes no
+selected variant can plan every declared node requirement and binding-derived obligation. An unavailable scheduler,
+ambiguous proof, unaccepted boundary, or unavailable or ambiguous binding contract yields a non-closed report.
+`InfrastructureBindingElaborationReport.FindDecision` exposes selected rules and stable obligation identities to
+tooling. `InfrastructureLifecyclePlan` rejects a missing, duplicated, external, or conflicting manager. The resulting
+`InfrastructureRealization` deliberately exposes no
 deployment-readiness flag until physical witnesses and backend receipts are part of the model.
 
 ## Lifecycle ownership
