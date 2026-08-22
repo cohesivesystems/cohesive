@@ -1091,7 +1091,7 @@ public sealed record PostgresRelationQueryTableBinding
 public sealed class PostgresRelationQueryStorageBinding
 {
     /// <summary>Current PostgreSQL relation/query storage-binding schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive.relations.postgres-binding/v2";
+    public const string CurrentSchemaVersion = "cohesive.relations.postgres-binding/v3";
 
     /// <summary>Default deterministic convention set for table-column binding.</summary>
     public const string SemanticPathConventionSet = "cohesive.adapters.postgres.sql/semantic-path-conventions/v1";
@@ -1117,6 +1117,7 @@ public sealed class PostgresRelationQueryStorageBinding
     /// <param name="configurationDecisions">Normalized effective configuration provenance.</param>
     /// <param name="compiledPlanFingerprint">Exact compiled-plan fingerprint, or <see langword="null"/> with placement fingerprint.</param>
     /// <param name="placementFingerprint">Exact source-placement fingerprint, or <see langword="null"/> with plan fingerprint.</param>
+    /// <param name="ownedCollections">Decomposed owned-collection component tables keyed to root placements.</param>
     /// <exception cref="ArgumentException">An identity, collection, provenance fact, or affinity pair is invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="origin"/> is unsupported.</exception>
     public PostgresRelationQueryStorageBinding(
@@ -1129,7 +1130,8 @@ public sealed class PostgresRelationQueryStorageBinding
         string? conventionSetVersion = null,
         ImmutableArray<EffectiveConfigurationDecision> configurationDecisions = default,
         RelationQueryPlanComponentFingerprint? compiledPlanFingerprint = null,
-        RelationQuerySourcePlacementFingerprint? placementFingerprint = null)
+        RelationQuerySourcePlacementFingerprint? placementFingerprint = null,
+        ImmutableArray<PostgresRelationQueryOwnedCollectionBinding> ownedCollections = default)
         : this(
             CurrentSchemaVersion,
             fingerprint: null,
@@ -1143,7 +1145,8 @@ public sealed class PostgresRelationQueryStorageBinding
             conventionSetVersion,
             configurationDecisions,
             compiledPlanFingerprint,
-            placementFingerprint)
+            placementFingerprint,
+            ownedCollections)
     {
     }
 
@@ -1164,6 +1167,7 @@ public sealed class PostgresRelationQueryStorageBinding
     /// <param name="configurationDecisions">Normalized effective configuration provenance.</param>
     /// <param name="compiledPlanFingerprint">Exact compiled-plan fingerprint, or <see langword="null"/> with placement fingerprint.</param>
     /// <param name="placementFingerprint">Exact source-placement fingerprint, or <see langword="null"/> with plan fingerprint.</param>
+    /// <param name="ownedCollections">Decomposed owned-collection component tables keyed to root placements.</param>
     /// <exception cref="ArgumentException">The schema, persisted fingerprint, identity, collection, provenance, or affinity is invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="origin"/> is unsupported.</exception>
     [JsonConstructor]
@@ -1180,7 +1184,8 @@ public sealed class PostgresRelationQueryStorageBinding
         string? conventionSetVersion,
         ImmutableArray<EffectiveConfigurationDecision> configurationDecisions,
         RelationQueryPlanComponentFingerprint? compiledPlanFingerprint,
-        RelationQuerySourcePlacementFingerprint? placementFingerprint)
+        RelationQuerySourcePlacementFingerprint? placementFingerprint,
+        ImmutableArray<PostgresRelationQueryOwnedCollectionBinding> ownedCollections = default)
     {
         if (!string.Equals(schemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
             throw new ArgumentException($"Unsupported PostgreSQL binding schema '{schemaVersion}'.", nameof(schemaVersion));
@@ -1213,6 +1218,32 @@ public sealed class PostgresRelationQueryStorageBinding
             throw new ArgumentException("A PostgreSQL storage binding cannot repeat a placement or compiled input.", nameof(tables));
         }
 
+        var normalizedOwnedCollections = ownedCollections.IsDefault ? [] : ownedCollections;
+        if (normalizedOwnedCollections.Any(static collection => collection is null))
+        {
+            throw new ArgumentException(
+                "PostgreSQL owned-collection bindings cannot contain null entries.",
+                nameof(ownedCollections));
+        }
+        if (normalizedOwnedCollections.GroupBy(static collection => collection.Collection)
+                .Any(static group => group.Count() > 1)
+            || normalizedOwnedCollections.GroupBy(static collection => collection.CollectionInput)
+                .Any(static group => group.Count() > 1))
+        {
+            throw new ArgumentException(
+                "A PostgreSQL storage binding cannot repeat an owned collection or collection input.",
+                nameof(ownedCollections));
+        }
+        foreach (var collection in normalizedOwnedCollections)
+        {
+            if (!normalizedTables.Any(table => table.PlacementBinding == collection.RootPlacementBinding))
+            {
+                throw new ArgumentException(
+                    $"Owned collection '{collection.Collection.Value}' references an unbound root placement.",
+                    nameof(ownedCollections));
+            }
+        }
+
         var normalizedDecisions = configurationDecisions.IsDefault ? [] : configurationDecisions;
         if (normalizedDecisions.Any(static decision => decision is null)
             || normalizedDecisions.GroupBy(static decision => decision.Setting, StringComparer.Ordinal).Any(static group => group.Count() > 1))
@@ -1233,6 +1264,12 @@ public sealed class PostgresRelationQueryStorageBinding
         Target = target;
         TargetProfile = targetProfile;
         Tables = [.. normalizedTables.OrderBy(static table => table.PlacementBinding.Value, StringComparer.Ordinal)];
+        OwnedCollections =
+        [
+            .. normalizedOwnedCollections.OrderBy(
+                static collection => collection.Collection.Value,
+                StringComparer.Ordinal)
+        ];
         Origin = origin;
         ConventionSetVersion = conventionSetVersion;
         ConfigurationDecisions = [.. normalizedDecisions.OrderBy(static decision => decision.Setting, StringComparer.Ordinal)];
@@ -1264,6 +1301,9 @@ public sealed class PostgresRelationQueryStorageBinding
 
     /// <summary>Exact table bindings in placement-identity order.</summary>
     public ImmutableArray<PostgresRelationQueryTableBinding> Tables { get; }
+
+    /// <summary>Decomposed owned-collection component tables in canonical collection-identity order.</summary>
+    public ImmutableArray<PostgresRelationQueryOwnedCollectionBinding> OwnedCollections { get; }
 
     /// <summary>Overall effective binding origin.</summary>
     public PostgresRelationQueryBindingOrigin Origin { get; }
@@ -1299,6 +1339,16 @@ public sealed class PostgresRelationQueryStorageBinding
         Tables.SingleOrDefault(table => table.Input == input)
         ?? throw new KeyNotFoundException($"PostgreSQL storage binding has no input '{input.Value}'.");
 
+    /// <summary>Resolves a decomposed owned collection by its exact compiled collection-field input.</summary>
+    /// <param name="collectionInput">Exact compiled root collection-field input.</param>
+    /// <returns>The exact decomposed component-table binding.</returns>
+    /// <exception cref="KeyNotFoundException"><paramref name="collectionInput"/> is not bound.</exception>
+    public PostgresRelationQueryOwnedCollectionBinding ResolveOwnedCollection(
+        RelationQueryInputId collectionInput) =>
+        OwnedCollections.SingleOrDefault(collection => collection.CollectionInput == collectionInput)
+        ?? throw new KeyNotFoundException(
+            $"PostgreSQL storage binding has no owned collection input '{collectionInput.Value}'.");
+
     internal static string RequireIdentifier(string value, string parameterName)
     {
         value = Guard.RequireNotNullOrWhiteSpace(value, parameterName);
@@ -1316,8 +1366,8 @@ public sealed class PostgresRelationQueryStorageBinding
 static class PostgresRelationQueryBindingFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.postgres-binding/v2-c14n/v1";
-    const string DerivedIdentityCanonicalization = "cohesive.relations.postgres-binding-id/v2-c14n/v1";
+    const string Canonicalization = "cohesive.relations.postgres-binding/v3-c14n/v1";
+    const string DerivedIdentityCanonicalization = "cohesive.relations.postgres-binding-id/v3-c14n/v1";
 
     public static PostgresRelationQueryBindingFingerprint Compute(PostgresRelationQueryStorageBinding binding)
     {
@@ -1336,6 +1386,9 @@ static class PostgresRelationQueryBindingFingerprinter
         Append(canonical, binding.Tables.Length);
         foreach (var table in binding.Tables)
             AppendTable(canonical, table);
+        Append(canonical, binding.OwnedCollections.Length);
+        foreach (var collection in binding.OwnedCollections)
+            AppendOwnedCollection(canonical, collection);
         Append(canonical, binding.ConfigurationDecisions.Length);
         foreach (var decision in binding.ConfigurationDecisions)
         {
@@ -1369,7 +1422,47 @@ static class PostgresRelationQueryBindingFingerprinter
         Append(canonical, normalizedTables.Length);
         foreach (var table in normalizedTables)
             AppendTable(canonical, table);
+        Append(canonical, 0);
         return ComputeHash(canonical);
+    }
+
+    static void AppendOwnedCollection(
+        StringBuilder canonical,
+        PostgresRelationQueryOwnedCollectionBinding collection)
+    {
+        Append(canonical, collection.Collection.Value);
+        Append(canonical, collection.RootPlacementBinding.Value);
+        Append(canonical, collection.CollectionInput.Value);
+        AppendPath(canonical, collection.CollectionPath);
+        Append(canonical, collection.ComponentType.Value);
+        Append(canonical, collection.SchemaName);
+        Append(canonical, collection.TableName);
+        AppendPath(canonical, collection.ParentRoot.SemanticPath);
+        Append(canonical, collection.ParentRoot.ColumnName);
+        Append(canonical, (int)collection.ParentRoot.ScalarType);
+        AppendText(canonical, collection.ParentRoot.TextSemantics);
+        AppendNumericDomain(canonical, collection.ParentRoot.NumericDomain);
+        AppendTemporalDomain(canonical, collection.ParentRoot.TemporalDomain);
+        AppendPartition(canonical, collection.Partition);
+        AppendPath(canonical, collection.LocalIdentityPath);
+        AppendPath(canonical, collection.OrdinalPath);
+        Append(canonical, collection.Fields.Length);
+        foreach (var field in collection.Fields)
+        {
+            AppendPath(canonical, field.SemanticPath);
+            Append(canonical, field.ColumnName);
+            Append(canonical, (int)field.ScalarType);
+            Append(canonical, (int)field.MissingValueEncoding);
+            Append(canonical, (int)field.NullValueEncoding);
+            AppendText(canonical, field.TextSemantics);
+            Append(canonical, (int)field.Ordering);
+            AppendNumericDomain(canonical, field.NumericDomain);
+            AppendTemporalDomain(canonical, field.TemporalDomain);
+        }
+        Append(canonical, collection.ValidatedParentForeignKeyName);
+        Append(canonical, collection.ValidatedAggregateIdentityName);
+        Append(canonical, collection.AtomicityEvidenceReference);
+        Append(canonical, collection.ChangeCaptureEvidenceReference);
     }
 
     static void AppendTable(StringBuilder canonical, PostgresRelationQueryTableBinding table)

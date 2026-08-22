@@ -1149,6 +1149,82 @@ public sealed class CosmosRelationQueryStorageBinding
     }
 }
 
+internal static class CosmosRelationQueryCollectionScopeContracts
+{
+    internal static bool TryGetValueDomain(
+        TypeRef? type,
+        out CosmosRelationQueryCollectionElementValueDomain domain)
+    {
+        switch (type)
+        {
+            case ScalarTypeRef { Kind: ScalarTypeKind.Bool }:
+                domain = CosmosRelationQueryCollectionElementValueDomain.Bool;
+                return true;
+            case ScalarTypeRef { Kind: ScalarTypeKind.Int32 }:
+                domain = CosmosRelationQueryCollectionElementValueDomain.Int32;
+                return true;
+            case ScalarTypeRef { Kind: ScalarTypeKind.String }:
+                domain = CosmosRelationQueryCollectionElementValueDomain.String;
+                return true;
+            case ScalarTypeRef { Kind: ScalarTypeKind.Guid }:
+                domain = CosmosRelationQueryCollectionElementValueDomain.Guid;
+                return true;
+            case ScalarTypeRef { Kind: ScalarTypeKind.Date }:
+                domain = CosmosRelationQueryCollectionElementValueDomain.Date;
+                return true;
+            default:
+                domain = default;
+                return false;
+        }
+    }
+
+    internal static CosmosRelationQueryCollectionScopeGap? GetGap(
+        CosmosRelationQueryCollectionScopeEvidence scope)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        if (scope.ElementScope != CosmosRelationQueryCollectionElementScope.JsonArrayElement)
+        {
+            return new(
+                "The Cosmos collection binding does not attest JSON-array element scope.",
+                "Attest JsonArrayElement scope for the structured collection.");
+        }
+        if (scope.CorrelationGuarantee
+            != CosmosRelationQueryCollectionCorrelationGuarantee.SameArrayElement)
+        {
+            return new(
+                "The Cosmos collection binding does not attest same-array-element correlation.",
+                "Attest SameArrayElement correlation for the structured collection.");
+        }
+        if (scope.CollectionMissingValueBehavior
+                != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion
+            || scope.CollectionNullValueBehavior
+                != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
+        {
+            return new(
+                "The Cosmos collection binding must attest that ingestion prohibits missing and null collections; treating them as empty would weaken canonical any semantics.",
+                "Prohibit missing and explicit-null collection values during ingestion.");
+        }
+        if (scope.NullElementBehavior
+            != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
+        {
+            return new(
+                "The Cosmos collection binding must attest that ingestion prohibits explicit-null collection elements.",
+                "Prohibit explicit-null elements during ingestion.");
+        }
+        if (scope.EmptyCollectionBehavior != CosmosRelationQueryEmptyCollectionBehavior.NoElements)
+        {
+            return new(
+                "The Cosmos collection binding does not prove that an empty JSON array contributes no existential subquery rows.",
+                "Attest NoElements behavior for an empty JSON array.");
+        }
+        return null;
+    }
+}
+
+internal sealed record CosmosRelationQueryCollectionScopeGap(
+    string Message,
+    string Resolution);
+
 static class CosmosRelationQueryBindingFingerprinter
 {
     const string Algorithm = "sha256";

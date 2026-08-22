@@ -765,49 +765,6 @@ public sealed class CosmosRelationQueryCompiler
         _ => "Select a supported canonical construct or provide an attributable exact lowering strategy."
     };
 
-    static CollectionScopeGap? GetCollectionScopeGap(
-        CosmosRelationQueryCollectionScopeEvidence scope)
-    {
-        if (scope.ElementScope != CosmosRelationQueryCollectionElementScope.JsonArrayElement)
-        {
-            return new(
-                "The Cosmos collection binding does not attest JSON-array element scope.",
-                "Attest JsonArrayElement scope for the structured collection.");
-        }
-        if (scope.CorrelationGuarantee
-            != CosmosRelationQueryCollectionCorrelationGuarantee.SameArrayElement)
-        {
-            return new(
-                "The Cosmos collection binding does not attest same-array-element correlation.",
-                "Attest SameArrayElement correlation for the structured collection.");
-        }
-        if (scope.CollectionMissingValueBehavior
-                != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion
-            || scope.CollectionNullValueBehavior
-                != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
-        {
-            return new(
-                "The Cosmos collection binding must attest that ingestion prohibits missing and null collections; treating them as empty would weaken canonical any semantics.",
-                "Prohibit missing and explicit-null collection values during ingestion.");
-        }
-        if (scope.NullElementBehavior
-            != CosmosRelationQueryStructuredCollectionAbsenceBehavior.ProhibitedByIngestion)
-        {
-            return new(
-                "The Cosmos collection binding must attest that ingestion prohibits explicit-null collection elements.",
-                "Prohibit explicit-null elements during ingestion.");
-        }
-        if (scope.EmptyCollectionBehavior != CosmosRelationQueryEmptyCollectionBehavior.NoElements)
-        {
-            return new(
-                "The Cosmos collection binding does not prove that an empty JSON array contributes no existential subquery rows.",
-                "Attest NoElements behavior for an empty JSON array.");
-        }
-        return null;
-    }
-
-    sealed record CollectionScopeGap(string Message, string Resolution);
-
     sealed class BranchCompiler
     {
         readonly CompiledRelationQueryPlan plan;
@@ -2150,7 +2107,7 @@ public sealed class CosmosRelationQueryCompiler
             RelationQueryFieldInputContract field,
             QueryNodeId node)
         {
-            if (GetCollectionScopeGap(evidence) is { } gap)
+            if (CosmosRelationQueryCollectionScopeContracts.GetGap(evidence) is { } gap)
                 throw CollectionEvidenceFailure(gap.Message, node, field.Input.Id);
         }
 
@@ -2160,24 +2117,14 @@ public sealed class CosmosRelationQueryCompiler
             QueryNodeId node,
             RelationQueryInputId input)
         {
-            var expected = type switch
+            if (!CosmosRelationQueryCollectionScopeContracts.TryGetValueDomain(type, out var expected))
             {
-                ScalarTypeRef { Kind: ScalarTypeKind.Bool } =>
-                    CosmosRelationQueryCollectionElementValueDomain.Bool,
-                ScalarTypeRef { Kind: ScalarTypeKind.Int32 } =>
-                    CosmosRelationQueryCollectionElementValueDomain.Int32,
-                ScalarTypeRef { Kind: ScalarTypeKind.String } =>
-                    CosmosRelationQueryCollectionElementValueDomain.String,
-                ScalarTypeRef { Kind: ScalarTypeKind.Guid } =>
-                    CosmosRelationQueryCollectionElementValueDomain.Guid,
-                ScalarTypeRef { Kind: ScalarTypeKind.Date } =>
-                    CosmosRelationQueryCollectionElementValueDomain.Date,
-                _ => throw Fail(
+                throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
                     "The current collection child is outside the exact Cosmos SQL v2 scalar equality domains.",
                     node,
-                    input)
-            };
+                    input);
+            }
             if (child.ValueDomain != expected)
             {
                 throw CollectionEvidenceFailure(
