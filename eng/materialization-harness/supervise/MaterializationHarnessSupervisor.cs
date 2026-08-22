@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
+using Cohesive.MaterializationHarness.Control;
 using Cohesive.Storage.Materialization;
 using Cohesive.Storage.Processes;
 
@@ -155,6 +156,23 @@ static partial class MaterializationHarnessSupervisor
             if (fault.OperationIdentity is not null)
                 start.Environment["COHESIVE_MATERIALIZATION_FAULT_OPERATION"] = fault.OperationIdentity;
         }
+        return StartHost(start);
+    }
+
+    static SupervisedHost StartHost(
+        SupervisorOptions options,
+        MaterializationHarnessElasticFaultKind fault)
+    {
+        var start = HostProcessStartInfo(options);
+        start.Environment["COHESIVE_MATERIALIZATION_ELASTIC_FAULT_KIND"] = fault.ToString();
+        start.Environment["COHESIVE_MATERIALIZATION_ELASTIC_FAULT_MARKER_PATH"] = options.ElasticFaultMarkerPath;
+        start.Environment["COHESIVE_MATERIALIZATION_ELASTIC_FAULT_PROVIDER"] = options.Provider;
+        start.Environment["COHESIVE_MATERIALIZATION_ELASTIC_FAULT_RUN_ID"] = options.RunIdentity;
+        return StartHost(start);
+    }
+
+    static SupervisedHost StartHost(ProcessStartInfo start)
+    {
         var process = new Process { StartInfo = start, EnableRaisingEvents = true };
         var stdout = new BoundedLineCapture(SupervisorOptions.MaximumArtifactBytes);
         var stderr = new BoundedLineCapture(SupervisorOptions.MaximumArtifactBytes);
