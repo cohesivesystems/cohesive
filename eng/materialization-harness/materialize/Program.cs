@@ -1208,9 +1208,15 @@ public static class Program
 
     internal static ElasticMaterializationTarget CreateTarget(
         ElasticMaterializationTargetBinding binding,
-        Uri endpoint)
+        Uri endpoint,
+        MaterializationHarnessElasticFaultPlan? faultPlan = null)
     {
-        ElasticsearchClientSettings settings = new(endpoint);
+        ElasticsearchClientSettings settings = faultPlan is null
+            ? new(endpoint)
+            : new(
+                new SingleNodePool(endpoint),
+                new HttpRequestInvoker((innerHandler, _) =>
+                    new MaterializationHarnessElasticFaultHandler(innerHandler, faultPlan)));
         settings = settings.ServerCertificateValidationCallback(static (_, _, _, _) => true);
         var client = new ElasticsearchClient(settings);
         var runtime = new ElasticElasticsearchRuntimeBinding(

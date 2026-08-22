@@ -46,7 +46,7 @@ static partial class MaterializationHarnessSupervisor
             }
             await StopHostAsync(host, artifacts, artifactPrefix: "baseline-host").ConfigureAwait(false);
             host = null;
-            var baseline = await CaptureSourceMatrixEvidenceAsync(
+            var baseline = await CaptureControlEvidenceAsync(
                 options,
                 artifacts,
                 artifactPrefix: "baseline",
@@ -72,7 +72,7 @@ static partial class MaterializationHarnessSupervisor
             var interruptedMarker = await WaitForMarkerAsync(options, host, timeout.Token).ConfigureAwait(false);
             await StopHostAsync(host, artifacts, artifactPrefix: "interrupted-incremental-host").ConfigureAwait(false);
             host = null;
-            var interrupted = await CaptureSourceMatrixEvidenceAsync(
+            var interrupted = await CaptureControlEvidenceAsync(
                 options,
                 artifacts,
                 artifactPrefix: "interrupted",
@@ -103,7 +103,7 @@ static partial class MaterializationHarnessSupervisor
                 cancellationToken: timeout.Token).ConfigureAwait(false);
             await StopHostAsync(host, artifacts, artifactPrefix: "replay-completed-host").ConfigureAwait(false);
             host = null;
-            var replayed = await CaptureSourceMatrixEvidenceAsync(
+            var replayed = await CaptureControlEvidenceAsync(
                 options,
                 artifacts,
                 artifactPrefix: "replayed",
@@ -363,7 +363,7 @@ static partial class MaterializationHarnessSupervisor
         }
     }
 
-    static async Task<MaterializationHarnessFailureEvidence> CaptureSourceMatrixEvidenceAsync(
+    static async Task<MaterializationHarnessFailureEvidence> CaptureControlEvidenceAsync(
         SupervisorOptions options,
         BoundedArtifactWriter artifacts,
         string artifactPrefix,

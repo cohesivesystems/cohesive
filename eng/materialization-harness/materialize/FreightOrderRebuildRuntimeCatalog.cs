@@ -135,7 +135,12 @@ public sealed class FreightOrderRebuildRuntimeCatalog : IAsyncDisposable
                 var targetBinding = Program.CreateTargetBinding(name, semantics, clusterId);
                 await Program.EnsureLocalElasticTemplatesAsync(elasticHttp, targetBinding, name)
                     .ConfigureAwait(false);
-                var target = Program.CreateTarget(targetBinding, options.ElasticsearchEndpoint);
+                var target = Program.CreateTarget(
+                    binding: targetBinding,
+                    endpoint: options.ElasticsearchEndpoint,
+                    faultPlan: MaterializationHarnessElasticFaultPlan.FromEnvironment(
+                        provider: name,
+                        readAlias: targetBinding.ReadAlias));
                 var compilation = await fixture.CompileAsync(
                         semantics: semantics,
                         plan: providerPlan,
@@ -202,6 +207,40 @@ public sealed class FreightOrderRebuildRuntimeCatalog : IAsyncDisposable
     {
         var runtime = GetProvider(provider);
         return Program.ReadCanonicalDocumentsAsync(elasticHttp, runtime.TargetBinding.ReadAlias);
+    }
+
+    /// <summary>Reads the concrete indexes currently published through one provider's stable read alias.</summary>
+    /// <param name="provider">Stable provider name.</param>
+    /// <param name="cancellationToken">Cancellation token for the Elasticsearch alias inspection.</param>
+    /// <returns>Concrete index names in ordinal order, or an empty result when the alias is absent.</returns>
+    /// <exception cref="ArgumentException"><paramref name="provider"/> is empty.</exception>
+    /// <exception cref="KeyNotFoundException">The provider is not configured.</exception>
+    /// <exception cref="HttpRequestException">Elasticsearch rejects the alias inspection.</exception>
+    /// <exception cref="JsonException">Elasticsearch returns invalid alias evidence.</exception>
+    /// <exception cref="OperationCanceledException">The operation is cancelled.</exception>
+    public async Task<ImmutableArray<string>> ReadAliasIndicesAsync(
+        string provider,
+        CancellationToken cancellationToken = default)
+    {
+        var runtime = GetProvider(provider);
+        using var response = await elasticHttp.GetAsync(
+                $"/_alias/{Uri.EscapeDataString(runtime.TargetBinding.ReadAlias)}",
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            return [];
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+            throw new JsonException("An Elasticsearch alias inspection returned a non-object response.");
+        return
+        [
+            .. document.RootElement.EnumerateObject()
+                .Select(static property => property.Name)
+                .Order(StringComparer.Ordinal)
+        ];
     }
 
     /// <summary>Reads visible item identities, versions, and logical values through one provider's active alias.</summary>

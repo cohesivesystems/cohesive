@@ -418,6 +418,12 @@ sealed class MaterializationHarnessExecutionController :
         var canonicalDocuments = target.ActiveGenerationId is null || runtimeCatalog is null
             ? []
             : await runtimeCatalog.ReadCanonicalDocumentsAsync(provider).ConfigureAwait(false);
+        var readAliasIndices = runtimeCatalog is null
+            ? []
+            : await runtimeCatalog.ReadAliasIndicesAsync(
+                    provider: provider,
+                    cancellationToken: context.CancellationToken)
+                .ConfigureAwait(false);
 
         return new(
             Provider: provider,
@@ -425,15 +431,26 @@ sealed class MaterializationHarnessExecutionController :
             CurrentAttemptId: snapshot.Checkpoint.ContinuationIdentity.ProcessAttemptId.Value,
             ControlRevision: snapshot.Checkpoint.Control.Revision.Value,
             ControlMode: snapshot.Checkpoint.Control.Mode,
+            RecoveryPolicy: process.Artifacts.ParentPlan.Definition.RecoveryPolicy,
             TerminalOutcome: snapshot.Checkpoint.Continuation.Terminal.Kind,
             CurrentGeneration: execution?.Generation.Value,
             SelectedGeneration: generation?.Value,
             TargetRevision: target.Revision.Value,
             ActiveGeneration: target.ActiveGenerationId?.Value,
+            LatestPromotionFence: target.LatestPromotionFence?.Value,
+            RetainedGenerationCount: target.RetainedGenerationCount,
             SelectedGenerationState: candidate?.State,
             SelectedGenerationRevision: candidate?.Revision.Value,
+            SelectedPhysicalIndex: generation is null
+                ? null
+                : process.Provider.TargetBinding.GetGenerationIndexName(generation.Value),
+            SelectedHasPermanentFailures: candidate?.HasPermanentFailures,
+            SelectedPendingRetryableMutationCount: candidate?.PendingRetryableMutationCount,
+            SelectedValidationIsValid: candidate?.ValidationReceipt?.Validation.IsValid,
             SelectedVisibleItemCount: candidate?.VisibleItemCount,
             SelectedTombstoneCount: candidate?.TombstoneCount,
+            ReadAlias: process.Provider.TargetBinding.ReadAlias,
+            ReadAliasIndices: readAliasIndices,
             SelectedControlEpochs: controlEpochs,
             SynchronizationWork: synchronizationWork,
             LastSynchronization: process.LastSynchronization is { } synchronization

@@ -220,6 +220,43 @@ source_matrix_test() {
   printf 'source-matrix-artifacts=%s\n' "$artifact_root"
 }
 
+elastic_failure_test() {
+  local provider="${1:-postgres}"
+  if [[ "$provider" != "postgres" && "$provider" != "cosmos" ]]; then
+    printf 'elastic-failure-test provider must be postgres or cosmos.\n' >&2
+    exit 2
+  fi
+  local run_id
+  run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  local artifact_root="$script_dir/artifacts/elastic-failure-$run_id"
+  local faults=(
+    retryable-bulk-rejection
+    permanent-bulk-item-failure
+    applied-promotion-response-loss
+  )
+
+  dotnet build \
+    "$script_dir/host/Cohesive.MaterializationHarness.Host.csproj" \
+    --configuration Release
+  dotnet build \
+    "$script_dir/supervise/Cohesive.MaterializationHarness.Supervise.csproj" \
+    --configuration Release
+  for fault in "${faults[@]}"; do
+    compose down --volumes --remove-orphans
+    up
+    seed --cohesive
+    configure_runtime
+    export COHESIVE_MATERIALIZATION_REPOSITORY_ROOT="$repo_root"
+    dotnet \
+      "$script_dir/supervise/bin/Release/net10.0/Cohesive.MaterializationHarness.Supervise.dll" \
+      elastic-failure \
+      "$provider" \
+      "$fault" \
+      "$artifact_root/$fault"
+  done
+  printf 'elastic-failure-artifacts=%s\n' "$artifact_root"
+}
+
 verify_index() {
   configure_runtime
   curl --fail --silent --show-error \
@@ -279,6 +316,7 @@ Commands:
   failure-test [provider] [boundary] Clean-reset, kill/restart the real host, and emit bounded artifacts.
   control-equivalence-test [provider] Clean-reset and compare SDK/HTTP control semantics.
   source-matrix-test [provider|all] Clean-reset and prove replay, ordering, and fencing for real sources.
+  elastic-failure-test [provider] Clean-reset and prove Elastic rejection and promotion recovery.
   verify-index Show active generation aliases and document counts without mutating Elasticsearch.
   test     Start, seed, materialize, and run the focused verification suite.
   status   Show service and health state.
@@ -397,6 +435,13 @@ case "$command" in
       exit 2
     fi
     source_matrix_test "${2:-all}"
+    ;;
+  elastic-failure-test)
+    if [[ "$#" -gt 2 ]]; then
+      usage
+      exit 2
+    fi
+    elastic_failure_test "${2:-postgres}"
     ;;
   verify-index)
     up

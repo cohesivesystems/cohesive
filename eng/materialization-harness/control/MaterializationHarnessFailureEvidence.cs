@@ -12,15 +12,24 @@ sealed record MaterializationHarnessFailureEvidence(
     string CurrentAttemptId,
     string ControlRevision,
     ProcessControlMode ControlMode,
+    ProcessRecoveryPolicy RecoveryPolicy,
     ExecutionTerminalOutcomeKind TerminalOutcome,
     string? CurrentGeneration,
     string? SelectedGeneration,
     string TargetRevision,
     string? ActiveGeneration,
+    string? LatestPromotionFence,
+    long RetainedGenerationCount,
     MaterializationGenerationState? SelectedGenerationState,
     string? SelectedGenerationRevision,
+    string? SelectedPhysicalIndex,
+    bool? SelectedHasPermanentFailures,
+    long? SelectedPendingRetryableMutationCount,
+    bool? SelectedValidationIsValid,
     long? SelectedVisibleItemCount,
     long? SelectedTombstoneCount,
+    string ReadAlias,
+    ImmutableArray<string> ReadAliasIndices,
     ImmutableArray<string> SelectedControlEpochs,
     MaterializationHarnessSynchronizationWorkEvidence? SynchronizationWork,
     MaterializationHarnessSynchronizationRunEvidence? LastSynchronization,
@@ -29,6 +38,37 @@ sealed record MaterializationHarnessFailureEvidence(
     ImmutableArray<MaterializationHarnessSourceHeadEvidence> SourceHeads,
     ImmutableArray<string> CanonicalDocuments,
     DateTimeOffset CapturedAtUtc);
+
+enum MaterializationHarnessElasticFaultKind
+{
+    RetryableBulkRejection = 0,
+    PermanentBulkItemFailure = 1,
+    AppliedPromotionResponseLoss = 2
+}
+
+sealed record MaterializationHarnessElasticFaultItemEvidence(
+    string Operation,
+    string Index,
+    string Item);
+
+sealed record MaterializationHarnessElasticFaultObservation(
+    int SchemaVersion,
+    string RunIdentity,
+    string Provider,
+    MaterializationHarnessElasticFaultKind Kind,
+    int HostProcessId,
+    string RequestPath,
+    string InjectedRequestFingerprint,
+    ImmutableArray<MaterializationHarnessElasticFaultItemEvidence> InjectedItems,
+    ImmutableArray<MaterializationHarnessElasticFaultItemEvidence> AppliedItems,
+    ImmutableArray<MaterializationHarnessElasticFaultItemEvidence> RejectedItems,
+    bool ResponseLostAfterApply,
+    int MatchingRequestCount,
+    string? ExactRetryRequestFingerprint,
+    ImmutableArray<MaterializationHarnessElasticFaultItemEvidence> ExactRetryItems,
+    string? ReconciliationRequestPath,
+    DateTimeOffset OccurredAtUtc,
+    DateTimeOffset LastObservedAtUtc);
 
 sealed record MaterializationHarnessSynchronizationRunEvidence(
     MaterializationSynchronizationRunDisposition Disposition,
