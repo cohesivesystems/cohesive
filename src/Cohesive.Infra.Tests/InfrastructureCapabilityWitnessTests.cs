@@ -12,51 +12,53 @@ public sealed class InfrastructureCapabilityWitnessTests
     static readonly InfrastructureCapabilityVariantId Variant = new("production");
 
     [Fact]
-    public void Variant_evidence_requires_one_physical_witness_per_exact_resource_demand()
+    public void Ari_scheduler_evidence_for_one_physical_scheduler_cannot_close_an_unrelated_scheduler_demand()
     {
-        InfrastructureNodeId firstResource = new("resource/first");
-        InfrastructureNodeId secondResource = new("resource/second");
-        var firstRequirement = InfrastructureCapabilityRequirement.ForNode(firstResource, DurableStorage);
-        var secondRequirement = InfrastructureCapabilityRequirement.ForNode(secondResource, DurableStorage);
+        InfrastructureCapabilityId durableScheduling = new("durable-process-scheduling");
+        InfrastructureCapabilityEvidenceId schedulerEvidence = new("evidence/durable-task-scheduler");
+        InfrastructureNodeId trainingScheduler = new("resource/training-scheduler");
+        InfrastructureNodeId replayScheduler = new("resource/replay-scheduler");
+        var trainingRequirement = InfrastructureCapabilityRequirement.ForNode(trainingScheduler, durableScheduling);
+        var replayRequirement = InfrastructureCapabilityRequirement.ForNode(replayScheduler, durableScheduling);
         var definition = Definition(
             resources:
             [
-                new(firstResource, InfrastructureResourceLifecycle.Persistent, [firstRequirement]),
-                new(secondResource, InfrastructureResourceLifecycle.Persistent, [secondRequirement])
+                new(trainingScheduler, InfrastructureResourceLifecycle.Persistent, [trainingRequirement]),
+                new(replayScheduler, InfrastructureResourceLifecycle.Persistent, [replayRequirement])
             ]);
-        var closure = Closure(definition, NativeProfile(DurableStorage, StorageEvidence));
+        var closure = Closure(definition, NativeProfile(durableScheduling, schedulerEvidence));
         var lifecycle = Lifecycle(
             definition,
-            (firstResource, "physical/storage/first"),
-            (secondResource, "physical/storage/second"));
+            (trainingScheduler, "physical/durable-task/training"),
+            (replayScheduler, "physical/durable-task/replay"));
 
         var incomplete = InfrastructureRealizationCompiler.Compile(
             closure,
             lifecycle,
             capabilityWitnesses:
             [
-                Witness(firstRequirement.Id, StorageEvidence, "physical/storage/first")
+                Witness(trainingRequirement.Id, schedulerEvidence, "physical/durable-task/training")
             ]);
 
-        Assert.True(incomplete.FindWitnessDecision(firstRequirement.Id)!.IsComplete);
-        var secondDecision = incomplete.FindWitnessDecision(secondRequirement.Id)!;
-        Assert.False(secondDecision.IsComplete);
-        Assert.True(secondDecision.MissingEvidence.SequenceEqual([StorageEvidence]));
+        Assert.True(incomplete.FindWitnessDecision(trainingRequirement.Id)!.IsComplete);
+        var replayDecision = incomplete.FindWitnessDecision(replayRequirement.Id)!;
+        Assert.False(replayDecision.IsComplete);
+        Assert.True(replayDecision.MissingEvidence.SequenceEqual([schedulerEvidence]));
         Assert.Equal(
-            ["physical/storage/second"],
-            secondDecision.MissingPhysicalResources.Select(static resource => resource.Value));
+            ["physical/durable-task/replay"],
+            replayDecision.MissingPhysicalResources.Select(static resource => resource.Value));
         Assert.Contains(
             incomplete.Diagnostics,
             diagnostic => diagnostic.Code == InfrastructureCapabilityWitnessDiagnosticCodes.EvidenceWitnessMissing
-                          && diagnostic.Evidence?.Subject == secondRequirement.Id.Value);
+                          && diagnostic.Evidence?.Subject == replayRequirement.Id.Value);
 
         var complete = InfrastructureRealizationCompiler.Compile(
             closure,
             lifecycle,
             capabilityWitnesses:
             [
-                Witness(firstRequirement.Id, StorageEvidence, "physical/storage/first"),
-                Witness(secondRequirement.Id, StorageEvidence, "physical/storage/second")
+                Witness(trainingRequirement.Id, schedulerEvidence, "physical/durable-task/training"),
+                Witness(replayRequirement.Id, schedulerEvidence, "physical/durable-task/replay")
             ]);
 
         Assert.True(complete.IsCapabilityWitnessComplete);
