@@ -323,7 +323,8 @@ public sealed class RelationQueryIRTests
                 input: sourceId,
                 collection: Expr.Field(leftBinding, "Items"),
                 itemBinding: new ValueBindingId("item"),
-                itemType: new ScalarTypeRef(ScalarTypeKind.String)),
+                itemType: new ScalarTypeRef(ScalarTypeKind.String),
+                itemShape: QualifiedShape("Item")),
             new ProjectQueryNode(
                 id: new("project"),
                 input: sourceId,
@@ -358,6 +359,8 @@ public sealed class RelationQueryIRTests
             Assert.Contains(RelationQueryWireNames.NodeDiscriminator, json, StringComparison.Ordinal);
             if (roundTripped is TraverseRelationshipQueryNode traversal)
                 Assert.Equal(RelationshipTraversalDirection.Inverse, traversal.Direction);
+            if (roundTripped is ExpandCollectionQueryNode expansion)
+                Assert.Equal(QualifiedShape("Item"), expansion.ItemShape);
         }
 
         QueryPageDefinition[] pages =

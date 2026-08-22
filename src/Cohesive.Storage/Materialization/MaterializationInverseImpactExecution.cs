@@ -5,25 +5,30 @@ using Cohesive.Relations.Compilation;
 
 namespace Cohesive.Storage.Materialization;
 
-/// <summary>Closed provider-neutral read operations required by inverse-impact execution.</summary>
+/// <summary>Closed provider-neutral read operations required by affected-root execution.</summary>
 public enum MaterializationImpactObservationReadKind
 {
     /// <summary>Reads the current observations having exact stable identities.</summary>
     IdentityLookup = 0,
 
     /// <summary>Reads current observations whose canonical relationship reference matches one of the supplied keys.</summary>
-    RelationshipPredicateLookup = 1
+    RelationshipPredicateLookup = 1,
+
+    /// <summary>Enumerates one complete root set within an explicit hard row boundary.</summary>
+    BoundedEnumeration = 2
 }
 
-/// <summary>One bounded provider-neutral observation read requested by compiled inverse-impact execution.</summary>
+/// <summary>One bounded provider-neutral observation read requested by compiled affected-root execution.</summary>
 public sealed record MaterializationImpactObservationReadRequest
 {
-    /// <summary>Creates one exact identity or relationship-predicate read.</summary>
+    /// <summary>Creates one exact bounded enumeration, identity, or relationship-predicate read.</summary>
     /// <param name="kind">Closed read operation.</param>
     /// <param name="input">Canonical Relations acquisition input being read.</param>
     /// <param name="shape">Exact result shape for <paramref name="input"/>.</param>
     /// <param name="logicalPartition">Provider-neutral logical partition containing the read.</param>
-    /// <param name="keys">Distinct identity or relationship keys in canonical order.</param>
+    /// <param name="keys">
+    /// Distinct identity or relationship keys in canonical order, or an empty array for bounded enumeration.
+    /// </param>
     /// <param name="maximumRows">Hard maximum observations admitted from the read.</param>
     /// <param name="maximumBytes">Hard maximum encoded result bytes admitted from the read.</param>
     /// <param name="relationshipInput">
@@ -52,8 +57,14 @@ public sealed record MaterializationImpactObservationReadRequest
             throw new ArgumentException("An impact observation read requires a graph-qualified shape.", nameof(shape));
         LogicalPartition = Guard.RequireNotNull(logicalPartition);
         var normalizedKeys = keys.IsDefault ? [] : keys;
-        if (normalizedKeys.IsDefaultOrEmpty || normalizedKeys.Any(string.IsNullOrWhiteSpace))
-            throw new ArgumentException("An impact observation read requires non-empty keys.", nameof(keys));
+        var isEnumeration = kind == MaterializationImpactObservationReadKind.BoundedEnumeration;
+        if (isEnumeration == !normalizedKeys.IsDefaultOrEmpty
+            || normalizedKeys.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new ArgumentException(
+                "An impact identity or predicate read requires non-empty keys; bounded enumeration permits no keys.",
+                nameof(keys));
+        }
         if (normalizedKeys.Distinct(StringComparer.Ordinal).Count() != normalizedKeys.Length)
             throw new ArgumentException("An impact observation read cannot repeat a key.", nameof(keys));
         if (maximumRows <= 0)
@@ -94,7 +105,7 @@ public sealed record MaterializationImpactObservationReadRequest
     /// <summary>Provider-neutral logical partition containing the read.</summary>
     public RelationQueryLogicalPartitionIdentity LogicalPartition { get; }
 
-    /// <summary>Distinct identity or relationship keys in canonical order.</summary>
+    /// <summary>Distinct identity or relationship keys in canonical order, or an empty array for enumeration.</summary>
     public ImmutableArray<string> Keys { get; }
 
     /// <summary>Hard maximum observations admitted from the read.</summary>
@@ -110,7 +121,7 @@ public sealed record MaterializationImpactObservationReadRequest
     public FieldPath? RelationshipReference { get; }
 }
 
-/// <summary>Executes one exact bounded observation read for compiled inverse-impact resolution.</summary>
+/// <summary>Executes one exact bounded observation read for compiled affected-root resolution.</summary>
 /// <param name="context">Explicit cancellation, time, identity, and tracing context.</param>
 /// <param name="request">Exact provider-neutral read request.</param>
 /// <returns>Complete current observations or authoritative absence for the requested boundary.</returns>
@@ -121,12 +132,12 @@ public delegate ValueTask<RelationQuerySourceReadResult> MaterializationImpactOb
     OperationContext context,
     MaterializationImpactObservationReadRequest request);
 
-/// <summary>Provider-neutral interpreter for the inverse-traversal strategies retained in one impact plan.</summary>
+/// <summary>Provider-neutral interpreter for physical affected-root strategies retained in one impact plan.</summary>
 /// <remarks>
 /// The persisted strategy remains semantic authority. This interpreter only sequences its closed operations and
-/// delegates exact physical identity and predicate reads to a bound provider runtime.
+/// delegates exact bounded enumeration, identity, and predicate reads to a bound provider runtime.
 /// </remarks>
-public sealed class MaterializationInverseTraversalExecutor
+public sealed class MaterializationImpactRootExecutor
 {
     readonly MaterializationImpactPlanLinkage linkage;
     readonly MaterializationImpactObservationReader reader;
@@ -134,13 +145,13 @@ public sealed class MaterializationInverseTraversalExecutor
     readonly ImmutableDictionary<RelationQueryInputId, InputContract> inputs;
     readonly ImmutableDictionary<RelationQueryInputId, RelationQueryTraversalInputContract> relationships;
 
-    /// <summary>Creates one exact inverse-impact executor.</summary>
-    /// <param name="plan">Persisted impact plan whose inverse strategies are interpreted.</param>
+    /// <summary>Creates one exact affected-root executor.</summary>
+    /// <param name="plan">Persisted impact plan whose physical strategies are interpreted.</param>
     /// <param name="definition">Canonical materialization definition that produced <paramref name="plan"/>.</param>
-    /// <param name="reader">Provider runtime for complete bounded identity and predicate reads.</param>
+    /// <param name="reader">Provider runtime for complete bounded enumeration, identity, and predicate reads.</param>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">The plan is stale or the canonical relation does not have exactly one root.</exception>
-    public MaterializationInverseTraversalExecutor(
+    public MaterializationImpactRootExecutor(
         MaterializationImpactPlan plan,
         MaterializationDefinition definition,
         MaterializationImpactObservationReader reader)
@@ -167,7 +178,7 @@ public sealed class MaterializationInverseTraversalExecutor
     /// <summary>Exact impact-plan fingerprint implemented by this executor.</summary>
     public MaterializationImpactPlanFingerprint ImpactPlan => linkage.Plan.Fingerprint;
 
-    /// <summary>Resolves one inverse contributor change into complete current root observations.</summary>
+    /// <summary>Resolves one contributor change into complete current root observations.</summary>
     /// <param name="context">Explicit cancellation, time, identity, and tracing context.</param>
     /// <param name="request">Exact route, change, generation, and impact-plan request.</param>
     /// <returns>Affected roots in canonical identity order.</returns>
@@ -190,6 +201,30 @@ public sealed class MaterializationInverseTraversalExecutor
             || request.Change.Shape != route.ChangeShape)
         {
             throw new ArgumentException("Inverse-impact resolution requires the exact persisted route and change scope.", nameof(request));
+        }
+        if (route.Strategy is MaterializationBoundedGlobalImpactStrategy global)
+        {
+            var enumeratedRoots = await ReadAsync(
+                    context,
+                    new(
+                        kind: MaterializationImpactObservationReadKind.BoundedEnumeration,
+                        input: global.RootInput,
+                        shape: root.Shape,
+                        logicalPartition: request.Change.Scope.LogicalPartition,
+                        keys: [],
+                        maximumRows: route.MaximumAffectedRoots,
+                        maximumBytes: route.MaximumReadBytes))
+                .ConfigureAwait(false);
+            return
+            [
+                .. enumeratedRoots
+                    .OrderBy(static observation => observation.Identity, StringComparer.Ordinal)
+                    .Select(observation => new MaterializationAffectedRoot(
+                        input: global.RootInput,
+                        identity: observation.Identity,
+                        state: MaterializationRootState.Present,
+                        observation: observation))
+            ];
         }
         if (route.Strategy is not MaterializationInverseTraversalImpactStrategy strategy)
         {
@@ -322,7 +357,8 @@ public sealed class MaterializationInverseTraversalExecutor
         if (result.State is not (RelationQuerySourceReadState.Complete or RelationQuerySourceReadState.NotFound))
         {
             throw new InvalidOperationException(
-                $"Impact read '{request.Kind}' for input '{request.Input.Value}' returned '{result.State}' instead of complete evidence.");
+                $"Impact read '{request.Kind}' for input '{request.Input.Value}' returned '{result.State}' instead of complete evidence "
+                + $"('{result.EvidenceReference}').");
         }
         if ((long)result.Observations.Length > request.MaximumRows)
             throw new InvalidOperationException("An impact observation read exceeded its hard row bound.");

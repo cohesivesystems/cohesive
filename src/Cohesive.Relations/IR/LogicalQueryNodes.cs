@@ -304,6 +304,7 @@ public sealed record ExpandCollectionQueryNode : LogicalQueryNode
     /// <param name="collection">Collection expression to expand.</param>
     /// <param name="itemBinding">Binding introduced for each collection item.</param>
     /// <param name="itemType">Semantic type of each collection item.</param>
+    /// <param name="itemShape">Optional canonical shape of each structured collection item.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="collection"/> or <paramref name="itemType"/> is <see langword="null"/>.
     /// </exception>
@@ -312,13 +313,15 @@ public sealed record ExpandCollectionQueryNode : LogicalQueryNode
         QueryNodeId input,
         Expr collection,
         ValueBindingId itemBinding,
-        TypeRef itemType)
+        TypeRef itemType,
+        QualifiedShapeId? itemShape = null)
         : base(id)
     {
         Input = input;
         Collection = Guard.RequireNotNull(collection);
         ItemBinding = itemBinding;
         ItemType = Guard.RequireNotNull(itemType);
+        ItemShape = itemShape;
     }
 
     /// <summary>Input rowset.</summary>
@@ -332,6 +335,9 @@ public sealed record ExpandCollectionQueryNode : LogicalQueryNode
 
     /// <summary>Semantic type of each collection item.</summary>
     public TypeRef ItemType { get; init; }
+
+    /// <summary>Canonical shape of each structured collection item, when the producer can prove it.</summary>
+    public QualifiedShapeId? ItemShape { get; init; }
 
     /// <inheritdoc />
     public override ImmutableArray<QueryNodeId> Inputs => [Input];

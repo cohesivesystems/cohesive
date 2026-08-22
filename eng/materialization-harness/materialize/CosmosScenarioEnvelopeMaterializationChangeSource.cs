@@ -268,11 +268,9 @@ public sealed class CosmosScenarioEnvelopeMaterializationChangeSource : IMateria
             ? state.Deserialize<FreightOrder>(observationJson)!
             : shape == FreightOrderMaterializationModel.CustomerAccountShapeId
                 ? state.Deserialize<FreightCustomerAccount>(observationJson)!
-                : shape == FreightOrderMaterializationModel.OrderStopShapeId
-                    ? state.Deserialize<FreightOrderStop>(observationJson)!
-                    : shape == FreightOrderMaterializationModel.LocationShapeId
-                        ? state.Deserialize<FreightLocation>(observationJson)!
-                        : throw new InvalidOperationException($"Unsupported freight change shape '{shape}'.");
+                : shape == FreightOrderMaterializationModel.LocationShapeId
+                    ? state.Deserialize<FreightLocation>(observationJson)!
+                    : throw new InvalidOperationException($"Unsupported freight change shape '{shape}'.");
         return ObservationValue.FromObject(entity);
     }
 
@@ -392,11 +390,9 @@ public sealed class CosmosScenarioEnvelopeMaterializationChangeSource : IMateria
         ? "order"
         : shape == FreightOrderMaterializationModel.CustomerAccountShapeId
             ? "customerAccount"
-            : shape == FreightOrderMaterializationModel.OrderStopShapeId
-                ? "orderStop"
-                : shape == FreightOrderMaterializationModel.LocationShapeId
-                    ? "location"
-                    : throw new ArgumentException($"Unsupported freight change shape '{shape}'.", nameof(shape));
+            : shape == FreightOrderMaterializationModel.LocationShapeId
+                ? "location"
+                : throw new ArgumentException($"Unsupported freight change shape '{shape}'.", nameof(shape));
 
     static string RequiredString(JsonElement document, string property) =>
         document.GetProperty(property).GetString()

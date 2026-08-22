@@ -1419,11 +1419,11 @@ public sealed class RelationQueryInMemoryInterpreterTests
         var diagnostic = Assert.Single(
             result.Diagnostics,
             static item => item.Code
-                == RelationRuntimeDiagnosticCodes.ExecutionTargetCapabilityUnsupported);
+                == RelationRuntimeDiagnosticCodes.ExecutionExpressionFailure);
         Assert.Null(diagnostic.Input);
         Assert.Equal(filter, diagnostic.Node);
         Assert.Equal(filterSite, diagnostic.SemanticSite);
-        Assert.Contains("collection-element", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("collection-element", diagnostic.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     static RelationQueryCompilationDemand QueryFields(

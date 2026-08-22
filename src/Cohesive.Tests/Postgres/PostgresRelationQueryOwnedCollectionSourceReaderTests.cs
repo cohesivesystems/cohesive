@@ -4,6 +4,7 @@ using Cohesive.Model;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
 
 namespace Cohesive.Tests.Postgres;
@@ -62,10 +63,85 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         Assert.Equal("tenant-a", tenant.Value);
     }
 
-    static OwnedCollectionFixture CreateOwnedCollectionFixture()
+    [Fact]
+    public async Task OwnedCollection_IdentityLookupFiltersRootsBeforeComponentJoin()
+    {
+        var fixture = CreateOwnedCollectionFixture(identityLookup: true);
+        var request = new RelationQuerySourceReadRequest(
+            physicalPlan: PhysicalPlan,
+            stage: new("read/identity"),
+            placementBinding: fixture.Placement.Id,
+            source: SourceId,
+            shape: Shape,
+            identitySelector: "id",
+            fields:
+            [
+                new(
+                    input: fixture.StopsInput,
+                    semanticPath: FieldPath.FromField("stops"),
+                    sourceSelector: "stops",
+                    purpose: RelationQuerySourceReadFieldPurpose.SemanticInput)
+            ],
+            constraint: new RelationQueryIdentityBatchLookup(["order-b"]),
+            maximumBufferedRows: 2);
+
+        var result = await fixture.Reader.ReadAsync(request);
+
+        Assert.Equal(RelationQuerySourceReadState.Complete, result.State);
+        Assert.Equal("order-b", Assert.Single(result.Observations).Identity);
+        var command = Assert.Single(fixture.Commands);
+        Assert.Contains(" = ANY(", command.Text, StringComparison.Ordinal);
+        Assert.Contains(command.Parameters, static parameter => parameter.IsArray);
+    }
+
+    [Fact]
+    public async Task OwnedCollection_RelationshipLookupFiltersRootsBeforeComponentJoin()
+    {
+        var fixture = CreateOwnedCollectionFixture(relationshipLookup: true);
+        var request = new RelationQuerySourceReadRequest(
+            physicalPlan: PhysicalPlan,
+            stage: new("read/predicate"),
+            placementBinding: fixture.Placement.Id,
+            source: SourceId,
+            shape: Shape,
+            identitySelector: "id",
+            fields:
+            [
+                new(
+                    input: fixture.CustomerInput,
+                    semanticPath: FieldPath.FromField("customerAccountId"),
+                    sourceSelector: "customer_id",
+                    purpose: RelationQuerySourceReadFieldPurpose.SemanticInputAndCorrelation),
+                new(
+                    input: fixture.StopsInput,
+                    semanticPath: FieldPath.FromField("stops"),
+                    sourceSelector: "stops",
+                    purpose: RelationQuerySourceReadFieldPurpose.SemanticInput)
+            ],
+            constraint: new RelationQueryRelationshipKeyBatchLookup(
+                relationshipReference: FieldPath.FromField("customerAccountId"),
+                sourceSelector: "customer_id",
+                keys: ["customer-a"]),
+            maximumBufferedRows: 2);
+
+        var result = await fixture.Reader.ReadAsync(request);
+
+        Assert.Equal(RelationQuerySourceReadState.Complete, result.State);
+        Assert.Equal("order-a", Assert.Single(result.Observations).Identity);
+        var command = Assert.Single(fixture.Commands);
+        Assert.Contains("\"source\".\"customer_id\"", command.Text, StringComparison.Ordinal);
+        Assert.Contains(" = ANY(", command.Text, StringComparison.Ordinal);
+        Assert.Contains(command.Parameters, static parameter => parameter.IsArray);
+    }
+
+    static OwnedCollectionFixture CreateOwnedCollectionFixture(
+        bool identityLookup = false,
+        bool relationshipLookup = false)
     {
         var sourceInput = new RelationQueryInputId("input:orders");
         var stopsInput = new RelationQueryInputId("field:stops");
+        var customerInput = new RelationQueryInputId("field:customerAccountId");
+        var relationshipInput = new RelationQueryInputId("relationship:orders-customer");
         var equalityText = new PostgresRelationQueryTextSemantics(
             collation: "C",
             equality: PostgresRelationQueryTextEqualitySemantics.Ordinal);
@@ -76,14 +152,30 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
             binding: new ValueBindingId("binding:orders"),
             shape: Shape,
             source: SourceId,
-            kind: RelationQuerySourcePlacementBindingKind.SourceSet,
-            acquisition: RelationQuerySourceAcquisitionKind.BoundedEnumeration,
+            kind: identityLookup || relationshipLookup
+                ? RelationQuerySourcePlacementBindingKind.RelationshipTraversal
+                : RelationQuerySourcePlacementBindingKind.SourceSet,
+            acquisition: identityLookup || relationshipLookup
+                ? RelationQuerySourceAcquisitionKind.BoundedLookup
+                : RelationQuerySourceAcquisitionKind.BoundedEnumeration,
             origin: RelationQuerySourcePlacementOrigin.Explicit,
             identity: new(
                 shape: Shape,
                 sourceSelector: "id",
                 semanticPath: FieldPath.FromField("id")),
-            fields: [new(stopsInput, FieldPath.FromField("stops"), "stops")],
+            fields: relationshipLookup
+                ?
+                [
+                    new(stopsInput, FieldPath.FromField("stops"), "stops"),
+                    new(customerInput, FieldPath.FromField("customerAccountId"), "customer_id")
+                ]
+                : [new(stopsInput, FieldPath.FromField("stops"), "stops")],
+            relationshipKeys: relationshipLookup
+                ? [new(
+                    relationshipInput,
+                    FieldPath.FromField("customerAccountId"),
+                    "customer_id")]
+                : [],
             partition: new("tenantId"));
         var source = new RelationQuerySourceInstance(
             id: SourceId,
@@ -101,7 +193,9 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
             shapeSnapshotsFingerprint: new("sha256", "tests/shapes/v1", "owned-shapes"),
             relationshipCatalogFingerprint: null,
             demandFingerprint: new("sha256", "tests/demand/v1", "owned-demand"),
-            inputs: [sourceInput, stopsInput]);
+            inputs: relationshipLookup
+                ? [sourceInput, stopsInput, customerInput, relationshipInput]
+                : [sourceInput, stopsInput]);
         var placement = new RelationQuerySourcePlacement(
             schemaVersion: RelationQuerySourcePlacement.CurrentSchemaVersion,
             plan: plan,
@@ -120,7 +214,33 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
                 columnName: "id",
                 scalarType: PostgresRelationQueryScalarType.Text,
                 textSemantics: equalityText),
-            fields: [],
+            fields: relationshipLookup
+                ?
+                [
+                    new(
+                        customerInput,
+                        FieldPath.FromField("customerAccountId"),
+                        "customer_id",
+                        PostgresRelationQueryScalarType.Text,
+                        PostgresRelationQueryMissingValueEncoding.Prohibited,
+                        PostgresRelationQueryNullValueEncoding.Prohibited,
+                        textSemantics: equalityText)
+                ]
+                : [],
+            relationshipReferences: relationshipLookup
+                ?
+                [
+                    new(
+                        relationshipInput,
+                        FieldPath.FromField("customerAccountId"),
+                        "customer_id",
+                        PostgresRelationQueryScalarType.Text,
+                        SourceReferenceUniqueness.NotGuaranteed,
+                        PostgresRelationQueryMissingValueEncoding.Prohibited,
+                        PostgresRelationQueryNullValueEncoding.Prohibited,
+                        textSemantics: equalityText)
+                ]
+                : [],
             partition: new(
                 sourceSelector: "tenantId",
                 semanticPath: FieldPath.FromField("tenantId"),
@@ -195,20 +315,26 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
                 cancellationToken.ThrowIfCancellationRequested();
                 commands.Add(command);
                 return ValueTask.FromResult(new PostgresNpgsqlCommandResult(
-                [
-                    ["order-a", "stop-a1", "location-1", 0],
-                    ["order-a", "stop-a2", "location-2", 1],
-                    ["order-b", null, null, null],
-                    ["order-c", "stop-c1", "location-3", 0]
-                ]));
+                    relationshipLookup
+                        ? [["order-a", "customer-a", "stop-a1", "location-1", 0]]
+                        : identityLookup
+                        ? [["order-b", null, null, null]]
+                        :
+                        [
+                            ["order-a", "stop-a1", "location-1", 0],
+                            ["order-a", "stop-a2", "location-2", 1],
+                            ["order-b", null, null, null],
+                            ["order-c", "stop-c1", "location-3", 0]
+                        ]));
             },
             policy: TenantPolicy("tenant-a"));
-        return new(reader, placementBinding, stopsInput, commands);
+        return new(reader, placementBinding, stopsInput, customerInput, commands);
     }
 
     sealed record OwnedCollectionFixture(
         PostgresRelationQuerySourceReader Reader,
         RelationQuerySourcePlacementBinding Placement,
         RelationQueryInputId StopsInput,
+        RelationQueryInputId CustomerInput,
         List<PostgresNpgsqlCommand> Commands);
 }

@@ -5,12 +5,14 @@ using Cohesive.Execution;
 using Cohesive.MaterializationHarness.Materialize;
 using Cohesive.MaterializationHarness.Model;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.Physical;
 using Cohesive.Storage.Materialization;
+using Cohesive.Storage.Realization;
 
 namespace Cohesive.Tests.Storage;
 
@@ -24,18 +26,21 @@ public sealed class FreightOrderRebuildPlanCompilerTests
             FreightOrderMaterializationReplicaDialects.Get("postgres"),
             semantics);
         var target = Target(semantics, "postgres");
+        var storageRealization = StorageRealization(semantics, "postgres", postgresPhysical);
         var forwardBindings = Bindings(semantics, "postgres", postgresPhysical, ["acme", "northwind"]);
         var reverseBindings = Bindings(semantics, "postgres", postgresPhysical, ["northwind", "acme"]);
 
         var forward = FreightOrderRebuildPlanCompiler.Compile(
             semantics: semantics,
             provider: "postgres",
+            storageRealization: storageRealization,
             target: target,
             tenantBindings: forwardBindings,
             impactPlan: postgresPhysical.ImpactPlan);
         var reverse = FreightOrderRebuildPlanCompiler.Compile(
             semantics: semantics,
             provider: "postgres",
+            storageRealization: storageRealization,
             target: target,
             tenantBindings: reverseBindings,
             impactPlan: postgresPhysical.ImpactPlan);
@@ -49,12 +54,14 @@ public sealed class FreightOrderRebuildPlanCompilerTests
             MaterializationRebuildPlanningJsonSerializer.GetCanonicalPlanSetBytes(forward.PlanSet),
             MaterializationRebuildPlanningJsonSerializer.GetCanonicalPlanSetBytes(reverse.PlanSet));
         Assert.Equal(["tenant/acme", "tenant/northwind"], forward.Plan.Shards.Select(static shard => shard.Id.Value));
-        Assert.Equal(12, forward.Plan.ChangeFeeds.Length);
-        Assert.Equal(6, forward.Plan.ImpactPlan.Routes.Length);
+        Assert.Equal(8, forward.Plan.ChangeFeeds.Length);
+        Assert.Equal(4, forward.Plan.ImpactPlan.Routes.Length);
         Assert.All(
             forward.Plan.ImpactPlan.Routes,
             static route => Assert.True(route.Strategy is
-                MaterializationDirectRootImpactStrategy or MaterializationInverseTraversalImpactStrategy));
+                MaterializationDirectRootImpactStrategy
+                or MaterializationInverseTraversalImpactStrategy
+                or MaterializationBoundedGlobalImpactStrategy));
         Assert.Single(forward.PlanSet.LeafPlans);
         Assert.Equal(target.Id, forward.Plan.Target.Id);
     }
@@ -73,12 +80,14 @@ public sealed class FreightOrderRebuildPlanCompilerTests
         var postgres = FreightOrderRebuildPlanCompiler.Compile(
             semantics: semantics,
             provider: "postgres",
+            storageRealization: StorageRealization(semantics, "postgres", postgresPhysical),
             target: Target(semantics, "postgres"),
             tenantBindings: Bindings(semantics, "postgres", postgresPhysical, ["acme", "northwind"]),
             impactPlan: postgresPhysical.ImpactPlan);
         var cosmos = FreightOrderRebuildPlanCompiler.Compile(
             semantics: semantics,
             provider: "cosmos",
+            storageRealization: StorageRealization(semantics, "cosmos", cosmosPhysical),
             target: Target(semantics, "cosmos"),
             tenantBindings: Bindings(semantics, "cosmos", cosmosPhysical, ["acme", "northwind"]),
             impactPlan: cosmosPhysical.ImpactPlan);
@@ -96,6 +105,13 @@ public sealed class FreightOrderRebuildPlanCompilerTests
         Assert.NotEqual(postgres.Plan.Target.Id, cosmos.Plan.Target.Id);
         Assert.NotEqual(postgres.Plan.Sources[0].Source, cosmos.Plan.Sources[0].Source);
         Assert.NotEqual(postgres.Plan.Fingerprint, cosmos.Plan.Fingerprint);
+        Assert.Equal(
+            postgres.StorageRealization.StructureFingerprint,
+            cosmos.StorageRealization.StructureFingerprint);
+        Assert.IsType<StorageDecomposedOwnedCollectionRealization>(
+            Assert.Single(postgres.StorageRealization.Realization.OwnedCollections));
+        Assert.IsType<StorageEmbeddedOwnedCollectionRealization>(
+            Assert.Single(cosmos.StorageRealization.Realization.OwnedCollections));
     }
 
     [Fact]
@@ -116,6 +132,7 @@ public sealed class FreightOrderRebuildPlanCompilerTests
         var exception = Assert.Throws<ArgumentException>(() => FreightOrderRebuildPlanCompiler.Compile(
             semantics: semantics,
             provider: "postgres",
+            storageRealization: StorageRealization(semantics, "postgres", physical),
             target: Target(semantics, "postgres"),
             tenantBindings: [mixed, valid[1]],
             impactPlan: physical.ImpactPlan));
@@ -142,6 +159,7 @@ public sealed class FreightOrderRebuildPlanCompilerTests
         var exception = Assert.Throws<ArgumentException>(() => FreightOrderRebuildPlanCompiler.Compile(
             semantics: semantics,
             provider: "postgres",
+            storageRealization: StorageRealization(semantics, "postgres", postgresPhysical),
             target: Target(semantics, "postgres"),
             tenantBindings: [postgres[0], cosmos[0]],
             impactPlan: postgresPhysical.ImpactPlan));
@@ -150,6 +168,45 @@ public sealed class FreightOrderRebuildPlanCompilerTests
         Assert.All(
             cosmos[0].Sources.Select(static source => Assert.IsType<CountingReader>(source.Source.Descriptor.RelationReader)),
             static reader => Assert.Equal(0, reader.ReadCount));
+    }
+
+    static StorageRealizationDocument StorageRealization(
+        FreightOrderMaterializationSemantics semantics,
+        string provider,
+        Program.ProviderPlan physical)
+    {
+        var provenance = new ExecutionProvenance(
+            producer: new("cohesive-tests", "1"),
+            source: new($"tests/freight-order-rebuild/{provider}/storage-realization"),
+            origin: DocumentOrigin.Generated);
+        StorageRealizationCompilationResult compilation = provider switch
+        {
+            "postgres" => new PostgresStorageRealizationCompiler().Compile(
+                structure: semantics.Structure,
+                rootPlacement: physical.ScanRoot,
+                storageBinding: Program.CreatePostgresStorageBinding(
+                    placement: physical.ScanPlacement,
+                    plan: semantics.Plan,
+                    structure: semantics.Structure,
+                    purpose: "tests-canonical-rebuild-scan"),
+                realizationId: new("tests/postgres/freight-order/v1"),
+                provenance: provenance),
+            "cosmos" => new CosmosStorageRealizationCompiler().Compile(
+                structure: semantics.Structure,
+                rootPlacement: physical.ScanRoot,
+                storageBinding: Program.CreateCosmosStorageBinding(
+                    placement: physical.ScanPlacement,
+                    plan: semantics.Plan,
+                    structure: semantics.Structure,
+                    accountEndpoint: new("https://localhost:8081"),
+                    databaseId: "cohesive-materialization-harness",
+                    containerId: "orders"),
+                realizationId: new("tests/cosmos/freight-order/v1"),
+                provenance: provenance),
+            _ => throw new ArgumentOutOfRangeException(nameof(provider), provider, "Unsupported test provider.")
+        };
+        return compilation.Document ?? throw new InvalidOperationException(
+            string.Join(Environment.NewLine, compilation.Diagnostics.Select(static diagnostic => diagnostic.Message)));
     }
 
     static ImmutableArray<FreightOrderRebuildTenantBinding> Bindings(

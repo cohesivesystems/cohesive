@@ -747,12 +747,8 @@ sealed class RelationQueryRequirementGraphBuilder
         var siteTrace = AppendSite(trace, expansion.Id, collectionSite);
         if (expansion.Collection is FieldExpr collectionField
             && TryResolveSiteFieldBinding(collectionSite, collectionField, out var sourceBinding)
-            && TryResolveComposedSiteFieldPath(
-                collectionSite,
-                sourceBinding,
-                collectionField.Path,
-                [FieldPathSegment.Element(), .. path.Segments],
-                out var sourcePath))
+            && TryFindBindingShape(collectionSite, sourceBinding, out var sourceShape)
+            && TryResolveField(sourceShape, collectionField.Path, out _))
         {
             WalkSiteNonFieldRequirements(
                 collectionSite,
@@ -763,7 +759,7 @@ sealed class RelationQueryRequirementGraphBuilder
             return WalkField(
                 expansion.Input,
                 sourceBinding,
-                sourcePath,
+                collectionField.Path,
                 effect,
                 output,
                 requirement,

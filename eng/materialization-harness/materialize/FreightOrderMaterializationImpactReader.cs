@@ -11,7 +11,7 @@ using Cohesive.Storage.Materialization;
 namespace Cohesive.MaterializationHarness.Materialize;
 
 /// <summary>
-/// Binds provider-neutral compiled inverse-impact reads to exact official Relations source readers.
+/// Binds provider-neutral compiled affected-root reads to exact official Relations source readers.
 /// </summary>
 public sealed class FreightOrderMaterializationImpactReader
 {
@@ -56,7 +56,7 @@ public sealed class FreightOrderMaterializationImpactReader
 
     /// <summary>Executes one provider-neutral impact read through its exact provider Relations reader.</summary>
     /// <param name="context">Explicit cancellation, time, identity, and tracing context.</param>
-    /// <param name="request">Exact identity or relationship-predicate read.</param>
+    /// <param name="request">Exact bounded enumeration, identity, or relationship-predicate read.</param>
     /// <returns>Complete, not-found, partial, inconclusive, or failed provider evidence.</returns>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">The request names another input, relationship, or logical partition.</exception>
@@ -76,9 +76,19 @@ public sealed class FreightOrderMaterializationImpactReader
         var reader = readers[binding.Source];
         if (reader.Descriptor.LogicalPartition != request.LogicalPartition)
             throw new ArgumentException("The impact read belongs to another provider-neutral logical partition.", nameof(request));
-        var kind = request.Kind == MaterializationImpactObservationReadKind.IdentityLookup
-            ? RelationQueryPhysicalStageKind.BatchedIdentityLookup
-            : RelationQueryPhysicalStageKind.BatchedPredicateLookup;
+        var kind = request.Kind switch
+        {
+            MaterializationImpactObservationReadKind.IdentityLookup =>
+                RelationQueryPhysicalStageKind.BatchedIdentityLookup,
+            MaterializationImpactObservationReadKind.RelationshipPredicateLookup =>
+                RelationQueryPhysicalStageKind.BatchedPredicateLookup,
+            MaterializationImpactObservationReadKind.BoundedEnumeration =>
+                RelationQueryPhysicalStageKind.SourceRead,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(request),
+                request.Kind,
+                "Unsupported impact observation read kind.")
+        };
         var stage = physicalPlan.Stages.Single(candidate =>
             candidate.PlacementBinding == binding.Id && candidate.Kind == kind);
         var fields = CreateFields(input.Fields, binding, request.RelationshipInput);
@@ -86,6 +96,8 @@ public sealed class FreightOrderMaterializationImpactReader
         {
             MaterializationImpactObservationReadKind.IdentityLookup => new RelationQueryIdentityBatchLookup(request.Keys),
             MaterializationImpactObservationReadKind.RelationshipPredicateLookup => CreatePredicate(binding, request),
+            MaterializationImpactObservationReadKind.BoundedEnumeration =>
+                new RelationQueryBoundedEnumeration(request.MaximumRows),
             _ => throw new ArgumentOutOfRangeException(nameof(request), request.Kind, "Unsupported impact observation read kind.")
         };
         var read = new RelationQuerySourceReadRequest(

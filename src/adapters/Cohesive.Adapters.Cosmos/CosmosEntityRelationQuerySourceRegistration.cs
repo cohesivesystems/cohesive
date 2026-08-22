@@ -46,6 +46,9 @@ public static class CosmosEntityRelationQuerySourceRegistration
     /// Physical property-only observation-identity path, or <see langword="null"/> for <c>observationId</c>.
     /// Returned documents must contain a nonempty JSON string at the effective path.
     /// </param>
+    /// <param name="identitySemanticPath">
+    /// Optional canonical field path whose value is exactly the source-native observation identity.
+    /// </param>
     /// <param name="fieldSourceSelector">
     /// Semantic-to-physical field policy, or <see langword="null"/> to select below <c>observation</c>. A custom
     /// policy is evaluated and property-path-validated per requested semantic path, not exhaustively by this method.
@@ -83,6 +86,7 @@ public static class CosmosEntityRelationQuerySourceRegistration
         RelationQueryExecutionDomainId? executionDomain = null,
         RelationQuerySourcePlacementLimits? limits = null,
         string? identitySourceSelector = null,
+        FieldPath? identitySemanticPath = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
         string? entityDocumentKind = null)
@@ -151,12 +155,13 @@ public static class CosmosEntityRelationQuerySourceRegistration
             relationshipKeySourceSelector,
             effectiveEntityDocumentKind);
         return new(
-            shape,
-            sourceInstance,
-            reader,
-            reader.IdentitySourceSelector,
-            reader.FieldSourceSelector,
-            reader.RelationshipKeySourceSelector);
+            shape: shape,
+            source: sourceInstance,
+            reader: reader,
+            identitySourceSelector: reader.IdentitySourceSelector,
+            identitySemanticPath: identitySemanticPath,
+            fieldSourceSelector: reader.FieldSourceSelector,
+            relationshipKeySourceSelector: reader.RelationshipKeySourceSelector);
     }
 
     static string FingerprintBinding(

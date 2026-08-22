@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Execution;
 using Cohesive.Model;
+using Cohesive.Relations.Acquisition;
 using Cohesive.Storage.Materialization;
 
 namespace Cohesive.MaterializationHarness.Materialize;
@@ -14,19 +15,26 @@ public sealed class PostgresFreightMaterializationChangeSource :
     IMaterializationSettlingSource
 {
     readonly PostgresLogicalReplicationMaterializationChangeSource source;
+    readonly MaterializationImpactObservationReader? currentRootReader;
 
     /// <summary>Creates one complete freight source capability closure.</summary>
     /// <param name="source">Official baseline, logical-replication, retained-history, and settlement source.</param>
     /// <param name="requirement">Complete canonical requirement for this acquisition input.</param>
     /// <param name="impactEvidenceReference">Exact auxiliary Relations impact-plan evidence.</param>
+    /// <param name="currentRootReader">
+    /// Optional authoritative aggregate reader used to reconcile root-row WAL signals with current owned-component
+    /// state. Non-root inputs omit this composition.
+    /// </param>
     /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">A missing capability cannot be supplied by auxiliary impact reads.</exception>
     public PostgresFreightMaterializationChangeSource(
         PostgresLogicalReplicationMaterializationChangeSource source,
         MaterializationSourceRequirement requirement,
-        string impactEvidenceReference)
+        string impactEvidenceReference,
+        MaterializationImpactObservationReader? currentRootReader = null)
     {
         this.source = Guard.RequireNotNull(source);
+        this.currentRootReader = currentRootReader;
         ArgumentNullException.ThrowIfNull(requirement);
         ArgumentException.ThrowIfNullOrWhiteSpace(impactEvidenceReference);
         var baseProfile = source.Descriptor.CapabilityProfile;
@@ -125,12 +133,83 @@ public sealed class PostgresFreightMaterializationChangeSource :
     {
         try
         {
-            return await source.ReadChangesAsync(context, request).ConfigureAwait(false);
+            var page = await source.ReadChangesAsync(context, request).ConfigureAwait(false);
+            return currentRootReader is null || page.Deliveries.IsDefaultOrEmpty
+                ? page
+                : await ReconcileCurrentRootsAsync(context, request, page).ConfigureAwait(false);
         }
         catch (PostgresLogicalReplicationException exception)
         {
             throw Explain(exception);
         }
+    }
+
+    async ValueTask<MaterializationChangePage> ReconcileCurrentRootsAsync(
+        OperationContext context,
+        MaterializationChangeReadRequest request,
+        MaterializationChangePage page)
+    {
+        HashSet<string> requestedIdentities = new(StringComparer.Ordinal);
+        foreach (var delivery in page.Deliveries)
+            requestedIdentities.Add(delivery.Change.SubjectIdentity);
+        var identities = requestedIdentities.Order(StringComparer.Ordinal).ToImmutableArray();
+        var result = await currentRootReader!(
+                context,
+                new(
+                    kind: MaterializationImpactObservationReadKind.IdentityLookup,
+                    input: request.Scope.Input,
+                    shape: request.Scope.Shape,
+                    logicalPartition: request.Scope.LogicalPartition,
+                    keys: identities,
+                    maximumRows: identities.Length,
+                    maximumBytes: request.MaximumBytes))
+            .ConfigureAwait(false);
+        if (result.State is not (RelationQuerySourceReadState.Complete or RelationQuerySourceReadState.NotFound))
+        {
+            throw new InvalidOperationException(
+                $"PostgreSQL aggregate current-state reconciliation returned '{result.State}' instead of complete evidence "
+                + $"('{result.EvidenceReference}').");
+        }
+        var currentByIdentity = result.Observations.ToImmutableDictionary(
+            static observation => observation.Identity,
+            StringComparer.Ordinal);
+        if (currentByIdentity.Keys.Any(identity => !requestedIdentities.Contains(identity)))
+        {
+            throw new InvalidOperationException(
+                "PostgreSQL aggregate current-state reconciliation returned an unrequested root observation.");
+        }
+
+        var deliveries = page.Deliveries.ToBuilder();
+        for (var index = 0; index < deliveries.Count; index++)
+        {
+            var delivery = deliveries[index];
+            var change = delivery.Change;
+            var identity = change.SubjectIdentity;
+            currentByIdentity.TryGetValue(identity, out var current);
+            var reconciled = new MaterializationChangeEnvelope(
+                id: change.Id,
+                subjectIdentity: change.SubjectIdentity,
+                scope: change.Scope,
+                shape: change.Shape,
+                position: change.Position,
+                kind: current is null ? MaterializationChangeKind.Delete : MaterializationChangeKind.Upsert,
+                before: null,
+                after: current,
+                occurredAtUtc: change.OccurredAtUtc,
+                observedAtUtc: change.ObservedAtUtc,
+                evidenceReference: change.EvidenceReference is null
+                    ? "materialization-harness/postgres/current-aggregate-root/v1"
+                    : $"{change.EvidenceReference}/current-aggregate-root/v1");
+            deliveries[index] = new(
+                id: delivery.Id,
+                change: reconciled,
+                deliveredAtUtc: delivery.DeliveredAtUtc,
+                evidenceReference: delivery.EvidenceReference);
+        }
+        return new(
+            deliveries: deliveries.ToImmutable(),
+            throughPosition: page.ThroughPosition,
+            state: page.State);
     }
 
     /// <inheritdoc />

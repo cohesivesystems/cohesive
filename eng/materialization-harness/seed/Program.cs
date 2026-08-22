@@ -117,7 +117,7 @@ static class Program
 
     static void PrintSummary(string action, FreightScenarioState state) => Console.WriteLine(
         $"{action} scenario '{state.ScenarioId}': {state.Orders.Length} orders, "
-        + $"{state.Customers.Length} customers, {state.Stops.Length} stops, "
+        + $"{state.Customers.Length} customers, {state.StopCount} owned stops, "
         + $"{state.Locations.Length} locations across {state.TenantCount} tenants through sequence {state.ThroughSequence}.");
 
     static async Task SeedPostgresDirectAsync(string connectionString, FreightScenarioState state)
@@ -164,22 +164,20 @@ static class Program
                 ("equipment", value.EquipmentClass),
                 ("created", value.CreatedAt),
                 ("version", state.GetVersion(FreightScenarioEntityKind.Order, value.TenantId, value.Id)));
-        }
-        foreach (var value in state.Stops)
-        {
-            await ExecuteAsync(
-                connection,
-                transaction,
-                $"INSERT INTO {PostgresSchema}.order_stops VALUES (@tenant, @id, @order, @sequence, @type, @location, @start, @end, @version);",
-                ("tenant", value.TenantId),
-                ("id", value.Id),
-                ("order", value.OrderId),
-                ("sequence", value.Sequence),
-                ("type", value.StopType),
-                ("location", value.LocationId),
-                ("start", value.ScheduledStart),
-                ("end", value.ScheduledEnd),
-                ("version", state.GetVersion(FreightScenarioEntityKind.OrderStop, value.TenantId, value.Id)));
+            foreach (var stop in value.Stops)
+            {
+                await ExecuteAsync(
+                    connection,
+                    transaction,
+                    $"INSERT INTO {PostgresSchema}.order_stops VALUES (@tenant, @id, @order, @sequence, @type, @location, @version);",
+                    ("tenant", value.TenantId),
+                    ("id", stop.Id),
+                    ("order", value.Id),
+                    ("sequence", stop.Sequence),
+                    ("type", stop.StopType),
+                    ("location", stop.LocationId),
+                    ("version", state.GetVersion(FreightScenarioEntityKind.Order, value.TenantId, value.Id)));
+            }
         }
         await transaction.CommitAsync();
 
@@ -238,16 +236,17 @@ static class Program
                 sequence integer NOT NULL CHECK (sequence > 0),
                 stop_type text NOT NULL CHECK (stop_type IN ('Pickup', 'Drop')),
                 location_id text COLLATE "C" NOT NULL,
-                scheduled_start timestamptz NOT NULL,
-                scheduled_end timestamptz NOT NULL,
                 observation_version bigint NOT NULL,
-                PRIMARY KEY (tenant_id, order_stop_id),
-                UNIQUE (tenant_id, order_id, sequence),
-                FOREIGN KEY (tenant_id, order_id)
-                    REFERENCES {{PostgresSchema}}.orders (tenant_id, order_id),
+                CONSTRAINT pk_freight_harness_order_stops
+                    PRIMARY KEY (tenant_id, order_id, order_stop_id),
+                CONSTRAINT uq_freight_harness_order_stops_sequence
+                    UNIQUE (tenant_id, order_id, sequence),
+                CONSTRAINT fk_freight_harness_order_stops_order
+                    FOREIGN KEY (tenant_id, order_id)
+                    REFERENCES {{PostgresSchema}}.orders (tenant_id, order_id)
+                    ON DELETE CASCADE,
                 FOREIGN KEY (tenant_id, location_id)
-                    REFERENCES {{PostgresSchema}}.locations (tenant_id, location_id),
-                CHECK (scheduled_start <= scheduled_end)
+                    REFERENCES {{PostgresSchema}}.locations (tenant_id, location_id)
             );
             CREATE TABLE {{PostgresSchema}}.scenario_mutations (
                 operation_id text COLLATE "C" PRIMARY KEY,
@@ -360,42 +359,13 @@ static class Program
                 ("displayName", "display_name", PostgresRelationQueryScalarType.Text),
                 ("city", "city", PostgresRelationQueryScalarType.Text),
                 ("region", "region", PostgresRelationQueryScalarType.Text)));
-        var orderRepository = new PostgresEntityRepository(
-            storage.Order,
-            runtime,
-            Mapping(
-                "orders",
-                "id",
-                "order_id",
-                ("tenantId", "tenant_id", PostgresRelationQueryScalarType.Text),
-                ("orderNumber", "order_number", PostgresRelationQueryScalarType.Text),
-                ("customerAccountId", "customer_account_id", PostgresRelationQueryScalarType.Text),
-                ("equipmentClass", "equipment_class", PostgresRelationQueryScalarType.Text),
-                ("createdAt", "created_at", PostgresRelationQueryScalarType.TimestampWithTimeZone)));
-        var stopRepository = new PostgresEntityRepository(
-            storage.OrderStop,
-            runtime,
-            Mapping(
-                "order_stops",
-                "id",
-                "order_stop_id",
-                ("tenantId", "tenant_id", PostgresRelationQueryScalarType.Text),
-                ("orderId", "order_id", PostgresRelationQueryScalarType.Text),
-                ("sequence", "sequence", PostgresRelationQueryScalarType.Int32),
-                ("stopType", "stop_type", PostgresRelationQueryScalarType.Text),
-                ("locationId", "location_id", PostgresRelationQueryScalarType.Text),
-                ("scheduledStart", "scheduled_start", PostgresRelationQueryScalarType.TimestampWithTimeZone),
-                ("scheduledEnd", "scheduled_end", PostgresRelationQueryScalarType.TimestampWithTimeZone)));
-
         var seeder = new GenericRepositorySeedDataService(
             [
                 GenericRepositorySeedBinding.For(storage.CustomerAccount, customerRepository),
-                GenericRepositorySeedBinding.For(storage.Location, locationRepository),
-                GenericRepositorySeedBinding.For(storage.Order, orderRepository),
-                GenericRepositorySeedBinding.For(storage.OrderStop, stopRepository)
+                GenericRepositorySeedBinding.For(storage.Location, locationRepository)
             ],
             new());
-        var seedItems = CreateRepositorySeedItems(state);
+        var seedItems = CreateRepositorySeedItems(state, includeOrders: false);
         var result = await seeder.Seed(
             OperationContext.Create(),
             seedItems,
@@ -408,6 +378,8 @@ static class Program
         Require(
             replay.Items.All(static item => item.Status == RepositorySeedItemStatuses.Replaced),
             "PostgreSQL repository replay did not exercise replacement semantics for every item.");
+        await SeedPostgresOrderAggregatesAsync(dataSource, state);
+        await SeedPostgresOrderAggregatesAsync(dataSource, state);
         await VerifyPostgresAsync(connectionString, state);
 
         static PostgresEntityRepositoryMapping Mapping(
@@ -425,6 +397,62 @@ static class Program
             ],
             identityField,
             partitionField: "tenantId");
+    }
+
+    static async Task SeedPostgresOrderAggregatesAsync(
+        NpgsqlDataSource dataSource,
+        FreightScenarioState state)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        foreach (var order in state.Orders)
+        {
+            var version = state.GetVersion(FreightScenarioEntityKind.Order, order.TenantId, order.Id);
+            await FreightScenarioMutationProjection.ExecutePostgresAsync(
+                connection: connection,
+                transaction: transaction,
+                template: FreightScenarioMutationProjection.PostgresCommands.UpsertOrder,
+                cancellationToken: CancellationToken.None,
+                parameters:
+                [
+                    ("tenant_id", order.TenantId),
+                    ("order_id", order.Id),
+                    ("order_number", order.OrderNumber),
+                    ("customer_account_id", order.CustomerAccountId),
+                    ("equipment_class", order.EquipmentClass),
+                    ("created_at", order.CreatedAt),
+                    ("observation_version", version)
+                ]);
+            await FreightScenarioMutationProjection.ExecutePostgresAsync(
+                connection: connection,
+                transaction: transaction,
+                template: FreightScenarioMutationProjection.PostgresCommands.DeleteOrderStops,
+                cancellationToken: CancellationToken.None,
+                parameters:
+                [
+                    ("tenant_id", order.TenantId),
+                    ("order_id", order.Id)
+                ]);
+            foreach (var stop in order.Stops)
+            {
+                await FreightScenarioMutationProjection.ExecutePostgresAsync(
+                    connection: connection,
+                    transaction: transaction,
+                    template: FreightScenarioMutationProjection.PostgresCommands.InsertStop,
+                    cancellationToken: CancellationToken.None,
+                    parameters:
+                    [
+                        ("tenant_id", order.TenantId),
+                        ("order_stop_id", stop.Id),
+                        ("order_id", order.Id),
+                        ("sequence", stop.Sequence),
+                        ("stop_type", stop.StopType),
+                        ("location_id", stop.LocationId),
+                        ("observation_version", version)
+                    ]);
+            }
+        }
+        await transaction.CommitAsync();
     }
 
     static async Task VerifyPostgresAsync(string connectionString, FreightScenarioState state)
@@ -455,7 +483,7 @@ static class Program
             Require(reader.GetString(1) == "logical", "PostgreSQL logical WAL is not enabled.");
             Require(reader.GetInt64(2) == state.Orders.Length, "PostgreSQL Order count differs from the journal.");
             Require(reader.GetInt64(3) == state.Customers.Length, "PostgreSQL CustomerAccount count differs from the journal.");
-            Require(reader.GetInt64(4) == state.Stops.Length, "PostgreSQL OrderStop count differs from the journal.");
+            Require(reader.GetInt64(4) == state.StopCount, "PostgreSQL owned Order.Stop count differs from the journal.");
             Require(reader.GetInt64(5) == state.Locations.Length, "PostgreSQL Location count differs from the journal.");
             Require(reader.GetInt64(6) == 1, "The PostgreSQL freight publication is missing.");
         }
@@ -515,17 +543,15 @@ static class Program
             "Order");
         await VerifyRowsAsync(
             connection,
-            $"SELECT tenant_id, order_stop_id, order_id, sequence, stop_type, location_id, scheduled_start, scheduled_end, observation_version FROM {PostgresSchema}.order_stops;",
-            state.Stops.Select(value => Row(
-                value.TenantId,
-                value.Id,
-                value.OrderId,
-                value.Sequence,
-                value.StopType,
-                value.LocationId,
-                value.ScheduledStart.ToUniversalTime(),
-                value.ScheduledEnd.ToUniversalTime(),
-                state.GetVersion(FreightScenarioEntityKind.OrderStop, value.TenantId, value.Id))),
+            $"SELECT tenant_id, order_stop_id, order_id, sequence, stop_type, location_id, observation_version FROM {PostgresSchema}.order_stops;",
+            state.Orders.SelectMany(order => order.Stops.Select(stop => Row(
+                order.TenantId,
+                stop.Id,
+                order.Id,
+                stop.Sequence,
+                stop.StopType,
+                stop.LocationId,
+                state.GetVersion(FreightScenarioEntityKind.Order, order.TenantId, order.Id)))),
             static reader => Row(
                 reader.GetString(0),
                 reader.GetString(1),
@@ -533,10 +559,8 @@ static class Program
                 reader.GetInt32(3),
                 reader.GetString(4),
                 reader.GetString(5),
-                new DateTimeOffset(reader.GetFieldValue<DateTime>(6)).ToUniversalTime(),
-                new DateTimeOffset(reader.GetFieldValue<DateTime>(7)).ToUniversalTime(),
-                reader.GetInt64(8)),
-            "OrderStop");
+                reader.GetInt64(6)),
+            "owned Order.Stop");
 
         static string Row(params object[] values) => JsonSerializer.Serialize(values, JsonOptions);
     }
@@ -579,7 +603,6 @@ static class Program
         var database = containers.Database;
         var orders = containers.Orders;
         var customers = containers.Customers;
-        var stops = containers.Stops;
         var locations = containers.Locations;
         var occurredAtUtc = state.OccurredAtUtc;
         foreach (var value in state.Orders)
@@ -600,7 +623,14 @@ static class Program
                         orderNumber = value.OrderNumber,
                         customerAccountId = value.CustomerAccountId,
                         equipmentClass = value.EquipmentClass,
-                        createdAt = value.CreatedAt.ToString("O", CultureInfo.InvariantCulture)
+                        createdAt = value.CreatedAt.ToString("O", CultureInfo.InvariantCulture),
+                        stops = value.Stops.Select(static stop => new
+                        {
+                            id = stop.Id,
+                            sequence = stop.Sequence,
+                            stopType = stop.StopType,
+                            locationId = stop.LocationId
+                        }).ToArray()
                     },
                     occurredAtUtc
                 },
@@ -622,32 +652,6 @@ static class Program
                         id = value.Id,
                         tenantId = value.TenantId,
                         displayName = value.DisplayName
-                    },
-                    occurredAtUtc
-                },
-                new(value.TenantId));
-        }
-        foreach (var value in state.Stops)
-        {
-            await stops.UpsertItemAsync(
-                new
-                {
-                    id = $"stop/{value.Id}",
-                    partitionKey = value.TenantId,
-                    documentKind = CosmosRelationQuerySourceReader.DefaultEntityDocumentKind,
-                    observationType = FreightOrderMaterializationModel.OrderStopShapeId.ShapeId.Value,
-                    observationId = value.Id,
-                    observationVersion = state.GetVersion(FreightScenarioEntityKind.OrderStop, value.TenantId, value.Id),
-                    observation = new
-                    {
-                        id = value.Id,
-                        tenantId = value.TenantId,
-                        orderId = value.OrderId,
-                        sequence = value.Sequence,
-                        stopType = value.StopType,
-                        locationId = value.LocationId,
-                        scheduledStart = value.ScheduledStart.ToString("O", CultureInfo.InvariantCulture),
-                        scheduledEnd = value.ScheduledEnd.ToString("O", CultureInfo.InvariantCulture)
                     },
                     occurredAtUtc
                 },
@@ -696,7 +700,6 @@ static class Program
             database,
             (await database.CreateContainerAsync("orders", "/partitionKey")).Container,
             (await database.CreateContainerAsync("customerAccounts", "/partitionKey")).Container,
-            (await database.CreateContainerAsync("orderStops", "/partitionKey")).Container,
             (await database.CreateContainerAsync("locations", "/partitionKey")).Container);
     }
 
@@ -711,14 +714,12 @@ static class Program
         var partition = EntityPartitionKeyPolicy.FromField("tenantId");
         var orderRepository = Repository(storage.Order, containers.Orders, "order");
         var customerRepository = Repository(storage.CustomerAccount, containers.Customers, "customer");
-        var stopRepository = Repository(storage.OrderStop, containers.Stops, "stop");
         var locationRepository = Repository(storage.Location, containers.Locations, "location");
         var seeder = new GenericRepositorySeedDataService(
             [
                 GenericRepositorySeedBinding.For(storage.CustomerAccount, customerRepository),
                 GenericRepositorySeedBinding.For(storage.Location, locationRepository),
-                GenericRepositorySeedBinding.For(storage.Order, orderRepository),
-                GenericRepositorySeedBinding.For(storage.OrderStop, stopRepository)
+                GenericRepositorySeedBinding.For(storage.Order, orderRepository)
             ],
             new());
         var seedItems = CreateRepositorySeedItems(state);
@@ -746,10 +747,12 @@ static class Program
             partitionKeyPolicy: partition);
     }
 
-    static IReadOnlyList<RepositorySeedStateItem> CreateRepositorySeedItems(FreightScenarioState state)
+    static IReadOnlyList<RepositorySeedStateItem> CreateRepositorySeedItems(
+        FreightScenarioState state,
+        bool includeOrders = true)
     {
         List<RepositorySeedStateItem> items = new(
-            state.Customers.Length + state.Locations.Length + state.Orders.Length + state.Stops.Length);
+            state.Customers.Length + state.Locations.Length + (includeOrders ? state.Orders.Length : 0));
         foreach (var value in state.Customers)
         {
             items.Add(new(
@@ -768,22 +771,13 @@ static class Program
                 Version: state.GetVersion(FreightScenarioEntityKind.Location, value.TenantId, value.Id),
                 PartitionKey: value.TenantId));
         }
-        foreach (var value in state.Orders)
+        foreach (var value in includeOrders ? state.Orders : [])
         {
             items.Add(new(
                 Type: FreightOrderMaterializationModel.OrderShapeId.ShapeId.Value,
                 Id: value.Id,
                 State: value,
                 Version: state.GetVersion(FreightScenarioEntityKind.Order, value.TenantId, value.Id),
-                PartitionKey: value.TenantId));
-        }
-        foreach (var value in state.Stops)
-        {
-            items.Add(new(
-                Type: FreightOrderMaterializationModel.OrderStopShapeId.ShapeId.Value,
-                Id: value.Id,
-                State: value,
-                Version: state.GetVersion(FreightScenarioEntityKind.OrderStop, value.TenantId, value.Id),
                 PartitionKey: value.TenantId));
         }
         return items;
@@ -802,7 +796,6 @@ static class Program
     {
         await VerifyContainerAsync(database, "orders", state.Orders.Length, "Order");
         await VerifyContainerAsync(database, "customerAccounts", state.Customers.Length, "CustomerAccount");
-        await VerifyContainerAsync(database, "orderStops", state.Stops.Length, "OrderStop");
         await VerifyContainerAsync(database, "locations", state.Locations.Length, "Location");
         await VerifyCosmosDocumentsAsync(database, state);
     }
@@ -1013,7 +1006,6 @@ static class Program
         Database Database,
         Container Orders,
         Container Customers,
-        Container Stops,
         Container Locations);
 
     sealed record ExpectedCosmosDocument(
@@ -1031,7 +1023,6 @@ static class Program
             {
                 "order" => ("orders", "order"),
                 "customer-account" => ("customerAccounts", "customer"),
-                "order-stop" => ("orderStops", "stop"),
                 "location" => ("locations", "location"),
                 _ => throw new InvalidOperationException($"Unsupported Cosmos seed type '{item.Type}'.")
             };

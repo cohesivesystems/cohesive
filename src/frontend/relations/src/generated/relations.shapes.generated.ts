@@ -1794,6 +1794,7 @@ export interface ExpandCollectionQueryNode {
   collection: Expr;
   itemBinding: ValueBindingId;
   itemType: TypeRef;
+  itemShape?: QualifiedShapeId | null;
   id: QueryNodeId;
 }
 

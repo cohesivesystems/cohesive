@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Cohesive.MaterializationHarness.Model;
 
-/// <summary>Canonical freight entity kinds admitted by the materialization harness scenario journal.</summary>
+/// <summary>Canonical aggregate/entity and owned-component targets admitted by the scenario journal.</summary>
 public enum FreightScenarioEntityKind
 {
     /// <summary>An immutable customer order root.</summary>
@@ -13,7 +13,7 @@ public enum FreightScenarioEntityKind
     /// <summary>A customer account referenced by one or more orders.</summary>
     CustomerAccount = 1,
 
-    /// <summary>An ordered stop owned by an order.</summary>
+    /// <summary>An authored operation targeting an ordered stop owned by an Order aggregate.</summary>
     OrderStop = 2,
 
     /// <summary>A location referenced by one or more order stops.</summary>
@@ -104,7 +104,8 @@ public sealed class FreightScenarioTransition
     /// <summary>Deterministic UTC occurrence time derived from the journal authority.</summary>
     public DateTimeOffset OccurredAtUtc { get; }
 
-    /// <summary>Canonical entity kind changed by this transition.</summary>
+    /// <summary>Canonical aggregate or independent entity changed by this transition.</summary>
+    /// <remarks>Authored OrderStop operations resolve to their owning <see cref="FreightScenarioEntityKind.Order"/>.</remarks>
     public FreightScenarioEntityKind Entity { get; }
 
     /// <summary>Canonical mutation kind.</summary>
@@ -210,7 +211,6 @@ public sealed class FreightScenarioState
         DateTimeOffset occurredAtUtc,
         ImmutableArray<FreightOrder> orders,
         ImmutableArray<FreightCustomerAccount> customers,
-        ImmutableArray<FreightOrderStop> stops,
         ImmutableArray<FreightLocation> locations,
         ImmutableDictionary<FreightScenarioVersionKey, long> versions)
     {
@@ -219,7 +219,6 @@ public sealed class FreightScenarioState
         OccurredAtUtc = occurredAtUtc;
         Orders = orders;
         Customers = customers;
-        Stops = stops;
         Locations = locations;
         this.versions = versions;
     }
@@ -239,11 +238,11 @@ public sealed class FreightScenarioState
     /// <summary>Customer accounts in canonical tenant and identity order.</summary>
     public ImmutableArray<FreightCustomerAccount> Customers { get; }
 
-    /// <summary>Order stops in canonical tenant, order, sequence, and identity order.</summary>
-    public ImmutableArray<FreightOrderStop> Stops { get; }
-
     /// <summary>Locations in canonical tenant and identity order.</summary>
     public ImmutableArray<FreightLocation> Locations { get; }
+
+    /// <summary>Total number of stop components owned by the canonical Orders.</summary>
+    public int StopCount => Orders.Sum(static order => order.Stops.Length);
 
     /// <summary>Number of distinct tenant partitions represented by the state.</summary>
     public int TenantCount => Orders.Select(static order => order.TenantId)
@@ -264,7 +263,7 @@ public sealed class FreightScenarioState
 public sealed class FreightScenarioJournal
 {
     /// <summary>Current persisted journal schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive.materialization-harness/scenario-journal/v3";
+    public const string CurrentSchemaVersion = "cohesive.materialization-harness/scenario-journal/v4";
 
     static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -364,7 +363,8 @@ public sealed class FreightScenarioJournal
             var transition = Apply(document, operation, entities);
             if (operation.Sequence <= document.BaselineThroughSequence
                 && (transition.Operation != FreightScenarioOperationKind.Upsert
-                    || transition.GetBefore<object>() is not null))
+                    || !string.Equals(operation.Entity, "orderStop", StringComparison.Ordinal)
+                        && transition.GetBefore<object>() is not null))
             {
                 throw new InvalidOperationException(
                     $"Baseline operation {operation.Sequence} must create one previously absent entity.");
@@ -404,6 +404,15 @@ public sealed class FreightScenarioJournal
         var transactionId = string.IsNullOrWhiteSpace(operation.Transaction)
             ? $"operation/{operation.Sequence}"
             : operation.Transaction;
+        if (entityKind == FreightScenarioEntityKind.OrderStop)
+        {
+            return ApplyOwnedStop(
+                journal: journal,
+                operation: operation,
+                operationKind: operationKind,
+                transactionId: transactionId,
+                entities: entities);
+        }
         object? before;
         object? after;
         FreightScenarioEntityKey key;
@@ -419,6 +428,8 @@ public sealed class FreightScenarioJournal
                 key = Key(entityKind, after);
                 var versionKey = new FreightScenarioVersionKey(entityKind, key);
                 entities.TryGetValue(versionKey, out var prior);
+                if (after is FreightOrder order)
+                    after = order with { Stops = (prior?.Value as FreightOrder)?.Stops ?? [] };
                 before = prior?.Value;
                 version = checked((prior?.Version ?? 0) + 1);
                 entities[versionKey] = new(after, version);
@@ -456,6 +467,90 @@ public sealed class FreightScenarioJournal
             afterState: CanonicalState(after));
     }
 
+    static FreightScenarioTransition ApplyOwnedStop(
+        JournalDocument journal,
+        OperationDocument operation,
+        FreightScenarioOperationKind operationKind,
+        string transactionId,
+        Dictionary<FreightScenarioVersionKey, VersionedEntity> entities)
+    {
+        FreightScenarioVersionKey orderVersionKey;
+        FreightOrder before;
+        ImmutableArray<FreightOrderStop> stops;
+        switch (operationKind)
+        {
+            case FreightScenarioOperationKind.Upsert:
+                if (operation.Document is not { ValueKind: JsonValueKind.Object } document)
+                    throw new InvalidOperationException($"Scenario upsert {operation.Sequence} requires a document.");
+                if (operation.Identity is not null)
+                    throw new InvalidOperationException($"Scenario upsert {operation.Sequence} cannot also declare an identity.");
+                var authored = Deserialize<StopDocument>(document, operation.Sequence);
+                orderVersionKey = new(
+                    FreightScenarioEntityKind.Order,
+                    new(authored.TenantId, authored.OrderId));
+                before = RequireOrder(entities, orderVersionKey, operation.Sequence);
+                stops = NormalizeStops(before.Stops
+                    .Where(stop => !string.Equals(stop.Id, authored.OrderStopId, StringComparison.Ordinal))
+                    .Append(authored.ToComponent()));
+                break;
+            case FreightScenarioOperationKind.Delete:
+                if (operation.Document is not null)
+                    throw new InvalidOperationException($"Scenario delete {operation.Sequence} cannot contain a document.");
+                var identity = operation.Identity
+                    ?? throw new InvalidOperationException($"Scenario delete {operation.Sequence} requires an identity.");
+                var owners = entities
+                    .Where(pair => pair.Key.Entity == FreightScenarioEntityKind.Order
+                        && string.Equals(pair.Key.Key.TenantId, identity.TenantId, StringComparison.Ordinal)
+                        && ((FreightOrder)pair.Value.Value).Stops.Any(stop =>
+                            string.Equals(stop.Id, identity.Id, StringComparison.Ordinal)))
+                    .ToArray();
+                if (owners.Length != 1)
+                {
+                    throw new InvalidOperationException(
+                        $"Scenario delete {operation.Sequence} requires exactly one owning Order for stop '{identity.TenantId}/{identity.Id}'.");
+                }
+                orderVersionKey = owners[0].Key;
+                before = (FreightOrder)owners[0].Value.Value;
+                stops = NormalizeStops(before.Stops.Where(stop =>
+                    !string.Equals(stop.Id, identity.Id, StringComparison.Ordinal)));
+                break;
+            default:
+                throw new InvalidOperationException($"Unsupported scenario operation '{operation.Operation}'.");
+        }
+
+        var prior = entities[orderVersionKey];
+        var after = before with { Stops = stops };
+        var version = checked(prior.Version + 1);
+        entities[orderVersionKey] = new(after, version);
+        var occurredAtUtc = journal.OccurredAtUtc.AddSeconds(operation.Sequence);
+        return new(
+            scenarioId: journal.ScenarioId,
+            sequence: operation.Sequence,
+            transactionId: transactionId,
+            occurredAtUtc: occurredAtUtc,
+            entity: FreightScenarioEntityKind.Order,
+            operation: FreightScenarioOperationKind.Upsert,
+            key: orderVersionKey.Key,
+            version: version,
+            before: before,
+            after: after,
+            beforeState: CanonicalState(before),
+            afterState: CanonicalState(after));
+    }
+
+    static FreightOrder RequireOrder(
+        IReadOnlyDictionary<FreightScenarioVersionKey, VersionedEntity> entities,
+        FreightScenarioVersionKey key,
+        long sequence) => entities.TryGetValue(key, out var versioned)
+        ? (FreightOrder)versioned.Value
+        : throw new InvalidOperationException(
+            $"Scenario stop operation {sequence} references absent Order '{key.Key}'.");
+
+    static ImmutableArray<FreightOrderStop> NormalizeStops(IEnumerable<FreightOrderStop> stops) =>
+        [.. stops
+            .OrderBy(static stop => stop.Sequence)
+            .ThenBy(static stop => stop.Id, StringComparer.Ordinal)];
+
     static ImmutableArray<FreightScenarioTransaction> GroupTransactions(
         JournalDocument document,
         ImmutableArray<FreightScenarioTransition> mutations,
@@ -463,8 +558,14 @@ public sealed class FreightScenarioJournal
     {
         if (mutations.IsEmpty)
             return [];
+        Dictionary<FreightScenarioVersionKey, VersionedEntity> replay = [];
+        foreach (var operation in document.Operations.Take(checked((int)document.BaselineThroughSequence)))
+            _ = Apply(document, operation, replay);
         HashSet<string> completed = new(StringComparer.Ordinal);
         ImmutableArray<FreightScenarioTransaction>.Builder transactions = ImmutableArray.CreateBuilder<FreightScenarioTransaction>();
+        Dictionary<FreightScenarioVersionKey, long> projectedVersions = replay.ToDictionary(
+            static pair => pair.Key,
+            static pair => pair.Value.Version);
         var start = 0;
         while (start < mutations.Length)
         {
@@ -476,25 +577,45 @@ public sealed class FreightScenarioJournal
                 end++;
             var transitions = mutations[start..end];
             var first = transitions[0];
-            if (transitions.Any(transition => transition.Entity != first.Entity || transition.Key.TenantId != first.Key.TenantId))
+            if (transitions.Any(transition => transition.Entity != first.Entity || transition.Key != first.Key))
             {
                 throw new InvalidOperationException(
-                    $"Scenario transaction '{id}' crosses an entity container or tenant partition and cannot be atomic in every provider.");
+                    $"Scenario transaction '{id}' crosses a canonical aggregate and cannot be atomic in every provider.");
             }
-            transactions.Add(new(id, first.OccurredAtUtc, transitions));
+            var last = transitions[^1];
+            var versionKey = new FreightScenarioVersionKey(first.Entity, first.Key);
+            var priorVersion = projectedVersions.GetValueOrDefault(versionKey);
+            var operation = last.AfterState is null
+                ? FreightScenarioOperationKind.Delete
+                : FreightScenarioOperationKind.Upsert;
+            var transition = new FreightScenarioTransition(
+                scenarioId: first.ScenarioId,
+                sequence: last.Sequence,
+                transactionId: id,
+                occurredAtUtc: last.OccurredAtUtc,
+                entity: first.Entity,
+                operation: operation,
+                key: first.Key,
+                version: checked(priorVersion + 1),
+                before: TransitionValue(first, before: true),
+                after: TransitionValue(last, before: false),
+                beforeState: first.BeforeState,
+                afterState: last.AfterState);
+            if (operation == FreightScenarioOperationKind.Delete)
+                projectedVersions.Remove(versionKey);
+            else
+                projectedVersions[versionKey] = transition.Version;
+            transactions.Add(new(id, last.OccurredAtUtc, [transition]));
             start = end;
         }
 
         // Replay the baseline and validate every committed mutation cut. Validation occurs here rather than while
         // parsing individual transitions so a transaction may atomically exchange relationship state.
-        Dictionary<FreightScenarioVersionKey, VersionedEntity> replay = [];
-        foreach (var operation in document.Operations.Take(checked((int)document.BaselineThroughSequence)))
-            _ = Apply(document, operation, replay);
         foreach (var transaction in transactions)
         {
             foreach (var operation in document.Operations.Where(candidate =>
-                         candidate.Sequence >= transaction.Transitions[0].Sequence
-                         && candidate.Sequence <= transaction.Transitions[^1].Sequence))
+                         candidate.Sequence > document.BaselineThroughSequence
+                         && string.Equals(TransactionId(candidate), transaction.Id, StringComparison.Ordinal)))
             {
                 _ = Apply(document, operation, replay);
             }
@@ -503,8 +624,31 @@ public sealed class FreightScenarioJournal
         }
         if (!Equivalent(replay, finalEntities))
             throw new InvalidOperationException("Scenario transaction replay differs from the final journal projection.");
+        foreach (var key in finalEntities.Keys.ToArray())
+        {
+            if (projectedVersions.TryGetValue(key, out var version))
+                finalEntities[key] = finalEntities[key] with { Version = version };
+        }
         return transactions.ToImmutable();
     }
+
+    static string TransactionId(OperationDocument operation) => string.IsNullOrWhiteSpace(operation.Transaction)
+        ? $"operation/{operation.Sequence}"
+        : operation.Transaction;
+
+    static object? TransitionValue(FreightScenarioTransition transition, bool before) => transition.Entity switch
+    {
+        FreightScenarioEntityKind.Order => before
+            ? transition.GetBefore<FreightOrder>()
+            : transition.GetAfter<FreightOrder>(),
+        FreightScenarioEntityKind.CustomerAccount => before
+            ? transition.GetBefore<FreightCustomerAccount>()
+            : transition.GetAfter<FreightCustomerAccount>(),
+        FreightScenarioEntityKind.Location => before
+            ? transition.GetBefore<FreightLocation>()
+            : transition.GetAfter<FreightLocation>(),
+        _ => throw new InvalidOperationException($"Unsupported canonical transition entity '{transition.Entity}'.")
+    };
 
     static FreightScenarioState CreateState(
         JournalDocument journal,
@@ -523,14 +667,6 @@ public sealed class FreightScenarioJournal
             .OrderBy(static value => value.TenantId, StringComparer.Ordinal)
             .ThenBy(static value => value.Id, StringComparer.Ordinal)
             .ToImmutableArray();
-        var stops = entities
-            .Where(static pair => pair.Key.Entity == FreightScenarioEntityKind.OrderStop)
-            .Select(static pair => (FreightOrderStop)pair.Value.Value)
-            .OrderBy(static value => value.TenantId, StringComparer.Ordinal)
-            .ThenBy(static value => value.OrderId, StringComparer.Ordinal)
-            .ThenBy(static value => value.Sequence)
-            .ThenBy(static value => value.Id, StringComparer.Ordinal)
-            .ToImmutableArray();
         var locations = entities
             .Where(static pair => pair.Key.Entity == FreightScenarioEntityKind.Location)
             .Select(static pair => (FreightLocation)pair.Value.Value)
@@ -543,7 +679,6 @@ public sealed class FreightScenarioJournal
             occurredAtUtc: journal.OccurredAtUtc.AddSeconds(throughSequence),
             orders: orders,
             customers: customers,
-            stops: stops,
             locations: locations,
             versions: entities.ToImmutableDictionary(static pair => pair.Key, static pair => pair.Value.Version));
     }
@@ -557,7 +692,7 @@ public sealed class FreightScenarioJournal
         {
             if (state.Orders.Length < 6)
                 throw new InvalidOperationException($"Scenario {cut} must cross the two-item root-page boundary.");
-            if (state.Stops.Length < 12)
+            if (state.StopCount < 12)
                 throw new InvalidOperationException($"Scenario {cut} must cross contributor lookup boundaries.");
             if (state.TenantCount < 2)
                 throw new InvalidOperationException($"Scenario {cut} requires at least two tenants.");
@@ -583,34 +718,30 @@ public sealed class FreightScenarioJournal
                     $"Scenario {cut} Order '{order.TenantId}/{order.Id}' references a missing customer.");
             }
         }
-        foreach (var stop in state.Stops)
+        foreach (var order in state.Orders)
         {
-            RequireText(stop.TenantId, $"Scenario {cut} OrderStop tenant");
-            RequireText(stop.Id, $"Scenario {cut} OrderStop identity");
-            if (stop.Sequence <= 0)
-                throw new InvalidOperationException($"Scenario {cut} OrderStop '{stop.TenantId}/{stop.Id}' has a nonpositive sequence.");
-            if (stop.StopType is not ("Pickup" or "Drop"))
-                throw new InvalidOperationException($"Scenario {cut} OrderStop '{stop.TenantId}/{stop.Id}' has an unsupported type.");
-            if (!orders.Contains(new(stop.TenantId, stop.OrderId)))
-                throw new InvalidOperationException($"Scenario {cut} OrderStop '{stop.TenantId}/{stop.Id}' references a missing order.");
-            if (!locations.Contains(new(stop.TenantId, stop.LocationId)))
-                throw new InvalidOperationException($"Scenario {cut} OrderStop '{stop.TenantId}/{stop.Id}' references a missing location.");
-            if (stop.ScheduledStart > stop.ScheduledEnd)
-                throw new InvalidOperationException($"Scenario {cut} OrderStop '{stop.TenantId}/{stop.Id}' has an inverted schedule.");
-        }
-        foreach (var group in state.Stops.GroupBy(static stop => new FreightScenarioEntityKey(stop.TenantId, stop.OrderId)))
-        {
-            if (group.Select(static stop => stop.Sequence).Distinct().Count() != group.Count())
-                throw new InvalidOperationException($"Scenario {cut} Order '{group.Key}' repeats a stop sequence.");
-            if (group.Count(static stop => stop.StopType == "Pickup") != 1)
-                throw new InvalidOperationException($"Scenario {cut} Order '{group.Key}' requires one pickup.");
-            if (!group.Any(static stop => stop.StopType == "Drop"))
-                throw new InvalidOperationException($"Scenario {cut} Order '{group.Key}' requires a drop.");
+            foreach (var stop in order.Stops)
+            {
+                RequireText(stop.Id, $"Scenario {cut} OrderStop identity");
+                if (stop.Sequence <= 0)
+                    throw new InvalidOperationException($"Scenario {cut} OrderStop '{order.TenantId}/{order.Id}/{stop.Id}' has a nonpositive sequence.");
+                if (stop.StopType is not ("Pickup" or "Drop"))
+                    throw new InvalidOperationException($"Scenario {cut} OrderStop '{order.TenantId}/{order.Id}/{stop.Id}' has an unsupported type.");
+                if (!locations.Contains(new(order.TenantId, stop.LocationId)))
+                    throw new InvalidOperationException($"Scenario {cut} OrderStop '{order.TenantId}/{order.Id}/{stop.Id}' references a missing location.");
+            }
+            if (order.Stops.Select(static stop => stop.Id).Distinct(StringComparer.Ordinal).Count() != order.Stops.Length)
+                throw new InvalidOperationException($"Scenario {cut} Order '{order.TenantId}/{order.Id}' repeats a stop identity.");
+            if (order.Stops.Select(static stop => stop.Sequence).Distinct().Count() != order.Stops.Length)
+                throw new InvalidOperationException($"Scenario {cut} Order '{order.TenantId}/{order.Id}' repeats a stop sequence.");
+            if (order.Stops.Length != 0 && order.Stops.Count(static stop => stop.StopType == "Pickup") != 1)
+                throw new InvalidOperationException($"Scenario {cut} Order '{order.TenantId}/{order.Id}' requires one pickup.");
+            if (order.Stops.Length != 0 && !order.Stops.Any(static stop => stop.StopType == "Drop"))
+                throw new InvalidOperationException($"Scenario {cut} Order '{order.TenantId}/{order.Id}' requires a drop.");
         }
         if (requireCoverage)
         {
-            if (!state.Stops.Select(static stop => new FreightScenarioEntityKey(stop.TenantId, stop.OrderId)).ToHashSet()
-                .SetEquals(orders))
+            if (state.Orders.Any(static order => order.Stops.IsDefaultOrEmpty))
             {
                 throw new InvalidOperationException($"Scenario {cut} requires stops for every order.");
             }
@@ -619,7 +750,14 @@ public sealed class FreightScenarioJournal
             {
                 throw new InvalidOperationException($"Scenario {cut} requires a customer shared by multiple orders.");
             }
-            if (!state.Stops.GroupBy(static stop => new FreightScenarioEntityKey(stop.TenantId, stop.LocationId))
+            if (!state.Orders
+                .SelectMany(static order => order.Stops.Select(stop => new
+                {
+                    order.TenantId,
+                    OrderId = order.Id,
+                    stop.LocationId
+                }))
+                .GroupBy(static stop => new FreightScenarioEntityKey(stop.TenantId, stop.LocationId))
                 .Any(static group => group.Select(static stop => stop.OrderId).Distinct(StringComparer.Ordinal).Count() > 1))
             {
                 throw new InvalidOperationException($"Scenario {cut} requires a location shared by multiple orders.");
@@ -631,7 +769,6 @@ public sealed class FreightScenarioJournal
     {
         FreightScenarioEntityKind.Order => Deserialize<OrderDocument>(document, sequence).ToEntity(),
         FreightScenarioEntityKind.CustomerAccount => Deserialize<CustomerDocument>(document, sequence).ToEntity(),
-        FreightScenarioEntityKind.OrderStop => Deserialize<StopDocument>(document, sequence).ToEntity(),
         FreightScenarioEntityKind.Location => Deserialize<LocationDocument>(document, sequence).ToEntity(),
         _ => throw new InvalidOperationException($"Scenario operation {sequence} has unsupported entity '{entity}'.")
     };
@@ -644,7 +781,6 @@ public sealed class FreightScenarioJournal
     {
         (FreightScenarioEntityKind.Order, FreightOrder order) => new(order.TenantId, order.Id),
         (FreightScenarioEntityKind.CustomerAccount, FreightCustomerAccount customer) => new(customer.TenantId, customer.Id),
-        (FreightScenarioEntityKind.OrderStop, FreightOrderStop stop) => new(stop.TenantId, stop.Id),
         (FreightScenarioEntityKind.Location, FreightLocation location) => new(location.TenantId, location.Id),
         _ => throw new InvalidOperationException($"Scenario value does not match entity kind '{entity}'.")
     };
@@ -685,7 +821,9 @@ public sealed class FreightScenarioJournal
         {
             if (!right.TryGetValue(key, out var candidate)
                 || value.Version != candidate.Version
-                || !Equals(value.Value, candidate.Value))
+                || !JsonElement.DeepEquals(
+                    CanonicalState(value.Value)!.Value,
+                    CanonicalState(candidate.Value)!.Value))
             {
                 return false;
             }
@@ -751,16 +889,12 @@ public sealed class FreightScenarioJournal
         DateTimeOffset ScheduledStart,
         DateTimeOffset ScheduledEnd)
     {
-        internal FreightOrderStop ToEntity() => new()
+        internal FreightOrderStop ToComponent() => new()
         {
             Id = OrderStopId,
-            TenantId = TenantId,
-            OrderId = OrderId,
             Sequence = Sequence,
             StopType = StopType,
-            LocationId = LocationId,
-            ScheduledStart = ScheduledStart,
-            ScheduledEnd = ScheduledEnd
+            LocationId = LocationId
         };
     }
 

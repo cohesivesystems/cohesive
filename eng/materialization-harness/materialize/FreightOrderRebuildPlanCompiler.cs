@@ -10,6 +10,7 @@ using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Physical;
 using Cohesive.Storage.Materialization;
+using Cohesive.Storage.Realization;
 
 namespace Cohesive.MaterializationHarness.Materialize;
 
@@ -126,6 +127,7 @@ public sealed class FreightOrderRebuildPlanCompilation
 
     internal FreightOrderRebuildPlanCompilation(
         string provider,
+        StorageRealizationDocument storageRealization,
         MaterializationRebuildRequestDocument request,
         MaterializationRebuildMembershipEvidence membership,
         MaterializationTargetPlacementPlan placement,
@@ -136,6 +138,7 @@ public sealed class FreightOrderRebuildPlanCompilation
         ImmutableDictionary<MaterializationChangeFeedId, IMaterializationImpactRuntime> impactRuntimesByFeed)
     {
         Provider = provider;
+        StorageRealization = storageRealization;
         Request = request;
         Membership = membership;
         Placement = placement;
@@ -148,6 +151,9 @@ public sealed class FreightOrderRebuildPlanCompilation
 
     /// <summary>Stable provider interpretation identity.</summary>
     public string Provider { get; }
+
+    /// <summary>Official adapter interpretation of the canonical aggregate storage structure.</summary>
+    public StorageRealizationDocument StorageRealization { get; }
 
     /// <summary>Canonical rebuild request.</summary>
     public MaterializationRebuildRequestDocument Request { get; }
@@ -218,6 +224,7 @@ public static class FreightOrderRebuildPlanCompiler
     /// <summary>Compiles canonical planning artifacts and verifies every exact tenant/provider runtime binding.</summary>
     /// <param name="semantics">Canonical provider-neutral freight semantics.</param>
     /// <param name="provider">Stable provider interpretation identity.</param>
+    /// <param name="storageRealization">Official adapter interpretation of the canonical aggregate storage structure.</param>
     /// <param name="target">Exact generational index target descriptor for this provider interpretation.</param>
     /// <param name="tenantBindings">Complete tenant runtime bindings; input order is immaterial.</param>
     /// <param name="impactPlan">Exact persisted impact plan already bound by every tenant runtime.</param>
@@ -228,12 +235,14 @@ public static class FreightOrderRebuildPlanCompiler
     public static FreightOrderRebuildPlanCompilation Compile(
         FreightOrderMaterializationSemantics semantics,
         string provider,
+        StorageRealizationDocument storageRealization,
         MaterializationTargetDescriptor target,
         IEnumerable<FreightOrderRebuildTenantBinding> tenantBindings,
         MaterializationImpactPlan impactPlan)
     {
         ArgumentNullException.ThrowIfNull(semantics);
         ArgumentException.ThrowIfNullOrWhiteSpace(provider);
+        ArgumentNullException.ThrowIfNull(storageRealization);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(tenantBindings);
         ArgumentNullException.ThrowIfNull(impactPlan);
@@ -245,6 +254,8 @@ public static class FreightOrderRebuildPlanCompiler
             throw new ArgumentException("A freight rebuild cannot repeat a tenant shard.", nameof(tenantBindings));
         if (target.MaterializationId != semantics.Definition.Id)
             throw new ArgumentException("The provider target belongs to another materialization.", nameof(target));
+        if (storageRealization.Structure.Id != semantics.Structure.Id)
+            throw new ArgumentException("The provider storage realization belongs to another canonical structure.", nameof(storageRealization));
 
         var compiledPlanReference = RelationQueryCompiledPlanReference.From(semantics.Plan);
         var compiledPlanFingerprint = RelationQueryCompiledPlanReferenceFingerprinter.Compute(compiledPlanReference);
@@ -453,6 +464,7 @@ public static class FreightOrderRebuildPlanCompiler
             static tenant => tenant);
         return new(
             provider: provider,
+            storageRealization: storageRealization,
             request: request,
             membership: membership,
             placement: placement,
@@ -483,9 +495,14 @@ public static class FreightOrderRebuildPlanCompiler
             document: semantics.Document,
             policy: new(
                 id: new($"materialization-harness/{provider}/freight-impact/v1"),
-                strategyPreference: [MaterializationImpactStrategyKind.InverseTraversal],
+                strategyPreference:
+                [
+                    MaterializationImpactStrategyKind.InverseTraversal,
+                    MaterializationImpactStrategyKind.BoundedGlobalInvalidation
+                ],
                 maximumAffectedRoots: 64,
-                maximumReadBytes: MaximumPageBytes));
+                maximumReadBytes: MaximumPageBytes,
+                maximumGlobalRoots: 64));
         return Require(
             artifact: compilation.Plan,
             diagnostics: compilation.Diagnostics.Select(static diagnostic => diagnostic.Message));

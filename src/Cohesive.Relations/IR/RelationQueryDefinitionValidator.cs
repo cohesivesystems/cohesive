@@ -336,6 +336,8 @@ public static partial class RelationQueryDefinitionValidator
                     {
                         ValidatePortableType(expansion.ItemType, $"{NodeLocation(expansion.Id)}/itemType");
                     }
+                    if (expansion.ItemShape is { } itemShape)
+                        ValidateShape(itemShape, expansion.Id, "itemShape");
                     break;
                 case ProjectQueryNode project:
                     ValidateBinding(project.ResultBinding, project.Id, "resultBinding");

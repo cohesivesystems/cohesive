@@ -283,10 +283,12 @@ sealed class PostgresFreightOrderMaterializationReplicaFixture : IFreightOrderMa
         var hydrationStorage = Program.CreatePostgresStorageBinding(
             placement: request.Plan.HydrationPlacement,
             plan: request.Semantics.Plan,
+            structure: request.Semantics.Structure,
             purpose: "standalone-hydration");
         var scanStorage = Program.CreatePostgresStorageBinding(
             placement: request.Plan.ScanPlacement,
             plan: request.Semantics.Plan,
+            structure: request.Semantics.Structure,
             purpose: "standalone-scan");
         var generation = request.Generation;
         var pageOrdinal = 0;

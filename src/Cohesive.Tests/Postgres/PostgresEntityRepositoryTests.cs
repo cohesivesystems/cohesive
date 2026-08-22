@@ -1,5 +1,7 @@
+using System.Text.Json.Serialization;
 using Cohesive.Adapters.Postgres;
-using Cohesive.MaterializationHarness.Model;
+using Cohesive.Model;
+using Cohesive.Relations.Authoring;
 using Cohesive.Storage;
 using Cohesive.Transitions.Model;
 using Npgsql;
@@ -12,7 +14,7 @@ public sealed class PostgresEntityRepositoryTests
     [Fact]
     public void MappingRetainsCanonicalAuthorityAndProducesInjectionSafeCommands()
     {
-        var entity = FreightOrderMaterializationModel.Create().Storage.Order;
+        var entity = OrderEntity();
         var mapping = OrderMapping();
         using var dataSource = DataSource();
         var repository = new PostgresEntityRepository(entity, Runtime(dataSource), mapping);
@@ -36,7 +38,7 @@ public sealed class PostgresEntityRepositoryTests
     [Fact]
     public void MappingRejectsMissingAndIncompatibleSemanticFields()
     {
-        var entity = FreightOrderMaterializationModel.Create().Storage.Order;
+        var entity = OrderEntity();
         using var dataSource = DataSource();
         var runtime = Runtime(dataSource);
         var missing = new PostgresEntityRepositoryMapping(
@@ -70,7 +72,7 @@ public sealed class PostgresEntityRepositoryTests
     [Fact]
     public async Task BatchRejectsCapacityAndCrossPartitionClaimsBeforeDatabaseAccess()
     {
-        var entity = FreightOrderMaterializationModel.Create().Storage.Order;
+        var entity = OrderEntity();
         using var dataSource = DataSource();
         var capacityRepository = new PostgresEntityRepository(
             entity,
@@ -98,7 +100,7 @@ public sealed class PostgresEntityRepositoryTests
     static EntityWriteRequest Write(EntityDefinition entity, string id, string tenant) => new(
         entity.CreateState(
             id,
-            new FreightOrder
+            new RepositoryOrder
             {
                 Id = id,
                 TenantId = tenant,
@@ -108,6 +110,24 @@ public sealed class PostgresEntityRepositoryTests
                 CreatedAt = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
             },
             version: 1).Observation);
+
+    static EntityDefinition OrderEntity()
+    {
+        QualifiedShapeId shapeId = new(
+            new("cohesive.tests.postgres-entity-repository"),
+            new("order"));
+        var shape = RelationQuery.Expression().Clr.Shape<RepositoryOrder>(shapeId);
+        var canonical = shape.Document.Graph.TryGetShape(shape.Id)
+            ?? throw new InvalidOperationException("The repository test Order shape is absent.");
+        return new(
+            new("postgres-repository-test-order"),
+            new Shape(
+                canonical.Id,
+                canonical.Fields,
+                canonical.Constraints,
+                canonical.Annotations,
+                ShapeRoles.Entity));
+    }
 
     static PostgresEntityRepositoryMapping OrderMapping(int maximumBatchItems = 64) => new(
         new PostgresSqlQualifiedTable("freight_harness", "orders"),
@@ -130,4 +150,25 @@ public sealed class PostgresEntityRepositoryTests
         new("tests/postgres-entity-repository"),
         dataSource,
         "cohesive.tests");
+
+    sealed record RepositoryOrder
+    {
+        [JsonPropertyName("id")]
+        public required string Id { get; init; }
+
+        [JsonPropertyName("tenantId")]
+        public required string TenantId { get; init; }
+
+        [JsonPropertyName("orderNumber")]
+        public required string OrderNumber { get; init; }
+
+        [JsonPropertyName("customerAccountId")]
+        public required string CustomerAccountId { get; init; }
+
+        [JsonPropertyName("equipmentClass")]
+        public required string EquipmentClass { get; init; }
+
+        [JsonPropertyName("createdAt")]
+        public DateTimeOffset CreatedAt { get; init; }
+    }
 }

@@ -34,7 +34,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
     /// <remarks>
     /// This target profile is intentionally narrower than the canonical relation-language profile. Execution
     /// preflights the demanded slice against this profile before evaluating any logical node. Collection-element
-    /// field paths are a separate structural constraint and are also rejected during that preflight.
+    /// paths are supported through canonical expansion over already materialized observation values.
     /// </remarks>
     public static ExprCapabilityProfile ExpressionCapabilities =>
         RelationQueryExpressionEvaluator.SupportedCapabilities;

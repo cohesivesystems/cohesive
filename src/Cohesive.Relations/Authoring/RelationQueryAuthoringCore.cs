@@ -262,6 +262,7 @@ public sealed class RelationQueryAuthoringCore
     /// <param name="source">Optional producer-source attribution for the node and collection expression.</param>
     /// <param name="bindingSource">Optional producer-source attribution specific to the introduced item binding.</param>
     /// <param name="collectionSource">Optional producer-source attribution specific to the collection expression.</param>
+    /// <param name="itemShape">Optional canonical shape proven for each structured collection item.</param>
     /// <returns>Typed handles for the expansion node and item binding.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="collection"/> or <paramref name="itemType"/> is <see langword="null"/>.
@@ -277,7 +278,8 @@ public sealed class RelationQueryAuthoringCore
         ValueBindingId? itemBindingId = null,
         RelationQueryAuthoringSource? source = null,
         RelationQueryAuthoringSource? bindingSource = null,
-        RelationQueryAuthoringSource? collectionSource = null)
+        RelationQueryAuthoringSource? collectionSource = null,
+        QualifiedShapeId? itemShape = null)
         where TInput : LogicalQueryNode
     {
         RequireNode(input, nameof(input));
@@ -288,7 +290,8 @@ public sealed class RelationQueryAuthoringCore
             input.Id,
             collection,
             selectedBinding.Id,
-            itemType);
+            itemType,
+            itemShape);
         AddNode(node, selectedNode, source, selectedBinding, bindingSource ?? source);
         Trace(RelationQueryAuthoringDecisionKind.Expression, node.Id.Value, collectionSource ?? source, "collection");
         return Bound(node, selectedBinding.Id);
