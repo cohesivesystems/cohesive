@@ -58,6 +58,9 @@ public static class FreightOrderMaterializationModel
         var orderCustomer = author.Relationship<FreightOrder, FreightCustomerAccount>(
             order => order.CustomerAccountId,
             new("freight-order.customer-account"));
+        var stopLocation = author.Relationship<FreightOrderStop, FreightLocation>(
+            stop => stop.LocationId,
+            new("freight-order-stop.location"));
         var orders = author.Source(orderShape, "materialization-harness/freight/orders");
         var customers = author.Traverse(
             orders,
@@ -96,20 +99,16 @@ public static class FreightOrderMaterializationModel
             (FreightOrder order) => order.Id,
             orders.Binding,
             sourceReference: "materialization-harness/freight/pickup-per-order");
-        var originLocationSource = author.Source(
-            locationShape,
-            "materialization-harness/freight/origin-locations");
-        var originLocations = author.Join(
+        var originLocations = author.Traverse(
             selectedPickupStops,
-            originLocationSource.Node,
-            JoinKind.Inner,
-            (FreightOrderStop stop, FreightLocation location) => stop.LocationId == location.Id,
             pickupStops.Binding,
-            originLocationSource.Binding,
+            stopLocation,
+            joinKind: JoinKind.Inner,
+            requirement: QueryInputRequirement.Required,
             sourceReference: "materialization-harness/freight/pickup-location");
 
         var deliveryStops = author.Expand(
-            originLocations,
+            originLocations.Node,
             (FreightOrder order) => order.Stops,
             orders.Binding,
             sourceReference: "materialization-harness/freight/delivery-stops");
@@ -142,16 +141,12 @@ public static class FreightOrderMaterializationModel
             (FreightOrder order) => order.Id,
             orders.Binding,
             sourceReference: "materialization-harness/freight/delivery-per-order");
-        var destinationLocationSource = author.Source(
-            locationShape,
-            "materialization-harness/freight/destination-locations");
-        var destinationLocations = author.Join(
+        var destinationLocations = author.Traverse(
             selectedDeliveryStops,
-            destinationLocationSource.Node,
-            JoinKind.Inner,
-            (FreightOrderStop stop, FreightLocation location) => stop.LocationId == location.Id,
             deliveryStops.Binding,
-            destinationLocationSource.Binding,
+            stopLocation,
+            joinKind: JoinKind.Inner,
+            requirement: QueryInputRequirement.Required,
             sourceReference: "materialization-harness/freight/delivery-location");
         Expression<Func<
             FreightOrder,
@@ -184,16 +179,16 @@ public static class FreightOrderMaterializationModel
                     DestinationRegion = destination.Region
                 };
         var projected = author.Project(
-            destinationLocations,
+            destinationLocations.Node,
             searchShape,
             projection,
             [
                 orders.Binding,
                 customers.Binding,
                 pickupStops.Binding,
-                originLocationSource.Binding,
+                originLocations.Binding,
                 deliveryStops.Binding,
-                destinationLocationSource.Binding
+                destinationLocations.Binding
             ],
             sourceReference: "materialization-harness/freight/order-search-document");
         var authored = author.BuildRelation(

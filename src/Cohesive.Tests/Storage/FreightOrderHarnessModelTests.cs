@@ -30,12 +30,13 @@ public sealed class FreightOrderHarnessModelTests
 
         Assert.Equal(first.DefinitionFingerprint, second.DefinitionFingerprint);
         Assert.Equal(
-            "3a3518cdc0de2e28b11b404b0651f461350ac87b1261a9a13e69955c31c09f5a",
+            "97e44b577b50923ad9f16a0df1b7527ceb8b9da82e2c2e45d5cb7cb07203c908",
             first.DefinitionFingerprint.Value);
         Assert.Equal(MaterializationSynchronizationMode.All, first.Definition.UpdatePolicy.SupportedModes);
         Assert.Equal(MaterializationConsistencyKind.BaselinePlusCatchUp, first.Definition.UpdatePolicy.Consistency);
-        Assert.Equal(3, first.Plan.InputContract.Sources.Length);
-        Assert.Single(first.Plan.InputContract.Traversals);
+        Assert.Single(first.Plan.InputContract.Sources);
+        Assert.Equal(3, first.Plan.InputContract.Traversals.Length);
+        Assert.Equal(2, first.Plan.InputContract.Expansions.Length);
         Assert.Equal(4, first.Definition.Sources.Length);
         Assert.Equal(2, first.Definition.ControlLoops.Length);
         Assert.Equal(2, first.Definition.ControlWorkloads.Length);
@@ -493,6 +494,8 @@ public sealed class FreightOrderHarnessModelTests
                         $"planning: {diagnostic.Code}: {diagnostic.Message}") ?? [])
                     .Concat(outcome.PhysicalExecution?.Diagnostics.Select(static diagnostic =>
                         $"execution: {diagnostic.Code}: {diagnostic.Message}") ?? [])
+                    .Concat(outcome.Result?.Diagnostics.Select(static diagnostic =>
+                        $"interpretation: {diagnostic.Code}: {diagnostic.Message}") ?? [])
                     .Concat(outcome.Result?.RequirementGapAnalysis.Gaps.Select(static gap =>
                         $"gap: {gap.Cause}: {gap.EvidenceReference}") ?? [])));
         var result = Assert.IsType<RelationQueryExecutionResult>(outcome.Result);

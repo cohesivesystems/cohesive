@@ -19,6 +19,8 @@ public sealed class CosmosRelationQuerySourceReaderTests
     static readonly QualifiedShapeId Shape = new(new("tests/cosmos-source/v1"), new("Load"));
     static readonly FieldPath NamePath = FieldPath.FromField("Name");
     static readonly FieldPath CustomerIdsPath = FieldPath.FromField("CustomerIds");
+    static readonly FieldPath StopsPath = FieldPath.FromField("Stops");
+    static readonly FieldPath LocationIdPath = FieldPath.FromField("locationId");
 
     [Fact]
     public async Task Reader_EmitsBoundedNonSensitiveAcquisitionActivity()
@@ -340,6 +342,34 @@ public sealed class CosmosRelationQuerySourceReaderTests
         Assert.Equal(["load-a", "load-b"], result.Observations.Select(static row => row.Identity));
         Assert.Equal(2, feed.Queries.Count);
         Assert.Equal(3, feed.Queries[1].Options.MaxItemCount);
+    }
+
+    [Fact]
+    public async Task CollectionElementLookup_UsesSameElementExistsAndValidatesReturnedOwners()
+    {
+        RecordingFeedFactory feed = new();
+        feed.Enqueue(Json(
+            """{"_identity":"order-a","_field0":[{"locationId":"location-a"},{"locationId":"location-b"}]}"""));
+        var fixture = CreateFixture(feed, FixedPolicy());
+        var stops = SemanticField(fixture, StopsPath);
+
+        var result = await fixture.Reader.ReadAsync(Request(
+            fixture,
+            [stops],
+            new RelationQueryCollectionElementKeyBatchLookup(
+                expansion: new("node:expand-stops"),
+                collectionInput: stops.Input!.Value,
+                collectionPath: StopsPath,
+                elementReference: LocationIdPath,
+                keys: ["location-a"])));
+
+        Assert.Equal(RelationQuerySourceReadState.Complete, result.State);
+        Assert.Equal("order-a", Assert.Single(result.Observations).Identity);
+        var query = Assert.Single(feed.Queries).Query.QueryText;
+        Assert.Contains("EXISTS (SELECT VALUE", query, StringComparison.Ordinal);
+        Assert.Contains(" IN c[\"observation\"][\"Stops\"]", query, StringComparison.Ordinal);
+        Assert.Contains("[\"locationId\"]", query, StringComparison.Ordinal);
+        Assert.Contains("ARRAY_CONTAINS", query, StringComparison.Ordinal);
     }
 
     [Fact]

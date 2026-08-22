@@ -155,7 +155,10 @@ public enum RelationQuerySourceReadKind
     IdentityBatch = 1,
 
     /// <summary>Bounded lookup by relationship-reference predicate.</summary>
-    RelationshipKeyBatch = 2
+    RelationshipKeyBatch = 2,
+
+    /// <summary>Bounded owner lookup by expanded collection-element predicate.</summary>
+    CollectionElementKeyBatch = 3
 }
 
 /// <summary>Attributable trace of one physical reader request.</summary>

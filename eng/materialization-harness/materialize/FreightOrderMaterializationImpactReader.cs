@@ -91,7 +91,10 @@ public sealed class FreightOrderMaterializationImpactReader
         };
         var stage = physicalPlan.Stages.Single(candidate =>
             candidate.PlacementBinding == binding.Id && candidate.Kind == kind);
-        var fields = CreateFields(input.Fields, binding, request.RelationshipInput);
+        var fields = CreateFields(
+            input.Fields,
+            binding,
+            request.CollectionOccurrence is null ? request.RelationshipInput : null);
         RelationQuerySourceReadConstraint constraint = request.Kind switch
         {
             MaterializationImpactObservationReadKind.IdentityLookup => new RelationQueryIdentityBatchLookup(request.Keys),
@@ -120,17 +123,46 @@ public sealed class FreightOrderMaterializationImpactReader
         return result;
     }
 
-    static RelationQueryRelationshipKeyBatchLookup CreatePredicate(
+    RelationQuerySourceReadConstraint CreatePredicate(
         RelationQuerySourcePlacementBinding binding,
         MaterializationImpactObservationReadRequest request)
     {
         var relationshipInput = request.RelationshipInput
             ?? throw new ArgumentException("A predicate impact read has no relationship input.", nameof(request));
+        if (request.CollectionOccurrence is { } occurrence)
+        {
+            var expansion = plan.InputContract.Expansions.SingleOrDefault(candidate =>
+                candidate.Expansion == occurrence.Expansion)
+                ?? throw new ArgumentException(
+                    "The impact collection occurrence has no canonical expansion contract.",
+                    nameof(request));
+            var occurrenceRelationship = plan.InputContract.Traversals.SingleOrDefault(candidate =>
+                candidate.Input.Id == relationshipInput)
+                ?? throw new ArgumentException(
+                    "The impact collection occurrence has no canonical relationship contract.",
+                    nameof(request));
+            if (expansion.CollectionInput.Id != occurrence.CollectionInput
+                || expansion.CollectionPath != occurrence.CollectionPath
+                || expansion.ItemBinding != occurrenceRelationship.From
+                || occurrence.ElementReference != occurrenceRelationship.Definition.SourceReference
+                || request.RelationshipReference != occurrence.ElementReference)
+            {
+                throw new ArgumentException(
+                    "The impact collection occurrence differs from its canonical expansion and relationship path.",
+                    nameof(request));
+            }
+            return new RelationQueryCollectionElementKeyBatchLookup(
+                expansion: occurrence.Expansion,
+                collectionInput: occurrence.CollectionInput,
+                collectionPath: occurrence.CollectionPath,
+                elementReference: occurrence.ElementReference,
+                keys: request.Keys);
+        }
         var relationship = binding.RelationshipKeys.SingleOrDefault(candidate => candidate.Input == relationshipInput)
             ?? throw new ArgumentException("The impact placement has no exact relationship-key binding.", nameof(request));
         if (relationship.SemanticPath != request.RelationshipReference)
             throw new ArgumentException("The impact relationship reference differs from its exact placement.", nameof(request));
-        return new(
+        return new RelationQueryRelationshipKeyBatchLookup(
             relationshipReference: relationship.SemanticPath,
             sourceSelector: relationship.SourceSelector,
             keys: request.Keys);

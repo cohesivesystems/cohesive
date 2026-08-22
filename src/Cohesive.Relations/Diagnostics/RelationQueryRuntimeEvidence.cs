@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.IR;
 using Cohesive.Relations.Serialization;
 
 namespace Cohesive.Relations.Diagnostics;
@@ -111,6 +112,54 @@ public sealed record RelationQueryObservationOccurrence
 
     /// <summary>Stable semantic observation identity, or <see langword="null"/> when unavailable.</summary>
     public string? ObservationIdentity { get; }
+}
+
+/// <summary>Runtime evidence for one structured item produced by a canonical collection expansion.</summary>
+public sealed record RelationQueryCollectionOccurrenceEvidence
+{
+    /// <summary>Creates one collection-item occurrence record.</summary>
+    /// <param name="expansion">Canonical expansion node that produced the item.</param>
+    /// <param name="owner">Exact owner occurrence containing the collection.</param>
+    /// <param name="ordinal">Zero-based position of the item in the collection.</param>
+    /// <param name="occurrence">Derived shaped binding occurrence.</param>
+    /// <param name="value">Complete structured item value.</param>
+    /// <exception cref="ArgumentException">An identity is default or <paramref name="value"/> is not an object.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="ordinal"/> is negative.</exception>
+    public RelationQueryCollectionOccurrenceEvidence(
+        QueryNodeId expansion,
+        RelationQueryOccurrenceId owner,
+        int ordinal,
+        RelationQueryObservationOccurrence occurrence,
+        ObservationValue value)
+    {
+        if (string.IsNullOrWhiteSpace(expansion.Value) || string.IsNullOrWhiteSpace(owner.Value))
+            throw new ArgumentException("Collection occurrence evidence requires expansion and owner identities.", nameof(expansion));
+        if (ordinal < 0)
+            throw new ArgumentOutOfRangeException(nameof(ordinal), ordinal, "A collection occurrence ordinal cannot be negative.");
+        ArgumentNullException.ThrowIfNull(occurrence);
+        if (value.Kind != ObservationValueKind.Object)
+            throw new ArgumentException("Structured collection occurrence evidence requires an object value.", nameof(value));
+        Expansion = expansion;
+        Owner = owner;
+        Ordinal = ordinal;
+        Occurrence = occurrence;
+        Value = value;
+    }
+
+    /// <summary>Canonical expansion node that produced the item.</summary>
+    public QueryNodeId Expansion { get; }
+
+    /// <summary>Exact owner occurrence containing the collection.</summary>
+    public RelationQueryOccurrenceId Owner { get; }
+
+    /// <summary>Zero-based position of the item in the collection.</summary>
+    public int Ordinal { get; }
+
+    /// <summary>Derived shaped binding occurrence.</summary>
+    public RelationQueryObservationOccurrence Occurrence { get; }
+
+    /// <summary>Complete structured item value.</summary>
+    public ObservationValue Value { get; }
 }
 
 /// <summary>Observed availability of a compiled source-set input.</summary>
@@ -657,6 +706,7 @@ public sealed class RelationQueryRuntimeEvidence
     /// <param name="parameters">Invocation-parameter evidence.</param>
     /// <param name="capabilities">Expression-capability evidence.</param>
     /// <param name="conversionFailures">Explicit conversion failures reported by later interpreters.</param>
+    /// <param name="collectionOccurrences">Structured item occurrences derived from canonical collection expansions.</param>
     /// <exception cref="ArgumentException">
     /// <paramref name="evaluation"/> is default, or an evidence array
     /// contains a <see langword="null"/> entry. Duplicate and cross-record conflicts are retained for analyzer diagnostics.
@@ -679,7 +729,8 @@ public sealed class RelationQueryRuntimeEvidence
         ImmutableArray<RelationQueryTraversalEvidence> traversals = default,
         ImmutableArray<RelationQueryParameterEvidence> parameters = default,
         ImmutableArray<RelationQueryCapabilityEvidence> capabilities = default,
-        ImmutableArray<RelationQueryConversionFailureEvidence> conversionFailures = default)
+        ImmutableArray<RelationQueryConversionFailureEvidence> conversionFailures = default,
+        ImmutableArray<RelationQueryCollectionOccurrenceEvidence> collectionOccurrences = default)
     {
         if (string.IsNullOrWhiteSpace(evaluation.Value))
         {
@@ -716,6 +767,10 @@ public sealed class RelationQueryRuntimeEvidence
                 "\u001f",
                 evidence.EvidenceReference),
             nameof(conversionFailures));
+        CollectionOccurrences = Normalize(
+            collectionOccurrences,
+            static evidence => evidence.Occurrence.Id.Value,
+            nameof(collectionOccurrences));
     }
 
     /// <summary>Identity of the evaluation represented by this snapshot.</summary>
@@ -747,6 +802,9 @@ public sealed class RelationQueryRuntimeEvidence
 
     /// <summary>Explicit conversion failures in deterministic input/occurrence/reference order.</summary>
     public ImmutableArray<RelationQueryConversionFailureEvidence> ConversionFailures { get; }
+
+    /// <summary>Structured collection-item occurrences in deterministic occurrence order.</summary>
+    public ImmutableArray<RelationQueryCollectionOccurrenceEvidence> CollectionOccurrences { get; }
 
     static ImmutableArray<T> Normalize<T>(
         ImmutableArray<T> values,

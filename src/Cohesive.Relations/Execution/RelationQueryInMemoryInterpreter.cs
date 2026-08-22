@@ -1000,14 +1000,30 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                         $"Collection expansion requires an array, but received '{collection.Kind}'.");
                 }
 
-                foreach (var item in collection.Array)
+                for (var index = 0; index < collection.Array.Length; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    var item = collection.Array[index];
+                    RelationQueryObservationOccurrence? itemOccurrence = null;
+                    if (node.ItemShape is { } itemShape
+                        && node.Collection is FieldExpr { Binding: { } ownerBinding }
+                        && row.TryGetBinding(ownerBinding, out var owner)
+                        && owner.Occurrence is { } ownerOccurrence)
+                    {
+                        itemOccurrence = new(
+                            RelationQueryCollectionOccurrenceIdentity.Create(
+                                node.Id,
+                                ownerOccurrence.Id,
+                                index),
+                            node.ItemBinding,
+                            itemShape);
+                    }
                     expanded.Add(row.WithBinding(
                         node.ItemBinding,
                         RelationQueryRuntimeBinding.FromComputed(
                             ResolveBindingShape(execution, node.ItemBinding),
-                            item)));
+                            item,
+                            occurrence: itemOccurrence)));
                 }
             }
             return expanded.ToImmutable();

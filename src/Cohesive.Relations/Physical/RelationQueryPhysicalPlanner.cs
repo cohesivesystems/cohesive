@@ -191,6 +191,20 @@ public static class RelationQueryPhysicalPlanner
             foreach (var source in plan.InputContract.Sources)
                 LowerSource(source);
 
+            foreach (var expansion in plan.InputContract.Expansions)
+            {
+                if (!bindingProducers.TryGetValue(expansion.OwnerBinding, out var owner)
+                    || !bindingProducers.TryAdd(expansion.ItemBinding, owner))
+                {
+                    Error(
+                        RelationQueryPhysicalPlanningDiagnosticCodes.StageProvenanceInvalid,
+                        $"Collection expansion '{expansion.Expansion.Value}' has no unique acquired owner producer.",
+                        expansion.CollectionInput.Id);
+                }
+            }
+            if (HasErrors)
+                return Failure(CurrentFailureStatus());
+
             var logicalOrder = plan.LogicalPlan.EvaluationOrder
                 .Select(static (node, ordinal) => (node, ordinal))
                 .ToDictionary(static item => item.node, static item => item.ordinal);

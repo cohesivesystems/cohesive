@@ -370,12 +370,26 @@ public sealed class RelationQueryPhysicalExecutor
             .Where(traversal => traversal.Result == binding && traversal.ResultShape == shape)
             .Take(2)
             .ToArray();
-        if (sources.Length + traversals.Length != 1)
+        var expansions = plan.InputContract.Expansions
+            .Where(expansion => expansion.ItemBinding == binding && expansion.ItemShape == shape)
+            .Take(2)
+            .ToArray();
+        if (sources.Length + traversals.Length + expansions.Length != 1)
             return false;
         if (sources.Length == 1)
         {
             reachabilityInputs.Add(sources[0].Input.Id);
             return true;
+        }
+        if (expansions.Length == 1)
+        {
+            reachabilityInputs.Add(expansions[0].CollectionInput.Id);
+            return TryAddBindingProducerReachabilityInputs(
+                plan,
+                expansions[0].OwnerBinding,
+                expansions[0].OwnerShape,
+                reachabilityInputs,
+                visitedTraversals);
         }
 
         var traversal = traversals[0];
@@ -448,6 +462,9 @@ public sealed class RelationQueryPhysicalExecutor
                 .Concat(plan.InputContract.Traversals
                     .Where(traversal => traversal.Result == binding && traversal.ResultShape == shape)
                     .Select(static traversal => traversal.Input.Traversal))
+                .Concat(plan.InputContract.Expansions
+                    .Where(expansion => expansion.ItemBinding == binding && expansion.ItemShape == shape)
+                    .Select(static expansion => expansion.Expansion))
                 .Take(2)
         ];
         if (producers.Length != 1)
@@ -493,6 +510,7 @@ public sealed class RelationQueryPhysicalExecutor
         readonly List<RelationQuerySourceEvidence> sourceEvidence = [];
         readonly List<RelationQueryFieldEvidence> fieldEvidence = [];
         readonly List<RelationQueryTraversalEvidence> traversalEvidence = [];
+        readonly List<RelationQueryCollectionOccurrenceEvidence> collectionOccurrenceEvidence = [];
         readonly List<RelationQuerySourceReadTrace> traces = [];
         readonly Dictionary<ValueBindingId, List<AcquiredOccurrence>> occurrencesByBinding = [];
         readonly Dictionary<RelationQueryPhysicalStageId, long> bufferedRowsByStage = [];
@@ -555,6 +573,12 @@ public sealed class RelationQueryPhysicalExecutor
             var logicalOrder = request.Plan.LogicalPlan.EvaluationOrder
                 .Select(static (node, ordinal) => (node, ordinal))
                 .ToDictionary(static item => item.node, static item => item.ordinal);
+            HashSet<QueryNodeId> materializedExpansions = [];
+            MaterializeReadyCollectionOccurrences(
+                readyBindings,
+                materializedExpansions,
+                logicalOrder,
+                cancellationToken);
             List<RelationQueryTraversalInputContract> remaining = [.. request.Plan.InputContract.Traversals];
             while (remaining.Count != 0)
             {
@@ -581,6 +605,11 @@ public sealed class RelationQueryPhysicalExecutor
                         return Failed(request, diagnostic, [.. traces]);
                     readyBindings.Add(traversal.Result);
                     remaining.Remove(traversal);
+                    MaterializeReadyCollectionOccurrences(
+                        readyBindings,
+                        materializedExpansions,
+                        logicalOrder,
+                        cancellationToken);
                 }
             }
 
@@ -593,12 +622,115 @@ public sealed class RelationQueryPhysicalExecutor
                 [.. traversalEvidence],
                 request.Parameters,
                 request.Capabilities,
-                request.ConversionFailures
+                request.ConversionFailures,
+                collectionOccurrences: [.. collectionOccurrenceEvidence]
                 );
             var interpretation = interpreter.Execute(
                 new(request.Plan, evidence, request.RequirementGapPolicy),
                 cancellationToken);
             return new(request, interpretation.Status, evidence, interpretation, [.. traces]);
+        }
+
+        void MaterializeReadyCollectionOccurrences(
+            ISet<ValueBindingId> readyBindings,
+            ISet<QueryNodeId> materializedExpansions,
+            IReadOnlyDictionary<QueryNodeId, int> logicalOrder,
+            CancellationToken cancellationToken)
+        {
+            var added = true;
+            while (added)
+            {
+                added = false;
+                foreach (var expansion in request.Plan.InputContract.Expansions
+                             .Where(expansion => readyBindings.Contains(expansion.OwnerBinding)
+                                 && !materializedExpansions.Contains(expansion.Expansion))
+                             .OrderBy(expansion => logicalOrder[expansion.Expansion]))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var itemInputs = fieldInputs.Values
+                        .Where(input => input.Binding == expansion.ItemBinding
+                            && input.Field.Shape == expansion.ItemShape)
+                        .OrderBy(static input => input.Id.Value, StringComparer.Ordinal)
+                        .ToArray();
+                    var owners = GetOccurrences(expansion.OwnerBinding).ToArray();
+                    var items = GetOccurrences(expansion.ItemBinding);
+                    foreach (var owner in owners)
+                    {
+                        var collection = owner.Fields.SingleOrDefault(field =>
+                            field.Field.Input == expansion.CollectionInput.Id);
+                        if (collection is not
+                            {
+                                State: RelationQuerySourceReadFieldState.Value,
+                                Value: { Kind: ObservationValueKind.Array } value
+                            }
+                            || value.Array.IsDefault)
+                        {
+                            continue;
+                        }
+
+                        for (var index = 0; index < value.Array.Length; index++)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            var item = value.Array[index];
+                            var fields = ImmutableArray.CreateBuilder<RelationQuerySourceReadFieldResult>(
+                                itemInputs.Length);
+                            foreach (var input in itemInputs)
+                            {
+                                var field = new RelationQuerySourceReadField(
+                                    input: input.Id,
+                                    semanticPath: input.Field.Path,
+                                    sourceSelector: input.Field.Path.ToString(),
+                                    purpose: RelationQuerySourceReadFieldPurpose.SemanticInput);
+                                if (!item.TryGetField(input.Field.Path, out var fieldValue)
+                                    || fieldValue.Kind == ObservationValueKind.Undefined)
+                                {
+                                    fields.Add(new(
+                                        field,
+                                        RelationQuerySourceReadFieldState.Missing,
+                                        evidenceReference: collection.EvidenceReference));
+                                }
+                                else if (fieldValue.Kind == ObservationValueKind.Null)
+                                {
+                                    fields.Add(new(
+                                        field,
+                                        RelationQuerySourceReadFieldState.Null,
+                                        evidenceReference: collection.EvidenceReference));
+                                }
+                                else
+                                {
+                                    fields.Add(new(
+                                        field,
+                                        RelationQuerySourceReadFieldState.Value,
+                                        fieldValue,
+                                        collection.EvidenceReference));
+                                }
+                            }
+
+                            RelationQueryObservationOccurrence occurrence = new(
+                                RelationQueryCollectionOccurrenceIdentity.Create(
+                                    expansion.Expansion,
+                                    owner.Occurrence.Id,
+                                    index),
+                                expansion.ItemBinding,
+                                expansion.ItemShape);
+                            items.Add(new(
+                                occurrence,
+                                fields.MoveToImmutable(),
+                                item));
+                            collectionOccurrenceEvidence.Add(new(
+                                expansion: expansion.Expansion,
+                                owner: owner.Occurrence.Id,
+                                ordinal: index,
+                                occurrence: occurrence,
+                                value: item));
+                        }
+                    }
+
+                    materializedExpansions.Add(expansion.Expansion);
+                    readyBindings.Add(expansion.ItemBinding);
+                    added = true;
+                }
+            }
         }
 
         RelationQueryPhysicalExecutionDiagnostic? AcquireSupplied(
@@ -792,22 +924,24 @@ public sealed class RelationQueryPhysicalExecutor
                 .SingleOrDefault(input => input.Binding == contract.From
                     && input.Field.Shape == contract.Definition.SourceShape
                     && input.Field.Path == contract.Definition.SourceReference);
-            if (referenceInput is null)
-            {
-                return Diagnostic(
-                    RelationQueryPhysicalExecutionDiagnosticCodes.StageInvalid,
-                    "A forward traversal has no exact compiled source-reference field input.",
-                    stage.Id,
-                    contract.Input.Id,
-                    source.Id);
-            }
-
             List<OwnerKeys> active = [];
             foreach (var owner in owners)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var observed = owner.Fields.SingleOrDefault(field => field.Field.Input == referenceInput.Id);
-                if (observed is null || observed.State != RelationQuerySourceReadFieldState.Value)
+                var observed = referenceInput is null
+                    ? null
+                    : owner.Fields.SingleOrDefault(field => field.Field.Input == referenceInput.Id);
+                ObservationValue? reference = observed is
+                    {
+                        State: RelationQuerySourceReadFieldState.Value,
+                        Value: { } observedValue
+                    }
+                    ? observedValue
+                    : owner.ComputedValue is { } computed
+                        && computed.TryGetField(contract.Definition.SourceReference, out var computedReference)
+                        ? computedReference
+                        : null;
+                if (reference is null)
                 {
                     traversalEvidence.Add(new(
                         contract.Input.Id,
@@ -818,7 +952,7 @@ public sealed class RelationQueryPhysicalExecutor
                 }
 
                 var extraction = RelationQueryReferenceKeyExtractor.Extract(
-                    observed.Value!.Value,
+                    reference.Value,
                     maximumKeys: 1,
                     cancellationToken,
                     out var extractedKeys);
@@ -830,7 +964,7 @@ public sealed class RelationQueryPhysicalExecutor
                         stage.Id,
                         contract.Input.Id,
                         source.Id,
-                        observed.EvidenceReference);
+                        observed?.EvidenceReference);
                 }
                 if (extraction == RelationQueryReferenceKeyExtractionState.Invalid)
                 {
@@ -838,7 +972,7 @@ public sealed class RelationQueryPhysicalExecutor
                         stage,
                         binding,
                         "A concrete relationship reference is not a non-empty string or an array of non-empty strings.",
-                        observed.EvidenceReference);
+                        observed?.EvidenceReference);
                 }
                 if (extractedKeys.IsDefaultOrEmpty)
                 {
@@ -1634,6 +1768,8 @@ public sealed class RelationQueryPhysicalExecutor
                     (RelationQuerySourceReadKind.IdentityBatch, identity.Identities.Length),
                 RelationQueryRelationshipKeyBatchLookup relationship =>
                     (RelationQuerySourceReadKind.RelationshipKeyBatch, relationship.Keys.Length),
+                RelationQueryCollectionElementKeyBatchLookup collection =>
+                    (RelationQuerySourceReadKind.CollectionElementKeyBatch, collection.Keys.Length),
                 _ => throw new ArgumentOutOfRangeException(
                     nameof(constraint),
                     constraint,
@@ -1781,7 +1917,8 @@ public sealed class RelationQueryPhysicalExecutor
 
         sealed record AcquiredOccurrence(
             RelationQueryObservationOccurrence Occurrence,
-            ImmutableArray<RelationQuerySourceReadFieldResult> Fields);
+            ImmutableArray<RelationQuerySourceReadFieldResult> Fields,
+            ObservationValue? ComputedValue = null);
 
         sealed record OwnerKeys(AcquiredOccurrence Owner, ImmutableArray<string> Keys);
 

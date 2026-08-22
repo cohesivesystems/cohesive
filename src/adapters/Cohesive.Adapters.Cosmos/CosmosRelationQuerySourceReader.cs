@@ -566,6 +566,8 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
                     await ReadIdentityBatchAsync(request, identity, accumulator, cancellationToken).ConfigureAwait(false),
                 RelationQueryRelationshipKeyBatchLookup relationship =>
                     await ReadRelationshipBatchAsync(request, relationship, accumulator, cancellationToken).ConfigureAwait(false),
+                RelationQueryCollectionElementKeyBatchLookup collection =>
+                    await ReadCollectionElementBatchAsync(request, collection, accumulator, cancellationToken).ConfigureAwait(false),
                 _ => Failed(request, "unsupported-read-constraint")
             };
         }
@@ -651,6 +653,7 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         RelationQueryBoundedEnumeration => RelationQuerySourceReadKind.BoundedEnumeration,
         RelationQueryIdentityBatchLookup => RelationQuerySourceReadKind.IdentityBatch,
         RelationQueryRelationshipKeyBatchLookup => RelationQuerySourceReadKind.RelationshipKeyBatch,
+        RelationQueryCollectionElementKeyBatchLookup => RelationQuerySourceReadKind.CollectionElementKeyBatch,
         _ => throw new ArgumentOutOfRangeException(nameof(constraint), constraint, "Unsupported source-read constraint.")
     };
 
@@ -901,6 +904,155 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
             Evidence(request, "relationship-complete", providerEvidence));
     }
 
+    async ValueTask<RelationQuerySourceReadResult> ReadCollectionElementBatchAsync(
+        RelationQuerySourceReadRequest request,
+        RelationQueryCollectionElementKeyBatchLookup lookup,
+        CosmosRelationQueryMaterializationAccumulator? accumulator,
+        CancellationToken cancellationToken)
+    {
+        var projection = CreateProjection(request, relationshipSelector: null);
+        var maximumRows = MaximumBufferedRows(request);
+        List<MaterializedRow> rows = [];
+        Dictionary<string, PhysicalOccurrence> occurrences = new(StringComparer.Ordinal);
+        Dictionary<string, long> fanOutByKey = new(StringComparer.Ordinal);
+        string? providerEvidence = null;
+        var partial = false;
+        var chunkIndex = 0;
+        foreach (var keys in Chunks(lookup.Keys))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var collection = CosmosSqlExpression.Property(
+                RootAlias,
+                CosmosRelationQuerySourceSelectors.RequirePropertyPath(
+                    FieldSourceSelector(lookup.CollectionPath),
+                    nameof(lookup.CollectionPath)));
+            var predicate = CosmosSqlExpression.CollectionExists(
+                collection,
+                item => ReferencePredicate(
+                    CosmosSqlExpression.Property(item, lookup.ElementReference),
+                    keys));
+            var feed = await ReadFeedAsync(
+                BuildStatement(projection, predicate),
+                ProbeLimit(maximumRows),
+                accumulator,
+                cancellationToken).ConfigureAwait(false);
+            providerEvidence = CombineProviderEvidence(providerEvidence, feed.ProviderEvidenceReference);
+            var materialized = MaterializeRows(
+                request,
+                projection,
+                feed.Rows,
+                feed.ProviderEvidenceReference,
+                cancellationToken);
+            if (materialized.FailureReason is { } failure)
+                return Failed(request, failure, providerEvidence);
+
+            HashSet<string> chunkKeys = new(keys, StringComparer.Ordinal);
+            foreach (var row in materialized.Rows)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var collectionField = row.Observation.Fields.SingleOrDefault(field =>
+                    field.Field.Input == lookup.CollectionInput
+                    && field.Field.SemanticPath == lookup.CollectionPath);
+                if (collectionField is null
+                    || collectionField.State != RelationQuerySourceReadFieldState.Value
+                    || collectionField.Value is not { Kind: ObservationValueKind.Array } collectionValue
+                    || collectionValue.Array.IsDefault)
+                {
+                    return Failed(request, "collection-query-returned-invalid-collection", providerEvidence);
+                }
+
+                HashSet<string> matchedKeys = new(StringComparer.Ordinal);
+                foreach (var item in collectionValue.Array)
+                {
+                    if (!item.TryGetField(lookup.ElementReference, out var reference)
+                        || reference.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)
+                    {
+                        continue;
+                    }
+
+                    var extraction = RelationQueryReferenceKeyExtractor.Extract(
+                        reference,
+                        source.Limits.MaximumBatchSize,
+                        cancellationToken,
+                        out var referenceKeys);
+                    if (extraction == RelationQueryReferenceKeyExtractionState.BoundaryExceeded)
+                    {
+                        return Inconclusive(
+                            request,
+                            "collection-element-reference-key-boundary-exceeded",
+                            providerEvidence);
+                    }
+                    if (extraction == RelationQueryReferenceKeyExtractionState.Invalid)
+                        return Failed(request, "collection-element-reference-invalid", providerEvidence);
+
+                    foreach (var key in referenceKeys)
+                    {
+                        if (chunkKeys.Contains(key))
+                            matchedKeys.Add(key);
+                    }
+                }
+                if (matchedKeys.Count == 0)
+                    return Failed(request, "collection-query-returned-unrequested-row", providerEvidence);
+
+                foreach (var key in matchedKeys)
+                {
+                    var fanOut = fanOutByKey.GetValueOrDefault(key) + 1;
+                    if (fanOut > source.Limits.MaximumFanOut)
+                    {
+                        return Inconclusive(
+                            request,
+                            "collection-element-fan-out-boundary-exceeded",
+                            providerEvidence);
+                    }
+                    fanOutByKey[key] = fanOut;
+                }
+
+                if (!TryAddOccurrence(
+                        row,
+                        chunkIndex,
+                        allowRepeatedPhysicalRows: true,
+                        occurrences,
+                        out var duplicateReason))
+                {
+                    return Failed(request, duplicateReason!, providerEvidence);
+                }
+                if (occurrences[row.Observation.Identity].ChunkIndex != chunkIndex)
+                    continue;
+
+                if ((long)rows.Count >= maximumRows)
+                {
+                    partial = true;
+                    break;
+                }
+                rows.Add(row);
+            }
+            if (partial || feed.BoundaryStopped)
+            {
+                partial = true;
+                break;
+            }
+            chunkIndex++;
+        }
+
+        if (partial)
+        {
+            var selectedCount = checked((int)Math.Min(maximumRows, rows.Count));
+            var observations = ProjectObservations(CollectionsMarshal.AsSpan(rows)[..selectedCount]);
+            return observations.IsDefaultOrEmpty
+                ? Inconclusive(request, "collection-element-buffer-boundary-reached", providerEvidence)
+                : new(
+                    RelationQuerySourceReadState.Partial,
+                    observations,
+                    Evidence(request, "collection-element-partial", providerEvidence));
+        }
+        if (rows.Count == 0)
+            return NotFound(request, "collection-element-not-found", providerEvidence);
+        return new(
+            RelationQuerySourceReadState.Complete,
+            ProjectObservations(CollectionsMarshal.AsSpan(rows)),
+            Evidence(request, "collection-element-complete", providerEvidence));
+    }
+
     static ImmutableArray<RelationQuerySourceReadObservation> ProjectObservations(
         ReadOnlySpan<MaterializedRow> rows)
     {
@@ -948,6 +1100,11 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         var reference = CosmosSqlExpression.Property(
             RootAlias,
             CosmosRelationQuerySourceSelectors.RequirePropertyPath(sourceSelector, nameof(sourceSelector)));
+        return ReferencePredicate(reference, keys);
+    }
+
+    static CosmosSqlExpression ReferencePredicate(CosmosSqlExpression reference, string[] keys)
+    {
         List<CosmosSqlExpression> terms = new(keys.Length + 1)
         {
             CosmosSqlExpression.Function(
@@ -1249,6 +1406,29 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
                     relationship.SourceSelector,
                     nameof(relationship.SourceSelector));
             }
+            if (request.Constraint is RelationQueryCollectionElementKeyBatchLookup collection)
+            {
+                var field = request.Fields.SingleOrDefault(candidate =>
+                    candidate.Input == collection.CollectionInput
+                    && candidate.SemanticPath == collection.CollectionPath);
+                if (field is null
+                    || field.Purpose is not (
+                        RelationQuerySourceReadFieldPurpose.SemanticInput
+                        or RelationQuerySourceReadFieldPurpose.SemanticInputAndCorrelation)
+                    || !string.Equals(
+                        field.SourceSelector,
+                        FieldSourceSelector(collection.CollectionPath),
+                        StringComparison.Ordinal))
+                {
+                    return "collection-selector-mismatch";
+                }
+                CosmosRelationQuerySourceSelectors.RequirePropertyPath(
+                    field.SourceSelector,
+                    nameof(field.SourceSelector));
+                CosmosSqlNames.RequirePropertyPath(
+                    collection.ElementReference,
+                    nameof(collection.ElementReference));
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1267,6 +1447,8 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
             (long)identity.Identities.Length > source.Limits.MaximumBatchSize,
         RelationQueryRelationshipKeyBatchLookup relationship =>
             (long)relationship.Keys.Length > source.Limits.MaximumBatchSize,
+        RelationQueryCollectionElementKeyBatchLookup collection =>
+            (long)collection.Keys.Length > source.Limits.MaximumBatchSize,
         _ => false
     };
 

@@ -87,7 +87,9 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
 
         var result = await fixture.Reader.ReadAsync(request);
 
-        Assert.Equal(RelationQuerySourceReadState.Complete, result.State);
+        Assert.True(
+            result.State == RelationQuerySourceReadState.Complete,
+            result.EvidenceReference);
         Assert.Equal("order-b", Assert.Single(result.Observations).Identity);
         var command = Assert.Single(fixture.Commands);
         Assert.Contains(" = ANY(", command.Text, StringComparison.Ordinal);
@@ -126,7 +128,9 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
 
         var result = await fixture.Reader.ReadAsync(request);
 
-        Assert.Equal(RelationQuerySourceReadState.Complete, result.State);
+        Assert.True(
+            result.State == RelationQuerySourceReadState.Complete,
+            result.EvidenceReference);
         Assert.Equal("order-a", Assert.Single(result.Observations).Identity);
         var command = Assert.Single(fixture.Commands);
         Assert.Contains("\"source\".\"customer_id\"", command.Text, StringComparison.Ordinal);
@@ -134,9 +138,54 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         Assert.Contains(command.Parameters, static parameter => parameter.IsArray);
     }
 
+    [Fact]
+    public async Task OwnedCollection_ElementLookupUsesCorrelatedExistsBeforeRootPaging()
+    {
+        var fixture = CreateOwnedCollectionFixture(collectionLookup: true);
+        var request = new RelationQuerySourceReadRequest(
+            physicalPlan: PhysicalPlan,
+            stage: new("read/predicate"),
+            placementBinding: fixture.Placement.Id,
+            source: SourceId,
+            shape: Shape,
+            identitySelector: "id",
+            fields:
+            [
+                new(
+                    input: fixture.StopsInput,
+                    semanticPath: FieldPath.FromField("stops"),
+                    sourceSelector: "stops",
+                    purpose: RelationQuerySourceReadFieldPurpose.SemanticInput)
+            ],
+            constraint: new RelationQueryCollectionElementKeyBatchLookup(
+                expansion: new("node:expand-stops"),
+                collectionInput: fixture.StopsInput,
+                collectionPath: FieldPath.FromField("stops"),
+                elementReference: FieldPath.FromField("locationId"),
+                keys: ["location-1"]),
+            maximumBufferedRows: 2);
+
+        var result = await fixture.Reader.ReadAsync(request);
+
+        Assert.True(
+            result.State == RelationQuerySourceReadState.Complete,
+            result.EvidenceReference);
+        Assert.Equal("order-a", Assert.Single(result.Observations).Identity);
+        var command = Assert.Single(fixture.Commands);
+        var occurrenceExists = command.Text.IndexOf("EXISTS (SELECT", StringComparison.Ordinal);
+        var rootLimit = command.Text.IndexOf("LIMIT 3", StringComparison.Ordinal);
+        var componentJoin = command.Text.IndexOf("LEFT JOIN", StringComparison.Ordinal);
+        Assert.True(occurrenceExists >= 0 && occurrenceExists < rootLimit, command.Text);
+        Assert.True(componentJoin > rootLimit, command.Text);
+        Assert.Contains("\"occurrence\".\"location_id\"", command.Text, StringComparison.Ordinal);
+        Assert.Contains(" = ANY(", command.Text, StringComparison.Ordinal);
+        Assert.Contains(command.Parameters, static parameter => parameter.IsArray);
+    }
+
     static OwnedCollectionFixture CreateOwnedCollectionFixture(
         bool identityLookup = false,
-        bool relationshipLookup = false)
+        bool relationshipLookup = false,
+        bool collectionLookup = false)
     {
         var sourceInput = new RelationQueryInputId("input:orders");
         var stopsInput = new RelationQueryInputId("field:stops");
@@ -152,10 +201,10 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
             binding: new ValueBindingId("binding:orders"),
             shape: Shape,
             source: SourceId,
-            kind: identityLookup || relationshipLookup
+            kind: identityLookup || relationshipLookup || collectionLookup
                 ? RelationQuerySourcePlacementBindingKind.RelationshipTraversal
                 : RelationQuerySourcePlacementBindingKind.SourceSet,
-            acquisition: identityLookup || relationshipLookup
+            acquisition: identityLookup || relationshipLookup || collectionLookup
                 ? RelationQuerySourceAcquisitionKind.BoundedLookup
                 : RelationQuerySourceAcquisitionKind.BoundedEnumeration,
             origin: RelationQuerySourcePlacementOrigin.Explicit,
@@ -282,7 +331,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
                     columnName: "location_id",
                     scalarType: PostgresRelationQueryScalarType.Text,
                     missingValueEncoding: PostgresRelationQueryMissingValueEncoding.Prohibited,
-                    nullValueEncoding: PostgresRelationQueryNullValueEncoding.Prohibited),
+                    nullValueEncoding: PostgresRelationQueryNullValueEncoding.Prohibited,
+                    textSemantics: equalityText),
                 new(
                     semanticPath: FieldPath.FromField("sequence"),
                     columnName: "sequence",
@@ -317,6 +367,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
                 return ValueTask.FromResult(new PostgresNpgsqlCommandResult(
                     relationshipLookup
                         ? [["order-a", "customer-a", "stop-a1", "location-1", 0]]
+                        : collectionLookup
+                        ? [["order-a", "stop-a1", "location-1", 0]]
                         : identityLookup
                         ? [["order-b", null, null, null]]
                         :

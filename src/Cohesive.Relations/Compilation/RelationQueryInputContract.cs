@@ -196,6 +196,70 @@ public sealed record RelationQueryTraversalInputContract
 }
 
 /// <summary>
+/// Exact owner-to-item occurrence lineage introduced by one direct field-backed collection expansion.
+/// </summary>
+public sealed record RelationQueryCollectionExpansionInputContract
+{
+    internal RelationQueryCollectionExpansionInputContract(
+        ExpandCollectionQueryNode expansion,
+        RelationQueryFieldInput collectionInput,
+        ValueBindingId ownerBinding,
+        QualifiedShapeId ownerShape)
+    {
+        ArgumentNullException.ThrowIfNull(expansion);
+        CollectionInput = Guard.RequireNotNull(collectionInput);
+        if (expansion.ItemShape is not { } itemShape)
+        {
+            throw new ArgumentException(
+                "A collection-occurrence contract requires a canonical structured item shape.",
+                nameof(expansion));
+        }
+        if (collectionInput.Binding != ownerBinding
+            || collectionInput.Field.Shape != ownerShape
+            || expansion.Collection is not FieldExpr { Binding: { } collectionOwner } collection
+            || collectionOwner != ownerBinding
+            || collection.Path != collectionInput.Field.Path)
+        {
+            throw new ArgumentException(
+                "A collection-occurrence contract must retain the exact owner field consumed by its expansion.",
+                nameof(collectionInput));
+        }
+
+        Expansion = expansion.Id;
+        Input = expansion.Input;
+        OwnerBinding = ownerBinding;
+        OwnerShape = ownerShape;
+        CollectionPath = collectionInput.Field.Path;
+        ItemBinding = expansion.ItemBinding;
+        ItemShape = itemShape;
+    }
+
+    /// <summary>Canonical expansion node introducing the occurrence.</summary>
+    public QueryNodeId Expansion { get; }
+
+    /// <summary>Logical rowset consumed by the expansion.</summary>
+    public QueryNodeId Input { get; }
+
+    /// <summary>Exact semantic field input containing the expanded collection.</summary>
+    public RelationQueryFieldInput CollectionInput { get; }
+
+    /// <summary>Visible binding owning the collection.</summary>
+    public ValueBindingId OwnerBinding { get; }
+
+    /// <summary>Canonical shape of the collection owner.</summary>
+    public QualifiedShapeId OwnerShape { get; }
+
+    /// <summary>Owner-relative path of the expanded collection.</summary>
+    public FieldPath CollectionPath { get; }
+
+    /// <summary>Binding introduced for each stable logical collection occurrence.</summary>
+    public ValueBindingId ItemBinding { get; }
+
+    /// <summary>Canonical shape of each structured collection item.</summary>
+    public QualifiedShapeId ItemShape { get; }
+}
+
+/// <summary>
 /// Required observation identity and its demanded-output uses.
 /// </summary>
 public sealed record RelationQueryIdentityInputContract
@@ -323,6 +387,31 @@ public sealed class RelationQueryInputContract
                     RequiredUses(uses, traversal.Id)))
                 .OrderBy(static traversal => traversal.Input.Traversal.Value, StringComparer.Ordinal)
         ];
+        Expansions =
+        [
+            .. executionSlice.Nodes
+                .Select(static execution => execution.CanonicalNode)
+                .OfType<ExpandCollectionQueryNode>()
+                .Where(static expansion => expansion.Collection is FieldExpr { Binding: not null }
+                    && expansion.ItemShape is not null)
+                .Select(expansion =>
+                {
+                    var collection = (FieldExpr)expansion.Collection;
+                    var ownerBinding = collection.Binding!.Value;
+                    var collectionInput = fields.SingleOrDefault(field =>
+                        field.Binding == ownerBinding
+                        && field.Field.Path == collection.Path)
+                        ?? throw new ArgumentException(
+                            $"Expansion '{expansion.Id.Value}' has no exact collection field input.",
+                            nameof(requirements));
+                    return new RelationQueryCollectionExpansionInputContract(
+                        expansion: expansion,
+                        collectionInput: collectionInput,
+                        ownerBinding: ownerBinding,
+                        ownerShape: collectionInput.Field.Shape);
+                })
+                .OrderBy(static expansion => expansion.Expansion.Value, StringComparer.Ordinal)
+        ];
 
         var unclaimed = fields.Where(field => !claimedFields.Contains(field.Id)).ToArray();
         if (unclaimed.Length != 0)
@@ -362,6 +451,11 @@ public sealed class RelationQueryInputContract
 
     /// <summary>Required relationship traversals sorted by logical node identity.</summary>
     public ImmutableArray<RelationQueryTraversalInputContract> Traversals { get; }
+
+    /// <summary>
+    /// Direct field-backed structured collection expansions retaining owner and item occurrence lineage.
+    /// </summary>
+    public ImmutableArray<RelationQueryCollectionExpansionInputContract> Expansions { get; }
 
     /// <summary>Required observation identities sorted by stable input identity.</summary>
     public ImmutableArray<RelationQueryIdentityInputContract> Identities { get; }
