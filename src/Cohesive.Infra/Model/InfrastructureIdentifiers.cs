@@ -135,3 +135,41 @@ public readonly record struct InfrastructureBindingContractId
     /// <returns>The value supplied at construction.</returns>
     public override string ToString() => Value;
 }
+
+/// <summary>Stable, versioned identity of one infrastructure binding-elaboration profile.</summary>
+[JsonConverter(typeof(SingleValueWrapperJsonConverter))]
+public readonly record struct InfrastructureBindingElaborationProfileId
+{
+    /// <summary>Creates a binding-elaboration profile identity.</summary>
+    /// <param name="value">Stable identity that changes when the profile's semantic authority changes.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    [JsonConstructor]
+    public InfrastructureBindingElaborationProfileId(string value) => Value = Guard.RequireNotNullOrWhiteSpace(value);
+
+    /// <summary>Raw binding-elaboration profile identity.</summary>
+    public string Value { get; }
+
+    /// <summary>Returns the raw binding-elaboration profile identity.</summary>
+    /// <returns>The value supplied at construction.</returns>
+    public override string ToString() => Value;
+}
+
+/// <summary>Stable identity of one versioned infrastructure binding-elaboration rule.</summary>
+[JsonConverter(typeof(SingleValueWrapperJsonConverter))]
+public readonly record struct InfrastructureBindingElaborationRuleId
+{
+    /// <summary>Creates a binding-elaboration rule identity.</summary>
+    /// <param name="value">Stable rule identity including its semantic version.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    [JsonConstructor]
+    public InfrastructureBindingElaborationRuleId(string value) => Value = Guard.RequireNotNullOrWhiteSpace(value);
+
+    /// <summary>Raw binding-elaboration rule identity.</summary>
+    public string Value { get; }
+
+    /// <summary>Returns the raw binding-elaboration rule identity.</summary>
+    /// <returns>The value supplied at construction.</returns>
+    public override string ToString() => Value;
+}

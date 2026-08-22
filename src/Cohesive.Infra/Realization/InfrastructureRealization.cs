@@ -7,8 +7,8 @@ namespace Cohesive.Infra.Realization;
 /// </summary>
 /// <remarks>
 /// The record combines target-profile capability planning with a validated lifecycle ownership partition. It is not
-/// deployment authority: this slice does not yet bind reusable target strategies to selected physical instances,
-/// elaborate every binding contract, or retain backend preview and deployment receipts.
+/// deployment authority: this slice does not yet bind reusable target strategies to selected physical instances or
+/// retain backend preview and deployment receipts.
 /// </remarks>
 public sealed record InfrastructureRealization
 {
