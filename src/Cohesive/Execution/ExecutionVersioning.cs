@@ -323,8 +323,6 @@ public sealed record ExecutionDefinitionMetadata
         if (diagnostics.IsDefaultOrEmpty)
             return [];
 
-        var isCanonical = true;
-        DocumentValidationDiagnostic? previous = null;
         foreach (var diagnostic in diagnostics)
         {
             if (diagnostic is null)
@@ -341,22 +339,8 @@ public sealed record ExecutionDefinitionMetadata
                     $"Execution definition diagnostic severity '{diagnostic.Severity}' is not recognized.",
                     nameof(diagnostics));
             }
-
-            if (previous is not null
-                && DocumentValidationDiagnosticComparer.Ordinal.Compare(previous, diagnostic) > 0)
-            {
-                isCanonical = false;
-            }
-
-            previous = diagnostic;
         }
 
-        if (isCanonical)
-            return diagnostics;
-
-        var normalized = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>(diagnostics.Length);
-        normalized.AddRange(diagnostics);
-        normalized.Sort(DocumentValidationDiagnosticComparer.Ordinal);
-        return normalized.MoveToImmutable();
+        return DocumentValidationDiagnostics.Normalize(diagnostics);
     }
 }

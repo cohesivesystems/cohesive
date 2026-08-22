@@ -578,20 +578,11 @@ public sealed record InfrastructureCapabilityProfile
     /// <returns>The matching variant, or <see langword="null"/> when unavailable.</returns>
     public InfrastructureCapabilityVariant? FindVariant(InfrastructureCapabilityVariantId id)
     {
-        var lower = 0;
-        var upper = Variants.Length - 1;
-        while (lower <= upper)
-        {
-            var middle = lower + ((upper - lower) / 2);
-            var comparison = StringComparer.Ordinal.Compare(Variants[middle].Id.Value, id.Value);
-            if (comparison == 0)
-                return Variants[middle];
-            if (comparison < 0)
-                lower = middle + 1;
-            else
-                upper = middle - 1;
-        }
-        return null;
+        var index = CanonicalDocumentCollections.BinarySearchIndex(
+            Variants,
+            id,
+            static (variant, sought) => StringComparer.Ordinal.Compare(variant.Id.Value, sought.Value));
+        return index < 0 ? null : Variants[index];
     }
 
     /// <summary>Creates an exact reference to this capability profile.</summary>

@@ -126,7 +126,7 @@ public sealed record ExecutionHealthObservation
             throw new ArgumentException("Health diagnostics cannot contain null entries.", nameof(diagnostics));
         }
 
-        return diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
+        return DocumentValidationDiagnostics.Normalize(diagnostics);
     }
 }
 

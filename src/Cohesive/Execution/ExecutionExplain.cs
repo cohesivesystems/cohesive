@@ -539,7 +539,7 @@ public sealed class ExecutionExplainArtifact
         {
             throw new ArgumentException("Explain diagnostics must be initialized and structured.", nameof(diagnostics));
         }
-        return diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
+        return DocumentValidationDiagnostics.Normalize(diagnostics);
     }
 }
 

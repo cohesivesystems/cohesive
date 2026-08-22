@@ -203,7 +203,6 @@ public static class MaterializationContract
             return [];
         }
 
-        var isCanonical = true;
         for (var index = 0; index < diagnostics.Length; index++)
         {
             if (diagnostics[index] is null)
@@ -212,21 +211,9 @@ public static class MaterializationContract
             }
 
             RequireCompleteDiagnostic(diagnostics[index], parameterName);
-            if (index > 0
-                && DocumentValidationDiagnosticComparer.Ordinal.Compare(diagnostics[index - 1], diagnostics[index]) > 0)
-            {
-                isCanonical = false;
-            }
-        }
-        if (isCanonical)
-        {
-            return diagnostics;
         }
 
-        var normalized = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>(diagnostics.Length);
-        normalized.AddRange(diagnostics);
-        normalized.Sort(DocumentValidationDiagnosticComparer.Ordinal);
-        return normalized.MoveToImmutable();
+        return DocumentValidationDiagnostics.Normalize(diagnostics);
     }
 
     internal static DocumentValidationResult NormalizeValidation(

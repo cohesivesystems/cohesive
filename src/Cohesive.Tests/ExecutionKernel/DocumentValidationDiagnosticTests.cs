@@ -228,6 +228,63 @@ public sealed class DocumentValidationDiagnosticTests
             laterMessageWithoutEvidence) < 0);
     }
 
+    [Fact]
+    public void DiagnosticCollections_NormalizeOrderAndRetainCanonicalStorage()
+    {
+        var earlier = new DocumentValidationDiagnostic(
+            "test.earlier",
+            DiagnosticSeverity.Warning,
+            "Earlier",
+            "/a");
+        var later = new DocumentValidationDiagnostic(
+            "test.later",
+            DiagnosticSeverity.Error,
+            "Later",
+            "/b");
+        ImmutableArray<DocumentValidationDiagnostic> canonical = [earlier, later];
+
+        var retained = DocumentValidationDiagnostics.Normalize(canonical);
+        var reordered = DocumentValidationDiagnostics.Normalize([later, earlier]);
+
+        Assert.True(retained == canonical);
+        Assert.True(canonical.SequenceEqual(reordered));
+    }
+
+    [Fact]
+    public void DiagnosticCollections_InitializeDefaultAndRejectNullEntries()
+    {
+        var normalized = DocumentValidationDiagnostics.Normalize(default);
+        var exception = Assert.Throws<ArgumentException>(() =>
+            DocumentValidationDiagnostics.Normalize([Diagnostic(), null!]));
+
+        Assert.False(normalized.IsDefault);
+        Assert.Empty(normalized);
+        Assert.Equal("diagnostics", exception.ParamName);
+    }
+
+    [Fact]
+    public void CanonicalCollections_SearchByKeyAndRejectDefaultStorage()
+    {
+        ImmutableArray<string> values = ["alpha", "bravo", "charlie"];
+
+        Assert.Equal(
+            1,
+            CanonicalDocumentCollections.BinarySearchIndex(
+                values,
+                "bravo",
+                static (value, sought) => StringComparer.Ordinal.Compare(value, sought)));
+        Assert.Equal(
+            -1,
+            CanonicalDocumentCollections.BinarySearchIndex(
+                values,
+                "delta",
+                static (value, sought) => StringComparer.Ordinal.Compare(value, sought)));
+        Assert.Throws<ArgumentException>(() => CanonicalDocumentCollections.BinarySearchIndex<string, string>(
+            default,
+            "alpha",
+            static (value, sought) => StringComparer.Ordinal.Compare(value, sought)));
+    }
+
     static DocumentValidationDiagnostic Diagnostic(DocumentDiagnosticEvidence? evidence = null) =>
         new(
             "test.code",
