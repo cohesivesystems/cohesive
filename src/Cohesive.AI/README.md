@@ -56,6 +56,33 @@ Reconciliation returns one closed result: `Accepted`, `ConfirmedAbsent`, or `Unr
 retry only according to its durable recovery policy and the returned evidence; physical attempt identity must not
 replace the stable logical submission identity.
 
+### Reconciliable training cancellation
+
+Training cancellation is a provider capability separate from cancelling the caller's wait. A workflow binds its
+stable cancellation-operation identity to the accepted provider job and invokes the stronger trainer capability:
+
+```csharp
+var cancellation = new TrainingJobCancellation(
+    cancellationId: "tenant/acme/training-run/42/cancel/1",
+    jobId: job.JobId);
+
+if (trainer is not ICancellableModelTrainer cancellableTrainer)
+    throw new InvalidOperationException("The selected trainer cannot cancel accepted provider jobs.");
+
+var cancellationResult = await cancellableTrainer.CancelAsync(cancellation, cancellationToken);
+```
+
+`Accepted` means only that the provider accepted cancellation; it is not proof that the job is terminal. Continue
+observing the job until it reports `Cancelled`, `Completed`, or `Failed`. `AlreadyTerminal` retains that exact
+provider-owned state so a cancellation race cannot overwrite success or failure. `NotFound`, `Rejected`, and
+`Unresolved` remain distinct recovery evidence. A provider's intermediate cancellation state is represented as
+`TrainingJobStatus.CancellationRequested`, not collapsed into `Running`.
+
+An implementation must treat the same cancellation identity and job identity as one logical operation. If it
+observes that cancellation identity already bound to another job, it throws
+`TrainingJobCancellationConflictException`. Cancelling the method's `CancellationToken` only stops the caller's
+wait; it never asserts that the provider job stopped.
+
 ## Related Packages
 
 - `Cohesive.Adapters.AzureML` for Azure Machine Learning training integration.

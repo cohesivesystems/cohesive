@@ -31,5 +31,8 @@ public enum TrainingJobStatus
     Cancelled = 4,
     
     /// <summary>Represents an unknown job option.</summary>
-    Unknown = 5
+    Unknown = 5,
+
+    /// <summary>The provider accepted cancellation, but the job has not yet reached a terminal state.</summary>
+    CancellationRequested = 6
 }
