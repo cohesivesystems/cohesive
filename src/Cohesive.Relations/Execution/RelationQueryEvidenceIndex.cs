@@ -246,7 +246,8 @@ sealed class RelationQueryEvidenceIndex
 
         Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrenceIndex = [];
         foreach (var occurrence in evidence.Sources.SelectMany(static source => source.Occurrences)
-                     .Concat(evidence.Traversals.SelectMany(static traversal => traversal.Results)))
+                     .Concat(evidence.Traversals.SelectMany(static traversal => traversal.Results))
+                     .Concat(evidence.CollectionOccurrences.Select(static item => item.Occurrence)))
         {
             if (!occurrenceIndex.TryAdd(occurrence.Id, occurrence))
             {
@@ -322,13 +323,14 @@ sealed class RelationQueryEvidenceIndex
     {
         ArgumentNullException.ThrowIfNull(from);
         RequirePlanInput(input);
-        RequireOccurrence(from);
         if (from.Binding != input.From || from.Shape != input.FromShape)
         {
             throw new ArgumentException(
                 "The traversal source occurrence does not match the compiled relationship input.",
                 nameof(from));
         }
+
+        RequireOccurrence(from);
 
         return traversals.TryGetValue((input.Id, from.Id), out traversal!);
     }

@@ -161,6 +161,39 @@ public sealed class PostgresSqlConstructionTests
     }
 
     [Fact]
+    public void Exists_ComposesCorrelatedQueriesWithOneDeterministicParameterContext()
+    {
+        var occurrence = new PostgresSqlSelectBuilder(
+                new PostgresSqlQualifiedTable("public", "order_stops"),
+                "s")
+            .Select(PostgresSqlExpression.Constant(1), "match")
+            .Where(PostgresSqlExpression.Binary(
+                @operator: PostgresSqlBinaryOperator.Equal,
+                left: PostgresSqlExpression.Column("s", "order_id"),
+                right: PostgresSqlExpression.Column("o", "id")))
+            .Where(PostgresSqlExpression.Binary(
+                @operator: PostgresSqlBinaryOperator.Equal,
+                left: PostgresSqlExpression.Column("s", "location_id"),
+                right: PostgresSqlExpression.RuntimeParameter("location")))
+            .BuildQuery();
+
+        var template = new PostgresSqlSelectBuilder(
+                new PostgresSqlQualifiedTable("public", "orders"),
+                "o")
+            .Select(PostgresSqlExpression.Column("o", "id"), "id")
+            .Where(PostgresSqlExpression.Exists(occurrence))
+            .BuildTemplate();
+
+        Assert.Equal(
+            "SELECT \"o\".\"id\" AS \"id\" FROM \"public\".\"orders\" AS \"o\" "
+            + "WHERE EXISTS (SELECT $1 AS \"match\" FROM \"public\".\"order_stops\" AS \"s\" "
+            + "WHERE (\"s\".\"order_id\" = \"o\".\"id\") AND (\"s\".\"location_id\" = $2))",
+            template.Text);
+        Assert.Equal(2, template.Parameters.Length);
+        Assert.Equal("location", template.Parameters[1].Binding);
+    }
+
+    [Fact]
     public void MutationBuildersShareSafeIdentifiersExpressionsAndParameterTemplates()
     {
         PostgresSqlQualifiedTable table = new("transport", "loads");

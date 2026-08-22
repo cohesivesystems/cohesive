@@ -81,7 +81,9 @@ public static class RelationRequirementGapAnalyzer
         readonly Dictionary<RelationQueryInputId, RelationQueryIdentityInputContract> identityContracts;
         readonly Dictionary<RelationQueryInputId, RelationQueryParameterInputContract> parameterContracts;
         readonly Dictionary<RelationQueryInputId, RelationQueryCapabilityInputContract> capabilityContracts;
+        readonly Dictionary<QueryNodeId, RelationQueryCollectionExpansionInputContract> expansionContracts;
         readonly Dictionary<RelationQueryInputId, RelationQueryFieldInputContract> forwardReferenceFields = [];
+        readonly Dictionary<RelationQueryInputId, RelationQueryCollectionExpansionInputContract> forwardCollectionReferences = [];
         readonly Dictionary<RelationQueryInputId, RelationQueryIdentityInputContract> inverseAnchorIdentities = [];
         readonly Dictionary<RelationQueryInputId, RelationQuerySourceEvidence> sources = [];
         readonly Dictionary<(RelationQueryInputId Input, RelationQueryOccurrenceId Owner), RelationQueryFieldEvidence> fields = [];
@@ -90,6 +92,7 @@ public static class RelationRequirementGapAnalyzer
         readonly Dictionary<RelationQueryInputId, RelationQueryCapabilityEvidence> capabilities = [];
         readonly Dictionary<(RelationQueryInputId Input, string Occurrence), RelationQueryConversionFailureEvidence> conversions = [];
         readonly Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrences = [];
+        readonly Dictionary<RelationQueryOccurrenceId, RelationQueryCollectionOccurrenceEvidence> collectionOccurrences = [];
         readonly List<RelationRuntimeDiagnostic> diagnostics = [];
         readonly Dictionary<(string Occurrence, RelationQueryInputId Input, RelationRequirementGapCause Cause), RelationRequirementGap> gaps = [];
         readonly HashSet<(RelationQueryInputId Input, RelationQueryOccurrenceId Owner)> processedFields = [];
@@ -116,6 +119,7 @@ public static class RelationRequirementGapAnalyzer
             identityContracts = plan.InputContract.Identities.ToDictionary(static identity => identity.Input.Id);
             parameterContracts = plan.InputContract.Parameters.ToDictionary(static parameter => parameter.Input.Id);
             capabilityContracts = plan.InputContract.Capabilities.ToDictionary(static capability => capability.Input.Id);
+            expansionContracts = plan.InputContract.Expansions.ToDictionary(static expansion => expansion.Expansion);
         }
 
         public RelationRequirementGapAnalysisResult Run()
@@ -237,6 +241,50 @@ public static class RelationRequirementGapAnalyzer
                 }
             }
 
+            foreach (var group in evidence.CollectionOccurrences.GroupBy(static item =>
+                         (item.Expansion, item.Owner, item.Ordinal)))
+            {
+                var item = group.First();
+                if (!expansionContracts.TryGetValue(item.Expansion, out var expansion))
+                {
+                    AddDiagnostic(
+                        RelationRuntimeDiagnosticCodes.InputUnknown,
+                        $"Collection occurrence evidence references unknown expansion '{item.Expansion.Value}'.",
+                        occurrence: item.Occurrence.Id);
+                    continue;
+                }
+                if (group.Skip(1).Any())
+                {
+                    AddDiagnostic(
+                        RelationRuntimeDiagnosticCodes.EvidenceDuplicate,
+                        $"Collection occurrence evidence repeats expansion '{item.Expansion.Value}', owner '{item.Owner.Value}', and ordinal '{item.Ordinal.ToString(CultureInfo.InvariantCulture)}'.",
+                        expansion.CollectionInput.Id,
+                        item.Occurrence.Id);
+                    continue;
+                }
+
+                RegisterOccurrence(item.Occurrence, expansion.CollectionInput.Id, evidenceReference: null);
+                if (!collectionOccurrences.TryAdd(item.Occurrence.Id, item))
+                {
+                    AddDiagnostic(
+                        RelationRuntimeDiagnosticCodes.EvidenceConflict,
+                        message:
+                            $"Collection occurrence '{item.Occurrence.Id.Value}' is declared more than once with conflicting evidence.",
+                        input: expansion.CollectionInput.Id,
+                        occurrence: item.Occurrence.Id);
+                }
+                if (item.Occurrence.Binding != expansion.ItemBinding
+                    || item.Occurrence.Shape != expansion.ItemShape
+                    || item.Occurrence.ObservationIdentity is not null)
+                {
+                    AddDiagnostic(
+                        RelationRuntimeDiagnosticCodes.EvidenceConflict,
+                        $"Collection occurrence '{item.Occurrence.Id.Value}' does not match expansion item binding '{expansion.ItemBinding.Value}' and shape '{expansion.ItemShape}'.",
+                        expansion.CollectionInput.Id,
+                        item.Occurrence.Id);
+                }
+            }
+
             foreach (var traversal in traversals.Values)
             {
                 var contract = traversalContracts[traversal.Input];
@@ -258,6 +306,28 @@ public static class RelationRequirementGapAnalyzer
                         traversal.Input,
                         from.Id,
                         traversal.EvidenceReference);
+                }
+            }
+
+            foreach (var item in collectionOccurrences.Values)
+            {
+                var expansion = expansionContracts[item.Expansion];
+                if (!occurrences.TryGetValue(item.Owner, out var owner))
+                {
+                    AddDiagnostic(
+                        RelationRuntimeDiagnosticCodes.EvidenceConflict,
+                        $"Collection occurrence evidence references unknown owner occurrence '{item.Owner.Value}'.",
+                        expansion.CollectionInput.Id,
+                        item.Occurrence.Id);
+                    continue;
+                }
+                if (owner.Binding != expansion.OwnerBinding || owner.Shape != expansion.OwnerShape)
+                {
+                    AddDiagnostic(
+                        RelationRuntimeDiagnosticCodes.EvidenceConflict,
+                        $"Collection occurrence owner '{owner.Id.Value}' does not match expansion owner binding '{expansion.OwnerBinding.Value}' and shape '{expansion.OwnerShape}'.",
+                        expansion.CollectionInput.Id,
+                        item.Occurrence.Id);
                 }
             }
 
@@ -438,7 +508,18 @@ public static class RelationRequirementGapAnalyzer
                             && field.Input.Field.Shape == traversal.Definition.SourceShape
                             && field.Input.Field.Path == traversal.Definition.SourceReference)
                         .ToArray();
-                    if (matches.Length != 1)
+                    if (matches.Length == 1)
+                    {
+                        forwardReferenceFields.Add(traversal.Input.Id, matches[0]);
+                        continue;
+                    }
+
+                    var expansions = expansionContracts.Values.Where(expansion =>
+                            expansion.ItemBinding == traversal.From
+                            && expansion.ItemShape == traversal.Definition.SourceShape)
+                        .Take(2)
+                        .ToArray();
+                    if (matches.Length != 0 || expansions.Length != 1)
                     {
                         AddDiagnostic(
                             RelationRuntimeDiagnosticCodes.EvidenceConflict,
@@ -446,7 +527,7 @@ public static class RelationRequirementGapAnalyzer
                             traversal.Input.Id);
                         continue;
                     }
-                    forwardReferenceFields.Add(traversal.Input.Id, matches[0]);
+                    forwardCollectionReferences.Add(traversal.Input.Id, expansions[0]);
                     continue;
                 }
 
@@ -471,11 +552,6 @@ public static class RelationRequirementGapAnalyzer
             foreach (var contract in traversalContracts.Values.Where(static item =>
                          item.Input.Direction == RelationshipTraversalDirection.Forward))
             {
-                if (!forwardReferenceFields.TryGetValue(contract.Input.Id, out var reference))
-                {
-                    continue;
-                }
-
                 foreach (var observedTraversal in traversals.Values.Where(item =>
                              item.Input == contract.Input.Id
                              && item.State == RelationQueryTraversalEvidenceState.Completed))
@@ -486,10 +562,24 @@ public static class RelationRequirementGapAnalyzer
                         continue;
                     }
 
-                    if (!fields.TryGetValue((reference.Input.Id, observedTraversal.From), out var observedReference)
-                        || observedReference.State != RelationQueryFieldEvidenceState.Value
-                        || observedReference.Value is not { } referenceValue
-                        || !TryGetReferenceIdentities(contract.Cardinality, referenceValue, out var expected))
+                    ObservationValue? referenceValue = null;
+                    if (forwardReferenceFields.TryGetValue(contract.Input.Id, out var reference)
+                        && fields.TryGetValue((reference.Input.Id, observedTraversal.From), out var observedReference)
+                        && observedReference.State == RelationQueryFieldEvidenceState.Value)
+                    {
+                        referenceValue = observedReference.Value;
+                    }
+                    else if (forwardCollectionReferences.ContainsKey(contract.Input.Id)
+                             && collectionOccurrences.TryGetValue(observedTraversal.From, out var collectionOccurrence)
+                             && collectionOccurrence.Value.TryGetField(
+                                 contract.Definition.SourceReference,
+                                 out var collectionReference))
+                    {
+                        referenceValue = collectionReference;
+                    }
+
+                    if (referenceValue is not { } loadedReference
+                        || !TryGetReferenceIdentities(contract.Cardinality, loadedReference, out var expected))
                     {
                         continue;
                     }
@@ -725,47 +815,57 @@ public static class RelationRequirementGapAnalyzer
                     ObservationValue? referenceValue = null;
                     if (contract.Input.Direction == RelationshipTraversalDirection.Forward)
                     {
-                        var reference = forwardReferenceFields[contract.Input.Id];
-                        processedFields.Add((reference.Input.Id, owner.Id));
-                        if (IsConversionHandled(reference.Input.Id, owner.Id))
+                        if (forwardReferenceFields.TryGetValue(contract.Input.Id, out var reference))
                         {
-                            BlockResults(observedTraversal);
-                            continue;
-                        }
-
-                        fields.TryGetValue((reference.Input.Id, owner.Id), out var observedReference);
-                        if (observedReference is null
-                            && evidence.Completeness == RelationQueryEvidenceCompleteness.Partial)
-                        {
-                            if (observedTraversal is null)
+                            processedFields.Add((reference.Input.Id, owner.Id));
+                            if (IsConversionHandled(reference.Input.Id, owner.Id))
                             {
+                                BlockResults(observedTraversal);
                                 continue;
                             }
+
+                            fields.TryGetValue((reference.Input.Id, owner.Id), out var observedReference);
+                            if (observedReference is null
+                                && evidence.Completeness == RelationQueryEvidenceCompleteness.Partial)
+                            {
+                                if (observedTraversal is null)
+                                {
+                                    continue;
+                                }
+                            }
+                            else if (TryGetReferenceGapCause(observedReference, out var referenceCause))
+                            {
+                                var blocked = Prepend(
+                                    contract.Input.Id,
+                                    GetTraversalDescendants(contract));
+                                AddGap(
+                                    reference.Input,
+                                    owner,
+                                    referenceCause,
+                                    blocked,
+                                    new(
+                                        reference.Input.Field,
+                                        reference.Input.ValueContract,
+                                        observedReference?.State ?? RelationQueryFieldEvidenceState.NotLoaded,
+                                        observedReference?.Value,
+                                        observedReference?.EvidenceReference),
+                                    CreateRelationshipContext(contract, observedTraversal, referenceValue: null),
+                                    observedReference?.EvidenceReference);
+                                BlockResults(observedTraversal);
+                                continue;
+                            }
+                            else if (observedReference?.Value is { } loadedReference)
+                            {
+                                referenceValue = loadedReference;
+                            }
                         }
-                        else if (TryGetReferenceGapCause(observedReference, out var referenceCause))
+                        else if (forwardCollectionReferences.ContainsKey(contract.Input.Id)
+                                 && collectionOccurrences.TryGetValue(owner.Id, out var collectionOccurrence)
+                                 && collectionOccurrence.Value.TryGetField(
+                                     contract.Definition.SourceReference,
+                                     out var collectionReference))
                         {
-                            var blocked = Prepend(
-                                contract.Input.Id,
-                                GetTraversalDescendants(contract));
-                            AddGap(
-                                reference.Input,
-                                owner,
-                                referenceCause,
-                                blocked,
-                                new(
-                                    reference.Input.Field,
-                                    reference.Input.ValueContract,
-                                    observedReference?.State ?? RelationQueryFieldEvidenceState.NotLoaded,
-                                    observedReference?.Value,
-                                    observedReference?.EvidenceReference),
-                                CreateRelationshipContext(contract, observedTraversal, referenceValue: null),
-                                observedReference?.EvidenceReference);
-                            BlockResults(observedTraversal);
-                            continue;
-                        }
-                        else if (observedReference?.Value is { } loadedReference)
-                        {
-                            referenceValue = loadedReference;
+                            referenceValue = collectionReference;
                         }
                     }
                     else

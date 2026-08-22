@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
+using Cohesive.Relations.IR;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 
@@ -141,6 +142,7 @@ static class RelationQuerySourceReadFields
 [JsonDerivedType(typeof(RelationQueryBoundedEnumeration), "boundedEnumeration")]
 [JsonDerivedType(typeof(RelationQueryIdentityBatchLookup), "identityBatch")]
 [JsonDerivedType(typeof(RelationQueryRelationshipKeyBatchLookup), "relationshipKeyBatch")]
+[JsonDerivedType(typeof(RelationQueryCollectionElementKeyBatchLookup), "collectionElementKeyBatch")]
 public abstract record RelationQuerySourceReadConstraint
 {
     /// <summary>Initializes a closed physical source-read constraint.</summary>
@@ -217,6 +219,59 @@ public sealed record RelationQueryRelationshipKeyBatchLookup : RelationQuerySour
 
     /// <summary>Stable adapter-interpreted selector for the reference field.</summary>
     public string SourceSelector { get; }
+
+    /// <summary>Distinct predicate values in deterministic ordinal order.</summary>
+    public ImmutableArray<string> Keys { get; }
+}
+
+/// <summary>
+/// Reads owner observations having at least one element in a canonical expanded collection whose relative field
+/// matches one bounded key batch.
+/// </summary>
+public sealed record RelationQueryCollectionElementKeyBatchLookup : RelationQuerySourceReadConstraint
+{
+    /// <summary>Creates an exact collection-element predicate lookup.</summary>
+    /// <param name="expansion">Canonical expansion node establishing owner/item correlation.</param>
+    /// <param name="collectionInput">Exact semantic field input containing the collection.</param>
+    /// <param name="collectionPath">Owner-relative collection path.</param>
+    /// <param name="elementReference">Item-relative field tested by the predicate.</param>
+    /// <param name="keys">Distinct predicate values in deterministic ordinal order.</param>
+    /// <exception cref="ArgumentException">An identity or path is default, or <paramref name="keys"/> is invalid.</exception>
+    [JsonConstructor]
+    public RelationQueryCollectionElementKeyBatchLookup(
+        QueryNodeId expansion,
+        RelationQueryInputId collectionInput,
+        FieldPath collectionPath,
+        FieldPath elementReference,
+        ImmutableArray<string> keys)
+    {
+        if (string.IsNullOrWhiteSpace(expansion.Value))
+            throw new ArgumentException("A collection-element lookup requires an expansion node.", nameof(expansion));
+        if (string.IsNullOrWhiteSpace(collectionInput.Value))
+            throw new ArgumentException("A collection-element lookup requires a collection input.", nameof(collectionInput));
+        if (collectionPath.Segments.IsDefaultOrEmpty)
+            throw new ArgumentException("A collection-element lookup requires a collection path.", nameof(collectionPath));
+        if (elementReference.Segments.IsDefaultOrEmpty)
+            throw new ArgumentException("A collection-element lookup requires an element reference path.", nameof(elementReference));
+
+        Expansion = expansion;
+        CollectionInput = collectionInput;
+        CollectionPath = collectionPath;
+        ElementReference = elementReference;
+        Keys = RelationQueryIdentityBatchLookup.NormalizeKeys(keys, nameof(keys));
+    }
+
+    /// <summary>Canonical expansion node establishing owner/item correlation.</summary>
+    public QueryNodeId Expansion { get; }
+
+    /// <summary>Exact semantic field input containing the collection.</summary>
+    public RelationQueryInputId CollectionInput { get; }
+
+    /// <summary>Owner-relative collection path.</summary>
+    public FieldPath CollectionPath { get; }
+
+    /// <summary>Item-relative field tested by the predicate.</summary>
+    public FieldPath ElementReference { get; }
 
     /// <summary>Distinct predicate values in deterministic ordinal order.</summary>
     public ImmutableArray<string> Keys { get; }

@@ -41,17 +41,18 @@ sealed record RelationQueryRuntimeBinding
         }
         if (!Enum.IsDefined(kind))
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported runtime-binding kind.");
-        if ((kind == RelationQueryRuntimeBindingKind.Observed) != (occurrence is not null))
+        if (kind == RelationQueryRuntimeBindingKind.Observed && occurrence is null
+            || kind == RelationQueryRuntimeBindingKind.Absent && occurrence is not null)
         {
             throw new ArgumentException(
-                "Only an observed runtime binding can carry an observation occurrence.",
+                "Observed bindings require an occurrence, absent bindings cannot carry one, and computed bindings may carry derived occurrence lineage.",
                 nameof(occurrence));
         }
-        if (kind == RelationQueryRuntimeBindingKind.Observed
-            && (shape is null || occurrence!.Shape != shape.Value))
+        if (occurrence is not null
+            && (shape is null || occurrence.Shape != shape.Value))
         {
             throw new ArgumentException(
-                "An observed runtime binding must use the occurrence shape.",
+                "A runtime binding occurrence must use the binding shape.",
                 nameof(shape));
         }
         if (kind == RelationQueryRuntimeBindingKind.Absent
@@ -121,12 +122,13 @@ sealed record RelationQueryRuntimeBinding
         ObservationValue value,
         ImmutableArray<FieldPath> unavailableFields = default,
         ImmutableArray<FieldPath> authoritativeFields = default,
-        bool isAuthoritativeValue = false) =>
+        bool isAuthoritativeValue = false,
+        RelationQueryObservationOccurrence? occurrence = null) =>
         new(
             RelationQueryRuntimeBindingKind.Computed,
             shape,
             value,
-            occurrence: null,
+            occurrence,
             unavailableFields,
             authoritativeFields,
             isAuthoritativeValue);

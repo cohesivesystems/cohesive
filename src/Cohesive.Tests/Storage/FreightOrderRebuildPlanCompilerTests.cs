@@ -60,8 +60,10 @@ public sealed class FreightOrderRebuildPlanCompilerTests
             forward.Plan.ImpactPlan.Routes,
             static route => Assert.True(route.Strategy is
                 MaterializationDirectRootImpactStrategy
-                or MaterializationInverseTraversalImpactStrategy
-                or MaterializationBoundedGlobalImpactStrategy));
+                or MaterializationInverseTraversalImpactStrategy));
+        Assert.DoesNotContain(
+            forward.Plan.ImpactPlan.Routes,
+            static route => route.Strategy is MaterializationBoundedGlobalImpactStrategy);
         Assert.Single(forward.PlanSet.LeafPlans);
         Assert.Equal(target.Id, forward.Plan.Target.Id);
     }

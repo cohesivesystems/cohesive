@@ -31,6 +31,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
     const string CandidateAlias = "candidate";
     const string RootPageAlias = "root_page";
     const string ComponentAlias = "component";
+    const string OccurrenceAlias = "occurrence";
     const string RootPartitionAlias = "_root_partition";
 
     readonly RelationQueryPhysicalPlanFingerprint physicalPlan;
@@ -270,7 +271,9 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             RelationQueryPhysicalStageKind.BatchedPredicateLookup =>
                 binding.Kind == RelationQuerySourcePlacementBindingKind.RelationshipTraversal
                 && binding.Acquisition == RelationQuerySourceAcquisitionKind.BoundedLookup
-                && !binding.RelationshipKeys.IsDefaultOrEmpty,
+                && (!binding.RelationshipKeys.IsDefaultOrEmpty
+                    || storage.OwnedCollections.Any(collection =>
+                        collection.RootPlacementBinding == binding.Id)),
             _ => false
         };
     }
@@ -702,6 +705,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             RelationQueryBoundedEnumeration => RelationQueryPhysicalStageKind.SourceRead,
             RelationQueryIdentityBatchLookup => RelationQueryPhysicalStageKind.BatchedIdentityLookup,
             RelationQueryRelationshipKeyBatchLookup => RelationQueryPhysicalStageKind.BatchedPredicateLookup,
+            RelationQueryCollectionElementKeyBatchLookup => RelationQueryPhysicalStageKind.BatchedPredicateLookup,
             _ => (RelationQueryPhysicalStageKind?)null
         };
         if (expectedStageKind is null
@@ -712,6 +716,9 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 && (canonical.Kind != RelationQuerySourcePlacementBindingKind.RelationshipTraversal
                     || canonical.Acquisition != RelationQuerySourceAcquisitionKind.BoundedLookup)
             || request.Constraint is RelationQueryRelationshipKeyBatchLookup
+                && (canonical.Kind != RelationQuerySourcePlacementBindingKind.RelationshipTraversal
+                    || canonical.Acquisition != RelationQuerySourceAcquisitionKind.BoundedLookup)
+            || request.Constraint is RelationQueryCollectionElementKeyBatchLookup
                 && (canonical.Kind != RelationQuerySourcePlacementBindingKind.RelationshipTraversal
                     || canonical.Acquisition != RelationQuerySourceAcquisitionKind.BoundedLookup))
         {
@@ -866,12 +873,40 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             }
         }
 
+        PostgresRelationQueryOwnedCollectionElementFieldBinding? collectionElement = null;
+        if (request.Constraint is RelationQueryCollectionElementKeyBatchLookup collectionLookup)
+        {
+            if (ownedCollection is null
+                || ownedCollection.Binding.CollectionInput != collectionLookup.CollectionInput
+                || ownedCollection.Binding.CollectionPath != collectionLookup.CollectionPath)
+            {
+                return "owned-collection-occurrence-mismatch";
+            }
+
+            try
+            {
+                collectionElement = ownedCollection.Binding.ResolveField(collectionLookup.ElementReference);
+            }
+            catch (KeyNotFoundException)
+            {
+                return "owned-collection-element-reference-mismatch";
+            }
+
+            if (collectionElement.ScalarType == PostgresRelationQueryScalarType.Text
+                && collectionElement.TextSemantics?.Equality != PostgresRelationQueryTextEqualitySemantics.Ordinal)
+            {
+                return "owned-collection-element-text-equality-unproven";
+            }
+        }
+
         var keyValidationFailure = request.Constraint switch
         {
             RelationQueryIdentityBatchLookup identityLookup =>
                 ValidateCanonicalKeys(identityLookup.Identities, identity.ScalarType, Policy.MaximumKeyBytes),
             RelationQueryRelationshipKeyBatchLookup relationshipLookup =>
                 ValidateCanonicalKeys(relationshipLookup.Keys, relationship!.ScalarType, Policy.MaximumKeyBytes),
+            RelationQueryCollectionElementKeyBatchLookup collectionKeys =>
+                ValidateCanonicalKeys(collectionKeys.Keys, collectionElement!.ScalarType, Policy.MaximumKeyBytes),
             _ => null
         };
         if (keyValidationFailure is not null)
@@ -1063,6 +1098,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         PostgresRelationQueryScalarType? keyType = null;
         PostgresRelationQueryTextSemantics? keyText = null;
         string? keyColumn = null;
+        PostgresSqlExpression? collectionPredicate = null;
         switch (request.Constraint)
         {
             case RelationQueryIdentityBatchLookup lookup:
@@ -1077,8 +1113,53 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 keyText = relationship.TextSemantics;
                 keyColumn = relationship.ColumnName;
                 break;
+            case RelationQueryCollectionElementKeyBatchLookup lookup:
+                if (owned.CollectionInput != lookup.CollectionInput
+                    || owned.CollectionPath != lookup.CollectionPath)
+                {
+                    throw new InvalidOperationException(
+                        "The collection-element predicate does not belong to the projected owned collection.");
+                }
+                var element = owned.ResolveField(lookup.ElementReference);
+                parsedKeys = ParseKeys(lookup.Keys, element.ScalarType);
+                keyType = element.ScalarType;
+                keyText = element.TextSemantics;
+                var occurrenceParent = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+                    PostgresSqlExpression.Column(OccurrenceAlias, owned.ParentRoot.ColumnName),
+                    owned.ParentRoot.ScalarType,
+                    owned.ParentRoot.TextSemantics);
+                var occurrencePartition = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+                    PostgresSqlExpression.Column(OccurrenceAlias, owned.Partition.ColumnName),
+                    owned.Partition.ScalarType,
+                    owned.Partition.TextSemantics);
+                var occurrenceReference = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+                    PostgresSqlExpression.Column(OccurrenceAlias, element.ColumnName),
+                    element.ScalarType,
+                    element.TextSemantics);
+                var occurrenceQuery = new PostgresSqlSelectBuilder(
+                        new PostgresSqlQualifiedTable(owned.SchemaName, owned.TableName),
+                        OccurrenceAlias)
+                    .Select(
+                        PostgresSqlExpression.Column(OccurrenceAlias, owned.ParentRoot.ColumnName),
+                        "_exists")
+                    .Where(PostgresSqlExpression.Binary(
+                        PostgresSqlBinaryOperator.Equal,
+                        occurrenceParent,
+                        rootIdentity))
+                    .Where(PostgresSqlExpression.Binary(
+                        PostgresSqlBinaryOperator.Equal,
+                        occurrencePartition,
+                        rootPartition))
+                    .Where(PostgresSqlExpression.EqualAny(occurrenceReference, KeysBinding))
+                    .BuildQuery();
+                collectionPredicate = PostgresSqlExpression.Exists(occurrenceQuery);
+                break;
         }
-        if (keyType is { } scalarType)
+        if (collectionPredicate is not null)
+        {
+            rootPage.Where(collectionPredicate);
+        }
+        else if (keyType is { } scalarType)
         {
             var keyExpression = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
                 PostgresSqlExpression.Column(SourceAlias, keyColumn!),
@@ -1712,6 +1793,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         {
             RelationQueryIdentityBatchLookup identity => identity.Identities.Length > maximumBatchSize,
             RelationQueryRelationshipKeyBatchLookup relationship => relationship.Keys.Length > maximumBatchSize,
+            RelationQueryCollectionElementKeyBatchLookup collection => collection.Keys.Length > maximumBatchSize,
             _ => false
         };
     }

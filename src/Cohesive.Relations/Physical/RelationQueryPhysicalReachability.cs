@@ -65,6 +65,10 @@ internal static class RelationQueryPhysicalReachability
                 .Concat(plan.InputContract.Traversals
                     .Where(traversal => traversal.Result == contract.From)
                     .Select(static traversal => traversal.Input.Traversal))
+                .Concat(plan.InputContract.Expansions
+                    .Where(expansion => expansion.ItemBinding == contract.From
+                        && expansion.ItemShape == contract.FromShape)
+                    .Select(static expansion => expansion.Expansion))
         ];
         if (producers.Length != 1)
         {

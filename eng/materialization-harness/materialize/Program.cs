@@ -725,6 +725,7 @@ public static class Program
             .SelectMany(static route => route.Strategy is MaterializationInverseTraversalImpactStrategy inverse
                 ? inverse.Steps
                 : [])
+            .Where(static step => step.CollectionOccurrence is null)
             .GroupBy(static step => step.ReferenceSourceInput)
             .ToDictionary(
                 static group => group.Key,

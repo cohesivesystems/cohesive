@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.IR;
 
 namespace Cohesive.Storage.Materialization;
 
@@ -68,7 +69,59 @@ public enum MaterializationInverseImpactOperationKind
     AfterRelationshipReferenceExtraction = 2,
 
     /// <summary>Extract a target identity from a current reference-bearing observation produced by a preceding step.</summary>
-    CurrentRelationshipReferenceExtraction = 3
+    CurrentRelationshipReferenceExtraction = 3,
+
+    /// <summary>
+    /// Query owner observations having at least one expanded collection item whose relationship reference equals a
+    /// contributor identity.
+    /// </summary>
+    CollectionElementPredicateLookup = 4
+}
+
+/// <summary>
+/// Canonical owner-to-item occurrence path used to invert a relationship from an expanded collection element.
+/// </summary>
+public sealed record MaterializationCollectionOccurrenceReference
+{
+    /// <summary>Creates one exact collection-occurrence reference.</summary>
+    /// <param name="expansion">Canonical collection-expansion node.</param>
+    /// <param name="collectionInput">Exact semantic field input containing the collection.</param>
+    /// <param name="collectionPath">Owner-relative collection path.</param>
+    /// <param name="elementReference">Item-relative relationship-reference path.</param>
+    /// <exception cref="ArgumentException">An identity or path is default.</exception>
+    [JsonConstructor]
+    public MaterializationCollectionOccurrenceReference(
+        QueryNodeId expansion,
+        RelationQueryInputId collectionInput,
+        FieldPath collectionPath,
+        FieldPath elementReference)
+    {
+        if (string.IsNullOrWhiteSpace(expansion.Value))
+            throw new ArgumentException("A collection occurrence requires an expansion node.", nameof(expansion));
+        if (string.IsNullOrWhiteSpace(collectionInput.Value))
+            throw new ArgumentException("A collection occurrence requires a collection input.", nameof(collectionInput));
+        if (collectionPath.Segments.IsDefaultOrEmpty)
+            throw new ArgumentException("A collection occurrence requires a collection path.", nameof(collectionPath));
+        if (elementReference.Segments.IsDefaultOrEmpty)
+            throw new ArgumentException("A collection occurrence requires an element reference path.", nameof(elementReference));
+
+        Expansion = expansion;
+        CollectionInput = collectionInput;
+        CollectionPath = collectionPath;
+        ElementReference = elementReference;
+    }
+
+    /// <summary>Canonical collection-expansion node.</summary>
+    public QueryNodeId Expansion { get; }
+
+    /// <summary>Exact semantic field input containing the collection.</summary>
+    public RelationQueryInputId CollectionInput { get; }
+
+    /// <summary>Owner-relative collection path.</summary>
+    public FieldPath CollectionPath { get; }
+
+    /// <summary>Item-relative relationship-reference path.</summary>
+    public FieldPath ElementReference { get; }
 }
 
 /// <summary>Stable, versioned identity of one materialization impact-planning policy.</summary>
@@ -278,13 +331,17 @@ public sealed record MaterializationInverseImpactStep
     /// Acquisition role that supplies the reference-bearing observations for this operation.
     /// </param>
     /// <param name="operation">Bounded operation used to move one hop toward relation roots.</param>
+    /// <param name="collectionOccurrence">
+    /// Owner-to-item occurrence path required only for collection-element predicate lookup.
+    /// </param>
     /// <exception cref="ArgumentException">An input identity is default.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="operation"/> is unsupported.</exception>
     [JsonConstructor]
     public MaterializationInverseImpactStep(
         RelationQueryInputId relationshipInput,
         RelationQueryInputId referenceSourceInput,
-        MaterializationInverseImpactOperationKind operation)
+        MaterializationInverseImpactOperationKind operation,
+        MaterializationCollectionOccurrenceReference? collectionOccurrence = null)
     {
         if (string.IsNullOrWhiteSpace(relationshipInput.Value))
         {
@@ -302,10 +359,18 @@ public sealed record MaterializationInverseImpactStep
         {
             throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unsupported inverse-impact operation.");
         }
+        if ((operation == MaterializationInverseImpactOperationKind.CollectionElementPredicateLookup)
+            != (collectionOccurrence is not null))
+        {
+            throw new ArgumentException(
+                "Only collection-element predicate lookup requires one exact collection occurrence.",
+                nameof(collectionOccurrence));
+        }
 
         RelationshipInput = relationshipInput;
         ReferenceSourceInput = referenceSourceInput;
         Operation = operation;
+        CollectionOccurrence = collectionOccurrence;
     }
 
     /// <summary>Canonical Relations relationship-input identity.</summary>
@@ -319,6 +384,9 @@ public sealed record MaterializationInverseImpactStep
 
     /// <summary>Bounded operation used to move one hop toward relation roots.</summary>
     public MaterializationInverseImpactOperationKind Operation { get; }
+
+    /// <summary>Owner-to-item occurrence path for collection-element predicate lookup.</summary>
+    public MaterializationCollectionOccurrenceReference? CollectionOccurrence { get; }
 }
 
 /// <summary>Closed executable strategy selected for one materialization change input.</summary>
@@ -477,7 +545,8 @@ static class MaterializationInverseImpactPathContract
         var normalized = Normalize(steps, stepsParameterName);
         var expectedLineage = normalized[0].Operation switch
         {
-            MaterializationInverseImpactOperationKind.PredicateLookup =>
+            MaterializationInverseImpactOperationKind.PredicateLookup
+                or MaterializationInverseImpactOperationKind.CollectionElementPredicateLookup =>
                 MaterializationImpactLineageKind.ContributorIdentity,
             MaterializationInverseImpactOperationKind.BeforeAndAfterReferenceExtraction =>
                 MaterializationImpactLineageKind.BeforeAndAfterRelationshipReferences,
@@ -506,6 +575,7 @@ static class MaterializationInverseImpactPathContract
         var normalized = Normalize(steps, parameterName);
         if (normalized[0].Operation is not (
                 MaterializationInverseImpactOperationKind.PredicateLookup
+                or MaterializationInverseImpactOperationKind.CollectionElementPredicateLookup
                 or MaterializationInverseImpactOperationKind.AfterRelationshipReferenceExtraction))
         {
             throw new ArgumentException(
@@ -546,7 +616,8 @@ static class MaterializationInverseImpactPathContract
         for (var index = 0; index < steps.Length; index++)
         {
             var operation = steps[index].Operation;
-            if (operation == MaterializationInverseImpactOperationKind.PredicateLookup)
+            if (operation is MaterializationInverseImpactOperationKind.PredicateLookup
+                or MaterializationInverseImpactOperationKind.CollectionElementPredicateLookup)
             {
                 continue;
             }
@@ -558,7 +629,8 @@ static class MaterializationInverseImpactPathContract
 
             if (operation == MaterializationInverseImpactOperationKind.CurrentRelationshipReferenceExtraction
                 && index > 0
-                && steps[index - 1].Operation == MaterializationInverseImpactOperationKind.PredicateLookup)
+                && steps[index - 1].Operation is MaterializationInverseImpactOperationKind.PredicateLookup
+                    or MaterializationInverseImpactOperationKind.CollectionElementPredicateLookup)
             {
                 continue;
             }

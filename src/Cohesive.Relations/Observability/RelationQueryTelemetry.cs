@@ -323,6 +323,7 @@ public static class RelationQueryTelemetry
         RelationQuerySourceReadKind.BoundedEnumeration => "bounded_enumeration",
         RelationQuerySourceReadKind.IdentityBatch => "identity_batch",
         RelationQuerySourceReadKind.RelationshipKeyBatch => "relationship_key_batch",
+        RelationQuerySourceReadKind.CollectionElementKeyBatch => "collection_element_key_batch",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported source-read kind.")
     };
 

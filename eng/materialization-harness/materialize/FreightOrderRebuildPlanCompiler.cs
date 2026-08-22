@@ -497,12 +497,10 @@ public static class FreightOrderRebuildPlanCompiler
                 id: new($"materialization-harness/{provider}/freight-impact/v1"),
                 strategyPreference:
                 [
-                    MaterializationImpactStrategyKind.InverseTraversal,
-                    MaterializationImpactStrategyKind.BoundedGlobalInvalidation
+                    MaterializationImpactStrategyKind.InverseTraversal
                 ],
                 maximumAffectedRoots: 64,
-                maximumReadBytes: MaximumPageBytes,
-                maximumGlobalRoots: 64));
+                maximumReadBytes: MaximumPageBytes));
         return Require(
             artifact: compilation.Plan,
             diagnostics: compilation.Diagnostics.Select(static diagnostic => diagnostic.Message));

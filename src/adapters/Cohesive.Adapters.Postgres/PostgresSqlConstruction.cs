@@ -390,6 +390,13 @@ public abstract record PostgresSqlExpression
             Guard.RequireNotNull(operand),
             Guard.RequireNotNullOrWhiteSpace(arrayBinding));
 
+    /// <summary>Creates a correlated SQL <c>EXISTS</c> predicate.</summary>
+    /// <param name="query">Subquery whose row existence determines the predicate value.</param>
+    /// <returns>A parenthesized <c>EXISTS</c> expression sharing the containing statement's parameter bindings.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="query"/> is <see langword="null"/>.</exception>
+    public static PostgresSqlExpression Exists(PostgresSqlSelectQuery query) =>
+        new ExistsExpression(Guard.RequireNotNull(query));
+
     /// <summary>Applies one explicitly selected PostgreSQL collation to an expression.</summary>
     /// <param name="operand">Text expression to collate.</param>
     /// <param name="collation">PostgreSQL collation identifier.</param>
@@ -681,6 +688,16 @@ public abstract record PostgresSqlExpression
             builder.Append('(');
             Operand.WriteTo(context, builder);
             builder.Append(" = ANY(").Append(context.AddRuntime(ArrayBinding)).Append("))");
+        }
+    }
+
+    sealed record ExistsExpression(PostgresSqlSelectQuery Query) : PostgresSqlExpression
+    {
+        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+        {
+            builder.Append("EXISTS (");
+            Query.WriteTo(context, builder);
+            builder.Append(')');
         }
     }
 

@@ -392,7 +392,7 @@ public static class MaterializationImpactPlanCompiler
 
         MaterializationImpactRoute? TryCompileInverseTraversal(
             RelationQueryTraversalInputContract changed,
-            ImmutableArray<RelationQueryTraversalInputContract> path,
+            ImmutableArray<InversePathLink> path,
             ImmutableArray<RelationQueryInputId> dependencies,
             ICollection<string> unavailable)
         {
@@ -418,7 +418,8 @@ public static class MaterializationImpactPlanCompiler
             List<MaterializationImpactCapabilityReference> capabilityReferences = [changeDelivery!];
             foreach (var step in steps)
             {
-                if (step.Operation == MaterializationInverseImpactOperationKind.PredicateLookup)
+                if (step.Operation is MaterializationInverseImpactOperationKind.PredicateLookup
+                    or MaterializationInverseImpactOperationKind.CollectionElementPredicateLookup)
                 {
                     if (!TryFindSourceCapability(
                             step.ReferenceSourceInput,
@@ -464,20 +465,46 @@ public static class MaterializationImpactPlanCompiler
                 maximumReadBytes: policy.MaximumReadBytes);
         }
 
-        ImmutableArray<RelationQueryTraversalInputContract>? BuildInversePath(
+        ImmutableArray<InversePathLink>? BuildInversePath(
             RelationQueryTraversalInputContract changed)
         {
             var traversals = plan!.InputContract.Traversals;
-            List<RelationQueryTraversalInputContract> path = [];
+            var expansions = plan.InputContract.Expansions;
+            List<InversePathLink> path = [];
             var current = changed;
             HashSet<RelationQueryInputId> visited = [];
             while (visited.Add(current.Input.Id))
             {
-                path.Add(current);
                 if (current.From == relation!.RootBinding)
                 {
+                    path.Add(new(current, Expansion: null));
                     return [.. path];
                 }
+
+                var ownerExpansions = expansions
+                    .Where(candidate => candidate.ItemBinding == current.From)
+                    .Take(2)
+                    .ToArray();
+                if (ownerExpansions.Length == 1)
+                {
+                    var expansion = ownerExpansions[0];
+                    path.Add(new(current, expansion));
+                    if (expansion.OwnerBinding == relation.RootBinding)
+                        return [.. path];
+
+                    var expansionUpstream = traversals
+                        .Where(candidate => candidate.Result == expansion.OwnerBinding)
+                        .Take(2)
+                        .ToArray();
+                    if (expansionUpstream.Length != 1)
+                        return null;
+                    current = expansionUpstream[0];
+                    continue;
+                }
+                if (ownerExpansions.Length != 0)
+                    return null;
+
+                path.Add(new(current, Expansion: null));
 
                 var upstream = traversals.Where(candidate => candidate.Result == current.From).Take(2).ToArray();
                 if (upstream.Length != 1)
@@ -492,18 +519,33 @@ public static class MaterializationImpactPlanCompiler
         }
 
         ImmutableArray<MaterializationInverseImpactStep>? BuildSteps(
-            ImmutableArray<RelationQueryTraversalInputContract> path,
+            ImmutableArray<InversePathLink> path,
             ReferenceHistoryRequirement referenceHistory)
         {
             List<MaterializationInverseImpactStep> steps = [];
             for (var index = 0; index < path.Length; index++)
             {
-                var traversal = path[index];
+                var link = path[index];
+                var traversal = link.Traversal;
                 RelationQueryInputId referenceSource;
                 MaterializationInverseImpactOperationKind operation;
+                MaterializationCollectionOccurrenceReference? collectionOccurrence = null;
                 switch (traversal.Input.Direction)
                 {
                     case RelationshipTraversalDirection.Forward:
+                        if (link.Expansion is { } expansion)
+                        {
+                            if (FindAcquisitionInput(expansion.OwnerBinding) is not { } ownerInput)
+                                return null;
+                            referenceSource = ownerInput;
+                            operation = MaterializationInverseImpactOperationKind.CollectionElementPredicateLookup;
+                            collectionOccurrence = new(
+                                expansion: expansion.Expansion,
+                                collectionInput: expansion.CollectionInput.Id,
+                                collectionPath: expansion.CollectionPath,
+                                elementReference: traversal.Definition.SourceReference);
+                            break;
+                        }
                         if (FindAcquisitionInput(traversal.From) is not { } acquisition)
                         {
                             return null;
@@ -513,8 +555,14 @@ public static class MaterializationImpactPlanCompiler
                         operation = MaterializationInverseImpactOperationKind.PredicateLookup;
                         break;
                     case RelationshipTraversalDirection.Inverse:
+                        if (link.Expansion is not null)
+                        {
+                            return null;
+                        }
                         if (index > 0
-                            && steps[^1].Operation != MaterializationInverseImpactOperationKind.PredicateLookup)
+                            && steps[^1].Operation is not (
+                                MaterializationInverseImpactOperationKind.PredicateLookup
+                                or MaterializationInverseImpactOperationKind.CollectionElementPredicateLookup))
                         {
                             return null;
                         }
@@ -538,7 +586,8 @@ public static class MaterializationImpactPlanCompiler
                 steps.Add(new(
                     relationshipInput: traversal.Input.Id,
                     referenceSourceInput: referenceSource,
-                    operation: operation));
+                    operation: operation,
+                    collectionOccurrence: collectionOccurrence));
             }
 
             return [.. steps];
@@ -559,7 +608,7 @@ public static class MaterializationImpactPlanCompiler
 
         MaterializationImpactRoute? TryCompileContributorLedger(
             RelationQueryTraversalInputContract changed,
-            ImmutableArray<RelationQueryTraversalInputContract> path,
+            ImmutableArray<InversePathLink> path,
             ImmutableArray<RelationQueryInputId> dependencies,
             ICollection<string> unavailable)
         {
@@ -608,7 +657,8 @@ public static class MaterializationImpactPlanCompiler
             List<MaterializationImpactCapabilityReference> capabilityReferences = [changeDelivery!, capability!];
             foreach (var step in currentRootSteps)
             {
-                if (step.Operation == MaterializationInverseImpactOperationKind.PredicateLookup)
+                if (step.Operation is MaterializationInverseImpactOperationKind.PredicateLookup
+                    or MaterializationInverseImpactOperationKind.CollectionElementPredicateLookup)
                 {
                     if (!TryFindSourceCapability(
                             step.ReferenceSourceInput,
@@ -867,6 +917,10 @@ public static class MaterializationImpactPlanCompiler
                 resolutionOptions: resolutionOptions));
 
         static string Encode(string value) => Uri.EscapeDataString(value);
+
+        readonly record struct InversePathLink(
+            RelationQueryTraversalInputContract Traversal,
+            RelationQueryCollectionExpansionInputContract? Expansion);
 
         enum ReferenceHistoryRequirement
         {

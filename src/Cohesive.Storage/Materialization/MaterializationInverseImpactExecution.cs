@@ -37,6 +37,10 @@ public sealed record MaterializationImpactObservationReadRequest
     /// <param name="relationshipReference">
     /// Canonical source-reference path for a predicate lookup; otherwise <see langword="null"/>.
     /// </param>
+    /// <param name="collectionOccurrence">
+    /// Exact owner-to-item occurrence path for a collection-element predicate lookup; otherwise
+    /// <see langword="null"/>.
+    /// </param>
     /// <exception cref="ArgumentException">An identity, shape, key, or operation-specific relationship value is invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The read kind or a hard bound is unsupported.</exception>
     public MaterializationImpactObservationReadRequest(
@@ -48,7 +52,8 @@ public sealed record MaterializationImpactObservationReadRequest
         long maximumRows,
         long maximumBytes,
         RelationQueryInputId? relationshipInput = null,
-        FieldPath? relationshipReference = null)
+        FieldPath? relationshipReference = null,
+        MaterializationCollectionOccurrenceReference? collectionOccurrence = null)
     {
         if (!Enum.IsDefined(kind))
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported materialization impact read kind.");
@@ -82,6 +87,12 @@ public sealed record MaterializationImpactObservationReadRequest
             MaterializationContract.RequireDefinedIdentity(relationship.Value, nameof(relationshipInput));
         if (relationshipReference is { Segments.IsDefaultOrEmpty: true })
             throw new ArgumentException("A relationship-predicate read requires a non-empty reference path.", nameof(relationshipReference));
+        if (collectionOccurrence is not null && !isPredicate)
+        {
+            throw new ArgumentException(
+                "A collection occurrence is valid only for a relationship-predicate read.",
+                nameof(collectionOccurrence));
+        }
 
         Kind = kind;
         Input = input;
@@ -91,6 +102,7 @@ public sealed record MaterializationImpactObservationReadRequest
         MaximumBytes = MaterializationContract.RequirePortablePositiveBound(maximumBytes, nameof(maximumBytes));
         RelationshipInput = relationshipInput;
         RelationshipReference = relationshipReference;
+        CollectionOccurrence = collectionOccurrence;
     }
 
     /// <summary>Closed read operation.</summary>
@@ -119,6 +131,9 @@ public sealed record MaterializationImpactObservationReadRequest
 
     /// <summary>Canonical source-reference path for a predicate lookup.</summary>
     public FieldPath? RelationshipReference { get; }
+
+    /// <summary>Exact owner-to-item occurrence path for a collection-element predicate lookup.</summary>
+    public MaterializationCollectionOccurrenceReference? CollectionOccurrence { get; }
 }
 
 /// <summary>Executes one exact bounded observation read for compiled affected-root resolution.</summary>
@@ -263,6 +278,34 @@ public sealed class MaterializationImpactRootExecutor
                                 maximumBytes: route.MaximumReadBytes,
                                 relationshipInput: step.RelationshipInput,
                                 relationshipReference: relationship.Definition.SourceReference))
+                        .ConfigureAwait(false);
+                    observationInput = step.ReferenceSourceInput;
+                    keys = [];
+                    break;
+                case MaterializationInverseImpactOperationKind.CollectionElementPredicateLookup:
+                    var occurrence = step.CollectionOccurrence
+                        ?? throw new InvalidOperationException(
+                            "A collection-element predicate step has no canonical occurrence path.");
+                    keys = keys.IsDefaultOrEmpty
+                        ? observations.IsDefaultOrEmpty
+                            ? [request.Change.SubjectIdentity]
+                            : [.. observations.Select(static observation => observation.Identity)
+                                .Distinct(StringComparer.Ordinal)
+                                .Order(StringComparer.Ordinal)]
+                        : keys;
+                    observations = await ReadAsync(
+                            context,
+                            new(
+                                kind: MaterializationImpactObservationReadKind.RelationshipPredicateLookup,
+                                input: step.ReferenceSourceInput,
+                                shape: input.Shape,
+                                logicalPartition: request.Change.Scope.LogicalPartition,
+                                keys: keys,
+                                maximumRows: route.MaximumAffectedRoots,
+                                maximumBytes: route.MaximumReadBytes,
+                                relationshipInput: step.RelationshipInput,
+                                relationshipReference: relationship.Definition.SourceReference,
+                                collectionOccurrence: occurrence))
                         .ConfigureAwait(false);
                     observationInput = step.ReferenceSourceInput;
                     keys = [];

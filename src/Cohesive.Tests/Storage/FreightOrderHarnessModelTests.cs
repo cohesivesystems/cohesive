@@ -30,12 +30,13 @@ public sealed class FreightOrderHarnessModelTests
 
         Assert.Equal(first.DefinitionFingerprint, second.DefinitionFingerprint);
         Assert.Equal(
-            "3a3518cdc0de2e28b11b404b0651f461350ac87b1261a9a13e69955c31c09f5a",
+            "97e44b577b50923ad9f16a0df1b7527ceb8b9da82e2c2e45d5cb7cb07203c908",
             first.DefinitionFingerprint.Value);
         Assert.Equal(MaterializationSynchronizationMode.All, first.Definition.UpdatePolicy.SupportedModes);
         Assert.Equal(MaterializationConsistencyKind.BaselinePlusCatchUp, first.Definition.UpdatePolicy.Consistency);
-        Assert.Equal(3, first.Plan.InputContract.Sources.Length);
-        Assert.Single(first.Plan.InputContract.Traversals);
+        Assert.Single(first.Plan.InputContract.Sources);
+        Assert.Equal(3, first.Plan.InputContract.Traversals.Length);
+        Assert.Equal(2, first.Plan.InputContract.Expansions.Length);
         Assert.Equal(4, first.Definition.Sources.Length);
         Assert.Equal(2, first.Definition.ControlLoops.Length);
         Assert.Equal(2, first.Definition.ControlWorkloads.Length);
@@ -226,6 +227,73 @@ public sealed class FreightOrderHarnessModelTests
             locations,
             "delete");
         AssertEndpoints(afterDelete, "pickup-a", "Seattle", "drop-b", "Eugene");
+    }
+
+    [Fact]
+    public async Task CanonicalRelationRejectsCollectionOccurrenceWithUnknownOwnerEvidence()
+    {
+        var semantics = FreightOrderMaterializationModel.Create();
+        FreightOrder order = new()
+        {
+            Id = "order-1",
+            TenantId = "tenant-a",
+            OrderNumber = "ORD-001",
+            CustomerAccountId = "customer-1",
+            EquipmentClass = "Reefer",
+            CreatedAt = DateTimeOffset.Parse("2026-08-01T10:00:00Z")
+        };
+        FreightCustomerAccount customer = new()
+        {
+            Id = "customer-1",
+            TenantId = "tenant-a",
+            DisplayName = "Acme Foods"
+        };
+        var outcome = await EvaluateAsync(
+            semantics,
+            order,
+            customer,
+            [
+                Stop("pickup-a", sequence: 10, stopType: "Pickup", locationId: "origin-a"),
+                Stop("drop-a", sequence: 20, stopType: "Drop", locationId: "destination-a")
+            ],
+            [
+                Location("origin-a", "Seattle", "WA"),
+                Location("destination-a", "Portland", "OR")
+            ],
+            scenario: "unknown-collection-owner");
+        var execution = Assert.IsType<RelationQueryPhysicalExecutionResult>(outcome.PhysicalExecution);
+        var evidence = Assert.IsType<RelationQueryRuntimeEvidence>(execution.Evidence);
+        var occurrence = evidence.CollectionOccurrences[0];
+        var malformed = new RelationQueryCollectionOccurrenceEvidence(
+            expansion: occurrence.Expansion,
+            owner: new("tenant-b/order-1"),
+            ordinal: occurrence.Ordinal,
+            occurrence: occurrence.Occurrence,
+            value: occurrence.Value);
+        var malformedEvidence = new RelationQueryRuntimeEvidence(
+            evaluation: evidence.Evaluation,
+            plan: semantics.Plan,
+            completeness: evidence.Completeness,
+            sources: evidence.Sources,
+            fields: evidence.Fields,
+            traversals: evidence.Traversals,
+            parameters: evidence.Parameters,
+            capabilities: evidence.Capabilities,
+            conversionFailures: evidence.ConversionFailures,
+            collectionOccurrences:
+            [
+                malformed,
+                .. evidence.CollectionOccurrences.Skip(1)
+            ]);
+
+        var analysis = RelationRequirementGapAnalyzer.Analyze(semantics.Plan, malformedEvidence);
+
+        Assert.False(analysis.IsEvidenceValid);
+        Assert.Contains(
+            analysis.Diagnostics,
+            diagnostic => diagnostic.Code == RelationRuntimeDiagnosticCodes.EvidenceConflict
+                && diagnostic.Occurrence == occurrence.Occurrence.Id
+                && diagnostic.Message.Contains("unknown owner occurrence", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -493,6 +561,8 @@ public sealed class FreightOrderHarnessModelTests
                         $"planning: {diagnostic.Code}: {diagnostic.Message}") ?? [])
                     .Concat(outcome.PhysicalExecution?.Diagnostics.Select(static diagnostic =>
                         $"execution: {diagnostic.Code}: {diagnostic.Message}") ?? [])
+                    .Concat(outcome.Result?.Diagnostics.Select(static diagnostic =>
+                        $"interpretation: {diagnostic.Code}: {diagnostic.Message}") ?? [])
                     .Concat(outcome.Result?.RequirementGapAnalysis.Gaps.Select(static gap =>
                         $"gap: {gap.Cause}: {gap.EvidenceReference}") ?? [])));
         var result = Assert.IsType<RelationQueryExecutionResult>(outcome.Result);
