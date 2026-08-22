@@ -166,6 +166,47 @@ public sealed record DocumentValidationDiagnostic(
     DocumentDiagnosticEvidence? Evidence = null
     );
 
+/// <summary>Shared canonical collection handling for portable document diagnostics.</summary>
+/// <remarks>
+/// Use this authority when diagnostic ordering is explicitly non-semantic. Validation results or
+/// protocols that define stage or producer order must retain that order instead of normalizing it.
+/// </remarks>
+public static class DocumentValidationDiagnostics
+{
+    /// <summary>
+    /// Initializes, validates, and deterministically orders a diagnostic collection.
+    /// </summary>
+    /// <param name="diagnostics">Diagnostics whose collection representation is normalized.</param>
+    /// <returns>
+    /// An initialized empty collection when <paramref name="diagnostics"/> is default or empty;
+    /// <paramref name="diagnostics"/> itself when already canonical; otherwise an ordinally sorted
+    /// immutable copy.
+    /// </returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="diagnostics"/> contains a <see langword="null"/> entry.
+    /// </exception>
+    public static ImmutableArray<DocumentValidationDiagnostic> Normalize(
+        ImmutableArray<DocumentValidationDiagnostic> diagnostics)
+    {
+        if (diagnostics.IsDefaultOrEmpty)
+            return [];
+
+        foreach (var diagnostic in diagnostics)
+        {
+            if (diagnostic is null)
+            {
+                throw new ArgumentException(
+                    "Portable document diagnostics cannot contain null entries.",
+                    nameof(diagnostics));
+            }
+        }
+
+        return CanonicalDocumentCollections.SortIfNeeded(
+            diagnostics,
+            DocumentValidationDiagnosticComparer.Ordinal.Compare);
+    }
+}
+
 /// <summary>
 /// Validation result for portable semantic documents.
 /// </summary>

@@ -627,7 +627,7 @@ public sealed record InfrastructureBindingElaborationReport
         Definition = Guard.RequireNotNull(definition);
         Profile = Guard.RequireNotNull(profile);
         Decisions = NormalizeDecisions(decisions);
-        Diagnostics = NormalizeDiagnostics(diagnostics);
+        Diagnostics = DocumentValidationDiagnostics.Normalize(diagnostics);
         ValidateCoverage();
 
         var computed = InfrastructureBindingElaborationFingerprinting.Compute(
@@ -677,20 +677,12 @@ public sealed record InfrastructureBindingElaborationReport
         if (string.IsNullOrWhiteSpace(binding.Value))
             throw new ArgumentException("A default binding identity cannot be explained.", nameof(binding));
 
-        var lower = 0;
-        var upper = Decisions.Length - 1;
-        while (lower <= upper)
-        {
-            var middle = lower + ((upper - lower) / 2);
-            var comparison = StringComparer.Ordinal.Compare(Decisions[middle].Binding.Value, binding.Value);
-            if (comparison == 0)
-                return Decisions[middle];
-            if (comparison < 0)
-                lower = middle + 1;
-            else
-                upper = middle - 1;
-        }
-        return null;
+        var index = CanonicalDocumentCollections.BinarySearchIndex(
+            Decisions,
+            binding,
+            static (decision, sought) =>
+                StringComparer.Ordinal.Compare(decision.Binding.Value, sought.Value));
+        return index < 0 ? null : Decisions[index];
     }
 
     /// <summary>Compares binding-elaboration reports structurally.</summary>
@@ -758,15 +750,6 @@ public sealed record InfrastructureBindingElaborationReport
         return ordered;
     }
 
-    static ImmutableArray<DocumentValidationDiagnostic> NormalizeDiagnostics(
-        ImmutableArray<DocumentValidationDiagnostic> diagnostics)
-    {
-        if (diagnostics.IsDefaultOrEmpty)
-            return [];
-        if (diagnostics.Any(static diagnostic => diagnostic is null))
-            throw new ArgumentException("Binding-elaboration diagnostics cannot contain null.", nameof(diagnostics));
-        return diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
-    }
 }
 
 /// <summary>Deterministically elaborates exact binding contracts into provider-neutral capability obligations.</summary>

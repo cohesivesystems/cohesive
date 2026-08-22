@@ -244,7 +244,7 @@ public sealed record InfrastructureConventionResolution
         ImmutableArray<DocumentValidationDiagnostic> diagnostics = default)
     {
         Configuration = NormalizeConfiguration(configuration);
-        Diagnostics = NormalizeDiagnostics(diagnostics);
+        Diagnostics = DocumentValidationDiagnostics.Normalize(diagnostics);
     }
 
     /// <summary>Effective values in deterministic subject and setting order.</summary>
@@ -305,15 +305,6 @@ public sealed record InfrastructureConventionResolution
         return ordered;
     }
 
-    static ImmutableArray<DocumentValidationDiagnostic> NormalizeDiagnostics(
-        ImmutableArray<DocumentValidationDiagnostic> diagnostics)
-    {
-        if (diagnostics.IsDefaultOrEmpty)
-            return [];
-        if (diagnostics.Any(static item => item is null))
-            throw new ArgumentException("Infrastructure convention diagnostics cannot contain null.", nameof(diagnostics));
-        return diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
-    }
 }
 
 /// <summary>Resolves infrastructure configuration using the shared deterministic authority precedence.</summary>
@@ -368,11 +359,7 @@ public static class InfrastructureConventionResolver
             start = end;
         }
 
-        return new(
-            configuration.ToImmutable(),
-            diagnostics.Count == 0
-                ? []
-                : diagnostics.ToImmutable().Sort(DocumentValidationDiagnosticComparer.Ordinal));
+        return new(configuration.ToImmutable(), diagnostics.ToImmutable());
     }
 
     static void ResolveSetting(

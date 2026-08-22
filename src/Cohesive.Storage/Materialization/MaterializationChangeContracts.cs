@@ -600,27 +600,10 @@ public sealed record MaterializationChangePage
         ImmutableArray<MaterializationDeliveryId> deliveries,
         MaterializationDeliveryId sought)
     {
-        var lower = 0;
-        var upper = deliveries.Length - 1;
-        while (lower <= upper)
-        {
-            var middle = lower + ((upper - lower) / 2);
-            var comparison = StringComparer.Ordinal.Compare(deliveries[middle].Value, sought.Value);
-            if (comparison == 0)
-            {
-                return true;
-            }
-
-            if (comparison < 0)
-            {
-                lower = middle + 1;
-            }
-            else
-            {
-                upper = middle - 1;
-            }
-        }
-
-        return false;
+        return CanonicalDocumentCollections.BinarySearchIndex(
+            deliveries,
+            sought,
+            static (delivery, expected) =>
+                StringComparer.Ordinal.Compare(delivery.Value, expected.Value)) >= 0;
     }
 }

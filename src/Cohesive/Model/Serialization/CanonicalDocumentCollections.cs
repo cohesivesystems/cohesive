@@ -3,7 +3,7 @@ using System.Collections.Immutable;
 namespace Cohesive.Model.Serialization;
 
 /// <summary>Shared allocation-aware operations for canonical immutable document collections.</summary>
-static class CanonicalDocumentCollections
+public static class CanonicalDocumentCollections
 {
     /// <summary>Retains canonical storage or returns an ordinally sorted immutable copy.</summary>
     /// <typeparam name="T">Collection item type.</typeparam>

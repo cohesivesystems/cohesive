@@ -201,7 +201,7 @@ public sealed record InfrastructureCapabilityClosureReport
         Target = target;
         Variant = variant;
         Decisions = NormalizeDecisions(decisions);
-        Diagnostics = NormalizeDiagnostics(diagnostics);
+        Diagnostics = DocumentValidationDiagnostics.Normalize(diagnostics);
         ValidateCoverage();
     }
 
@@ -243,20 +243,12 @@ public sealed record InfrastructureCapabilityClosureReport
         if (string.IsNullOrWhiteSpace(requirement.Value))
             throw new ArgumentException("A default requirement identity cannot be explained.", nameof(requirement));
 
-        var lower = 0;
-        var upper = Decisions.Length - 1;
-        while (lower <= upper)
-        {
-            var middle = lower + ((upper - lower) / 2);
-            var comparison = StringComparer.Ordinal.Compare(Decisions[middle].Requirement.Value, requirement.Value);
-            if (comparison == 0)
-                return Decisions[middle];
-            if (comparison < 0)
-                lower = middle + 1;
-            else
-                upper = middle - 1;
-        }
-        return null;
+        var index = CanonicalDocumentCollections.BinarySearchIndex(
+            Decisions,
+            requirement,
+            static (decision, sought) =>
+                StringComparer.Ordinal.Compare(decision.Requirement.Value, sought.Value));
+        return index < 0 ? null : Decisions[index];
     }
 
     /// <summary>Compares capability-closure reports structurally.</summary>
@@ -331,15 +323,6 @@ public sealed record InfrastructureCapabilityClosureReport
         return ordered;
     }
 
-    static ImmutableArray<DocumentValidationDiagnostic> NormalizeDiagnostics(
-        ImmutableArray<DocumentValidationDiagnostic> diagnostics)
-    {
-        if (diagnostics.IsDefaultOrEmpty)
-            return [];
-        if (diagnostics.Any(static diagnostic => diagnostic is null))
-            throw new ArgumentException("Infrastructure capability diagnostics cannot contain null.", nameof(diagnostics));
-        return diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
-    }
 }
 
 /// <summary>Computes capability-planning closure against one coherent configured target variant.</summary>
