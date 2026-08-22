@@ -53,6 +53,7 @@
     <ProjectReference Include="..\..\eng\materialization-harness\model\Cohesive.MaterializationHarness.Model.csproj" />
     <ProjectReference Include="..\..\eng\materialization-harness\control\Cohesive.MaterializationHarness.Control.csproj" />
     <ProjectReference Include="..\..\eng\materialization-harness\materialize\Cohesive.MaterializationHarness.Materialize.csproj" />
+    <ProjectReference Include="..\..\eng\materialization-harness\supervise\Cohesive.MaterializationHarness.Supervise.csproj" Aliases="supervise" />
   </ItemGroup>
   
   <ItemGroup>

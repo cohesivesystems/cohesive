@@ -11,6 +11,7 @@ using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.Runtime;
+using Cohesive.Relations.Physical;
 using Cohesive.Storage.Materialization;
 using Cohesive.Storage.Processes;
 using Npgsql;
@@ -522,6 +523,260 @@ sealed class MaterializationHarnessExecutionController :
                     JsonSerializer.SerializeToElement(retained),
                     JsonSerializer.SerializeToElement(pending)));
     }
+
+    internal async Task<MaterializationHarnessCompatibilityDriftProbeResult> ProbeCompatibilityDriftAsync(
+        string provider,
+        MaterializationHarnessCompatibilityDriftKind kind,
+        OperationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var cell = MaterializationHarnessMatrixCatalog.CompatibilityDrifts.Single(candidate => candidate.Kind == kind);
+        var process = GetProvider(provider);
+        var execution = await process.ResolveCurrentExecutionAsync(context).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"The {provider} materialization has no current generation.");
+        var beforeTarget = await process.Provider.Target.InspectAsync(context).ConfigureAwait(false);
+        var beforeGeneration = await process.Provider.Target
+            .InspectGenerationAsync(context, execution.Generation)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The compatibility probe generation is absent from its target.");
+
+        var authority = kind == MaterializationHarnessCompatibilityDriftKind.StorageBinding
+            ? await ProbeProgressCompatibilityDriftAsync(process, execution.Generation, context).ConfigureAwait(false)
+            : await ProbeSynchronizationCompatibilityDriftAsync(process, execution.Generation, kind, context)
+                .ConfigureAwait(false);
+
+        var afterTarget = await process.Provider.Target.InspectAsync(context).ConfigureAwait(false);
+        var afterGeneration = await process.Provider.Target
+            .InspectGenerationAsync(context, execution.Generation)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The compatibility probe generation disappeared from its target.");
+        return new(
+            SchemaVersion: 1,
+            Provider: provider,
+            Kind: kind,
+            Authority: cell.Authority,
+            CanonicalGeneration: execution.Generation.Value,
+            DriftedIdentity: authority.DriftedIdentity,
+            ExpectedDisposition: cell.ExpectedDisposition,
+            ActualDisposition: authority.ActualDisposition,
+            DiagnosticCodes: authority.DiagnosticCodes,
+            RequiredControlAction: process.Artifacts.ParentPlan.Definition.RecoveryPolicy,
+            BeforeAuthorityRevision: authority.BeforeRevision,
+            AfterAuthorityRevision: authority.AfterRevision,
+            BeforeAuthorityFence: authority.BeforeFence,
+            AfterAuthorityFence: authority.AfterFence,
+            BeforeTargetRevision: beforeTarget.Revision.Value,
+            AfterTargetRevision: afterTarget.Revision.Value,
+            BeforeActiveGeneration: beforeTarget.ActiveGenerationId?.Value,
+            AfterActiveGeneration: afterTarget.ActiveGenerationId?.Value,
+            CanonicalAuthorityPreserved: authority.CanonicalAuthorityPreserved,
+            DriftedAuthorityAbsent: authority.DriftedAuthorityAbsent,
+            TargetAuthorityPreserved: SameEvidence(beforeTarget, afterTarget)
+                && SameEvidence(beforeGeneration, afterGeneration));
+    }
+
+    async Task<CompatibilityAuthorityProbe> ProbeSynchronizationCompatibilityDriftAsync(
+        MaterializationHarnessProviderProcess process,
+        MaterializationGenerationId generation,
+        MaterializationHarnessCompatibilityDriftKind kind,
+        OperationContext context)
+    {
+        var canonicalKey = SynchronizationWorkKey(process, generation);
+        var store = (IMaterializationSynchronizationWorkStore)materializationStore;
+        var before = await store.LoadAsync(context, canonicalKey).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The compatibility probe requires synchronization-work evidence.");
+        var pending = before.PendingWork
+            ?? throw new InvalidOperationException("The compatibility probe requires exact pending source work.");
+        MaterializationSynchronizationWorkMutationResult result;
+        string driftedIdentity;
+        var driftedAuthorityAbsent = true;
+        switch (kind)
+        {
+            case MaterializationHarnessCompatibilityDriftKind.Plan:
+            {
+                var canonical = canonicalKey.RebuildPlanFingerprint;
+                var driftedPlan = new MaterializationRebuildPlanFingerprint(
+                    algorithm: canonical.Algorithm,
+                    canonicalization: canonical.Canonicalization,
+                    value: $"{canonical.Value}0");
+                var driftedKey = new MaterializationSynchronizationWorkKey(
+                    materialization: canonicalKey.Materialization,
+                    definitionFingerprint: canonicalKey.DefinitionFingerprint,
+                    rebuildPlanFingerprint: driftedPlan,
+                    impactPlanFingerprint: canonicalKey.ImpactPlanFingerprint,
+                    generation: canonicalKey.Generation);
+                result = await store.AcquireFenceAsync(
+                        context: context,
+                        key: driftedKey,
+                        mutationId: new($"compatibility-drift/{process.Provider.Provider}/plan"),
+                        expectedRevision: before.Revision,
+                        owner: before.FenceOwner)
+                    .ConfigureAwait(false);
+                driftedAuthorityAbsent = await store.LoadAsync(context, driftedKey).ConfigureAwait(false) is null;
+                driftedIdentity = $"rebuild-plan/{driftedPlan.Value}";
+                break;
+            }
+            case MaterializationHarnessCompatibilityDriftKind.Generation:
+            {
+                MaterializationGenerationId driftedGeneration = new($"{generation.Value}/compatibility-drift");
+                var driftedKey = new MaterializationSynchronizationWorkKey(
+                    materialization: canonicalKey.Materialization,
+                    definitionFingerprint: canonicalKey.DefinitionFingerprint,
+                    rebuildPlanFingerprint: canonicalKey.RebuildPlanFingerprint,
+                    impactPlanFingerprint: canonicalKey.ImpactPlanFingerprint,
+                    generation: driftedGeneration);
+                result = await store.AcquireFenceAsync(
+                        context: context,
+                        key: driftedKey,
+                        mutationId: new($"compatibility-drift/{process.Provider.Provider}/generation"),
+                        expectedRevision: before.Revision,
+                        owner: before.FenceOwner)
+                    .ConfigureAwait(false);
+                driftedAuthorityAbsent = await store.LoadAsync(context, driftedKey).ConfigureAwait(false) is null;
+                driftedIdentity = $"generation/{driftedGeneration.Value}";
+                break;
+            }
+            case MaterializationHarnessCompatibilityDriftKind.Schema:
+            case MaterializationHarnessCompatibilityDriftKind.Cursor:
+            {
+                var original = pending.Page.ThroughPosition;
+                var schemaDrift = kind == MaterializationHarnessCompatibilityDriftKind.Schema;
+                var conflicting = new MaterializationSourcePosition(
+                    formatVersion: schemaDrift ? checked(original.FormatVersion + 1) : original.FormatVersion,
+                    scope: original.Scope,
+                    value: schemaDrift ? original.Value : $"{original.Value}/compatibility-drift");
+                var page = new MaterializationSynchronizationPageIntent(
+                    feed: pending.Page.Feed,
+                    checkpoint: pending.Page.Checkpoint,
+                    throughPosition: conflicting,
+                    appliedDeliveries: pending.Page.AppliedDeliveries,
+                    state: pending.Page.State,
+                    readStartedAtUtc: pending.Page.ReadStartedAtUtc,
+                    readCompletedAtUtc: pending.Page.ReadCompletedAtUtc);
+                result = await store.PrepareAsync(
+                        context: context,
+                        key: canonicalKey,
+                        mutationId: pending.PreparationId,
+                        expectedRevision: before.Revision,
+                        owner: before.FenceOwner,
+                        fence: before.Fence,
+                        intent: new(page, RehydrateSynchronizationIntents(pending.Mutations)))
+                    .ConfigureAwait(false);
+                driftedIdentity = schemaDrift
+                    ? $"source-position-format/{conflicting.FormatVersion}"
+                    : $"source-position/{conflicting.Value}";
+                break;
+            }
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported synchronization drift.");
+        }
+
+        var after = await store.LoadAsync(context, canonicalKey).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The canonical synchronization authority disappeared.");
+        return new(
+            DriftedIdentity: driftedIdentity,
+            ActualDisposition: result.Disposition.ToString(),
+            DiagnosticCodes: [.. result.Diagnostics.Select(static diagnostic => diagnostic.Code)],
+            BeforeRevision: before.Revision.Value,
+            AfterRevision: after.Revision.Value,
+            BeforeFence: before.Fence.Value,
+            AfterFence: after.Fence.Value,
+            CanonicalAuthorityPreserved: SameEvidence(before, after),
+            DriftedAuthorityAbsent: driftedAuthorityAbsent);
+    }
+
+    async Task<CompatibilityAuthorityProbe> ProbeProgressCompatibilityDriftAsync(
+        MaterializationHarnessProviderProcess process,
+        MaterializationGenerationId generation,
+        OperationContext context)
+    {
+        var plan = process.Provider.Compilation.Plan;
+        var scopes = plan.Shards.Select(static shard => shard.Scope)
+            .Concat(plan.ChangeFeeds.Select(static feed => feed.Scope))
+            .Distinct()
+            .OrderBy(static scope => scope.Input.Value, StringComparer.Ordinal)
+            .ThenBy(static scope => scope.Partition.Value, StringComparer.Ordinal);
+        MaterializationProgressKey? canonicalKey = null;
+        MaterializationProgressSnapshot? before = null;
+        foreach (var scope in scopes)
+        {
+            var candidate = new MaterializationProgressKey(
+                materialization: plan.Materialization.Definition.Id,
+                definitionFingerprint: plan.Materialization.DefinitionFingerprint,
+                generation: generation,
+                scope: scope);
+            var retained = await process.Provider.ResolvedPlan.ProgressStore.LoadAsync(context, candidate)
+                .ConfigureAwait(false);
+            if (retained is null)
+                continue;
+            canonicalKey = candidate;
+            before = retained;
+            break;
+        }
+        if (canonicalKey is null || before is null)
+            throw new InvalidOperationException("The storage-binding drift probe found no retained progress scope.");
+
+        var physicalPlan = canonicalKey.Scope.PhysicalPlan;
+        var driftedPhysicalPlan = new RelationQueryPhysicalPlanFingerprint(
+            algorithm: physicalPlan.Algorithm,
+            canonicalization: physicalPlan.Canonicalization,
+            value: $"{physicalPlan.Value}0");
+        var driftedScope = new MaterializationSourceScope(
+            physicalPlan: driftedPhysicalPlan,
+            placement: canonicalKey.Scope.Placement,
+            logicalPartition: canonicalKey.Scope.LogicalPartition,
+            partition: canonicalKey.Scope.Partition,
+            orderingScope: canonicalKey.Scope.OrderingScope);
+        var driftedKey = new MaterializationProgressKey(
+            materialization: canonicalKey.Materialization,
+            definitionFingerprint: canonicalKey.DefinitionFingerprint,
+            generation: canonicalKey.Generation,
+            scope: driftedScope);
+        var result = await process.Provider.ResolvedPlan.ProgressStore.AcquireFenceAsync(
+                context: context,
+                key: driftedKey,
+                mutationId: new($"compatibility-drift/{process.Provider.Provider}/storage-binding"),
+                expectedRevision: before.Revision,
+                owner: before.FenceOwner)
+            .ConfigureAwait(false);
+        var after = await process.Provider.ResolvedPlan.ProgressStore.LoadAsync(context, canonicalKey)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The canonical progress authority disappeared.");
+        var drifted = await process.Provider.ResolvedPlan.ProgressStore.LoadAsync(context, driftedKey)
+            .ConfigureAwait(false);
+        return new(
+            DriftedIdentity: $"physical-plan/{driftedPhysicalPlan.Value}",
+            ActualDisposition: result.Disposition.ToString(),
+            DiagnosticCodes: [.. result.Diagnostics.Select(static diagnostic => diagnostic.Code)],
+            BeforeRevision: before.Revision.Value,
+            AfterRevision: after.Revision.Value,
+            BeforeFence: before.Fence.Value,
+            AfterFence: after.Fence.Value,
+            CanonicalAuthorityPreserved: SameEvidence(before, after),
+            DriftedAuthorityAbsent: drifted is null);
+    }
+
+    static ImmutableArray<MaterializationSynchronizationItemIntent> RehydrateSynchronizationIntents(
+        ImmutableArray<MaterializationItemMutation> mutations) =>
+    [
+        .. mutations.Select<MaterializationItemMutation, MaterializationSynchronizationItemIntent>(
+            static mutation => mutation switch
+            {
+                MaterializationUpsert upsert => new MaterializationSynchronizationUpsertIntent(
+                    itemId: upsert.ItemId,
+                    value: upsert.Value),
+                MaterializationDelete deleted => new MaterializationSynchronizationDeleteIntent(
+                    itemId: deleted.ItemId),
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(mutation),
+                    mutation.Kind,
+                    "Unsupported prepared materialization mutation.")
+            })
+    ];
+
+    static bool SameEvidence<T>(T left, T right) => JsonElement.DeepEquals(
+        JsonSerializer.SerializeToElement(left),
+        JsonSerializer.SerializeToElement(right));
 
     internal async Task<MaterializationHarnessTargetOrderingProbeResult> ProbeTargetOrderingAsync(
         string provider,
@@ -1314,6 +1569,17 @@ sealed class MaterializationHarnessExecutionController :
         [
             .. endpoint.Operation.AuthorizationRequirements.Select(static requirement => requirement.Id)
         ]);
+
+    sealed record CompatibilityAuthorityProbe(
+        string DriftedIdentity,
+        string ActualDisposition,
+        ImmutableArray<string> DiagnosticCodes,
+        string BeforeRevision,
+        string AfterRevision,
+        string BeforeFence,
+        string AfterFence,
+        bool CanonicalAuthorityPreserved,
+        bool DriftedAuthorityAbsent);
 
     sealed class ProviderExecutionState : IDisposable
     {

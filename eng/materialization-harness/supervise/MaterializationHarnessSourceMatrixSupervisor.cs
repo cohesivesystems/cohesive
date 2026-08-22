@@ -142,6 +142,9 @@ static partial class MaterializationHarnessSupervisor
             var summary = new
             {
                 schemaVersion = 1,
+                manifestKind = "cell",
+                cellId = $"source/{options.Provider}",
+                expectedOutcome = MaterializationHarnessExpectedOutcome.Success.ToString(),
                 options.RunIdentity,
                 options.Provider,
                 generation = interruptedMarker.Generation,

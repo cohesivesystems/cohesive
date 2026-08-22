@@ -116,13 +116,15 @@ sealed record SupervisorOptions(
                 nameof(args));
         }
         var provider = RequireValue(args[1], "provider");
-        var fault = args[2] switch
+        MaterializationHarnessElasticFaultKind fault;
+        try
         {
-            "retryable-bulk-rejection" => MaterializationHarnessElasticFaultKind.RetryableBulkRejection,
-            "permanent-bulk-item-failure" => MaterializationHarnessElasticFaultKind.PermanentBulkItemFailure,
-            "applied-promotion-response-loss" => MaterializationHarnessElasticFaultKind.AppliedPromotionResponseLoss,
-            _ => throw new ArgumentException("Unsupported Elastic failure scenario.", nameof(args))
-        };
+            fault = MaterializationHarnessMatrixCatalog.GetElasticFault(args[2]);
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new ArgumentException("Unsupported Elastic failure scenario.", nameof(args), exception);
+        }
         var options = await CreateAsync(
             mode: RecoveryMode.Resume,
             provider: provider,
@@ -132,6 +134,26 @@ sealed record SupervisorOptions(
             processPurpose: "elastic-failure",
             cancellationToken: cancellationToken).ConfigureAwait(false);
         return (options, fault);
+    }
+
+    internal static Task<SupervisorOptions> ParseCompatibilityDriftAsync(
+        string[] args,
+        CancellationToken cancellationToken = default)
+    {
+        if (args is not ["compatibility-drift", _, _])
+        {
+            throw new ArgumentException(
+                "Expected: compatibility-drift <provider> <absolute-artifact-directory>.",
+                nameof(args));
+        }
+        return CreateAsync(
+            mode: RecoveryMode.Resume,
+            provider: RequireValue(args[1], "provider"),
+            boundary: MaterializationExecutionBoundaryPoint.AfterTargetBatch,
+            artifactDirectory: args[2],
+            runPurpose: "compatibility-drift",
+            processPurpose: "compatibility-drift",
+            cancellationToken: cancellationToken);
     }
 
     static async Task<SupervisorOptions> CreateAsync(
