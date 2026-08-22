@@ -37,8 +37,8 @@ public sealed class MaterializationRebuildPlanJsonSerializerTests
         Assert.Equal(
             MaterializationRebuildPlanJsonSerializer.GetCanonicalBytes(plan),
             MaterializationRebuildPlanJsonSerializer.GetCanonicalBytes(restored));
-        Assert.Equal("cohesive-materialization-rebuild-plan/v5", restored.SchemaVersion);
-        Assert.Equal("cohesive-materialization-rebuild-plan/v5-c14n/v1", restored.Fingerprint.Canonicalization);
+        Assert.Equal("cohesive-materialization-rebuild-plan/v6", restored.SchemaVersion);
+        Assert.Equal("cohesive-materialization-rebuild-plan/v6-c14n/v1", restored.Fingerprint.Canonicalization);
         Assert.Equal(plan.PlacementSlice.Fingerprint, restored.PlacementSlice.Fingerprint);
         Assert.Equal(
             plan.ChangeFeedCatalogs.Select(static catalog => catalog.EvidenceReference),

@@ -64,7 +64,7 @@ public sealed class FreightOrderMaterializationImpactReader
     /// <exception cref="OperationCanceledException">The operation is cancelled.</exception>
     public async ValueTask<RelationQuerySourceReadResult> ReadAsync(
         OperationContext context,
-        MaterializationImpactObservationReadRequest request)
+        MaterializationObservationReadRequest request)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
@@ -78,11 +78,11 @@ public sealed class FreightOrderMaterializationImpactReader
             throw new ArgumentException("The impact read belongs to another provider-neutral logical partition.", nameof(request));
         var kind = request.Kind switch
         {
-            MaterializationImpactObservationReadKind.IdentityLookup =>
+            MaterializationObservationReadKind.IdentityLookup =>
                 RelationQueryPhysicalStageKind.BatchedIdentityLookup,
-            MaterializationImpactObservationReadKind.RelationshipPredicateLookup =>
+            MaterializationObservationReadKind.RelationshipPredicateLookup =>
                 RelationQueryPhysicalStageKind.BatchedPredicateLookup,
-            MaterializationImpactObservationReadKind.BoundedEnumeration =>
+            MaterializationObservationReadKind.BoundedEnumeration =>
                 RelationQueryPhysicalStageKind.SourceRead,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(request),
@@ -97,9 +97,9 @@ public sealed class FreightOrderMaterializationImpactReader
             request.CollectionOccurrence is null ? request.RelationshipInput : null);
         RelationQuerySourceReadConstraint constraint = request.Kind switch
         {
-            MaterializationImpactObservationReadKind.IdentityLookup => new RelationQueryIdentityBatchLookup(request.Keys),
-            MaterializationImpactObservationReadKind.RelationshipPredicateLookup => CreatePredicate(binding, request),
-            MaterializationImpactObservationReadKind.BoundedEnumeration =>
+            MaterializationObservationReadKind.IdentityLookup => new RelationQueryIdentityBatchLookup(request.Keys),
+            MaterializationObservationReadKind.RelationshipPredicateLookup => CreatePredicate(binding, request),
+            MaterializationObservationReadKind.BoundedEnumeration =>
                 new RelationQueryBoundedEnumeration(request.MaximumRows),
             _ => throw new ArgumentOutOfRangeException(nameof(request), request.Kind, "Unsupported impact observation read kind.")
         };
@@ -125,7 +125,7 @@ public sealed class FreightOrderMaterializationImpactReader
 
     RelationQuerySourceReadConstraint CreatePredicate(
         RelationQuerySourcePlacementBinding binding,
-        MaterializationImpactObservationReadRequest request)
+        MaterializationObservationReadRequest request)
     {
         var relationshipInput = request.RelationshipInput
             ?? throw new ArgumentException("A predicate impact read has no relationship input.", nameof(request));

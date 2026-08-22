@@ -349,6 +349,9 @@ public sealed record MaterializationChangeFeedPlan
     /// <param name="id">Stable Process work and evidence identity.</param>
     /// <param name="scope">Exact physical source, dependency input, partition, and ordering scope.</param>
     /// <param name="channel">Exact Channel realization-plan fingerprint governing delivery semantics.</param>
+    /// <param name="currentStateEnrichment">
+    /// Exact authoritative current-state realization for a direct-root feed; otherwise null.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="scope"/> or <paramref name="channel"/> is <see langword="null"/>.
     /// </exception>
@@ -357,12 +360,23 @@ public sealed record MaterializationChangeFeedPlan
     public MaterializationChangeFeedPlan(
         MaterializationChangeFeedId id,
         MaterializationSourceScope scope,
-        ChannelRealizationPlanFingerprint channel)
+        ChannelRealizationPlanFingerprint channel,
+        MaterializationCurrentStateEnrichmentPlan? currentStateEnrichment = null)
     {
         MaterializationContract.RequireDefinedIdentity(id.Value, nameof(id));
         Scope = Guard.RequireNotNull(scope);
         Channel = Guard.RequireNotNull(channel);
+        if (currentStateEnrichment is not null
+            && (currentStateEnrichment.Input != scope.Input
+                || currentStateEnrichment.Shape != scope.Shape
+                || currentStateEnrichment.Source != scope.Source))
+        {
+            throw new ArgumentException(
+                "Current-state enrichment must belong to the exact change-feed input, shape, and source.",
+                nameof(currentStateEnrichment));
+        }
         Id = id;
+        CurrentStateEnrichment = currentStateEnrichment;
     }
 
     /// <summary>Stable Process work and evidence identity.</summary>
@@ -373,6 +387,9 @@ public sealed record MaterializationChangeFeedPlan
 
     /// <summary>Exact Channel realization-plan fingerprint governing delivery semantics.</summary>
     public ChannelRealizationPlanFingerprint Channel { get; }
+
+    /// <summary>Exact authoritative current-state realization for a direct-root feed; otherwise null.</summary>
+    public MaterializationCurrentStateEnrichmentPlan? CurrentStateEnrichment { get; }
 }
 
 /// <summary>
@@ -385,7 +402,7 @@ public sealed record MaterializationChangeFeedPlan
 public sealed record MaterializationRebuildPlan
 {
     /// <summary>Current persisted rebuild-plan schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan/v5";
+    public const string CurrentSchemaVersion = "cohesive-materialization-rebuild-plan/v6";
 
     /// <summary>Creates and fingerprints a rebuild realization plan.</summary>
     /// <param name="materialization">Exact canonical materialization document.</param>
@@ -869,6 +886,16 @@ public sealed record MaterializationRebuildPlan
                     "Every change feed must use one exact pinned source realization.",
                     nameof(changeFeeds));
             }
+            var source = sources.Single(candidate => candidate.Input == feed.Scope.Input);
+            if (feed.CurrentStateEnrichment is not null
+                && route.Strategy is not MaterializationDirectRootImpactStrategy)
+            {
+                throw new ArgumentException(
+                    "Authoritative current-state enrichment applies only to direct-root feeds.",
+                    nameof(changeFeeds));
+            }
+            if (feed.CurrentStateEnrichment is { } enrichment)
+                MaterializationCurrentStateEnrichmentCompiler.Link(enrichment, source.Profile);
         }
 
         foreach (var catalog in changeFeedCatalogs)
@@ -975,7 +1002,7 @@ public static class MaterializationRebuildPlanFingerprinter
     public const string Algorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current synchronization-plan fence.</summary>
-    public const string Canonicalization = "cohesive-materialization-rebuild-plan/v5-c14n/v1";
+    public const string Canonicalization = "cohesive-materialization-rebuild-plan/v6-c14n/v1";
 
     /// <summary>Computes the fingerprint of one complete persisted rebuild plan.</summary>
     /// <param name="plan">Plan whose canonical content is fingerprinted.</param>

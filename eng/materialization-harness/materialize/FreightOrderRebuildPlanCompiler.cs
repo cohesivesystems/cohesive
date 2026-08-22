@@ -402,10 +402,46 @@ public static class FreightOrderRebuildPlanCompiler
             {
                 var binding = tenant.GetSource(input);
                 MaterializationChangeFeedId feedId = new($"feed/{tenant.Tenant}/{Uri.EscapeDataString(input.Value)}");
+                MaterializationCurrentStateEnrichmentPlan? currentState = null;
+                if (input == rootInput)
+                {
+                    currentState = (binding.Source as IMaterializationCurrentStateEnrichmentSource)
+                        ?.CurrentStateEnrichment;
+                    if (currentState is null)
+                    {
+                        var changeRequirement = semantics.Definition.Sources
+                            .Single(source => source.Input == input)
+                            .Capabilities
+                            .Single(capability =>
+                                capability.Capability == MaterializationCapabilityKind.SourceChangeDelivery);
+                        var compilation = MaterializationCurrentStateEnrichmentCompiler.Compile(
+                            input: input,
+                            shape: binding.Scope.Shape,
+                            source: binding.Scope.Source,
+                            changeRequirement: changeRequirement,
+                            profile: binding.Source.Descriptor.CapabilityProfile,
+                            policy: new(
+                                maximumIdentitiesPerRead: MaximumPageItems,
+                                maximumReadBytes: MaximumPageBytes,
+                                evidenceReference: $"materialization-harness/{provider}/current-state/native/v1"));
+                        if (!compilation.IsSuccessful
+                            || !CanonicalProfileBytes(compilation.Profile!)
+                                .SequenceEqual(CanonicalProfileBytes(binding.Source.Descriptor.CapabilityProfile)))
+                        {
+                            throw new ArgumentException(
+                                $"Provider '{provider}' root feed '{input.Value}' has neither a complete native change image "
+                                + "nor an exact runtime current-state enrichment binding: "
+                                + string.Join(" ", compilation.Diagnostics.Select(static diagnostic => diagnostic.Message)),
+                                nameof(tenantBindings));
+                        }
+                        currentState = compilation.Plan;
+                    }
+                }
                 var feed = new MaterializationChangeFeedPlan(
                     id: feedId,
                     scope: binding.Scope,
-                    channel: Channel(binding.Scope));
+                    channel: Channel(binding.Scope),
+                    currentStateEnrichment: currentState);
                 feeds.Add(feed);
                 sourcesByFeed.Add(feedId, binding.Source);
                 impactRuntimesByFeed.Add(feedId, impactRuntime);

@@ -280,7 +280,7 @@ explicit settlement, fenced idempotent versioned writes, generation isolation, e
 promotion. `MaterializationCapabilityMatcher` resolves those requirements against attributable adapter evidence and
 returns structured diagnostics instead of weakening a guarantee.
 
-The persisted `cohesive-materialization-rebuild-plan/v5` realization also contains the deterministic result of
+The persisted `cohesive-materialization-rebuild-plan/v6` realization also contains the deterministic result of
 compiling explicitly workload-bound Control loops against those plan and adapter limits. A generation-scoped
 `MaterializationIndexSyncControlRuntime` owns one durable CAS state per exact materialization, effective Control
 definition, plan, physical target, generation, workload, and loop. Source, transform, and target operating points
@@ -296,6 +296,16 @@ change-item or read-byte limits. Bounded pull sources continue to advertise and 
 Definitions also distinguish `CompleteMutationDelivery`—every retained create, update, and delete without
 latest-version coalescing—from `LatestVersionUpsertDelivery`, which promises only currently visible upserts. These
 typed guarantees are not interchangeable during capability matching.
+
+`CompleteCurrentObservation` separately proves that a delivered change carries the authoritative complete current
+logical observation, not merely the physical row or component that emitted the signal. A native change image may
+prove this directly. For aggregates split across physical structures,
+`MaterializationCurrentStateEnrichmentCompiler` selects attributable change and bounded point-read evidence and
+persists a `BatchedIdentityRead` plan on the direct-root feed. Its runtime deduplicates page identities, reads them in
+bounded batches through the shared provider-neutral observation-read port, and preserves source delivery identity,
+position, ordering, before-image, and settlement behavior. The resulting current state is explicitly
+`ReconciledLatest`; it does not claim a coordinated snapshot with the earlier change position. Failed reads produce
+no enriched page, checkpoint, or settlement, and replay repeats the same stateless composition.
 
 Capability matching establishes whether a binding can satisfy the declared consistency strategy; it is not proof
 that a particular run acquired a coordinated snapshot or baseline/change-feed cut. The later execution planner must

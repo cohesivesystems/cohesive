@@ -55,6 +55,11 @@ public sealed class FreightOrderRebuildPlanCompilerTests
             MaterializationRebuildPlanningJsonSerializer.GetCanonicalPlanSetBytes(reverse.PlanSet));
         Assert.Equal(["tenant/acme", "tenant/northwind"], forward.Plan.Shards.Select(static shard => shard.Id.Value));
         Assert.Equal(8, forward.Plan.ChangeFeeds.Length);
+        Assert.All(
+            forward.Plan.ChangeFeeds.Where(feed => feed.Scope.Input == semantics.Root.Input.Id),
+            feed => Assert.Equal(
+                MaterializationCurrentStateEnrichmentStrategyKind.DeliveredChangeImage,
+                Assert.IsType<MaterializationCurrentStateEnrichmentPlan>(feed.CurrentStateEnrichment).Strategy));
         Assert.Equal(4, forward.Plan.ImpactPlan.Routes.Length);
         Assert.All(
             forward.Plan.ImpactPlan.Routes,
@@ -287,7 +292,12 @@ public sealed class FreightOrderRebuildPlanCompilerTests
                         .Select(capabilities => Evidence(
                             $"source/{Uri.EscapeDataString(group.Key.Value)}/{(int)capabilities.Key}",
                             capabilities.Key,
-                            [.. capabilities.SelectMany(static requirement => requirement.Guarantees).Distinct()],
+                            capabilities.Key == MaterializationCapabilityKind.SourceChangeDelivery
+                                ? [
+                                    .. capabilities.SelectMany(static requirement => requirement.Guarantees).Distinct(),
+                                    MaterializationGuaranteeKind.CompleteCurrentObservation
+                                ]
+                                : [.. capabilities.SelectMany(static requirement => requirement.Guarantees).Distinct()],
                             MergeLimits(capabilities.SelectMany(static requirement => requirement.OperatingLimits))))
                 ],
                 description: "Deterministic synthetic source capability profile for canonical freight rebuild planning."));

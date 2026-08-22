@@ -319,7 +319,9 @@ public sealed class CosmosScenarioEnvelopeMaterializationChangeSource : IMateria
                 id: new($"cosmos-scenario-envelope/{Uri.EscapeDataString(capability.Id.Value)}/v1"),
                 capability: capability.Capability,
                 realization: CapabilityRealizationKind.Composed,
-                guarantees: capability.Guarantees,
+                guarantees: capability.Capability == MaterializationCapabilityKind.SourceChangeDelivery
+                    ? capability.Guarantees.Add(MaterializationGuaranteeKind.CompleteCurrentObservation)
+                    : capability.Guarantees,
                 operatingLimits: capability.OperatingLimits,
                 sourceReferences:
                 [

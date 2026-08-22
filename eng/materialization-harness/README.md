@@ -180,4 +180,13 @@ For every provider, materialization:
 
 After promotion, active-generation maintenance pages each tenant/feed position, computes affected roots through direct, inverse, or bounded-global impact strategies, rehydrates them through the same relation, flushes bounded mutations to Elasticsearch, commits synchronization evidence, and only then settles provider progress. A fresh `materialize` run against the final source state is the differential oracle for the incremental result.
 
+Direct Order changes also retain an explicit current-state strategy in the rebuild plan. Cosmos scenario envelopes carry
+the complete embedded Order observation and therefore select `DeliveredChangeImage`. PostgreSQL logical replication
+emits the root table row while owned stops live in `order_stops`, so the harness registers the official Relations
+identity-read capability and selects `BatchedIdentityRead`. The shared Storage executor deduplicates changed Order
+identities, reads complete aggregates in bounded batches, preserves the raw WAL delivery identity, position,
+before-image, and source ordering, and exposes the result as `ReconciledLatest` rather than claiming a coordinated WAL
+snapshot. The harness wrapper retains only PostgreSQL lifecycle/error translation and capability binding; it no longer
+implements its own reconciliation algorithm.
+
 When run through the Process host, each applied page also commits a PostgreSQL progress checkpoint. A stopped host therefore resumes from the last durable continuation. An exact retry uses the same attempt-derived generation and idempotency identities; an explicit RestartAttempt uses a new generation and leaves durable abandonment evidence that prevents a delayed old worker from promoting its candidate.
