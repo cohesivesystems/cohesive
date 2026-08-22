@@ -111,6 +111,38 @@ public sealed class DurableOperationContractTests
     }
 
     [Fact]
+    public void AdapterCapabilityAssessment_ReturnsStructuredIdempotencyAndReconciliationEvidence()
+    {
+        var fixture = DurableOperationTestFixture.Create();
+        var capabilities = new DurableOperationAdapterCapabilities(
+            DurableOperationIdempotencyEvidence.NaturallyIdempotent,
+            DurableOperationReconciliationCapability.Unsupported,
+            [fixture.Binding.Request]);
+
+        var validation = DurableOperationReferenceExecutor.AssessReconciliationAdapterCapabilities(
+            fixture.Binding,
+            capabilities);
+
+        Assert.False(validation.IsValid);
+        var idempotency = Assert.Single(
+            validation.Diagnostics,
+            static diagnostic => diagnostic.Code
+                == DurableOperationDiagnosticCodes.AdapterIdempotencyInsufficient);
+        Assert.Equal("/adapter/capabilities/idempotencyEvidence", idempotency.Location);
+        Assert.Equal(fixture.Binding.IdempotencyEvidence.ToString(), idempotency.Evidence?.Expected);
+        Assert.Equal(capabilities.IdempotencyEvidence.ToString(), idempotency.Evidence?.Observed);
+        var reconciliation = Assert.Single(
+            validation.Diagnostics,
+            static diagnostic => diagnostic.Code
+                == DurableOperationDiagnosticCodes.AdapterReconciliationUnsupported);
+        Assert.Equal("/adapter/capabilities/reconciliation", reconciliation.Location);
+        Assert.Equal(
+            DurableOperationReconciliationCapability.Supported.ToString(),
+            reconciliation.Evidence?.Expected);
+        Assert.Equal(capabilities.Reconciliation.ToString(), reconciliation.Evidence?.Observed);
+    }
+
+    [Fact]
     public void Claim_LiveLeaseReplaysForOwnerBlocksCompetitorAndReclaimsWithHigherFenceAtExpiry()
     {
         var fixture = DurableOperationTestFixture.Create();

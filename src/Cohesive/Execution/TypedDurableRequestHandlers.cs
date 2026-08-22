@@ -908,6 +908,16 @@ public sealed class DurableRequestReconciliationRegistration<TRequest, TOutcome,
 
     static void EnsureCatalogResolver(IServiceCollection services)
     {
+        foreach (var descriptor in services
+                     .Where(static descriptor => descriptor.ServiceType
+                         == typeof(IDurableOperationAdapterCapabilityResolver))
+                     .Where(static descriptor => descriptor.ImplementationInstance
+                         is EmptyDurableOperationAdapterCapabilityResolver)
+                     .ToArray())
+        {
+            services.Remove(descriptor);
+        }
+
         var existing = services
             .Where(static descriptor => descriptor.ServiceType == typeof(IDurableOperationAdapterResolver))
             .ToArray();
@@ -927,6 +937,11 @@ public sealed class DurableRequestReconciliationRegistration<TRequest, TOutcome,
         }
 
         services.TryAddSingleton<IDurableOperationAdapterResolver, DurableOperationAdapterCatalog>();
+        services.TryAddSingleton<IDurableOperationAdapterCapabilityResolver>(provider =>
+            provider.GetRequiredService<IDurableOperationAdapterResolver>()
+                as IDurableOperationAdapterCapabilityResolver
+            ?? throw new InvalidOperationException(
+                "The durable operation adapter resolver does not publish exact deployment capability evidence."));
     }
 
     static string Format(RequestContractReference request) =>

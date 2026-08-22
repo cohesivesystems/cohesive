@@ -370,6 +370,20 @@ supplies its profile and consumes only a successful exhaustive report when compi
 The first intended consumer is the Durable Task parallel interpreter, but the same contracts also govern native
 Postgres, Cosmos, simulation, and future orchestration profiles.
 
+Interpreter realization and application deployment qualification are distinct capability closures. The former
+proves that a target can preserve canonical Process constructs and cross-cutting guarantees. The latter proves that
+the deployed application can interpret every exact Request referenced by that particular plan.
+`ProcessRequestRequirementCollector` derives that second inventory from the same closed node union and verifies that
+every canonical node kind has an explicit no-Request, external-operation, or child-invocation disposition. A target
+then qualifies those exact Request identities against its binding policy and deployed operation capability evidence;
+a generic interpreter profile must not claim that an application-specific operation exists.
+
+This keeps cancellability at the right semantic layers. Canonical Process cancellation is part of the interpreter's
+`LifecycleControl` guarantee. A provider-specific cancellation action is an exact application Request and is
+qualified through the deployed adapter capability catalog, rather than through a product-specific boolean. If a
+deployed provider can reject cancellation conditionally, that remains a declared Request outcome, not false static
+capability evidence.
+
 ## Advanced lowering escape hatch
 
 `ProcessAuthoring.Create` and `ProcessBuilder<TInput,TResult>` remain public, advanced APIs because source generators,

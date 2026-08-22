@@ -389,7 +389,12 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
     public async Task GetExplainAsync_ProjectsPendingAndActiveLifecyclePrefixesWithoutInventingTraces()
     {
         var fixture = CreateFixture();
-        var plans = new DurableTaskSequentialProcessPlanCatalog([fixture.Plan]);
+        var binding = Assert.IsType<DurableRequestBinding>(fixture.Binding);
+        var adapters = new DurableOperationAdapterCatalog([new NonExecutingAdapter(binding.Request)]);
+        var plans = new DurableTaskSequentialProcessPlanCatalog(
+            [fixture.Plan],
+            [binding],
+            operationAdapterCapabilities: adapters);
         var pendingClient = new FakeDurableTaskClient([
             Metadata(fixture, status: null, OrchestrationRuntimeStatus.Pending)
         ]);
@@ -727,7 +732,8 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             start.Receipt.Request.Context.Authorization.AuthorityScope,
             start.Receipt.Request.InitialContinuation.ProcessInstanceId,
             DurableTaskProcessDataConverter.Create(),
-            Physical(fixture.Plan));
+            Physical(fixture.Plan),
+            fixture.DurableOperation.Binding);
     }
 
     static async Task<CompletedTraceFixture> CreateCompletedFixtureAsync(
@@ -807,7 +813,8 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             scope,
             continuation.ProcessInstanceId,
             DurableTaskProcessDataConverter.Create(),
-            Physical(plan));
+            Physical(plan),
+            Binding: null);
         return new(fixture, result);
     }
 
@@ -900,7 +907,26 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         InteractionAuthorityScope Scope,
         ProcessInstanceId LogicalInstanceId,
         DataConverter Converter,
-        DurableTaskProcessRealizationPlan Plan);
+        DurableTaskProcessRealizationPlan Plan,
+        DurableRequestBinding? Binding);
+
+    sealed class NonExecutingAdapter(RequestContractReference request) : IDurableOperationAdapter
+    {
+        public DurableOperationAdapterCapabilities Capabilities { get; } = new(
+            DurableOperationIdempotencyEvidence.TargetDeduplication,
+            DurableOperationReconciliationCapability.Supported,
+            [request]);
+
+        public ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
+            OperationContext context,
+            DurableOperationInvocation invocation) =>
+            throw new InvalidOperationException("The explain-repository fixture never executes its adapter.");
+
+        public ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
+            OperationContext context,
+            DurableOperationReconciliationRequest request) =>
+            throw new InvalidOperationException("The explain-repository fixture never reconciles its adapter.");
+    }
 
     sealed record CompletedTraceFixture(
         CurrentFixture Fixture,

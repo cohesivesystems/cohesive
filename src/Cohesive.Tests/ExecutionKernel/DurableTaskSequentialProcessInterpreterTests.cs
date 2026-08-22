@@ -2286,13 +2286,85 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
-    public void ExecutableQualification_AllowsAnUnboundDeliberatelyExternalRequest()
+    public void ExecutableQualification_FailsClosedWhenAnExternalRequestBindingIsMissing()
     {
         var (plan, _) = CompileRequestPlan("process/durable-task-external-request-admission");
 
-        var catalog = new DurableTaskSequentialProcessPlanCatalog([Physical(plan)]);
+        var exception = Assert.Throws<ArgumentException>(() =>
+            new DurableTaskSequentialProcessPlanCatalog([Physical(plan)]));
+
+        Assert.Contains(
+            DurableTaskProcessPlanAdmissionDiagnosticCodes.ExternalRequestBindingMissing,
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("node 'request'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExecutableQualification_FailsClosedWhenExternalAdapterCapabilityIsMissing()
+    {
+        var (plan, reply) = CompileRequestPlan("process/durable-task-external-capability-missing");
+        var binding = Binding(plan, reply);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            new DurableTaskSequentialProcessPlanCatalog(
+                [Physical(plan)],
+                [binding]));
+
+        Assert.Contains(
+            DurableTaskProcessPlanAdmissionDiagnosticCodes.ExternalRequestCapabilityMissing,
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(binding.Request.Definition.Fingerprint.Value, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExecutableQualification_AdmitsAnExactExternalAdapterCapability()
+    {
+        var (plan, reply) = CompileRequestPlan("process/durable-task-external-capability-exact");
+        var binding = Binding(plan, reply);
+        var adapters = new DurableOperationAdapterCatalog([
+            new CountingDurableOperationAdapter(binding.Request)
+        ]);
+
+        var catalog = new DurableTaskSequentialProcessPlanCatalog(
+            [Physical(plan)],
+            [binding],
+            operationAdapterCapabilities: adapters);
 
         Assert.Equal(1, catalog.Count);
+    }
+
+    [Fact]
+    public void ExecutableQualification_ReportsStructuredExternalAdapterCapabilityMismatch()
+    {
+        var (plan, reply) = CompileRequestPlan("process/durable-task-external-capability-invalid");
+        var binding = Binding(plan, reply);
+        var adapters = new DurableOperationAdapterCatalog([
+            new CountingDurableOperationAdapter(
+                binding.Request,
+                idempotencyEvidence: DurableOperationIdempotencyEvidence.NaturallyIdempotent,
+                reconciliation: DurableOperationReconciliationCapability.Unsupported)
+        ]);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            new DurableTaskSequentialProcessPlanCatalog(
+                [Physical(plan)],
+                [binding],
+                operationAdapterCapabilities: adapters));
+
+        Assert.Contains(
+            DurableTaskProcessPlanAdmissionDiagnosticCodes.ExternalRequestCapabilityInvalid,
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            DurableOperationDiagnosticCodes.AdapterIdempotencyInsufficient,
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            DurableOperationDiagnosticCodes.AdapterReconciliationUnsupported,
+            exception.Message,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -5441,13 +5513,18 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         }
     }
 
-    sealed class CountingDurableOperationAdapter(RequestContractReference request) : IDurableOperationAdapter
+    sealed class CountingDurableOperationAdapter(
+        RequestContractReference request,
+        DurableOperationIdempotencyEvidence idempotencyEvidence =
+            DurableOperationIdempotencyEvidence.TargetDeduplication,
+        DurableOperationReconciliationCapability reconciliation =
+            DurableOperationReconciliationCapability.Supported) : IDurableOperationAdapter
     {
         readonly ConcurrentQueue<DurableOperationInvocation> invocations = [];
 
         public DurableOperationAdapterCapabilities Capabilities { get; } = new(
-            DurableOperationIdempotencyEvidence.TargetDeduplication,
-            DurableOperationReconciliationCapability.Supported,
+            idempotencyEvidence,
+            reconciliation,
             [request]);
 
         internal IReadOnlyCollection<DurableOperationInvocation> Invocations => invocations.ToArray();
