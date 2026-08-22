@@ -230,6 +230,73 @@ public sealed class FreightOrderHarnessModelTests
     }
 
     [Fact]
+    public async Task CanonicalRelationRejectsCollectionOccurrenceWithUnknownOwnerEvidence()
+    {
+        var semantics = FreightOrderMaterializationModel.Create();
+        FreightOrder order = new()
+        {
+            Id = "order-1",
+            TenantId = "tenant-a",
+            OrderNumber = "ORD-001",
+            CustomerAccountId = "customer-1",
+            EquipmentClass = "Reefer",
+            CreatedAt = DateTimeOffset.Parse("2026-08-01T10:00:00Z")
+        };
+        FreightCustomerAccount customer = new()
+        {
+            Id = "customer-1",
+            TenantId = "tenant-a",
+            DisplayName = "Acme Foods"
+        };
+        var outcome = await EvaluateAsync(
+            semantics,
+            order,
+            customer,
+            [
+                Stop("pickup-a", sequence: 10, stopType: "Pickup", locationId: "origin-a"),
+                Stop("drop-a", sequence: 20, stopType: "Drop", locationId: "destination-a")
+            ],
+            [
+                Location("origin-a", "Seattle", "WA"),
+                Location("destination-a", "Portland", "OR")
+            ],
+            scenario: "unknown-collection-owner");
+        var execution = Assert.IsType<RelationQueryPhysicalExecutionResult>(outcome.PhysicalExecution);
+        var evidence = Assert.IsType<RelationQueryRuntimeEvidence>(execution.Evidence);
+        var occurrence = evidence.CollectionOccurrences[0];
+        var malformed = new RelationQueryCollectionOccurrenceEvidence(
+            expansion: occurrence.Expansion,
+            owner: new("tenant-b/order-1"),
+            ordinal: occurrence.Ordinal,
+            occurrence: occurrence.Occurrence,
+            value: occurrence.Value);
+        var malformedEvidence = new RelationQueryRuntimeEvidence(
+            evaluation: evidence.Evaluation,
+            plan: semantics.Plan,
+            completeness: evidence.Completeness,
+            sources: evidence.Sources,
+            fields: evidence.Fields,
+            traversals: evidence.Traversals,
+            parameters: evidence.Parameters,
+            capabilities: evidence.Capabilities,
+            conversionFailures: evidence.ConversionFailures,
+            collectionOccurrences:
+            [
+                malformed,
+                .. evidence.CollectionOccurrences.Skip(1)
+            ]);
+
+        var analysis = RelationRequirementGapAnalyzer.Analyze(semantics.Plan, malformedEvidence);
+
+        Assert.False(analysis.IsEvidenceValid);
+        Assert.Contains(
+            analysis.Diagnostics,
+            diagnostic => diagnostic.Code == RelationRuntimeDiagnosticCodes.EvidenceConflict
+                && diagnostic.Occurrence == occurrence.Occurrence.Id
+                && diagnostic.Message.Contains("unknown owner occurrence", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task CanonicalRelationRejectsOwnedStopFanOutBeyondThePhysicalBoundary()
     {
         var semantics = FreightOrderMaterializationModel.Create();
