@@ -282,7 +282,7 @@ static class RelationQueryBindingFlowAnalyzer
             if (!output.TryAdd(
                     expansion.ItemBinding,
                     new(
-                        Shape: null,
+                        Shape: expansion.ItemShape,
                         Type: expansion.ItemType,
                         Availability: RelationQueryBindingAvailability.AlwaysPresent)))
             {

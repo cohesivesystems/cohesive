@@ -89,9 +89,15 @@ static class RelationQueryInMemoryTargetProfile
                 yield return new StructuralRelationQueryCapability(role, path);
         }
 
-        yield return new StructuralRelationQueryCapability(
-            RelationQueryStructuralCapabilityRole.CurrentItemRead,
-            RelationQueryStructuralPathKind.CollectionElement);
+        foreach (var role in new[]
+                 {
+                     RelationQueryStructuralCapabilityRole.BindingRead,
+                     RelationQueryStructuralCapabilityRole.CurrentItemRead
+                 })
+        {
+            yield return new StructuralRelationQueryCapability(role, RelationQueryStructuralPathKind.CollectionElement);
+            yield return new StructuralRelationQueryCapability(role, RelationQueryStructuralPathKind.NestedCollectionElement);
+        }
     }
 
     static ImmutableArray<RelationQueryStructuralCapabilityRole> StructuralRoles =>

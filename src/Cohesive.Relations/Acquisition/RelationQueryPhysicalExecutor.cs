@@ -489,6 +489,7 @@ public sealed class RelationQueryPhysicalExecutor
         readonly IReadOnlyDictionary<RelationQuerySourceInstanceId, RelationQuerySourceInstance> sources;
         readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryFieldInput> fieldInputs;
         readonly IReadOnlySet<RelationQueryInputId> identityFieldInputs;
+        readonly IReadOnlyDictionary<RelationQueryInputId, int> expansionInputMultiplicities;
         readonly List<RelationQuerySourceEvidence> sourceEvidence = [];
         readonly List<RelationQueryFieldEvidence> fieldEvidence = [];
         readonly List<RelationQueryTraversalEvidence> traversalEvidence = [];
@@ -516,6 +517,17 @@ public sealed class RelationQueryPhysicalExecutor
                 .Where(input => RelationQueryFieldSemantics.IsSingleStringIdentityField(request.Plan, input.Field))
                 .Select(static input => input.Id)
                 .ToHashSet();
+            expansionInputMultiplicities = request.Plan.ExecutionSlice.Nodes
+                .Select(static execution => execution.CanonicalNode)
+                .OfType<ExpandCollectionQueryNode>()
+                .Select(expansion => expansion.Collection is FieldExpr { Binding: { } binding } field
+                    ? fieldInputs.Values.SingleOrDefault(input =>
+                        input.Binding == binding && input.Field.Path == field.Path)?.Id
+                    : null)
+                .Where(static input => input is not null)
+                .Select(static input => input!.Value)
+                .GroupBy(static input => input)
+                .ToDictionary(static group => group.Key, static group => group.Count());
         }
 
         public async ValueTask<RelationQueryPhysicalExecutionResult> ExecuteAsync(CancellationToken cancellationToken)
@@ -623,6 +635,7 @@ public sealed class RelationQueryPhysicalExecutor
             }
 
             List<RelationQueryObservationOccurrence> occurrences = [];
+            long expandedRows = 0;
             foreach (var row in supplied.Observations)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -635,6 +648,19 @@ public sealed class RelationQueryPhysicalExecutor
                         source: binding.Source,
                         evidenceReference: supplied.EvidenceReference);
                 }
+                if (!TryCountExpandedRows(
+                        row,
+                        MaximumFanOut(source),
+                        ref expandedRows))
+                {
+                    return Diagnostic(
+                        RelationQueryPhysicalExecutionDiagnosticCodes.OperatingBoundaryExceeded,
+                        "A supplied collection exceeds the explicit per-occurrence fan-out boundary.",
+                        stage.Id,
+                        contract.Input.Id,
+                        binding.Source,
+                        supplied.EvidenceReference);
+                }
 
                 var acquired = Materialize(
                     row,
@@ -643,6 +669,16 @@ public sealed class RelationQueryPhysicalExecutor
                     cancellationToken);
                 GetOccurrences(contract.Binding).Add(acquired);
                 occurrences.Add(acquired.Occurrence);
+            }
+            if (!TryReserveLocalRows(expandedRows))
+            {
+                return Diagnostic(
+                    RelationQueryPhysicalExecutionDiagnosticCodes.OperatingBoundaryExceeded,
+                    "Supplied collection expansion exceeds the plan-wide local-row boundary.",
+                    stage.Id,
+                    contract.Input.Id,
+                    binding.Source,
+                    supplied.EvidenceReference);
             }
 
             sourceEvidence.Add(new(
@@ -1292,6 +1328,30 @@ public sealed class RelationQueryPhysicalExecutor
                     return Invalid(read, result.EvidenceReference, validation);
             }
 
+            if (result.State is RelationQuerySourceReadState.Complete or RelationQuerySourceReadState.Partial)
+            {
+                var source = sources[read.Source];
+                long expandedRows = 0;
+                foreach (var row in result.Observations)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!TryCountExpandedRows(row, MaximumFanOut(source), ref expandedRows))
+                    {
+                        return Boundary(
+                            read,
+                            result,
+                            "A source collection exceeds the explicit per-occurrence fan-out boundary.");
+                    }
+                }
+                if (!TryReserveLocalRows(expandedRows))
+                {
+                    return Boundary(
+                        read,
+                        result,
+                        "Source collection expansion exceeds the plan-wide local-row boundary.");
+                }
+            }
+
             if (read.Constraint is RelationQueryIdentityBatchLookup identity
                 && result.Observations.Any(row => !identity.Identities.Contains(row.Identity, StringComparer.Ordinal)))
             {
@@ -1365,6 +1425,28 @@ public sealed class RelationQueryPhysicalExecutor
             }
 
             return null;
+        }
+
+        bool TryCountExpandedRows(
+            RelationQuerySourceReadObservation row,
+            long maximumFanOut,
+            ref long expandedRows)
+        {
+            foreach (var field in row.Fields)
+            {
+                if (field.Field.Input is not { } input
+                    || !expansionInputMultiplicities.TryGetValue(input, out var multiplicity)
+                    || field.State != RelationQuerySourceReadFieldState.Value
+                    || field.Value is not { Kind: ObservationValueKind.Array } value)
+                {
+                    continue;
+                }
+
+                if ((long)value.Array.Length > maximumFanOut)
+                    return false;
+                expandedRows = checked(expandedRows + (long)value.Array.Length * multiplicity);
+            }
+            return true;
         }
 
         string? ValidateObservation(
@@ -1671,7 +1753,7 @@ public sealed class RelationQueryPhysicalExecutor
                 && sourceRows <= source.Limits.MaximumBufferedRows;
         }
 
-        bool TryReserveLocalRows(int count)
+        bool TryReserveLocalRows(long count)
         {
             localRows = checked(localRows + count);
             return localRows <= request.PhysicalPlan.Policy.MaximumLocalRows;

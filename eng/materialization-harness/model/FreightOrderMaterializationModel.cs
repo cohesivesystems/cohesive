@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Linq.Expressions;
 using System.Text.Json.Serialization;
 using Cohesive.Control;
@@ -11,6 +12,7 @@ using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Realization;
 using Cohesive.Storage.Materialization;
+using Cohesive.Storage.Realization;
 using Cohesive.Transitions.Model;
 
 namespace Cohesive.MaterializationHarness.Model;
@@ -47,33 +49,25 @@ public static class FreightOrderMaterializationModel
     public static FreightOrderMaterializationSemantics Create()
     {
         var author = RelationQuery.Expression();
+        var stopShape = author.Clr.Shape<FreightOrderStop>(OrderStopShapeId, ShapeRoles.ValueObject);
         var orderShape = author.Clr.Shape<FreightOrder>(OrderShapeId);
         var customerShape = author.Clr.Shape<FreightCustomerAccount>(CustomerAccountShapeId);
-        var stopShape = author.Clr.Shape<FreightOrderStop>(OrderStopShapeId);
         var locationShape = author.Clr.Shape<FreightLocation>(LocationShapeId);
         var searchShape = author.Clr.Shape<FreightOrderSearchDocument>(OrderSearchDocumentShapeId, ShapeRoles.Projection);
 
         var orderCustomer = author.Relationship<FreightOrder, FreightCustomerAccount>(
             order => order.CustomerAccountId,
             new("freight-order.customer-account"));
-        var stopOrder = author.Relationship<FreightOrderStop, FreightOrder>(
-            stop => stop.OrderId,
-            new("freight-order-stop.order"));
-        var stopLocation = author.Relationship<FreightOrderStop, FreightLocation>(
-            stop => stop.LocationId,
-            new("freight-order-stop.location"));
-
         var orders = author.Source(orderShape, "materialization-harness/freight/orders");
         var customers = author.Traverse(
             orders,
             orderCustomer,
             requirement: QueryInputRequirement.Required,
             sourceReference: "materialization-harness/freight/customer");
-        var pickupStops = author.TraverseInverse(
+        var pickupStops = author.Expand(
             customers.Node,
+            (FreightOrder order) => order.Stops,
             orders.Binding,
-            stopOrder,
-            requirement: QueryInputRequirement.Required,
             sourceReference: "materialization-harness/freight/pickup-stops");
         var pickupCandidates = author.Filter(
             pickupStops.Node,
@@ -84,8 +78,8 @@ public static class FreightOrderMaterializationModel
             pickupCandidates,
             [
                 author.Ordering(
-                    (FreightOrderStop stop) => stop.OrderId,
-                    pickupStops.Binding,
+                    (FreightOrder order) => order.Id,
+                    orders.Binding,
                     sourceReference: "materialization-harness/freight/pickup-order/order"),
                 author.Ordering(
                     (FreightOrderStop stop) => stop.Sequence,
@@ -99,21 +93,25 @@ public static class FreightOrderMaterializationModel
             sourceReference: "materialization-harness/freight/pickup-order");
         var selectedPickupStops = author.Distinct(
             orderedPickupCandidates,
-            (FreightOrderStop stop) => stop.OrderId,
-            pickupStops.Binding,
+            (FreightOrder order) => order.Id,
+            orders.Binding,
             sourceReference: "materialization-harness/freight/pickup-per-order");
-        var originLocations = author.Traverse(
+        var originLocationSource = author.Source(
+            locationShape,
+            "materialization-harness/freight/origin-locations");
+        var originLocations = author.Join(
             selectedPickupStops,
+            originLocationSource.Node,
+            JoinKind.Inner,
+            (FreightOrderStop stop, FreightLocation location) => stop.LocationId == location.Id,
             pickupStops.Binding,
-            stopLocation,
-            requirement: QueryInputRequirement.Required,
+            originLocationSource.Binding,
             sourceReference: "materialization-harness/freight/pickup-location");
 
-        var deliveryStops = author.TraverseInverse(
-            originLocations.Node,
+        var deliveryStops = author.Expand(
+            originLocations,
+            (FreightOrder order) => order.Stops,
             orders.Binding,
-            stopOrder,
-            requirement: QueryInputRequirement.Required,
             sourceReference: "materialization-harness/freight/delivery-stops");
         var deliveryCandidates = author.Filter(
             deliveryStops.Node,
@@ -124,8 +122,8 @@ public static class FreightOrderMaterializationModel
             deliveryCandidates,
             [
                 author.Ordering(
-                    (FreightOrderStop stop) => stop.OrderId,
-                    deliveryStops.Binding,
+                    (FreightOrder order) => order.Id,
+                    orders.Binding,
                     sourceReference: "materialization-harness/freight/delivery-order/order"),
                 author.Ordering(
                     (FreightOrderStop stop) => stop.Sequence,
@@ -141,14 +139,19 @@ public static class FreightOrderMaterializationModel
             sourceReference: "materialization-harness/freight/delivery-order");
         var selectedDeliveryStops = author.Distinct(
             orderedDeliveryCandidates,
-            (FreightOrderStop stop) => stop.OrderId,
-            deliveryStops.Binding,
+            (FreightOrder order) => order.Id,
+            orders.Binding,
             sourceReference: "materialization-harness/freight/delivery-per-order");
-        var destinationLocations = author.Traverse(
+        var destinationLocationSource = author.Source(
+            locationShape,
+            "materialization-harness/freight/destination-locations");
+        var destinationLocations = author.Join(
             selectedDeliveryStops,
+            destinationLocationSource.Node,
+            JoinKind.Inner,
+            (FreightOrderStop stop, FreightLocation location) => stop.LocationId == location.Id,
             deliveryStops.Binding,
-            stopLocation,
-            requirement: QueryInputRequirement.Required,
+            destinationLocationSource.Binding,
             sourceReference: "materialization-harness/freight/delivery-location");
         Expression<Func<
             FreightOrder,
@@ -181,16 +184,16 @@ public static class FreightOrderMaterializationModel
                     DestinationRegion = destination.Region
                 };
         var projected = author.Project(
-            destinationLocations.Node,
+            destinationLocations,
             searchShape,
             projection,
             [
                 orders.Binding,
                 customers.Binding,
                 pickupStops.Binding,
-                originLocations.Binding,
+                originLocationSource.Binding,
                 deliveryStops.Binding,
-                destinationLocations.Binding
+                destinationLocationSource.Binding
             ],
             sourceReference: "materialization-harness/freight/order-search-document");
         var authored = author.BuildRelation(
@@ -230,8 +233,12 @@ public static class FreightOrderMaterializationModel
                 maximumReadBytes: MaximumReadBytes,
                 maximumChangeItems: MaximumReadItems,
                 maximumChangeBytes: MaximumReadBytes)
-            .WithGenerationalIndexTarget(MaximumWriteItems, MaximumWriteBytes)
-            .WithFailurePolicy(new(3, MaterializationFailureDisposition.Stop))
+            .WithGenerationalIndexTarget(
+                maximumItems: MaximumWriteItems,
+                maximumBytes: MaximumWriteBytes)
+            .WithFailurePolicy(new(
+                maximumAttempts: 3,
+                exhaustedDisposition: MaterializationFailureDisposition.Stop))
             .WithFreshnessPolicy(new(maximumLagMilliseconds: 1_800_000))
             .WithControls(
                 loops: [rebuildTargetBatchControl, realtimeTargetBatchControl],
@@ -254,11 +261,48 @@ public static class FreightOrderMaterializationModel
             materialization.Validation.Diagnostics.Select(static diagnostic => diagnostic.Message));
         var document = materialization.CreateDocument();
         var definition = document.Definition;
+        var canonicalOrderShape = orderShape.Document.Graph.TryGetShape(orderShape.Id)
+            ?? throw new InvalidOperationException("Canonical Order shape is missing.");
+        var stopsField = canonicalOrderShape.Fields.Single(static field => field.Name.Value == "stops");
+        var stopType = stopsField.Type as NamedTypeRef
+            ?? throw new InvalidOperationException("Canonical Order.Stops must reference one named component type.");
+        var structure = new StorageStructureDefinition(
+            id: new("freight/order"),
+            semanticModel: orderShape.Document,
+            rootShape: orderShape.Id,
+            rootIdentityPath: FieldPath.FromField("id"),
+            partitionPath: FieldPath.FromField("tenantId"),
+            ownedCollections:
+            [
+                new(
+                    id: new("order/stops"),
+                    collectionPath: FieldPath.FromField("stops"),
+                    componentType: stopType.TypeId,
+                    localIdentityPath: FieldPath.FromField("id"),
+                    ordinalPath: FieldPath.FromField("sequence"))
+            ],
+            provenance: new(
+                producer: new("cohesive-materialization-harness", "1"),
+                source: new("eng/materialization-harness/model/freight-order-storage"),
+                origin: DocumentOrigin.Generated));
+        var structureValidation = StorageRealizationValidator.ValidateStructure(structure);
+        Require(
+            structureValidation.IsValid,
+            structureValidation.Diagnostics.Select(static diagnostic => diagnostic.Message));
+        var orderEntity = Entity(
+            orderShape.Id.ShapeId.Value,
+            canonicalOrderShape,
+            orderShape.Document.Graph);
         var storage = new FreightOrderStorageDefinitions(
-            Order: Entity(orderShape.Id.ShapeId.Value, orderShape.Document.Graph.TryGetShape(orderShape.Id)),
-            CustomerAccount: Entity(customerShape.Id.ShapeId.Value, customerShape.Document.Graph.TryGetShape(customerShape.Id)),
-            OrderStop: Entity(stopShape.Id.ShapeId.Value, stopShape.Document.Graph.TryGetShape(stopShape.Id)),
-            Location: Entity(locationShape.Id.ShapeId.Value, locationShape.Document.Graph.TryGetShape(locationShape.Id)));
+            Order: orderEntity,
+            CustomerAccount: Entity(
+                customerShape.Id.ShapeId.Value,
+                customerShape.Document.Graph.TryGetShape(customerShape.Id),
+                customerShape.Document.Graph),
+            Location: Entity(
+                locationShape.Id.ShapeId.Value,
+                locationShape.Document.Graph.TryGetShape(locationShape.Id),
+                locationShape.Document.Graph));
 
         return new(
             compilationRequest,
@@ -266,17 +310,87 @@ public static class FreightOrderMaterializationModel
             realization,
             root,
             output,
+            structure,
             storage,
             document,
             definition,
             MaterializationDefinitionFingerprinter.Compute(definition));
 
-        static EntityDefinition Entity(string name, Shape? shape)
+        static EntityDefinition Entity(string name, Shape? shape, ShapeGraph graph)
         {
             var source = shape ?? throw new InvalidOperationException($"Canonical entity shape '{name}' is missing.");
+            // EntityDefinition currently validates one Shape without its named-type graph. Derive an equivalent
+            // inline validation projection while retaining StorageStructureDefinition as aggregate/type authority.
+            // Fail closed below whenever the inline TypeRef surface cannot preserve the named type's semantics.
+            var repositoryFields = source.Fields
+                .Select(field => field with { Type = ResolveRepositoryType(field.Type, graph, []) })
+                .ToImmutableArray();
             return new(
                 new(name),
-                new Shape(source.Id, source.Fields, source.Constraints, source.Annotations, ShapeRoles.Entity));
+                new Shape(source.Id, repositoryFields, source.Constraints, source.Annotations, ShapeRoles.Entity));
+        }
+
+        static TypeRef ResolveRepositoryType(
+            TypeRef type,
+            ShapeGraph graph,
+            HashSet<TypeId> resolutionPath) => type switch
+        {
+            NamedTypeRef named => ResolveNamedRepositoryType(named, graph, resolutionPath),
+            ArrayTypeRef array => new ArrayTypeRef(
+                ResolveRepositoryType(array.ElementType, graph, resolutionPath)),
+            ObjectTypeRef objectType => new ObjectTypeRef(
+            [
+                .. objectType.Fields.Select(field => field with
+                {
+                    Type = ResolveRepositoryType(field.Type, graph, resolutionPath)
+                })
+            ]),
+            _ => type
+        };
+
+        static TypeRef ResolveNamedRepositoryType(
+            NamedTypeRef named,
+            ShapeGraph graph,
+            HashSet<TypeId> resolutionPath)
+        {
+            if (!resolutionPath.Add(named.TypeId))
+            {
+                throw new InvalidOperationException(
+                    $"Repository entity-state validation cannot inline recursive named type '{named.TypeId.Value}'.");
+            }
+
+            try
+            {
+                return graph.GetType(named.TypeId) switch
+                {
+                    TypeDefinition.Structural structural when structural.Constraints.IsDefaultOrEmpty
+                        && structural.Fields.All(static field => field.Constraints.IsDefaultOrEmpty) => new ObjectTypeRef(
+                    [
+                        .. structural.Fields.Select(field => new ObjectFieldTypeDef(
+                            name: field.Name.Value,
+                            type: ResolveRepositoryType(field.Type, graph, resolutionPath),
+                            cardinality: field.Cardinality,
+                            presence: field.Presence,
+                            nullability: field.Nullability,
+                            annotations: field.Annotations))
+                    ]),
+                    TypeDefinition.Structural => throw new InvalidOperationException(
+                        $"Repository entity-state validation cannot inline constrained named type '{named.TypeId.Value}' without weakening it."),
+                    TypeDefinition.Enum enumeration when enumeration.Underlying == PrimitiveType.String => new EnumTypeRef(
+                        name: enumeration.Name,
+                        members: [.. enumeration.Values.Select(static value => value.Value ?? value.Name)]),
+                    TypeDefinition.Enum => throw new InvalidOperationException(
+                        $"Repository entity-state validation cannot inline non-string enum '{named.TypeId.Value}'."),
+                    TypeDefinition.Union => throw new InvalidOperationException(
+                        $"Repository entity-state validation cannot inline union '{named.TypeId.Value}'."),
+                    var unsupported => throw new InvalidOperationException(
+                        $"Repository entity-state validation cannot inline named type '{named.TypeId.Value}' of kind '{unsupported.GetType().Name}'.")
+                };
+            }
+            finally
+            {
+                resolutionPath.Remove(named.TypeId);
+            }
         }
     }
 
@@ -343,7 +457,8 @@ public static class FreightOrderMaterializationModel
 /// <param name="Realization">Canonical in-memory relation realization used for hydration.</param>
 /// <param name="Root">Relation root supplied by each bounded source page.</param>
 /// <param name="Output">Complete derived OrderSearchDocument output.</param>
-/// <param name="Storage">Canonical entity definitions used by every seed realization.</param>
+/// <param name="Structure">Canonical aggregate ownership and ordering authority.</param>
+/// <param name="Storage">Repository entity-state definitions deterministically projected from canonical shapes.</param>
 /// <param name="Document">Portable canonical materialization document retained for planning and execution.</param>
 /// <param name="Definition">Backend-independent materialization definition.</param>
 /// <param name="DefinitionFingerprint">Stable fingerprint shared by provider realizations.</param>
@@ -353,20 +468,19 @@ public sealed record FreightOrderMaterializationSemantics(
     RelationQueryRealizationReport Realization,
     RelationQuerySourceInputContract Root,
     RelationQueryOutputReference Output,
+    StorageStructureDefinition Structure,
     FreightOrderStorageDefinitions Storage,
     MaterializationDocument Document,
     MaterializationDefinition Definition,
     ExecutionDefinitionFingerprint DefinitionFingerprint);
 
-/// <summary>Canonical source entity definitions shared by PostgreSQL and Cosmos seed repositories.</summary>
-/// <param name="Order">Immutable freight order definition.</param>
+/// <summary>Source entity-state definitions deterministically projected for PostgreSQL and Cosmos repositories.</summary>
+/// <param name="Order">Immutable freight order aggregate definition.</param>
 /// <param name="CustomerAccount">Customer account definition.</param>
-/// <param name="OrderStop">Immutable order-stop definition.</param>
 /// <param name="Location">Freight location definition.</param>
 public sealed record FreightOrderStorageDefinitions(
     EntityDefinition Order,
     EntityDefinition CustomerAccount,
-    EntityDefinition OrderStop,
     EntityDefinition Location);
 
 /// <summary>Simplified immutable freight order root.</summary>
@@ -395,6 +509,10 @@ public sealed record FreightOrder
     /// <summary>Source creation instant retained for incremental ordering and spot checks.</summary>
     [JsonPropertyName("createdAt")]
     public DateTimeOffset CreatedAt { get; init; }
+
+    /// <summary>Ordered stops owned by this aggregate; component lifetime and tenant scope are inherited.</summary>
+    [JsonPropertyName("stops")]
+    public ImmutableArray<FreightOrderStop> Stops { get; init; } = [];
 }
 
 /// <summary>Simplified freight customer account.</summary>
@@ -413,20 +531,12 @@ public sealed record FreightCustomerAccount
     public required string DisplayName { get; init; }
 }
 
-/// <summary>Simplified immutable order stop.</summary>
+/// <summary>Simplified immutable order-stop component owned by one <see cref="FreightOrder"/>.</summary>
 public sealed record FreightOrderStop
 {
-    /// <summary>Tenant-local stop identity.</summary>
+    /// <summary>Order-local stable stop identity.</summary>
     [JsonPropertyName("id")]
     public required string Id { get; init; }
-
-    /// <summary>Owning tenant identity.</summary>
-    [JsonPropertyName("tenantId")]
-    public required string TenantId { get; init; }
-
-    /// <summary>Tenant-local order identity.</summary>
-    [JsonPropertyName("orderId")]
-    public required string OrderId { get; init; }
 
     /// <summary>Positive order-relative stop sequence.</summary>
     [JsonPropertyName("sequence")]
@@ -439,14 +549,6 @@ public sealed record FreightOrderStop
     /// <summary>Tenant-local location identity.</summary>
     [JsonPropertyName("locationId")]
     public required string LocationId { get; init; }
-
-    /// <summary>Beginning of the scheduled service window.</summary>
-    [JsonPropertyName("scheduledStart")]
-    public DateTimeOffset ScheduledStart { get; init; }
-
-    /// <summary>End of the scheduled service window.</summary>
-    [JsonPropertyName("scheduledEnd")]
-    public DateTimeOffset ScheduledEnd { get; init; }
 }
 
 /// <summary>Simplified freight location.</summary>

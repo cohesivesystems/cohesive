@@ -29,13 +29,28 @@ public sealed class RelationQueryInMemorySupportTests
                 Role: RelationQueryStructuralCapabilityRole.CurrentItemRead,
                 PathKind: RelationQueryStructuralPathKind.NestedField
             });
+        Assert.Contains(
+            structuralCapabilities,
+            static capability => capability is
+            {
+                Role: RelationQueryStructuralCapabilityRole.BindingRead,
+                PathKind: RelationQueryStructuralPathKind.CollectionElement
+            });
+        Assert.Contains(
+            structuralCapabilities,
+            static capability => capability is
+            {
+                Role: RelationQueryStructuralCapabilityRole.BindingRead,
+                PathKind: RelationQueryStructuralPathKind.NestedCollectionElement
+            });
         Assert.DoesNotContain(
             structuralCapabilities,
-            static capability => capability.PathKind == RelationQueryStructuralPathKind.CollectionElement
-                && capability.Role != RelationQueryStructuralCapabilityRole.CurrentItemRead);
-        Assert.DoesNotContain(
-            structuralCapabilities,
-            static capability => capability.PathKind == RelationQueryStructuralPathKind.NestedCollectionElement);
+            static capability => capability.PathKind is
+                    RelationQueryStructuralPathKind.CollectionElement
+                    or RelationQueryStructuralPathKind.NestedCollectionElement
+                && capability.Role is not (
+                    RelationQueryStructuralCapabilityRole.BindingRead
+                    or RelationQueryStructuralCapabilityRole.CurrentItemRead));
         Assert.Equal(
             "cohesive.relations.in-memory/realization-v2",
             RelationQueryInMemoryInterpreter.DefaultTargetProfile.Id.Value);

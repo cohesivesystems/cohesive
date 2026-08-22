@@ -240,12 +240,6 @@ internal static class FreightScenarioMutationProjection
                     transition,
                     cancellationToken)
                 .ConfigureAwait(false),
-            FreightScenarioEntityKind.OrderStop => await ApplyPostgresStopAsync(
-                    connection,
-                    transaction,
-                    transition,
-                    cancellationToken)
-                .ConfigureAwait(false),
             FreightScenarioEntityKind.Location => await ApplyPostgresLocationAsync(
                     connection,
                     transaction,
@@ -261,7 +255,7 @@ internal static class FreightScenarioMutationProjection
         }
     }
 
-    static Task<int> ApplyPostgresOrderAsync(
+    static async Task<int> ApplyPostgresOrderAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         FreightScenarioTransition transition,
@@ -269,16 +263,16 @@ internal static class FreightScenarioMutationProjection
     {
         if (transition.Operation == FreightScenarioOperationKind.Delete)
         {
-            return DeletePostgresAsync(
+            return await DeletePostgresAsync(
                 connection,
                 transaction,
                 transition,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
         }
         var order = transition.GetAfter<FreightOrder>()
             ?? throw new InvalidOperationException($"Order transition '{transition.DeliveryId}' has no current state.");
-        return transition.BeforeState is null
-            ? ExecutePostgresAsync(
+        var affected = transition.BeforeState is null
+            ? await ExecutePostgresAsync(
                 connection,
                 transaction,
                 PostgresCommands.InsertOrder,
@@ -289,8 +283,8 @@ internal static class FreightScenarioMutationProjection
                 ("customer_account_id", order.CustomerAccountId),
                 ("equipment_class", order.EquipmentClass),
                 ("created_at", order.CreatedAt),
-                ("observation_version", transition.Version))
-            : ExecutePostgresAsync(
+                ("observation_version", transition.Version)).ConfigureAwait(false)
+            : await ExecutePostgresAsync(
                 connection,
                 transaction,
                 PostgresCommands.UpdateOrder,
@@ -302,7 +296,33 @@ internal static class FreightScenarioMutationProjection
                 ("equipment_class", order.EquipmentClass),
                 ("created_at", order.CreatedAt),
                 ("observation_version", transition.Version),
-                (PostgresCommands.ExpectedVersionBinding, transition.Version - 1));
+                (PostgresCommands.ExpectedVersionBinding, transition.Version - 1)).ConfigureAwait(false);
+        if (affected != 1)
+            return affected;
+
+        await ExecutePostgresAsync(
+            connection,
+            transaction,
+            PostgresCommands.DeleteOrderStops,
+            cancellationToken,
+            ("tenant_id", order.TenantId),
+            ("order_id", order.Id)).ConfigureAwait(false);
+        foreach (var stop in order.Stops)
+        {
+            await ExecutePostgresAsync(
+                connection,
+                transaction,
+                PostgresCommands.InsertStop,
+                cancellationToken,
+                ("tenant_id", order.TenantId),
+                ("order_stop_id", stop.Id),
+                ("order_id", order.Id),
+                ("sequence", stop.Sequence),
+                ("stop_type", stop.StopType),
+                ("location_id", stop.LocationId),
+                ("observation_version", transition.Version)).ConfigureAwait(false);
+        }
+        return affected;
     }
 
     static Task<int> ApplyPostgresCustomerAsync(
@@ -339,54 +359,6 @@ internal static class FreightScenarioMutationProjection
                 ("tenant_id", customer.TenantId),
                 ("customer_account_id", customer.Id),
                 ("display_name", customer.DisplayName),
-                ("observation_version", transition.Version),
-                (PostgresCommands.ExpectedVersionBinding, transition.Version - 1));
-    }
-
-    static Task<int> ApplyPostgresStopAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        FreightScenarioTransition transition,
-        CancellationToken cancellationToken)
-    {
-        if (transition.Operation == FreightScenarioOperationKind.Delete)
-        {
-            return DeletePostgresAsync(
-                connection,
-                transaction,
-                transition,
-                cancellationToken);
-        }
-        var stop = transition.GetAfter<FreightOrderStop>()
-            ?? throw new InvalidOperationException($"Stop transition '{transition.DeliveryId}' has no current state.");
-        return transition.BeforeState is null
-            ? ExecutePostgresAsync(
-                connection,
-                transaction,
-                PostgresCommands.InsertStop,
-                cancellationToken,
-                ("tenant_id", stop.TenantId),
-                ("order_stop_id", stop.Id),
-                ("order_id", stop.OrderId),
-                ("sequence", stop.Sequence),
-                ("stop_type", stop.StopType),
-                ("location_id", stop.LocationId),
-                ("scheduled_start", stop.ScheduledStart),
-                ("scheduled_end", stop.ScheduledEnd),
-                ("observation_version", transition.Version))
-            : ExecutePostgresAsync(
-                connection,
-                transaction,
-                PostgresCommands.UpdateStop,
-                cancellationToken,
-                ("tenant_id", stop.TenantId),
-                ("order_stop_id", stop.Id),
-                ("order_id", stop.OrderId),
-                ("sequence", stop.Sequence),
-                ("stop_type", stop.StopType),
-                ("location_id", stop.LocationId),
-                ("scheduled_start", stop.ScheduledStart),
-                ("scheduled_end", stop.ScheduledEnd),
                 ("observation_version", transition.Version),
                 (PostgresCommands.ExpectedVersionBinding, transition.Version - 1));
     }
@@ -443,7 +415,6 @@ internal static class FreightScenarioMutationProjection
         {
             FreightScenarioEntityKind.Order => (PostgresCommands.DeleteOrder, "order_id"),
             FreightScenarioEntityKind.CustomerAccount => (PostgresCommands.DeleteCustomer, "customer_account_id"),
-            FreightScenarioEntityKind.OrderStop => (PostgresCommands.DeleteStop, "order_stop_id"),
             FreightScenarioEntityKind.Location => (PostgresCommands.DeleteLocation, "location_id"),
             _ => throw new InvalidOperationException($"Unsupported freight entity kind '{transition.Entity}'.")
         };
@@ -457,7 +428,7 @@ internal static class FreightScenarioMutationProjection
             (PostgresCommands.ExpectedVersionBinding, transition.Version - 1));
     }
 
-    static async Task<int> ExecutePostgresAsync(
+    internal static async Task<int> ExecutePostgresAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         PostgresSqlCommandTemplate template,
@@ -684,9 +655,6 @@ internal static class FreightScenarioMutationProjection
             FreightScenarioEntityKind.CustomerAccount => before
                 ? transition.GetBefore<FreightCustomerAccount>()
                 : transition.GetAfter<FreightCustomerAccount>(),
-            FreightScenarioEntityKind.OrderStop => before
-                ? transition.GetBefore<FreightOrderStop>()
-                : transition.GetAfter<FreightOrderStop>(),
             FreightScenarioEntityKind.Location => before
                 ? transition.GetBefore<FreightLocation>()
                 : transition.GetAfter<FreightLocation>(),
@@ -725,10 +693,6 @@ internal static class FreightScenarioMutationProjection
             Container: "customerAccounts",
             ItemPrefix: "customer",
             ObservationType: FreightOrderMaterializationModel.CustomerAccountShapeId.ShapeId.Value),
-        FreightScenarioEntityKind.OrderStop => new(
-            Container: "orderStops",
-            ItemPrefix: "stop",
-            ObservationType: FreightOrderMaterializationModel.OrderStopShapeId.ShapeId.Value),
         FreightScenarioEntityKind.Location => new(
             Container: "locations",
             ItemPrefix: "location",
@@ -740,7 +704,6 @@ internal static class FreightScenarioMutationProjection
     {
         FreightScenarioEntityKind.Order => "order",
         FreightScenarioEntityKind.CustomerAccount => "customerAccount",
-        FreightScenarioEntityKind.OrderStop => "orderStop",
         FreightScenarioEntityKind.Location => "location",
         _ => throw new InvalidOperationException($"Unsupported freight entity kind '{entity}'.")
     };
@@ -776,7 +739,7 @@ internal static class FreightScenarioMutationProjection
             throw new InvalidOperationException(message);
     }
 
-    static class PostgresCommands
+    internal static class PostgresCommands
     {
         internal const string ExpectedVersionBinding = "expected_observation_version";
         internal const string BeforeStateBinding = "before_state";
@@ -788,6 +751,28 @@ internal static class FreightScenarioMutationProjection
             [
                 "tenant_id",
                 "order_id",
+                "order_number",
+                "customer_account_id",
+                "equipment_class",
+                "created_at",
+                "observation_version"
+            ]);
+
+        internal static readonly PostgresSqlCommandTemplate UpsertOrder = Upsert(
+            table: "orders",
+            columns:
+            [
+                "tenant_id",
+                "order_id",
+                "order_number",
+                "customer_account_id",
+                "equipment_class",
+                "created_at",
+                "observation_version"
+            ],
+            conflictColumns: ["tenant_id", "order_id"],
+            updateColumns:
+            [
                 "order_number",
                 "customer_account_id",
                 "equipment_class",
@@ -834,28 +819,12 @@ internal static class FreightScenarioMutationProjection
                 "sequence",
                 "stop_type",
                 "location_id",
-                "scheduled_start",
-                "scheduled_end",
                 "observation_version"
             ]);
 
-        internal static readonly PostgresSqlCommandTemplate UpdateStop = Update(
+        internal static readonly PostgresSqlCommandTemplate DeleteOrderStops = DeleteOwnedCollection(
             table: "order_stops",
-            identityColumn: "order_stop_id",
-            assignmentColumns:
-            [
-                "order_id",
-                "sequence",
-                "stop_type",
-                "location_id",
-                "scheduled_start",
-                "scheduled_end",
-                "observation_version"
-            ]);
-
-        internal static readonly PostgresSqlCommandTemplate DeleteStop = Delete(
-            table: "order_stops",
-            identityColumn: "order_stop_id");
+            parentIdentityColumn: "order_id");
 
         internal static readonly PostgresSqlCommandTemplate InsertLocation = Insert(
             table: "locations",
@@ -923,6 +892,19 @@ internal static class FreightScenarioMutationProjection
             return builder.BuildTemplate();
         }
 
+        static PostgresSqlCommandTemplate Upsert(
+            string table,
+            IReadOnlyList<string> columns,
+            IReadOnlyList<string> conflictColumns,
+            IReadOnlyList<string> updateColumns)
+        {
+            PostgresSqlInsertBuilder builder = new(new PostgresSqlQualifiedTable(PostgresSchema, table));
+            foreach (var column in columns)
+                builder.Value(column, PostgresSqlExpression.RuntimeParameter(column));
+            builder.OnConflictDoUpdate(conflictColumns, updateColumns);
+            return builder.BuildTemplate();
+        }
+
         static PostgresSqlCommandTemplate Update(
             string table,
             string identityColumn,
@@ -939,6 +921,16 @@ internal static class FreightScenarioMutationProjection
         {
             PostgresSqlDeleteBuilder builder = new(new PostgresSqlQualifiedTable(PostgresSchema, table));
             AddVersionedIdentityPredicates(predicate => builder.Where(predicate), identityColumn);
+            return builder.BuildTemplate();
+        }
+
+        static PostgresSqlCommandTemplate DeleteOwnedCollection(
+            string table,
+            string parentIdentityColumn)
+        {
+            PostgresSqlDeleteBuilder builder = new(new PostgresSqlQualifiedTable(PostgresSchema, table));
+            builder.Where(Equal("tenant_id", "tenant_id"));
+            builder.Where(Equal(parentIdentityColumn, parentIdentityColumn));
             return builder.BuildTemplate();
         }
 

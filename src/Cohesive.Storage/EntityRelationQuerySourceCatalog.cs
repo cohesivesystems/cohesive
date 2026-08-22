@@ -210,7 +210,10 @@ public sealed class EntityRelationQuerySourceCatalog
         FieldPath? relationshipReference,
         ICollection<RelationQueryArtifactAuthoringDiagnostic> diagnostics)
     {
-        binding.Identity(registration.IdentitySourceSelector);
+        if (registration.IdentitySemanticPath is { } identityPath)
+            binding.Identity(identityPath, registration.IdentitySourceSelector);
+        else
+            binding.Identity(registration.IdentitySourceSelector);
         foreach (var field in fields.OrderBy(static field => field.Input.Id.Value, StringComparer.Ordinal))
         {
             if (TrySelect(

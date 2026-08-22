@@ -26,6 +26,9 @@ public sealed class EntityRelationQuerySourceRegistration
     /// Stable physical identity selector, or <see langword="null"/> for
     /// <see cref="ObservationIdentitySourceSelector"/>.
     /// </param>
+    /// <param name="identitySemanticPath">
+    /// Optional canonical field path whose value is exactly the source-native observation identity.
+    /// </param>
     /// <param name="fieldSourceSelector">
     /// Semantic-to-physical field selector, or <see langword="null"/> to use canonical semantic path text.
     /// </param>
@@ -45,6 +48,7 @@ public sealed class EntityRelationQuerySourceRegistration
         RelationQuerySourceInstance source,
         IRelationQuerySourceReader reader,
         string? identitySourceSelector = null,
+        FieldPath? identitySemanticPath = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null)
     {
@@ -64,9 +68,12 @@ public sealed class EntityRelationQuerySourceRegistration
         }
 
         Shape = shape;
+        if (identitySemanticPath is { Segments.IsDefaultOrEmpty: true })
+            throw new ArgumentException("An identity semantic path cannot be empty.", nameof(identitySemanticPath));
         IdentitySourceSelector = identitySourceSelector is null
             ? ObservationIdentitySourceSelector
             : Guard.RequireNotNullOrWhiteSpace(identitySourceSelector);
+        IdentitySemanticPath = identitySemanticPath;
         FieldSourceSelector = fieldSourceSelector ?? SemanticPathSelector;
         RelationshipKeySourceSelector = relationshipKeySourceSelector ?? SemanticPathSelector;
     }
@@ -82,6 +89,9 @@ public sealed class EntityRelationQuerySourceRegistration
 
     /// <summary>Stable physical selector for semantic observation identity.</summary>
     public string IdentitySourceSelector { get; }
+
+    /// <summary>Canonical field path equal to the observation identity, when explicitly evidenced.</summary>
+    public FieldPath? IdentitySemanticPath { get; }
 
     /// <summary>Deterministic semantic-to-physical field selector.</summary>
     public RelationQueryPlacementFieldSelector FieldSourceSelector { get; }
@@ -100,6 +110,7 @@ public sealed class EntityRelationQuerySourceRegistration
     /// </param>
     /// <param name="limits">Explicit physical limits, or <see langword="null"/> for in-memory defaults.</param>
     /// <param name="identitySourceSelector">Explicit identity selector, or <see langword="null"/> for the observation-identity convention.</param>
+    /// <param name="identitySemanticPath">Optional canonical field path exactly equal to observation identity.</param>
     /// <param name="fieldSourceSelector">Explicit field selector policy, or <see langword="null"/> for semantic paths.</param>
     /// <param name="relationshipKeySourceSelector">
     /// Explicit relationship-reference selector policy, or <see langword="null"/> for semantic paths.
@@ -120,6 +131,7 @@ public sealed class EntityRelationQuerySourceRegistration
         RelationQueryExecutionDomainId? executionDomain = null,
         RelationQuerySourcePlacementLimits? limits = null,
         string? identitySourceSelector = null,
+        FieldPath? identitySemanticPath = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null)
     {
@@ -155,6 +167,7 @@ public sealed class EntityRelationQuerySourceRegistration
             sourceInstance,
             reader,
             reader.IdentitySourceSelector,
+            identitySemanticPath,
             reader.FieldSourceSelector,
             reader.RelationshipKeySourceSelector);
     }

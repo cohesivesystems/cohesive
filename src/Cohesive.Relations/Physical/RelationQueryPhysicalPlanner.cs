@@ -607,11 +607,12 @@ public static class RelationQueryPhysicalPlanner
                         RelationQueryPhysicalPlanningDiagnosticCodes.CrossSourceJoinUnsupported,
                         $"Temporal join '{node.Id.Value}' has no v1 federated acquisition lowering.");
                 }
-                else if (node is ExpandCollectionQueryNode)
+                else if (node is ExpandCollectionQueryNode expansion
+                         && !HasBoundedDirectCollectionInput(expansion))
                 {
                     Error(
                         RelationQueryPhysicalPlanningDiagnosticCodes.LocalWorkUnbounded,
-                        $"Collection expansion '{node.Id.Value}' has no statically proven output-row bound for v1 local execution.");
+                        $"Collection expansion '{node.Id.Value}' is not backed by one direct array field that the executor can enforce against the explicit fan-out and local-row policy.");
                 }
                 else if (node is JoinQueryNode join && !TryGetEquijoin(join, out _, out _))
                 {
@@ -620,6 +621,22 @@ public static class RelationQueryPhysicalPlanner
                         $"Join '{join.Id.Value}' is not a statically proven field-equality join.");
                 }
             }
+        }
+
+        bool HasBoundedDirectCollectionInput(ExpandCollectionQueryNode expansion)
+        {
+            if (expansion.Collection is not FieldExpr { Binding: { } binding } field)
+                return false;
+
+            var candidates = plan.InputContract.Sources
+                .SelectMany(static source => source.Fields)
+                .Concat(plan.InputContract.Traversals.SelectMany(static traversal => traversal.Fields))
+                .Where(candidate => candidate.Input.Binding == binding
+                    && candidate.Input.Field.Path == field.Path
+                    && candidate.Input.ValueContract?.GetEffectiveType() is ArrayTypeRef)
+                .Take(2)
+                .ToArray();
+            return candidates.Length == 1;
         }
 
         void LowerSource(RelationQuerySourceInputContract contract)
@@ -829,31 +846,38 @@ public static class RelationQueryPhysicalPlanner
                          .OfType<JoinQueryNode>()
                          .OrderBy(static join => join.Id.Value, StringComparer.Ordinal))
             {
-                if (!TryGetEquijoin(join, out var leftField, out var rightField))
+                if (!TryGetEquijoin(join, out _, out _))
                     continue;
-                if (!sourceNodeProducers.TryGetValue(join.Left, out var left)
-                    || !sourceNodeProducers.TryGetValue(join.Right, out var right))
+                var fieldInputs = plan.RequirementGraph.Edges
+                    .Where(edge => edge.Input is RelationQueryFieldInput
+                        && edge.Traces.Any(trace => trace.Steps.Any(step =>
+                            step.Node == join.Id
+                            && step.SiteKind == RelationQueryExpressionSiteKind.JoinPredicate)))
+                    .Select(static edge => (RelationQueryFieldInput)edge.Input)
+                    .DistinctBy(static input => input.Id)
+                    .OrderBy(static input => input.Id.Value, StringComparer.Ordinal)
+                    .ToArray();
+                if (fieldInputs.Length != 2)
                 {
                     Error(
                         RelationQueryPhysicalPlanningDiagnosticCodes.CrossSourceJoinUnsupported,
-                        $"Join '{join.Id.Value}' v1 lowering requires two directly placed bounded source nodes.");
+                        $"Join '{join.Id.Value}' does not retain exactly two compiled acquisition fields for its equality keys.");
                     continue;
                 }
-
-                var fieldInputs = plan.RequirementGraph.Inputs.OfType<RelationQueryFieldInput>().ToArray();
-                var leftInput = fieldInputs.SingleOrDefault(input =>
-                    input.Binding == leftField.Binding && input.Field.Path == leftField.Path);
-                var rightInput = fieldInputs.SingleOrDefault(input =>
-                    input.Binding == rightField.Binding && input.Field.Path == rightField.Path);
-                if (leftInput is null || rightInput is null)
+                var dependencies = fieldInputs
+                    .Select(input => TryGetFieldProducer(input.Id, out var producer)
+                        ? producer
+                        : (RelationQueryPhysicalStageId?)null)
+                    .ToArray();
+                if (dependencies.Any(static dependency => dependency is null)
+                    || dependencies.Select(static dependency => dependency!.Value).Distinct().Count() != 2)
                 {
                     Error(
                         RelationQueryPhysicalPlanningDiagnosticCodes.CrossSourceJoinUnsupported,
-                        $"Join '{join.Id.Value}' does not retain exact compiled field inputs for both equality keys.");
+                        $"Join '{join.Id.Value}' equality inputs do not route to two distinct bounded acquisitions.");
                     continue;
                 }
-                if (!RelationQueryFieldSemantics.IsSingleStringIdentityField(plan, leftInput.Field)
-                    && !RelationQueryFieldSemantics.IsSingleStringIdentityField(plan, rightInput.Field))
+                if (!fieldInputs.Any(HasUniqueJoinKey))
                 {
                     Error(
                         RelationQueryPhysicalPlanningDiagnosticCodes.LocalWorkUnbounded,
@@ -865,19 +889,51 @@ public static class RelationQueryPhysicalPlanner
                 stages.Add(new(
                     correlation,
                     RelationQueryPhysicalStageKind.LocalCorrelation,
-                    [left, right],
+                    [.. dependencies.Select(static dependency => dependency!.Value)],
                     placementBinding: null,
-                    semanticInputs: [leftInput.Id, rightInput.Id],
+                    semanticInputs: [.. fieldInputs.Select(static input => input.Id)],
                     requestedFields: [],
                     batchSize: null,
                     Provenance(
                         [join.Id],
-                        [leftInput.Id, rightInput.Id],
+                        fieldInputs.Select(static input => input.Id),
                         placementBinding: null,
                         source: null,
                         primitives: [],
                         LocalEquijoinLowering)));
             }
+        }
+
+        bool HasUniqueJoinKey(RelationQueryFieldInput input)
+        {
+            if (RelationQueryFieldSemantics.IsSingleStringIdentityField(plan, input.Field))
+                return true;
+
+            return placement.Bindings.Any(binding =>
+                binding.Shape == input.Field.Shape
+                && binding.Identity?.SemanticPath == input.Field.Path
+                && binding.Fields.Any(field => field.Input == input.Id));
+        }
+
+        bool TryGetFieldProducer(
+            RelationQueryInputId field,
+            out RelationQueryPhysicalStageId producer)
+        {
+            var source = plan.InputContract.Sources.SingleOrDefault(candidate =>
+                candidate.Fields.Any(contract => contract.Input.Id == field));
+            if (source is not null && sourceNodeProducers.TryGetValue(source.Node, out producer))
+                return true;
+
+            var traversal = plan.InputContract.Traversals.SingleOrDefault(candidate =>
+                candidate.Fields.Any(contract => contract.Input.Id == field));
+            if (traversal is not null
+                && traversalNodeProducers.TryGetValue(traversal.Input.Traversal, out producer))
+            {
+                return true;
+            }
+
+            producer = default;
+            return false;
         }
 
         RelationQueryPhysicalStageProvenance Provenance(

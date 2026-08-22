@@ -14,113 +14,67 @@ public sealed class FreightOrderMaterializationInverseExecutorTests
     static readonly DateTimeOffset Epoch = DateTimeOffset.UnixEpoch;
 
     [Fact]
-    public async Task StopMove_ExtractsBeforeAndAfterOrderReferencesBeforeReadingCurrentRoots()
-    {
-        var fixture = Fixture();
-        var route = fixture.Plan.Routes.First(candidate =>
-            candidate.ChangeShape == FreightOrderMaterializationModel.OrderStopShapeId
-            && candidate.Strategy is MaterializationInverseTraversalImpactStrategy inverse
-            && inverse.Steps.Any(static step =>
-                step.Operation == MaterializationInverseImpactOperationKind.BeforeAndAfterReferenceExtraction));
-        var strategy = Assert.IsType<MaterializationInverseTraversalImpactStrategy>(route.Strategy);
-        var extraction = strategy.Steps.Single(static step =>
-            step.Operation == MaterializationInverseImpactOperationKind.BeforeAndAfterReferenceExtraction);
-        var reference = RelationshipReference(fixture.Semantics, extraction.RelationshipInput);
-        var requests = new List<MaterializationImpactObservationReadRequest>();
-        var executor = new MaterializationInverseTraversalExecutor(
-            plan: fixture.Plan,
-            definition: fixture.Semantics.Definition,
-            reader: (context, request) =>
-            {
-                requests.Add(request);
-                return ValueTask.FromResult(Complete(
-                    request.Keys.Select(identity => Observation(
-                        identity: identity,
-                        shape: FreightOrderMaterializationModel.OrderShapeId))));
-            });
-        var before = Observation(
-            identity: "stop-moved",
-            shape: route.ChangeShape,
-            input: extraction.RelationshipInput,
-            reference: reference,
-            value: "order-a");
-        var after = Observation(
-            identity: "stop-moved",
-            shape: route.ChangeShape,
-            input: extraction.RelationshipInput,
-            reference: reference,
-            value: "order-b");
-
-        var roots = await executor.ResolveRootsAsync(
-            context: OperationContext.Create(),
-            request: Request(fixture, route, before, after));
-
-        var read = Assert.Single(requests);
-        Assert.Equal(MaterializationImpactObservationReadKind.IdentityLookup, read.Kind);
-        Assert.Equal(["order-a", "order-b"], read.Keys.ToArray());
-        Assert.Equal(["order-a", "order-b"], roots.Select(static root => root.Identity).ToArray());
-        Assert.All(roots, static root => Assert.Equal(MaterializationRootState.Present, root.State));
-    }
-
-    [Fact]
-    public async Task LocationChange_UsesStopPredicateThenOrderReferenceThenCurrentRootRead()
+    public async Task LocationChange_EnumeratesCompleteBoundedRootSetInCanonicalOrder()
     {
         var fixture = Fixture();
         var route = fixture.Plan.Routes.First(candidate =>
             candidate.ChangeShape == FreightOrderMaterializationModel.LocationShapeId);
-        var strategy = Assert.IsType<MaterializationInverseTraversalImpactStrategy>(route.Strategy);
-        var predicate = strategy.Steps.Single(static step =>
-            step.Operation == MaterializationInverseImpactOperationKind.PredicateLookup);
-        var extraction = strategy.Steps.Single(static step =>
-            step.Operation == MaterializationInverseImpactOperationKind.CurrentRelationshipReferenceExtraction);
-        var orderReference = RelationshipReference(fixture.Semantics, extraction.RelationshipInput);
+        var strategy = Assert.IsType<MaterializationBoundedGlobalImpactStrategy>(route.Strategy);
         var requests = new List<MaterializationImpactObservationReadRequest>();
-        var executor = new MaterializationInverseTraversalExecutor(
+        var executor = new MaterializationImpactRootExecutor(
             plan: fixture.Plan,
             definition: fixture.Semantics.Definition,
             reader: (context, request) =>
             {
                 requests.Add(request);
-                if (request.Kind == MaterializationImpactObservationReadKind.RelationshipPredicateLookup)
-                {
-                    return ValueTask.FromResult(Complete([
-                        Observation(
-                            identity: "stop-at-location",
-                            shape: FreightOrderMaterializationModel.OrderStopShapeId,
-                            input: extraction.RelationshipInput,
-                            reference: orderReference,
-                            value: "order-at-location")
-                    ]));
-                }
                 return ValueTask.FromResult(Complete([
-                    Observation(
-                        identity: "order-at-location",
-                        shape: FreightOrderMaterializationModel.OrderShapeId)
+                    Observation("order-b", FreightOrderMaterializationModel.OrderShapeId),
+                    Observation("order-a", FreightOrderMaterializationModel.OrderShapeId)
                 ]));
             });
-        var location = Observation(identity: "location-a", shape: route.ChangeShape);
+        var location = Observation("location-a", route.ChangeShape);
 
         var roots = await executor.ResolveRootsAsync(
             context: OperationContext.Create(),
             request: Request(fixture, route, location, location));
 
-        Assert.Collection(
-            requests,
-            read =>
+        var read = Assert.Single(requests);
+        Assert.Equal(MaterializationImpactObservationReadKind.BoundedEnumeration, read.Kind);
+        Assert.Equal(strategy.RootInput, read.Input);
+        Assert.Empty(read.Keys);
+        Assert.Equal(route.MaximumAffectedRoots, read.MaximumRows);
+        Assert.Equal(["order-a", "order-b"], roots.Select(static root => root.Identity).ToArray());
+        Assert.All(roots, static root => Assert.Equal(MaterializationRootState.Present, root.State));
+    }
+
+    [Fact]
+    public async Task BoundedGlobalInvalidation_FailsClosedOnPartialEnumeration()
+    {
+        var fixture = Fixture();
+        var route = fixture.Plan.Routes.First(candidate =>
+            candidate.ChangeShape == FreightOrderMaterializationModel.LocationShapeId);
+        var requests = new List<MaterializationImpactObservationReadRequest>();
+        var executor = new MaterializationImpactRootExecutor(
+            plan: fixture.Plan,
+            definition: fixture.Semantics.Definition,
+            reader: (context, request) =>
             {
-                Assert.Equal(MaterializationImpactObservationReadKind.RelationshipPredicateLookup, read.Kind);
-                Assert.Equal(predicate.ReferenceSourceInput, read.Input);
-                Assert.Equal(["location-a"], read.Keys.ToArray());
-            },
-            read =>
-            {
-                Assert.Equal(MaterializationImpactObservationReadKind.IdentityLookup, read.Kind);
-                Assert.Equal(fixture.Semantics.Root.Input.Id, read.Input);
-                Assert.Equal(["order-at-location"], read.Keys.ToArray());
+                requests.Add(request);
+                return ValueTask.FromResult(new RelationQuerySourceReadResult(
+                    state: RelationQuerySourceReadState.Partial,
+                    observations: [],
+                    evidenceReference: "tests/freight-impact/partial-enumeration"));
             });
-        var root = Assert.Single(roots);
-        Assert.Equal("order-at-location", root.Identity);
-        Assert.Equal(MaterializationRootState.Present, root.State);
+        var location = Observation(identity: "location-a", shape: route.ChangeShape);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => executor.ResolveRootsAsync(
+                context: OperationContext.Create(),
+                request: Request(fixture, route, location, location))
+            .AsTask());
+
+        Assert.Contains("complete evidence", exception.Message, StringComparison.Ordinal);
+        var read = Assert.Single(requests);
+        Assert.Equal(MaterializationImpactObservationReadKind.BoundedEnumeration, read.Kind);
     }
 
     [Fact]
@@ -130,7 +84,7 @@ public sealed class FreightOrderMaterializationInverseExecutorTests
         var route = fixture.Plan.Routes.Single(candidate =>
             candidate.ChangeShape == FreightOrderMaterializationModel.CustomerAccountShapeId);
         var requests = new List<MaterializationImpactObservationReadRequest>();
-        var executor = new MaterializationInverseTraversalExecutor(
+        var executor = new MaterializationImpactRootExecutor(
             plan: fixture.Plan,
             definition: fixture.Semantics.Definition,
             reader: (context, request) =>

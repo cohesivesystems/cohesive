@@ -30,13 +30,13 @@ public sealed class FreightOrderHarnessModelTests
 
         Assert.Equal(first.DefinitionFingerprint, second.DefinitionFingerprint);
         Assert.Equal(
-            "e324ee44d26496d2d1e799cfcbd1f22592cc2b0fe64920700da6dae358451982",
+            "3a3518cdc0de2e28b11b404b0651f461350ac87b1261a9a13e69955c31c09f5a",
             first.DefinitionFingerprint.Value);
         Assert.Equal(MaterializationSynchronizationMode.All, first.Definition.UpdatePolicy.SupportedModes);
         Assert.Equal(MaterializationConsistencyKind.BaselinePlusCatchUp, first.Definition.UpdatePolicy.Consistency);
-        Assert.Single(first.Plan.InputContract.Sources);
-        Assert.Equal(5, first.Plan.InputContract.Traversals.Length);
-        Assert.Equal(6, first.Definition.Sources.Length);
+        Assert.Equal(3, first.Plan.InputContract.Sources.Length);
+        Assert.Single(first.Plan.InputContract.Traversals);
+        Assert.Equal(4, first.Definition.Sources.Length);
         Assert.Equal(2, first.Definition.ControlLoops.Length);
         Assert.Equal(2, first.Definition.ControlWorkloads.Length);
         Assert.All(first.Definition.ControlLoops, static control => Assert.Equal(ControlStageKind.Target, control.Stage));
@@ -51,11 +51,13 @@ public sealed class FreightOrderHarnessModelTests
             workload => Assert.Contains(
                 first.Definition.ControlLoops,
                 control => control.Id == workload.LoopId));
-        Assert.Equal(
-            2,
-            first.Plan.InputContract.Traversals.Count(static traversal =>
-                traversal.Input.Direction == RelationshipTraversalDirection.Inverse
-                && traversal.ResultShape == FreightOrderMaterializationModel.OrderStopShapeId));
+        var expansions = first.Plan.Definition.Body.Nodes.OfType<ExpandCollectionQueryNode>().ToImmutableArray();
+        Assert.Equal(2, expansions.Length);
+        Assert.All(
+            expansions,
+            static expansion => Assert.Equal(
+                FreightOrderMaterializationModel.OrderStopShapeId,
+                expansion.ItemShape));
         Assert.All(
             first.Definition.Sources,
             static source => Assert.Contains(
@@ -73,14 +75,22 @@ public sealed class FreightOrderHarnessModelTests
             {
                 first.Storage.Order,
                 first.Storage.CustomerAccount,
-                first.Storage.OrderStop,
                 first.Storage.Location
             },
             static entity => Assert.True(entity.Shape.HasRole(Cohesive.Model.ShapeRoles.Entity)));
         Assert.Contains(first.Storage.Order.Fields, static field => field.Name.Value == "createdAt");
         Assert.DoesNotContain(first.Storage.Order.Fields, static field => field.Name.Value is
             "pickupStopId" or "deliveryStopId" or "originLocationId" or "destinationLocationId");
-        Assert.Contains(first.Storage.OrderStop.Fields, static field => field.Name.Value == "scheduledStart");
+        Assert.Contains(first.Storage.Order.Fields, static field => field.Name.Value == "stops");
+        Assert.IsType<ObjectTypeRef>(
+            first.Storage.Order.Fields.Single(static field => field.Name.Value == "stops").Type);
+        var ownedStops = Assert.Single(first.Structure.OwnedCollections);
+        Assert.Equal(FieldPath.FromField("stops"), ownedStops.CollectionPath);
+        var canonicalStopsField = first.Structure.SemanticModel.Graph
+            .GetShape(first.Structure.RootShape)
+            .Fields.Single(static field => field.Name.Value == "stops");
+        Assert.Equal(Assert.IsType<NamedTypeRef>(canonicalStopsField.Type).TypeId, ownedStops.ComponentType);
+        Assert.Equal(FieldPath.FromField("sequence"), ownedStops.OrdinalPath);
         Assert.Equal(
             RelationQueryCompiledPlanReferenceFingerprinter.Compute(
                 RelationQueryCompiledPlanReference.From(first.Plan)),
@@ -216,6 +226,50 @@ public sealed class FreightOrderHarnessModelTests
             locations,
             "delete");
         AssertEndpoints(afterDelete, "pickup-a", "Seattle", "drop-b", "Eugene");
+    }
+
+    [Fact]
+    public async Task CanonicalRelationRejectsOwnedStopFanOutBeyondThePhysicalBoundary()
+    {
+        var semantics = FreightOrderMaterializationModel.Create();
+        FreightOrder order = new()
+        {
+            Id = "order-1",
+            TenantId = "tenant-a",
+            OrderNumber = "ORD-001",
+            CustomerAccountId = "customer-1",
+            EquipmentClass = "Reefer",
+            CreatedAt = DateTimeOffset.Parse("2026-08-01T10:00:00Z")
+        };
+        FreightCustomerAccount customer = new()
+        {
+            Id = "customer-1",
+            TenantId = "tenant-a",
+            DisplayName = "Acme Foods"
+        };
+        var stops = Enumerable.Range(start: 1, count: 65)
+            .Select(sequence => Stop(
+                id: $"pickup-{sequence:D2}",
+                sequence: sequence,
+                stopType: "Pickup",
+                locationId: "origin-a"))
+            .ToImmutableArray();
+
+        var outcome = await EvaluateAsync(
+            semantics,
+            order,
+            customer,
+            stops,
+            [Location("origin-a", "Seattle", "WA")],
+            scenario: "fan-out-boundary");
+
+        Assert.False(outcome.IsSuccessful);
+        var execution = Assert.IsType<RelationQueryPhysicalExecutionResult>(outcome.PhysicalExecution);
+        Assert.Contains(
+            execution.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == RelationQueryPhysicalExecutionDiagnosticCodes.OperatingBoundaryExceeded
+                && diagnostic.Message.Contains("fan-out boundary", StringComparison.Ordinal));
     }
 
     static MaterializationDefinition CreateDirectDefinition(FreightOrderMaterializationSemantics semantics)
@@ -424,48 +478,7 @@ public sealed class FreightOrderHarnessModelTests
         ImmutableArray<FreightLocation> locations,
         string scenario)
     {
-        var evaluation = new RelationQueryEvaluationBuilder(
-                document: semantics.CompilationRequest.DefinitionDocument,
-                evaluation: new($"tests/freight-order-harness/{scenario}"),
-                shapeDocuments: semantics.CompilationRequest.ShapeDocuments,
-                relationshipCatalogDocument: semantics.CompilationRequest.RelationshipCatalogDocument,
-                planReference: RelationQueryCompiledPlanReference.From(semantics.Plan))
-            .Supply(
-                values: [order],
-                selectIdentity: static candidate => candidate.Id,
-                completeness: RelationQueryEvidenceCompleteness.Complete,
-                evidenceReference: $"tests/freight-order-harness/{scenario}/root",
-                logicalPartition: TenantPartition)
-            .Build();
-        var catalog = new EntityRelationQuerySourceCatalog(
-        [
-            Registration(
-                semantics.Storage.CustomerAccount,
-                FreightOrderMaterializationModel.CustomerAccountShapeId,
-                [customer],
-                static value => value.Id),
-            Registration(
-                semantics.Storage.OrderStop,
-                FreightOrderMaterializationModel.OrderStopShapeId,
-                stops,
-                static value => value.Id),
-            Registration(
-                semantics.Storage.Location,
-                FreightOrderMaterializationModel.LocationShapeId,
-                locations,
-                static value => value.Id)
-        ]);
-        var evaluator = catalog.CreateEvaluator(new(
-            new("tests/freight-order-harness/physical-policy/v1"),
-            conventionSetVersion: "tests/freight-order-harness/physical-conventions/v1",
-            maximumBatchSize: 64,
-            maximumBufferedRows: 256,
-            maximumLocalRows: 256,
-            maximumFanOut: 64,
-            maximumReferenceKeysPerObservation: 64,
-            maximumConcurrency: 1));
-
-        var outcome = await evaluator.EvaluateAsync(evaluation);
+        var outcome = await EvaluateAsync(semantics, order, customer, stops, locations, scenario);
 
         Assert.True(
             outcome.IsSuccessful,
@@ -484,6 +497,53 @@ public sealed class FreightOrderHarnessModelTests
                         $"gap: {gap.Cause}: {gap.EvidenceReference}") ?? [])));
         var result = Assert.IsType<RelationQueryExecutionResult>(outcome.Result);
         return Assert.Single(Assert.IsType<RelationQueryRelationResult>(result.Relation).Rows);
+    }
+
+    static async Task<RelationQueryEvaluationOutcome> EvaluateAsync(
+        FreightOrderMaterializationSemantics semantics,
+        FreightOrder order,
+        FreightCustomerAccount customer,
+        ImmutableArray<FreightOrderStop> stops,
+        ImmutableArray<FreightLocation> locations,
+        string scenario)
+    {
+        var evaluation = new RelationQueryEvaluationBuilder(
+                document: semantics.CompilationRequest.DefinitionDocument,
+                evaluation: new($"tests/freight-order-harness/{scenario}"),
+                shapeDocuments: semantics.CompilationRequest.ShapeDocuments,
+                relationshipCatalogDocument: semantics.CompilationRequest.RelationshipCatalogDocument,
+                planReference: RelationQueryCompiledPlanReference.From(semantics.Plan))
+            .Supply(
+                values: [order with { Stops = stops }],
+                selectIdentity: static candidate => candidate.Id,
+                completeness: RelationQueryEvidenceCompleteness.Complete,
+                evidenceReference: $"tests/freight-order-harness/{scenario}/root",
+                logicalPartition: TenantPartition)
+            .Build();
+        var catalog = new EntityRelationQuerySourceCatalog(
+        [
+            Registration(
+                semantics.Storage.CustomerAccount,
+                FreightOrderMaterializationModel.CustomerAccountShapeId,
+                [customer],
+                static value => value.Id),
+            Registration(
+                semantics.Storage.Location,
+                FreightOrderMaterializationModel.LocationShapeId,
+                locations,
+                static value => value.Id)
+        ]);
+        var evaluator = catalog.CreateEvaluator(new(
+            new("tests/freight-order-harness/physical-policy/v1"),
+            conventionSetVersion: "tests/freight-order-harness/physical-conventions/v1",
+            maximumBatchSize: 64,
+            maximumBufferedRows: 256,
+            maximumLocalRows: 256,
+            maximumFanOut: 64,
+            maximumReferenceKeysPerObservation: 64,
+            maximumConcurrency: 1));
+
+        return await evaluator.EvaluateAsync(evaluation);
     }
 
     static EntityRelationQuerySourceRegistration Registration<T>(
@@ -508,7 +568,8 @@ public sealed class FreightOrderHarnessModelTests
         return EntityRelationQuerySourceRegistration.InMemory(
             shape,
             repository,
-            logicalPartition: TenantPartition);
+            logicalPartition: TenantPartition,
+            identitySemanticPath: FieldPath.FromField("id"));
     }
 
     static FreightOrderStop Stop(
@@ -518,13 +579,9 @@ public sealed class FreightOrderHarnessModelTests
         string locationId) => new()
     {
         Id = id,
-        TenantId = "tenant-a",
-        OrderId = "order-1",
         Sequence = sequence,
         StopType = stopType,
-        LocationId = locationId,
-        ScheduledStart = DateTimeOffset.Parse("2026-08-02T10:00:00Z"),
-        ScheduledEnd = DateTimeOffset.Parse("2026-08-02T11:00:00Z")
+        LocationId = locationId
     };
 
     static FreightLocation Location(string id, string city, string region) => new()

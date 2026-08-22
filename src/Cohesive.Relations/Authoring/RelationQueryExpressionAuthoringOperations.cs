@@ -659,7 +659,8 @@ public sealed partial class RelationQueryExpressionAuthoring
             itemType,
             source: Source(reference, $"Collection expansion to '{StableTypeName(typeof(TItem))}'."),
             bindingSource: Source(reference + "/binding", "Expanded collection-item binding."),
-            collectionSource: lowered.Source);
+            collectionSource: lowered.Source,
+            itemShape: itemShape);
 
         return new(
             expanded.Node,

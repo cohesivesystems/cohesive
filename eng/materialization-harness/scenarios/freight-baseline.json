@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "cohesive.materialization-harness/scenario-journal/v3",
+  "schemaVersion": "cohesive.materialization-harness/scenario-journal/v4",
   "scenarioId": "freight-incremental-v1",
   "occurredAtUtc": "2026-08-01T10:00:00Z",
   "baselineThroughSequence": 33,

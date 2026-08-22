@@ -17,29 +17,41 @@ public sealed class FreightScenarioJournalTests
         Assert.Equal(33, journal.Baseline.ThroughSequence);
         Assert.Equal(46, journal.Final.ThroughSequence);
         Assert.Equal(10, journal.MutationTransactions.Length);
-        Assert.Equal(13, transitions.Length);
+        Assert.Equal(10, transitions.Length);
         Assert.Equal(7, journal.Baseline.Orders.Length);
-        Assert.Equal(16, journal.Baseline.Stops.Length);
+        Assert.Equal(16, journal.Baseline.StopCount);
         Assert.Equal(6, journal.Final.Orders.Length);
-        Assert.Equal(13, journal.Final.Stops.Length);
+        Assert.Equal(13, journal.Final.StopCount);
 
         var created = Assert.Single(transitions, static value => value.Sequence == 37);
-        Assert.Null(created.BeforeState);
+        Assert.Equal(FreightScenarioEntityKind.Order, created.Entity);
+        Assert.Equal(FreightScenarioOperationKind.Upsert, created.Operation);
+        Assert.NotNull(created.BeforeState);
         Assert.NotNull(created.AfterState);
-        Assert.Equal(1, created.Version);
+        Assert.Equal(4, created.Version);
+        Assert.Equal(2, created.GetBefore<FreightOrder>()!.Stops.Length);
+        Assert.Equal(3, created.GetAfter<FreightOrder>()!.Stops.Length);
 
         var deleted = Assert.Single(transitions, static value => value.Sequence == 38);
-        Assert.Equal(FreightScenarioOperationKind.Delete, deleted.Operation);
-        Assert.NotNull(deleted.GetBefore<FreightOrderStop>());
-        Assert.Null(deleted.GetAfter<FreightOrderStop>());
-        Assert.Equal(2, deleted.Version);
+        Assert.Equal(FreightScenarioEntityKind.Order, deleted.Entity);
+        Assert.Equal(FreightScenarioOperationKind.Upsert, deleted.Operation);
+        Assert.Equal(3, deleted.GetBefore<FreightOrder>()!.Stops.Length);
+        Assert.Equal(2, deleted.GetAfter<FreightOrder>()!.Stops.Length);
+        Assert.Equal(5, deleted.Version);
 
         var atomicExchange = Assert.Single(
             journal.MutationTransactions,
             static value => value.Id == "stop-type-exchange");
-        Assert.Equal([40L, 41L], atomicExchange.Transitions.Select(static value => value.Sequence));
-        Assert.All(atomicExchange.Transitions, static value => Assert.Equal("acme", value.Key.TenantId));
-        Assert.All(atomicExchange.Transitions, static value => Assert.Equal(FreightScenarioEntityKind.OrderStop, value.Entity));
+        var exchange = Assert.Single(atomicExchange.Transitions);
+        Assert.Equal(41, exchange.Sequence);
+        Assert.Equal("acme", exchange.Key.TenantId);
+        Assert.Equal("order-2002", exchange.Key.Id);
+        Assert.Equal(FreightScenarioEntityKind.Order, exchange.Entity);
+        Assert.Equal(4, exchange.Version);
+        Assert.Equal("Pickup", exchange.GetBefore<FreightOrder>()!.Stops.Single(
+            static stop => stop.Id == "stop-2002-pickup").StopType);
+        Assert.Equal("Drop", exchange.GetAfter<FreightOrder>()!.Stops.Single(
+            static stop => stop.Id == "stop-2002-pickup").StopType);
 
         var rootDelete = Assert.Single(transitions, static value => value.Sequence == 46);
         Assert.Equal(FreightScenarioEntityKind.Order, rootDelete.Entity);
@@ -83,7 +95,7 @@ public sealed class FreightScenarioJournalTests
     }
 
     [Fact]
-    public async Task JournalRejectsAtomicTransactionThatCrossesTenantPartitions()
+    public async Task JournalRejectsAtomicTransactionThatCrossesCanonicalAggregates()
     {
         var source = JsonNode.Parse(await File.ReadAllTextAsync(ScenarioPath()))
             ?? throw new InvalidOperationException("The freight scenario JSON is empty.");
@@ -100,7 +112,7 @@ public sealed class FreightScenarioJournalTests
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => FreightScenarioJournal.LoadAsync(temporaryPath));
 
-            Assert.Contains("tenant partition", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("canonical aggregate", exception.Message, StringComparison.Ordinal);
         }
         finally
         {

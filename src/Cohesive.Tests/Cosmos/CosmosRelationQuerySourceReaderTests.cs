@@ -69,7 +69,8 @@ public sealed class CosmosRelationQuerySourceReaderTests
             container,
             "operations",
             "entities",
-            policy);
+            policy,
+            identitySemanticPath: FieldPath.FromField("id"));
         var second = CosmosEntityRelationQuerySourceRegistration.Create(
             Shape,
             container,
@@ -85,6 +86,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
         Assert.Equal(first.Source.Id, second.Source.Id);
         Assert.Equal(first.Source.ExecutionDomain, second.Source.ExecutionDomain);
         Assert.Equal("observationId", first.IdentitySourceSelector);
+        Assert.Equal(FieldPath.FromField("id"), first.IdentitySemanticPath);
         Assert.Equal("observation.Name", first.FieldSourceSelector(NamePath));
         Assert.Equal("observation.CustomerIds", first.RelationshipKeySourceSelector(CustomerIdsPath));
         Assert.Same(policy, reader.Policy);
