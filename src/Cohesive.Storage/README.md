@@ -180,6 +180,33 @@ The same facilities can be registered with `IServiceCollection` through `Registe
 `RegisterEntityRelationQueryEvaluator`. Registration order does not choose a source: the v1 catalog permits exactly
 one source per graph-qualified shape and rejects duplicate shape or source identities.
 
+## Canonical aggregate storage realization
+
+`Cohesive.Storage.Realization` separates canonical aggregate structure from its physical interpretation. A
+`StorageStructureDefinition` retains the exact `ShapeGraphDocument` as its field and type authority and adds only
+the storage semantics absent from that graph: the independently governed root, root identity, inherited logical
+partition, and owned ordered collections. An owned component has a stable root-local identity and ordinal, but no
+independent tenant scope or lifecycle.
+
+The same structure can be interpreted by multiple adapters without changing its structure fingerprint:
+
+- `StorageEmbeddedOwnedCollectionRealization` declares in-document expansion, single-document atomicity, and
+  root-document change attribution; and
+- `StorageDecomposedOwnedCollectionRealization` declares bounded root-correlated component acquisition,
+  transaction atomicity across records, and component-parent change attribution.
+
+These alternatives describe semantic guarantees rather than duplicate a provider schema. Physical container,
+table, field, and column catalogs remain adapter authorities; realizations retain stable references or fingerprints
+to that adapter-owned binding evidence. `StorageRealizationDocument` fences the complete semantic structure and one
+target interpretation with independent deterministic fingerprints. Strict JSON loading recompiles neither side:
+it validates the retained shape graph, owned paths, complete target coverage, linkage, and both fingerprints before
+the document is admitted. `StorageRealizationExplainProjector` exposes the effective semantic paths, target
+strategy, guarantees, change attribution, and adapter evidence for review and tooling.
+
+Adapter compilation of these declarations into Cosmos embedding and PostgreSQL decomposition is intentionally a
+separate interpretation layer. It must preserve these guarantees or return structured capability diagnostics; it
+must not mutate the canonical structure to fit a target.
+
 ## Relation-derived materialization
 
 `Cohesive.Storage.Materialization` defines one backend-neutral contract for rebuild and incremental synchronization.
