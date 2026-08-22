@@ -11,23 +11,44 @@ using Cohesive.AI.Training;
 namespace Cohesive.Adapters.AzureML;
 
 /// <summary>
-/// Azure Machine Learning command-job implementation of <see cref="IModelTrainer"/>.
+/// Azure Machine Learning command-job implementation of <see cref="ICancellableModelTrainer"/>.
 /// </summary>
-public sealed class AzureMLModelTrainer : IModelTrainer
+public sealed class AzureMLModelTrainer : ICancellableModelTrainer
 {
     const string DefaultOutputName = "trained_model";
     static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     readonly ArmClient armClient;
+    readonly IAzureMLTrainingJobCancellationOperations cancellationOperations;
     readonly AzureMLModelTrainerOptions options;
 
-    /// <summary>Initializes a new instance of the azure ml model trainer type.</summary>
+    /// <summary>Initializes an Azure ML model trainer.</summary>
+    /// <param name="credential">Credential used to authorize Azure Resource Manager operations.</param>
+    /// <param name="options">Exact Azure subscription, resource group, and workspace coordinates.</param>
+    /// <param name="armClientOptions">Optional Azure Resource Manager client configuration.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="credential"/> or <paramref name="options"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">A required workspace coordinate is empty or white-space.</exception>
     public AzureMLModelTrainer(TokenCredential credential, AzureMLModelTrainerOptions options, ArmClientOptions? armClientOptions = null)
     {
+        ArgumentNullException.ThrowIfNull(credential);
+        ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
+
         this.armClient = new(credential, defaultSubscriptionId: options.SubscriptionId, armClientOptions);
         this.options = options;
-        this.options.Validate();
+        cancellationOperations = new AzureMLTrainingJobCancellationOperations(armClient, options);
     }
+
+    internal AzureMLModelTrainer(
+        TokenCredential credential,
+        AzureMLModelTrainerOptions options,
+        IAzureMLTrainingJobCancellationOperations cancellationOperations,
+        ArmClientOptions? armClientOptions = null)
+        : this(credential, options, armClientOptions) =>
+        this.cancellationOperations = cancellationOperations
+            ?? throw new ArgumentNullException(nameof(cancellationOperations));
     
     /// <summary>
     /// Submits an Azure ML training job under a deterministic provider job identity.
@@ -100,7 +121,14 @@ public sealed class AzureMLModelTrainer : IModelTrainer
         }
     }
 
-    /// <summary>Gets status asynchronously.</summary>
+    /// <summary>Gets the latest Azure ML state for one provider training job.</summary>
+    /// <param name="jobId">Stable Azure ML training-job identity.</param>
+    /// <param name="ct">Token that cancels the caller's wait.</param>
+    /// <returns>The provider-owned training-job state.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="jobId"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="jobId"/> is empty or white-space.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="ct"/> is cancelled.</exception>
+    /// <exception cref="RequestFailedException">Azure ML status observation fails.</exception>
     public async ValueTask<TrainingJobState> GetStatusAsync(string jobId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
@@ -108,31 +136,55 @@ public sealed class AzureMLModelTrainer : IModelTrainer
 
         var workspace = GetWorkspaceResource();
         var response = await workspace.GetMachineLearningJobAsync(jobId, ct).ConfigureAwait(false);
-        var job = response.Value.Data.Properties;
-        var status = MapStatus(job.Status);
-
-        return new(
-            JobId: jobId,
-            Status: status,
-            Result: status is TrainingJobStatus.Completed ? TryBuildResult(jobId, job) : null,
-            Failure: status is TrainingJobStatus.Failed or TrainingJobStatus.Cancelled
-                ? new TrainingJobFailure(
-                    ErrorType: $"AzureML.{job.Status?.ToString() ?? nameof(TrainingJobStatus.Unknown)}",
-                    ErrorMessage: $"AzureML job '{jobId}' ended with status '{job.Status?.ToString() ?? "Unknown"}'.",
-                    IsTransient: false
-                    )
-                : null
-            );
+        return CreateTrainingJobState(jobId, response.Value.Data.Properties);
     }
 
-    MachineLearningWorkspaceResource GetWorkspaceResource()
+    /// <inheritdoc />
+    public async ValueTask<TrainingJobCancellationResult> CancelAsync(
+        TrainingJobCancellation cancellation,
+        CancellationToken ct = default)
     {
-        var id = MachineLearningWorkspaceResource.CreateResourceIdentifier(
-            options.SubscriptionId,
-            options.ResourceGroupName,
-            options.WorkspaceName);
-        return armClient.GetMachineLearningWorkspaceResource(id);
+        ArgumentNullException.ThrowIfNull(cancellation);
+        ct.ThrowIfCancellationRequested();
+
+        TrainingJobState? observed;
+        try
+        {
+            observed = await cancellationOperations
+                .ObserveAsync(cancellation.JobId, ct)
+                .ConfigureAwait(false);
+        }
+        catch (RequestFailedException error)
+        {
+            ct.ThrowIfCancellationRequested();
+            return ClassifyObservationFailure(cancellation.JobId, error);
+        }
+
+        if (ClassifyObservedCancellation(cancellation.JobId, observed) is { } settled)
+            return settled;
+
+        try
+        {
+            await cancellationOperations
+                .RequestCancellationAsync(cancellation.JobId, ct)
+                .ConfigureAwait(false);
+            return new TrainingJobCancellationResult.Accepted(cancellation.JobId);
+        }
+        catch (RequestFailedException dispatchError)
+        {
+            ct.ThrowIfCancellationRequested();
+            return await ReconcileCancellationFailureAsync(
+                cancellation.JobId,
+                dispatchError,
+                ct).ConfigureAwait(false);
+        }
     }
+
+    MachineLearningWorkspaceResource GetWorkspaceResource() => AzureMLResourceLocator.Workspace(
+        armClient,
+        options.SubscriptionId,
+        options.ResourceGroupName,
+        options.WorkspaceName);
 
     MachineLearningCommandJob CreateJob(
         string jobId,
@@ -260,7 +312,7 @@ public sealed class AzureMLModelTrainer : IModelTrainer
         _ => null
     };
 
-    static TrainingJobStatus MapStatus(MachineLearningJobStatus? status)
+    internal static TrainingJobStatus MapStatus(MachineLearningJobStatus? status)
     {
         if (status is null)
             return TrainingJobStatus.Unknown;
@@ -274,9 +326,9 @@ public sealed class AzureMLModelTrainer : IModelTrainer
                        || s == MachineLearningJobStatus.Queued => TrainingJobStatus.Pending,
             var s when s == MachineLearningJobStatus.Running
                        || s == MachineLearningJobStatus.Finalizing
-                       || s == MachineLearningJobStatus.CancelRequested
                        || s == MachineLearningJobStatus.NotResponding
                        || s == MachineLearningJobStatus.Paused => TrainingJobStatus.Running,
+            var s when s == MachineLearningJobStatus.CancelRequested => TrainingJobStatus.CancellationRequested,
             var s when s == MachineLearningJobStatus.Completed => TrainingJobStatus.Completed,
             var s when s == MachineLearningJobStatus.Failed => TrainingJobStatus.Failed,
             var s when s == MachineLearningJobStatus.Canceled => TrainingJobStatus.Cancelled,
@@ -328,7 +380,107 @@ public sealed class AzureMLModelTrainer : IModelTrainer
         return new(jobId, MapStatus(job.Status));
     }
 
-    static bool IsTransient(int status) => status is 408 or 409 or 429 or >= 500;
+    internal static TrainingJobState CreateTrainingJobState(
+        string jobId,
+        MachineLearningJobProperties job)
+    {
+        var status = MapStatus(job.Status);
+        return new(
+            JobId: jobId,
+            Status: status,
+            Result: status is TrainingJobStatus.Completed ? TryBuildResult(jobId, job) : null,
+            Failure: status is TrainingJobStatus.Failed or TrainingJobStatus.Cancelled
+                ? new TrainingJobFailure(
+                    ErrorType: $"AzureML.{job.Status?.ToString() ?? nameof(TrainingJobStatus.Unknown)}",
+                    ErrorMessage: $"AzureML job '{jobId}' ended with status '{job.Status?.ToString() ?? "Unknown"}'.",
+                    IsTransient: false)
+                : null);
+    }
+
+    async ValueTask<TrainingJobCancellationResult> ReconcileCancellationFailureAsync(
+        string jobId,
+        RequestFailedException dispatchError,
+        CancellationToken ct)
+    {
+        TrainingJobState? observed;
+        try
+        {
+            observed = await cancellationOperations.ObserveAsync(jobId, ct).ConfigureAwait(false);
+        }
+        catch (RequestFailedException reconciliationError)
+        {
+            ct.ThrowIfCancellationRequested();
+            return new TrainingJobCancellationResult.Unresolved(
+                jobId,
+                ErrorType(dispatchError),
+                $"Azure ML cancellation failed with '{dispatchError.Message}', and provider-state reconciliation " +
+                $"failed with '{reconciliationError.Message}'.",
+                IsTransient(dispatchError.Status) || IsTransient(reconciliationError.Status));
+        }
+
+        if (ClassifyObservedCancellation(jobId, observed) is { } settled)
+            return settled;
+
+        if (dispatchError.Status is 404)
+        {
+            return new TrainingJobCancellationResult.Unresolved(
+                jobId,
+                ErrorType(dispatchError),
+                "Azure ML rejected the cancellation as not found, but the job remained observable and non-terminal.",
+                isTransient: false);
+        }
+
+        return ClassifyDispatchFailure(jobId, dispatchError);
+    }
+
+    static TrainingJobCancellationResult? ClassifyObservedCancellation(
+        string jobId,
+        TrainingJobState? observed) =>
+        observed switch
+        {
+            null => new TrainingJobCancellationResult.NotFound(jobId),
+            { Status: TrainingJobStatus.Completed or TrainingJobStatus.Failed or TrainingJobStatus.Cancelled } =>
+                new TrainingJobCancellationResult.AlreadyTerminal(observed),
+            { Status: TrainingJobStatus.CancellationRequested } =>
+                new TrainingJobCancellationResult.Accepted(observed.JobId),
+            _ => null
+        };
+
+    static TrainingJobCancellationResult ClassifyObservationFailure(
+        string jobId,
+        RequestFailedException error) =>
+        error.Status switch
+        {
+            404 => new TrainingJobCancellationResult.NotFound(jobId),
+            _ when IsTransient(error.Status) => new TrainingJobCancellationResult.Unresolved(
+                jobId,
+                ErrorType(error),
+                error.Message,
+                isTransient: true),
+            _ => new TrainingJobCancellationResult.Rejected(
+                jobId,
+                ErrorType(error),
+                error.Message)
+        };
+
+    static TrainingJobCancellationResult ClassifyDispatchFailure(
+        string jobId,
+        RequestFailedException error) =>
+        IsTransient(error.Status)
+            ? new TrainingJobCancellationResult.Unresolved(
+                jobId,
+                ErrorType(error),
+                error.Message,
+                isTransient: true)
+            : new TrainingJobCancellationResult.Rejected(
+                jobId,
+                ErrorType(error),
+                error.Message);
+
+    static string ErrorType(RequestFailedException error) =>
+        $"AzureML.{error.ErrorCode ?? (error.Status > 0 ? $"Http{error.Status}" : "Transport")}";
+
+    static bool IsTransient(int status) => status <= 0 || status is 408 or 409 or 429 or >= 500;
 
     sealed record AzureMLTrainingConfiguration(
         string Command,

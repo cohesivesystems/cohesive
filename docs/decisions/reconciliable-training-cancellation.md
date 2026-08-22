@@ -3,7 +3,7 @@ kind: decision
 status: implemented
 authority: cohesive.ai.training-job-cancellation
 owners: [cohesive-core]
-applies_to: [cohesive-ai]
+applies_to: [cohesive-ai, cohesive-adapters-azureml]
 last_verified: 2026-08-21
 supersedes: []
 ---
@@ -83,5 +83,7 @@ or terminal observation.
 - `Accepted` never authorizes terminal domain finalization. Provider status remains the training-job authority.
 - Callers must retain the operation identity and result as durable evidence and distinguish caller cancellation
   from provider cancellation.
-- Azure ML, local Python, and in-memory interpretations are separate dependent changes and must share conformance
-  cases for terminal races, absence, rejection, ambiguity, and replay.
+- Azure ML realizes idempotency by observing state before dispatch and again after any failed dispatch. Native
+  `CancelRequested` proves provider acceptance without redundant redispatch; terminal state always wins a race.
+- Local Python and in-memory interpretations remain separate dependent changes and must share the Azure ML
+  conformance cases for terminal races, absence, rejection, ambiguity, and replay.

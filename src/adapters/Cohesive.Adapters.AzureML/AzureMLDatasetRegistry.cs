@@ -85,15 +85,11 @@ public sealed class AzureMLDatasetRegistry : ITrainingDatasetRegistry
             );
     }
 
-    MachineLearningWorkspaceResource GetWorkspaceResource()
-    {
-        var id = MachineLearningWorkspaceResource.CreateResourceIdentifier(
-            options.SubscriptionId,
-            options.ResourceGroupName,
-            options.WorkspaceName
-            );
-        return armClient.GetMachineLearningWorkspaceResource(id);
-    }
+    MachineLearningWorkspaceResource GetWorkspaceResource() => AzureMLResourceLocator.Workspace(
+        armClient,
+        options.SubscriptionId,
+        options.ResourceGroupName,
+        options.WorkspaceName);
 
     MachineLearningRegistryResource GetRegistryResource(string registryName)
     {
