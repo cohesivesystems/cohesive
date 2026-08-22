@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
+using Cohesive.Processes.Compilation;
 using Cohesive.Processes.IR;
 
 namespace Cohesive.Adapters.DurableTask;
@@ -8,6 +9,18 @@ namespace Cohesive.Adapters.DurableTask;
 /// <summary>Stable diagnostics emitted while admitting Process plans to a Durable Task worker.</summary>
 public static class DurableTaskProcessPlanAdmissionDiagnosticCodes
 {
+    /// <summary>An executable external Request node has no exact concrete durable Request binding.</summary>
+    public const string ExternalRequestBindingMissing = "processes.durableTask.admission.externalRequestBinding.missing";
+
+    /// <summary>An executable external Request node has a binding incompatible with its exact interaction catalog.</summary>
+    public const string ExternalRequestBindingInvalid = "processes.durableTask.admission.externalRequestBinding.invalid";
+
+    /// <summary>An executable external Request node has no exact deployed adapter capability evidence.</summary>
+    public const string ExternalRequestCapabilityMissing = "processes.durableTask.admission.externalRequestCapability.missing";
+
+    /// <summary>Deployed adapter capability evidence cannot satisfy an executable external Request binding.</summary>
+    public const string ExternalRequestCapabilityInvalid = "processes.durableTask.admission.externalRequestCapability.invalid";
+
     /// <summary>An executable child Process node has no exact concrete durable Request binding.</summary>
     public const string ChildRequestBindingMissing = "processes.durableTask.admission.childRequestBinding.missing";
 
@@ -29,28 +42,35 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
     /// <summary>Creates an immutable catalog from executable-qualified canonical Processes.</summary>
     /// <param name="plans">Exact Durable Task realization plans deployed to this worker.</param>
     /// <param name="requestBindings">
-    /// Concrete durable Request bindings deployed to this worker. Bindings remain optional for ordinary external
-    /// Requests, but every child Process Request in <paramref name="plans"/> requires one exact compatible binding.
+    /// Concrete durable Request bindings deployed to this worker. Every external operation and child Process Request
+    /// in <paramref name="plans"/> requires one exact compatible binding.
     /// </param>
     /// <param name="domainEventPublisherResolver">
     /// Deterministic exact domain-event publisher resolver. Plans that directly emit an event require a publisher
     /// whose capabilities declare target deduplication for that exact contract.
     /// </param>
+    /// <param name="operationAdapterCapabilities">
+    /// Exact external-operation capability evidence published by the same deployed adapter authority used at runtime.
+    /// Every ordinary external Request in <paramref name="plans"/> requires matching evidence.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="plans"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// An entry is null, repeats an exact reference, has a conflicting fingerprint, or was not compiled against the
-    /// exact executable profile; a child Process Request lacks one exact compatible binding; or a directly emitted
-    /// event lacks an exact target-deduplicating publisher.
+    /// exact executable profile; a Request lacks one exact compatible binding or external adapter capability; or a
+    /// directly emitted event lacks an exact target-deduplicating publisher.
     /// </exception>
     public DurableTaskSequentialProcessPlanCatalog(
         IEnumerable<DurableTaskProcessRealizationPlan> plans,
         IEnumerable<DurableRequestBinding>? requestBindings = null,
-        IDomainEventPublisherResolver? domainEventPublisherResolver = null)
+        IDomainEventPublisherResolver? domainEventPublisherResolver = null,
+        IDurableOperationAdapterCapabilityResolver? operationAdapterCapabilities = null)
     {
         ArgumentNullException.ThrowIfNull(plans);
         var bindingCatalog = new DurableRequestBindingCatalog(requestBindings ?? []);
         this.domainEventPublisherResolver = domainEventPublisherResolver
             ?? EmptyDomainEventPublisherResolver.Instance;
+        var adapterCapabilities = operationAdapterCapabilities
+            ?? EmptyDurableOperationAdapterCapabilityResolver.Instance;
         var builder = ImmutableDictionary.CreateBuilder<ExecutionDefinitionReference, DurableTaskProcessRealizationPlan>();
         Dictionary<(ExecutionDefinitionId Definition, ExecutionRevisionId Revision), ExecutionDefinitionReference>
             revisions = [];
@@ -70,7 +90,12 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
                     + $"{nameof(DurableTaskProcessRealizationCompiler)}.{nameof(DurableTaskProcessRealizationCompiler.CompileExecutable)}.",
                     nameof(plans));
             }
-            RequireChildProcessBindings(plan, bindingCatalog, nameof(requestBindings));
+            RequireRequestCapabilities(
+                plan,
+                bindingCatalog,
+                adapterCapabilities,
+                nameof(requestBindings),
+                nameof(operationAdapterCapabilities));
             foreach (var domainEvent in plan.CanonicalPlan.Definition.Nodes.OfType<EmitEventProcessNode>())
             {
                 _ = ResolveDomainEventPublisher(domainEvent.Contract, nameof(plans));
@@ -103,53 +128,77 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
 
     internal IDurableRequestBindingResolver BindingResolver { get; }
 
-    static void RequireChildProcessBindings(
+    static void RequireRequestCapabilities(
         DurableTaskProcessRealizationPlan plan,
         DurableRequestBindingCatalog bindings,
-        string parameterName)
+        IDurableOperationAdapterCapabilityResolver adapterCapabilities,
+        string bindingParameterName,
+        string capabilityParameterName)
     {
         var contracts = plan.CanonicalPlan.ValidationContext.InteractionContracts;
         DurableOperationReferenceExecutor? validator = contracts is null
             ? null
             : new(contracts);
-        foreach (var node in plan.CanonicalPlan.Definition.Nodes)
+        foreach (var requirement in ProcessRequestRequirementCollector.Collect(plan.CanonicalPlan).Requirements)
         {
-            var request = node switch
-            {
-                InvokeProcessProcessNode invoke => invoke.Contract,
-                ForEachPartitionProcessNode partition => partition.Contract,
-                _ => null
-            };
-            if (request is null)
-            {
-                continue;
-            }
-
-            var source = $"Process '{Describe(plan.Definition)}' node '{node.Id.Value}'";
-            if (!bindings.TryResolve(request, out var binding) || binding is null)
+            var isExternal = requirement.Kind == ProcessRequestRequirementKind.ExternalOperation;
+            var bindingMissingCode = isExternal
+                ? DurableTaskProcessPlanAdmissionDiagnosticCodes.ExternalRequestBindingMissing
+                : DurableTaskProcessPlanAdmissionDiagnosticCodes.ChildRequestBindingMissing;
+            var bindingInvalidCode = isExternal
+                ? DurableTaskProcessPlanAdmissionDiagnosticCodes.ExternalRequestBindingInvalid
+                : DurableTaskProcessPlanAdmissionDiagnosticCodes.ChildRequestBindingInvalid;
+            var source = $"Process '{Describe(plan.Definition)}' node '{requirement.Node.Value}'";
+            if (!bindings.TryResolve(requirement.Request, out var binding) || binding is null)
             {
                 throw new ArgumentException(
-                    $"{DurableTaskProcessPlanAdmissionDiagnosticCodes.ChildRequestBindingMissing}: {source} "
-                    + $"invokes a child through exact Request '{Describe(request)}', but no concrete durable "
-                    + "binding was deployed. Register the binding derived from the child invocation protocol.",
-                    parameterName);
+                    $"{bindingMissingCode}: {source} requires exact Request '{Describe(requirement.Request)}', "
+                    + "but no concrete durable binding was deployed.",
+                    bindingParameterName);
             }
             if (validator is null)
             {
                 throw new ArgumentException(
-                    $"{DurableTaskProcessPlanAdmissionDiagnosticCodes.ChildRequestBindingInvalid}: {source} "
-                    + "cannot validate its child Request binding because the compiled interaction catalog is absent.",
-                    parameterName);
+                    $"{bindingInvalidCode}: {source} cannot validate its Request binding because the compiled "
+                    + "interaction catalog is absent.",
+                    bindingParameterName);
             }
 
             var validation = validator.ValidateBinding(binding);
             if (!validation.IsValid)
             {
                 throw new ArgumentException(
-                    $"{DurableTaskProcessPlanAdmissionDiagnosticCodes.ChildRequestBindingInvalid}: {source} "
-                    + $"has an incompatible binding for exact Request '{Describe(request)}': "
+                    $"{bindingInvalidCode}: {source} has an incompatible binding for exact Request "
+                    + $"'{Describe(requirement.Request)}': "
                     + Format(validation),
-                    parameterName);
+                    bindingParameterName);
+            }
+
+            if (!isExternal)
+            {
+                continue;
+            }
+
+            if (!adapterCapabilities.TryResolve(requirement.Request, out var capabilities)
+                || capabilities is null)
+            {
+                throw new ArgumentException(
+                    $"{DurableTaskProcessPlanAdmissionDiagnosticCodes.ExternalRequestCapabilityMissing}: {source} "
+                    + $"requires exact Request '{Describe(requirement.Request)}', but no deployed durable-operation "
+                    + "adapter publishes capability evidence for it.",
+                    capabilityParameterName);
+            }
+
+            var capabilityValidation = binding.ReconciliationTarget is null
+                ? DurableOperationReferenceExecutor.AssessAdapterCapabilities(binding, capabilities)
+                : DurableOperationReferenceExecutor.AssessReconciliationAdapterCapabilities(binding, capabilities);
+            if (!capabilityValidation.IsValid)
+            {
+                throw new ArgumentException(
+                    $"{DurableTaskProcessPlanAdmissionDiagnosticCodes.ExternalRequestCapabilityInvalid}: {source} "
+                    + $"has incompatible adapter capabilities for exact Request "
+                    + $"'{Describe(requirement.Request)}': {Format(capabilityValidation)}",
+                    capabilityParameterName);
             }
         }
 

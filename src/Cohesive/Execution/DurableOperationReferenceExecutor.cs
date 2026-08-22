@@ -36,6 +36,15 @@ public static class DurableOperationDiagnosticCodes
 
     /// <summary>An escalation policy lacks its exact semantic path, or an undeclared path was supplied.</summary>
     public const string EscalationBindingInvalid = "execution.operation.binding.escalation.invalid";
+
+    /// <summary>The selected adapter does not declare support for the exact Request contract.</summary>
+    public const string AdapterRequestUnsupported = "execution.operation.adapter.request.unsupported";
+
+    /// <summary>The selected adapter does not supply the idempotency evidence required by the binding.</summary>
+    public const string AdapterIdempotencyInsufficient = "execution.operation.adapter.idempotency.insufficient";
+
+    /// <summary>The selected adapter cannot interpret a reconciliation path required by the binding.</summary>
+    public const string AdapterReconciliationUnsupported = "execution.operation.adapter.reconciliation.unsupported";
 }
 
 /// <summary>Stable adapter-independent failure classifications produced by the reference protocol.</summary>
@@ -467,6 +476,23 @@ public interface IDurableOperationAdapterResolver
     bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? adapter);
 }
 
+/// <summary>Resolves deployment capability evidence for one exact canonical Request contract.</summary>
+/// <remarks>
+/// This contract supports deterministic worker admission without constructing or decoding a Request payload.
+/// Implementations must use the same adapter deployment authority used for runtime operation resolution.
+/// </remarks>
+public interface IDurableOperationAdapterCapabilityResolver
+{
+    /// <summary>Attempts to resolve adapter capabilities for an exact canonical Request contract.</summary>
+    /// <param name="request">Exact Request definition identity, revision, and fingerprint.</param>
+    /// <param name="capabilities">Receives the deployed adapter capability evidence when available.</param>
+    /// <returns><see langword="true"/> when exact capability evidence is available.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <see langword="null"/>.</exception>
+    bool TryResolve(
+        RequestContractReference request,
+        out DurableOperationAdapterCapabilities? capabilities);
+}
+
 /// <summary>Adapter resolver that deliberately supports no durable Request contract.</summary>
 public sealed class EmptyDurableOperationAdapterResolver : IDurableOperationAdapterResolver
 {
@@ -482,6 +508,27 @@ public sealed class EmptyDurableOperationAdapterResolver : IDurableOperationAdap
     {
         ArgumentNullException.ThrowIfNull(request);
         adapter = null;
+        return false;
+    }
+}
+
+/// <summary>Adapter capability resolver that deliberately supports no durable Request contract.</summary>
+public sealed class EmptyDurableOperationAdapterCapabilityResolver : IDurableOperationAdapterCapabilityResolver
+{
+    /// <summary>Shared stateless empty resolver.</summary>
+    public static EmptyDurableOperationAdapterCapabilityResolver Instance { get; } = new();
+
+    EmptyDurableOperationAdapterCapabilityResolver()
+    {
+    }
+
+    /// <inheritdoc />
+    public bool TryResolve(
+        RequestContractReference request,
+        out DurableOperationAdapterCapabilities? capabilities)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        capabilities = null;
         return false;
     }
 }
@@ -2481,9 +2528,20 @@ public sealed class DurableOperationReferenceExecutor
         DurableRequestBinding binding,
         DurableOperationAdapterCapabilities capabilities)
     {
-        ArgumentNullException.ThrowIfNull(binding);
-        ValidateAdapterCapabilitiesCore(binding, capabilities, requiresReconciliation: false);
+        ThrowIfInvalid(AssessAdapterCapabilities(binding, capabilities));
     }
+
+    /// <summary>Assesses adapter capabilities against one exact durable Request dispatch binding.</summary>
+    /// <param name="binding">Portable execution refinement whose exact Request and idempotency evidence are required.</param>
+    /// <param name="capabilities">Capabilities declared by the selected impure adapter.</param>
+    /// <returns>Structured deterministic capability diagnostics.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="binding"/> or <paramref name="capabilities"/> is <see langword="null"/>.
+    /// </exception>
+    public static DocumentValidationResult AssessAdapterCapabilities(
+        DurableRequestBinding binding,
+        DurableOperationAdapterCapabilities capabilities) =>
+        AssessAdapterCapabilitiesCore(binding, capabilities, requiresReconciliation: false);
 
     /// <summary>Validates that adapter capabilities satisfy one exact durable Request reconciliation binding.</summary>
     /// <param name="binding">Portable execution refinement whose reconciliation path must be interpreted.</param>
@@ -2498,32 +2556,96 @@ public sealed class DurableOperationReferenceExecutor
         DurableRequestBinding binding,
         DurableOperationAdapterCapabilities capabilities)
     {
-        ArgumentNullException.ThrowIfNull(binding);
-        ValidateAdapterCapabilitiesCore(binding, capabilities, requiresReconciliation: true);
+        ThrowIfInvalid(AssessReconciliationAdapterCapabilities(binding, capabilities));
     }
 
-    static void ValidateAdapterCapabilitiesCore(
+    /// <summary>Assesses adapter capabilities against one exact durable Request reconciliation binding.</summary>
+    /// <param name="binding">Portable execution refinement whose reconciliation path must be interpreted.</param>
+    /// <param name="capabilities">Capabilities declared by the selected impure adapter.</param>
+    /// <returns>Structured deterministic capability diagnostics.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="binding"/> or <paramref name="capabilities"/> is <see langword="null"/>.
+    /// </exception>
+    public static DocumentValidationResult AssessReconciliationAdapterCapabilities(
+        DurableRequestBinding binding,
+        DurableOperationAdapterCapabilities capabilities) =>
+        AssessAdapterCapabilitiesCore(binding, capabilities, requiresReconciliation: true);
+
+    static DocumentValidationResult AssessAdapterCapabilitiesCore(
         DurableRequestBinding binding,
         DurableOperationAdapterCapabilities capabilities,
         bool requiresReconciliation)
     {
+        ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(capabilities);
+        List<DocumentValidationDiagnostic> diagnostics = [];
         if (!capabilities.Supports(binding.Request))
         {
-            throw new InvalidOperationException("The durable operation adapter does not support the exact Request contract.");
+            diagnostics.Add(AdapterCapabilityError(
+                DurableOperationDiagnosticCodes.AdapterRequestUnsupported,
+                "The durable operation adapter does not support the exact Request contract.",
+                "/adapter/capabilities/supportedRequests",
+                expected: Describe(binding.Request),
+                observed: capabilities.SupportedRequests.IsDefaultOrEmpty
+                    ? "none"
+                    : string.Join(", ", capabilities.SupportedRequests.Select(Describe).Order(StringComparer.Ordinal))));
         }
 
         if (binding.IdempotencyEvidence != DurableOperationIdempotencyEvidence.None
             && capabilities.IdempotencyEvidence != binding.IdempotencyEvidence)
         {
-            throw new InvalidOperationException(
-                "The durable operation adapter does not supply the idempotency evidence required by the binding.");
+            diagnostics.Add(AdapterCapabilityError(
+                DurableOperationDiagnosticCodes.AdapterIdempotencyInsufficient,
+                "The durable operation adapter does not supply the idempotency evidence required by the binding.",
+                "/adapter/capabilities/idempotencyEvidence",
+                expected: binding.IdempotencyEvidence.ToString(),
+                observed: capabilities.IdempotencyEvidence.ToString()));
         }
         if (requiresReconciliation
             && capabilities.Reconciliation != DurableOperationReconciliationCapability.Supported)
         {
-            throw new InvalidOperationException("The durable operation adapter does not support required reconciliation.");
+            diagnostics.Add(AdapterCapabilityError(
+                DurableOperationDiagnosticCodes.AdapterReconciliationUnsupported,
+                "The durable operation adapter does not support required reconciliation.",
+                "/adapter/capabilities/reconciliation",
+                expected: DurableOperationReconciliationCapability.Supported.ToString(),
+                observed: capabilities.Reconciliation.ToString()));
         }
+
+        diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
+        return DocumentValidationResult.FromDiagnostics(diagnostics);
+
+        static DocumentValidationDiagnostic AdapterCapabilityError(
+            string code,
+            string message,
+            string location,
+            string expected,
+            string observed) => new(
+                code,
+                DiagnosticSeverity.Error,
+                message,
+                location,
+                Evidence: new DocumentDiagnosticEvidence(
+                    stage: "durableOperationAdapterCapability",
+                    expected: expected,
+                    observed: observed));
+
+        static string Describe(RequestContractReference request) =>
+            $"{request.Definition.DefinitionId.Value}@{request.Definition.RevisionId.Value}#"
+            + request.Definition.Fingerprint.Value;
+    }
+
+    static void ThrowIfInvalid(DocumentValidationResult validation)
+    {
+        if (validation.IsValid)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(string.Join(
+            "; ",
+            validation.Diagnostics.Select(static diagnostic =>
+                $"{diagnostic.Code} at {diagnostic.Location}: {diagnostic.Message}")));
     }
 
     static DurableOperationObservationDisposition ToObservationDisposition(

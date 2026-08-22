@@ -7,7 +7,9 @@ namespace Cohesive.Execution;
 /// Adapter capabilities are the deployment authority for supported Request contracts. The catalog rejects overlap
 /// instead of relying on registration order, so one durable Request can never select two physical interpreters.
 /// </remarks>
-public sealed class DurableOperationAdapterCatalog : IDurableOperationAdapterResolver
+public sealed class DurableOperationAdapterCatalog :
+    IDurableOperationAdapterResolver,
+    IDurableOperationAdapterCapabilityResolver
 {
     readonly ImmutableDictionary<RequestContractReference, IDurableOperationAdapter> adapters;
 
@@ -61,5 +63,21 @@ public sealed class DurableOperationAdapterCatalog : IDurableOperationAdapterRes
     {
         ArgumentNullException.ThrowIfNull(request);
         return adapters.TryGetValue(request.Contract, out adapter);
+    }
+
+    /// <inheritdoc />
+    public bool TryResolve(
+        RequestContractReference request,
+        out DurableOperationAdapterCapabilities? capabilities)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (adapters.TryGetValue(request, out var adapter))
+        {
+            capabilities = adapter.Capabilities;
+            return true;
+        }
+
+        capabilities = null;
+        return false;
     }
 }

@@ -190,9 +190,10 @@ cannot imply support.
 
 Qualify every deployed definition against the executable profile, retain its exact physical plan, and register one
 canonical host for bounded I/O. Unsupported requirements produce source-attributed realization diagnostics before a
-plan can enter the catalog. To dispatch Requests automatically, also supply exact concrete bindings and an adapter
-resolver. Child invocation protocols derive their Request and terminal Reply mappings; deployment code declares
-only physical attempt, lease, idempotency, timeout, and recovery policy:
+plan can enter the catalog. Every ordinary external Request must also have an exact concrete binding and capability
+evidence from the adapter catalog used at runtime. Child invocation protocols need an exact binding but are realized
+natively as sub-orchestrations. They derive their Request and terminal Reply mappings; deployment code declares only
+physical attempt, lease, idempotency, timeout, and recovery policy:
 
 ```csharp
 DurableTaskProcessPlanningResult executable =
@@ -208,13 +209,16 @@ DurableRequestBinding childBinding = childInvocationProtocol.BindDurably(
     claimLease: TimeSpan.FromMinutes(2),
     DurableOperationIdempotencyEvidence.TargetDeduplication,
     reconciliationTarget: childReconciliationTarget);
+var operationAdapters = new DurableOperationAdapterCatalog(applicationOperationAdapters);
 var catalog = new DurableTaskSequentialProcessPlanCatalog(
     [physicalPlan],
     [childBinding],
-    new ApplicationDomainEventPublisherResolver());
+    new ApplicationDomainEventPublisherResolver(),
+    operationAdapters);
 
 services.AddSingleton<IAsyncProcessReferenceHost, ApplicationProcessHost>();
-services.AddSingleton<IDurableOperationAdapterResolver, ApplicationDurableOperationAdapterResolver>();
+services.AddSingleton<IDurableOperationAdapterResolver>(operationAdapters);
+services.AddSingleton<IDurableOperationAdapterCapabilityResolver>(operationAdapters);
 // Register a provider-aware IDurableOperationExceptionClassifier here when available.
 services.AddDurableTaskWorker(worker =>
 {
@@ -234,7 +238,8 @@ services.AddDurableTaskWorker(worker =>
     worker.AddCohesiveSequentialProcesses(serviceProvider =>
         ApplicationProcessDeploymentCatalog.Create(
             serviceProvider.GetRequiredService<ApplicationProcessDefinitions>(),
-            serviceProvider.GetRequiredService<IDomainEventPublisherResolver>()));
+            serviceProvider.GetRequiredService<IDomainEventPublisherResolver>(),
+            serviceProvider.GetRequiredService<IDurableOperationAdapterCapabilityResolver>()));
     worker.UseDurableTaskScheduler(connectionString);
 });
 ```
@@ -278,9 +283,11 @@ adapter-owned retry policy, or ordering beyond the canonical envelope requiremen
 Register application operation resolvers before `AddCohesiveSequentialProcesses`; the worker method installs
 empty, fail-closed defaults only when the application has not supplied them. The immutable
 `DurableRequestBindingCatalog` is built directly from the worker catalog's bindings and is reused during replay.
-`IDurableRequestBindingResolver`, `IDurableOperationAdapterResolver`, and
-`IDurableOperationExceptionClassifier` remain shared execution ports used by both native Storage and Durable Task
-interpretations, rather than target-specific copies.
+`IDurableRequestBindingResolver`, `IDurableOperationAdapterResolver`,
+`IDurableOperationAdapterCapabilityResolver`, and `IDurableOperationExceptionClassifier` remain shared execution
+ports used by both native Storage and Durable Task interpretations, rather than target-specific copies. The standard
+`DurableOperationAdapterCatalog` implements both adapter resolution and exact capability resolution so admission and
+runtime dispatch cannot drift into parallel registries.
 
 The worker catalog is a deployment projection, not a mutable definition registry. It admits only plans carrying the
 exact executable profile identity; planning evidence cannot authorize execution. Each lookup requires the full
@@ -384,15 +391,16 @@ Transition, subject, and materialized input. The original typed result and envel
 replacement attempt retains the original emission and target-deduplication identities. Changed intent conflicts, and
 an existing subject without an atomic creation receipt remains rejected; this is not general upsert behavior.
 
-A non-child Request without an exact binding still emits canonical evidence and waits for a canonical
-`ProcessActivationInput` external event; use `RaiseCohesiveProcessInteractionAsync` for that deliberately external
-boundary. `InvokeProcess` and `ForEachPartition` are different: worker catalog admission inventories their exact
-Request contracts and rejects a missing, duplicate, fingerprint-drifted, or interaction-incompatible concrete
-binding before orchestration starts. A bound Request creates the canonical `DurableOperationState`, crosses explicit
-before/after dispatch and acknowledgement/admission history cuts, and dispatches through an activity. The canonical
+Worker catalog admission inventories every exact Request in the canonical plan. `Request` nodes require a compatible
+binding plus exact `DurableOperationAdapterCapabilities`; `InvokeProcess` and `ForEachPartition` require compatible
+bindings and are realized by the native child orchestration path. Missing bindings, fingerprint drift, interaction
+incompatibility, insufficient idempotency evidence, and missing required reconciliation all fail before the worker
+starts. A bound external Request creates the canonical `DurableOperationState`, crosses explicit before/after
+dispatch and acknowledgement/admission history cuts, and dispatches through an activity. The canonical
 `DurableOperationReferenceExecutor` alone decides claims, bounded retries, ambiguity, reconciliation,
 acknowledgement, and Reply admission. Activity and orchestration replay retain the Request emission, scoped target
-deduplication key, attempt IDs, fences, and Reply IDs.
+deduplication key, attempt IDs, fences, and Reply IDs. Use `AwaitMatch` and its explicit Signal policy for inbound
+interactions that deliberately have no operation adapter.
 
 Durable Task activities are at-least-once. The executable profile therefore rejects a binding whose
 `IdempotencyEvidence` is `None`; automatic dispatch requires `TargetDeduplication` or `NaturallyIdempotent`, with
@@ -499,7 +507,7 @@ The script pins the emulator image by digest. Emulator coverage proves successfu
 Inspect, exact replay, Continue, RestartAttempt, Cancel, and Terminate through the public event API, bound Request
 activity dispatch and Reply admission, child sub-orchestration, recurrence history rollover, authored failure,
 duplicate start admission, cross-instance and self-Signal delivery, and worker restart during active Transition work
-and while an unbound Request, canonical Timer, and AwaitMatch are waiting. The restart assertions verify that
+and while a bound Request operation, canonical Timer, and AwaitMatch are waiting. The restart assertions verify that
 shutdown-cancelled in-flight work is retried with its exact occurrence, retained Transition activity history is not
 reinvoked, Timer keeps its persisted due instant, and an AwaitMatch input is admitted once after replay. The
 emulator reads the safe `ExecutionStatus` custom-status projection directly and through

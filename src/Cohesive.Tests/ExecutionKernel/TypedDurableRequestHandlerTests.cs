@@ -179,6 +179,7 @@ public sealed class TypedDurableRequestHandlerTests
 
         using var provider = services.BuildServiceProvider();
         var resolver = provider.GetRequiredService<IDurableOperationAdapterResolver>();
+        var capabilityResolver = provider.GetRequiredService<IDurableOperationAdapterCapabilityResolver>();
         var request = CreateRequest(protocol, new SubmitTraining("dataset/42"));
 
         Assert.IsType<DurableOperationAdapterCatalog>(resolver);
@@ -190,6 +191,8 @@ public sealed class TypedDurableRequestHandlerTests
         Assert.Equal(
             DurableOperationReconciliationCapability.Supported,
             adapter.Capabilities.Reconciliation);
+        Assert.True(capabilityResolver.TryResolve(protocol.Request, out var capabilities));
+        Assert.Same(adapter.Capabilities, capabilities);
     }
 
     [Fact]

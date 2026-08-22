@@ -94,6 +94,20 @@ public sealed class ProcessInterpreterRealizationTests
     }
 
     [Fact]
+    public void RequestCollector_AcquiresTheExactExternalOperationRequirement()
+    {
+        var plan = RequestPlan(out var requestReference);
+
+        var inventory = ProcessRequestRequirementCollector.Collect(plan);
+        var requirement = Assert.Single(inventory.Requirements);
+
+        Assert.Equal(plan.DefinitionReference, inventory.Definition);
+        Assert.Equal(new ExecutionNodeId("request"), requirement.Node);
+        Assert.Equal(ProcessRequestRequirementKind.ExternalOperation, requirement.Kind);
+        Assert.Equal(new RequestContractReference(requestReference), requirement.Request);
+    }
+
+    [Fact]
     public void Collector_AccountsForEveryDeclaredGuaranteeAcrossRepresentativePlans()
     {
         var plans = new[]

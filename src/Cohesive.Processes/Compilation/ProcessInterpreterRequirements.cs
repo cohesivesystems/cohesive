@@ -150,6 +150,10 @@ public static class ProcessNodeConstructCatalog
 {
     static readonly ImmutableDictionary<Type, ProcessInterpreterRequirementKey> ByRuntimeType = CreateCatalog();
 
+    /// <summary>Canonical runtime node types declared by the persisted closed union.</summary>
+    internal static ImmutableArray<Type> DeclaredRuntimeTypes { get; } =
+        [.. ByRuntimeType.Keys.OrderBy(static type => type.FullName, StringComparer.Ordinal)];
+
     /// <summary>All declared canonical node kinds in deterministic wire-name order.</summary>
     public static ImmutableArray<ProcessInterpreterRequirementKey> DeclaredRequirements { get; } =
         [.. ByRuntimeType.Values.OrderBy(static key => key.Name, StringComparer.Ordinal)];

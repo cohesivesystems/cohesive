@@ -120,6 +120,8 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
         builder.Services.TryAddSingleton(converter);
         builder.Services.TryAddSingleton<IDurableOperationAdapterResolver>(
             EmptyDurableOperationAdapterResolver.Instance);
+        builder.Services.TryAddSingleton<IDurableOperationAdapterCapabilityResolver>(
+            EmptyDurableOperationAdapterCapabilityResolver.Instance);
         builder.Services.TryAddSingleton<IDurableOperationExceptionClassifier>(
             ConservativeDurableOperationExceptionClassifier.Instance);
         builder.Configure(options => options.DataConverter = converter);
