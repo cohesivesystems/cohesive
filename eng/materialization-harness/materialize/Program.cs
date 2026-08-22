@@ -916,6 +916,50 @@ public static class Program
                 .ToImmutableArray();
             var bindingBySource = hydrationBindings.ToImmutableDictionary(
                 static binding => binding.Reader.Descriptor.Source);
+            var impactReaders = plan.ImpactPlacement.SourceInstances.Select(source =>
+            {
+                var runtime = new PostgresNpgsqlRuntimeBinding(
+                    database: impactStorage.Database,
+                    dataSource: dataSource,
+                    authority: "materialization-harness/postgres/canonical-impact-reads");
+                return (IRelationQuerySourceReader)new PostgresRelationQuerySourceReader(
+                    plan: semantics.Plan,
+                    physicalPlan: plan.ImpactPhysicalPlan,
+                    source: source.Id,
+                    storage: impactStorage,
+                    dataSource: dataSource,
+                    runtimeBinding: runtime,
+                    policy: policy);
+            }).ToImmutableArray();
+            var impactReader = new FreightOrderMaterializationImpactReader(
+                plan: semantics.Plan,
+                physicalPlan: plan.ImpactPhysicalPlan,
+                sourceReaders: impactReaders);
+            MaterializationImpactObservationReader readImpact = (context, request) =>
+            {
+                if (request.Kind != MaterializationImpactObservationReadKind.BoundedEnumeration
+                    || request.Input != semantics.Root.Input.Id)
+                {
+                    return impactReader.ReadAsync(context, request);
+                }
+                if (request.LogicalPartition != rootReader.Descriptor.LogicalPartition)
+                {
+                    throw new ArgumentException(
+                        "The root enumeration impact read belongs to another logical partition.",
+                        nameof(request));
+                }
+                var read = new RelationQuerySourceReadRequest(
+                    physicalPlan: rootRead.PhysicalPlan,
+                    stage: rootRead.Stage,
+                    placementBinding: rootRead.PlacementBinding,
+                    source: rootRead.Source,
+                    shape: rootRead.Shape,
+                    identitySelector: rootRead.IdentitySelector,
+                    fields: rootRead.Fields,
+                    constraint: new RelationQueryBoundedEnumeration(request.MaximumRows),
+                    maximumBufferedRows: request.MaximumRows);
+                return rootReader.ReadAsync(read, context.CancellationToken);
+            };
             var sources = ImmutableArray.CreateBuilder<FreightOrderRebuildSourceBinding>(
                 semantics.Definition.Sources.Length);
             foreach (var requirement in semantics.Definition.Sources)
@@ -949,7 +993,8 @@ public static class Program
                 var source = new PostgresFreightMaterializationChangeSource(
                     source: logicalSource,
                     requirement: requirement,
-                    impactEvidenceReference: $"relations-physical-plan/{plan.ImpactPhysicalPlan.Fingerprint.Value}");
+                    impactEvidenceReference: $"relations-physical-plan/{plan.ImpactPhysicalPlan.Fingerprint.Value}",
+                    currentRootReader: isRoot ? readImpact : null);
                 var scope = new PostgresMaterializationSource(
                     reader: reader,
                     placement: placement,
@@ -966,25 +1011,6 @@ public static class Program
                 suppliedRoot: semantics.Root.Input.Id,
                 output: semantics.Output,
                 sourceReaders: hydrationReaders);
-            var impactReaders = plan.ImpactPlacement.SourceInstances.Select(source =>
-            {
-                var runtime = new PostgresNpgsqlRuntimeBinding(
-                    database: impactStorage.Database,
-                    dataSource: dataSource,
-                    authority: "materialization-harness/postgres/canonical-impact-reads");
-                return (IRelationQuerySourceReader)new PostgresRelationQuerySourceReader(
-                    plan: semantics.Plan,
-                    physicalPlan: plan.ImpactPhysicalPlan,
-                    source: source.Id,
-                    storage: impactStorage,
-                    dataSource: dataSource,
-                    runtimeBinding: runtime,
-                    policy: policy);
-            }).ToImmutableArray();
-            var impactReader = new FreightOrderMaterializationImpactReader(
-                plan: semantics.Plan,
-                physicalPlan: plan.ImpactPhysicalPlan,
-                sourceReaders: impactReaders);
             bindings.Add(new(
                 tenant: tenant,
                 rootRead: rootRead,
@@ -995,7 +1021,7 @@ public static class Program
                     var impact = new MaterializationImpactRootExecutor(
                         plan: impactPlan,
                         definition: semantics.Definition,
-                        reader: impactReader.ReadAsync);
+                        reader: readImpact);
                     return new RelationQueryMaterializationImpactRuntime(
                         impactPlan: impactPlan,
                         definition: semantics.Definition,

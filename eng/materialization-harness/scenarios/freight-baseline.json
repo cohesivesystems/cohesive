@@ -579,7 +579,7 @@
       "sequence": 43,
       "entity": "orderStop",
       "operation": "delete",
-      "transaction": "root-delete-stops",
+      "transaction": "root-delete",
       "identity": {
         "tenantId": "acme",
         "id": "stop-2003-pickup"
@@ -589,7 +589,7 @@
       "sequence": 44,
       "entity": "orderStop",
       "operation": "delete",
-      "transaction": "root-delete-stops",
+      "transaction": "root-delete",
       "identity": {
         "tenantId": "acme",
         "id": "stop-2003-drop-austin"
@@ -599,7 +599,7 @@
       "sequence": 45,
       "entity": "orderStop",
       "operation": "delete",
-      "transaction": "root-delete-stops",
+      "transaction": "root-delete",
       "identity": {
         "tenantId": "acme",
         "id": "stop-2003-drop-dallas"

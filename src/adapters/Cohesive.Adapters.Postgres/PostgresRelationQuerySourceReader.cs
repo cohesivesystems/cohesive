@@ -596,9 +596,11 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                     afterIdentity,
                     checked(maximumRows + 1))
                 : BuildOwnedCollectionCommand(
+                    request,
                     table!,
                     projection,
                     ownedCollection,
+                    relationship,
                     afterIdentity,
                     checked(maximumRows + 1));
             var result = await executeCommand(command, cancellationToken).ConfigureAwait(false);
@@ -864,11 +866,6 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             }
         }
 
-        if (ownedCollection is not null && relationship is not null)
-        {
-            return "owned-collection-relationship-acquisition-unsupported";
-        }
-
         var keyValidationFailure = request.Constraint switch
         {
             RelationQueryIdentityBatchLookup identityLookup =>
@@ -1008,9 +1005,11 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
     }
 
     PostgresNpgsqlCommand BuildOwnedCollectionCommand(
+        RelationQuerySourceReadRequest request,
         PostgresRelationQueryTableBinding table,
         ImmutableArray<PostgresRelationQueryProjectionBinding> projection,
         PostgresRelationQueryOwnedCollectionProjectionBinding ownedProjection,
+        PostgresRelationQueryRelationshipReferenceBinding? relationship,
         object? afterIdentity,
         int probeLimit)
     {
@@ -1059,6 +1058,34 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             PostgresSqlBinaryOperator.Equal,
             rootPartition,
             PostgresSqlExpression.RuntimeParameter(PartitionBinding)));
+
+        ImmutableArray<object> parsedKeys = [];
+        PostgresRelationQueryScalarType? keyType = null;
+        PostgresRelationQueryTextSemantics? keyText = null;
+        string? keyColumn = null;
+        switch (request.Constraint)
+        {
+            case RelationQueryIdentityBatchLookup lookup:
+                parsedKeys = ParseKeys(lookup.Identities, identity.ScalarType);
+                keyType = identity.ScalarType;
+                keyText = identity.TextSemantics;
+                keyColumn = identity.ColumnName;
+                break;
+            case RelationQueryRelationshipKeyBatchLookup lookup when relationship is not null:
+                parsedKeys = ParseKeys(lookup.Keys, relationship.ScalarType);
+                keyType = relationship.ScalarType;
+                keyText = relationship.TextSemantics;
+                keyColumn = relationship.ColumnName;
+                break;
+        }
+        if (keyType is { } scalarType)
+        {
+            var keyExpression = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+                PostgresSqlExpression.Column(SourceAlias, keyColumn!),
+                scalarType,
+                keyText);
+            rootPage.Where(PostgresSqlExpression.EqualAny(keyExpression, KeysBinding));
+        }
 
         if (afterIdentity is not null)
         {
@@ -1139,6 +1166,10 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         {
             parameters.Add(parameter.Binding switch
             {
+                KeysBinding when keyType is { } type => new(
+                    PostgresRelationQueryScalarCatalog.CreateArray(parsedKeys, type),
+                    type,
+                    IsArray: true),
                 AfterBinding => new(afterIdentity!, identity.ScalarType, IsArray: false),
                 PartitionBinding => new(
                     partition.Value,

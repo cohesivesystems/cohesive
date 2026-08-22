@@ -357,7 +357,8 @@ public sealed class MaterializationImpactRootExecutor
         if (result.State is not (RelationQuerySourceReadState.Complete or RelationQuerySourceReadState.NotFound))
         {
             throw new InvalidOperationException(
-                $"Impact read '{request.Kind}' for input '{request.Input.Value}' returned '{result.State}' instead of complete evidence.");
+                $"Impact read '{request.Kind}' for input '{request.Input.Value}' returned '{result.State}' instead of complete evidence "
+                + $"('{result.EvidenceReference}').");
         }
         if ((long)result.Observations.Length > request.MaximumRows)
             throw new InvalidOperationException("An impact observation read exceeded its hard row bound.");

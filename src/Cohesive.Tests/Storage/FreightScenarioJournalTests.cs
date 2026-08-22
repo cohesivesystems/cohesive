@@ -16,8 +16,8 @@ public sealed class FreightScenarioJournalTests
         Assert.Equal(33, journal.BaselineThroughSequence);
         Assert.Equal(33, journal.Baseline.ThroughSequence);
         Assert.Equal(46, journal.Final.ThroughSequence);
-        Assert.Equal(10, journal.MutationTransactions.Length);
-        Assert.Equal(10, transitions.Length);
+        Assert.Equal(9, journal.MutationTransactions.Length);
+        Assert.Equal(9, transitions.Length);
         Assert.Equal(7, journal.Baseline.Orders.Length);
         Assert.Equal(16, journal.Baseline.StopCount);
         Assert.Equal(6, journal.Final.Orders.Length);
@@ -56,7 +56,7 @@ public sealed class FreightScenarioJournalTests
         var rootDelete = Assert.Single(transitions, static value => value.Sequence == 46);
         Assert.Equal(FreightScenarioEntityKind.Order, rootDelete.Entity);
         Assert.Equal(FreightScenarioOperationKind.Delete, rootDelete.Operation);
-        Assert.NotNull(rootDelete.GetBefore<FreightOrder>());
+        Assert.Equal(3, rootDelete.GetBefore<FreightOrder>()!.Stops.Length);
         Assert.Null(rootDelete.GetAfter<FreightOrder>());
 
         var finalCustomer = Assert.Single(
