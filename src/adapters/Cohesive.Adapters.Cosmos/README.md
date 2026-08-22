@@ -691,6 +691,19 @@ not a semantic query execution or change-delivery surface.
 The former parallel predicate and aggregation compilers were removed intentionally. The adapter provides no
 automatic translation bridge from their deleted model to canonical relation/query IR.
 
+## Aggregate storage realization
+
+`CosmosStorageRealizationCompiler` projects a canonical `StorageStructureDefinition` through the existing
+fingerprinted Cosmos relation/query binding. Each owned collection must map to one structured JSON array with exact
+scope, same-element correlation, required collection/element presence, complete child-field domains, root-local
+identity equality, and the
+`cohesive.adapters.cosmos/storage-realization/ordered-owned-json-array/v1` semantic profile. That profile asserts the
+physical JSON array order is the canonical component-ordinal order.
+
+The resulting embedded realization declares in-document expansion, single-document atomicity, and root-document
+change attribution. Physical container and document paths remain in the Cosmos binding and are referenced through its
+fingerprint; missing scope, order, tenant, identity, or child-domain evidence returns structured `CSST` diagnostics.
+
 ## Related Packages
 
 - `Cohesive.Storage` for repository abstractions.

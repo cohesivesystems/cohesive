@@ -771,6 +771,20 @@ key-changing update expansion, before/after images, explicit settlement, typed h
 slot-generation fencing. Npgsql remains confined to the adapter package; Cohesive.Relations and Cohesive.Storage
 public contracts do not expose provider types.
 
+## Aggregate storage realization
+
+`PostgresStorageRealizationCompiler` projects a canonical `StorageStructureDefinition` through the fingerprinted
+`PostgresRelationQueryStorageBinding`. An owned collection maps to a component table with an exact parent-root key,
+inherited tenant partition, complete component field map, root-local identity, and exact ordinal. The source reader
+bounds the root query first and only then left-joins component rows, so SQL row multiplication cannot split an
+aggregate or displace another root from the requested page. Component rows are reconstructed into one ordered array
+per root before canonical Relations interpretation.
+
+The resulting decomposed realization declares transaction atomicity across root and component records and retains
+the component-parent key as change-impact evidence. Constraint names and atomicity/change references are supplied by
+the adapter binding; the binding fingerprint remains the physical mapping authority. Missing partition, identity,
+ordinal, scalar-domain, or field-coverage evidence fails compilation with structured `PGST` diagnostics.
+
 Set `COHESIVE_POSTGRES_TEST_CONNECTION_STRING` to run the opt-in local PostgreSQL execution scenario against a database
 where the configured user may create and drop a temporary schema:
 

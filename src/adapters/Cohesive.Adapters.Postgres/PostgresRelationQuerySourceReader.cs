@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
 using System.Transactions;
+using Cohesive.Model;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Physical;
@@ -28,6 +29,9 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
     const string RequestedAlias = "requested";
     const string RequestedKeyAlias = "key";
     const string CandidateAlias = "candidate";
+    const string RootPageAlias = "root_page";
+    const string ComponentAlias = "component";
+    const string RootPartitionAlias = "_root_partition";
 
     readonly RelationQueryPhysicalPlanFingerprint physicalPlan;
     readonly CompiledRelationQueryPhysicalPlan? compiledPhysicalPlan;
@@ -340,7 +344,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         foreach (var binding in acquired)
         {
             var table = storage.Tables.SingleOrDefault(candidate => candidate.PlacementBinding == binding.Id);
-            if (GetTableCoverageMismatch(binding, table) is { } mismatch)
+            if (GetTableCoverageMismatch(binding, table, storage.OwnedCollections) is { } mismatch)
             {
                 throw new ArgumentException(
                     $"PostgreSQL table coverage conflicts with placement '{binding.Id.Value}': {mismatch}",
@@ -452,7 +456,8 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
 
     static string? GetTableCoverageMismatch(
         RelationQuerySourcePlacementBinding binding,
-        PostgresRelationQueryTableBinding? table)
+        PostgresRelationQueryTableBinding? table,
+        ImmutableArray<PostgresRelationQueryOwnedCollectionBinding> ownedCollections)
     {
         if (table is null)
         {
@@ -495,15 +500,22 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             return "the table lacks identity-column evidence";
         }
 
-        if (table.Fields.Length != binding.Fields.Length)
+        var owned = ownedCollections
+            .Where(collection => collection.RootPlacementBinding == binding.Id)
+            .ToArray();
+        if (table.Fields.Length + owned.Length != binding.Fields.Length)
         {
             return string.Create(
                 CultureInfo.InvariantCulture,
-                $"the table maps {table.Fields.Length} fields while the placement requires {binding.Fields.Length}");
+                $"the root and owned-component tables map {table.Fields.Length + owned.Length} fields while the placement requires {binding.Fields.Length}");
         }
-        var missingField = binding.Fields.FirstOrDefault(field => !table.Fields.Any(candidate =>
-            candidate.Input == field.Input
-            && candidate.SemanticPath == field.SemanticPath));
+        var missingField = binding.Fields.FirstOrDefault(field =>
+            !table.Fields.Any(candidate =>
+                candidate.Input == field.Input
+                && candidate.SemanticPath == field.SemanticPath)
+            && !owned.Any(candidate =>
+                candidate.CollectionInput == field.Input
+                && candidate.CollectionPath == field.SemanticPath));
         if (missingField is not null)
         {
             return $"field '{missingField.Input.Value}' at '{missingField.SemanticPath}' is absent";
@@ -558,6 +570,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                     request,
                     out var table,
                     out var projection,
+                    out var ownedCollection,
                     out var relationship,
                     out var stage) is { } invalid)
             {
@@ -574,25 +587,42 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 return InconclusiveWindow(request, "batch-boundary-exceeded");
             }
 
-            var command = BuildCommand(
-                request,
-                table!,
-                projection,
-                relationship,
-                afterIdentity,
-                checked(maximumRows + 1));
+            var command = ownedCollection is null
+                ? BuildCommand(
+                    request,
+                    table!,
+                    projection,
+                    relationship,
+                    afterIdentity,
+                    checked(maximumRows + 1))
+                : BuildOwnedCollectionCommand(
+                    table!,
+                    projection,
+                    ownedCollection,
+                    afterIdentity,
+                    checked(maximumRows + 1));
             var result = await executeCommand(command, cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            return Materialize(
-                request,
-                table!,
-                projection,
-                relationship,
-                result.Rows,
-                maximumRows,
-                afterIdentity is not null,
-                priorFanOut,
-                cancellationToken);
+            return ownedCollection is null
+                ? Materialize(
+                    request,
+                    table!,
+                    projection,
+                    relationship,
+                    result.Rows,
+                    maximumRows,
+                    afterIdentity is not null,
+                    priorFanOut,
+                    cancellationToken)
+                : MaterializeOwnedCollection(
+                    request,
+                    table!,
+                    projection,
+                    ownedCollection,
+                    result.Rows,
+                    maximumRows,
+                    afterIdentity is not null,
+                    cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -640,11 +670,13 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         RelationQuerySourceReadRequest request,
         out PostgresRelationQueryTableBinding? table,
         out ImmutableArray<PostgresRelationQueryProjectionBinding> projection,
+        out PostgresRelationQueryOwnedCollectionProjectionBinding? ownedCollection,
         out PostgresRelationQueryRelationshipReferenceBinding? relationship,
         out RelationQueryPhysicalStage? stage)
     {
         table = null;
         projection = [];
+        ownedCollection = null;
         relationship = null;
         stage = null;
         if (request.PhysicalPlan != physicalPlan)
@@ -747,6 +779,12 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 : table.Fields.SingleOrDefault(candidate =>
                     candidate.Input == canonicalSemantic.Input
                     && candidate.SemanticPath == canonicalSemantic.SemanticPath);
+            var owned = canonicalSemantic is null
+                ? null
+                : storage.OwnedCollections.SingleOrDefault(candidate =>
+                    candidate.RootPlacementBinding == canonical.Id
+                    && candidate.CollectionInput == canonicalSemantic.Input
+                    && candidate.CollectionPath == canonicalSemantic.SemanticPath);
             var canonicalCorrelation = canonical.RelationshipKeys.SingleOrDefault(candidate =>
                 candidate.SemanticPath == requested.SemanticPath
                 && string.Equals(candidate.SourceSelector, requested.SourceSelector, StringComparison.Ordinal));
@@ -757,7 +795,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                     && candidate.SemanticPath == canonicalCorrelation.SemanticPath);
             var valid = requested.Purpose switch
             {
-                RelationQuerySourceReadFieldPurpose.SemanticInput => semantic is not null,
+                RelationQuerySourceReadFieldPurpose.SemanticInput => semantic is not null || owned is not null,
                 RelationQuerySourceReadFieldPurpose.Correlation => correlation is not null,
                 RelationQuerySourceReadFieldPurpose.SemanticInputAndCorrelation =>
                     semantic is not null && correlation is not null
@@ -773,23 +811,36 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 return "field-selector-mismatch";
             }
 
-            fields.Add(semantic is not null
-                ? new(
+            if (owned is not null)
+            {
+                if (ownedCollection is not null)
+                {
+                    return "multiple-owned-collections-unsupported";
+                }
+                ownedCollection = new(requested, owned);
+            }
+            else
+            {
+                fields.Add(semantic is not null
+                    ? new(
                     requested,
                     semantic.ColumnName,
                     semantic.ScalarType,
                     semantic.MissingValueEncoding,
                     semantic.NullValueEncoding,
                     semantic.TextSemantics)
-                : new(
+                    : new(
                     requested,
                     correlation!.ColumnName,
                     correlation.ScalarType,
                     correlation.MissingValueEncoding,
                     correlation.NullValueEncoding,
                     correlation.TextSemantics));
+            }
         }
-        projection = fields.MoveToImmutable();
+        projection = fields.Count == fields.Capacity
+            ? fields.MoveToImmutable()
+            : fields.ToImmutable();
 
         if (request.Constraint is RelationQueryRelationshipKeyBatchLookup lookup)
         {
@@ -811,6 +862,11 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             {
                 return "relationship-text-equality-unproven";
             }
+        }
+
+        if (ownedCollection is not null && relationship is not null)
+        {
+            return "owned-collection-relationship-acquisition-unsupported";
         }
 
         var keyValidationFailure = request.Constraint switch
@@ -946,6 +1002,162 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
 
         return new(
             template.Text,
+            parameters.MoveToImmutable(),
+            resultTypes.MoveToImmutable(),
+            Policy.MaximumPageBytes);
+    }
+
+    PostgresNpgsqlCommand BuildOwnedCollectionCommand(
+        PostgresRelationQueryTableBinding table,
+        ImmutableArray<PostgresRelationQueryProjectionBinding> projection,
+        PostgresRelationQueryOwnedCollectionProjectionBinding ownedProjection,
+        object? afterIdentity,
+        int probeLimit)
+    {
+        var identity = table.Identity!;
+        var partition = ResolvePartition(table.PlacementBinding)
+            ?? throw new InvalidOperationException(
+                "A decomposed owned collection requires an exact tenant partition scope.");
+        var owned = ownedProjection.Binding;
+        if (owned.ParentRoot.SemanticPath != identity.SemanticPath
+            || owned.ParentRoot.ScalarType != identity.ScalarType
+            || !Equals(owned.ParentRoot.TextSemantics, identity.TextSemantics)
+            || owned.Partition.SemanticPath != partition.Binding.SemanticPath
+            || owned.Partition.ScalarType != partition.Binding.ScalarType
+            || !Equals(owned.Partition.TextSemantics, partition.Binding.TextSemantics)
+            || !string.Equals(
+                owned.Partition.SourceSelector,
+                partition.Binding.SourceSelector,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The PostgreSQL component parent or partition binding does not preserve the root key domain.");
+        }
+
+        var rootIdentity = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+            PostgresSqlExpression.Column(SourceAlias, identity.ColumnName),
+            identity.ScalarType,
+            identity.TextSemantics);
+        var rootPartition = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+            PostgresSqlExpression.Column(SourceAlias, partition.Binding.ColumnName),
+            partition.Binding.ScalarType,
+            partition.Binding.TextSemantics);
+        var rootPage = new PostgresSqlSelectBuilder(
+                new PostgresSqlQualifiedTable(table.SchemaName, table.TableName),
+                SourceAlias)
+            .Select(PostgresSqlExpression.Column(SourceAlias, identity.ColumnName), IdentityAlias)
+            .Select(
+                PostgresSqlExpression.Column(SourceAlias, partition.Binding.ColumnName),
+                RootPartitionAlias);
+        for (var index = 0; index < projection.Length; index++)
+        {
+            rootPage.Select(
+                PostgresSqlExpression.Column(SourceAlias, projection[index].ColumnName),
+                $"_field{index.ToString(CultureInfo.InvariantCulture)}");
+        }
+        rootPage.Where(PostgresSqlExpression.Binary(
+            PostgresSqlBinaryOperator.Equal,
+            rootPartition,
+            PostgresSqlExpression.RuntimeParameter(PartitionBinding)));
+
+        if (afterIdentity is not null)
+        {
+            rootPage.Where(PostgresSqlExpression.KeysetAfter(
+            [
+                new(
+                    rootIdentity,
+                    PostgresSqlExpression.RuntimeParameter(AfterBinding),
+                    PostgresSqlSortDirection.Ascending,
+                    PostgresSqlNullPlacement.Last)
+            ]));
+        }
+        var boundedRoots = rootPage
+            .OrderBy(rootIdentity)
+            .Limit(probeLimit)
+            .BuildQuery();
+
+        var pageIdentity = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+            PostgresSqlExpression.Column(RootPageAlias, IdentityAlias),
+            identity.ScalarType,
+            identity.TextSemantics);
+        var componentParent = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+            PostgresSqlExpression.Column(ComponentAlias, owned.ParentRoot.ColumnName),
+            owned.ParentRoot.ScalarType,
+            owned.ParentRoot.TextSemantics);
+        var pagePartition = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+            PostgresSqlExpression.Column(RootPageAlias, RootPartitionAlias),
+            partition.Binding.ScalarType,
+            partition.Binding.TextSemantics);
+        var componentPartition = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+            PostgresSqlExpression.Column(ComponentAlias, owned.Partition.ColumnName),
+            owned.Partition.ScalarType,
+            owned.Partition.TextSemantics);
+        var join = PostgresSqlExpression.Binary(
+            PostgresSqlBinaryOperator.And,
+            PostgresSqlExpression.Binary(
+                PostgresSqlBinaryOperator.Equal,
+                pageIdentity,
+                componentParent),
+            PostgresSqlExpression.Binary(
+                PostgresSqlBinaryOperator.Equal,
+                pagePartition,
+                componentPartition));
+        var builder = new PostgresSqlSelectBuilder(boundedRoots, RootPageAlias)
+            .Select(PostgresSqlExpression.Column(RootPageAlias, IdentityAlias), IdentityAlias);
+        for (var index = 0; index < projection.Length; index++)
+        {
+            var alias = $"_field{index.ToString(CultureInfo.InvariantCulture)}";
+            builder.Select(PostgresSqlExpression.Column(RootPageAlias, alias), alias);
+        }
+        builder.Join(
+            new PostgresSqlQualifiedTable(owned.SchemaName, owned.TableName),
+            ComponentAlias,
+            PostgresSqlJoinKind.Left,
+            join);
+        for (var index = 0; index < owned.Fields.Length; index++)
+        {
+            builder.Select(
+                PostgresSqlExpression.Column(ComponentAlias, owned.Fields[index].ColumnName),
+                $"_owned{index.ToString(CultureInfo.InvariantCulture)}");
+        }
+
+        var ordinal = owned.ResolveField(owned.OrdinalPath);
+        var localIdentity = owned.ResolveField(owned.LocalIdentityPath);
+        var statement = builder
+            .OrderBy(pageIdentity)
+            .OrderBy(PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+                PostgresSqlExpression.Column(ComponentAlias, ordinal.ColumnName),
+                ordinal.ScalarType,
+                ordinal.TextSemantics))
+            .OrderBy(PostgresRelationQueryScalarCatalog.ApplyTextCollation(
+                PostgresSqlExpression.Column(ComponentAlias, localIdentity.ColumnName),
+                localIdentity.ScalarType,
+                localIdentity.TextSemantics))
+            .BuildTemplate();
+        var parameters = ImmutableArray.CreateBuilder<PostgresNpgsqlParameter>(statement.Parameters.Length);
+        foreach (var parameter in statement.Parameters)
+        {
+            parameters.Add(parameter.Binding switch
+            {
+                AfterBinding => new(afterIdentity!, identity.ScalarType, IsArray: false),
+                PartitionBinding => new(
+                    partition.Value,
+                    partition.Binding.ScalarType,
+                    IsArray: false),
+                _ => throw new InvalidOperationException(
+                    $"Unexpected PostgreSQL owned-collection parameter '{parameter.Binding ?? "<constant>"}'.")
+            });
+        }
+
+        var resultTypes = ImmutableArray.CreateBuilder<PostgresRelationQueryScalarType>(
+            1 + projection.Length + owned.Fields.Length);
+        resultTypes.Add(identity.ScalarType);
+        foreach (var item in projection)
+            resultTypes.Add(item.ScalarType);
+        foreach (var field in owned.Fields)
+            resultTypes.Add(field.ScalarType);
+        return new(
+            statement.Text,
             parameters.MoveToImmutable(),
             resultTypes.MoveToImmutable(),
             Policy.MaximumPageBytes);
@@ -1190,6 +1402,232 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                     : "read-complete")),
             hasMore,
             correlationKeys.MoveToImmutable());
+    }
+
+    PostgresRelationQueryReadWindow MaterializeOwnedCollection(
+        RelationQuerySourceReadRequest request,
+        PostgresRelationQueryTableBinding table,
+        ImmutableArray<PostgresRelationQueryProjectionBinding> projection,
+        PostgresRelationQueryOwnedCollectionProjectionBinding ownedProjection,
+        ImmutableArray<ImmutableArray<object?>> rows,
+        int maximumRows,
+        bool resumed,
+        CancellationToken cancellationToken)
+    {
+        var owned = ownedProjection.Binding;
+        var expectedRowLength = 1 + projection.Length + owned.Fields.Length;
+        var localIdentityIndex = owned.Fields.IndexOf(owned.ResolveField(owned.LocalIdentityPath));
+        if (localIdentityIndex < 0)
+        {
+            return FailedWindow(request, "owned-collection-identity-binding-missing");
+        }
+
+        var identityBinding = table.Identity!;
+        HashSet<string>? requestedIdentities = request.Constraint is RelationQueryIdentityBatchLookup identityLookup
+            ? CanonicalKeys(identityLookup.Identities, identityBinding.ScalarType)
+            : null;
+        HashSet<string> observedRoots = new(StringComparer.Ordinal);
+        List<PostgresRelationQueryOwnedCollectionRootAccumulator> roots = [];
+        PostgresRelationQueryOwnedCollectionRootAccumulator? current = null;
+        foreach (var row in rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (row.Length != expectedRowLength || row[0] is not { } rawRootIdentity)
+            {
+                return FailedWindow(request, "owned-collection-row-shape-invalid");
+            }
+
+            string rootIdentity;
+            try
+            {
+                rootIdentity = PostgresRelationQueryScalarCatalog.FormatKey(
+                    rawRootIdentity,
+                    identityBinding.ScalarType);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            {
+                return FailedWindow(request, "observation-identity-invalid");
+            }
+
+            if (string.IsNullOrWhiteSpace(rootIdentity))
+            {
+                return FailedWindow(request, "duplicate-or-empty-observation-identity");
+            }
+            if (requestedIdentities is not null && !requestedIdentities.Contains(rootIdentity))
+            {
+                return FailedWindow(request, "identity-query-returned-unrequested-row");
+            }
+
+            if (current is null || !string.Equals(current.Identity, rootIdentity, StringComparison.Ordinal))
+            {
+                if (!observedRoots.Add(rootIdentity))
+                {
+                    return FailedWindow(request, "owned-collection-root-order-invalid");
+                }
+
+                current = new(rootIdentity, row);
+                roots.Add(current);
+            }
+
+            var componentOffset = 1 + projection.Length;
+            var rawLocalIdentity = row[componentOffset + localIdentityIndex];
+            if (rawLocalIdentity is null)
+            {
+                var hasComponentValue = false;
+                for (var index = componentOffset; index < row.Length; index++)
+                {
+                    if (row[index] is not null)
+                    {
+                        hasComponentValue = true;
+                        break;
+                    }
+                }
+                if (hasComponentValue)
+                {
+                    return FailedWindow(request, "owned-collection-null-identity-invalid");
+                }
+                continue;
+            }
+
+            if (current.Components.Count >= source.Limits.MaximumFanOut)
+            {
+                return InconclusiveWindow(request, "owned-collection-fan-out-boundary-exceeded");
+            }
+
+            string localIdentity;
+            try
+            {
+                localIdentity = PostgresRelationQueryScalarCatalog.FormatKey(
+                    rawLocalIdentity,
+                    owned.Fields[localIdentityIndex].ScalarType);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            {
+                return FailedWindow(request, "owned-collection-identity-invalid");
+            }
+            if (string.IsNullOrWhiteSpace(localIdentity)
+                || !current.ComponentIdentities.Add(localIdentity))
+            {
+                return FailedWindow(request, "owned-collection-identity-duplicate");
+            }
+
+            Dictionary<string, ObservationValue> component = new(
+                capacity: owned.Fields.Length,
+                comparer: StringComparer.Ordinal);
+            for (var fieldIndex = 0; fieldIndex < owned.Fields.Length; fieldIndex++)
+            {
+                var binding = owned.Fields[fieldIndex];
+                if (!TryProjectOwnedValue(
+                        binding,
+                        row[componentOffset + fieldIndex],
+                        out var value))
+                {
+                    return FailedWindow(request, "owned-collection-value-invalid");
+                }
+
+                component.Add(binding.SemanticPath.Segments[0].Segment!, value);
+            }
+            current.Components.Add(ObservationValue.FromObject(component));
+        }
+
+        var hasMore = roots.Count > maximumRows;
+        var selectedCount = Math.Min(maximumRows, roots.Count);
+        var observations = ImmutableArray.CreateBuilder<RelationQuerySourceReadObservation>(selectedCount);
+        for (var rootIndex = 0; rootIndex < selectedCount; rootIndex++)
+        {
+            var root = roots[rootIndex];
+            var fields = ImmutableArray.CreateBuilder<RelationQuerySourceReadFieldResult>(request.Fields.Length);
+            foreach (var requested in request.Fields)
+            {
+                if (requested == ownedProjection.Field)
+                {
+                    fields.Add(new(
+                        requested,
+                        RelationQuerySourceReadFieldState.Value,
+                        ObservationValue.FromImmutableArray([.. root.Components]),
+                        Evidence(
+                            request,
+                            $"field/{Uri.EscapeDataString(requested.SemanticPath.ToString())}")));
+                    continue;
+                }
+
+                var projectionIndex = -1;
+                for (var index = 0; index < projection.Length; index++)
+                {
+                    if (projection[index].Field == requested)
+                    {
+                        projectionIndex = index;
+                        break;
+                    }
+                }
+                if (projectionIndex < 0)
+                {
+                    return FailedWindow(request, "owned-collection-projection-mismatch");
+                }
+                fields.Add(ProjectField(
+                    request,
+                    projection[projectionIndex],
+                    root.RootRow[projectionIndex + 1]));
+            }
+            observations.Add(new(
+                root.Identity,
+                request.Shape,
+                fields.MoveToImmutable()));
+        }
+
+        var selected = observations.MoveToImmutable();
+        var state = hasMore
+            ? RelationQuerySourceReadState.Partial
+            : selected.IsDefaultOrEmpty && !resumed
+                ? RelationQuerySourceReadState.NotFound
+                : RelationQuerySourceReadState.Complete;
+        return new(
+            new RelationQuerySourceReadResult(
+                state,
+                selected,
+                Evidence(
+                    request,
+                    hasMore
+                        ? "owned-collection-read-partial"
+                        : state == RelationQuerySourceReadState.NotFound
+                            ? "owned-collection-read-not-found"
+                            : "owned-collection-read-complete")),
+            HasMore: hasMore,
+            CorrelationKeys: []);
+    }
+
+    static bool TryProjectOwnedValue(
+        PostgresRelationQueryOwnedCollectionElementFieldBinding binding,
+        object? raw,
+        out ObservationValue value)
+    {
+        if (raw is null)
+        {
+            if (binding.MissingValueEncoding == PostgresRelationQueryMissingValueEncoding.SqlNull)
+            {
+                value = ObservationValue.Undefined;
+                return true;
+            }
+            if (binding.NullValueEncoding == PostgresRelationQueryNullValueEncoding.SqlNull)
+            {
+                value = ObservationValue.Null;
+                return true;
+            }
+
+            value = default;
+            return false;
+        }
+
+        try
+        {
+            value = PostgresRelationQueryScalarCatalog.ToObservationValue(raw, binding.ScalarType);
+            return true;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+        {
+            value = default;
+            return false;
+        }
     }
 
     RelationQuerySourceReadFieldResult ProjectField(
@@ -1445,6 +1883,23 @@ internal sealed record PostgresRelationQueryProjectionBinding(
     PostgresRelationQueryMissingValueEncoding MissingValueEncoding,
     PostgresRelationQueryNullValueEncoding NullValueEncoding,
     PostgresRelationQueryTextSemantics? TextSemantics);
+
+internal sealed record PostgresRelationQueryOwnedCollectionProjectionBinding(
+    RelationQuerySourceReadField Field,
+    PostgresRelationQueryOwnedCollectionBinding Binding);
+
+internal sealed class PostgresRelationQueryOwnedCollectionRootAccumulator(
+    string identity,
+    ImmutableArray<object?> rootRow)
+{
+    public string Identity { get; } = identity;
+
+    public ImmutableArray<object?> RootRow { get; } = rootRow;
+
+    public List<ObservationValue> Components { get; } = [];
+
+    public HashSet<string> ComponentIdentities { get; } = new(StringComparer.Ordinal);
+}
 
 internal sealed record PostgresRelationQueryReadWindow(
     RelationQuerySourceReadResult Read,

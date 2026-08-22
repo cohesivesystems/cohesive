@@ -260,7 +260,7 @@ public sealed class StorageRealizationTests
                 diagnostic.Code == StorageRealizationDiagnosticCodes.FingerprintMismatch));
     }
 
-    static StorageStructureDefinition Structure()
+    internal static StorageStructureDefinition Structure()
     {
         var graphId = new GraphId("freight/storage/v1");
         var stopType = new TypeId("freight.stop");
@@ -322,7 +322,7 @@ public sealed class StorageRealizationTests
         ownedCollections: [collection],
         provenance: Provenance($"tests/{adapter}"));
 
-    static ExecutionProvenance Provenance(string reference) => new(
+    internal static ExecutionProvenance Provenance(string reference) => new(
         producer: new("cohesive-tests", "1"),
         source: new(reference),
         origin: DocumentOrigin.Generated);

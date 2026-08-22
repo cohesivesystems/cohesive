@@ -203,9 +203,13 @@ it validates the retained shape graph, owned paths, complete target coverage, li
 the document is admitted. `StorageRealizationExplainProjector` exposes the effective semantic paths, target
 strategy, guarantees, change attribution, and adapter evidence for review and tooling.
 
-Adapter compilation of these declarations into Cosmos embedding and PostgreSQL decomposition is intentionally a
-separate interpretation layer. It must preserve these guarantees or return structured capability diagnostics; it
-must not mutate the canonical structure to fit a target.
+`PostgresStorageRealizationCompiler` and `CosmosStorageRealizationCompiler` are the official adapter interpretations.
+Both consume the same canonical structure and their existing relation/query storage-binding authorities. PostgreSQL
+requires a root page bounded before a tenant-and-parent-correlated component join, exact component field coverage,
+ordinal evidence, transaction atomicity, and component-to-parent change attribution. Cosmos requires an embedded
+structured-array binding, canonical ordinal array order, complete child coverage, single-document atomicity, and
+root-document change attribution. Either compiler returns a `StorageRealizationCompilationResult`; capability or
+binding gaps are structured diagnostics and never mutate the canonical structure to fit the target.
 
 ## Relation-derived materialization
 
