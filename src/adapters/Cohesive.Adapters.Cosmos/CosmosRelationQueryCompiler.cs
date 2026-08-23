@@ -780,6 +780,7 @@ public sealed class CosmosRelationQueryCompiler
         readonly Dictionary<(ValueBindingId Binding, FieldPath Path), RelationQueryAggregateGroupingExecution> groupings = [];
         readonly Dictionary<(ValueBindingId Binding, FieldPath Path), AggregateBinding> aggregates = [];
         readonly Dictionary<ValueBindingId, string> collectionAliases = [];
+        readonly Dictionary<QueryParameterId, CosmosRelationQueryParameterValueDomain> parameterValueDomains = [];
         readonly HashSet<RelationQueryInputId> selectedInputIds;
         readonly CosmosSqlBuilder builder;
         readonly ImmutableArray<RelationQueryExecutionNode> pipeline;
@@ -880,7 +881,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.RelationTerminalUnsupported,
-                    "Cosmos SQL v3 does not lower relation terminals until root correlation, cardinality, key, and invariant evidence are represented by the native artifact contract.",
+                    "Cosmos SQL v4 does not lower relation terminals until root correlation, cardinality, key, and invariant evidence are represented by the native artifact contract.",
                     branch.Node);
             }
             if (realization.Observability.OccurrenceProvenance
@@ -888,7 +889,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported,
-                    "Cosmos SQL v3 compiles value results only and cannot provide exact contributor-occurrence lineage.",
+                    "Cosmos SQL v4 compiles value results only and cannot provide exact contributor-occurrence lineage.",
                     branch.Node);
             }
             ValidatePipeline();
@@ -936,7 +937,7 @@ public sealed class CosmosRelationQueryCompiler
                 {
                     throw Fail(
                         CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology,
-                        "Canonical Cosmos SQL v3 supports only a linear single-source branch.",
+                        "Canonical Cosmos SQL v4 supports only a linear single-source branch.",
                         execution.Id);
                 }
                 if (execution.LogicalPlan.Inputs.Any(static input => !input.Bypasses.IsDefaultOrEmpty))
@@ -1039,7 +1040,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator,
-                    "Cosmos SQL v3 does not claim ordered or paged aggregate-result equivalence; grouped queries cannot combine GROUP BY and ORDER BY.",
+                    "Cosmos SQL v4 does not claim ordered or paged aggregate-result equivalence; grouped queries cannot combine GROUP BY and ORDER BY.",
                     branch.Node);
             }
         }
@@ -1121,7 +1122,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Whole-row DISTINCT requires one complete projected binding in Cosmos SQL v3.",
+                    "Whole-row DISTINCT requires one complete projected binding in Cosmos SQL v4.",
                     distinct.Id);
             }
 
@@ -1327,7 +1328,7 @@ public sealed class CosmosRelationQueryCompiler
                 AggregateOperator.Min or AggregateOperator.Max => CompileNumericMinimumOrMaximum(aggregate),
                 _ => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported,
-                    $"Aggregate operation '{definition.Operation}' is not in the exact Cosmos SQL v3 closure.",
+                    $"Aggregate operation '{definition.Operation}' is not in the exact Cosmos SQL v4 closure.",
                     branch.Node)
             };
         }
@@ -1353,7 +1354,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported,
-                    $"Cosmos SQL v3 requires a known Int32 value for exact '{aggregate.Execution.Definition.Operation}' semantics.",
+                    $"Cosmos SQL v4 requires a known Int32 value for exact '{aggregate.Execution.Definition.Operation}' semantics.",
                     valueSite.Node ?? branch.Node);
             }
 
@@ -1466,7 +1467,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable,
-                    $"Page size {page.Limit} exceeds the Cosmos v3 boundary of {CosmosRelationQueryTargetProfile.MaximumPageSize}.",
+                    $"Page size {page.Limit} exceeds the Cosmos v4 boundary of {CosmosRelationQueryTargetProfile.MaximumPageSize}.",
                     pageExecution.Id);
             }
             if (orderExecution?.CanonicalNode is not OrderQueryNode ordered)
@@ -1565,6 +1566,9 @@ public sealed class CosmosRelationQueryCompiler
                         "A keyset continuation must have the same exact scalar ordering domain as its ordered key.",
                         pageExecution.Id);
                 }
+                RetainTemporalParameterValueDomain(
+                    keyset.After[index],
+                    boundarySite.Analysis.KnownResult?.GetEffectiveType());
 
                 var key = CompileExpression(ordering.Key, keySite, requireNonNullInputs: true);
                 var continuation = CompileExpression(
@@ -1612,35 +1616,39 @@ public sealed class CosmosRelationQueryCompiler
                 return false;
             if (keyType is ScalarTypeRef { Kind: ScalarTypeKind.Int32 })
                 return true;
-            return keyType is ScalarTypeRef { Kind: ScalarTypeKind.String or ScalarTypeKind.Date }
+            return keyType is ScalarTypeRef
+                { Kind: ScalarTypeKind.String or ScalarTypeKind.Date or ScalarTypeKind.DateTime or ScalarTypeKind.Instant }
                 && sourcePath is { } path
                 && storageBinding.ExactOrderingPaths.Contains(path);
         }
 
         FieldPath? TryResolveStableSourcePath(Expr expression, RelationQueryExpressionSiteAnalysis? site)
         {
-            if (expression is not FieldExpr field)
+            ResolvedFieldRoot? resolved = expression switch
+            {
+                FieldExpr field => ResolveFieldRoot(field.Path, field.Binding, site),
+                FieldRefExpr field => ResolveFieldRoot(field.Path, explicitBinding: null, site),
+                _ => null
+            };
+            if (resolved is null)
+                return null;
+
+            if (resolved.Value.Root != FieldRoot.Binding)
             {
                 return null;
             }
 
-            var resolved = ResolveFieldRoot(field.Path, field.Binding, site);
-            if (resolved.Root != FieldRoot.Binding)
-            {
-                return null;
-            }
-
-            if (projections.TryGetValue((resolved.Binding!.Value, resolved.Path), out var projection))
+            if (projections.TryGetValue((resolved.Value.Binding!.Value, resolved.Value.Path), out var projection))
             {
                 return TryResolveStableSourcePath(projection.Definition.Value, projection.ValueSite);
             }
 
-            if (groupings.ContainsKey((resolved.Binding!.Value, resolved.Path))
-                || aggregates.ContainsKey((resolved.Binding!.Value, resolved.Path)))
+            if (groupings.ContainsKey((resolved.Value.Binding!.Value, resolved.Value.Path))
+                || aggregates.ContainsKey((resolved.Value.Binding!.Value, resolved.Value.Path)))
             {
                 return null;
             }
-            return sourceFields.TryGetValue((resolved.Binding!.Value, resolved.Path), out var input)
+            return sourceFields.TryGetValue((resolved.Value.Binding!.Value, resolved.Value.Path), out var input)
                 ? storageBinding.ResolveField(input.Input.Id)
                 : null;
         }
@@ -1688,7 +1696,7 @@ public sealed class CosmosRelationQueryCompiler
                                    && call.Arguments.Length == 2 => CompileCollectionAny(call, site),
                 CallExpr call => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Function '{call.Function}' is not in the exact canonical Cosmos SQL v3 expression closure.",
+                    $"Function '{call.Function}' is not in the exact canonical Cosmos SQL v4 expression closure.",
                     site?.Node ?? branch.Node),
                 AggregateExpr => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
@@ -1696,7 +1704,7 @@ public sealed class CosmosRelationQueryCompiler
                     site?.Node ?? branch.Node),
                 _ => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Expression node '{expression.GetType().Name}' is not in the exact canonical Cosmos SQL v3 closure.",
+                    $"Expression node '{expression.GetType().Name}' is not in the exact canonical Cosmos SQL v4 closure.",
                     site?.Node ?? branch.Node)
             };
         }
@@ -1718,7 +1726,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Constant value kind '{value.Kind}' has no exact Cosmos SQL v3 parameter encoding.",
+                    $"Constant value kind '{value.Kind}' has no exact Cosmos SQL v4 parameter encoding.",
                     node);
             }
             if (value.Kind != ObservationValueKind.Null
@@ -1774,22 +1782,36 @@ public sealed class CosmosRelationQueryCompiler
 
             var left = AnalyzeSubexpression(binary.Left, site, "left");
             var right = AnalyzeSubexpression(binary.Right, site, "right");
+            var leftType = left.GetEffectiveType();
+            var rightType = right.GetEffectiveType();
+            var exactTemporalDomain = HasExactTemporalComparisonDomain(
+                binary.Left,
+                leftType,
+                binary.Right,
+                rightType,
+                site);
             var supported = binary.Operator switch
             {
                 BinaryOperator.And or BinaryOperator.Or =>
-                    IsBooleanScalar(left.GetEffectiveType()) && IsBooleanScalar(right.GetEffectiveType()),
+                    IsBooleanScalar(leftType) && IsBooleanScalar(rightType),
                 BinaryOperator.Eq or BinaryOperator.Ne =>
-                    AreCosmosEqualityComparable(left.GetEffectiveType(), right.GetEffectiveType()),
+                    AreCosmosEqualityComparable(leftType, rightType) || exactTemporalDomain,
                 BinaryOperator.Gt or BinaryOperator.Ge or BinaryOperator.Lt or BinaryOperator.Le =>
-                    AreCosmosOrderComparable(left.GetEffectiveType(), right.GetEffectiveType()),
+                    AreCosmosOrderComparable(leftType, rightType) || exactTemporalDomain,
                 _ => false
             };
             if (!supported)
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Binary operator '{binary.Operator}' does not have a proven exact Cosmos JSON value domain in v2.",
+                    $"Binary operator '{binary.Operator}' does not have a proven exact Cosmos JSON value domain in v4.",
                     site.Node ?? branch.Node);
+            }
+
+            if (exactTemporalDomain)
+            {
+                RetainTemporalParameterValueDomain(binary.Left, leftType);
+                RetainTemporalParameterValueDomain(binary.Right, rightType);
             }
 
             var leftExpression = CompileExpression(binary.Left, site, requireNonNullInputs: true);
@@ -1806,6 +1828,71 @@ public sealed class CosmosRelationQueryCompiler
                 Convert(binary.Operator),
                 leftExpression,
                 rightExpression);
+        }
+
+        bool HasExactTemporalComparisonDomain(
+            Expr leftExpression,
+            TypeRef? leftType,
+            Expr rightExpression,
+            TypeRef? rightType,
+            RelationQueryExpressionSiteAnalysis site)
+        {
+            if (leftType != rightType || !IsUtcTemporalScalar(leftType))
+                return false;
+
+            var leftPath = TryResolveStableSourcePath(leftExpression, site);
+            var rightPath = TryResolveStableSourcePath(rightExpression, site);
+            if (!HasExactTemporalOperandDomain(leftExpression, leftPath)
+                || !HasExactTemporalOperandDomain(rightExpression, rightPath))
+            {
+                return false;
+            }
+            return leftPath is not null || rightPath is not null;
+        }
+
+        bool HasExactTemporalOperandDomain(Expr expression, FieldPath? sourcePath) =>
+            sourcePath is { } path
+                ? storageBinding.ExactOrderingPaths.Contains(path)
+                : expression is ParameterExpr or ConstantExpr or LiteralExpr;
+
+        void RetainTemporalParameterValueDomain(Expr expression, TypeRef? type)
+        {
+            if (!IsUtcTemporalScalar(type))
+                return;
+            var domain = type is ScalarTypeRef { Kind: ScalarTypeKind.DateTime }
+                ? CosmosRelationQueryParameterValueDomain.UtcRoundTripDateTime
+                : CosmosRelationQueryParameterValueDomain.UtcRoundTripInstant;
+            var constant = expression switch
+            {
+                ConstantExpr value => (ObservationValue?)value.Value,
+                LiteralExpr value => value.Value,
+                _ => null
+            };
+            if (constant is { } retainedConstant
+                && !CosmosRelationQueryCanonicalValueCodec.TryEncodeRuntimeParameter(
+                    new ValueContract(type!),
+                    retainedConstant,
+                    out _,
+                    domain))
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
+                    "A proof-gated Cosmos temporal comparison requires a canonical UTC round-trip constant.",
+                    branch.Node);
+            }
+            if (expression is not ParameterExpr parameter)
+                return;
+
+            QueryParameterId id = new(parameter.Parameter);
+            if (parameterValueDomains.TryGetValue(id, out var retained) && retained != domain)
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.ParameterUnsupported,
+                    $"Canonical parameter '{parameter.Parameter}' is used in incompatible Cosmos temporal domains.",
+                    branch.Node,
+                    parameters[id].Input.Id);
+            }
+            parameterValueDomains[id] = domain;
         }
 
         CosmosSqlExpression CompileContains(
@@ -1883,7 +1970,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    "Canonical any requires a structured object collection in the Cosmos SQL v3 closure.",
+                    "Canonical any requires a structured object collection in the Cosmos SQL v4 closure.",
                     node);
             }
 
@@ -1891,7 +1978,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    "Canonical any requires one direct physical structured collection field in Cosmos SQL v3.",
+                    "Canonical any requires one direct physical structured collection field in Cosmos SQL v4.",
                     node);
             }
 
@@ -2000,7 +2087,7 @@ public sealed class CosmosRelationQueryCompiler
                         item),
                 _ => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Expression node '{expression.GetType().Name}' is outside the direct-child Cosmos SQL v3 collection predicate closure.",
+                    $"Expression node '{expression.GetType().Name}' is outside the direct-child Cosmos SQL v4 collection predicate closure.",
                     site.Node ?? branch.Node,
                     collectionField.Input.Id)
             };
@@ -2250,7 +2337,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    "The current collection child is outside the exact Cosmos SQL v3 scalar equality domains.",
+                    "The current collection child is outside the exact Cosmos SQL v4 scalar equality domains.",
                     node,
                     input);
             }
@@ -2438,7 +2525,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    "A current-item expression requires exactly one visible collection expansion in Cosmos SQL v3.",
+                    "A current-item expression requires exactly one visible collection expansion in Cosmos SQL v4.",
                     branch.Node);
             }
             return CosmosSqlExpression.Alias(collectionAliases.Values.Single());
@@ -2459,7 +2546,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.ParameterUnsupported,
-                    $"Canonical parameter '{parameter.Parameter}' does not have a Cosmos SQL v3 parameter encoding with exact value semantics.",
+                    $"Canonical parameter '{parameter.Parameter}' does not have a Cosmos SQL v4 parameter encoding with exact value semantics.",
                     branch.Node,
                     contract.Input.Id);
             }
@@ -2613,7 +2700,25 @@ public sealed class CosmosRelationQueryCompiler
                         $"SQL runtime slot '{slot.Binding}' does not identify a canonical parameter.",
                         branch.Node);
                 }
-                result.Add(new(slot.Name, contract.Definition, contract.ValueContract));
+                var valueDomain = parameterValueDomains.GetValueOrDefault(parameter);
+                if (contract.Definition.DefaultKind == QueryParameterDefaultKind.Value
+                    && !CosmosRelationQueryCanonicalValueCodec.TryEncodeRuntimeParameter(
+                        contract.ValueContract,
+                        contract.Definition.DefaultValue ?? ObservationValue.Null,
+                        out _,
+                        valueDomain))
+                {
+                    throw Fail(
+                        CosmosRelationQueryCompilationDiagnosticCodes.ParameterUnsupported,
+                        $"Canonical parameter '{parameter.Value}' has a default outside its retained Cosmos value domain.",
+                        branch.Node,
+                        contract.Input.Id);
+                }
+                result.Add(new(
+                    slot.Name,
+                    contract.Definition,
+                    contract.ValueContract,
+                    valueDomain));
             }
             return result.ToImmutable();
         }
@@ -2667,7 +2772,7 @@ public sealed class CosmosRelationQueryCompiler
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                $"Canonical {operation} semantics for missing or null values are not proven exact by Cosmos SQL v3.",
+                $"Canonical {operation} semantics for missing or null values are not proven exact by Cosmos SQL v4.",
                 node);
         }
 
@@ -2695,7 +2800,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Cosmos SQL v3 result fields require a single-valued semantic contract.",
+                    "Cosmos SQL v4 result fields require a single-valued semantic contract.",
                     node);
             }
 
@@ -2704,7 +2809,7 @@ public sealed class CosmosRelationQueryCompiler
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                "Cosmos SQL v3 cannot prove a canonical physical result encoding for this value contract.",
+                "Cosmos SQL v4 cannot prove a canonical physical result encoding for this value contract.",
                 node);
         }
 
@@ -2720,7 +2825,7 @@ public sealed class CosmosRelationQueryCompiler
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                $"Canonical {operation} requires one proven exact scalar equality domain in Cosmos SQL v3.",
+                $"Canonical {operation} requires one proven exact scalar equality domain in Cosmos SQL v4.",
                 node);
         }
 
@@ -2735,7 +2840,8 @@ public sealed class CosmosRelationQueryCompiler
                 return;
             }
 
-            if (type is ScalarTypeRef { Kind: ScalarTypeKind.String or ScalarTypeKind.Date }
+            if (type is ScalarTypeRef
+                    { Kind: ScalarTypeKind.String or ScalarTypeKind.Date or ScalarTypeKind.DateTime or ScalarTypeKind.Instant }
                 && sourcePath is { } path
                 && storageBinding.ExactOrderingPaths.Contains(path))
             {
@@ -2744,7 +2850,7 @@ public sealed class CosmosRelationQueryCompiler
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                "Canonical ordering requires Int32 values or an explicitly proven string/date source path; wider numeric and temporal ordering is not exact in Cosmos SQL v3.",
+                "Canonical ordering requires Int32 values or an explicitly proven string/date/UTC-temporal source path; wider numeric and unproven temporal ordering is not exact in Cosmos SQL v4.",
                 node);
         }
 
@@ -2767,6 +2873,11 @@ public sealed class CosmosRelationQueryCompiler
         static bool IsExactNumericScalar(TypeRef? type) =>
             type is ScalarTypeRef { Kind: ScalarTypeKind.Int32 };
 
+        static bool IsUtcTemporalScalar(TypeRef? type) => type is ScalarTypeRef
+        {
+            Kind: ScalarTypeKind.DateTime or ScalarTypeKind.Instant
+        };
+
         static bool IsCosmosEqualityScalar(TypeRef? type) => type is ScalarTypeRef
         {
             Kind: ScalarTypeKind.Bool
@@ -2788,7 +2899,7 @@ public sealed class CosmosRelationQueryCompiler
             BinaryOperator.Or => CosmosSqlBinaryOperator.Or,
             _ => throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                $"Binary operator '{@operator}' is not in the Cosmos SQL v3 closure.")
+                $"Binary operator '{@operator}' is not in the Cosmos SQL v4 closure.")
         };
 
         static FieldPath RemoveCurrentItemRoot(FieldPath path)
@@ -2866,7 +2977,7 @@ public sealed class CosmosRelationQueryCompiler
 static class CosmosRelationQueryArtifactFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.cosmos-artifact/v1-c14n/v5";
+    const string Canonicalization = "cohesive.relations.cosmos-artifact/v1-c14n/v6";
 
     public static CosmosRelationQueryArtifactFingerprint Compute(
         RelationQueryNativeResultBranch branch,
@@ -2928,6 +3039,7 @@ static class CosmosRelationQueryArtifactFingerprinter
             Append(canonical, parameter.Parameter.Value);
             Append(canonical, JsonSerializer.Serialize(parameter.Definition, jsonOptions));
             Append(canonical, JsonSerializer.Serialize(parameter.ValueContract, jsonOptions));
+            Append(canonical, (int)parameter.ValueDomain);
         }
         Append(canonical, paging is null ? -1 : (int)paging.Kind);
         Append(canonical, paging?.Offset ?? -1);

@@ -13,9 +13,9 @@ public static class CosmosRelationQueryTargetProfile
     /// <summary>Stable Cosmos SQL interpretation-target identity.</summary>
     public static RelationQueryTargetId Target { get; } = new("cohesive.adapters.cosmos.sql");
 
-    /// <summary>Stable v3 capability-profile identity.</summary>
+    /// <summary>Stable v4 capability-profile identity.</summary>
     public static RelationQueryTargetProfileId ProfileId { get; } = new(
-        "cohesive.adapters.cosmos.sql/canonical-v3");
+        "cohesive.adapters.cosmos.sql/canonical-v4");
 
     /// <summary>Operating boundary requiring one physical source/container.</summary>
     public static RelationQueryOperatingBoundaryId SingleSourceBoundary { get; } = new(
@@ -50,7 +50,7 @@ public static class CosmosRelationQueryTargetProfile
         "cosmos/boundary/exact-count-input-rows");
 
     /// <summary>
-    /// Default Cosmos target profile. It advertises operation families interpreted by the canonical v3 compiler;
+    /// Default Cosmos target profile. It advertises operation families interpreted by the canonical v4 compiler;
     /// demand-scoped structural and value-contract checks further constrain their exact supported variants.
     /// </summary>
     public static RelationQueryTargetCapabilityProfile Default { get; } = CreateProfile();
@@ -60,7 +60,7 @@ public static class CosmosRelationQueryTargetProfile
     /// attributable boundary validation.
     /// </summary>
     public static RelationQueryRealizationPolicy Policy { get; } = new(
-        new("cohesive.adapters.cosmos.sql/realization-policy-v3"),
+        new("cohesive.adapters.cosmos.sql/realization-policy-v4"),
         conventionSetVersion: CosmosRelationQueryStorageBinding.SemanticPathConventionSet,
         constrainedRealizations: RelationQueryConstrainedRealizationPolicy.AllowValidated);
 
@@ -169,7 +169,7 @@ public static class CosmosRelationQueryTargetProfile
             [RelationQueryCompilationProvenance.CurrentCompilerProfile],
             evidence,
             boundaries,
-            "Canonical Cosmos SQL v3: exact single-container rows, correlated structured JSON-array existential predicates, and aggregations within declared boundaries.");
+            "Canonical Cosmos SQL v4: exact single-container rows, proof-gated UTC temporal ranges and keysets, correlated structured JSON-array existential predicates, and aggregations within declared boundaries.");
     }
 
     static IEnumerable<ExprCapabilityId> ExpressionCapabilities()

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Cohesive.Model;
 using Cohesive.Model.Expressions;
@@ -93,6 +94,7 @@ internal static class CosmosRelationQueryCanonicalValueCodec
     /// <param name="contract">Effective compiled parameter contract.</param>
     /// <param name="value">Supplied or defaulted invocation value.</param>
     /// <param name="encoded">The unchanged canonical scalar or recursively validated array value when successful.</param>
+    /// <param name="valueDomain">Additional exact physical representation required by the compiled use site.</param>
     /// <returns>
     /// <see langword="true"/> when the value satisfies the contract and already has the exact representation that
     /// Cosmos result decoding returns for the same semantic type.
@@ -100,9 +102,15 @@ internal static class CosmosRelationQueryCanonicalValueCodec
     internal static bool TryEncodeRuntimeParameter(
         ValueContract contract,
         ObservationValue value,
-        out ObservationValue encoded)
+        out ObservationValue encoded,
+        CosmosRelationQueryParameterValueDomain valueDomain = CosmosRelationQueryParameterValueDomain.Canonical)
     {
         ArgumentNullException.ThrowIfNull(contract);
+        if (!Enum.IsDefined(valueDomain))
+        {
+            encoded = default;
+            return false;
+        }
         if (!contract.IsSatisfiedByConstant(value) || value.Kind == ObservationValueKind.Undefined)
         {
             encoded = default;
@@ -119,7 +127,56 @@ internal static class CosmosRelationQueryCanonicalValueCodec
             return false;
         }
 
-        return TryEncodeRuntimeValue(type, value, out encoded);
+        if (valueDomain == CosmosRelationQueryParameterValueDomain.UtcRoundTripInstant
+            && type is ScalarTypeRef { Kind: ScalarTypeKind.Instant })
+        {
+            if (!IsCanonicalUtcInstant(value))
+            {
+                encoded = default;
+                return false;
+            }
+
+            encoded = value;
+            return true;
+        }
+
+        if (!TryEncodeRuntimeValue(type, value, out encoded))
+            return false;
+        return valueDomain switch
+        {
+            CosmosRelationQueryParameterValueDomain.Canonical => true,
+            CosmosRelationQueryParameterValueDomain.UtcRoundTripDateTime => IsCanonicalUtcDateTime(value),
+            _ => false
+        };
+    }
+
+    static bool IsCanonicalUtcDateTime(ObservationValue value)
+    {
+        if (value.Kind != ObservationValueKind.String
+            || !DateTime.TryParseExact(
+                value.String,
+                "O",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind,
+                out var parsed)
+            || parsed.Kind != DateTimeKind.Utc)
+        {
+            return false;
+        }
+        return string.Equals(
+            value.String,
+            parsed.ToString("O", CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
+    }
+
+    static bool IsCanonicalUtcInstant(ObservationValue value)
+    {
+        if (!value.TryGetInstant(out var parsed) || parsed.Offset != TimeSpan.Zero)
+            return false;
+        return string.Equals(
+            value.String,
+            parsed.ToString("O", CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
     }
 
     /// <summary>Decodes one non-null physical result value according to retained exact encoding metadata.</summary>
@@ -205,8 +262,11 @@ internal static class CosmosRelationQueryCanonicalValueCodec
             case ScalarTypeKind.String when value.Kind == ObservationValueKind.String:
                 encoded = value;
                 return true;
-            case ScalarTypeKind.Guid or ScalarTypeKind.Date or ScalarTypeKind.DateTime or ScalarTypeKind.Instant
+            case ScalarTypeKind.Guid or ScalarTypeKind.Date or ScalarTypeKind.DateTime
                 when value.Kind == ObservationValueKind.String:
+                encoded = value;
+                return true;
+            case ScalarTypeKind.Instant when value.Kind == ObservationValueKind.String:
                 encoded = value;
                 return true;
             default:

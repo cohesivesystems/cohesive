@@ -11,7 +11,7 @@ namespace Cohesive.Adapters.Cosmos;
 public sealed record CosmosRelationQueryCompilerOptions
 {
     /// <summary>Current canonical Cosmos SQL compiler profile.</summary>
-    public const string CurrentCompilerProfile = "cohesive.adapters.cosmos.sql/compiler-v3";
+    public const string CurrentCompilerProfile = "cohesive.adapters.cosmos.sql/compiler-v4";
 
     /// <summary>Creates canonical Cosmos compiler options.</summary>
     /// <param name="compilerProfile">Stable compiler implementation/profile identity.</param>
@@ -205,6 +205,19 @@ public sealed record CosmosRelationQueryResultIdentityBinding
     public CosmosRelationQueryResultValueEncoding Encoding { get; }
 }
 
+/// <summary>Additional physical value-domain constraint retained for a Cosmos invocation parameter.</summary>
+public enum CosmosRelationQueryParameterValueDomain
+{
+    /// <summary>The ordinary canonical Cosmos parameter closure for the declared semantic type.</summary>
+    Canonical = 0,
+
+    /// <summary>A UTC <see cref="DateTime"/> round-trip string whose ordinal order is chronological.</summary>
+    UtcRoundTripDateTime = 1,
+
+    /// <summary>A zero-offset <see cref="DateTimeOffset"/> round-trip value whose ordinal order is chronological.</summary>
+    UtcRoundTripInstant = 2
+}
+
 /// <summary>Binding from one command-template slot to one canonical invocation parameter.</summary>
 public sealed record CosmosRelationQueryParameterBinding
 {
@@ -212,6 +225,7 @@ public sealed record CosmosRelationQueryParameterBinding
     /// <param name="sqlName">Allocated SQL parameter name.</param>
     /// <param name="definition">Canonical parameter declaration.</param>
     /// <param name="valueContract">Exact effective compiled value contract after default application.</param>
+    /// <param name="valueDomain">Additional physical representation required by the compiled use site.</param>
     /// <exception cref="ArgumentNullException"><paramref name="definition"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="valueContract"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
@@ -220,13 +234,49 @@ public sealed record CosmosRelationQueryParameterBinding
     public CosmosRelationQueryParameterBinding(
         string sqlName,
         QueryParameterDefinition definition,
-        ValueContract valueContract)
+        ValueContract valueContract,
+        CosmosRelationQueryParameterValueDomain valueDomain = CosmosRelationQueryParameterValueDomain.Canonical)
     {
         SqlName = CosmosSqlNames.RequireParameterName(sqlName, nameof(sqlName));
         Definition = Guard.RequireNotNull(definition);
         ValueContract = Guard.RequireNotNull(valueContract);
         if (ValueContract != Definition.EffectiveValueContract)
             throw new ArgumentException("The parameter value contract must match the canonical declaration.", nameof(valueContract));
+        if (!Enum.IsDefined(valueDomain))
+            throw new ArgumentOutOfRangeException(nameof(valueDomain), valueDomain, "Unsupported Cosmos parameter value domain.");
+        var effectiveType = ValueContract.GetEffectiveType();
+        if ((valueDomain == CosmosRelationQueryParameterValueDomain.UtcRoundTripDateTime
+             && effectiveType is not ScalarTypeRef { Kind: ScalarTypeKind.DateTime })
+            || (valueDomain == CosmosRelationQueryParameterValueDomain.UtcRoundTripInstant
+                && effectiveType is not ScalarTypeRef { Kind: ScalarTypeKind.Instant }))
+        {
+            throw new ArgumentException(
+                "The Cosmos parameter value domain does not match its canonical temporal type.",
+                nameof(valueDomain));
+        }
+        if (valueDomain != CosmosRelationQueryParameterValueDomain.Canonical
+            && ValueContract is not
+            {
+                Presence: FieldPresence.Required,
+                Nullability: FieldNullability.NonNullable
+            })
+        {
+            throw new ArgumentException(
+                "A Cosmos temporal ordering parameter must be required and non-null.",
+                nameof(valueContract));
+        }
+        if (Definition.DefaultKind == QueryParameterDefaultKind.Value
+            && !CosmosRelationQueryCanonicalValueCodec.TryEncodeRuntimeParameter(
+                ValueContract,
+                Definition.DefaultValue ?? ObservationValue.Null,
+                out _,
+                valueDomain))
+        {
+            throw new ArgumentException(
+                "The canonical parameter default does not satisfy its retained Cosmos value domain.",
+                nameof(definition));
+        }
+        ValueDomain = valueDomain;
     }
 
     /// <summary>Allocated SQL parameter name.</summary>
@@ -237,6 +287,9 @@ public sealed record CosmosRelationQueryParameterBinding
 
     /// <summary>Exact effective compiled value contract after default application.</summary>
     public ValueContract ValueContract { get; }
+
+    /// <summary>Additional exact physical representation required by the compiled use site.</summary>
+    public CosmosRelationQueryParameterValueDomain ValueDomain { get; }
 
     /// <summary>Stable canonical parameter identity.</summary>
     public QueryParameterId Parameter => Definition.Id;
@@ -462,7 +515,8 @@ public sealed class CosmosRelationQueryCompiledArtifact
             if (!CosmosRelationQueryCanonicalValueCodec.TryEncodeRuntimeParameter(
                     binding.ValueContract,
                     value,
-                    out var encoded))
+                    out var encoded,
+                    binding.ValueDomain))
             {
                 throw new ArgumentException(
                     $"Canonical query parameter '{binding.Parameter.Value}' does not satisfy its effective compiled value contract or exact Cosmos representation.",
@@ -586,10 +640,10 @@ public static class CosmosRelationQueryCompilationDiagnosticCodes
     /// <summary>Artifact construction failed an internal consistency check.</summary>
     public const string ArtifactInvalid = "REL2219";
 
-    /// <summary>The requested runtime result observability cannot be produced by Cosmos SQL v3.</summary>
+    /// <summary>The requested runtime result observability cannot be produced by Cosmos SQL v4.</summary>
     public const string ResultObservabilityUnsupported = "REL2220";
 
-    /// <summary>A relation terminal requires root, cardinality, key, or invariant semantics absent from the v2 artifact contract.</summary>
+    /// <summary>A relation terminal requires root, cardinality, key, or invariant semantics absent from the native artifact contract.</summary>
     public const string RelationTerminalUnsupported = "REL2221";
 
     /// <summary>Exact structured collection-element binding evidence is unavailable or insufficient.</summary>

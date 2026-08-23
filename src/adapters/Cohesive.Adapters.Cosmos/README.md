@@ -121,7 +121,7 @@ illustrative fragment below assumes `plan`, `loadShape`, an SDK `loadsContainer`
 a `cancellationToken`; the authored query requests both a row branch and an aggregation branch. Source placement
 and the Cosmos storage binding are separate persisted interpretations of that plan. The Cosmos adapter supplies a
 conservative target profile and policy. The realization must explicitly request value results without
-contributor-occurrence lineage because Cosmos SQL v3 does not reconstruct source occurrence identities:
+contributor-occurrence lineage because Cosmos SQL v4 does not reconstruct source occurrence identities:
 
 Profile feasibility establishes what the Cosmos target family could support. `Realize(...)` then qualifies that
 profile against the exact placement, container binding, field evidence, and compiler policy. Only the resulting
@@ -392,9 +392,9 @@ demand-scoped compiled plan and accepts only the exact native variants described
 variant produces an attributable `REL22xx` diagnostic; successful capability realization alone is not a promise
 that every shape of the operation has a Cosmos-native lowering.
 
-### Exact v3 Semantic Envelope
+### Exact v4 Semantic Envelope
 
-The default `cohesive.adapters.cosmos.sql/canonical-v3` profile and compiler support only the closure they can
+The default `cohesive.adapters.cosmos.sql/canonical-v4` profile and compiler support only the closure they can
 currently prove exact:
 
 - One placed source set bound to one Cosmos container, with no relationship traversal or cross-source stage.
@@ -411,19 +411,22 @@ currently prove exact:
 - Correlated structured-collection `Any` over one direct JSON-array field, with direct required child comparisons
   and the explicit same-element, absence, empty-array, scalar-domain, and comparison evidence described above.
 - Numeric comparison and ordering over known required, non-null `Int32` values. String and date `ORDER BY`
-  additionally require the source path in the binding's `ExactOrderingPaths` proof set.
+  additionally require the source path in the binding's `ExactOrderingPaths` proof set. Required, non-null
+  `DateTime` and `Instant` equality/range predicates, ordering, and keyset continuations require the same explicit
+  path proof plus canonical UTC round-trip parameter values. The proof asserts that every participating stored
+  value uses the corresponding UTC round-trip JSON string domain; a field name or temporal CLR type is not proof.
 - Ungrouped row `COUNT` (emitted as `COUNT(1)`) when the storage binding proves
   `maximumInputRows <= 2^53 - 1`.
 
-The v3 compiler rejects unsupported topology or semantics with deterministic `REL22xx` diagnostics. Notable
+The v4 compiler rejects unsupported topology or semantics with deterministic `REL22xx` diagnostics. Notable
 deferrals include relationship joins, relation-row output, cross-container queries, nullable keyset ordering, aggregate
 filters, `COUNT(expression)`, `SUM`, ungrouped `MIN`/`MAX`, aggregate ordering or paging, `GROUP BY` combined
 with `ORDER BY`, grouped aggregation without an attributable deterministic output-order strategy, expanded row
 results without collection-element ordering evidence, unordered `DISTINCT`, precision-unsafe numeric comparison
-or ordering, `DateTime`/`Instant` relational comparison or ordering, string/date `ORDER BY` without physical
-ordering evidence, nested collections and deeper current-element paths, and any expression or aggregate outside the
-advertised exact type closure. It never falls back to client evaluation or silently substitutes weaker Cosmos
-behavior.
+or ordering, temporal comparison/order without physical UTC ordering evidence, non-canonical temporal continuation
+values, string/date `ORDER BY` without physical ordering evidence, nested collections and deeper current-element
+paths, and any expression or aggregate outside the advertised exact type closure. It never falls back to client
+evaluation or silently substitutes weaker Cosmos behavior.
 
 ### Missing, Null, Distinctness, Ordering, Paging, Parameters, and Aggregation
 
