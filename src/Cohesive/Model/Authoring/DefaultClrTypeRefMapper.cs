@@ -15,9 +15,10 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     /// Maps the supplied CLR type to a semantic type reference using available nullability metadata.
     /// </summary>
     /// <remarks>
-    /// Structural object fields use <see cref="JsonPropertyNameAttribute"/> when present and otherwise use the CLR
-    /// property name. Fields are ordered ordinally by that semantic name. Unsupported, recursive, polymorphic, or
-    /// ambiguous CLR shapes produce an <see cref="OpaqueRuntimeTypeRef"/> carrying a type-inference diagnostic.
+    /// Types declaring <see cref="PortableJsonValueAttribute"/> retain their explicit JSON contract. Structural
+    /// object fields use <see cref="JsonPropertyNameAttribute"/> when present and otherwise use the CLR property
+    /// name. Fields are ordered ordinally by that semantic name. Unsupported, recursive, polymorphic, or ambiguous
+    /// CLR shapes produce an <see cref="OpaqueRuntimeTypeRef"/> carrying a type-inference diagnostic.
     /// </remarks>
     /// <param name="clrType">CLR type to project into a portable semantic type reference.</param>
     /// <param name="nullability">Optional reflection nullability metadata for the mapped occurrence.</param>
@@ -37,6 +38,9 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 
         if (unwrapped.IsEnum)
             return new EnumTypeRef(name: unwrapped.Name, members: [.. Enum.GetNames(enumType: unwrapped)]);
+
+        if (PortableJsonValueAttribute.TryGetKind(unwrapped, out var portableJsonKind))
+            return new JsonTypeRef(portableJsonKind);
 
         if (TryMapJsonType(unwrapped, out var jsonType))
             return jsonType;

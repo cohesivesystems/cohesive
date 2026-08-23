@@ -30,6 +30,24 @@ var graph = new ClrShapeGraphBuilder()
     .Build(new("shipping"));
 ```
 
+### Typed portable JSON values
+
+Use `PortableJsonValueAttribute` when a CLR type's semantic representation is one JSON value and a separate JSON
+Schema or semantic validator owns its internal structure:
+
+```csharp
+[PortableJsonValue(JsonTypeKind.Object)]
+public sealed record PartnerProtocolSpec(
+    string SchemaVersion,
+    IReadOnlyDictionary<string, object?> Content);
+```
+
+Canonical CLR contract inference represents the marked type as `JsonTypeRef` at root, nested, and collection
+occurrences. Typed Query handlers and Transition fields retain `PartnerProtocolSpec`; runtime projection serializes
+it to portable observation JSON and typed dispatch materializes it back. Do not use the attribute to hide an
+ordinary domain object from structural inference. The declaration is appropriate only when JSON is authoritative,
+serialization is deterministic, and the declared `JsonTypeKind` is guaranteed for every instance.
+
 ## Package Role
 
 `Cohesive` is the foundation package. Higher-level blocks such as `Cohesive.Relations`, `Cohesive.Transitions`, `Cohesive.Processes`, `Cohesive.Presentation`, and `Cohesive.Api` depend on it.

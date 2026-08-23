@@ -5,6 +5,7 @@ namespace Cohesive.Model.Serialization;
 /// <summary>
 /// Portable JSON document envelope for a <see cref="ShapeGraph"/>.
 /// </summary>
+[PortableJsonValue(JsonTypeKind.Object)]
 public sealed record ShapeGraphDocument
 {
     /// <summary>

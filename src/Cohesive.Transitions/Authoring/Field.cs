@@ -262,8 +262,8 @@ public class Field<T> : IAuthoredField
             case OpaqueRuntimeTypeRef:
                 return true;
 
-            case JsonTypeRef:
-                return IsJsonClrTypeCompatible(t);
+            case JsonTypeRef json:
+                return IsJsonClrTypeCompatible(t, json.Kind);
 
             case ScalarTypeRef scalar:
                 return DefaultClrTypeRefMapper.TryMapScalarTypeKind(t, out var mappedKind)
@@ -307,11 +307,18 @@ public class Field<T> : IAuthoredField
         return false;
     }
 
-    static bool IsJsonClrTypeCompatible(Type clrType) =>
-        clrType == typeof(System.Text.Json.JsonElement)
+    static bool IsJsonClrTypeCompatible(Type clrType, JsonTypeKind expectedKind)
+    {
+        if (PortableJsonValueAttribute.TryGetKind(clrType, out var portableJsonKind))
+        {
+            return expectedKind == JsonTypeKind.Any || portableJsonKind == expectedKind;
+        }
+
+        return clrType == typeof(System.Text.Json.JsonElement)
         || clrType == typeof(System.Text.Json.JsonDocument)
         || clrType == typeof(AnnotationValue)
         || typeof(System.Text.Json.Nodes.JsonNode).IsAssignableFrom(clrType);
+    }
 
     static bool TryGetStructuredQuantityRepresentationType(Type type, out Type representationType)
     {
