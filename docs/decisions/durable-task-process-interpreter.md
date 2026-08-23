@@ -268,8 +268,9 @@ separates not found, in-progress, available, and terminal-without-artifact outco
 never claims completeness. The migration-only Core reader is unsupported because its provider history is not
 canonical trace evidence.
 
-Current monitoring retains the start receipt's exact definition reference directly on `ProcessExecutionRecord`,
-including the pending admission window before custom status exists. `DurableTaskProcessExecutionExplainRepository`
+Current monitoring retains the start receipt's exact definition reference and canonical logical Process identity
+directly on `ProcessExecutionRecord`, including the pending admission window before custom status exists. The
+physical task-hub identity remains a separate engine-administration key. `DurableTaskProcessExecutionExplainRepository`
 combines that current repository with the immutable exact deployed plan catalog and returns the shared
 `ExecutionExplainArtifact`. It projects static evidence from the already compiled canonical plan, one realization
 claim for every source-inventory disposition in the retained target report, safe current state from `ExecutionStatus`,

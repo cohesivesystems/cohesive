@@ -138,6 +138,11 @@ public sealed record ProcessExecutionQueryResult(
 /// This remains available during admission windows in which <paramref name="RuntimeStatus"/> has not yet been
 /// published.
 /// </param>
+/// <param name="LogicalProcessInstanceId">
+/// Canonical logical Process identity when retained by the backing interpretation. This remains available during
+/// admission windows in which <paramref name="RuntimeStatus"/> has not yet been published and intentionally differs
+/// from the physical <paramref name="ProcessId"/> assigned by the backing engine.
+/// </param>
 public sealed record ProcessExecutionRecord(
     string ProcessId,
     string? ProcessName,
@@ -150,7 +155,8 @@ public sealed record ProcessExecutionRecord(
     ProcessExecutionError? Error = null,
     object? Output = null,
     ExecutionStatus? RuntimeStatus = null,
-    ExecutionDefinitionReference? Definition = null
+    ExecutionDefinitionReference? Definition = null,
+    ProcessInstanceId? LogicalProcessInstanceId = null
 )
 {
     /// <summary>

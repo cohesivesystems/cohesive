@@ -94,6 +94,7 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         Assert.Equal(
             fixture.WaitingStatus.ProcessInstanceId,
             Assert.IsType<ExecutionStatus>(record.RuntimeStatus).ProcessInstanceId);
+        Assert.Equal(fixture.LogicalInstanceId, record.LogicalProcessInstanceId);
         Assert.NotEqual(record.ProcessId, record.RuntimeStatus.ProcessInstanceId.Value);
         Assert.Equal(fixture.WaitingStatus.Definition.DefinitionId.Value, record.ProcessName);
         Assert.Equal(fixture.WaitingStatus.Definition, record.Definition);
@@ -118,6 +119,7 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         Assert.Equal(ProcessExecutionStatus.Pending, record.Status);
         Assert.Null(record.RuntimeStatus);
         Assert.Equal(fixture.Start.Receipt.Request.Definition, record.Definition);
+        Assert.Equal(fixture.LogicalInstanceId, record.LogicalProcessInstanceId);
         Assert.Equal(fixture.WaitingStatus.Definition.DefinitionId.Value, record.ProcessName);
 
         var running = Metadata(fixture, status: null, OrchestrationRuntimeStatus.Running);
@@ -568,7 +570,9 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             OrchestrationRuntimeStatus.Running,
             Assert.IsAssignableFrom<IEnumerable<OrchestrationRuntimeStatus>>(query.Statuses));
         Assert.Equal("ct-out", result.ContinuationToken);
-        Assert.Equal(fixture.PhysicalInstanceId, Assert.Single(result.Items).ProcessId);
+        var item = Assert.Single(result.Items);
+        Assert.Equal(fixture.PhysicalInstanceId, item.ProcessId);
+        Assert.Equal(fixture.LogicalInstanceId, item.LogicalProcessInstanceId);
     }
 
     [Fact]

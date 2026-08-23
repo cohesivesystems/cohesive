@@ -284,6 +284,7 @@ public sealed class DurableTaskProcessExecutionRepository :
         ValidateTags(metadata, start);
         var runtimeStatus = ReadCurrentStatus(metadata);
         ValidateStatusAffinity(metadata, start, runtimeStatus);
+        var logicalProcessInstanceId = start.Receipt.Request.InitialContinuation.ProcessInstanceId;
 
         if (runtimeStatus is null && metadata.RuntimeStatus != ModernOrchestrationStatus.Pending)
         {
@@ -314,7 +315,8 @@ public sealed class DurableTaskProcessExecutionRepository :
             Error: null,
             Output: null,
             RuntimeStatus: runtimeStatus,
-            Definition: definition);
+            Definition: definition,
+            LogicalProcessInstanceId: logicalProcessInstanceId);
     }
 
     static DurableTaskSequentialProcessStart ReadCurrentStart(ModernOrchestrationMetadata metadata)
