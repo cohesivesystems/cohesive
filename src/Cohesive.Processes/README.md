@@ -160,6 +160,22 @@ reclassified as an operational failure. The raw exact-reference overload remains
 importers. Both forms lower to the same canonical `InvokeProcessProcessNode` and therefore have identical
 interpreter and replay behavior.
 
+A root computation may also declare one exact lifecycle cancellation finalizer without reauthoring the Process
+through the advanced builder:
+
+```csharp
+process.OnCancellation(
+    TrainingCancellationFinalizationProcessFamily.Invocation,
+    id: new("training/cancel/finalize"));
+```
+
+This non-awaited, top-level declaration lowers to the canonical `CancellationFinalizerProcessNode`; it is not an
+ordinary control-flow step or a runtime callback. The child receives only
+`ProcessCancellationFinalizationInput<TInput>`—the immutable root input plus exact cancellation context—and must
+return `ProcessCancellationAcknowledgement` for the cancelled attempt. Mutable application state must therefore be
+reacquired inside the child through ordinary canonical operations. Nested declarations and protocols for a
+different root input type are rejected at the source site.
+
 Typed Request protocols can also project heterogeneous terminal outcomes into an ordinary closed C# family:
 
 ```csharp

@@ -391,6 +391,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly List<PatternOutput> patternOutputs = [];
         readonly List<BranchObligation> requestObligations = [];
         readonly Dictionary<string, int> semanticRoleOrdinals = new(StringComparer.Ordinal);
+        bool cancellationFinalizerDeclared;
         int variableOrdinal;
 
         public FlowParser(
@@ -810,6 +811,40 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             out FlowStatement flow)
         {
             flow = null!;
+            if (TryGetContextInvocation(statement, out var declaration)
+                && declaration.TargetMethod.Name == "OnCancellation")
+            {
+                if (!structuralPath.IsEmpty)
+                {
+                    return StatementFailure(
+                        statement,
+                        "OnCancellation is a Process-level lifecycle declaration and must appear in the root computation body");
+                }
+                if (cancellationFinalizerDeclared)
+                {
+                    return StatementFailure(
+                        statement,
+                        "a Process computation may declare only one cancellation finalizer");
+                }
+                if (declaration.TargetMethod.TypeArguments.Length != 1
+                    || !SymbolEqualityComparer.Default.Equals(
+                        declaration.TargetMethod.TypeArguments[0],
+                        inputParameter.Type))
+                {
+                    return StatementFailure(
+                        statement,
+                        "OnCancellation protocol input must contain the exact root Process input type");
+                }
+
+                cancellationFinalizerDeclared = true;
+                flow = new ActionFlow(
+                    NextIdentity("cancellation-finalizer", structuralPath),
+                    ActionKind.CancellationFinalizer,
+                    declaration,
+                    SourceLocation(statement),
+                    statement);
+                return true;
+            }
             if (TryGetForkJoinInvocation(statement, out _))
             {
                 if (!TryParseForkJoin(statement, structuralPath, out var forkJoin))
@@ -2118,6 +2153,23 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             return true;
         }
 
+        bool TryGetContextInvocation(StatementSyntax statement, out IInvocationOperation invocation)
+        {
+            invocation = null!;
+            if (statement is not ExpressionStatementSyntax expression
+                || semanticModel.GetOperation(expression.Expression) is not IInvocationOperation candidate
+                || !SymbolEqualityComparer.Default.Equals(candidate.TargetMethod.ContainingType, contextParameter.Type)
+                || candidate.Instance is null
+                || Strip(candidate.Instance) is not IParameterReferenceOperation contextReference
+                || !SymbolEqualityComparer.Default.Equals(contextReference.Parameter, contextParameter))
+            {
+                return false;
+            }
+
+            invocation = candidate;
+            return true;
+        }
+
         static ImmutableArray<IOperation> CollectionArguments(IInvocationOperation invocation, string parameterName)
         {
             var argument = Argument(invocation, parameterName);
@@ -3334,6 +3386,15 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         break;
 
                     case ActionFlow action:
+                        if (action.Kind == ActionKind.CancellationFinalizer)
+                        {
+                            if (!TryEmitAction(action, successor: null))
+                            {
+                                return false;
+                            }
+
+                            break;
+                        }
                         if (action.Kind == ActionKind.ContinueAt)
                         {
                             var target = Argument(action.Invocation, "target");
@@ -3764,6 +3825,19 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         terminalResult,
                         action.Source,
                         action.Syntax);
+
+                case ActionKind.CancellationFinalizer:
+                    var protocol = Argument(action.Invocation, "protocol");
+                    if (protocol is null
+                        || !TryEmitExactArgument(protocol, action.Syntax, out var protocolExpression))
+                    {
+                        return StatementFailure(
+                            action.Syntax,
+                            "OnCancellation requires one exact typed cancellation-finalizer protocol");
+                    }
+                    builderStatements.Add(
+                        $"__builder.OnCancellation(id: {action.Identity.Variable}, protocol: {protocolExpression}, {SourceArguments(action.Source, method.Name)});");
+                    return true;
 
                 default:
                     return StatementFailure(action.Syntax, "unsupported awaited Process action");
@@ -5840,7 +5914,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         Succeed = 5,
         Terminate = 6,
         EmitEvent = 7,
-        SendSignal = 8
+        SendSignal = 8,
+        CancellationFinalizer = 9
     }
 
     enum AwaitClauseKind
