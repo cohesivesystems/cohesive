@@ -1050,7 +1050,15 @@ static class InfrastructureDiagnosticReferences
         $"{document.Definition.Id.Value}@{document.Definition.Revision.Value}"
         + $"#{document.Fingerprint.Algorithm}:{document.Fingerprint.Canonicalization}:{document.Fingerprint.Value}";
 
+    internal static string DefinitionReference(InfrastructureDefinitionReference definition) =>
+        $"{definition.Id.Value}@{definition.Revision.Value}"
+        + $"#{definition.Fingerprint.Algorithm}:{definition.Fingerprint.Canonicalization}:{definition.Fingerprint.Value}";
+
     internal static string CapabilityProfile(InfrastructureCapabilityProfile profile) =>
+        $"{profile.Id.Value}"
+        + $"#{profile.Fingerprint.Algorithm}:{profile.Fingerprint.Canonicalization}:{profile.Fingerprint.Value}";
+
+    internal static string CapabilityProfileReference(InfrastructureCapabilityProfileReference profile) =>
         $"{profile.Id.Value}"
         + $"#{profile.Fingerprint.Algorithm}:{profile.Fingerprint.Canonicalization}:{profile.Fingerprint.Value}";
 
@@ -1061,4 +1069,12 @@ static class InfrastructureDiagnosticReferences
     internal static string BindingProfileReference(InfrastructureBindingElaborationProfileReference profile) =>
         $"{profile.Id.Value}"
         + $"#{profile.Fingerprint.Algorithm}:{profile.Fingerprint.Canonicalization}:{profile.Fingerprint.Value}";
+
+    internal static string BoundaryAcceptancePolicy(InfrastructureBoundaryAcceptancePolicy policy) =>
+        $"{policy.Id.Value}"
+        + $"#{policy.Fingerprint.Algorithm}:{policy.Fingerprint.Canonicalization}:{policy.Fingerprint.Value}";
+
+    internal static string BoundaryAcceptancePolicyReference(InfrastructureBoundaryAcceptancePolicyReference policy) =>
+        $"{policy.Id.Value}"
+        + $"#{policy.Fingerprint.Algorithm}:{policy.Fingerprint.Canonicalization}:{policy.Fingerprint.Value}";
 }

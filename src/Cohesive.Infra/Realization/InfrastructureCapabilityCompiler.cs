@@ -24,6 +24,18 @@ public static class InfrastructureCapabilityDiagnosticCodes
     /// <summary>A constrained proof requires exact environment-policy acceptance before it can close.</summary>
     public const string OperatingBoundaryAcceptanceRequired = "infra.capabilities.boundary.acceptanceRequired";
 
+    /// <summary>The supplied boundary-acceptance policy uses a schema unsupported by this compiler.</summary>
+    public const string BoundaryAcceptancePolicySchemaUnsupported = "infra.capabilities.boundary.policySchemaUnsupported";
+
+    /// <summary>A boundary acceptance names a requirement absent from the exact compiled demand set.</summary>
+    public const string BoundaryAcceptanceRequirementUnknown = "infra.capabilities.boundary.requirementUnknown";
+
+    /// <summary>A boundary acceptance does not belong to the selected constrained proof.</summary>
+    public const string BoundaryAcceptanceUnexpected = "infra.capabilities.boundary.unexpectedAcceptance";
+
+    /// <summary>The supplied policy is fenced to a different exact compiler authority.</summary>
+    public const string BoundaryAcceptancePolicyFenceMismatch = "infra.capabilities.boundary.policyFenceMismatch";
+
     /// <summary>Several valid proofs preserve one requirement and no policy selected between them.</summary>
     public const string RequirementAmbiguous = "infra.capabilities.requirement.ambiguous";
 
@@ -45,6 +57,8 @@ public sealed record InfrastructureCapabilityDecision
     /// <param name="rules">Transitive capability-composition rule identities.</param>
     /// <param name="operatingBoundaries">Transitive operating-boundary identities.</param>
     /// <param name="preservedGuarantees">Guarantee capabilities explicitly preserved by selected rules.</param>
+    /// <param name="acceptedOperatingBoundaries">Demand-scoped boundaries accepted by exact policy.</param>
+    /// <param name="missingOperatingBoundaries">Selected boundaries still requiring acceptance.</param>
     /// <exception cref="ArgumentException">An identity, collection, or realization-specific invariant is invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="realization"/> is unsupported.</exception>
     [JsonConstructor]
@@ -55,7 +69,9 @@ public sealed record InfrastructureCapabilityDecision
         ImmutableArray<InfrastructureCapabilityEvidenceId> evidence = default,
         ImmutableArray<InfrastructureCapabilityRuleId> rules = default,
         ImmutableArray<InfrastructureOperatingBoundaryId> operatingBoundaries = default,
-        ImmutableArray<InfrastructureCapabilityId> preservedGuarantees = default)
+        ImmutableArray<InfrastructureCapabilityId> preservedGuarantees = default,
+        ImmutableArray<InfrastructureOperatingBoundaryId> acceptedOperatingBoundaries = default,
+        ImmutableArray<InfrastructureOperatingBoundaryId> missingOperatingBoundaries = default)
     {
         if (string.IsNullOrWhiteSpace(requirement.Value))
             throw new ArgumentException("An infrastructure capability decision requires a requirement identity.", nameof(requirement));
@@ -83,6 +99,18 @@ public sealed record InfrastructureCapabilityDecision
             preservedGuarantees,
             static identity => identity.Value,
             nameof(preservedGuarantees));
+        AcceptedOperatingBoundaries = InfrastructureCapabilityCollections.IdentitySet(
+            acceptedOperatingBoundaries,
+            static identity => identity.Value,
+            nameof(acceptedOperatingBoundaries));
+        MissingOperatingBoundaries = acceptedOperatingBoundaries.IsDefault
+            && missingOperatingBoundaries.IsDefault
+            && realization == CapabilityRealizationKind.Constrained
+                ? OperatingBoundaries
+                : InfrastructureCapabilityCollections.IdentitySet(
+                    missingOperatingBoundaries,
+                    static identity => identity.Value,
+                    nameof(missingOperatingBoundaries));
 
         var available = realization is not CapabilityRealizationKind.Unavailable and not CapabilityRealizationKind.Unknown;
         if (available && Evidence.IsDefaultOrEmpty)
@@ -104,6 +132,24 @@ public sealed record InfrastructureCapabilityDecision
             throw new ArgumentException("Composed capability decisions require a rule or several evidence assertions.", nameof(realization));
         if (realization == CapabilityRealizationKind.Constrained && OperatingBoundaries.IsDefaultOrEmpty)
             throw new ArgumentException("Constrained capability decisions require an operating boundary.", nameof(realization));
+        if (realization != CapabilityRealizationKind.Constrained
+            && (!AcceptedOperatingBoundaries.IsDefaultOrEmpty || !MissingOperatingBoundaries.IsDefaultOrEmpty))
+        {
+            throw new ArgumentException(
+                "Only constrained capability decisions can claim boundary-acceptance policy.",
+                nameof(realization));
+        }
+        if (realization == CapabilityRealizationKind.Constrained
+            && (AcceptedOperatingBoundaries.Any(boundary => !OperatingBoundaries.Contains(boundary))
+                || MissingOperatingBoundaries.Any(boundary => !OperatingBoundaries.Contains(boundary))
+                || AcceptedOperatingBoundaries.Any(MissingOperatingBoundaries.Contains)
+                || OperatingBoundaries.Any(boundary =>
+                    !AcceptedOperatingBoundaries.Contains(boundary) && !MissingOperatingBoundaries.Contains(boundary))))
+        {
+            throw new ArgumentException(
+                "Accepted and missing operating boundaries must exactly partition the constrained proof boundaries.",
+                nameof(acceptedOperatingBoundaries));
+        }
     }
 
     /// <summary>Exact definition-local requirement identity.</summary>
@@ -127,8 +173,17 @@ public sealed record InfrastructureCapabilityDecision
     /// <summary>Guarantee capabilities explicitly preserved by selected rules in ordinal order.</summary>
     public ImmutableArray<InfrastructureCapabilityId> PreservedGuarantees { get; }
 
-    /// <summary>Whether the decision supplies an available exact realization.</summary>
+    /// <summary>Demand-scoped operating boundaries accepted by exact policy in ordinal order.</summary>
+    public ImmutableArray<InfrastructureOperatingBoundaryId> AcceptedOperatingBoundaries { get; }
+
+    /// <summary>Selected operating boundaries still requiring exact acceptance in ordinal order.</summary>
+    public ImmutableArray<InfrastructureOperatingBoundaryId> MissingOperatingBoundaries { get; }
+
+    /// <summary>Whether the target strategy supplies proof evidence, independent of boundary acceptance.</summary>
     public bool IsAvailable => Realization is not CapabilityRealizationKind.Unavailable and not CapabilityRealizationKind.Unknown;
+
+    /// <summary>Whether proof evidence is available and every constrained boundary is accepted.</summary>
+    public bool IsAdmissible => IsAvailable && MissingOperatingBoundaries.IsDefaultOrEmpty;
 
     /// <summary>Compares capability decisions structurally.</summary>
     /// <param name="other">Other decision.</param>
@@ -142,7 +197,9 @@ public sealed record InfrastructureCapabilityDecision
         && Evidence.SequenceEqual(other.Evidence)
         && Rules.SequenceEqual(other.Rules)
         && OperatingBoundaries.SequenceEqual(other.OperatingBoundaries)
-        && PreservedGuarantees.SequenceEqual(other.PreservedGuarantees);
+        && PreservedGuarantees.SequenceEqual(other.PreservedGuarantees)
+        && AcceptedOperatingBoundaries.SequenceEqual(other.AcceptedOperatingBoundaries)
+        && MissingOperatingBoundaries.SequenceEqual(other.MissingOperatingBoundaries);
 
     /// <summary>Returns a structural hash code for this decision.</summary>
     /// <returns>A hash code derived from every field.</returns>
@@ -159,6 +216,10 @@ public sealed record InfrastructureCapabilityDecision
         foreach (var item in OperatingBoundaries)
             hash.Add(item);
         foreach (var item in PreservedGuarantees)
+            hash.Add(item);
+        foreach (var item in AcceptedOperatingBoundaries)
+            hash.Add(item);
+        foreach (var item in MissingOperatingBoundaries)
             hash.Add(item);
         return hash.ToHashCode();
     }
@@ -178,6 +239,7 @@ public sealed record InfrastructureCapabilityClosureReport
     /// <param name="variant">Selected coherent target variant.</param>
     /// <param name="decisions">One decision for every declared or binding-derived requirement.</param>
     /// <param name="diagnostics">Structured capability-closure diagnostics.</param>
+    /// <param name="boundaryAcceptancePolicy">Exact policy used to accept constrained boundaries, when supplied.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="profile"/> or <paramref name="bindingElaboration"/> is <see langword="null"/>.
     /// </exception>
@@ -189,7 +251,8 @@ public sealed record InfrastructureCapabilityClosureReport
         InfrastructureTargetId target,
         InfrastructureCapabilityVariantId variant,
         ImmutableArray<InfrastructureCapabilityDecision> decisions = default,
-        ImmutableArray<DocumentValidationDiagnostic> diagnostics = default)
+        ImmutableArray<DocumentValidationDiagnostic> diagnostics = default,
+        InfrastructureBoundaryAcceptancePolicyReference? boundaryAcceptancePolicy = null)
     {
         Profile = Guard.RequireNotNull(profile);
         BindingElaboration = Guard.RequireNotNull(bindingElaboration);
@@ -200,9 +263,11 @@ public sealed record InfrastructureCapabilityClosureReport
 
         Target = target;
         Variant = variant;
+        BoundaryAcceptancePolicy = boundaryAcceptancePolicy;
         Decisions = NormalizeDecisions(decisions);
         Diagnostics = DocumentValidationDiagnostics.Normalize(diagnostics);
         ValidateCoverage();
+        ValidatePolicyFence();
     }
 
     /// <summary>Exact schema, identity, and fingerprint of the selected capability profile.</summary>
@@ -221,6 +286,9 @@ public sealed record InfrastructureCapabilityClosureReport
     /// <summary>Selected coherent target variant.</summary>
     public InfrastructureCapabilityVariantId Variant { get; }
 
+    /// <summary>Exact policy used to accept constrained operating boundaries, when supplied.</summary>
+    public InfrastructureBoundaryAcceptancePolicyReference? BoundaryAcceptancePolicy { get; }
+
     /// <summary>One decision per declared or binding-derived requirement in requirement-identity order.</summary>
     public ImmutableArray<InfrastructureCapabilityDecision> Decisions { get; }
 
@@ -231,7 +299,7 @@ public sealed record InfrastructureCapabilityClosureReport
     [JsonIgnore]
     public bool IsClosed =>
         BindingElaboration.IsComplete
-        && Decisions.All(static decision => decision.IsAvailable)
+        && Decisions.All(static decision => decision.IsAdmissible)
         && !Diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
 
     /// <summary>Finds the capability decision for one declared or binding-derived requirement.</summary>
@@ -261,6 +329,7 @@ public sealed record InfrastructureCapabilityClosureReport
         && BindingElaboration == other.BindingElaboration
         && Target == other.Target
         && Variant == other.Variant
+        && BoundaryAcceptancePolicy == other.BoundaryAcceptancePolicy
         && Decisions.SequenceEqual(other.Decisions)
         && Diagnostics.SequenceEqual(other.Diagnostics);
 
@@ -273,6 +342,7 @@ public sealed record InfrastructureCapabilityClosureReport
         hash.Add(BindingElaboration);
         hash.Add(Target);
         hash.Add(Variant);
+        hash.Add(BoundaryAcceptancePolicy);
         foreach (var decision in Decisions)
             hash.Add(decision);
         foreach (var diagnostic in Diagnostics)
@@ -302,6 +372,22 @@ public sealed record InfrastructureCapabilityClosureReport
                     $"Capability decision '{Decisions[index].Requirement.Value}' does not match the exact compiled requirement.",
                     nameof(Decisions));
             }
+        }
+    }
+
+    void ValidatePolicyFence()
+    {
+        if (BoundaryAcceptancePolicy is null)
+            return;
+        if (BoundaryAcceptancePolicy.Definition != Definition.ToReference()
+            || BoundaryAcceptancePolicy.Profile != Profile
+            || BoundaryAcceptancePolicy.BindingProfile != BindingElaboration.Profile
+            || BoundaryAcceptancePolicy.Target != Target
+            || BoundaryAcceptancePolicy.Variant != Variant)
+        {
+            throw new ArgumentException(
+                "The boundary-acceptance policy reference does not match the exact capability-closure fence.",
+                nameof(BoundaryAcceptancePolicy));
         }
     }
 
@@ -344,6 +430,26 @@ public static class InfrastructureCapabilityCompiler
         InfrastructureCapabilityVariantId variant) =>
         Compile(definition, profile, variant, InfrastructureBindingElaborationProfile.Empty);
 
+    /// <summary>Compiles one exact definition using attributable constrained-boundary acceptance policy.</summary>
+    /// <param name="definition">Exact fingerprinted infrastructure definition.</param>
+    /// <param name="profile">Versioned target capability profile.</param>
+    /// <param name="variant">Exact coherent target variant.</param>
+    /// <param name="boundaryAcceptancePolicy">Exact demand-scoped operating-boundary acceptance policy.</param>
+    /// <returns>One exact decision per requirement and structured closure diagnostics.</returns>
+    /// <exception cref="ArgumentNullException">A reference argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">The variant is default.</exception>
+    public static InfrastructureCapabilityClosureReport Compile(
+        InfrastructureDefinitionDocument definition,
+        InfrastructureCapabilityProfile profile,
+        InfrastructureCapabilityVariantId variant,
+        InfrastructureBoundaryAcceptancePolicy boundaryAcceptancePolicy) =>
+        Compile(
+            definition,
+            profile,
+            variant,
+            InfrastructureBindingElaborationProfile.Empty,
+            boundaryAcceptancePolicy);
+
     /// <summary>
     /// Compiles one exact infrastructure definition and its binding-induced obligations against a coherent target.
     /// </summary>
@@ -361,15 +467,72 @@ public static class InfrastructureCapabilityCompiler
         InfrastructureDefinitionDocument definition,
         InfrastructureCapabilityProfile profile,
         InfrastructureCapabilityVariantId variant,
-        InfrastructureBindingElaborationProfile bindingElaborationProfile)
+        InfrastructureBindingElaborationProfile bindingElaborationProfile) =>
+        CompileCore(definition, profile, variant, bindingElaborationProfile, boundaryAcceptancePolicy: null);
+
+    /// <summary>
+    /// Compiles exact declared and binding-induced requirements using attributable boundary-acceptance policy.
+    /// </summary>
+    /// <param name="definition">Exact fingerprinted infrastructure definition.</param>
+    /// <param name="profile">Versioned target capability profile.</param>
+    /// <param name="variant">Exact coherent target variant.</param>
+    /// <param name="bindingElaborationProfile">Exact rules used to elaborate binding contracts.</param>
+    /// <param name="boundaryAcceptancePolicy">Exact demand-scoped operating-boundary acceptance policy.</param>
+    /// <returns>One exact decision per declared or binding-derived requirement and structured diagnostics.</returns>
+    /// <exception cref="ArgumentNullException">A reference argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">The variant is default.</exception>
+    public static InfrastructureCapabilityClosureReport Compile(
+        InfrastructureDefinitionDocument definition,
+        InfrastructureCapabilityProfile profile,
+        InfrastructureCapabilityVariantId variant,
+        InfrastructureBindingElaborationProfile bindingElaborationProfile,
+        InfrastructureBoundaryAcceptancePolicy boundaryAcceptancePolicy)
+    {
+        ArgumentNullException.ThrowIfNull(boundaryAcceptancePolicy);
+        return CompileCore(definition, profile, variant, bindingElaborationProfile, boundaryAcceptancePolicy);
+    }
+
+    static InfrastructureCapabilityClosureReport CompileCore(
+        InfrastructureDefinitionDocument definition,
+        InfrastructureCapabilityProfile profile,
+        InfrastructureCapabilityVariantId variant,
+        InfrastructureBindingElaborationProfile bindingElaborationProfile,
+        InfrastructureBoundaryAcceptancePolicy? boundaryAcceptancePolicy)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(bindingElaborationProfile);
         if (string.IsNullOrWhiteSpace(variant.Value))
             throw new ArgumentException("Infrastructure capability compilation requires a coherent variant identity.", nameof(variant));
-
         var diagnostics = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>();
+        var boundaryAcceptancePolicyFenceMatches = boundaryAcceptancePolicy is null
+            || AddBoundaryAcceptancePolicyFenceDiagnostics(
+                definition,
+                profile,
+                variant,
+                bindingElaborationProfile,
+                boundaryAcceptancePolicy,
+                diagnostics);
+        var boundaryAcceptancePolicySupported = boundaryAcceptancePolicy is null
+            || string.Equals(
+                boundaryAcceptancePolicy.SchemaVersion,
+                InfrastructureBoundaryAcceptancePolicy.CurrentSchemaVersion,
+                StringComparison.Ordinal);
+        if (!boundaryAcceptancePolicySupported)
+        {
+            diagnostics.Add(new(
+                InfrastructureCapabilityDiagnosticCodes.BoundaryAcceptancePolicySchemaUnsupported,
+                DiagnosticSeverity.Error,
+                $"Boundary-acceptance policy schema '{boundaryAcceptancePolicy!.SchemaVersion}' is unsupported; expected '{InfrastructureBoundaryAcceptancePolicy.CurrentSchemaVersion}'.",
+                Location: "/schemaVersion",
+                Evidence: new(
+                    stage: CapabilityMatchingStage,
+                    subject: boundaryAcceptancePolicy.Id.Value,
+                    sourceReferences: [InfrastructureDiagnosticReferences.BoundaryAcceptancePolicy(boundaryAcceptancePolicy)],
+                    resolutionOptions: ["Select an exact boundary-acceptance policy using a schema supported by this compiler."],
+                    expected: InfrastructureBoundaryAcceptancePolicy.CurrentSchemaVersion,
+                    observed: boundaryAcceptancePolicy.SchemaVersion)));
+        }
         var capabilitySchemasSupported = true;
         if (!string.Equals(
                 profile.SchemaVersion,
@@ -450,16 +613,25 @@ public static class InfrastructureCapabilityCompiler
             }
 
             var resolution = CapabilityResolver.Resolve(selected, requirement.Capability);
-            var decision = ToDecision(requirement, resolution);
+            var acceptedBoundaries = resolution.Proof is { Realization: CapabilityRealizationKind.Constrained } proof
+                && boundaryAcceptancePolicySupported
+                && boundaryAcceptancePolicyFenceMatches
+                && boundaryAcceptancePolicy is not null
+                    ? proof.OperatingBoundaries
+                        .Where(boundary => boundaryAcceptancePolicy.FindAcceptance(requirement.Id, boundary) is not null)
+                        .ToImmutableArray()
+                    : [];
+            var decision = ToDecision(requirement, resolution, acceptedBoundaries);
             decisions.Add(decision);
             if (resolution.Status != CapabilityResolutionStatus.Success)
                 diagnostics.Add(ToDiagnostic(site, resolution, profile, selected));
-            else if (decision.Realization == CapabilityRealizationKind.Constrained)
+            else if (decision.Realization == CapabilityRealizationKind.Constrained
+                     && !decision.MissingOperatingBoundaries.IsDefaultOrEmpty)
             {
                 diagnostics.Add(new(
                     InfrastructureCapabilityDiagnosticCodes.OperatingBoundaryAcceptanceRequired,
                     DiagnosticSeverity.Error,
-                    $"Capability '{requirement.Capability.Value}' is supported only within boundaries {string.Join(", ", decision.OperatingBoundaries.Select(static boundary => $"'{boundary.Value}'"))}; exact environment policy must accept them or supply an explicit override.",
+                    $"Capability '{requirement.Capability.Value}' is supported only within boundaries {DisplayBoundaries(decision.OperatingBoundaries)}; exact policy must accept the missing boundaries {DisplayBoundaries(decision.MissingOperatingBoundaries)} or supply an explicit override.",
                     Location: site.Location,
                     SchemaLocation: requirement.Capability.Value,
                     Evidence: new(
@@ -467,52 +639,248 @@ public static class InfrastructureCapabilityCompiler
                         subject: requirement.Id.Value,
                         relatedLocations: MergeOrdinalSets(site.RelatedLocations, DecisionLocations(decision)),
                         sourceReferences: MergeOrdinalSets(
-                            site.SourceReferences,
-                            DecisionSourceReferences(profile, selected, decision)),
+                            MergeOrdinalSets(
+                                site.SourceReferences,
+                                DecisionSourceReferences(profile, selected, decision)),
+                            BoundaryAcceptanceSourceReferences(
+                                boundaryAcceptancePolicy,
+                                requirement.Id,
+                                decision.AcceptedOperatingBoundaries)),
                         resolutionOptions:
                         [
                             "Accept every exact operating boundary through attributable environment policy.",
                             "Select an unconstrained target proof that preserves the requirement.",
                             "Supply an explicit local override with its own attributable evidence."
                         ],
-                        expected: "accepted operating boundaries or an unconstrained exact proof",
-                        observed: "constrained proof with unaccepted operating boundaries")));
+                        expected: $"accepted boundaries: {DisplayBoundaries(decision.OperatingBoundaries)}",
+                        observed: decision.AcceptedOperatingBoundaries.IsDefaultOrEmpty
+                            ? "constrained proof with unaccepted operating boundaries"
+                            : $"accepted: {DisplayBoundaries(decision.AcceptedOperatingBoundaries)}; missing: {DisplayBoundaries(decision.MissingOperatingBoundaries)}")));
             }
         }
 
+        var normalizedDecisions = decisions.MoveToImmutable();
+        if (boundaryAcceptancePolicySupported
+            && boundaryAcceptancePolicyFenceMatches
+            && boundaryAcceptancePolicy is not null)
+        {
+            AddUnexpectedAcceptanceDiagnostics(
+                boundaryAcceptancePolicy,
+                normalizedDecisions,
+                requirements,
+                diagnostics);
+        }
+
         return new(
-            profile.ToReference(),
-            bindingElaboration,
-            profile.Target,
-            variant,
-            decisions.MoveToImmutable(),
-            diagnostics.Count == 0 ? [] : diagnostics.ToImmutable());
+            profile: profile.ToReference(),
+            bindingElaboration: bindingElaboration,
+            target: profile.Target,
+            variant: variant,
+            decisions: normalizedDecisions,
+            diagnostics: diagnostics.Count == 0 ? [] : diagnostics.ToImmutable(),
+            boundaryAcceptancePolicy: boundaryAcceptancePolicyFenceMatches
+                ? boundaryAcceptancePolicy?.ToReference()
+                : null);
     }
 
     static InfrastructureCapabilityDecision ToDecision(
         InfrastructureCapabilityRequirement requirement,
-        CapabilityResolution resolution)
+        CapabilityResolution resolution,
+        ImmutableArray<InfrastructureOperatingBoundaryId> acceptedOperatingBoundaries)
     {
         if (resolution.Status != CapabilityResolutionStatus.Success || resolution.Proof is null)
         {
             return new(
-                requirement.Id,
-                requirement.Capability,
-                resolution.Status == CapabilityResolutionStatus.Unavailable
+                requirement: requirement.Id,
+                capability: requirement.Capability,
+                realization: resolution.Status == CapabilityResolutionStatus.Unavailable
                     ? CapabilityRealizationKind.Unavailable
                     : CapabilityRealizationKind.Unknown);
         }
 
         var proof = resolution.Proof;
+        var missingOperatingBoundaries = proof.Realization == CapabilityRealizationKind.Constrained
+            ? proof.OperatingBoundaries.Where(boundary => !acceptedOperatingBoundaries.Contains(boundary)).ToImmutableArray()
+            : [];
         return new(
-            requirement.Id,
-            requirement.Capability,
-            proof.Realization,
-            proof.Evidence,
-            proof.Rules,
-            proof.OperatingBoundaries,
-            proof.PreservedGuarantees);
+            requirement: requirement.Id,
+            capability: requirement.Capability,
+            realization: proof.Realization,
+            evidence: proof.Evidence,
+            rules: proof.Rules,
+            operatingBoundaries: proof.OperatingBoundaries,
+            preservedGuarantees: proof.PreservedGuarantees,
+            acceptedOperatingBoundaries: acceptedOperatingBoundaries,
+            missingOperatingBoundaries: missingOperatingBoundaries);
     }
+
+    static bool AddBoundaryAcceptancePolicyFenceDiagnostics(
+        InfrastructureDefinitionDocument definition,
+        InfrastructureCapabilityProfile profile,
+        InfrastructureCapabilityVariantId variant,
+        InfrastructureBindingElaborationProfile bindingProfile,
+        InfrastructureBoundaryAcceptancePolicy boundaryAcceptancePolicy,
+        ImmutableArray<DocumentValidationDiagnostic>.Builder diagnostics)
+    {
+        var matches = true;
+        var definitionReference = definition.ToReference();
+        if (boundaryAcceptancePolicy.Definition != definitionReference)
+        {
+            AddBoundaryAcceptancePolicyFenceDiagnostic(
+                policy: boundaryAcceptancePolicy,
+                fence: "definition",
+                expected: InfrastructureDiagnosticReferences.DefinitionReference(definitionReference),
+                observed: InfrastructureDiagnosticReferences.DefinitionReference(boundaryAcceptancePolicy.Definition),
+                diagnostics: diagnostics);
+            matches = false;
+        }
+        var profileReference = profile.ToReference();
+        if (boundaryAcceptancePolicy.Profile != profileReference)
+        {
+            AddBoundaryAcceptancePolicyFenceDiagnostic(
+                policy: boundaryAcceptancePolicy,
+                fence: "profile",
+                expected: InfrastructureDiagnosticReferences.CapabilityProfileReference(profileReference),
+                observed: InfrastructureDiagnosticReferences.CapabilityProfileReference(boundaryAcceptancePolicy.Profile),
+                diagnostics: diagnostics);
+            matches = false;
+        }
+        var bindingProfileReference = bindingProfile.ToReference();
+        if (boundaryAcceptancePolicy.BindingProfile != bindingProfileReference)
+        {
+            AddBoundaryAcceptancePolicyFenceDiagnostic(
+                policy: boundaryAcceptancePolicy,
+                fence: "bindingProfile",
+                expected: InfrastructureDiagnosticReferences.BindingProfileReference(bindingProfileReference),
+                observed: InfrastructureDiagnosticReferences.BindingProfileReference(boundaryAcceptancePolicy.BindingProfile),
+                diagnostics: diagnostics);
+            matches = false;
+        }
+        if (boundaryAcceptancePolicy.Target != profile.Target)
+        {
+            AddBoundaryAcceptancePolicyFenceDiagnostic(
+                policy: boundaryAcceptancePolicy,
+                fence: "target",
+                expected: profile.Target.Value,
+                observed: boundaryAcceptancePolicy.Target.Value,
+                diagnostics: diagnostics);
+            matches = false;
+        }
+        if (boundaryAcceptancePolicy.Variant != variant)
+        {
+            AddBoundaryAcceptancePolicyFenceDiagnostic(
+                policy: boundaryAcceptancePolicy,
+                fence: "variant",
+                expected: variant.Value,
+                observed: boundaryAcceptancePolicy.Variant.Value,
+                diagnostics: diagnostics);
+            matches = false;
+        }
+        return matches;
+    }
+
+    static void AddBoundaryAcceptancePolicyFenceDiagnostic(
+        InfrastructureBoundaryAcceptancePolicy policy,
+        string fence,
+        string expected,
+        string observed,
+        ImmutableArray<DocumentValidationDiagnostic>.Builder diagnostics) => diagnostics.Add(new(
+        InfrastructureCapabilityDiagnosticCodes.BoundaryAcceptancePolicyFenceMismatch,
+        DiagnosticSeverity.Error,
+        $"Boundary-acceptance policy '{policy.Id.Value}' has a mismatched {fence} fence.",
+        Location: $"/{fence}",
+        SchemaLocation: fence,
+        Evidence: new(
+            stage: CapabilityMatchingStage,
+            subject: policy.Id.Value,
+            sourceReferences: [InfrastructureDiagnosticReferences.BoundaryAcceptancePolicy(policy)],
+            resolutionOptions:
+            [
+                "Regenerate the boundary-acceptance policy from the exact definition, profiles, target, and variant supplied to this compilation."
+            ],
+            expected: expected,
+            observed: observed)));
+
+    static void AddUnexpectedAcceptanceDiagnostics(
+        InfrastructureBoundaryAcceptancePolicy policy,
+        ImmutableArray<InfrastructureCapabilityDecision> decisions,
+        ImmutableArray<RequirementSite> requirements,
+        ImmutableArray<DocumentValidationDiagnostic>.Builder diagnostics)
+    {
+        var decisionsByRequirement = decisions.ToDictionary(static decision => decision.Requirement);
+        var sitesByRequirement = requirements.ToDictionary(static site => site.Requirement.Id);
+        for (var index = 0; index < policy.Acceptances.Length; index++)
+        {
+            var acceptance = policy.Acceptances[index];
+            if (!decisionsByRequirement.TryGetValue(acceptance.Requirement, out var decision))
+            {
+                diagnostics.Add(new(
+                    InfrastructureCapabilityDiagnosticCodes.BoundaryAcceptanceRequirementUnknown,
+                    DiagnosticSeverity.Error,
+                    $"Boundary acceptance requirement '{acceptance.Requirement.Value}' is absent from the exact compiled demand set.",
+                    Location: $"/acceptances/{index.ToString(CultureInfo.InvariantCulture)}/requirement",
+                    SchemaLocation: acceptance.Requirement.Value,
+                    Evidence: new(
+                        stage: CapabilityMatchingStage,
+                        subject: acceptance.Requirement.Value,
+                        relatedLocations: [$"operating-boundary/{Uri.EscapeDataString(acceptance.Boundary.Value)}"],
+                        sourceReferences: MergeOrdinalSets(
+                            [InfrastructureDiagnosticReferences.BoundaryAcceptancePolicy(policy)],
+                            acceptance.SourceReferences),
+                        resolutionOptions:
+                        ["Remove the stale acceptance or regenerate policy from the exact compiled requirement set."],
+                        expected: "a requirement in the exact definition and binding-elaboration result",
+                        observed: "unknown requirement")));
+                continue;
+            }
+
+            if (decision.Realization == CapabilityRealizationKind.Constrained
+                && decision.OperatingBoundaries.Contains(acceptance.Boundary))
+            {
+                continue;
+            }
+
+            var site = sitesByRequirement[acceptance.Requirement];
+            diagnostics.Add(new(
+                InfrastructureCapabilityDiagnosticCodes.BoundaryAcceptanceUnexpected,
+                DiagnosticSeverity.Error,
+                $"Boundary acceptance '{acceptance.Boundary.Value}' does not belong to the selected constrained proof for requirement '{acceptance.Requirement.Value}'.",
+                Location: $"/acceptances/{index.ToString(CultureInfo.InvariantCulture)}/boundary",
+                SchemaLocation: acceptance.Boundary.Value,
+                Evidence: new(
+                    stage: CapabilityMatchingStage,
+                    subject: acceptance.Requirement.Value,
+                    relatedLocations: MergeOrdinalSets(site.RelatedLocations, DecisionLocations(decision)),
+                    sourceReferences: MergeOrdinalSets(
+                        [InfrastructureDiagnosticReferences.BoundaryAcceptancePolicy(policy)],
+                        acceptance.SourceReferences),
+                    resolutionOptions:
+                    ["Remove the stale acceptance or select the exact constrained proof that requires it."],
+                    expected: decision.Realization == CapabilityRealizationKind.Constrained
+                        ? DisplayBoundaries(decision.OperatingBoundaries)
+                        : "no boundary acceptance for an unconstrained or unresolved proof",
+                    observed: acceptance.Boundary.Value)));
+        }
+    }
+
+    static ImmutableArray<string> BoundaryAcceptanceSourceReferences(
+        InfrastructureBoundaryAcceptancePolicy? policy,
+        InfrastructureRequirementId requirement,
+        ImmutableArray<InfrastructureOperatingBoundaryId> acceptedBoundaries)
+    {
+        if (policy is null)
+            return [];
+
+        return
+        [
+            InfrastructureDiagnosticReferences.BoundaryAcceptancePolicy(policy),
+            .. acceptedBoundaries.SelectMany(boundary =>
+                policy.FindAcceptance(requirement, boundary)?.SourceReferences ?? [])
+        ];
+    }
+
+    static string DisplayBoundaries(IEnumerable<InfrastructureOperatingBoundaryId> boundaries) =>
+        string.Join(", ", boundaries.Select(static boundary => $"'{boundary.Value}'"));
 
     static DocumentValidationDiagnostic ToDiagnostic(
         RequirementSite site,

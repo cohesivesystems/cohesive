@@ -25,14 +25,14 @@
     "variant": "local-containers",
     "fingerprint": {
       "algorithm": "sha256",
-      "canonicalization": "cohesive-infra-realization/v1-c14n/v1",
-      "value": "d5c2ddded8ec02316393321f49f28ad5f187b8519fff23ec15e233fccc997633"
+      "canonicalization": "cohesive-infra-realization/v1-c14n/v2",
+      "value": "4029ec93872daf71ebd9b517e5c7a68e9a2bac7ccdded25552e45755f5c9c65f"
     }
   },
   "localRealization": {
     "algorithm": "sha256",
     "canonicalization": "cohesive-infra-local-realization/v1-c14n/v1",
-    "value": "a73ba8b0dd9f705a254f6f061a8ad375e7dda5bf87170276ce4a1a18fa2843cc"
+    "value": "52187478e3be6dca6539451344e1ede39f380fe0c1ae70784edcf23a52831f95"
   },
   "environment": "materialization-harness/interactive/v1",
   "lifecycleAuthority": "local/materialization-harness",

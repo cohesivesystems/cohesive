@@ -139,10 +139,16 @@ profile supplies evidence; conventions and compiler configuration supply policy.
 
 `InfrastructureCapabilityCompiler` resolves every declared node requirement and successfully elaborated binding
 obligation in one exact document against one coherent variant. It retains the exact elaboration-profile and report
-fingerprints beside the target-profile fence. Constrained proofs and unavailable or ambiguous contracts remain
-structured residuals, so full closure must cover the whole binding path, not only one resource. A durable Process
-requirement may depend on a worker, scheduler, identity, secret, network path, state store, and lifecycle backend.
-Local support at one edge does not establish end-to-end assurance.
+fingerprints beside the target-profile fence. A constrained proof closes only when an
+`InfrastructureBoundaryAcceptancePolicy` accepts every transitive boundary for the exact requirement. The policy is
+separate governance authority, fingerprinted and fenced to the exact definition, capability profile, binding profile,
+target, and variant. Acceptance for one demand cannot leak to another demand with the same capability. Each decision
+retains accepted and missing boundary sets, and the closure retains the exact policy reference.
+
+Unaccepted constrained proofs and unavailable or ambiguous contracts remain structured residuals, so full closure
+must cover the whole binding path, not only one resource. A durable Process requirement may depend on a worker,
+scheduler, identity, secret, network path, state store, and lifecycle backend. Local support at one edge does not
+establish end-to-end assurance.
 
 ## Explainable conventions
 
@@ -173,10 +179,10 @@ transport; an unsupported target is a diagnostic.
 Infra uses the suite-wide `DocumentValidationDiagnostic` and `DocumentDiagnosticEvidence` contracts rather than
 creating a parallel diagnostic family. A diagnostic can retain a stable code and severity, canonical document and
 semantic locations, compiler stage, stable subject, related locations, exact source references, expected and observed
-semantics, and resolution options. Capability diagnostics should identify the demanded capability, exact definition
-and target-profile fingerprints, coherent variant, evidence or rules considered, rejected alternatives and causes,
-operating boundaries, and remaining obligation. Backend-native identifiers and evidence must be retained when
-Terraform, Pulumi, Aspire, or a provider diagnostic is normalized.
+semantics, and resolution options. Capability diagnostics should identify the demanded capability, exact definition,
+target-profile, binding-profile, and boundary-policy fingerprints, coherent variant, evidence or rules considered,
+rejected alternatives and causes, accepted and missing operating boundaries, and remaining obligation. Backend-native
+identifiers and evidence must be retained when Terraform, Pulumi, Aspire, or a provider diagnostic is normalized.
 
 Diagnostic collections are deterministically ordered and serializable. Human CLI text, JSON, SARIF, editor/LSP
 messages, CI annotations, test assertions, dashboards, and agent explanations are projections of the same diagnostic
@@ -299,6 +305,11 @@ foreach (var diagnostic in realization.CapabilityClosure.Diagnostics.Concat(real
 authoring callback is synchronous and is not retained. `InfrastructureCapabilityCompiler` decides whether the one
 selected variant can plan every declared node requirement and binding-derived obligation. An unavailable scheduler,
 ambiguous proof, unaccepted boundary, or unavailable or ambiguous binding contract yields a non-closed report.
+`InfrastructureBoundaryAcceptancePolicy.Create` provides the explicit path for a constrained proof: every acceptance
+names the exact requirement and boundary, includes a human-reviewable rationale and non-empty policy sources, and is
+canonicalized into an exact policy fingerprint. Missing, stale, or proof-inapplicable acceptances remain diagnostics;
+policy fence mismatches fail closed with exact expected/observed compiler-authority diagnostics and do not contribute
+acceptance.
 `InfrastructureBindingElaborationReport.FindDecision` exposes selected rules and stable obligation identities to
 tooling. `InfrastructureLifecyclePlan` rejects a missing, duplicated, external, or conflicting manager. The resulting
 `InfrastructureRealization.FindWitnessDecision` explains the exact subjects, selected evidence, physical coverage, and
