@@ -2556,6 +2556,142 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
     }
 
     [Fact]
+    public void Generator_JoinsTheSoleContinuingTypedEffectOutcomeIntoARecurrenceValue()
+    {
+        var compilation = CreateCompilation(TypedEffectRecurrenceSource(
+            observedBody: """
+                await process.Timer(input.DueAt);
+                return observed;
+                """,
+            rejectedBody: """
+                await process.Succeed(failure.Status);
+                return process.Unreachable<Observation>();
+                """,
+            timedOutBody: """
+                await process.Terminate(timeout.Status);
+                return process.Unreachable<Observation>();
+                """));
+
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.All(runResult.Results, static result => Assert.Null(result.Exception));
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Contains("__builder.Request", generated);
+        Assert.Contains("__builder.RepeatAcrossActivation", generated);
+        Assert.Contains("__builder.Timer", generated);
+        Assert.Contains("__builder.Return", generated);
+        Assert.Contains("__builder.Fail", generated);
+    }
+
+    [Fact]
+    public void Generator_RejectsAmbiguousTypedEffectRecurrenceJoinAtTheSecondResult()
+    {
+        var compilation = CreateCompilation(TypedEffectRecurrenceSource(
+            observedBody: "return observed;",
+            rejectedBody: "return failure;",
+            timedOutBody: """
+                await process.Terminate(timeout.Status);
+                return process.Unreachable<Observation>();
+                """));
+
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.All(runResult.Results, static result => Assert.Null(result.Exception));
+        Assert.Contains("ambiguous portable result paths", diagnostic.GetMessage());
+        Assert.Contains(
+            "return failure;",
+            diagnostic.Location.SourceTree!.GetText().GetSubText(diagnostic.Location.SourceSpan).ToString());
+    }
+
+    [Fact]
+    public void Generator_RejectsResultlessTypedEffectOutcomeWithoutCrashing()
+    {
+        var compilation = CreateCompilation(TypedEffectRecurrenceSource(
+            observedBody: "return observed;",
+            rejectedBody: """
+                await process.Timer(input.DueAt);
+                return process.Unreachable<Observation>();
+                """,
+            timedOutBody: """
+                await process.Terminate(timeout.Status);
+                return process.Unreachable<Observation>();
+                """));
+
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.All(runResult.Results, static result => Assert.Null(result.Exception));
+        Assert.Contains("neither returns the occurrence value nor terminates", diagnostic.GetMessage());
+        Assert.Contains(
+            "case Rejected(var failure)",
+            diagnostic.Location.SourceTree!.GetText().GetSubText(diagnostic.Location.SourceSpan).ToString());
+    }
+
+    [Fact]
+    public void Generator_RejectsTypedEffectRecurrenceWithoutAContinuingResultPath()
+    {
+        var compilation = CreateCompilation(TypedEffectRecurrenceSource(
+            observedBody: """
+                await process.Succeed(observed.Status);
+                return process.Unreachable<Observation>();
+                """,
+            rejectedBody: """
+                await process.Succeed(failure.Status);
+                return process.Unreachable<Observation>();
+                """,
+            timedOutBody: """
+                await process.Terminate(timeout.Status);
+                return process.Unreachable<Observation>();
+                """));
+
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.All(runResult.Results, static result => Assert.Null(result.Exception));
+        Assert.Contains("has no continuing portable result path", diagnostic.GetMessage());
+    }
+
+    [Fact]
+    public void Generator_RejectsIncompatibleTypedEffectRecurrenceResultAtItsReturn()
+    {
+        var compilation = CreateCompilation(TypedEffectRecurrenceSource(
+            observedBody: "return observed;",
+            rejectedBody: """
+                await process.Succeed(failure.Status);
+                return process.Unreachable<object>();
+                """,
+            timedOutBody: """
+                await process.Terminate(timeout.Status);
+                return process.Unreachable<object>();
+                """,
+            occurrenceType: "object"));
+
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.All(runResult.Results, static result => Assert.Null(result.Exception));
+        Assert.Contains("returns 'Sample.Observation' but requires 'object'", diagnostic.GetMessage());
+        Assert.Contains(
+            "return observed;",
+            diagnostic.Location.SourceTree!.GetText().GetSubText(diagnostic.Location.SourceSpan).ToString());
+    }
+
+    [Fact]
     public void Generator_RejectsRuntimeDerivedRecurrencePolicyAtItsSource()
     {
         var source = """
@@ -2864,6 +3000,68 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
         {{switchSections}}
                 }
                 return process.Unreachable<string>();
+            }
+        }
+        """;
+
+    static string TypedEffectRecurrenceSource(
+        string observedBody,
+        string rejectedBody,
+        string timedOutBody,
+        string occurrenceType = "Observation") => $$"""
+        using System;
+        using Cohesive.Execution;
+        using Cohesive.Processes.Authoring;
+        using Cohesive.Processes.IR;
+
+        namespace Sample;
+
+        public sealed record Input(string Value, DateTimeOffset DueAt);
+        public sealed record Observation(string Status);
+        public abstract record Outcome;
+        public sealed record Observed(Observation Payload) : Outcome;
+        public sealed record Rejected(Observation Payload) : Outcome;
+        public sealed record TimedOut(Observation Payload) : Outcome;
+        public sealed record OutcomeCases(
+            RequestProtocolCase<Observed, Observation> Observed,
+            RequestProtocolCase<Rejected, Observation> Rejected,
+            RequestProtocolCase<TimedOut, Observation> TimedOut);
+
+        [GenerateProcessDefinition(nameof(Run))]
+        public static partial class PollingProcess
+        {
+            private static RequestProtocol<Input, Outcome, OutcomeCases> Protocol => null!;
+
+            private static async ProcessTask<string> Run(ProcessContext process, Input input)
+            {
+                async ProcessTask<{{occurrenceType}}> Observe()
+                {
+                    var outcome = await process.Effect(Protocol, input);
+                    switch (outcome)
+                    {
+                        case Observed(var observed):
+        {{observedBody}}
+                        case Rejected(var failure):
+        {{rejectedBody}}
+                        case TimedOut(var timeout):
+        {{timedOutBody}}
+                    }
+                    return process.Unreachable<{{occurrenceType}}>();
+                }
+
+                async ProcessTask Exhausted() { }
+                async ProcessTask Stalled() { }
+
+                var final = await process.RepeatAcrossActivation(
+                    occurrence: Observe(),
+                    continueWhen: observation => false,
+                    progress: observation => input.Value,
+                    policy: new ProcessRecurrencePolicy(
+                        maximumOccurrences: 3,
+                        maximumUnchangedProgressOccurrences: 1),
+                    exhausted: Exhausted,
+                    stalled: Stalled);
+                return input.Value;
             }
         }
         """;

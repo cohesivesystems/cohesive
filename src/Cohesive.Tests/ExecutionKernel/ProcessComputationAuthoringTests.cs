@@ -1400,6 +1400,150 @@ public sealed class ProcessComputationAuthoringTests
     }
 
     [Fact]
+    public void TypedEffectRecurrenceJoin_IsByteEquivalentAndExecutesThroughTheReferenceInterpreter()
+    {
+        var metadata = TypedEffectRecurrenceMetadata();
+        var generated = GeneratedTypedEffectRecurrenceProcess.Define(metadata);
+        var request = Assert.Single(generated.Definition.Nodes.OfType<RequestProcessNode>());
+        var timer = Assert.Single(generated.Definition.Nodes.OfType<TimerProcessNode>());
+        var recurrence = Assert.Single(generated.Definition.Nodes.OfType<RepeatAcrossActivationProcessNode>());
+        var acceptedBranch = Assert.Single(request.Outcomes, outcome =>
+            outcome.Outcome == GeneratedTypedRequestEffectProtocol.Protocol.Outcomes.Accepted.Id);
+        var rejectedBranch = Assert.Single(request.Outcomes, outcome =>
+            outcome.Outcome == GeneratedTypedRequestEffectProtocol.Protocol.Outcomes.Rejected.Id);
+        var timedOutBranch = Assert.Single(request.Outcomes, outcome =>
+            outcome.Outcome == GeneratedTypedRequestEffectProtocol.Protocol.Outcomes.TimedOut.Id);
+        var completed = Assert.Single(generated.Definition.Nodes.OfType<ReturnProcessNode>(), returned =>
+            returned.Id == recurrence.Completed.Target);
+        var rejected = Assert.Single(generated.Definition.Nodes.OfType<ReturnProcessNode>(), returned =>
+            returned.Id == rejectedBranch.Continuation.Edge.Target);
+        var timedOut = Assert.Single(generated.Definition.Nodes.OfType<FailProcessNode>(), failed =>
+            failed.Id == timedOutBranch.Continuation.Edge.Target);
+
+        var lowLevel = ProcessAuthoring.Create<TypedEffectRecurrenceInput, string>(
+            metadata.WithEntry(request.Id),
+            process =>
+            {
+                var accepted = process.Output<TrainingAccepted>(
+                    acceptedBranch.Continuation.Output!.Binding,
+                    acceptedBranch.Continuation.Output.Contract);
+                var failure = process.Output<TrainingFailure>(
+                    rejectedBranch.Continuation.Output!.Binding,
+                    rejectedBranch.Continuation.Output.Contract);
+                var timeout = process.Output<TrainingFailure>(
+                    timedOutBranch.Continuation.Output!.Binding,
+                    timedOutBranch.Continuation.Output.Contract);
+                var continueWhen = process.CanonicalValue<bool>(
+                    recurrence.ContinueWhen,
+                    new(new ScalarTypeRef(ScalarTypeKind.Bool)));
+                var progress = accepted.Field(static value => value.SubmissionId);
+
+                process.Request(
+                    id: request.Id,
+                    contract: GeneratedTypedRequestEffectProtocol.Protocol.Request,
+                    payload: process.Input.Field(static value => value.Submission),
+                    outcomes:
+                    [
+                        process.RequestOutcome(
+                            id: acceptedBranch.Id,
+                            outcome: acceptedBranch.Outcome,
+                            continuation: process.Continuation(
+                                edge: process.Edge(
+                                    owner: acceptedBranch.Id,
+                                    role: "next",
+                                    target: timer.Id),
+                                output: accepted)),
+                        process.RequestOutcome(
+                            id: rejectedBranch.Id,
+                            outcome: rejectedBranch.Outcome,
+                            continuation: process.Continuation(
+                                edge: process.Edge(
+                                    owner: rejectedBranch.Id,
+                                    role: "next",
+                                    target: rejected.Id),
+                                output: failure)),
+                        process.RequestOutcome(
+                            id: timedOutBranch.Id,
+                            outcome: timedOutBranch.Outcome,
+                            continuation: process.Continuation(
+                                edge: process.Edge(
+                                    owner: timedOutBranch.Id,
+                                    role: "next",
+                                    target: timedOut.Id),
+                                output: timeout))
+                    ]);
+                process.Timer(
+                    id: timer.Id,
+                    dueAt: process.Input.Field(static value => value.DueAt),
+                    next: process.Edge(
+                        owner: timer.Id,
+                        role: "next",
+                        target: recurrence.Id));
+                process.RepeatAcrossActivation(
+                    id: recurrence.Id,
+                    continueWhen: continueWhen,
+                    progress: progress,
+                    policy: new ProcessRecurrencePolicy(
+                        maximumOccurrences: 3,
+                        maximumUnchangedProgressOccurrences: 1),
+                    repeat: process.Edge(
+                        owner: recurrence.Id,
+                        role: "repeat",
+                        target: request.Id),
+                    completed: process.Edge(
+                        owner: recurrence.Id,
+                        role: "completed",
+                        target: completed.Id),
+                    exhausted: process.Edge(
+                        owner: recurrence.Id,
+                        role: "exhausted",
+                        target: completed.Id),
+                    stalled: process.Edge(
+                        owner: recurrence.Id,
+                        role: "stalled",
+                        target: completed.Id));
+                process.Return(
+                    id: completed.Id,
+                    result: accepted.Field(static value => value.SubmissionId));
+                process.Return(
+                    id: rejected.Id,
+                    result: failure.Field(static value => value.Reason));
+                process.Fail(
+                    id: timedOut.Id,
+                    result: timeout.Field(static value => value.Reason));
+            });
+
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        Assert.True(lowLevel.IsValid, Format(lowLevel.Validation));
+        Assert.Equal(lowLevel.Definition, generated.Definition);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(lowLevel.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(generated.Document));
+        Assert.Equal(timer.Id, acceptedBranch.Continuation.Edge.Target);
+        Assert.Equal(recurrence.Id, timer.Next.Target);
+        Assert.Equal(request.Id, recurrence.Repeat.Target);
+        Assert.Equal(
+            GeneratedTypedRequestEffectProtocol.Protocol.Cases.Select(static item => item.Id),
+            request.Outcomes.Select(static item => item.Outcome));
+        Assert.All(
+            request.Outcomes,
+            outcome => Assert.Equal(
+                ProcessAuthoringIdentities.NodeForRequestOutcome(request.Id, outcome.Outcome),
+                outcome.Id));
+
+        var context = new ProcessDefinitionValidationContext(
+            interactionContracts: GeneratedTypedRequestEffectProtocol.Protocol.Catalog);
+        var generatedCompilation = generated.Compile(context);
+        var lowLevelCompilation = lowLevel.Compile(context);
+        Assert.True(generatedCompilation.IsSuccessful, Format(generatedCompilation.Validation));
+        Assert.True(lowLevelCompilation.IsSuccessful, Format(lowLevelCompilation.Validation));
+        AssertEquivalentTypedEffectRecurrence(
+            Assert.IsType<CompiledProcessPlan>(generatedCompilation.Plan),
+            Assert.IsType<CompiledProcessPlan>(lowLevelCompilation.Plan),
+            acceptedBranch.Continuation.Output!.Contract);
+    }
+
+    [Fact]
     public void ApproveCustomerProcess_CoversSequentialBranchingAndParallelAuthoringConstructs()
     {
         var generated = ApproveCustomerProcess.Define(ApproveCustomerMetadata());
@@ -1553,6 +1697,15 @@ public sealed class ProcessComputationAuthoringTests
         new(
             new("tests.process-computation", "1"),
             new("tests/ari-230/recurrence"),
+            DocumentOrigin.User));
+
+    static ProcessAuthoringMetadata TypedEffectRecurrenceMetadata() => new(
+        new("process/generated-typed-effect-recurrence"),
+        new("1"),
+        ProcessRecoveryPolicy.ContinueAttempt,
+        new(
+            new("tests.process-computation", "1"),
+            new("tests/ari-438/typed-effect-recurrence"),
             DocumentOrigin.User));
 
     static ProcessAuthoringMetadata DecisionMetadata() => new(
@@ -2073,6 +2226,145 @@ public sealed class ProcessComputationAuthoringTests
         Assert.Equal(json, JsonSerializer.Serialize(restored, options));
     }
 
+    static void AssertEquivalentTypedEffectRecurrence(
+        CompiledProcessPlan generated,
+        CompiledProcessPlan lowLevel,
+        ValueContract acceptedContract)
+    {
+        var continuation = new ProcessContinuationIdentity(
+            new("process-instance/typed-effect-recurrence"),
+            new("attempt/1"));
+        var dueAtUtc = new DateTimeOffset(2026, 8, 22, 14, 0, 0, TimeSpan.Zero);
+        var input = PortableValue.Concrete(
+            generated.Definition.Input,
+            ObservationValue.FromObject(new TypedEffectRecurrenceInput(
+                Submission: new("dataset/438"),
+                DueAt: dueAtUtc)));
+        var started = Activation(
+            generated,
+            continuation,
+            id: "activation/typed-effect-recurrence/start",
+            cause: ProcessActivationCause.Start,
+            observedAtUtc: dueAtUtc.AddMinutes(-2));
+        var generatedStarted = ProcessReferenceInterpreter.Activate(
+            generated,
+            ProcessReferenceInterpreter.Create(generated, continuation, input),
+            started,
+            EchoRelationHost.Instance);
+        var lowLevelStarted = ProcessReferenceInterpreter.Activate(
+            lowLevel,
+            ProcessReferenceInterpreter.Create(lowLevel, continuation, input),
+            started,
+            EchoRelationHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.DurableCut, generatedStarted.Disposition);
+        var request = Assert.IsType<RequestEnvelope>(Assert.Single(generatedStarted.Emissions));
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        Assert.Equal(
+            JsonSerializer.Serialize(lowLevelStarted.State, options),
+            JsonSerializer.Serialize(generatedStarted.State, options));
+        Assert.Equal(
+            JsonSerializer.Serialize(lowLevelStarted.Emissions, options),
+            JsonSerializer.Serialize(generatedStarted.Emissions, options));
+
+        var target = Assert.IsType<ProcessTokenInteractionTarget>(request.ResponseTarget);
+        var reply = AcceptedReply(
+            generated,
+            continuation,
+            request,
+            target,
+            acceptedContract,
+            new("approved"));
+        var replied = Activation(
+            generated,
+            continuation,
+            id: "activation/typed-effect-recurrence/accepted",
+            cause: ProcessActivationCause.Interaction,
+            observedAtUtc: dueAtUtc.AddMinutes(-1),
+            causationId: reply.Context.EmissionId,
+            inputs: [new(target, reply)]);
+        var generatedWaiting = ProcessReferenceInterpreter.Activate(
+            generated,
+            generatedStarted.State,
+            replied,
+            EchoRelationHost.Instance);
+        var lowLevelWaiting = ProcessReferenceInterpreter.Activate(
+            lowLevel,
+            lowLevelStarted.State,
+            replied,
+            EchoRelationHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.DurableCut, generatedWaiting.Disposition);
+        Assert.Equal(
+            JsonSerializer.Serialize(lowLevelWaiting.State, options),
+            JsonSerializer.Serialize(generatedWaiting.State, options));
+        Assert.Contains(
+            generatedWaiting.State.Waits,
+            static wait => wait is { Active: true, Kind: ProcessWaitKind.Timer });
+
+        var due = Activation(
+            generated,
+            continuation,
+            id: "activation/typed-effect-recurrence/due",
+            cause: ProcessActivationCause.Timer,
+            observedAtUtc: dueAtUtc);
+        var generatedCompleted = ProcessReferenceInterpreter.Activate(
+            generated,
+            generatedWaiting.State,
+            due,
+            EchoRelationHost.Instance);
+        var lowLevelCompleted = ProcessReferenceInterpreter.Activate(
+            lowLevel,
+            lowLevelWaiting.State,
+            due,
+            EchoRelationHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.Completed, generatedCompleted.Disposition);
+        Assert.Equal(
+            JsonSerializer.Serialize(lowLevelCompleted.State, options),
+            JsonSerializer.Serialize(generatedCompleted.State, options));
+        Assert.Equal(
+            PortableValue.Concrete(
+                generated.Definition.Result,
+                ObservationValue.FromString("approved")),
+            generatedCompleted.State.Terminal.Detail?.Value);
+        Assert.DoesNotContain(generatedCompleted.State.Recurrences, static recurrence => recurrence.Active);
+    }
+
+    static ReplyEnvelope AcceptedReply(
+        CompiledProcessPlan plan,
+        ProcessContinuationIdentity continuation,
+        RequestEnvelope request,
+        ProcessTokenInteractionTarget target,
+        ValueContract acceptedContract,
+        TrainingAccepted accepted) => new(
+        schemaVersion: InteractionEnvelope.CurrentSchemaVersion,
+        context: new(
+            emissionId: new("emission/typed-effect-recurrence/accepted"),
+            origin: new ProcessInteractionOrigin(
+                definition: plan.DefinitionReference,
+                node: new("source/training-provider"),
+                continuation: continuation,
+                activation: new("activation/training-provider/accepted"),
+                token: target.Token),
+            correlationId: new("correlation/typed-effect-recurrence"),
+            causationId: request.Context.EmissionId,
+            authorityScope: new("authority/tests", "tenant/cohesive"),
+            idempotencyKey: new("idempotency/typed-effect-recurrence/accepted"),
+            ordering: null,
+            delivery: new(
+                InteractionDurabilityDemand.Durable,
+                InteractionVisibilityDemand.AfterOriginCommit),
+            provenance: plan.Document.Metadata.Provenance),
+        contract: GeneratedTypedRequestEffectProtocol.Protocol.ReplyFor(
+            GeneratedTypedRequestEffectProtocol.Protocol.Outcomes.Accepted.TypedOutcome),
+        inReplyTo: request.Context.EmissionId,
+        outcome: new RequestResultOutcome(
+            id: GeneratedTypedRequestEffectProtocol.Protocol.Outcomes.Accepted.Id,
+            value: PortableValue.Concrete(
+                acceptedContract,
+                ObservationValue.FromObject(accepted))));
+
     static void AssertEquivalentRecurrenceRecovery(
         CompiledProcessPlan generated,
         CompiledProcessPlan lowLevel)
@@ -2163,7 +2455,8 @@ public sealed class ProcessComputationAuthoringTests
         string id,
         ProcessActivationCause cause,
         DateTimeOffset observedAtUtc,
-        EmissionId? causationId = null) => new(
+        EmissionId? causationId = null,
+        ImmutableArray<ProcessActivationInput> inputs = default) => new(
         id: new(id),
         cause: cause,
         observedAtUtc: observedAtUtc,
@@ -2174,7 +2467,8 @@ public sealed class ProcessComputationAuthoringTests
                         InteractionDurabilityDemand.Durable,
                         InteractionVisibilityDemand.AfterOriginCommit),
                     provenance: plan.Document.Metadata.Provenance,
-                    causationId: causationId));
+                    causationId: causationId),
+        inputs: inputs);
 
     sealed class EchoRelationHost : IProcessReferenceHost
     {
@@ -3216,6 +3510,57 @@ public static partial class GeneratedRecurrenceProcess
         return observation;
     }
 }
+
+/// <summary>Representative recurrence whose occurrence joins one continuing typed Effect outcome.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedTypedEffectRecurrenceProcess
+{
+    static async ProcessTask<string> Run(ProcessContext process, TypedEffectRecurrenceInput input)
+    {
+        async ProcessTask<TrainingAccepted> Observe()
+        {
+            var outcome = await process.Effect(
+                GeneratedTypedRequestEffectProtocol.Protocol,
+                input.Submission,
+                id: new("observation/provider"));
+            switch (outcome)
+            {
+                case TrainingSubmissionAccepted(var accepted):
+                    await process.Timer(input.DueAt, id: new("observation/next-poll"));
+                    return accepted;
+                case TrainingSubmissionRejected(var failure):
+                    await process.Succeed(failure.Reason, id: new("observation/rejected"));
+                    return process.Unreachable<TrainingAccepted>();
+                case TrainingSubmissionTimedOut(var failure):
+                    await process.Terminate(failure.Reason, id: new("observation/timed-out"));
+                    return process.Unreachable<TrainingAccepted>();
+            }
+            return process.Unreachable<TrainingAccepted>();
+        }
+
+        async ProcessTask Exhausted() { }
+        async ProcessTask Stalled() { }
+
+        var observation = await process.RepeatAcrossActivation(
+            occurrence: Observe(),
+            continueWhen: status => status.SubmissionId == "pending",
+            progress: status => status.SubmissionId,
+            policy: new ProcessRecurrencePolicy(
+                maximumOccurrences: 3,
+                maximumUnchangedProgressOccurrences: 1),
+            exhausted: Exhausted,
+            stalled: Stalled,
+            id: new("observation/repeat"));
+        return observation.SubmissionId;
+    }
+}
+
+/// <summary>Input for a typed Effect occurrence joined into a durable recurrence.</summary>
+/// <param name="Submission">Provider Request payload.</param>
+/// <param name="DueAt">Absolute instant separating the selected continuing outcome from recurrence evaluation.</param>
+public sealed record TypedEffectRecurrenceInput(
+    TrainingSubmission Submission,
+    DateTimeOffset DueAt);
 
 /// <summary>Baseline convention-identity computation used for stability comparison.</summary>
 [GenerateProcessDefinition(nameof(Run))]

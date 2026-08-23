@@ -493,6 +493,16 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
                 if (terminalObserved)
                 {
+                    if (statement is ReturnStatementSyntax terminalMarker
+                        && terminalMarker.Expression is not null
+                        && IsUnreachableMarker(terminalMarker.Expression))
+                    {
+                        // A syntax-only unreachable marker may follow an explicit root terminal so C# can
+                        // satisfy the typed local function's definite-return rules. The terminal already owns
+                        // the durable semantics; retain no second node for the marker.
+                        continue;
+                    }
+
                     return Failure(
                         statement,
                         "statements after an unconditional return are not supported",
@@ -612,12 +622,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         var terminalResult = returnedOperation;
                         var terminalRole = "return";
                         var strippedReturn = Strip(returnedOperation);
-                        if (strippedReturn is IInvocationOperation unreachable
-                            && unreachable.TargetMethod.Name == "Unreachable"
-                            && SymbolEqualityComparer.Default.Equals(unreachable.TargetMethod.ContainingType, contextParameter.Type)
-                            && unreachable.Instance is not null
-                            && Strip(unreachable.Instance) is IParameterReferenceOperation unreachableContext
-                            && SymbolEqualityComparer.Default.Equals(unreachableContext.Parameter, contextParameter))
+                        if (IsUnreachableMarker(strippedReturn))
                         {
                             terminalObserved = true;
                             break;
@@ -1574,20 +1579,17 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return false;
             }
 
-            var occurrenceReturns = occurrenceBody.Descendants().OfType<ReturnFlow>().ToArray();
-            if (occurrenceReturns.Length != 1
-                || occurrenceBody.Statements.IsEmpty
-                || !ReferenceEquals(
-                    occurrenceBody.Statements[occurrenceBody.Statements.Length - 1],
-                    occurrenceReturns[0]))
-            {
-                return StatementFailure(
+            if (!TryJoinRecurrenceResult(
                     occurrenceFunction,
-                    $"RepeatAcrossActivation occurrence '{occurrenceInvocation.TargetMethod.Name}' must end in one path-total portable result expression");
+                    occurrenceInvocation.TargetMethod.Name,
+                    occurrenceTask.TypeArguments[0],
+                    occurrenceBody,
+                    out occurrenceBody,
+                    out var occurrenceResult))
+            {
+                return false;
             }
 
-            var occurrenceResult = occurrenceReturns[0].Result;
-            occurrenceBody = new(occurrenceBody.Statements.RemoveAt(occurrenceBody.Statements.Length - 1));
             if (occurrenceBody.Statements.IsEmpty)
             {
                 return StatementFailure(
@@ -1656,6 +1658,146 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 statement);
             return true;
         }
+
+        bool TryJoinRecurrenceResult(
+            LocalFunctionStatementSyntax occurrenceFunction,
+            string occurrenceName,
+            ITypeSymbol expectedType,
+            FlowBlock body,
+            out FlowBlock joinedBody,
+            out IOperation result)
+        {
+            joinedBody = body;
+            result = null!;
+            if (body.Statements.IsEmpty)
+            {
+                return StatementFailure(
+                    occurrenceFunction,
+                    $"RepeatAcrossActivation occurrence '{occurrenceName}' must end in one path-total portable result expression");
+            }
+
+            var tailIndex = body.Statements.Length - 1;
+            if (body.Statements[tailIndex] is ReturnFlow directReturn)
+            {
+                if (directReturn.Invocation is not null)
+                {
+                    return StatementFailure(
+                        directReturn.Syntax,
+                        $"RepeatAcrossActivation occurrence '{occurrenceName}' cannot join an explicit root terminal as its occurrence result");
+                }
+                if (!TryValidateJoinedResultType(occurrenceName, expectedType, directReturn))
+                {
+                    return false;
+                }
+
+                joinedBody = new(body.Statements.RemoveAt(tailIndex));
+                result = directReturn.Result;
+                return true;
+            }
+
+            if (body.Statements[tailIndex] is not RequestFlow
+                {
+                    Kind: RequestAuthoringKind.Request
+                } request
+                || request.Outcomes.Any(static outcome => outcome.ProtocolCaseType is null))
+            {
+                return StatementFailure(
+                    occurrenceFunction,
+                    $"RepeatAcrossActivation occurrence '{occurrenceName}' must end in one path-total portable result expression");
+            }
+
+            var joinedOutcomes = ImmutableArray.CreateBuilder<RequestOutcomeFlow>(request.Outcomes.Length);
+            ReturnFlow? joinedReturn = null;
+            foreach (var outcome in request.Outcomes)
+            {
+                if (outcome.Body.Statements.IsEmpty)
+                {
+                    return StatementFailure(
+                        outcome.Syntax,
+                        $"typed Effect outcome '{outcome.Name}' neither returns the occurrence value nor terminates the root Process");
+                }
+
+                var outcomeTailIndex = outcome.Body.Statements.Length - 1;
+                var outcomeTail = outcome.Body.Statements[outcomeTailIndex];
+                if (outcomeTail is ReturnFlow { Invocation: null } returned)
+                {
+                    if (joinedReturn is not null)
+                    {
+                        return StatementFailure(
+                            returned.Syntax,
+                            $"RepeatAcrossActivation occurrence '{occurrenceName}' has ambiguous portable result paths; exactly one typed Effect outcome may continue with the occurrence value");
+                    }
+                    if (!TryValidateJoinedResultType(occurrenceName, expectedType, returned))
+                    {
+                        return false;
+                    }
+
+                    joinedReturn = returned;
+                    joinedOutcomes.Add(outcome with
+                    {
+                        Body = new(outcome.Body.Statements.RemoveAt(outcomeTailIndex))
+                    });
+                    continue;
+                }
+
+                if (outcomeTail is ActionFlow
+                    {
+                        Kind: ActionKind.Succeed or ActionKind.Terminate
+                    }
+                    || outcomeTail is ReturnFlow { Invocation: not null })
+                {
+                    joinedOutcomes.Add(outcome);
+                    continue;
+                }
+
+                return StatementFailure(
+                    outcome.Syntax,
+                    $"typed Effect outcome '{outcome.Name}' neither returns the occurrence value nor terminates the root Process");
+            }
+
+            if (joinedReturn is null)
+            {
+                return StatementFailure(
+                    request.Syntax,
+                    $"RepeatAcrossActivation occurrence '{occurrenceName}' has no continuing portable result path; exactly one typed Effect outcome must return the occurrence value");
+            }
+
+            joinedBody = new(body.Statements.SetItem(
+                tailIndex,
+                request with { Outcomes = joinedOutcomes.MoveToImmutable() }));
+            result = joinedReturn.Result;
+            return true;
+        }
+
+        bool TryValidateJoinedResultType(
+            string occurrenceName,
+            ITypeSymbol expectedType,
+            ReturnFlow returned)
+        {
+            if (returned.Result.Type is not { } actualType
+                || !SymbolEqualityComparer.Default.Equals(actualType, expectedType))
+            {
+                return StatementFailure(
+                    returned.Syntax,
+                    $"RepeatAcrossActivation occurrence '{occurrenceName}' returns '{returned.Result.Type?.ToDisplayString() ?? "<unknown>"}' but requires '{expectedType.ToDisplayString()}'");
+            }
+
+            return true;
+        }
+
+        bool IsUnreachableMarker(SyntaxNode expression)
+        {
+            var operation = semanticModel.GetOperation(expression);
+            return operation is not null && IsUnreachableMarker(operation);
+        }
+
+        bool IsUnreachableMarker(IOperation operation) =>
+            Strip(operation) is IInvocationOperation unreachable
+            && unreachable.TargetMethod.Name == "Unreachable"
+            && SymbolEqualityComparer.Default.Equals(unreachable.TargetMethod.ContainingType, contextParameter.Type)
+            && unreachable.Instance is not null
+            && Strip(unreachable.Instance) is IParameterReferenceOperation unreachableContext
+            && SymbolEqualityComparer.Default.Equals(unreachableContext.Parameter, contextParameter);
 
         bool TryGetInlineProjection(
             IArgumentOperation? argument,
