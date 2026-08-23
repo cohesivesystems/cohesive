@@ -243,6 +243,75 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
     }
 
     [Fact]
+    public void Generator_LowersTopLevelCancellationFinalizerDeclaration()
+    {
+        var compilation = CreateCompilation(CancellationFinalizerSource("""
+            process.OnCancellation(Protocol, id: new("cancel/finalize"));
+            """));
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Contains("__builder.OnCancellation", generated);
+        Assert.Contains("cancel/finalize", generated);
+        Assert.DoesNotContain("System.Func", generated);
+    }
+
+    [Fact]
+    public void Generator_RejectsNestedCancellationFinalizerDeclaration()
+    {
+        var compilation = CreateCompilation(CancellationFinalizerSource("""
+            if (input.Length > 0)
+            {
+                process.OnCancellation(Protocol);
+            }
+            """));
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("root computation body", diagnostic.GetMessage());
+    }
+
+    [Fact]
+    public void Generator_RejectsDuplicateCancellationFinalizerDeclarations()
+    {
+        var compilation = CreateCompilation(CancellationFinalizerSource("""
+            process.OnCancellation(Protocol, id: new("cancel/first"));
+            process.OnCancellation(Protocol, id: new("cancel/second"));
+            """));
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("only one cancellation finalizer", diagnostic.GetMessage());
+    }
+
+    [Fact]
+    public void Generator_RejectsCancellationFinalizerForDifferentRootInput()
+    {
+        var source = CancellationFinalizerSource(
+            "process.OnCancellation(WrongProtocol);",
+            """
+            private static ProcessInvocationProtocol<ProcessCancellationFinalizationInput<int>, ProcessCancellationAcknowledgement> WrongProtocol => null!;
+            """);
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC003");
+
+        Assert.Contains("exact root Process input type", diagnostic.GetMessage());
+    }
+
+    [Fact]
     public void Generator_ReportsUnsupportedPureComputationAtItsSource()
     {
         var source = """
@@ -2496,6 +2565,27 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
         {{switchSections}}
                 }
                 return process.Unreachable<string>();
+            }
+        }
+        """;
+
+    static string CancellationFinalizerSource(string declaration, string additionalMembers = "") => $$"""
+        using Cohesive.Execution;
+        using Cohesive.Processes.Authoring;
+        using Cohesive.Processes.IR;
+
+        namespace Sample;
+
+        [GenerateProcessDefinition(nameof(Run))]
+        public static partial class CancellableProcess
+        {
+            private static ProcessInvocationProtocol<ProcessCancellationFinalizationInput<string>, ProcessCancellationAcknowledgement> Protocol => null!;
+            {{additionalMembers}}
+
+            private static async ProcessTask<string> Run(ProcessContext process, string input)
+            {
+                {{declaration}}
+                return input;
             }
         }
         """;

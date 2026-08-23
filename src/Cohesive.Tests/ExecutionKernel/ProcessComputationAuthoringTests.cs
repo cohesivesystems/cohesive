@@ -46,6 +46,41 @@ public sealed class ProcessComputationAuthoringTests
     }
 
     [Fact]
+    public void CancellationFinalizerComputation_IsByteEquivalentToCanonicalBuilderAuthoring()
+    {
+        var returnId = ProcessAuthoringIdentities.NodeFor(new(["body", "return-0"]));
+        var metadata = new ProcessAuthoringMetadata(
+            new("process/tests/generated-cancellation-finalizer-parent"),
+            new("revision/1"),
+            returnId,
+            ProcessRecoveryPolicy.ContinueAttempt,
+            new(
+                new("tests.process-computation", "1"),
+                new("tests/ari-469/cancellation-finalizer-parent"),
+                DocumentOrigin.Generated));
+        var generated = GeneratedCancellableProcess.Define(metadata);
+        var finalizer = Assert.Single(generated.Definition.Nodes.OfType<CancellationFinalizerProcessNode>());
+        var returned = Assert.Single(generated.Definition.Nodes.OfType<ReturnProcessNode>());
+        var lowLevel = ProcessAuthoring.Create<string, string>(
+            metadata.WithEntry(returned.Id),
+            process =>
+            {
+                process.OnCancellation(finalizer.Id, GeneratedCancellableProcess.Cancellation);
+                process.Return(returned.Id, process.Input.Value);
+            });
+
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        Assert.True(lowLevel.IsValid, Format(lowLevel.Validation));
+        Assert.Equal(new ExecutionNodeId("training/cancel/finalize"), finalizer.Id);
+        Assert.Equal(GeneratedCancellableProcess.Cancellation.Process.Reference, finalizer.Process);
+        Assert.Equal(GeneratedCancellableProcess.Cancellation.Request, finalizer.Contract);
+        Assert.Equal(lowLevel.Definition, generated.Definition);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(lowLevel.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(generated.Document));
+    }
+
+    [Fact]
     public void OutboundInteractionComputation_IsCanonicalRoundTripsAndExecutesWithStableEvidence()
     {
         var metadata = OutboundInteractionMetadata();
@@ -2123,6 +2158,58 @@ public static partial class CustomerQueryProcessWithPureLocal
         var queryInput = input;
         var row = await process.Query<string>(CustomerQueryProcess.Relation, queryInput);
         return row;
+    }
+}
+
+/// <summary>Representative generated Process with an authored lifecycle cancellation finalizer.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedCancellableProcess
+{
+    static readonly Process<
+        ProcessCancellationFinalizationInput<string>,
+        ProcessCancellationAcknowledgement> Finalizer =
+        ProcessAuthoring.Create<
+            ProcessCancellationFinalizationInput<string>,
+            ProcessCancellationAcknowledgement>(
+            new(
+                new("process/tests/generated-cancellation-finalizer"),
+                new("revision/1"),
+                new("return"),
+                ProcessRecoveryPolicy.ContinueAttempt,
+                new(
+                    new("tests.process-computation", "1"),
+                    new("tests/ari-469/cancellation-finalizer"),
+                    DocumentOrigin.Generated)),
+            ProcessCancellationFinalizationContracts.Input(
+                new(new ScalarTypeRef(ScalarTypeKind.String))),
+            ProcessCancellationFinalizationContracts.Acknowledgement,
+            process => process.Return(
+                new("return"),
+                process.CanonicalValue<ProcessCancellationAcknowledgement>(
+                    Expr.Const(ObservationValue.FromObject(
+                        new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+                        {
+                            ["attemptId"] = ObservationValue.FromString("process-attempt/fixture")
+                        })),
+                    ProcessCancellationFinalizationContracts.Acknowledgement)));
+
+    /// <summary>Exact cancellation-finalizer child invocation protocol.</summary>
+    public static ProcessInvocationProtocol<
+        ProcessCancellationFinalizationInput<string>,
+        ProcessCancellationAcknowledgement> Cancellation { get; } =
+        Finalizer.InvocationProtocol(
+            new("request/tests/generated-cancellation-finalizer"),
+            new("revision/1"),
+            ProcessInvocationResponsePolicy.ReconciledJoin(TimeSpan.FromDays(30)),
+            new(
+                new("tests.process-computation", "1"),
+                new("tests/ari-469/cancellation-finalizer-invocation"),
+                DocumentOrigin.Generated));
+
+    static async ProcessTask<string> Run(ProcessContext process, string input)
+    {
+        process.OnCancellation(Cancellation, id: new("training/cancel/finalize"));
+        return input;
     }
 }
 

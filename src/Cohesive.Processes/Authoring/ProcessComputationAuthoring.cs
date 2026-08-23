@@ -379,6 +379,24 @@ public sealed class ProcessContext
         ExecutionNodeId? id = null) =>
         throw SyntaxOnly();
 
+    /// <summary>Declares the exact authored child Process that must acknowledge lifecycle cancellation.</summary>
+    /// <remarks>
+    /// This is a top-level lifecycle declaration rather than an ordinary awaited operation. The child receives
+    /// only the immutable root input and canonical cancellation context, and must return the exact cancellation
+    /// acknowledgement. The generator lowers this syntax directly to the canonical cancellation-finalizer node;
+    /// no delegate or runtime callback is retained.
+    /// </remarks>
+    /// <typeparam name="TInput">Portable root input type of the Process being cancelled.</typeparam>
+    /// <param name="protocol">Exact typed cancellation-finalizer child invocation protocol.</param>
+    /// <param name="id">Optional explicit canonical lifecycle declaration identity.</param>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only member is executed.</exception>
+    public void OnCancellation<TInput>(
+        ProcessInvocationProtocol<
+            ProcessCancellationFinalizationInput<TInput>,
+            ProcessCancellationAcknowledgement> protocol,
+        ExecutionNodeId? id = null) =>
+        throw SyntaxOnly();
+
     /// <summary>Declares one typed domain-event emission without creating a response obligation.</summary>
     /// <typeparam name="TPayload">Portable CLR type of the exact domain-event payload.</typeparam>
     /// <param name="contract">Exact typed domain-event contract.</param>
