@@ -346,8 +346,7 @@ public abstract class ProcessRelationHandlerRegistration
             PortableValue portable;
             try
             {
-                var element = JsonSerializer.SerializeToElement(result, JsonOptions);
-                var observed = ObservationValue.FromJsonElement(element);
+                var observed = ObservationValue.FromObject(result);
                 if (observed.Kind is ObservationValueKind.Undefined or ObservationValueKind.Null)
                     throw new JsonException("The typed result encoded as an undefined or null root value.");
                 portable = PortableValue.Concrete(ResultContract, observed);
