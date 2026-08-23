@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Text.Json;
 using Cohesive.Adapters.Cosmos;
 using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
@@ -10,6 +11,7 @@ using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 using Cohesive.Tests.Relations;
+using Microsoft.Azure.Cosmos;
 using IRQueryDefinition = Cohesive.Relations.IR.QueryDefinition;
 using IRRelationDefinition = Cohesive.Relations.IR.RelationDefinition;
 
@@ -17,6 +19,18 @@ namespace Cohesive.Tests.Model;
 
 public sealed class CosmosRelationQueryCompilerTests
 {
+    sealed class CosmosRelationQueryArtifactFactAttribute : FactAttribute
+    {
+        public CosmosRelationQueryArtifactFactAttribute()
+        {
+            if (string.IsNullOrWhiteSpace(
+                    Environment.GetEnvironmentVariable("COSMOS_RELATION_QUERY_CONNECTION_STRING")))
+            {
+                Skip = "Set COSMOS_RELATION_QUERY_CONNECTION_STRING to run the Cosmos keyset integration test.";
+            }
+        }
+    }
+
     [Fact]
     public void Compile_RowQuery_ProducesExactReusableArtifact()
     {
@@ -352,23 +366,27 @@ public sealed class CosmosRelationQueryCompilerTests
     }
 
     [Fact]
-    public void Compile_UnrealizableButAlignedInputs_AreUnsupportedRatherThanInvalid()
+    public void Compile_KeysetInputs_AreRealizableAndCompileExactly()
     {
-        var fixture = Fixture.Row(keyset: true, overrideUnavailableRequirements: true);
-        var unrealizable = RelationQueryRealizationCompiler.Compile(
+        var fixture = Fixture.Row(keyset: true);
+        var realization = RelationQueryRealizationCompiler.Compile(
             fixture.Plan,
             CosmosRelationQueryTargetProfile.Default,
             CosmosRelationQueryTargetProfile.Policy,
             RelationQueryResultObservability.NotRequested);
-        Assert.False(unrealizable.IsRealizable);
+        Assert.True(
+            realization.IsRealizable,
+            string.Join(Environment.NewLine, realization.Diagnostics.Select(static diagnostic => diagnostic.Message)));
 
         var result = fixture.Compile(
-            request: new(fixture.Plan, unrealizable, fixture.Placement));
+            request: new(fixture.Plan, realization, fixture.Placement));
 
-        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
-        Assert.Contains(result.Diagnostics, static diagnostic =>
-            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.RequirementUnavailable);
-        Assert.Empty(result.Artifacts);
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var artifact = Assert.Single(result.Artifacts);
+        Assert.Contains("(c[\"Id\"] > @p1)", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Equal(CosmosRelationQueryPagingKind.Keyset, artifact.Paging!.Kind);
+        Assert.Equal(0, artifact.Paging.Offset);
+        Assert.Equal(25, artifact.Paging.Limit);
     }
 
     [Fact]
@@ -424,19 +442,193 @@ public sealed class CosmosRelationQueryCompilerTests
     }
 
     [Fact]
-    public void Compile_KeysetPage_IsRejectedWithStructuredOperatorDiagnostic()
+    public void Compile_InitialKeysetPage_AppliesOnlyTheDeterministicLimit()
     {
-        var fixture = Fixture.Row(keyset: true, overrideUnavailableRequirements: true);
+        var fixture = Fixture.Row(keyset: true, initialKeyset: true);
+
+        var result = fixture.Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var artifact = Assert.Single(result.Artifacts);
+        Assert.Equal(
+            "SELECT c[\"Id\"] AS f0, c[\"Status\"] AS f1 FROM c "
+            + "WHERE (c[\"Status\"] = @p0) ORDER BY c[\"Id\"] ASC OFFSET 0 LIMIT 25",
+            artifact.Statement.Text);
+        Assert.Equal(CosmosRelationQueryPagingKind.Keyset, artifact.Paging!.Kind);
+        Assert.Single(artifact.Parameters);
+    }
+
+    [CosmosRelationQueryArtifactFact]
+    public async Task CosmosArtifact_KeysetPagesMatchCanonicalOrderingWithoutDuplicatesOrOmissions()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("COSMOS_RELATION_QUERY_CONNECTION_STRING")
+            ?? throw new InvalidOperationException("The Cosmos connection string disappeared after discovery.");
+        var databaseId = $"cohesive-relation-query-tests-{Guid.NewGuid():N}";
+        using var client = CreateCosmosClient(connectionString);
+        var database = (await client.CreateDatabaseAsync(databaseId)).Database;
+        try
+        {
+            const string containerId = "loads";
+            var container = (await database.CreateContainerAsync(
+                new ContainerProperties(containerId, "/pk"))).Container;
+            foreach (var id in new[] { "load-4", "load-2", "load-1", "load-3" })
+            {
+                await container.UpsertItemAsync(
+                    new { id, pk = "tenant-a", Id = id, Status = "ready" },
+                    new PartitionKey("tenant-a"));
+            }
+
+            var initial = Fixture.Row(keyset: true, initialKeyset: true, pageSize: 2);
+            var continued = Fixture.Row(keyset: true, pageSize: 2);
+            var initialBinding = EmulatorBinding(initial, client.Endpoint, databaseId, containerId);
+            var continuedBinding = EmulatorBinding(continued, client.Endpoint, databaseId, containerId);
+            var initialArtifact = Assert.Single(initial.Compile(initialBinding).Artifacts);
+            var continuedArtifact = Assert.Single(continued.Compile(continuedBinding).Artifacts);
+            var executor = new CosmosRelationQueryArtifactExecutor(container);
+
+            var first = await executor.ExecuteAsync(ExecutionRequest(
+                initial,
+                initialBinding,
+                initialArtifact,
+                new Dictionary<QueryParameterId, ObservationValue>
+                {
+                    [new("status")] = ObservationValue.FromString("ready")
+                }));
+            var secondRequest = ExecutionRequest(
+                continued,
+                continuedBinding,
+                continuedArtifact,
+                new Dictionary<QueryParameterId, ObservationValue>
+                {
+                    [new("status")] = ObservationValue.FromString("ready"),
+                    [new("cursor")] = ObservationValue.FromString("load-2")
+                });
+            var second = await executor.ExecuteAsync(secondRequest);
+            var replayedSecond = await executor.ExecuteAsync(secondRequest);
+            var exhausted = await executor.ExecuteAsync(ExecutionRequest(
+                continued,
+                continuedBinding,
+                continuedArtifact,
+                new Dictionary<QueryParameterId, ObservationValue>
+                {
+                    [new("status")] = ObservationValue.FromString("ready"),
+                    [new("cursor")] = ObservationValue.FromString("load-4")
+                }));
+
+            Assert.True(first.IsSuccessful, string.Join(Environment.NewLine, first.Diagnostics.Select(static x => x.Message)));
+            Assert.True(second.IsSuccessful, string.Join(Environment.NewLine, second.Diagnostics.Select(static x => x.Message)));
+            Assert.Equal(
+                ["load-1", "load-2", "load-3", "load-4"],
+                first.Rows.Concat(second.Rows).Select(static row => row.Value.GetProperty("Id").String));
+            Assert.Equal(
+                second.Rows.Select(static row => row.Value),
+                replayedSecond.Rows.Select(static row => row.Value));
+            Assert.Empty(exhausted.Rows);
+        }
+        finally
+        {
+            await database.DeleteAsync();
+        }
+    }
+
+    [Fact]
+    public void Compile_MixedDirectionKeysetPage_ProducesLexicographicStrictAfterPredicate()
+    {
+        var fixture = Fixture.MixedDirectionKeyset();
+        var binding = fixture.StorageBindingWithOrderingProofs(
+            stableUniqueOrderingPaths: [Fixture.IdPath],
+            exactOrderingPaths: [Fixture.StatusPath, Fixture.IdPath]);
+
+        var result = fixture.Compile(binding);
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var artifact = Assert.Single(result.Artifacts);
+        Assert.Contains("(c[\"Status\"] > @p1)", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Contains("(c[\"Status\"] = @p1)", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Contains("(c[\"Id\"] < @p2)", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Contains(
+            "ORDER BY c[\"Status\"] ASC, c[\"Id\"] DESC OFFSET 0 LIMIT 25",
+            artifact.Statement.Text,
+            StringComparison.Ordinal);
+        Assert.Equal(CosmosRelationQueryPagingKind.Keyset, artifact.Paging!.Kind);
+        Assert.Equal(
+            ["status", "cursor-status", "cursor-id"],
+            artifact.Parameters.Select(static parameter => parameter.Parameter.Value));
+    }
+
+    [Fact]
+    public void PagingContract_KeysetPageRejectsAnOffset()
+    {
+        var exception = Assert.Throws<ArgumentException>(() => new CosmosRelationQueryPagingContract(
+            CosmosRelationQueryPagingKind.Keyset,
+            offset: 1,
+            limit: 25,
+            stableUniquePath: Fixture.IdPath));
+
+        Assert.Equal("offset", exception.ParamName);
+    }
+
+    [Fact]
+    public void PagingContract_KeysetKindSurvivesPortableJsonRoundTrip()
+    {
+        CosmosRelationQueryPagingContract contract = new(
+            CosmosRelationQueryPagingKind.Keyset,
+            offset: 0,
+            limit: 25,
+            stableUniquePath: Fixture.IdPath);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        var rehydrated = JsonSerializer.Deserialize<CosmosRelationQueryPagingContract>(
+            JsonSerializer.Serialize(contract, options),
+            options);
+
+        Assert.Equal(contract, rehydrated);
+    }
+
+    [Fact]
+    public void Compile_OversizedKeysetPage_FailsAtTheDeclaredPageBoundary()
+    {
+        var fixture = Fixture.Row(
+            keyset: true,
+            initialKeyset: true,
+            pageSize: CosmosRelationQueryTargetProfile.MaximumPageSize + 1,
+            overrideUnavailableRequirements: true);
 
         var result = fixture.Compile();
 
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
             diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
-        Assert.Contains("offset paging only", diagnostic.Message, StringComparison.Ordinal);
-        Assert.NotNull(diagnostic.Branch);
-        Assert.NotNull(diagnostic.Node);
+        Assert.Contains("Page size", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
+    public void Compile_OptionalKeysetContinuation_FailsTheNonNullBoundary()
+    {
+        var fixture = Fixture.Row(
+            keyset: true,
+            cursorPresence: FieldPresence.Optional,
+            overrideUnavailableRequirements: true);
+
+        var result = fixture.Compile();
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
+        Assert.Contains("keyset continuation", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("missing or null", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Author_NonScalarKeysetContinuation_FailsTheComparableCategoryBoundary()
+    {
+        var exception = Assert.Throws<ArgumentException>(() => Fixture.Row(
+            keyset: true,
+            cursorType: new ArrayTypeRef(new ScalarTypeRef(ScalarTypeKind.String))));
+
+        Assert.Contains("relationQuery.expression.resultCategoryMismatch", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Comparable", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -924,7 +1116,7 @@ public sealed class CosmosRelationQueryCompilerTests
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
             diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
-        Assert.Contains("does not have a Cosmos SQL v2 parameter encoding", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("does not have a Cosmos SQL v3 parameter encoding", diagnostic.Message, StringComparison.Ordinal);
         Assert.NotNull(diagnostic.Input);
         Assert.DoesNotContain(result.Diagnostics, static diagnostic =>
             diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.ArtifactInvalid);
@@ -1504,6 +1696,60 @@ public sealed class CosmosRelationQueryCompilerTests
         Environment.NewLine,
         result.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
 
+    static CosmosRelationQueryStorageBinding EmulatorBinding(
+        Fixture fixture,
+        Uri accountEndpoint,
+        string databaseName,
+        string containerName)
+    {
+        var placement = fixture.Placement.Bindings.Single(binding =>
+            binding.Id == fixture.StorageBinding.PlacementBinding);
+        return CosmosRelationQueryStorageBinding.FromSemanticPathConvention(
+            new("tests/cosmos-keyset-emulator/v1"),
+            placement,
+            CosmosRelationQueryTargetProfile.Target,
+            CosmosRelationQueryTargetProfile.ProfileId,
+            accountEndpoint,
+            databaseName,
+            containerName,
+            Fixture.IdPath,
+            stableUniqueOrderingPaths: [Fixture.IdPath],
+            exactOrderingPaths: [Fixture.IdPath],
+            maximumInputRows: 100);
+    }
+
+    static CosmosClient CreateCosmosClient(string connectionString)
+    {
+        var options = new CosmosClientOptions { ConnectionMode = ConnectionMode.Gateway };
+        var endpointValue = connectionString
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(static part => part.StartsWith("AccountEndpoint=", StringComparison.OrdinalIgnoreCase))?
+            ["AccountEndpoint=".Length..];
+        if (Uri.TryCreate(endpointValue, UriKind.Absolute, out var endpoint) && endpoint.IsLoopback)
+        {
+            options.HttpClientFactory = static () => new HttpClient(new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback =
+                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            });
+        }
+
+        return new CosmosClient(connectionString, options);
+    }
+
+    static CosmosRelationQueryArtifactExecutionRequest ExecutionRequest(
+        Fixture fixture,
+        CosmosRelationQueryStorageBinding binding,
+        CosmosRelationQueryCompiledArtifact artifact,
+        IReadOnlyDictionary<QueryParameterId, ObservationValue> parameters) => new(
+        fixture.PlanReference,
+        artifact.Provenance.Realization,
+        artifact.Provenance.Placement,
+        binding.Fingerprint,
+        artifact,
+        maximumRows: 10,
+        parameters);
+
     static RelationQueryNativeCompilationDiagnostic AssertContextDiagnostic(
         CosmosRelationQueryCompilationResult result,
         string code,
@@ -1877,19 +2123,26 @@ public sealed class CosmosRelationQueryCompilerTests
         public static Fixture Row(
             int offset = 5,
             bool keyset = false,
+            bool initialKeyset = false,
+            int pageSize = 25,
+            TypeRef? cursorType = null,
+            FieldPresence cursorPresence = FieldPresence.Required,
             bool optionalPredicate = false,
             bool overrideUnavailableRequirements = false)
         {
             QueryPageDefinition page = keyset
-                ? new KeysetPageDefinition(25, [Expr.Param("cursor")])
-                : new OffsetPageDefinition(25, offset);
+                ? new KeysetPageDefinition(pageSize, initialKeyset ? [] : [Expr.Param("cursor")])
+                : new OffsetPageDefinition(pageSize, offset);
             List<QueryParameterDefinition> parameters =
             [
                 new(StatusParameter, new ScalarTypeRef(ScalarTypeKind.String))
             ];
-            if (keyset)
+            if (keyset && !initialKeyset)
             {
-                parameters.Add(new(new("cursor"), new ScalarTypeRef(ScalarTypeKind.String)));
+                parameters.Add(new(
+                    new("cursor"),
+                    cursorType ?? new ScalarTypeRef(ScalarTypeKind.String),
+                    cursorPresence));
             }
 
             IRQueryDefinition definition = new(
@@ -1922,6 +2175,52 @@ public sealed class CosmosRelationQueryCompilerTests
             return Create(
                 RelationQueryDocument.FromDefinition(definition),
                 overrideUnavailableRequirements: overrideUnavailableRequirements);
+        }
+
+        public static Fixture MixedDirectionKeyset()
+        {
+            IRQueryDefinition definition = new(
+                new("mixed-keyset-row-query"),
+                new("MixedKeysetRowQuery"),
+                new(
+                    nodes:
+                    [
+                        new SourceQueryNode(LoadSource, Load, LoadShape),
+                        new FilterQueryNode(
+                            Filter,
+                            LoadSource,
+                            Expr.Eq(Expr.Field(Load, StatusPath), Expr.Param(StatusParameter.Value))),
+                        new ProjectQueryNode(
+                            Project,
+                            Filter,
+                            RowBinding,
+                            RowShape,
+                            [
+                                new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
+                                new(new("row-status"), StatusPath, Expr.Field(Load, StatusPath))
+                            ]),
+                        new OrderQueryNode(
+                            Order,
+                            Project,
+                            [
+                                new(Expr.Field(RowBinding, StatusPath), QuerySortDirection.Ascending),
+                                new(Expr.Field(RowBinding, IdPath), QuerySortDirection.Descending)
+                            ]),
+                        new PageQueryNode(
+                            Page,
+                            Order,
+                            new KeysetPageDefinition(
+                                25,
+                                [Expr.Param("cursor-status"), Expr.Param("cursor-id")]))
+                    ],
+                    parameters:
+                    [
+                        new(StatusParameter, new ScalarTypeRef(ScalarTypeKind.String)),
+                        new(new("cursor-status"), new ScalarTypeRef(ScalarTypeKind.String)),
+                        new(new("cursor-id"), new ScalarTypeRef(ScalarTypeKind.String))
+                    ]),
+                [new RowsQueryResultDefinition(Rows, Page)]);
+            return Create(RelationQueryDocument.FromDefinition(definition));
         }
 
         public static Fixture IndependentBranches()

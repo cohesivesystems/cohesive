@@ -242,7 +242,7 @@ Current portable and adapter contracts expose their schema versions through cons
 - `relation-query-source-placement/v3`
 - `relation-query-physical-plan/v1`
 - `relation-query-explain/v1`
-- Cosmos SQL profile `canonical-v2` and binding `cosmos-binding/v5`
+- Cosmos SQL profile `canonical-v3` and binding `cosmos-binding/v5`
 - Elasticsearch profile `canonical-v2` and binding `elastic-binding/v4`
 - PostgreSQL SQL profile `canonical-v2`, source-reader profile `source-reader-v1`, binding `postgres-binding/v1`, and
   artifact `postgres-artifact/v3`

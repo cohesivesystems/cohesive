@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Cohesive.Model;
 using Cohesive.Model.Expressions;
 using Cohesive.Relations.Compilation;
@@ -10,7 +11,7 @@ namespace Cohesive.Adapters.Cosmos;
 public sealed record CosmosRelationQueryCompilerOptions
 {
     /// <summary>Current canonical Cosmos SQL compiler profile.</summary>
-    public const string CurrentCompilerProfile = "cohesive.adapters.cosmos.sql/compiler-v2";
+    public const string CurrentCompilerProfile = "cohesive.adapters.cosmos.sql/compiler-v3";
 
     /// <summary>Creates canonical Cosmos compiler options.</summary>
     /// <param name="compilerProfile">Stable compiler implementation/profile identity.</param>
@@ -241,27 +242,67 @@ public sealed record CosmosRelationQueryParameterBinding
     public QueryParameterId Parameter => Definition.Id;
 }
 
-/// <summary>Exact offset-page contract retained by a compiled artifact.</summary>
+/// <summary>Cosmos paging strategy retained by a compiled artifact.</summary>
+public enum CosmosRelationQueryPagingKind
+{
+    /// <summary>Skip a fixed number of rows from one deterministic ordering.</summary>
+    Offset = 0,
+
+    /// <summary>Select rows strictly after an ordered continuation tuple.</summary>
+    Keyset = 1
+}
+
+/// <summary>Exact page contract retained by a compiled artifact.</summary>
 public sealed record CosmosRelationQueryPagingContract
 {
-    /// <summary>Creates paging metadata.</summary>
+    /// <summary>Creates offset paging metadata.</summary>
     /// <param name="offset">Number of ordered rows skipped.</param>
     /// <param name="limit">Maximum number of rows returned.</param>
     /// <param name="stableUniquePath">Physical final ordering path proving stable page boundaries.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="offset"/> is negative or <paramref name="limit"/> is not positive.</exception>
     /// <exception cref="ArgumentException"><paramref name="stableUniquePath"/> is invalid.</exception>
     public CosmosRelationQueryPagingContract(int offset, int limit, FieldPath stableUniquePath)
+        : this(CosmosRelationQueryPagingKind.Offset, offset, limit, stableUniquePath)
     {
+    }
+
+    /// <summary>Creates paging metadata.</summary>
+    /// <param name="kind">Exact paging strategy.</param>
+    /// <param name="offset">Number of ordered rows skipped; keyset pages require zero.</param>
+    /// <param name="limit">Maximum number of rows returned.</param>
+    /// <param name="stableUniquePath">Physical final ordering path proving stable page boundaries.</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="kind"/> is unsupported, <paramref name="offset"/> is negative, or <paramref name="limit"/>
+    /// is not positive.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="stableUniquePath"/> is invalid or a keyset page has a nonzero offset.
+    /// </exception>
+    [JsonConstructor]
+    public CosmosRelationQueryPagingContract(
+        CosmosRelationQueryPagingKind kind,
+        int offset,
+        int limit,
+        FieldPath stableUniquePath)
+    {
+        if (!Enum.IsDefined(kind))
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported Cosmos paging kind.");
         if (offset < 0)
             throw new ArgumentOutOfRangeException(nameof(offset), offset, "A Cosmos page offset cannot be negative.");
+        if (kind == CosmosRelationQueryPagingKind.Keyset && offset != 0)
+            throw new ArgumentException("A Cosmos keyset page cannot retain an offset.", nameof(offset));
         if (limit <= 0)
             throw new ArgumentOutOfRangeException(nameof(limit), limit, "A Cosmos page limit must be positive.");
+        Kind = kind;
         Offset = offset;
         Limit = limit;
         StableUniquePath = CosmosRelationQueryStorageBinding.RequirePropertyPath(
             stableUniquePath,
             nameof(stableUniquePath));
     }
+
+    /// <summary>Exact paging strategy.</summary>
+    public CosmosRelationQueryPagingKind Kind { get; }
 
     /// <summary>Number of ordered rows skipped.</summary>
     public int Offset { get; }
@@ -371,7 +412,7 @@ public sealed class CosmosRelationQueryCompiledArtifact
     /// <summary>Canonical invocation parameters in allocated SQL-name order.</summary>
     public ImmutableArray<CosmosRelationQueryParameterBinding> Parameters { get; }
 
-    /// <summary>Offset-page guarantees, or <see langword="null"/> for an unpaged branch.</summary>
+    /// <summary>Page guarantees, or <see langword="null"/> for an unpaged branch.</summary>
     public CosmosRelationQueryPagingContract? Paging { get; }
 
     /// <summary>Exact target-neutral compilation provenance.</summary>
@@ -545,7 +586,7 @@ public static class CosmosRelationQueryCompilationDiagnosticCodes
     /// <summary>Artifact construction failed an internal consistency check.</summary>
     public const string ArtifactInvalid = "REL2219";
 
-    /// <summary>The requested runtime result observability cannot be produced by Cosmos SQL v2.</summary>
+    /// <summary>The requested runtime result observability cannot be produced by Cosmos SQL v3.</summary>
     public const string ResultObservabilityUnsupported = "REL2220";
 
     /// <summary>A relation terminal requires root, cardinality, key, or invariant semantics absent from the v2 artifact contract.</summary>

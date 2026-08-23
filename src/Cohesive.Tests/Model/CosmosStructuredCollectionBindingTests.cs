@@ -170,9 +170,9 @@ public sealed class CosmosStructuredCollectionBindingTests
             .ToArray();
         var structural = capabilities.OfType<StructuralRelationQueryCapability>().ToArray();
 
-        Assert.EndsWith("/canonical-v2", CosmosRelationQueryTargetProfile.ProfileId.Value, StringComparison.Ordinal);
-        Assert.EndsWith("/realization-policy-v2", CosmosRelationQueryTargetProfile.Policy.Id.Value, StringComparison.Ordinal);
-        Assert.EndsWith("/compiler-v2", CosmosRelationQueryCompilerOptions.CurrentCompilerProfile, StringComparison.Ordinal);
+        Assert.EndsWith("/canonical-v3", CosmosRelationQueryTargetProfile.ProfileId.Value, StringComparison.Ordinal);
+        Assert.EndsWith("/realization-policy-v3", CosmosRelationQueryTargetProfile.Policy.Id.Value, StringComparison.Ordinal);
+        Assert.EndsWith("/compiler-v3", CosmosRelationQueryCompilerOptions.CurrentCompilerProfile, StringComparison.Ordinal);
         Assert.Contains(capabilities, static capability => capability is ExpressionRelationQueryCapability expression
             && expression.Capability == ExprCapabilities.ForFunction(ExprFunctionNames.Any));
         Assert.Contains(capabilities, static capability => capability is ExpressionRelationQueryCapability expression
