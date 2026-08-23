@@ -265,6 +265,22 @@ services.AddSingleton<IAsyncProcessReferenceHost>(provider =>
 The compatibility adapter checks cancellation before entering the synchronous call but cannot interrupt it after
 entry. Do not use it for asynchronous I/O or unbounded work.
 
+Canonical Process activations and interaction envelopes retain an `InteractionAuthorityScope`, while the physical
+`OperationContext` deliberately has no product-specific interpretation of that authority. Applications that enforce
+typed identity or tenant scopes register one `IInteractionAuthorityOperationContextProjector` before the worker:
+
+```csharp
+services.AddSingleton<IInteractionAuthorityOperationContextProjector,
+    ApplicationInteractionAuthorityOperationContextProjector>();
+```
+
+The worker uses that same singleton for Transition and Relation/Query host operations, Signal-target resolution,
+durable Request execution and reconciliation, and domain-event publication. The default projector is an explicit
+pass-through for hosts that need no semantic scope projection. A product projector may enrich principal, scope, or
+metadata state from the exact canonical authority tuple, but it cannot change the physical time provider, operation
+start instant, trace, or cancellation evidence. Cohesive never assumes that the optional canonical tenant string
+maps to a particular product scope kind, grant model, or storage partition.
+
 `IDomainEventPublisherResolver` is deployment policy keyed by the exact `DomainEventContractReference`. Every
 resolved `IDomainEventPublisher` declares the exact contracts for which its target durably suppresses redelivery by
 `DomainEventPublicationDeduplicationKey`. The key combines authority scope, exact contract identity, revision,

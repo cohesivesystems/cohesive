@@ -129,6 +129,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var completion = new TaskCompletionSource<ProcessOperationResult>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        var projector = new RecordingAuthorityProjector();
         OperationContext? capturedContext = null;
         ProcessRelationEvaluation? capturedEvaluation = null;
         var host = new DelegateAsyncProcessHost(evaluateRelation: (context, invocation) =>
@@ -138,7 +139,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             entered.SetResult();
             return new(completion.Task);
         });
-        var activity = new DurableTaskProcessHostOperationActivity(host, lifetime);
+        var activity = new DurableTaskProcessHostOperationActivity(host, lifetime, projector);
         using var trace = new Activity("tests.durable-task.async-host").Start();
 
         var execution = activity.RunAsync(
@@ -150,6 +151,8 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.Equal(evaluation, capturedEvaluation);
         Assert.Equal(trace.Context, capturedContext?.TraceContext);
         Assert.Equal(lifetime.ApplicationStopping, capturedContext?.CancellationToken);
+        AssertProjected(capturedContext, evaluation.Context.AuthorityScope);
+        Assert.Equal([evaluation.Context.AuthorityScope], projector.AuthorityScopes);
 
         var result = ProcessOperationResult.Completed(evaluation.Input);
         completion.SetResult(result);
@@ -234,14 +237,17 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var completion = new TaskCompletionSource<ProcessSignalTargetResult>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        var projector = new RecordingAuthorityProjector();
+        OperationContext? capturedContext = null;
         ProcessSignalTargetResolution? capturedResolution = null;
-        var host = new DelegateAsyncProcessHost(resolveSignalTarget: (_, invocation) =>
+        var host = new DelegateAsyncProcessHost(resolveSignalTarget: (context, invocation) =>
         {
+            capturedContext = context;
             capturedResolution = invocation;
             entered.SetResult();
             return new(completion.Task);
         });
-        var activity = new DurableTaskProcessSignalTargetActivity(host, lifetime);
+        var activity = new DurableTaskProcessSignalTargetActivity(host, lifetime, projector);
 
         var execution = activity.RunAsync(
             new TestTaskActivityContext("instance/async-signal"),
@@ -250,11 +256,152 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 
         Assert.False(execution.IsCompleted);
         Assert.Equal(resolution, capturedResolution);
+        AssertProjected(capturedContext, resolution.Context.AuthorityScope);
+        Assert.Equal([resolution.Context.AuthorityScope], projector.AuthorityScopes);
 
         var result = ProcessSignalTargetResult.Resolved(target);
         completion.SetResult(result);
 
         Assert.Equal(result, await execution);
+    }
+
+    [Fact]
+    public async Task DurableRequestActivities_ProjectCanonicalAuthorityForExecutionAndReconciliation()
+    {
+        var (plan, replyContract) = CompileRequestPlan("process/durable-task-authority-request");
+        var binding = Binding(plan, replyContract);
+        var start = Start(plan, "authority/request", "instance/authority-request");
+        DurableOperationInvocation? invocation = null;
+        _ = await RunDurableRequest(
+            plan,
+            start,
+            binding,
+            current =>
+            {
+                invocation = current;
+                return new(
+                    new DurableOperationOutcomeObservation(
+                        new RequestResultOutcome(new("accepted"), StringValue("accepted"))),
+                    deadlineElapsed: false);
+            });
+
+        DurableOperationState? reconciliation = null;
+        _ = await RunDurableRequest(
+            plan,
+            start,
+            binding,
+            _ => new(
+                new DurableOperationFailureObservation(new(
+                    DurableOperationFailurePhase.InCall,
+                    DurableOperationEffectEvidence.Ambiguous,
+                    DurableOperationFailureDisposition.Retryable,
+                    "tests.authority-projection")),
+                deadlineElapsed: false),
+            current =>
+            {
+                reconciliation = current;
+                return new(
+                    new DurableOperationReconciledOutcome(
+                        new RequestResultOutcome(new("accepted"), StringValue("accepted"))),
+                    deadlineElapsed: false);
+            });
+
+        var adapter = new ContextCapturingDurableOperationAdapter(invocation!.Request.Contract);
+        var resolver = new AdapterResolver(adapter);
+        var projector = new RecordingAuthorityProjector();
+        var executionActivity = new DurableTaskDurableOperationActivity(
+            resolver,
+            ConservativeDurableOperationExceptionClassifier.Instance,
+            projector);
+        var execution = await executionActivity.RunAsync(
+            new TestTaskActivityContext("instance/authority-request-execution"),
+            invocation);
+        Assert.IsType<DurableOperationOutcomeObservation>(execution.Observation);
+        AssertProjected(Assert.Single(adapter.ExecutionContexts), invocation.Request.Context.AuthorityScope);
+
+        var reconciliationActivity = new DurableTaskDurableOperationReconciliationActivity(resolver, projector);
+        var reconciled = await reconciliationActivity.RunAsync(
+            new TestTaskActivityContext("instance/authority-request-reconciliation"),
+            reconciliation!);
+        Assert.IsType<DurableOperationReconciledOutcome>(reconciled.Observation);
+        AssertProjected(
+            Assert.Single(adapter.ReconciliationContexts),
+            reconciliation!.Request.Context.AuthorityScope);
+        Assert.Equal(
+            [invocation.Request.Context.AuthorityScope, reconciliation.Request.Context.AuthorityScope],
+            projector.AuthorityScopes);
+    }
+
+    [Fact]
+    public async Task DomainEventPublicationActivity_ProjectsCanonicalAuthorityWithoutChangingEnvelope()
+    {
+        var eventDocument = InteractionDocument(
+            "interaction/event/durable-task-authority-publication",
+            new DomainEventContractDefinition(new(StringContract, new("authority-publication/v1"))));
+        DomainEventContractReference eventContract = new(Reference(eventDocument));
+        var plan = Compile(
+            Definition(
+                "emit",
+                [
+                    new EmitEventProcessNode(
+                        new("emit"),
+                        eventContract,
+                        Expr.Const("event"),
+                        Edge("edge/emit-return", "return")),
+                    new ReturnProcessNode(new("return"), Expr.Const("done"))
+                ]),
+            Catalog(eventDocument),
+            definitionId: "process/durable-task-authority-publication");
+        DomainEventPublicationInvocation? invocation = null;
+        _ = await DurableTaskSequentialProcessInterpreter.RunAsync(
+            plan,
+            Start(plan, "publish", "instance/authority-publication"),
+            EmptyDurableRequestBindingResolver.Instance,
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            UnexpectedChildProcess,
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            TestDurableTimer,
+            () => StartedAtUtc,
+            publishDomainEvent: current =>
+            {
+                invocation = current;
+                return Task.FromResult(DurableTaskDomainEventPublication.From(
+                    current,
+                    StartedAtUtc,
+                    new DomainEventPublicationAcknowledgement()));
+            });
+
+        var publisher = new ContextCapturingDomainEventPublisher(eventContract);
+        var catalog = new DurableTaskSequentialProcessPlanCatalog(
+            [Physical(plan)],
+            domainEventPublisherResolver: new DomainEventPublisherResolver(publisher));
+        var projector = new RecordingAuthorityProjector();
+        var activity = new DurableTaskDomainEventPublicationActivity(catalog, projector);
+
+        var publication = await activity.RunAsync(
+            new TestTaskActivityContext("instance/authority-publication-activity"),
+            invocation!);
+
+        Assert.Equal(invocation!.DomainEvent.Context.EmissionId, publication.EmissionId);
+        Assert.Same(invocation.DomainEvent, Assert.Single(publisher.Invocations).DomainEvent);
+        AssertProjected(
+            Assert.Single(publisher.Contexts),
+            invocation.DomainEvent.Context.AuthorityScope);
+        Assert.Equal([invocation.DomainEvent.Context.AuthorityScope], projector.AuthorityScopes);
+    }
+
+    [Fact]
+    public void AuthorityProjection_RejectsChangesToPhysicalLifetimeEvidence()
+    {
+        var context = OperationContext.Create();
+        var scope = new InteractionAuthorityScope("authority/tests", "tenant/cohesive");
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            DurableTaskActivityOperationContext.Project(context, scope, new CancellationReplacingProjector()));
+
+        Assert.Contains("changed physical time, trace, or cancellation evidence", exception.Message);
     }
 
     [Fact]
@@ -2656,6 +2803,8 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(new WorkerCatalogDependency(expected));
+        var projector = new RecordingAuthorityProjector();
+        services.AddSingleton<IInteractionAuthorityOperationContextProjector>(projector);
         var factoryInvocations = 0;
         services.AddDurableTaskWorker(worker =>
         {
@@ -2686,6 +2835,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 
         Assert.Same(expected, first);
         Assert.Same(first, second);
+        Assert.Same(projector, provider.GetRequiredService<IInteractionAuthorityOperationContextProjector>());
         Assert.Equal(1, factoryInvocations);
         Assert.IsType<DurableTaskSequentialProcessOrchestrator>(orchestratorRegistration.Value(provider));
     }
@@ -4207,6 +4357,13 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         delay == TimeSpan.Zero
             ? Task.CompletedTask
             : Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+
+    static void AssertProjected(OperationContext? context, InteractionAuthorityScope expected)
+    {
+        Assert.NotNull(context);
+        Assert.True(context!.TryGetItem<InteractionAuthorityScope>(RecordingAuthorityProjector.ItemKey, out var actual));
+        Assert.Equal(expected, actual);
+    }
 
     static DurableRequestBinding Binding(
         CompiledProcessPlan plan,
@@ -5829,6 +5986,28 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         }
     }
 
+    sealed class ContextCapturingDomainEventPublisher(DomainEventContractReference contract)
+        : IDomainEventPublisher
+    {
+        readonly ConcurrentQueue<OperationContext> contexts = [];
+        readonly ConcurrentQueue<DomainEventPublicationInvocation> invocations = [];
+
+        public DomainEventPublisherCapabilities Capabilities { get; } = new([contract]);
+
+        internal IReadOnlyCollection<OperationContext> Contexts => contexts.ToArray();
+
+        internal IReadOnlyCollection<DomainEventPublicationInvocation> Invocations => invocations.ToArray();
+
+        public ValueTask<DomainEventPublicationAcknowledgement> PublishAsync(
+            OperationContext context,
+            DomainEventPublicationInvocation invocation)
+        {
+            contexts.Enqueue(context);
+            invocations.Enqueue(invocation);
+            return ValueTask.FromResult(new DomainEventPublicationAcknowledgement());
+        }
+    }
+
     sealed class AdapterResolver(IDurableOperationAdapter adapter) : IDurableOperationAdapterResolver
     {
         public bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? resolved)
@@ -5870,6 +6049,62 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             OperationContext context,
             DurableOperationReconciliationRequest request) =>
             throw new InvalidOperationException("Unexpected Scheduler-emulator reconciliation.");
+    }
+
+    sealed class ContextCapturingDurableOperationAdapter(RequestContractReference request)
+        : IDurableOperationAdapter
+    {
+        readonly ConcurrentQueue<OperationContext> executionContexts = [];
+        readonly ConcurrentQueue<OperationContext> reconciliationContexts = [];
+
+        public DurableOperationAdapterCapabilities Capabilities { get; } = new(
+            DurableOperationIdempotencyEvidence.TargetDeduplication,
+            DurableOperationReconciliationCapability.Supported,
+            [request]);
+
+        internal IReadOnlyCollection<OperationContext> ExecutionContexts => executionContexts.ToArray();
+
+        internal IReadOnlyCollection<OperationContext> ReconciliationContexts => reconciliationContexts.ToArray();
+
+        public ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
+            OperationContext context,
+            DurableOperationInvocation invocation)
+        {
+            executionContexts.Enqueue(context);
+            return ValueTask.FromResult<DurableOperationAttemptObservation>(
+                new DurableOperationOutcomeObservation(
+                    new RequestResultOutcome(new("accepted"), StringValue("accepted"))));
+        }
+
+        public ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
+            OperationContext context,
+            DurableOperationReconciliationRequest request)
+        {
+            reconciliationContexts.Enqueue(context);
+            return ValueTask.FromResult<DurableOperationReconciliationObservation>(
+                new DurableOperationReconciledOutcome(
+                    new RequestResultOutcome(new("accepted"), StringValue("accepted"))));
+        }
+    }
+
+    sealed class RecordingAuthorityProjector : IInteractionAuthorityOperationContextProjector
+    {
+        public const string ItemKey = "tests.interaction-authority";
+        readonly ConcurrentQueue<InteractionAuthorityScope> authorityScopes = [];
+
+        internal IReadOnlyCollection<InteractionAuthorityScope> AuthorityScopes => authorityScopes.ToArray();
+
+        public OperationContext Project(OperationContext context, InteractionAuthorityScope authorityScope)
+        {
+            authorityScopes.Enqueue(authorityScope);
+            return context.WithItem(ItemKey, authorityScope);
+        }
+    }
+
+    sealed class CancellationReplacingProjector : IInteractionAuthorityOperationContextProjector
+    {
+        public OperationContext Project(OperationContext context, InteractionAuthorityScope authorityScope) =>
+            context.WithCancellationToken(new CancellationToken(canceled: true));
     }
 
     sealed class SimulatedCrashException : Exception;

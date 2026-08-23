@@ -124,6 +124,8 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
             EmptyDurableOperationAdapterCapabilityResolver.Instance);
         builder.Services.TryAddSingleton<IDurableOperationExceptionClassifier>(
             ConservativeDurableOperationExceptionClassifier.Instance);
+        builder.Services.TryAddSingleton<IInteractionAuthorityOperationContextProjector>(
+            PassthroughInteractionAuthorityOperationContextProjector.Instance);
         builder.Configure(options => options.DataConverter = converter);
         return builder.AddTasks(tasks =>
         {
@@ -450,6 +452,7 @@ public sealed class DurableTaskDurableOperationActivity
 {
     readonly IDurableOperationAdapterResolver resolver;
     readonly IDurableOperationExceptionClassifier exceptionClassifier;
+    readonly IInteractionAuthorityOperationContextProjector contextProjector;
 
     /// <summary>Creates an activity over exact adapter resolution and explicit exception classification.</summary>
     /// <param name="resolver">Exact canonical Request adapter resolver.</param>
@@ -457,10 +460,26 @@ public sealed class DurableTaskDurableOperationActivity
     /// <exception cref="ArgumentNullException">Either dependency is <see langword="null"/>.</exception>
     public DurableTaskDurableOperationActivity(
         IDurableOperationAdapterResolver resolver,
-        IDurableOperationExceptionClassifier exceptionClassifier)
+        IDurableOperationExceptionClassifier exceptionClassifier) : this(
+            resolver,
+            exceptionClassifier,
+            PassthroughInteractionAuthorityOperationContextProjector.Instance)
+    {
+    }
+
+    /// <summary>Creates an activity with explicit canonical-authority context projection.</summary>
+    /// <param name="resolver">Exact canonical Request adapter resolver.</param>
+    /// <param name="exceptionClassifier">Provider-aware adapter exception classifier.</param>
+    /// <param name="contextProjector">Host interpretation of canonical interaction authority.</param>
+    /// <exception cref="ArgumentNullException">Any dependency is <see langword="null"/>.</exception>
+    public DurableTaskDurableOperationActivity(
+        IDurableOperationAdapterResolver resolver,
+        IDurableOperationExceptionClassifier exceptionClassifier,
+        IInteractionAuthorityOperationContextProjector contextProjector)
     {
         this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         this.exceptionClassifier = exceptionClassifier ?? throw new ArgumentNullException(nameof(exceptionClassifier));
+        this.contextProjector = contextProjector ?? throw new ArgumentNullException(nameof(contextProjector));
     }
 
     /// <inheritdoc />
@@ -475,7 +494,10 @@ public sealed class DurableTaskDurableOperationActivity
         try
         {
             var observation = await DurableOperationReferenceExecutor.ExecuteAsync(
-                    OperationContext.Create(),
+                    DurableTaskActivityOperationContext.Project(
+                        OperationContext.Create(),
+                        input.Request.Context.AuthorityScope,
+                        contextProjector),
                     input,
                     adapter)
                 .ConfigureAwait(false);
@@ -506,12 +528,28 @@ public sealed class DurableTaskDurableOperationReconciliationActivity
     : TaskActivity<DurableOperationState, DurableTaskDurableOperationReconciliationResult>
 {
     readonly IDurableOperationAdapterResolver resolver;
+    readonly IInteractionAuthorityOperationContextProjector contextProjector;
 
     /// <summary>Creates an activity over exact adapter resolution.</summary>
     /// <param name="resolver">Exact canonical Request adapter resolver.</param>
     /// <exception cref="ArgumentNullException"><paramref name="resolver"/> is <see langword="null"/>.</exception>
-    public DurableTaskDurableOperationReconciliationActivity(IDurableOperationAdapterResolver resolver) =>
+    public DurableTaskDurableOperationReconciliationActivity(IDurableOperationAdapterResolver resolver) : this(
+        resolver,
+        PassthroughInteractionAuthorityOperationContextProjector.Instance)
+    {
+    }
+
+    /// <summary>Creates a reconciliation activity with explicit canonical-authority context projection.</summary>
+    /// <param name="resolver">Exact canonical Request adapter resolver.</param>
+    /// <param name="contextProjector">Host interpretation of canonical interaction authority.</param>
+    /// <exception cref="ArgumentNullException">Either dependency is <see langword="null"/>.</exception>
+    public DurableTaskDurableOperationReconciliationActivity(
+        IDurableOperationAdapterResolver resolver,
+        IInteractionAuthorityOperationContextProjector contextProjector)
+    {
         this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        this.contextProjector = contextProjector ?? throw new ArgumentNullException(nameof(contextProjector));
+    }
 
     /// <inheritdoc />
     public override async Task<DurableTaskDurableOperationReconciliationResult> RunAsync(
@@ -530,7 +568,10 @@ public sealed class DurableTaskDurableOperationReconciliationActivity
         try
         {
             var observation = await DurableOperationReferenceExecutor.ReconcileAsync(
-                    OperationContext.Create(),
+                    DurableTaskActivityOperationContext.Project(
+                        OperationContext.Create(),
+                        input.Request.Context.AuthorityScope,
+                        contextProjector),
                     input,
                     adapter)
                 .ConfigureAwait(false);
@@ -555,6 +596,7 @@ public sealed class DurableTaskProcessHostOperationActivity
 {
     readonly IAsyncProcessReferenceHost host;
     readonly IHostApplicationLifetime applicationLifetime;
+    readonly IInteractionAuthorityOperationContextProjector contextProjector;
 
     /// <summary>Creates an activity over the application's canonical Process host.</summary>
     /// <param name="host">Asynchronous host that resolves exact Transition and Relation/Query operations.</param>
@@ -562,11 +604,27 @@ public sealed class DurableTaskProcessHostOperationActivity
     /// <exception cref="ArgumentNullException">Either dependency is <see langword="null"/>.</exception>
     public DurableTaskProcessHostOperationActivity(
         IAsyncProcessReferenceHost host,
-        IHostApplicationLifetime applicationLifetime)
+        IHostApplicationLifetime applicationLifetime) : this(
+            host,
+            applicationLifetime,
+            PassthroughInteractionAuthorityOperationContextProjector.Instance)
+    {
+    }
+
+    /// <summary>Creates an activity with explicit canonical-authority context projection.</summary>
+    /// <param name="host">Asynchronous host that resolves exact Transition and Relation/Query operations.</param>
+    /// <param name="applicationLifetime">Worker lifetime supplying physical shutdown cancellation.</param>
+    /// <param name="contextProjector">Host interpretation of canonical interaction authority.</param>
+    /// <exception cref="ArgumentNullException">Any dependency is <see langword="null"/>.</exception>
+    public DurableTaskProcessHostOperationActivity(
+        IAsyncProcessReferenceHost host,
+        IHostApplicationLifetime applicationLifetime,
+        IInteractionAuthorityOperationContextProjector contextProjector)
     {
         this.host = host ?? throw new ArgumentNullException(nameof(host));
         this.applicationLifetime = applicationLifetime
             ?? throw new ArgumentNullException(nameof(applicationLifetime));
+        this.contextProjector = contextProjector ?? throw new ArgumentNullException(nameof(contextProjector));
     }
 
     /// <inheritdoc />
@@ -578,6 +636,13 @@ public sealed class DurableTaskProcessHostOperationActivity
         ArgumentNullException.ThrowIfNull(input);
         var result = await DurableTaskActivityOperationContext.ExecuteAsync(
             applicationLifetime,
+            input.Kind switch
+            {
+                DurableTaskProcessHostOperationKind.Transition => input.Transition!.Context.AuthorityScope,
+                DurableTaskProcessHostOperationKind.RelationQuery => input.RelationQuery!.Context.AuthorityScope,
+                _ => throw new ArgumentOutOfRangeException(nameof(input), input.Kind, "Unsupported host operation kind.")
+            },
+            contextProjector,
             operationContext => input.Kind switch
             {
                 DurableTaskProcessHostOperationKind.Transition =>
@@ -601,6 +666,7 @@ public sealed class DurableTaskProcessSignalTargetActivity
 {
     readonly IAsyncProcessReferenceHost host;
     readonly IHostApplicationLifetime applicationLifetime;
+    readonly IInteractionAuthorityOperationContextProjector contextProjector;
 
     /// <summary>Creates a Signal-target activity over the application's canonical Process host.</summary>
     /// <param name="host">Asynchronous host that resolves portable values into the closed canonical interaction-target union.</param>
@@ -608,11 +674,27 @@ public sealed class DurableTaskProcessSignalTargetActivity
     /// <exception cref="ArgumentNullException">Either dependency is <see langword="null"/>.</exception>
     public DurableTaskProcessSignalTargetActivity(
         IAsyncProcessReferenceHost host,
-        IHostApplicationLifetime applicationLifetime)
+        IHostApplicationLifetime applicationLifetime) : this(
+            host,
+            applicationLifetime,
+            PassthroughInteractionAuthorityOperationContextProjector.Instance)
+    {
+    }
+
+    /// <summary>Creates an activity with explicit canonical-authority context projection.</summary>
+    /// <param name="host">Asynchronous host that resolves portable values into interaction targets.</param>
+    /// <param name="applicationLifetime">Worker lifetime supplying physical shutdown cancellation.</param>
+    /// <param name="contextProjector">Host interpretation of canonical interaction authority.</param>
+    /// <exception cref="ArgumentNullException">Any dependency is <see langword="null"/>.</exception>
+    public DurableTaskProcessSignalTargetActivity(
+        IAsyncProcessReferenceHost host,
+        IHostApplicationLifetime applicationLifetime,
+        IInteractionAuthorityOperationContextProjector contextProjector)
     {
         this.host = host ?? throw new ArgumentNullException(nameof(host));
         this.applicationLifetime = applicationLifetime
             ?? throw new ArgumentNullException(nameof(applicationLifetime));
+        this.contextProjector = contextProjector ?? throw new ArgumentNullException(nameof(contextProjector));
     }
 
     /// <inheritdoc />
@@ -624,6 +706,8 @@ public sealed class DurableTaskProcessSignalTargetActivity
         ArgumentNullException.ThrowIfNull(input);
         return await DurableTaskActivityOperationContext.ExecuteAsync(
                 applicationLifetime,
+                input.Context.AuthorityScope,
+                contextProjector,
                 operationContext => host.ResolveSignalTargetAsync(operationContext, input))
             .ConfigureAwait(false)
             ?? throw new InvalidOperationException(
@@ -646,11 +730,15 @@ static class DurableTaskActivityOperationContext
 
     internal static async Task<TResult> ExecuteAsync<TResult>(
         IHostApplicationLifetime applicationLifetime,
+        InteractionAuthorityScope authorityScope,
+        IInteractionAuthorityOperationContextProjector contextProjector,
         Func<OperationContext, ValueTask<TResult>> execute)
     {
         ArgumentNullException.ThrowIfNull(applicationLifetime);
+        ArgumentNullException.ThrowIfNull(authorityScope);
+        ArgumentNullException.ThrowIfNull(contextProjector);
         ArgumentNullException.ThrowIfNull(execute);
-        var operationContext = Create(applicationLifetime);
+        var operationContext = Project(Create(applicationLifetime), authorityScope, contextProjector);
         try
         {
             operationContext.ThrowIfCancellationRequested();
@@ -661,6 +749,27 @@ static class DurableTaskActivityOperationContext
         {
             throw new DurableTaskWorkerStoppingException(exception);
         }
+    }
+
+    internal static OperationContext Project(
+        OperationContext context,
+        InteractionAuthorityScope authorityScope,
+        IInteractionAuthorityOperationContextProjector contextProjector)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(authorityScope);
+        ArgumentNullException.ThrowIfNull(contextProjector);
+        var projected = contextProjector.Project(context, authorityScope)
+            ?? throw new InvalidOperationException("The interaction-authority context projector returned null.");
+        if (!ReferenceEquals(projected.TimeProvider, context.TimeProvider)
+            || projected.StartedUtc != context.StartedUtc
+            || projected.TraceContext != context.TraceContext
+            || projected.CancellationToken != context.CancellationToken)
+        {
+            throw new InvalidOperationException(
+                "The interaction-authority context projector changed physical time, trace, or cancellation evidence.");
+        }
+        return projected;
     }
 
     internal static bool IsWorkerStoppingFailure(TaskFailureDetails failure) =>
@@ -676,12 +785,28 @@ public sealed class DurableTaskDomainEventPublicationActivity
     : TaskActivity<DomainEventPublicationInvocation, DurableTaskDomainEventPublication>
 {
     readonly DurableTaskSequentialProcessPlanCatalog catalog;
+    readonly IInteractionAuthorityOperationContextProjector contextProjector;
 
     /// <summary>Creates a publication activity over exact worker deployment policy.</summary>
     /// <param name="catalog">Worker catalog containing deterministic publisher resolution.</param>
     /// <exception cref="ArgumentNullException"><paramref name="catalog"/> is <see langword="null"/>.</exception>
-    public DurableTaskDomainEventPublicationActivity(DurableTaskSequentialProcessPlanCatalog catalog) =>
+    public DurableTaskDomainEventPublicationActivity(DurableTaskSequentialProcessPlanCatalog catalog) : this(
+        catalog,
+        PassthroughInteractionAuthorityOperationContextProjector.Instance)
+    {
+    }
+
+    /// <summary>Creates a publication activity with explicit canonical-authority context projection.</summary>
+    /// <param name="catalog">Worker catalog containing deterministic publisher resolution.</param>
+    /// <param name="contextProjector">Host interpretation of canonical interaction authority.</param>
+    /// <exception cref="ArgumentNullException">Either dependency is <see langword="null"/>.</exception>
+    public DurableTaskDomainEventPublicationActivity(
+        DurableTaskSequentialProcessPlanCatalog catalog,
+        IInteractionAuthorityOperationContextProjector contextProjector)
+    {
         this.catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        this.contextProjector = contextProjector ?? throw new ArgumentNullException(nameof(contextProjector));
+    }
 
     /// <inheritdoc />
     public override async Task<DurableTaskDomainEventPublication> RunAsync(
@@ -691,7 +816,10 @@ public sealed class DurableTaskDomainEventPublicationActivity
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(input);
         var publisher = catalog.ResolveDomainEventPublisher(input.DomainEvent.Contract);
-        var operationContext = OperationContext.Create();
+        var operationContext = DurableTaskActivityOperationContext.Project(
+            OperationContext.Create(),
+            input.DomainEvent.Context.AuthorityScope,
+            contextProjector);
         var acknowledgement = await publisher.PublishAsync(operationContext, input).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The domain-event publisher returned null acknowledgement evidence.");
         return DurableTaskDomainEventPublication.From(input, operationContext.UtcNow, acknowledgement);
