@@ -7,6 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../../src/Cohesive.Infra/Cohesive.Infra.csproj" />
     <ProjectReference Include="../../../src/Cohesive.Relations/Cohesive.Relations.csproj" />
     <ProjectReference Include="../../../src/Cohesive.Storage/Cohesive.Storage.csproj" />
   </ItemGroup>

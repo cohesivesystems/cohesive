@@ -50,8 +50,8 @@ Changing meaning requires an explicit accepted definition revision and a newly a
 
 An `InfrastructureDefinition` is the first provider-neutral requirement-system core. It contains stable identities for
 workloads, logical resource roles, capability requirements, directed contract bindings, and resource lifecycle. The
-broader Infra language will add lifecycle-bearing environments, typed ports and surfaces, and explicit target
-extensions without changing this authority boundary. Requirements should normally reference or be
+local target extension adds lifecycle-bearing environment profiles, typed local endpoints and surfaces, and an exact
+construction topology without changing this authority boundary. Requirements should normally reference or be
 derived from their owning Cohesive definitions. Infra must not copy a Process retry contract, Storage durability
 guarantee, or Identity authorization rule into a second independently maintained model.
 
@@ -188,6 +188,36 @@ Fluent builders are authoring projections rather than semantic authority. Given 
 producer/compiler version, conventions, and explicit configuration, fluent and direct-IR construction must normalize
 to the same immutable definition. No closure, callback, reflection object, service provider, clock, environment
 variable, or arbitrary host executable dependency may survive in canonical IR.
+
+## Exact local construction realization
+
+`InfrastructureLocalRealizationDocument` is the shared input boundary for local lifecycle adapters. It fences a
+target-neutral local construction topology to one exact `InfrastructureRealizationReference`, a versioned environment
+policy, and the existing four-tier `InfrastructureConventionResolution`. The topology describes pinned container
+services, endpoint exposure and UI roles, external secret references, generated non-secret configuration files,
+volumes, readiness dependencies, health probes, graceful termination, and application-owned harness operations.
+
+Interactive and isolated-test environments are explicit profiles. Interactive environments retain managed data across
+ordinary stops. Isolated-test environments make disposable data and any maximum lifetime visible to adapters; a
+scoped-profile or explicit project name prevents accidental namespace sharing, and a destructive operation must
+additionally name the exact lifecycle authority it may mutate. Configuration values remain
+attributable to explicit declarations, scoped profiles, adapter conventions, or framework defaults. Secret payloads
+are never effective configuration values in the local IR.
+
+The local compiler validates the construction topology before an adapter performs I/O: services must match managed
+physical bindings in the exact realization, images must be pinned, referenced settings/endpoints/volumes/files/services
+must exist, loopback ports must be valid and unique, readiness must be acyclic, likely secret environment values must
+be external references, and destructive operations must remain inside the selected lifecycle authority. Failures are
+portable `DocumentValidationDiagnostic` values. A successful local document is still not an executable deployment
+plan or receipt; Compose and Aspire compilers must fingerprint their own artifacts against this document.
+
+The freight materialization harness owns the first canonical fixture in
+`eng/materialization-harness/model/FreightMaterializationInfrastructure.cs`. It declares PostgreSQL, Cosmos and its Data
+Explorer, Elasticsearch, pgAdmin, Kibana, health/readiness, persistent volumes, the interactive and isolated-test
+profiles, and the `start`, `stop`, `reset`, `status`, `seed`, `materialize`, `verify`, and `inspect` operation intents.
+The checked-in Compose topology remains an implementation to be replaced by a generated artifact; it is no longer the
+intended semantic authority. The Aspire AppHost will consume the same fixture and realization rather than maintain a
+parallel service graph.
 
 ## First-slice fluent authoring and realization
 
