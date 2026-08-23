@@ -558,7 +558,7 @@ public sealed class CanonicalProcessAuthoringTests
     }
 
     [Fact]
-    public void TypedBuilder_CoversTheClosedEighteenNodeUnionAndNestedConstructs()
+    public void TypedBuilder_CoversTheClosedNineteenNodeUnionAndNestedConstructs()
     {
         var authored = CreateClosedUnionProcess();
         Assert.True(authored.IsValid, Format(authored.Validation));
@@ -573,9 +573,9 @@ public sealed class CanonicalProcessAuthoringTests
             .OrderBy(static type => type.FullName, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(18, expectedTypes.Length);
+        Assert.Equal(19, expectedTypes.Length);
         Assert.Equal(expectedTypes, actualTypes);
-        Assert.Equal(18, authored.Definition.Nodes.Length);
+        Assert.Equal(19, authored.Definition.Nodes.Length);
 
         var request = Assert.Single(authored.Definition.Nodes.OfType<RequestProcessNode>());
         var choice = Assert.Single(authored.Definition.Nodes.OfType<ChoiceProcessNode>());
@@ -669,8 +669,10 @@ public sealed class CanonicalProcessAuthoringTests
         ],
         ProcessRecoveryPolicy.ContinueAttempt);
 
-    static Process<string, string> CreateClosedUnionProcess() =>
-        ProcessAuthoring.Create<string, string>(
+    static Process<string, string> CreateClosedUnionProcess()
+    {
+        var cancellationProtocol = ClosedUnionCancellationProtocol();
+        return ProcessAuthoring.Create<string, string>(
             new(
                 new("process/closed-union"),
                 Identities.Revision,
@@ -850,9 +852,42 @@ public sealed class CanonicalProcessAuthoringTests
                     recurrenceCompleted,
                     recurrenceExhausted,
                     recurrenceStalled);
+                process.OnCancellation(new("cancellation-finalizer"), cancellationProtocol);
                 process.Return(new("return"), text);
                 process.Fail(new("fail"), text);
             });
+    }
+
+    static ProcessInvocationProtocol<
+        ProcessCancellationFinalizationInput<string>,
+        ProcessCancellationAcknowledgement> ClosedUnionCancellationProtocol()
+    {
+        var finalizer = ProcessAuthoring.Create<
+            ProcessCancellationFinalizationInput<string>,
+            ProcessCancellationAcknowledgement>(
+            new(
+                new("process/closed-union/cancellation-finalizer"),
+                Identities.Revision,
+                new("return"),
+                ProcessRecoveryPolicy.ContinueAttempt,
+                Provenance()),
+            ProcessCancellationFinalizationContracts.Input(StringContract),
+            ProcessCancellationFinalizationContracts.Acknowledgement,
+            process => process.Return(
+                new("return"),
+                process.CanonicalValue<ProcessCancellationAcknowledgement>(
+                    Expr.Const(ObservationValue.FromObject(
+                        new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+                        {
+                            ["attemptId"] = ObservationValue.FromString("process-attempt/runtime")
+                        })),
+                    ProcessCancellationFinalizationContracts.Acknowledgement)));
+        return finalizer.InvocationProtocol(
+            new("request/closed-union/cancellation-finalizer"),
+            Identities.Revision,
+            ProcessInvocationResponsePolicy.ReconciledJoin(TimeSpan.FromDays(30)),
+            Provenance());
+    }
 
     static ProcessJoinPolicy JoinPolicy() => new(
         ProcessJoinMode.All,

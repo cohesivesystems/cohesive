@@ -125,6 +125,9 @@ public static class DurableTaskProcessTargetProfile
                 ProcessWireNames.RepeatAcrossActivationNode,
                 "continue-as-new-recurrence",
                 ["canonical-recurrence-evidence", "continue-as-new"]),
+            UnavailableConstruct(
+                ProcessWireNames.CancellationFinalizerNode,
+                "authored-cancellation-finalization"),
             NativeConstruct(ProcessWireNames.ReturnNode, "orchestration-completion"),
             NativeConstruct(ProcessWireNames.FailNode, "orchestration-failure"),
 
@@ -244,6 +247,9 @@ public static class DurableTaskProcessTargetProfile
                 ProcessWireNames.RepeatAcrossActivationNode,
                 "canonical-bounded-recurrence",
                 ["sequential-interpreter", "canonical-recurrence-evidence", "continue-as-new"]),
+            ExecutableUnavailableConstruct(
+                ProcessWireNames.CancellationFinalizerNode,
+                "authored-cancellation-finalization"),
             ExecutableNativeConstruct(ProcessWireNames.ReturnNode, "canonical-return"),
             ExecutableNativeConstruct(ProcessWireNames.FailNode, "canonical-failure"),
 
@@ -373,6 +379,12 @@ public static class DurableTaskProcessTargetProfile
             strategy,
             supportingFacilities,
             boundaries);
+
+    static ProcessInterpreterCapabilityEvidence UnavailableConstruct(string wireName, string strategy) =>
+        Evidence(
+            ProcessInterpreterRequirementKey.ForConstruct(wireName),
+            CapabilityRealizationKind.Unavailable,
+            strategy);
 
     static ProcessInterpreterCapabilityEvidence ComposedGuarantee(
         ProcessInterpreterRequirementKey guarantee,

@@ -110,6 +110,7 @@ construct. `Composed` combines Durable Task facilities with canonical interprete
 | `InvokeProcessProcessNode` | Exact child definition, start/join protocol, purpose, outcome mapping and cancellation; `TResult` only on completion and typed operational evidence on failure | Sub-orchestration plus canonical child Request/Reply protocol, identity derivation, and exact projection of the terminal node and retained failure diagnostics | Composed |
 | `ForEachPartitionProcessNode` | Finite partition identity, bounds, capacity, failure and cancellation policy | Bounded sub-orchestration fan-out with validated target and payload limits | Constrained |
 | `RepeatAcrossActivationProcessNode` | Durable recurrence, occurrence bound, progress proof, exhausted and stalled outcomes | Durable reactivation or continue-as-new while retaining canonical recurrence evidence | Composed |
+| `CancellationFinalizerProcessNode` | Stop normal work, settle propagated children, start one exact finalizer child, validate its acknowledgement, and retain explicit failure evidence | Canonical cancellation lifecycle plus child sub-orchestration and exact Request/Reply recovery | Unavailable pending native lifecycle realization |
 | `ReturnProcessNode` | Typed successful terminal result and exact terminal trace | Complete orchestration with canonical result evidence | Native |
 | `FailProcessNode` | Typed failed terminal result and exact terminal trace | Fail orchestration with canonical failure evidence | Native |
 
@@ -154,8 +155,9 @@ The target-neutral inventory, profile, realization ledger, and structured diagno
 of another enum. `Cohesive.Adapters.DurableTask` publishes separate versioned planning and executable profiles. Both
 must exactly cover the canonical construct and guarantee catalogs. Executable profile v2 constrains domain-event
 emission to durable after-origin visibility through an activity and an exact-contract publisher that guarantees
-target deduplication by the canonical scoped publication key. Reply discharge and whole-definition multi-resource
-atomicity remain unavailable. Only plans compiled successfully against that profile may enter the worker catalog.
+target deduplication by the canonical scoped publication key. Reply discharge, authored cancellation finalization,
+and whole-definition multi-resource atomicity remain unavailable. Only plans compiled successfully against that
+profile may enter the worker catalog.
 There is no independent CLR-type recognizer whose omissions can shrink the qualified protocol.
 
 ## Conformance and promotion
@@ -205,9 +207,10 @@ a native realization.
 
 ## Implementation status and provenance
 
-This decision remains accepted direction for Durable Task execution. As of 2026-08-11,
+This decision remains accepted direction for Durable Task execution. As of 2026-08-22,
 `Cohesive.Processes` implements the target-neutral requirement inventory, capability evidence, exhaustive
-disposition ledger, structured matching diagnostics, and reference interpreter. `Cohesive.Adapters.DurableTask`
+disposition ledger, structured matching diagnostics, and reference interpreter, including authored cancellation
+finalization after exact propagated-child settlement. `Cohesive.Adapters.DurableTask`
 implements historical monitoring, complete planning and executable profiles, and a generic executable slice for Transition,
 Relation/Query, Request, Signal send to a Process token, Choice, Match, Fork, Join, AwaitMatch, Timer, child Process,
 bounded partition, bounded recurrence, Durable Cut, Return, and Fail constructs. It resolves only exact
@@ -295,7 +298,7 @@ status, explain, and retained-trace execution-control API bindings are available
 trace streaming, richer dashboard presentation, and history-event normalization remain ARI-292 follow-up work.
 
 This is not promotion of the full planning profile. Authored timeout, terminal-failure, escalation, and cancellation
-execution paths for general Requests, Reply emission, atomic-with-origin event publication, activation-local and
+execution paths for general Requests, `CancellationFinalizerProcessNode`, Reply emission, atomic-with-origin event publication, activation-local and
 non-Process Signal targets, external Signal adapters, lifecycle Signal qualification, general attempt-resource/
 affinity cleanup, exhaustive
 durable Request pause/retry/reconciliation races, complete observability, and the complete target qualification

@@ -1410,13 +1410,26 @@ public sealed partial class ProcessDurableRuntime
                     "/checkpoint/activations")]);
         }
 
+        var retainedCommandId = receipt.Activation.Cancellation?.CommandId;
+        if (retainedCommandId is { } retained && retained != command.Context.CommandId)
+        {
+            return new(
+                ProcessDurableRuntimeDisposition.Incompatible,
+                snapshot,
+                decision,
+                diagnostics: [Error(
+                    ProcessCheckpointDiagnosticCodes.ActivationReceiptIncompatible,
+                    "The replayed cancellation activation retains another causal command identity.",
+                    "/checkpoint/activations")]);
+        }
+
         var expected = new ProcessActivation(
             activationId,
             ProcessActivationCause.Control,
             receipt.Activation.ObservedAtUtc,
             activationContext,
             receipt.Activation.Inputs,
-            cancellation: new(continuation.ProcessAttemptId, command.Reason));
+            cancellation: new(continuation.ProcessAttemptId, command.Reason, retainedCommandId));
         if (ProcessStorageContentFingerprints.Value(expected)
             != ProcessStorageContentFingerprints.Value(receipt.Activation))
         {

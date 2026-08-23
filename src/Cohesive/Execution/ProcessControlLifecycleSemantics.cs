@@ -18,7 +18,8 @@ internal static class ProcessControlLifecycleSemantics
         ProcessControlCommand command,
         bool duplicateSignal,
         out ProcessControlReceiptDisposition disposition,
-        out Position next)
+        out Position next,
+        ProcessCancellationCompletionPolicy cancellationPolicy = ProcessCancellationCompletionPolicy.Immediate)
     {
         disposition = ClassifyDisposition(position, command, duplicateSignal);
         if (disposition == ProcessControlReceiptDisposition.Unspecified
@@ -28,7 +29,7 @@ internal static class ProcessControlLifecycleSemantics
             return false;
         }
 
-        next = ApplyEffect(position, command, disposition);
+        next = ApplyEffect(position, command, disposition, cancellationPolicy);
         return true;
     }
 
@@ -36,7 +37,8 @@ internal static class ProcessControlLifecycleSemantics
         Position position,
         ProcessControlCommand command,
         ProcessControlReceiptDisposition disposition,
-        out Position next)
+        out Position next,
+        ProcessCancellationCompletionPolicy cancellationPolicy = ProcessCancellationCompletionPolicy.Immediate)
     {
         var expected = ClassifyDisposition(
             position,
@@ -49,7 +51,7 @@ internal static class ProcessControlLifecycleSemantics
             return false;
         }
 
-        next = ApplyEffect(position, command, disposition);
+        next = ApplyEffect(position, command, disposition, cancellationPolicy);
         return true;
     }
 
@@ -85,6 +87,8 @@ internal static class ProcessControlLifecycleSemantics
 
             CancelProcessCommand when position.Mode == ProcessControlMode.CancellationRequested =>
                 ProcessControlReceiptDisposition.AlreadyRequested,
+            CancelProcessCommand when position.Mode == ProcessControlMode.Cancelling =>
+                ProcessControlReceiptDisposition.AlreadyRequested,
             CancelProcessCommand when position.Mode == ProcessControlMode.Cancelled =>
                 ProcessControlReceiptDisposition.AlreadySatisfied,
             CancelProcessCommand when position.Mode == ProcessControlMode.Running
@@ -115,7 +119,8 @@ internal static class ProcessControlLifecycleSemantics
     static Position ApplyEffect(
         Position position,
         ProcessControlCommand command,
-        ProcessControlReceiptDisposition disposition) =>
+        ProcessControlReceiptDisposition disposition,
+        ProcessCancellationCompletionPolicy cancellationPolicy) =>
         (command, disposition) switch
         {
             (PauseProcessCommand, ProcessControlReceiptDisposition.Applied) =>
@@ -135,8 +140,12 @@ internal static class ProcessControlLifecycleSemantics
             (CancelProcessCommand, ProcessControlReceiptDisposition.Applied) =>
                 position with
                 {
-                    Mode = ProcessControlMode.Cancelled,
-                    Phase = ProcessControlExecutionPhase.Stopped
+                    Mode = cancellationPolicy == ProcessCancellationCompletionPolicy.AuthoredFinalization
+                        ? ProcessControlMode.Cancelling
+                        : ProcessControlMode.Cancelled,
+                    Phase = cancellationPolicy == ProcessCancellationCompletionPolicy.AuthoredFinalization
+                        ? position.Phase
+                        : ProcessControlExecutionPhase.Stopped
                 },
             (CancelProcessCommand, ProcessControlReceiptDisposition.DeferredToSafePoint) =>
                 position with { Mode = ProcessControlMode.CancellationRequested },
@@ -152,7 +161,7 @@ internal static class ProcessControlLifecycleSemantics
     internal static bool TryBeginActivation(Position position, ProcessAttemptId attemptId, out Position next)
     {
         next = position;
-        if (position.Mode != ProcessControlMode.Running
+        if (position.Mode is not (ProcessControlMode.Running or ProcessControlMode.Cancelling)
             || !IsSafeBoundary(position.Phase)
             || attemptId != position.AttemptId)
         {
@@ -167,7 +176,8 @@ internal static class ProcessControlLifecycleSemantics
         Position position,
         ProcessAttemptId attemptId,
         ProcessAttemptId? restartAttemptId,
-        out Position next)
+        out Position next,
+        ProcessCancellationCompletionPolicy cancellationPolicy = ProcessCancellationCompletionPolicy.Immediate)
     {
         next = position;
         if (position.Mode is not (ProcessControlMode.Running
@@ -197,12 +207,41 @@ internal static class ProcessControlLifecycleSemantics
                 },
             ProcessControlMode.CancellationRequested => position with
             {
-                Mode = ProcessControlMode.Cancelled,
-                Phase = ProcessControlExecutionPhase.Stopped
+                Mode = cancellationPolicy == ProcessCancellationCompletionPolicy.AuthoredFinalization
+                    ? ProcessControlMode.Cancelling
+                    : ProcessControlMode.Cancelled,
+                Phase = cancellationPolicy == ProcessCancellationCompletionPolicy.AuthoredFinalization
+                    ? ProcessControlExecutionPhase.AtSafePoint
+                    : ProcessControlExecutionPhase.Stopped
             },
             _ => position
         };
         return position.Mode != ProcessControlMode.RestartRequested || next != position;
+    }
+
+    internal static bool TryCompleteCancellationFinalization(
+        Position position,
+        ExecutionTerminalOutcomeKind outcome,
+        out Position next)
+    {
+        next = position;
+        if (position.Mode != ProcessControlMode.Cancelling
+            || position.Phase is not (ProcessControlExecutionPhase.Ready
+                or ProcessControlExecutionPhase.AtSafePoint
+                or ProcessControlExecutionPhase.InActivation)
+            || outcome is not (ExecutionTerminalOutcomeKind.Cancelled or ExecutionTerminalOutcomeKind.Failed))
+        {
+            return false;
+        }
+
+        next = position with
+        {
+            Mode = outcome == ExecutionTerminalOutcomeKind.Cancelled
+                ? ProcessControlMode.Cancelled
+                : ProcessControlMode.CancellationFailed,
+            Phase = ProcessControlExecutionPhase.Stopped
+        };
+        return true;
     }
 
     internal static bool TryBindAttemptAffinity(Position position, ProcessAttemptId attemptId, out Position next)

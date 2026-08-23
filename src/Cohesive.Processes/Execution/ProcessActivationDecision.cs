@@ -93,7 +93,16 @@ public enum ProcessTraceEventKind
     ChildCancelledBeforeStart = 19,
 
     /// <summary>A Fork admission point changed, admitted a branch, or retained a finite activation boundary.</summary>
-    ForkAdmissionChanged = 20
+    ForkAdmissionChanged = 20,
+
+    /// <summary>A propagated child cancellation reached an observed terminal closure.</summary>
+    ChildCancellationSettled = 21,
+
+    /// <summary>The exact authored cancellation-finalizer child occurrence started.</summary>
+    CancellationFinalizerStarted = 22,
+
+    /// <summary>The authored cancellation-finalizer produced acknowledgement or explicit failure.</summary>
+    CancellationFinalizerResolved = 23
 }
 
 /// <summary>One ordered attributable observation from Process reference interpretation.</summary>

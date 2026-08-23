@@ -979,7 +979,8 @@ public static class MaterializationRebuildPlanSetStatusProjector
         ProcessChildDisposition.Completed
         or ProcessChildDisposition.Failed
         or ProcessChildDisposition.Detached
-        or ProcessChildDisposition.CancelledBeforeStart;
+        or ProcessChildDisposition.CancelledBeforeStart
+        or ProcessChildDisposition.CancellationSettled;
 
     static ValueBindingId ReadyBarrierBinding(MaterializationRebuildPlanSetProcessArtifacts artifacts)
     {

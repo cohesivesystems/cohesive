@@ -250,6 +250,7 @@ public static class ProcessDefinitionDocuments
         or ProcessWireNames.InvokeProcessNode
         or ProcessWireNames.ForEachPartitionNode
         or ProcessWireNames.RepeatAcrossActivationNode
+        or ProcessWireNames.CancellationFinalizerNode
         or ProcessWireNames.ReturnNode
         or ProcessWireNames.FailNode;
 

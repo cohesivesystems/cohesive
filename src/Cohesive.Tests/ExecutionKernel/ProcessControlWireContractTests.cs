@@ -65,6 +65,43 @@ public sealed class ProcessControlWireContractTests
     }
 
     [Fact]
+    public void AuthoredCancellationFinalization_RoundTripsCancellingAndTerminalCuts()
+    {
+        var fixture = ProcessControlTestFixture.Create();
+        var initial = fixture.State();
+        var requested = fixture.Executor.Apply(
+            initial,
+            fixture.Cancel(initial, id: "cancel/strict-authored-finalization"),
+            initial.UpdatedAtUtc.AddMinutes(1),
+            ProcessCancellationCompletionPolicy.AuthoredFinalization);
+        var intent = Assert.IsType<ProcessCancellationIntent>(requested.Intent);
+        var finalized = fixture.Executor.CompleteCancellationFinalization(
+            requested.State,
+            new(
+                intent,
+                ExecutionTerminalOutcomeKind.Cancelled,
+                requested.State.UpdatedAtUtc.AddMinutes(1)));
+
+        foreach (var state in new[] { requested.State, finalized.State })
+        {
+            var canonical = ProcessControlJsonSerializer.GetCanonicalBytes(state);
+            var restored = ProcessControlJsonSerializer.DeserializeState(
+                Encoding.UTF8.GetString(canonical),
+                fixture.Catalog);
+
+            Assert.Equal(state, restored);
+            Assert.Equal(canonical, ProcessControlJsonSerializer.GetCanonicalBytes(restored));
+        }
+
+        var decisionCanonical = ProcessControlJsonSerializer.GetCanonicalBytes(finalized);
+        var restoredDecision = ProcessControlJsonSerializer.DeserializeDecision(
+            Encoding.UTF8.GetString(decisionCanonical),
+            fixture.Catalog);
+        Assert.Equal(finalized, restoredDecision);
+        Assert.Equal(decisionCanonical, ProcessControlJsonSerializer.GetCanonicalBytes(restoredDecision));
+    }
+
+    [Fact]
     public void DecisionResults_RoundTripEveryIntentAndDiagnosticShape()
     {
         var fixture = ProcessControlTestFixture.Create();

@@ -726,6 +726,8 @@ public static class ExecutionTelemetry
         ProcessControlMode.CancellationRequested => "cancellation_requested",
         ProcessControlMode.Cancelled => "cancelled",
         ProcessControlMode.Terminated => "terminated",
+        ProcessControlMode.Cancelling => "cancelling",
+        ProcessControlMode.CancellationFailed => "cancellation_failed",
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported Process control mode.")
     };
 

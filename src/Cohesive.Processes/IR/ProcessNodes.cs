@@ -22,6 +22,7 @@ namespace Cohesive.Processes.IR;
 [JsonDerivedType(typeof(InvokeProcessProcessNode), ProcessWireNames.InvokeProcessNode)]
 [JsonDerivedType(typeof(ForEachPartitionProcessNode), ProcessWireNames.ForEachPartitionNode)]
 [JsonDerivedType(typeof(RepeatAcrossActivationProcessNode), ProcessWireNames.RepeatAcrossActivationNode)]
+[JsonDerivedType(typeof(CancellationFinalizerProcessNode), ProcessWireNames.CancellationFinalizerNode)]
 [JsonDerivedType(typeof(ReturnProcessNode), ProcessWireNames.ReturnNode)]
 [JsonDerivedType(typeof(FailProcessNode), ProcessWireNames.FailNode)]
 public abstract record ProcessNode
@@ -32,6 +33,42 @@ public abstract record ProcessNode
 
     /// <summary>Stable node identity used by graph links, diagnostics, source maps, and traces.</summary>
     public ExecutionNodeId Id { get; }
+}
+
+/// <summary>Declares one exact authored child Process that must acknowledge cooperative cancellation.</summary>
+/// <remarks>
+/// This is a lifecycle declaration in the closed Process construct union, not an ordinary graph node. It cannot be
+/// the Process entry or the target of a control-flow edge. Its stable identity anchors child invocation, Request
+/// capability, source attribution, and replay evidence when cancellation supersedes the normal graph.
+/// </remarks>
+public sealed record CancellationFinalizerProcessNode : ProcessNode
+{
+    /// <summary>Creates an exact cancellation-finalizer declaration.</summary>
+    /// <param name="id">Stable lifecycle declaration and child-invocation identity basis.</param>
+    /// <param name="process">Exact cancellation-finalizer Process definition revision and fingerprint.</param>
+    /// <param name="contract">Exact Request contract used to durably start and join the finalizer.</param>
+    /// <param name="outcomeMapping">Total mapping from finalizer child terminal status to Request outcomes.</param>
+    [JsonConstructor]
+    public CancellationFinalizerProcessNode(
+        ExecutionNodeId id,
+        ExecutionDefinitionReference process,
+        RequestContractReference contract,
+        ProcessChildOutcomeMapping outcomeMapping)
+        : base(id)
+    {
+        Process = process;
+        Contract = contract;
+        OutcomeMapping = outcomeMapping;
+    }
+
+    /// <summary>Exact cancellation-finalizer Process definition revision and fingerprint.</summary>
+    public ExecutionDefinitionReference Process { get; }
+
+    /// <summary>Exact Request contract used to durably start and join the finalizer.</summary>
+    public RequestContractReference Contract { get; }
+
+    /// <summary>Total mapping from finalizer child terminal status to exact Request outcomes.</summary>
+    public ProcessChildOutcomeMapping OutcomeMapping { get; }
 }
 
 /// <summary>Invokes one exact aggregate Transition without embedding its definition or interpreter.</summary>

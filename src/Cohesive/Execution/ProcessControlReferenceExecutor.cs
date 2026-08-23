@@ -90,6 +90,9 @@ public enum ProcessControlDecisionDisposition
     /// <summary>A write-once attempt affinity was bound.</summary>
     AffinityBound = 12,
 
+    /// <summary>Authored cancellation finalization produced terminal acknowledgement or failure evidence.</summary>
+    CancellationFinalized = 23,
+
     /// <summary>The command authority does not match current Process authority.</summary>
     Unauthorized = 13,
 
@@ -250,13 +253,30 @@ public sealed record ProcessCancellationIntent : ProcessControlIntent
 {
     internal override void EnsureDeclaredVariant() { }
 
+    /// <summary>Creates compatibility cancellation evidence without a retained command identity.</summary>
+    /// <param name="attemptId">Attempt cancelled without replacement.</param>
+    /// <param name="reason">Typed cancellation reason.</param>
+    public ProcessCancellationIntent(
+        ProcessAttemptId attemptId,
+        ProcessControlReason reason)
+        : this(attemptId, reason, commandId: null)
+    {
+    }
+
     /// <summary>Creates a cooperative cancellation intent.</summary>
     /// <param name="attemptId">Attempt cancelled without replacement.</param>
     /// <param name="reason">Typed cancellation reason.</param>
+    /// <param name="commandId">
+    /// Accepted cancellation command identity. Older immediate-cancellation evidence may omit it; an authored
+    /// cancellation finalizer requires it.
+    /// </param>
     /// <exception cref="ArgumentException"><paramref name="attemptId"/> is default.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="reason"/> is <see langword="null"/>.</exception>
     [JsonConstructor]
-    public ProcessCancellationIntent(ProcessAttemptId attemptId, ProcessControlReason reason)
+    public ProcessCancellationIntent(
+        ProcessAttemptId attemptId,
+        ProcessControlReason reason,
+        ProcessControlCommandId? commandId)
     {
         if (string.IsNullOrWhiteSpace(attemptId.Value))
         {
@@ -265,6 +285,9 @@ public sealed record ProcessCancellationIntent : ProcessControlIntent
 
         AttemptId = attemptId;
         Reason = Guard.RequireNotNull(reason);
+        if (commandId is { } candidate && string.IsNullOrWhiteSpace(candidate.Value))
+            throw new ArgumentException("A supplied cancellation command identity cannot be default.", nameof(commandId));
+        CommandId = commandId;
     }
 
     /// <summary>Attempt cancelled without replacement.</summary>
@@ -272,6 +295,10 @@ public sealed record ProcessCancellationIntent : ProcessControlIntent
 
     /// <summary>Typed cancellation reason.</summary>
     public ProcessControlReason Reason { get; }
+
+    /// <summary>Accepted cancellation command identity when retained by the producing control interpreter.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProcessControlCommandId? CommandId { get; }
 }
 
 /// <summary>Intent to realize immediate forced termination and its explicit cleanup.</summary>
@@ -496,6 +523,16 @@ public sealed record ProcessControlDecision
             case ProcessControlDecisionDisposition.AffinityBound:
                 RequireNoReceiptOrIntent(receipt, intent, disposition);
                 ValidateAffinityCut(state);
+                return;
+            case ProcessControlDecisionDisposition.CancellationFinalized:
+                RequireNoReceiptOrIntent(receipt, intent, disposition);
+                if (state.CancellationFinalization is null
+                    || state.Mode is not (ProcessControlMode.Cancelled or ProcessControlMode.CancellationFailed))
+                {
+                    throw new ArgumentException(
+                        "A cancellation-finalized decision requires terminal authored finalization evidence.",
+                        nameof(state));
+                }
                 return;
             case ProcessControlDecisionDisposition.Replayed:
                 if (intent is not null)
@@ -756,7 +793,8 @@ public sealed record ProcessControlDecision
                 && receipt.Command switch
                 {
                     PauseProcessCommand => state.Mode == ProcessControlMode.Paused,
-                    CancelProcessCommand => state.Mode == ProcessControlMode.Cancelled,
+                    CancelProcessCommand => state.Mode is
+                        ProcessControlMode.Cancelled or ProcessControlMode.Cancelling,
                     RestartProcessAttemptCommand restart =>
                         state.Mode == ProcessControlMode.Running
                         && state.CurrentAttempt.AttemptId == restart.Plan.NewAttemptId,
@@ -780,7 +818,7 @@ public sealed record ProcessControlDecision
             (RestartProcessAttemptCommand restart, ProcessControlReceiptDisposition.Applied) =>
                 state.CurrentAttempt.AttemptId == restart.Plan.NewAttemptId,
             (CancelProcessCommand, ProcessControlReceiptDisposition.Applied) =>
-                state.Mode == ProcessControlMode.Cancelled,
+                state.Mode is ProcessControlMode.Cancelled or ProcessControlMode.Cancelling,
             (TerminateProcessCommand, ProcessControlReceiptDisposition.Applied) =>
                 state.Mode == ProcessControlMode.Terminated,
             (_, ProcessControlReceiptDisposition.DeferredToSafePoint) =>
@@ -857,6 +895,7 @@ public sealed record ProcessControlDecision
     {
         if (intent is not ProcessCancellationIntent cancellation
             || cancellation.AttemptId != receipt.BeforeAttemptId
+            || cancellation.CommandId != receipt.Command.Context.CommandId
             || cancellation.Reason != command.Reason)
         {
             throw new ArgumentException(
@@ -999,6 +1038,7 @@ public sealed class ProcessControlReferenceExecutor
     /// <param name="state">Current portable Process-control state.</param>
     /// <param name="command">Canonical lifecycle command to evaluate.</param>
     /// <param name="observedAtUtc">Explicit UTC evaluation observation.</param>
+    /// <param name="cancellationPolicy">Whether cancellation closes immediately or awaits authored finalization.</param>
     /// <returns>Replacement state, observable disposition, durable receipt, and first-time intent.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="state"/> or <paramref name="command"/> is <see langword="null"/>.
@@ -1010,12 +1050,15 @@ public sealed class ProcessControlReferenceExecutor
     public ProcessControlDecision Apply(
         ProcessControlState state,
         ProcessControlCommand command,
-        DateTimeOffset observedAtUtc)
+        DateTimeOffset observedAtUtc,
+        ProcessCancellationCompletionPolicy cancellationPolicy = ProcessCancellationCompletionPolicy.Immediate)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(command);
         command.EnsureDeclaredVariant();
         ExecutionObservationRequirements.RequireUtc(observedAtUtc, nameof(observedAtUtc));
+        if (!Enum.IsDefined(cancellationPolicy))
+            throw new ArgumentOutOfRangeException(nameof(cancellationPolicy), cancellationPolicy, "Unsupported cancellation completion policy.");
 
         var replay = ResolveCommandReplay(state, command);
         if (replay is not null)
@@ -1105,7 +1148,7 @@ public sealed class ProcessControlReferenceExecutor
             PauseProcessCommand pause => ApplyPause(state, pause, observedAtUtc),
             ContinueProcessCommand @continue => ApplyContinue(state, @continue, observedAtUtc),
             RestartProcessAttemptCommand restart => ApplyRestart(state, restart, observedAtUtc),
-            CancelProcessCommand cancel => ApplyCancel(state, cancel, observedAtUtc),
+            CancelProcessCommand cancel => ApplyCancel(state, cancel, observedAtUtc, cancellationPolicy),
             TerminateProcessCommand terminate => ApplyTerminate(state, terminate, observedAtUtc),
             _ => Reject(
                 state,
@@ -1183,6 +1226,7 @@ public sealed class ProcessControlReferenceExecutor
     /// <summary>Records an invariant-preserving safe point and applies one pending lifecycle action.</summary>
     /// <param name="state">Current portable Process-control state.</param>
     /// <param name="observation">Exact safe-point observation.</param>
+    /// <param name="cancellationPolicy">Whether pending cancellation closes immediately or awaits authored finalization.</param>
     /// <returns>Replacement state, observable disposition, and any first-time cancellation or restart intent.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="state"/> or <paramref name="observation"/> is <see langword="null"/>.
@@ -1191,10 +1235,13 @@ public sealed class ProcessControlReferenceExecutor
     /// <exception cref="OverflowException">The next semantic control revision cannot be represented.</exception>
     public ProcessControlDecision ReachSafePoint(
         ProcessControlState state,
-        ProcessSafePointObservation observation)
+        ProcessSafePointObservation observation,
+        ProcessCancellationCompletionPolicy cancellationPolicy = ProcessCancellationCompletionPolicy.Immediate)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(observation);
+        if (!Enum.IsDefined(cancellationPolicy))
+            throw new ArgumentOutOfRangeException(nameof(cancellationPolicy), cancellationPolicy, "Unsupported cancellation completion policy.");
 
         var observedAttempt = FindAttempt(state, observation.Expectation.Continuation.ProcessAttemptId);
         var prior = FindSafePoint(observedAttempt, observation.SafePointId);
@@ -1242,7 +1289,8 @@ public sealed class ProcessControlReferenceExecutor
                 LifecyclePosition(state),
                 observation.Expectation.Continuation.ProcessAttemptId,
                 restartAttemptId,
-                out var lifecycle)
+                out var lifecycle,
+                cancellationPolicy)
             || state.CurrentAttempt.ActiveActivationId != observation.ActivationId)
         {
             return InvalidState(state, "A safe point must close the exact activation currently in flight.");
@@ -1295,7 +1343,8 @@ public sealed class ProcessControlReferenceExecutor
                 lifecycle,
                 pendingReceipt,
                 cancel,
-                observation.ObservedAtUtc),
+                observation.ObservedAtUtc,
+                cancellationPolicy),
             RestartProcessAttemptCommand restart => CompletePendingRestart(
                 state,
                 attempts,
@@ -1684,14 +1733,16 @@ public sealed class ProcessControlReferenceExecutor
     ProcessControlDecision ApplyCancel(
         ProcessControlState state,
         CancelProcessCommand command,
-        DateTimeOffset observedAtUtc)
+        DateTimeOffset observedAtUtc,
+        ProcessCancellationCompletionPolicy cancellationPolicy)
     {
         if (!ProcessControlLifecycleSemantics.TryClassifyCommand(
                 LifecyclePosition(state),
                 command,
                 duplicateSignal: false,
                 out var disposition,
-                out var lifecycle))
+                out var lifecycle,
+                cancellationPolicy))
         {
             return InvalidState(
                 state,
@@ -1731,10 +1782,21 @@ public sealed class ProcessControlReferenceExecutor
                 new ProcessReachSafePointIntent(command.Context.CommandId, ProcessControlPendingAction.Cancel));
         }
 
-        var cancelledAttempts = CloseCurrentAttempt(
-            state.Attempts,
-            ProcessControlAttemptDisposition.Cancelled,
-            new ProcessAttemptClosure(command.Context.CommandId, observedAtUtc));
+        var cancelledAttempts = cancellationPolicy == ProcessCancellationCompletionPolicy.AuthoredFinalization
+            ? ReplaceCurrentAttempt(
+                state.Attempts,
+                new ProcessControlAttemptState(
+                    state.CurrentAttempt.AttemptId,
+                    state.CurrentAttempt.StartedAtUtc,
+                    state.CurrentAttempt.Disposition,
+                    state.CurrentAttempt.Phase,
+                    activeActivation: null,
+                    state.CurrentAttempt.SafePoints,
+                    state.CurrentAttempt.AffinityBindings))
+            : CloseCurrentAttempt(
+                state.Attempts,
+                ProcessControlAttemptDisposition.Cancelled,
+                new ProcessAttemptClosure(command.Context.CommandId, observedAtUtc));
         return RecordCommand(
             state,
             command,
@@ -1743,7 +1805,10 @@ public sealed class ProcessControlReferenceExecutor
             cancelledAttempts,
             pendingCommandId: null,
             observedAtUtc,
-            new ProcessCancellationIntent(state.CurrentAttempt.AttemptId, command.Reason));
+            new ProcessCancellationIntent(
+                state.CurrentAttempt.AttemptId,
+                command.Reason,
+                command.Context.CommandId));
     }
 
     ProcessControlDecision ApplyTerminate(
@@ -1807,12 +1872,15 @@ public sealed class ProcessControlReferenceExecutor
         ProcessControlLifecycleSemantics.Position lifecycle,
         ProcessControlCommandReceipt receipt,
         CancelProcessCommand command,
-        DateTimeOffset observedAtUtc)
+        DateTimeOffset observedAtUtc,
+        ProcessCancellationCompletionPolicy cancellationPolicy)
     {
-        var closed = CloseCurrentAttempt(
-            safeAttempts,
-            ProcessControlAttemptDisposition.Cancelled,
-            new ProcessAttemptClosure(command.Context.CommandId, observedAtUtc));
+        var closed = cancellationPolicy == ProcessCancellationCompletionPolicy.AuthoredFinalization
+            ? safeAttempts
+            : CloseCurrentAttempt(
+                safeAttempts,
+                ProcessControlAttemptDisposition.Cancelled,
+                new ProcessAttemptClosure(command.Context.CommandId, observedAtUtc));
         var next = Replace(
             state,
             revision: revision,
@@ -1825,7 +1893,61 @@ public sealed class ProcessControlReferenceExecutor
             next,
             ProcessControlDecisionDisposition.SafePointReached,
             receipt,
-            intent: new ProcessCancellationIntent(state.CurrentAttempt.AttemptId, command.Reason));
+            intent: new ProcessCancellationIntent(
+                state.CurrentAttempt.AttemptId,
+                command.Reason,
+                command.Context.CommandId));
+    }
+
+    /// <summary>Records terminal evidence from one exact authored cancellation-finalizer occurrence.</summary>
+    /// <param name="state">Current cancelling control state.</param>
+    /// <param name="observation">Acknowledged cancellation or explicit finalization failure.</param>
+    /// <returns>Replacement terminal control state, or a replay/conflict diagnostic.</returns>
+    /// <exception cref="ArgumentNullException">Either argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">The observation predates retained control evidence.</exception>
+    /// <exception cref="OverflowException">The next semantic control revision cannot be represented.</exception>
+    public ProcessControlDecision CompleteCancellationFinalization(
+        ProcessControlState state,
+        ProcessCancellationFinalizationObservation observation)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(observation);
+        if (state.CancellationFinalization is { } retained)
+        {
+            return retained == observation
+                ? new(state, ProcessControlDecisionDisposition.Replayed)
+                : InvalidState(state, "Cancellation-finalization terminal evidence conflicts with the retained outcome.");
+        }
+        if (observation.ObservedAtUtc < state.UpdatedAtUtc)
+            throw new ArgumentException("Cancellation-finalization evidence cannot predate retained control state.", nameof(observation));
+        if (observation.Intent.AttemptId != state.CurrentAttempt.AttemptId
+            || observation.Intent.CommandId is not { } commandId
+            || state.FindReceipt(commandId)?.Command is not CancelProcessCommand command
+            || command.Reason != observation.Intent.Reason
+            || !ProcessControlLifecycleSemantics.TryCompleteCancellationFinalization(
+                LifecyclePosition(state),
+                observation.Outcome,
+                out var lifecycle))
+        {
+            return InvalidState(state, "Cancellation-finalization evidence does not match the active authored cancellation occurrence.");
+        }
+
+        var disposition = observation.Outcome == ExecutionTerminalOutcomeKind.Cancelled
+            ? ProcessControlAttemptDisposition.Cancelled
+            : ProcessControlAttemptDisposition.CancellationFailed;
+        var closed = CloseCurrentAttempt(
+            state.Attempts,
+            disposition,
+            new ProcessAttemptClosure(commandId, observation.ObservedAtUtc));
+        var next = Replace(
+            state,
+            revision: state.Revision.Next(),
+            mode: lifecycle.Mode,
+            attempts: closed,
+            updatedAtUtc: observation.ObservedAtUtc,
+            cancellationFinalization: observation,
+            setCancellationFinalization: true);
+        return new(next, ProcessControlDecisionDisposition.CancellationFinalized);
     }
 
     ProcessControlDecision CompletePendingRestart(
@@ -1968,7 +2090,9 @@ public sealed class ProcessControlReferenceExecutor
         ProcessControlCommandId? pendingCommandId = null,
         bool setPendingCommandId = false,
         ImmutableArray<ProcessControlCommandReceipt> receipts = default,
-        DateTimeOffset? updatedAtUtc = null) =>
+        DateTimeOffset? updatedAtUtc = null,
+        ProcessCancellationFinalizationObservation? cancellationFinalization = null,
+        bool setCancellationFinalization = false) =>
         new(
             state.SchemaVersion,
             state.Definition,
@@ -1980,7 +2104,8 @@ public sealed class ProcessControlReferenceExecutor
             setPendingCommandId ? pendingCommandId : state.PendingCommandId,
             receipts.IsDefault ? state.Receipts : receipts,
             state.CreatedAtUtc,
-            updatedAtUtc ?? state.UpdatedAtUtc);
+            updatedAtUtc ?? state.UpdatedAtUtc,
+            setCancellationFinalization ? cancellationFinalization : state.CancellationFinalization);
 
     static ImmutableArray<ProcessControlAttemptState> ReplaceCurrentAttempt(
         ImmutableArray<ProcessControlAttemptState> attempts,

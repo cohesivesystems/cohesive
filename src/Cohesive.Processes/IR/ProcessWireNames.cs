@@ -61,6 +61,9 @@ public static class ProcessWireNames
     /// <summary>Durable recurrence node discriminator.</summary>
     public const string RepeatAcrossActivationNode = "repeatAcrossActivation";
 
+    /// <summary>Authored lifecycle cancellation-finalizer declaration discriminator.</summary>
+    public const string CancellationFinalizerNode = "cancellationFinalizer";
+
     /// <summary>Successful terminal Process node discriminator.</summary>
     public const string ReturnNode = "return";
 

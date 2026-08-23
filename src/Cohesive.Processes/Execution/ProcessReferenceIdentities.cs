@@ -19,6 +19,7 @@ public static class ProcessReferenceIdentities
     internal const string Version = "cohesive.processes.reference-identities/v1";
 
     const string RootTokenPurpose = "root-token";
+    const string CancellationFinalizerTokenPurpose = "cancellation-finalizer-token";
     const string ForkTokenPurpose = "fork-token";
     const string ForkRegistrationPurpose = "fork-registration";
     const string ChildRegistrationPurpose = "child-registration";
@@ -59,6 +60,24 @@ public static class ProcessReferenceIdentities
             RootTokenPurpose,
             continuation.ProcessInstanceId.Value,
             continuation.ProcessAttemptId.Value));
+    }
+
+    /// <summary>Derives the sole lifecycle token for one authored cancellation-finalizer occurrence.</summary>
+    /// <param name="continuation">Parent Process continuation being cancelled.</param>
+    /// <param name="node">Canonical cancellation-finalizer declaration.</param>
+    /// <returns>A replay-stable token distinct from every normal graph token.</returns>
+    internal static TokenId CancellationFinalizerToken(
+        ProcessContinuationIdentity continuation,
+        ExecutionNodeId node)
+    {
+        RequireContinuation(continuation);
+        RequireIdentity(node.Value, nameof(node));
+        return new(Derive(
+            TokenPrefix,
+            CancellationFinalizerTokenPurpose,
+            continuation.ProcessInstanceId.Value,
+            continuation.ProcessAttemptId.Value,
+            node.Value));
     }
 
     /// <summary>Derives one child token from its exact Fork occurrence, owner, and semantic branch.</summary>

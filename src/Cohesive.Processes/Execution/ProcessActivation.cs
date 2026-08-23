@@ -216,6 +216,27 @@ public sealed record ProcessAdmissionOperatingPoint
 /// <summary>Explicit evidence supplied to one finite Process activation.</summary>
 public sealed record ProcessActivation
 {
+    /// <summary>Creates a finite activation request without propagated-child closure observations.</summary>
+    public ProcessActivation(
+        ActivationId id,
+        ProcessActivationCause cause,
+        DateTimeOffset observedAtUtc,
+        ProcessActivationContext context,
+        ImmutableArray<ProcessActivationInput> inputs = default,
+        ProcessCancellationIntent? cancellation = null,
+        ImmutableArray<ProcessAdmissionOperatingPoint> admissionOperatingPoints = default)
+        : this(
+            id,
+            cause,
+            observedAtUtc,
+            context,
+            inputs,
+            cancellation,
+            admissionOperatingPoints,
+            childCancellationClosures: default)
+    {
+    }
+
     /// <summary>Creates a finite activation request.</summary>
     /// <param name="id">Caller-assigned stable activation identity.</param>
     /// <param name="cause">Closed activation cause.</param>
@@ -226,19 +247,24 @@ public sealed record ProcessActivation
     /// <param name="admissionOperatingPoints">
     /// Optional attributable effective admission points selected within canonical hard bounds.
     /// </param>
+    /// <param name="childCancellationClosures">
+    /// Optional exact closure observations for previously emitted propagated child-cancellation intents.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// <paramref name="id"/> is default, <paramref name="observedAtUtc"/> is not UTC, or an input is null.
     /// </exception>
     /// <exception cref="ArgumentNullException"><paramref name="context"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="cause"/> is unspecified or unsupported.</exception>
+    [JsonConstructor]
     public ProcessActivation(
         ActivationId id,
         ProcessActivationCause cause,
         DateTimeOffset observedAtUtc,
         ProcessActivationContext context,
-        ImmutableArray<ProcessActivationInput> inputs = default,
-        ProcessCancellationIntent? cancellation = null,
-        ImmutableArray<ProcessAdmissionOperatingPoint> admissionOperatingPoints = default)
+        ImmutableArray<ProcessActivationInput> inputs,
+        ProcessCancellationIntent? cancellation,
+        ImmutableArray<ProcessAdmissionOperatingPoint> admissionOperatingPoints,
+        ImmutableArray<ProcessChildCancellationClosure> childCancellationClosures)
     {
         if (string.IsNullOrWhiteSpace(id.Value))
             throw new ArgumentException("A Process activation requires a stable identity.", nameof(id));
@@ -265,6 +291,20 @@ public sealed record ProcessActivation
                 "An activation cannot repeat a bounded-work admission node.",
                 nameof(admissionOperatingPoints));
         }
+        var normalizedClosures = childCancellationClosures.IsDefault ? [] : childCancellationClosures;
+        if (normalizedClosures.Any(static closure => closure is null))
+        {
+            throw new ArgumentException(
+                "Child cancellation-closure observations cannot contain null entries.",
+                nameof(childCancellationClosures));
+        }
+        if (normalizedClosures.GroupBy(static closure => closure.IntentId, StringComparer.Ordinal)
+            .Any(static group => group.Distinct().Count() > 1))
+        {
+            throw new ArgumentException(
+                "One activation cannot present conflicting closure evidence for a child cancellation intent.",
+                nameof(childCancellationClosures));
+        }
 
         Id = id;
         Cause = cause;
@@ -273,6 +313,9 @@ public sealed record ProcessActivation
         Inputs = normalized;
         Cancellation = cancellation;
         AdmissionOperatingPoints = [.. normalizedAdmission.OrderBy(static point => point.Node.Value, StringComparer.Ordinal)];
+        ChildCancellationClosures = [.. normalizedClosures
+            .Distinct()
+            .OrderBy(static closure => closure.IntentId, StringComparer.Ordinal)];
     }
 
     /// <summary>Caller-assigned stable activation identity.</summary>
@@ -295,4 +338,7 @@ public sealed record ProcessActivation
 
     /// <summary>Attributable effective admission points in stable node-identity order.</summary>
     public ImmutableArray<ProcessAdmissionOperatingPoint> AdmissionOperatingPoints { get; }
+
+    /// <summary>Exact propagated child-cancellation closures in stable intent-identity order.</summary>
+    public ImmutableArray<ProcessChildCancellationClosure> ChildCancellationClosures { get; }
 }

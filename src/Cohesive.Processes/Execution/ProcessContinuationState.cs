@@ -215,12 +215,49 @@ public enum ProcessChildDisposition
     /// <summary>
     /// Owner or partition closure, including sibling failure, cancelled bounded child work before its Request emitted.
     /// </summary>
-    CancelledBeforeStart = 7
+    CancelledBeforeStart = 7,
+
+    /// <summary>A propagated cancellation request reached one observed physical and semantic child closure.</summary>
+    CancellationSettled = 8
 }
 
 /// <summary>Complete durable semantic state of one exact child Process invocation.</summary>
 public sealed record ProcessChildState
 {
+    internal ProcessChildState(
+        string registrationId,
+        TokenId owner,
+        TokenId token,
+        ExecutionNodeId node,
+        long occurrence,
+        string? progressIdentity,
+        ExecutionDefinitionReference process,
+        ProcessContinuationIdentity continuation,
+        ProcessChildPurpose purpose,
+        ProcessChildCancellationPolicy cancellation,
+        ProcessChildDisposition disposition,
+        EmissionId? requestEmission = null,
+        RequestTerminalOutcomeId? terminalOutcome = null,
+        PortableValue? result = null)
+        : this(
+            registrationId,
+            owner,
+            token,
+            node,
+            occurrence,
+            progressIdentity,
+            process,
+            continuation,
+            purpose,
+            cancellation,
+            disposition,
+            requestEmission,
+            terminalOutcome,
+            result,
+            cancellationClosure: null)
+    {
+    }
+
     /// <summary>Creates one replay-stable child Process occurrence.</summary>
     /// <param name="registrationId">Opaque child occurrence identity.</param>
     /// <param name="owner">Parent coordination token that owns the child.</param>
@@ -239,6 +276,7 @@ public sealed record ProcessChildState
     /// <param name="requestEmission">Canonical Request emission once the child has started.</param>
     /// <param name="terminalOutcome">Declared terminal Request outcome once observed.</param>
     /// <param name="result">Typed terminal outcome value once observed.</param>
+    /// <param name="cancellationClosure">Exact closure evidence after propagated child cancellation.</param>
     [JsonConstructor]
     internal ProcessChildState(
         string registrationId,
@@ -252,9 +290,10 @@ public sealed record ProcessChildState
         ProcessChildPurpose purpose,
         ProcessChildCancellationPolicy cancellation,
         ProcessChildDisposition disposition,
-        EmissionId? requestEmission = null,
-        RequestTerminalOutcomeId? terminalOutcome = null,
-        PortableValue? result = null)
+        EmissionId? requestEmission,
+        RequestTerminalOutcomeId? terminalOutcome,
+        PortableValue? result,
+        ProcessChildCancellationClosure? cancellationClosure)
     {
         RegistrationId = registrationId;
         Owner = owner;
@@ -270,6 +309,7 @@ public sealed record ProcessChildState
         RequestEmission = requestEmission;
         TerminalOutcome = terminalOutcome;
         Result = result;
+        CancellationClosure = cancellationClosure;
     }
 
     /// <summary>Opaque replay-stable child occurrence identity.</summary>
@@ -316,6 +356,81 @@ public sealed record ProcessChildState
 
     /// <summary>Typed terminal outcome value once observed.</summary>
     public PortableValue? Result { get; internal init; }
+
+    /// <summary>Exact physical and semantic closure observed after propagated child cancellation.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProcessChildCancellationClosure? CancellationClosure { get; internal init; }
+}
+
+/// <summary>Durable phase of an authored cancellation-finalization protocol.</summary>
+public enum ProcessCancellationFinalizationPhase
+{
+    /// <summary>No phase was supplied; invalid for retained cancellation state.</summary>
+    Unspecified = 0,
+
+    /// <summary>Normal work is closed while propagated child cancellations settle.</summary>
+    WaitingForPropagatedChildren = 1,
+
+    /// <summary>The exact cancellation-finalizer child Request is active.</summary>
+    FinalizerActive = 2,
+
+    /// <summary>The exact finalizer acknowledged the cancelled parent attempt.</summary>
+    Acknowledged = 3,
+
+    /// <summary>The finalizer failed, was cancelled or terminated, or returned invalid acknowledgement evidence.</summary>
+    Failed = 4
+}
+
+/// <summary>Portable retained state of one authored cancellation-finalization occurrence.</summary>
+public sealed record ProcessCancellationFinalizationState
+{
+    /// <summary>Creates exact retained cancellation-finalization state.</summary>
+    /// <param name="intent">Accepted cancellation intent, including its causal command identity.</param>
+    /// <param name="phase">Current closed cancellation-finalization phase.</param>
+    /// <param name="requestedAtUtc">Explicit UTC time at which cancellation entered reference interpretation.</param>
+    /// <param name="failure">Structured failure evidence exactly when <paramref name="phase"/> is failed.</param>
+    [JsonConstructor]
+    public ProcessCancellationFinalizationState(
+        ProcessCancellationIntent intent,
+        ProcessCancellationFinalizationPhase phase,
+        DateTimeOffset requestedAtUtc,
+        DocumentValidationDiagnostic? failure = null)
+    {
+        Intent = intent ?? throw new ArgumentNullException(nameof(intent));
+        if (intent.CommandId is null)
+            throw new ArgumentException("Authored cancellation finalization requires a causal command identity.", nameof(intent));
+        if (!Enum.IsDefined(phase) || phase == ProcessCancellationFinalizationPhase.Unspecified)
+        {
+            throw new ArgumentOutOfRangeException(nameof(phase), phase, "Cancellation-finalization phase must be explicit.");
+        }
+        if (requestedAtUtc.Offset != TimeSpan.Zero)
+            throw new ArgumentException("Cancellation-finalization time must use the UTC offset.", nameof(requestedAtUtc));
+        if ((phase == ProcessCancellationFinalizationPhase.Failed) != (failure is not null))
+        {
+            throw new ArgumentException(
+                "Cancellation-finalization failure evidence must be present exactly for the failed phase.",
+                nameof(failure));
+        }
+        if (failure is { Severity: not DiagnosticSeverity.Error })
+            throw new ArgumentException("Cancellation-finalization failure evidence must be an error.", nameof(failure));
+
+        Phase = phase;
+        RequestedAtUtc = requestedAtUtc;
+        Failure = failure;
+    }
+
+    /// <summary>Accepted cancellation intent and causal command identity.</summary>
+    public ProcessCancellationIntent Intent { get; }
+
+    /// <summary>Current cancellation-finalization phase.</summary>
+    public ProcessCancellationFinalizationPhase Phase { get; }
+
+    /// <summary>Explicit UTC time at which cancellation entered reference interpretation.</summary>
+    public DateTimeOffset RequestedAtUtc { get; }
+
+    /// <summary>Structured finalizer failure evidence.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DocumentValidationDiagnostic? Failure { get; }
 }
 
 /// <summary>One retained partition value and its exact child occurrence.</summary>
@@ -749,7 +864,6 @@ public sealed record ProcessOutstandingRequest(
 /// <summary>Complete immutable semantic continuation of one canonical Process attempt.</summary>
 public sealed class ProcessContinuationState
 {
-    [JsonConstructor]
     internal ProcessContinuationState(
         ExecutionDefinitionReference definition,
         ProcessContinuationIdentity continuation,
@@ -764,6 +878,40 @@ public sealed class ProcessContinuationState
         ImmutableArray<ProcessInputReceipt> inputReceipts,
         ImmutableArray<ProcessOutstandingRequest> outstandingRequests,
         ExecutionTerminalOutcome terminal)
+        : this(
+            definition,
+            continuation,
+            completedActivationCount,
+            tokens,
+            forks,
+            children,
+            partitions,
+            recurrences,
+            waits,
+            bufferedInputs,
+            inputReceipts,
+            outstandingRequests,
+            terminal,
+            cancellationFinalization: null)
+    {
+    }
+
+    [JsonConstructor]
+    internal ProcessContinuationState(
+        ExecutionDefinitionReference definition,
+        ProcessContinuationIdentity continuation,
+        long completedActivationCount,
+        ImmutableArray<ProcessTokenState> tokens,
+        ImmutableArray<ProcessForkState> forks,
+        ImmutableArray<ProcessChildState> children,
+        ImmutableArray<ProcessPartitionState> partitions,
+        ImmutableArray<ProcessRecurrenceState> recurrences,
+        ImmutableArray<ProcessWaitState> waits,
+        ImmutableArray<ProcessBufferedInput> bufferedInputs,
+        ImmutableArray<ProcessInputReceipt> inputReceipts,
+        ImmutableArray<ProcessOutstandingRequest> outstandingRequests,
+        ExecutionTerminalOutcome terminal,
+        ProcessCancellationFinalizationState? cancellationFinalization)
     {
         Definition = definition;
         Continuation = continuation;
@@ -778,6 +926,7 @@ public sealed class ProcessContinuationState
         InputReceipts = inputReceipts.IsDefault ? [] : inputReceipts;
         OutstandingRequests = outstandingRequests.IsDefault ? [] : outstandingRequests;
         Terminal = terminal;
+        CancellationFinalization = cancellationFinalization;
     }
 
     /// <summary>Exact pinned Process definition identity, revision, and fingerprint.</summary>
@@ -818,4 +967,8 @@ public sealed class ProcessContinuationState
 
     /// <summary>Terminal outcome, or the canonical nonterminal outcome value.</summary>
     public ExecutionTerminalOutcome Terminal { get; }
+
+    /// <summary>Authored cancellation-finalization state, absent for ordinary or immediately cancelled Processes.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProcessCancellationFinalizationState? CancellationFinalization { get; }
 }
