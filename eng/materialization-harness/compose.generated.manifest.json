@@ -32,7 +32,7 @@
   "localRealization": {
     "algorithm": "sha256",
     "canonicalization": "cohesive-infra-local-realization/v1-c14n/v1",
-    "value": "52187478e3be6dca6539451344e1ede39f380fe0c1ae70784edcf23a52831f95"
+    "value": "858ad9d64865a8a89789f27a9e5fc212a09461bc797757e26738e3f7dac56995"
   },
   "environment": "materialization-harness/interactive/v1",
   "lifecycleAuthority": "local/materialization-harness",

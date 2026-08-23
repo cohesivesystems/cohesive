@@ -14,6 +14,7 @@ public sealed class InfrastructureLocalRealizationTests
     static readonly InfrastructureLifecycleAuthorityId Authority = new("local/materialization");
     static readonly InfrastructureSettingId ProjectName = new("project-name");
     static readonly InfrastructureSettingId PostgresPort = new("postgres-port");
+    static readonly InfrastructureSettingId ElasticContainerPort = new("elastic-container-port");
 
     [Fact]
     public void Fluent_and_direct_topologies_compile_to_the_same_exact_document()
@@ -98,7 +99,7 @@ public sealed class InfrastructureLocalRealizationTests
                         new(
                             id: new("http"),
                             scheme: "http",
-                            containerPort: 9200,
+                            containerPort: new InfrastructureLocalConfigurationValue(Subject, ElasticContainerPort),
                             exposure: InfrastructureLocalEndpointExposure.HostLoopback,
                             role: InfrastructureLocalEndpointRole.Data,
                             hostPort: new(Subject, new("elastic-port")))
@@ -108,6 +109,7 @@ public sealed class InfrastructureLocalRealizationTests
         var configuration = Configuration(
             (ProjectName, "materialization"),
             (PostgresPort, "55432"),
+            (ElasticContainerPort, "70000"),
             (new("elastic-port"), "55432"));
 
         var document = InfrastructureLocalRealizationCompiler.Compile(
@@ -118,6 +120,7 @@ public sealed class InfrastructureLocalRealizationTests
 
         Assert.False(document.IsValid);
         Assert.Equal(2, document.Diagnostics.Count(diagnostic => diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.ImageNotPinned));
+        Assert.Contains(document.Diagnostics, diagnostic => diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.ContainerPortInvalid);
         Assert.Contains(document.Diagnostics, diagnostic => diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.HostPortInvalid);
     }
 

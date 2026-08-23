@@ -157,6 +157,8 @@ public static class InfrastructureLocalRealizationCompiler
         public const string ConfigurationMissing = "infra.local.configuration.missing";
         /// <summary>A host port is invalid or duplicates another host port.</summary>
         public const string HostPortInvalid = "infra.local.endpoint.hostPortInvalid";
+        /// <summary>A configured service listener port is invalid.</summary>
+        public const string ContainerPortInvalid = "infra.local.endpoint.containerPortInvalid";
         /// <summary>A service, endpoint, or volume reference cannot be resolved.</summary>
         public const string ReferenceUnknown = "infra.local.reference.unknown";
         /// <summary>A readiness dependency graph contains a cycle.</summary>
@@ -262,6 +264,27 @@ public static class InfrastructureLocalRealizationCompiler
 
             foreach (var endpoint in service.Endpoints)
             {
+                if (endpoint.ContainerPort.Configuration is { } containerPortReference)
+                {
+                    var containerPortLocation = $"/topology/services/{service.PhysicalResource.Value}/endpoints/{endpoint.Id.Value}/containerPort";
+                    if (RequireConfiguration(
+                            containerPortReference.Subject,
+                            containerPortReference.Setting,
+                            containerPortLocation,
+                            effective,
+                            diagnostics,
+                            out var containerPortValue)
+                        && (!int.TryParse(containerPortValue, NumberStyles.None, CultureInfo.InvariantCulture, out var containerPort)
+                            || containerPort is < 1 or > 65535))
+                    {
+                        Add(
+                            diagnostics,
+                            DiagnosticCodes.ContainerPortInvalid,
+                            $"Effective container port '{containerPortValue}' is outside 1-65535.",
+                            containerPortLocation,
+                            endpoint.Id.Value);
+                    }
+                }
                 if (endpoint.HostPort is null)
                     continue;
                 var location = $"/topology/services/{service.PhysicalResource.Value}/endpoints/{endpoint.Id.Value}/hostPort";

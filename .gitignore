@@ -84,6 +84,7 @@ eng/materialization-harness/.runtime/
 ############################################
 # dotnet tool restore creates this
 .dotnet/
+.aspire/
 # optional: if you have local tools folder
 tools/
 tmp/

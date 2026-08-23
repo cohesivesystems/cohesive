@@ -88,6 +88,12 @@ public sealed class FreightMaterializationInfrastructureTests
                     setting: FreightMaterializationInfrastructure.Settings.PostgresPort,
                     value: "65432",
                     origin: EffectiveConfigurationOrigin.Explicit,
+                    authority: "worktree/ports/v1"),
+                new(
+                    subject: FreightMaterializationInfrastructure.ConfigurationSubject,
+                    setting: FreightMaterializationInfrastructure.Settings.CosmosPort,
+                    value: "65081",
+                    origin: EffectiveConfigurationOrigin.Explicit,
                     authority: "worktree/ports/v1")
             ]);
 
@@ -96,11 +102,19 @@ public sealed class FreightMaterializationInfrastructureTests
             overrides);
         var effective = document.Configuration.Configuration.Single(item =>
             item.Setting == FreightMaterializationInfrastructure.Settings.PostgresPort);
+        var cosmos = document.Topology.Services.Single(service =>
+            service.PhysicalResource == FreightMaterializationInfrastructure.CosmosService);
+        var cosmosEnvironmentPort = Assert.IsType<InfrastructureLocalConfigurationValue>(
+            cosmos.Environment.Single(variable => variable.Name == "PORT").Value);
+        var cosmosEndpointPort = cosmos.Endpoints.Single(endpoint => endpoint.Id.Value == "cosmos").ContainerPort;
 
         Assert.True(document.IsValid);
         Assert.Equal("65432", effective.Value);
         Assert.Equal(EffectiveConfigurationOrigin.Explicit, effective.Attribution.Origin);
         Assert.Equal("worktree/ports/v1", effective.Attribution.Authority);
+        Assert.Equal(FreightMaterializationInfrastructure.Settings.CosmosPort, cosmosEnvironmentPort.Setting);
+        Assert.Equal(FreightMaterializationInfrastructure.Settings.CosmosPort, cosmosEndpointPort.Configuration?.Setting);
+        Assert.Equal(65081, cosmosEndpointPort.Resolve(document.Configuration));
     }
 
     [Fact]

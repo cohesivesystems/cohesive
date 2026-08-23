@@ -1,9 +1,6 @@
-using System.Collections.Immutable;
 using System.Text;
 using Cohesive.Adapters.DockerCompose;
-using Cohesive.Infra.Configuration;
 using Cohesive.MaterializationHarness.Model;
-using Cohesive.Model;
 
 var check = args.Length == 1 && string.Equals(args[0], "--check", StringComparison.Ordinal);
 var runtime = args.Length == 1 && string.Equals(args[0], "--runtime", StringComparison.Ordinal);
@@ -21,7 +18,7 @@ var manifestPath = Path.Combine(outputRoot, runtime ? "compose.manifest.json" : 
 var source = runtime
     ? FreightMaterializationInfrastructure.CreateLocalRealization(
         FreightMaterializationInfrastructure.InteractiveProfile,
-        CreateRuntimeConfiguration())
+        FreightMaterializationInfrastructure.CreateRuntimeConfiguration())
     : FreightMaterializationInfrastructure.CreateLocalRealization(
         FreightMaterializationInfrastructure.InteractiveProfile);
 var compilation = DockerComposeCompiler.Compile(source);
@@ -54,42 +51,6 @@ Console.WriteLine($"wrote={Path.GetRelativePath(repositoryRoot, yamlPath)}");
 Console.WriteLine($"wrote={Path.GetRelativePath(repositoryRoot, manifestPath)}");
 Console.WriteLine($"compose-artifact={artifact.Manifest.YamlFingerprint.Value}");
 return 0;
-
-static InfrastructureConventionProfile CreateRuntimeConfiguration()
-{
-    const string authority = "materialization-harness/runtime-environment/v1";
-    (InfrastructureSettingId Setting, string EnvironmentVariable)[] bindings =
-    [
-        (FreightMaterializationInfrastructure.Settings.ProjectName, "COHESIVE_HARNESS_PROJECT_NAME"),
-        (FreightMaterializationInfrastructure.Settings.PostgresPort, "COHESIVE_HARNESS_POSTGRES_PORT"),
-        (FreightMaterializationInfrastructure.Settings.PostgresDatabase, "COHESIVE_HARNESS_POSTGRES_DATABASE"),
-        (FreightMaterializationInfrastructure.Settings.PostgresUser, "COHESIVE_HARNESS_POSTGRES_USER"),
-        (FreightMaterializationInfrastructure.Settings.CosmosPort, "COHESIVE_HARNESS_COSMOS_PORT"),
-        (FreightMaterializationInfrastructure.Settings.CosmosHealthPort, "COHESIVE_HARNESS_COSMOS_HEALTH_PORT"),
-        (FreightMaterializationInfrastructure.Settings.CosmosExplorerPort, "COHESIVE_HARNESS_COSMOS_EXPLORER_PORT"),
-        (FreightMaterializationInfrastructure.Settings.ElasticsearchPort, "COHESIVE_HARNESS_ELASTIC_PORT"),
-        (FreightMaterializationInfrastructure.Settings.ElasticsearchJavaOptions, "COHESIVE_HARNESS_ELASTIC_JAVA_OPTS"),
-        (FreightMaterializationInfrastructure.Settings.KibanaPort, "COHESIVE_HARNESS_KIBANA_PORT"),
-        (FreightMaterializationInfrastructure.Settings.PgAdminPort, "COHESIVE_HARNESS_PGADMIN_PORT"),
-        (FreightMaterializationInfrastructure.Settings.PgAdminEmail, "COHESIVE_HARNESS_PGADMIN_EMAIL")
-    ];
-    var candidates = ImmutableArray.CreateBuilder<InfrastructureConfigurationCandidate>(bindings.Length);
-    foreach (var binding in bindings)
-    {
-        var value = Environment.GetEnvironmentVariable(binding.EnvironmentVariable);
-        if (string.IsNullOrWhiteSpace(value))
-            throw new InvalidOperationException($"Runtime configuration requires environment variable '{binding.EnvironmentVariable}'.");
-        candidates.Add(new(
-            subject: FreightMaterializationInfrastructure.ConfigurationSubject,
-            setting: binding.Setting,
-            value: value,
-            origin: EffectiveConfigurationOrigin.Explicit,
-            authority: authority));
-    }
-    return new(
-        id: new(authority),
-        candidates: candidates.MoveToImmutable());
-}
 
 static bool Check(string path, string expected)
 {

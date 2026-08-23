@@ -1,0 +1,5 @@
+{
+  "appHost": {
+    "path": "eng/materialization-harness/apphost/Cohesive.MaterializationHarness.AppHost.csproj"
+  }
+}

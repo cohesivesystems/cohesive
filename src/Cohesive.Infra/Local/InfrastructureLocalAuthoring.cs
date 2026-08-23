@@ -165,7 +165,7 @@ public sealed class InfrastructureLocalServiceBuilder
     /// <summary>Adds a service endpoint.</summary>
     /// <param name="id">Service-local endpoint identity.</param>
     /// <param name="scheme">URI scheme.</param>
-    /// <param name="containerPort">Container port.</param>
+    /// <param name="containerPort">Literal or configured container port.</param>
     /// <param name="exposure">Endpoint exposure.</param>
     /// <param name="role">Endpoint role.</param>
     /// <param name="hostPort">Effective host-port reference for loopback exposure.</param>
@@ -173,7 +173,7 @@ public sealed class InfrastructureLocalServiceBuilder
     public InfrastructureLocalServiceBuilder Endpoint(
         InfrastructureLocalEndpointId id,
         string scheme,
-        int containerPort,
+        InfrastructureLocalPort containerPort,
         InfrastructureLocalEndpointExposure exposure,
         InfrastructureLocalEndpointRole role,
         InfrastructureLocalConfigurationValue? hostPort = null)
