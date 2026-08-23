@@ -1025,6 +1025,49 @@ public sealed class ProcessComputationAuthoringTests
     }
 
     [Fact]
+    public void SharedTypedChildHandlers_LowerToOccurrenceSpecificBindingsAndStableSemanticBytes()
+    {
+        var metadata = new ProcessAuthoringMetadata(
+            new("process/tests/shared-typed-child-handlers"),
+            new("1"),
+            ProcessRecoveryPolicy.ContinueAttempt,
+            new(
+                new("tests.process-computation", "1"),
+                new("tests/ari-470/shared-typed-child-handlers"),
+                DocumentOrigin.User));
+        var authored = GeneratedSharedTypedChildHandlersProcess.Define(metadata);
+        var replayed = GeneratedSharedTypedChildHandlersProcess.Define(metadata);
+
+        Assert.True(authored.IsValid, Format(authored.Validation));
+        Assert.Equal(authored.Definition, replayed.Definition);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(authored.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(replayed.Document));
+
+        var invocations = authored.Definition.Nodes
+            .OfType<InvokeProcessProcessNode>()
+            .OrderBy(static invocation => invocation.Id.Value, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(2, invocations.Length);
+        Assert.Equal(new[] { "invoke-first", "invoke-second" }, invocations.Select(static invocation => invocation.Id.Value));
+        Assert.All(invocations, static invocation => Assert.Equal(4, invocation.Outcomes.Length));
+        var typedBindings = invocations
+            .SelectMany(static invocation => invocation.Outcomes)
+            .Select(static outcome => outcome.Continuation.Output)
+            .OfType<ProcessOutputBinding>()
+            .Select(static output => output.Binding)
+            .ToArray();
+        Assert.Equal(4, typedBindings.Length);
+        Assert.Equal(typedBindings.Length, typedBindings.Distinct().Count());
+
+        var childContext = ChildProcessContext(GeneratedTypedChildInvocationProtocol.Child.Reference);
+        var compilation = authored.Compile(new ProcessDefinitionValidationContext(
+            definitions: childContext.DefinitionLinks,
+            interactionContracts: GeneratedTypedChildInvocationProtocol.Protocol.Catalog));
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+    }
+
+    [Fact]
     public void TypedRequestProtocolEffect_IsByteEquivalentAndExecutesIdenticallyToRawAuthoring()
     {
         var metadata = new ProcessAuthoringMetadata(
@@ -2709,6 +2752,70 @@ public static partial class GeneratedTypedChildInvocationProcess
         async ProcessTask Terminated() { }
     }
 }
+
+/// <summary>Two child occurrences sharing one typed source continuation set.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedSharedTypedChildHandlersProcess
+{
+    static async ProcessTask<string> Run(ProcessContext process, SharedTypedChildHandlersInput input)
+    {
+        if (input.UseFirst)
+        {
+            await process.InvokeProcess(
+                protocol: GeneratedTypedChildInvocationProtocol.Protocol,
+                input: input.Value,
+                purpose: ProcessChildPurpose.Reconciliation,
+                cancellation: ProcessChildCancellationPolicy.Propagate,
+                completed: Completed,
+                failed: Failed,
+                cancelled: Cancelled,
+                terminated: Terminated,
+                id: new("invoke-first"));
+        }
+        else
+        {
+            await process.InvokeProcess(
+                protocol: GeneratedTypedChildInvocationProtocol.Protocol,
+                input: input.Value,
+                purpose: ProcessChildPurpose.Reconciliation,
+                cancellation: ProcessChildCancellationPolicy.Propagate,
+                completed: Completed,
+                failed: Failed,
+                cancelled: Cancelled,
+                terminated: Terminated,
+                id: new("invoke-second"));
+        }
+
+        return process.Unreachable<string>();
+
+        async ProcessTask Completed(string result)
+        {
+            var completed = result;
+            await process.Succeed(completed);
+        }
+
+        async ProcessTask Failed(ProcessChildFailure failure)
+        {
+            var rejected = "failed";
+            await process.Terminate(rejected);
+        }
+
+        async ProcessTask Cancelled()
+        {
+            await process.Terminate("cancelled");
+        }
+
+        async ProcessTask Terminated()
+        {
+            await process.Terminate("terminated");
+        }
+    }
+}
+
+/// <summary>Input selecting one of two shared-handler child occurrences.</summary>
+/// <param name="Value">Value supplied to the selected child.</param>
+/// <param name="UseFirst">Whether to select the first authored occurrence.</param>
+public sealed record SharedTypedChildHandlersInput(string Value, bool UseFirst);
 
 /// <summary>Raw exact-reference equivalent of <see cref="GeneratedTypedChildInvocationProcess"/>.</summary>
 [GenerateProcessDefinition(nameof(Run))]

@@ -1646,6 +1646,211 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
     }
 
     [Fact]
+    public void Generator_LowersSharedTypedChildHandlersPerInvocationOccurrence()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.Execution;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class SharedTypedChildHandlersProcess
+                     {
+                         private static ProcessInvocationProtocol<string, Result> Protocol => null!;
+
+                         private static async ProcessTask<Result> Run(ProcessContext process, Input input)
+                         {
+                             if (input.UseFirst)
+                             {
+                                 await process.InvokeProcess(
+                                     protocol: Protocol,
+                                     input: input.Value,
+                                     purpose: ProcessChildPurpose.Reconciliation,
+                                     cancellation: ProcessChildCancellationPolicy.Propagate,
+                                     completed: Completed,
+                                     failed: Failed,
+                                     cancelled: Cancelled,
+                                     terminated: Terminated,
+                                     id: new("invoke-first"));
+                             }
+                             else
+                             {
+                                 await process.InvokeProcess(
+                                     protocol: Protocol,
+                                     input: input.Value,
+                                     purpose: ProcessChildPurpose.Reconciliation,
+                                     cancellation: ProcessChildCancellationPolicy.Propagate,
+                                     completed: Completed,
+                                     failed: Failed,
+                                     cancelled: Cancelled,
+                                     terminated: Terminated,
+                                     id: new("invoke-second"));
+                             }
+
+                             return process.Unreachable<Result>();
+
+                             async ProcessTask Completed(Result result)
+                             {
+                                 var completed = result;
+                                 await process.Succeed(completed);
+                             }
+
+                             async ProcessTask Failed(ProcessChildFailure failure)
+                             {
+                                 var rejected = new Result("failed");
+                                 await process.Terminate(rejected);
+                             }
+
+                             async ProcessTask Cancelled()
+                             {
+                                 await process.Terminate(new Result("cancelled"));
+                             }
+
+                             async ProcessTask Terminated()
+                             {
+                                 await process.Terminate(new Result("terminated"));
+                             }
+                         }
+                     }
+
+                     public sealed record Input(string Value, bool UseFirst);
+                     public sealed record Result(string Value);
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        Assert.Empty(runResult.Diagnostics);
+        Assert.All(runResult.Results, static result => Assert.Null(result.Exception));
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Equal(2, Count(generated, "__builder.InvokeProcess"));
+        Assert.Equal(4, Count(generated, "__builder.Output<"));
+        Assert.All(
+            Enumerable.Range(0, 4),
+            index => Assert.Contains($"output: __authored_output_{index}", generated));
+        Assert.DoesNotContain("Completed(", generated);
+
+        var replay = RunGenerator(CreateCompilation(source), out _);
+        var replayed = Assert.Single(replay.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+        Assert.Equal(generated, replayed);
+    }
+
+    [Fact]
+    public void Generator_LowersSharedTypedChildHandlersAcrossExhaustiveEffectCases()
+    {
+        var source = """
+                     using Cohesive.Execution;
+                     using Cohesive.Processes.Authoring;
+                     using Cohesive.Processes.Execution;
+                     using Cohesive.Processes.IR;
+
+                     namespace Sample;
+
+                     public sealed record Submission(string DatasetId);
+                     public sealed record AcceptedPayload(string Value);
+                     public sealed record RejectedPayload(string Value);
+                     public abstract record SubmissionOutcome;
+                     public sealed record Accepted(AcceptedPayload Payload) : SubmissionOutcome;
+                     public sealed record Rejected(RejectedPayload Payload) : SubmissionOutcome;
+                     public sealed record SubmissionCases(
+                         RequestProtocolCase<Accepted, AcceptedPayload> Accepted,
+                         RequestProtocolCase<Rejected, RejectedPayload> Rejected);
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class SharedEffectChildHandlersProcess
+                     {
+                         private static RequestProtocol<Submission, SubmissionOutcome, SubmissionCases> Provider => null!;
+                         private static ProcessInvocationProtocol<string, string> Child => null!;
+
+                         private static async ProcessTask<string> Run(ProcessContext process, Submission input)
+                         {
+                             var outcome = await process.Effect(Provider, input, id: new("provider"));
+                             switch (outcome)
+                             {
+                                 case Accepted(var accepted):
+                                     await process.InvokeProcess(
+                                         protocol: Child,
+                                         input: accepted.Value,
+                                         purpose: ProcessChildPurpose.Reconciliation,
+                                         cancellation: ProcessChildCancellationPolicy.Propagate,
+                                         completed: Completed,
+                                         failed: Failed,
+                                         cancelled: Cancelled,
+                                         terminated: Terminated,
+                                         id: new("accepted-child"));
+                                     break;
+
+                                 case Rejected(var rejected):
+                                     await process.InvokeProcess(
+                                         protocol: Child,
+                                         input: rejected.Value,
+                                         purpose: ProcessChildPurpose.Reconciliation,
+                                         cancellation: ProcessChildCancellationPolicy.Propagate,
+                                         completed: Completed,
+                                         failed: Failed,
+                                         cancelled: Cancelled,
+                                         terminated: Terminated,
+                                         id: new("rejected-child"));
+                                     break;
+                             }
+
+                             return process.Unreachable<string>();
+
+                             async ProcessTask Completed(string result)
+                             {
+                                 var completed = result;
+                                 await process.Succeed(completed);
+                             }
+
+                             async ProcessTask Failed(ProcessChildFailure failure)
+                             {
+                                 var rejected = "failed";
+                                 await process.Terminate(rejected);
+                             }
+
+                             async ProcessTask Cancelled()
+                             {
+                                 await process.Terminate("cancelled");
+                             }
+
+                             async ProcessTask Terminated()
+                             {
+                                 await process.Terminate("terminated");
+                             }
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        Assert.Empty(runResult.Diagnostics);
+        Assert.All(runResult.Results, static result => Assert.Null(result.Exception));
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Equal(2, Count(generated, "__builder.InvokeProcess"));
+        Assert.Equal(6, Count(generated, "__builder.Output<"));
+        Assert.Contains("CaseFor<global::Sample.Accepted>().Id", generated);
+        Assert.Contains("CaseFor<global::Sample.Rejected>().Id", generated);
+    }
+
+    [Fact]
     public void Generator_RejectsDuplicateTypedChildSemanticHandlers()
     {
         var source = """
