@@ -1792,8 +1792,8 @@ public sealed class CosmosRelationQueryCompiler
                     branch.Node);
             }
 
-            var left = AnalyzeSubexpression(binary.Left, site, "left");
-            var right = AnalyzeSubexpression(binary.Right, site, "right");
+            var left = AnalyzeBinaryOperand(binary.Left, site, "left");
+            var right = AnalyzeBinaryOperand(binary.Right, site, "right");
             var leftType = left.GetEffectiveType();
             var rightType = right.GetEffectiveType();
             var exactTemporalDomain = HasExactTemporalComparisonDomain(
@@ -1840,6 +1840,20 @@ public sealed class CosmosRelationQueryCompiler
                 Convert(binary.Operator),
                 leftExpression,
                 rightExpression);
+        }
+
+        ValueContract AnalyzeBinaryOperand(
+            Expr expression,
+            RelationQueryExpressionSiteAnalysis site,
+            string operand)
+        {
+            if (TryResolveSourceField(expression, site, out var field)
+                && field.Input.ValueContract is { } resolved)
+            {
+                return resolved;
+            }
+
+            return AnalyzeSubexpression(expression, site, operand);
         }
 
         bool HasExactTemporalComparisonDomain(

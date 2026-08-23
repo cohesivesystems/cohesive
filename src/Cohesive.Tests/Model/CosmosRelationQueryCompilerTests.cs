@@ -68,6 +68,29 @@ public sealed class CosmosRelationQueryCompilerTests
     }
 
     [Fact]
+    public void Compile_NestedNamedTypeSourceField_UsesResolvedRequirementContract()
+    {
+        var result = Fixture.NestedNamedField().Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        Assert.Equal(
+            "SELECT c[\"Id\"] AS f0, c[\"Status\"] AS f1 FROM c "
+            + "WHERE (c[\"Payload\"][\"Status\"] = @p0) ORDER BY c[\"Id\"] ASC OFFSET 0 LIMIT 25",
+            Assert.Single(result.Artifacts).Statement.Text);
+    }
+
+    [Fact]
+    public void Compile_OptionalNestedNamedTypeSourceField_RemainsFailClosed()
+    {
+        var result = Fixture.NestedNamedField(optionalPredicate: true).Compile();
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Message.Contains("may be missing or null", StringComparison.Ordinal));
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
     public void Compile_UngroupedRowCount_ProducesDeterministicSingleRowArtifact()
     {
         var fixture = Fixture.UngroupedRowCount();
@@ -2124,6 +2147,7 @@ public sealed class CosmosRelationQueryCompilerTests
         static readonly QueryParameterId BytesParameter = new("bytes-value");
         static readonly QueryParameterId ContainsValuesParameter = new("contains-values");
         static readonly QueryParameterId LocationParameter = new("location");
+        static readonly TypeId PayloadType = new("type.load.payload");
 
         public static readonly FieldPath IdPath = FieldPath.FromField("Id");
         static readonly FieldPath CustomerIdPath = FieldPath.FromField("CustomerId");
@@ -2150,6 +2174,8 @@ public sealed class CosmosRelationQueryCompilerTests
         static readonly FieldPath CountPath = FieldPath.FromField("Count");
         static readonly FieldPath TotalPath = FieldPath.FromField("Total");
         static readonly FieldPath MinimumStatusPath = FieldPath.FromField("MinimumStatus");
+        static readonly FieldPath PayloadStatusPath = FieldPath.Parse("Payload.Status");
+        static readonly FieldPath PayloadNotesPath = FieldPath.Parse("Payload.Notes");
 
         Fixture(
             CompiledRelationQueryPlan plan,
@@ -2433,6 +2459,40 @@ public sealed class CosmosRelationQueryCompilerTests
             return Create(
                 RelationQueryDocument.FromDefinition(definition),
                 overrideUnavailableRequirements: overrideUnavailableRequirements);
+        }
+
+        public static Fixture NestedNamedField(bool optionalPredicate = false)
+        {
+            var predicatePath = optionalPredicate ? PayloadNotesPath : PayloadStatusPath;
+            IRQueryDefinition definition = new(
+                new("nested-named-field-query"),
+                new("NestedNamedFieldQuery"),
+                new(
+                    nodes:
+                    [
+                        new SourceQueryNode(LoadSource, Load, LoadShape),
+                        new FilterQueryNode(
+                            Filter,
+                            LoadSource,
+                            Expr.Eq(Expr.Field(Load, predicatePath), Expr.Param(StatusParameter.Value))),
+                        new ProjectQueryNode(
+                            Project,
+                            Filter,
+                            RowBinding,
+                            RowShape,
+                            [
+                                new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
+                                new(new("row-status"), StatusPath, Expr.Field(Load, StatusPath))
+                            ]),
+                        new OrderQueryNode(Order, Project, [new(Expr.Field(RowBinding, IdPath))]),
+                        new PageQueryNode(Page, Order, new OffsetPageDefinition(25, 0))
+                    ],
+                    parameters:
+                    [
+                        new(StatusParameter, new ScalarTypeRef(ScalarTypeKind.String))
+                    ]),
+                [new RowsQueryResultDefinition(Rows, Page)]);
+            return Create(RelationQueryDocument.FromDefinition(definition));
         }
 
         public static Fixture MixedDirectionKeyset()
@@ -3488,6 +3548,16 @@ public sealed class CosmosRelationQueryCompilerTests
                 new ObjectFieldTypeDef("ServiceDate", new ScalarTypeRef(ScalarTypeKind.Date)),
                 new ObjectFieldTypeDef("Address", stopAddressType)
             ]);
+            var payloadType = new TypeDefinition.Structural(
+                PayloadType,
+                [
+                    new(new("Status"), stringType),
+                    new(
+                        new("Notes"),
+                        stringType,
+                        presence: FieldPresence.Optional,
+                        nullability: FieldNullability.Nullable)
+                ]);
             var load = new Shape(
                 LoadShape.ShapeId,
                 [
@@ -3502,6 +3572,7 @@ public sealed class CosmosRelationQueryCompilerTests
                     new(new("Stops"), new ArrayTypeRef(stopType)),
                     new(new("ObservedInstant"), new ScalarTypeRef(ScalarTypeKind.Instant)),
                     new(new("ObservedDateTime"), new ScalarTypeRef(ScalarTypeKind.DateTime)),
+                    new(new("Payload"), new NamedTypeRef(PayloadType)),
                     new(
                         new("Notes"),
                         stringType,
@@ -3619,7 +3690,8 @@ public sealed class CosmosRelationQueryCompilerTests
                     aggregate,
                     countAggregate,
                     stringAggregate
-                ]));
+                ],
+                namedTypes: [payloadType]));
         }
     }
 }
