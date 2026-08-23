@@ -46,6 +46,49 @@ public sealed class ProcessRelationHandlerCatalogTests
             result.Value.Value);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TypedHandler_PreservesNestedTemporalScalarKinds(bool explicitOutcome)
+    {
+        var query = TemporalQuery();
+        var expected = new TemporalQueryResult(
+            "source/42",
+            new(
+                new DateTimeOffset(2026, 8, 23, 10, 30, 0, TimeSpan.Zero),
+                new DateOnly(2026, 8, 24)));
+        var registration = explicitOutcome
+            ? ProcessRelationHandlerRegistration.CreateOutcome(
+                query,
+                (context, evaluation, input) => ValueTask.FromResult(
+                    ProcessRelationHandlerOutcome<TemporalQueryResult>.Completed(expected)))
+            : ProcessRelationHandlerRegistration.Create(
+                query,
+                (context, evaluation, input) => ValueTask.FromResult(expected));
+        var catalog = new ProcessRelationHandlerCatalog([registration]);
+
+        var result = await catalog.EvaluateAsync(
+            OperationContext.Create(),
+            Evaluation(query.Reference, query.InputContract, new QueryInput("source/42")));
+
+        Assert.True(
+            result.IsSuccessful,
+            result.Failure is null
+                ? "Handler returned no result."
+                : $"{result.Failure.Code}:{result.Failure.Location}:{result.Failure.Message}");
+        Assert.NotNull(result.Value);
+        var portable = result.Value;
+        Assert.True(portable.Value.HasValue);
+        var observed = portable.Value.Value;
+        Assert.NotNull(observed.Fields);
+        var root = observed.Fields!;
+        Assert.NotNull(root[nameof(TemporalQueryResult.Window)].Fields);
+        var window = root[nameof(TemporalQueryResult.Window)].Fields!;
+        Assert.Equal(ObservationValueKind.DateTimeOffset, window[nameof(TemporalWindow.DeadlineUtc)].Kind);
+        Assert.Equal(ObservationValueKind.DateOnly, window[nameof(TemporalWindow.BusinessDate)].Kind);
+        Assert.Equal(ObservationValue.FromObject(expected), observed);
+    }
+
     [Fact]
     public async Task Catalog_RoutesHostedQueriesAndAuthoredRelationsByExactCanonicalReference()
     {
@@ -381,6 +424,14 @@ public sealed class ProcessRelationHandlerCatalogTests
             new QueryConfiguration("entity", policy),
             Provenance());
 
+    static HostedQuery<QueryInput, TemporalQueryResult> TemporalQuery() =>
+        HostedQuery<QueryInput, TemporalQueryResult>.Create(
+            new("query/tests/async-hosted-query-temporal-result"),
+            new("1"),
+            new("tests.async-hosted-query-temporal-result", "1"),
+            new QueryConfiguration("entity", "exact"),
+            Provenance());
+
     internal static ProcessRelationEvaluation Evaluation(
         HostedQuery<QueryInput, QueryResult> query,
         QueryInput input) => Evaluation(query.Reference, query.InputContract, input);
@@ -420,6 +471,12 @@ public sealed class ProcessRelationHandlerCatalogTests
     public sealed record QueryInput(string Id);
 
     public sealed record QueryResult(string Id, string Value);
+
+    public sealed record TemporalQueryResult(string Id, TemporalWindow Window);
+
+    public sealed record TemporalWindow(
+        DateTimeOffset DeadlineUtc,
+        DateOnly BusinessDate);
 
     public sealed record QueryConfiguration(string SourceFamily, string Policy);
 }
