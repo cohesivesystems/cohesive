@@ -37,7 +37,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
             return new ScalarTypeRef(scalarKind);
 
         if (unwrapped.IsEnum)
-            return new EnumTypeRef(name: unwrapped.Name, members: [.. Enum.GetNames(enumType: unwrapped)]);
+            return MapEnum(unwrapped);
 
         if (PortableJsonValueAttribute.TryGetKind(unwrapped, out var portableJsonKind))
             return new JsonTypeRef(portableJsonKind);
@@ -183,6 +183,45 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 
     static OpaqueRuntimeTypeRef Opaque(Type type, string reason, string? message = null) =>
         new(type.FullName ?? type.Name, new TypeInferenceDiagnostic(reason: reason, message: message));
+
+    static TypeRef MapEnum(Type enumType)
+    {
+        var converterAttribute = enumType.GetCustomAttribute<JsonConverterAttribute>(inherit: true);
+        var converter = converterAttribute?.ConverterType;
+        if (converterAttribute is not null
+            && (converter is null || !IsStandardStringEnumConverter(converter)))
+        {
+            return Opaque(
+                enumType,
+                TypeInferenceDiagnosticReasons.UnsupportedEnumConverter,
+                $"Enum JSON converter '{converter?.FullName ?? converterAttribute.GetType().FullName}' does not expose a statically inferable closed wire-member catalog.");
+        }
+
+        var useJsonMemberNames = converterAttribute is not null;
+        var members = Enum.GetNames(enumType)
+            .Select(name => useJsonMemberNames
+                ? enumType.GetField(name, BindingFlags.Public | BindingFlags.Static)?
+                      .GetCustomAttribute<JsonStringEnumMemberNameAttribute>(inherit: false)?.Name ?? name
+                : name)
+            .ToArray();
+        if (members.Distinct(StringComparer.Ordinal).Count() != members.Length)
+        {
+            return Opaque(
+                enumType,
+                TypeInferenceDiagnosticReasons.AmbiguousSerializedEnumMember,
+                "The CLR enum maps more than one member to the same canonical JSON string.");
+        }
+
+        return new EnumTypeRef(name: enumType.Name, members: [.. members]);
+    }
+
+    static bool IsStandardStringEnumConverter(Type converter) =>
+        converter == typeof(JsonStringEnumConverter)
+        || converter.IsGenericType
+        && string.Equals(
+            converter.GetGenericTypeDefinition().FullName,
+            "System.Text.Json.Serialization.JsonStringEnumConverter`1",
+            StringComparison.Ordinal);
 
     /// <summary>Returns the deterministic JSON field identity of a reflected member.</summary>
     /// <remarks>

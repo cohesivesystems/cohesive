@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -131,6 +132,36 @@ public sealed class ProcessRelationHandlerCatalogTests
             .GetProperty(nameof(PortableHandlerDocument.Attributes))
             .GetProperty("protocol")
             .GetString());
+    }
+
+    [Fact]
+    public async Task TypedHandler_EncodesJsonStringEnumWithItsExactWireMemberContract()
+    {
+        var query = WireEnumQuery();
+        var catalog = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.Create(
+                query,
+                static (context, evaluation, input) => ValueTask.FromResult(
+                    new WireEnumQueryResult(input.Id, WireDisposition.PartnerOverlay)))
+        ]);
+
+        var result = await catalog.EvaluateAsync(
+            OperationContext.Create(),
+            Evaluation(query.Reference, query.InputContract, new QueryInput("source/enum")));
+
+        Assert.Empty(query.Document.Metadata.Diagnostics);
+        var disposition = Assert.Single(
+            Assert.IsType<ObjectTypeRef>(query.ResultContract.Type).Fields,
+            static field => field.Name == nameof(WireEnumQueryResult.Disposition));
+        Assert.Equal(
+            ["standard", "partner-overlay"],
+            Assert.IsType<EnumTypeRef>(disposition.Type).Members.ToArray());
+        Assert.True(result.IsSuccessful, result.Failure?.Message);
+        Assert.Equal(
+            "partner-overlay",
+            result.Value!.Value!.Value
+                .GetProperty(nameof(WireEnumQueryResult.Disposition))
+                .GetString());
     }
 
     [Fact]
@@ -484,6 +515,14 @@ public sealed class ProcessRelationHandlerCatalogTests
             new QueryConfiguration("document", "exact"),
             Provenance());
 
+    static HostedQuery<QueryInput, WireEnumQueryResult> WireEnumQuery() =>
+        HostedQuery<QueryInput, WireEnumQueryResult>.Create(
+            new("query/tests/json-string-enum-result"),
+            new("1"),
+            new("tests.json-string-enum-result", "1"),
+            new QueryConfiguration("enum", "exact"),
+            Provenance());
+
     internal static ProcessRelationEvaluation Evaluation(
         HostedQuery<QueryInput, QueryResult> query,
         QueryInput input) => Evaluation(query.Reference, query.InputContract, input);
@@ -540,6 +579,18 @@ public sealed class ProcessRelationHandlerCatalogTests
     public sealed record PortableDocumentQueryInput(string Id, PortableHandlerDocument Document);
 
     public sealed record PortableDocumentQueryResult(string Id, PortableHandlerDocument Document);
+
+    public sealed record WireEnumQueryResult(string Id, WireDisposition Disposition);
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum WireDisposition
+    {
+        [JsonStringEnumMemberName("standard")]
+        Standard,
+
+        [JsonStringEnumMemberName("partner-overlay")]
+        PartnerOverlay
+    }
 }
 
 public sealed class ProcessAsyncReferenceInterpreterTests
