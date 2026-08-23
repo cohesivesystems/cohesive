@@ -99,6 +99,28 @@ public sealed class ObservationValueTests
     }
 
     [Fact]
+    public void FromObject_DeclaredPortableJsonValue_UsesCanonicalJsonAndRoundTripsTypedValue()
+    {
+        var value = new PortableDocument(new Dictionary<string, object?>
+        {
+            ["count"] = 12,
+            ["enabled"] = true
+        });
+
+        var direct = ObservationValue.FromObject(value);
+        var nested = ObservationValue.FromObject(new PortableDocumentEnvelope(value))
+            .GetProperty(nameof(PortableDocumentEnvelope.Document));
+
+        Assert.Equal(direct, nested);
+        Assert.Equal(12, direct.GetProperty("content").GetProperty("count").GetInt32());
+        Assert.True(direct.GetProperty("content").GetProperty("enabled").GetBoolean());
+        var restored = direct.Deserialize<PortableDocument>();
+        Assert.NotNull(restored);
+        Assert.Equal(12, Assert.IsType<JsonElement>(restored!.Content["count"]).GetInt32());
+        Assert.True(Assert.IsType<JsonElement>(restored.Content["enabled"]).GetBoolean());
+    }
+
+    [Fact]
     public void FromClrPropertyBag_Null_ReturnsEmptyObject()
     {
         var observed = ObservationValue.FromClrPropertyBag(null);
@@ -817,4 +839,10 @@ public sealed class ObservationValueTests
     {
         public int Value { get; set; }
     }
+
+    [PortableJsonValue(JsonTypeKind.Object)]
+    sealed record PortableDocument(
+        [property: JsonPropertyName("content")] IReadOnlyDictionary<string, object?> Content);
+
+    sealed record PortableDocumentEnvelope(PortableDocument Document);
 }

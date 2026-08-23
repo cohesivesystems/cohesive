@@ -324,6 +324,46 @@ public sealed class CanonicalTransitionAuthoringTests
     }
 
     [Fact]
+    public void SubjectCreation_PreservesDeclaredPortableJsonDocumentAsTypedState()
+    {
+        var authored = TransitionAuthoring.Create<PortableDocumentEntity, PortableDocumentCreationInput, string>(
+            PortableDocumentEntity.Instance.Definition.Shape,
+            AuxiliaryMetadata(
+                new("transition/portable-document/create"),
+                new("portable-document/create/body")),
+            transition => transition
+                .CreatesFrom(
+                    new("portable-document/create/initialize"),
+                    input => new PortableDocumentInitialState(input.Id, input.Document))
+                .Return(
+                    new("portable-document/create/outcome"),
+                    TransitionOutcomeDisposition.Applied,
+                    "created"));
+
+        Assert.True(authored.IsValid, Format(authored.Validation));
+        var compilation = TransitionStaticCompiler.Compile(authored.Document);
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        var plan = Assert.IsType<CompiledTransitionPlan>(compilation.Plan);
+        var document = new PortableTransitionDocument(
+            new Dictionary<string, string> { ["protocol"] = "FIX" });
+        var decision = TransitionReferenceInterpreter.DecideCreation(
+            plan,
+            new("portable-document/create/activation"),
+            Object(
+                authored.Definition.Input,
+                (nameof(PortableDocumentCreationInput.Id), ObservationValue.FromString("document/1")),
+                (nameof(PortableDocumentCreationInput.Document), ObservationValue.FromObject(document))));
+
+        Assert.Equal(TransitionDecisionKind.Applied, decision.Kind);
+        var initial = Assert.IsType<PortableValue>(decision.Evidence.InitialObservation);
+        var observed = Assert.IsType<ObservationValue>(initial.Value)
+            .GetProperty(nameof(PortableDocumentEntity.Document));
+        Assert.Equal("FIX", observed.GetProperty(nameof(PortableTransitionDocument.Content))
+            .GetProperty("protocol")
+            .GetString());
+    }
+
+    [Fact]
     public void SubjectCreation_RejectsProjectionThatDoesNotMatchAuthoritativeObservation()
     {
         var exception = Assert.Throws<TransitionExpressionTranslationException>(() =>
@@ -1009,6 +1049,26 @@ public sealed class CanonicalTransitionAuthoringTests
         public Field<string> Status { get; }
 
         public Field<IReadOnlyList<string>> Tags { get; }
+    }
+
+    [PortableJsonValue(JsonTypeKind.Object)]
+    sealed record PortableTransitionDocument(IReadOnlyDictionary<string, string> Content);
+
+    sealed record PortableDocumentCreationInput(string Id, PortableTransitionDocument Document);
+
+    sealed record PortableDocumentInitialState(string Id, PortableTransitionDocument Document);
+
+    sealed class PortableDocumentEntity : Entity<PortableDocumentEntity>
+    {
+        public PortableDocumentEntity()
+        {
+            Id = WriteOnceField<string>(nameof(Id));
+            Document = MutableField<PortableTransitionDocument>(nameof(Document));
+        }
+
+        public Field<string> Id { get; }
+
+        public Field<PortableTransitionDocument> Document { get; }
     }
 
     sealed record OptionalDecisionInput(

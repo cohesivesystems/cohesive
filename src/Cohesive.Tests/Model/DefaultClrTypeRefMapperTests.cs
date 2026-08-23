@@ -57,6 +57,20 @@ public sealed class DefaultClrTypeRefMapperTests
             type.InferenceDiagnostic?.Reason);
     }
 
+    [Fact]
+    public void Map_DeclaredPortableJsonValueUsesItsJsonContractAtEveryOccurrence()
+    {
+        var document = Assert.IsType<JsonTypeRef>(
+            mapper.Map(typeof(PortableDocument), nullability: null));
+        var envelope = Assert.IsType<ObjectTypeRef>(
+            mapper.Map(typeof(PortableDocumentEnvelope), nullability: null));
+
+        Assert.Equal(JsonTypeKind.Object, document.Kind);
+        Assert.Equal(
+            JsonTypeKind.Object,
+            Assert.IsType<JsonTypeRef>(Assert.Single(envelope.Fields).Type).Kind);
+    }
+
     sealed record SerializedEnvelope(
         [property: JsonPropertyName("zeta")] long Sequence,
         [property: JsonPropertyName("alpha")] DateTimeOffset ObservedAt);
@@ -64,4 +78,9 @@ public sealed class DefaultClrTypeRefMapperTests
     sealed record AmbiguousSerializedEnvelope(
         [property: JsonPropertyName("same")] string First,
         [property: JsonPropertyName("same")] string Second);
+
+    [PortableJsonValue(JsonTypeKind.Object)]
+    sealed record PortableDocument(IReadOnlyDictionary<string, object?> Content);
+
+    sealed record PortableDocumentEnvelope(PortableDocument Document);
 }

@@ -90,6 +90,50 @@ public sealed class ProcessRelationHandlerCatalogTests
     }
 
     [Fact]
+    public async Task TypedHandler_PreservesDeclaredPortableJsonDocumentAcrossContractAndRuntimeBoundaries()
+    {
+        var query = PortableDocumentQuery();
+        var expected = new PortableHandlerDocument(
+            "source schema",
+            new Dictionary<string, string> { ["protocol"] = "X12" });
+        PortableDocumentQueryInput? received = null;
+        var catalog = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.Create(
+                query,
+                (context, evaluation, input) =>
+                {
+                    received = input;
+                    return ValueTask.FromResult(new PortableDocumentQueryResult(input.Id, input.Document));
+                })
+        ]);
+
+        var result = await catalog.EvaluateAsync(
+            OperationContext.Create(),
+            Evaluation(
+                query.Reference,
+                query.InputContract,
+                new PortableDocumentQueryInput("source/portable", expected)));
+
+        Assert.Empty(query.Document.Metadata.Diagnostics);
+        Assert.Equal(
+            JsonTypeKind.Object,
+            Assert.IsType<JsonTypeRef>(
+                Assert.Single(
+                    Assert.IsType<ObjectTypeRef>(query.ResultContract.Type).Fields,
+                    static field => field.Name == nameof(PortableDocumentQueryResult.Document)).Type).Kind);
+        Assert.True(result.IsSuccessful, result.Failure?.Message);
+        Assert.NotNull(received);
+        Assert.Equal("X12", received!.Document.Attributes["protocol"]);
+        var document = result.Value!.Value!.Value
+            .GetProperty(nameof(PortableDocumentQueryResult.Document));
+        Assert.Equal("source schema", document.GetProperty(nameof(PortableHandlerDocument.Name)).GetString());
+        Assert.Equal("X12", document
+            .GetProperty(nameof(PortableHandlerDocument.Attributes))
+            .GetProperty("protocol")
+            .GetString());
+    }
+
+    [Fact]
     public async Task Catalog_RoutesHostedQueriesAndAuthoredRelationsByExactCanonicalReference()
     {
         var query = Query();
@@ -432,6 +476,14 @@ public sealed class ProcessRelationHandlerCatalogTests
             new QueryConfiguration("entity", "exact"),
             Provenance());
 
+    static HostedQuery<PortableDocumentQueryInput, PortableDocumentQueryResult> PortableDocumentQuery() =>
+        HostedQuery<PortableDocumentQueryInput, PortableDocumentQueryResult>.Create(
+            new("query/tests/portable-json-document"),
+            new("1"),
+            new("tests.portable-json-document", "1"),
+            new QueryConfiguration("document", "exact"),
+            Provenance());
+
     internal static ProcessRelationEvaluation Evaluation(
         HostedQuery<QueryInput, QueryResult> query,
         QueryInput input) => Evaluation(query.Reference, query.InputContract, input);
@@ -479,6 +531,15 @@ public sealed class ProcessRelationHandlerCatalogTests
         DateOnly BusinessDate);
 
     public sealed record QueryConfiguration(string SourceFamily, string Policy);
+
+    [PortableJsonValue(JsonTypeKind.Object)]
+    public sealed record PortableHandlerDocument(
+        string Name,
+        IReadOnlyDictionary<string, string> Attributes);
+
+    public sealed record PortableDocumentQueryInput(string Id, PortableHandlerDocument Document);
+
+    public sealed record PortableDocumentQueryResult(string Id, PortableHandlerDocument Document);
 }
 
 public sealed class ProcessAsyncReferenceInterpreterTests

@@ -128,14 +128,12 @@ public sealed class ObjectEntityDefinitionTests
     }
 
     [Fact]
-    public void DefaultClrTypeRefMapper_ForShapeGraphDocument_InfersStructuralTypeRef()
+    public void DefaultClrTypeRefMapper_ForShapeGraphDocument_UsesDeclaredPortableJsonContract()
     {
         var type = new DefaultClrTypeRefMapper().Map(typeof(ShapeGraphDocument), null);
-        var documentType = Assert.IsType<ObjectTypeRef>(type);
+        var documentType = Assert.IsType<JsonTypeRef>(type);
 
-        Assert.Contains(documentType.Fields, static field => field.Name == nameof(ShapeGraphDocument.Graph));
-        Assert.Contains(documentType.Fields, static field => field.Name == nameof(ShapeGraphDocument.Metadata));
-        Assert.Contains(documentType.Fields, static field => field.Name == nameof(ShapeGraphDocument.SchemaVersion));
+        Assert.Equal(JsonTypeKind.Object, documentType.Kind);
     }
 
     [Fact]

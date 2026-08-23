@@ -679,7 +679,8 @@ public readonly struct ObservationValue(
     static bool TryProjectJsonConvertedValue(object value, out ObservationValue observed)
     {
         var type = value.GetType();
-        if (type.GetCustomAttribute<JsonConverterAttribute>(inherit: true) is null)
+        if (type.GetCustomAttribute<JsonConverterAttribute>(inherit: true) is null
+            && !PortableJsonValueAttribute.TryGetKind(type, out _))
         {
             observed = default;
             return false;
@@ -805,14 +806,16 @@ public readonly struct ObservationValue(
     static bool ShouldProjectWithDeclaredJsonType(Type type)
     {
         if (type.GetCustomAttribute<JsonConverterAttribute>(inherit: true) is not null
-            || type.GetCustomAttribute<JsonPolymorphicAttribute>(inherit: true) is not null)
+            || type.GetCustomAttribute<JsonPolymorphicAttribute>(inherit: true) is not null
+            || PortableJsonValueAttribute.TryGetKind(type, out _))
         {
             return true;
         }
 
         return TryGetSequenceElementType(type, out var elementType)
                && (elementType.GetCustomAttribute<JsonConverterAttribute>(inherit: true) is not null
-                   || elementType.GetCustomAttribute<JsonPolymorphicAttribute>(inherit: true) is not null);
+                   || elementType.GetCustomAttribute<JsonPolymorphicAttribute>(inherit: true) is not null
+                   || PortableJsonValueAttribute.TryGetKind(elementType, out _));
     }
 
     static bool TryGetSequenceElementType(Type type, out Type elementType)
