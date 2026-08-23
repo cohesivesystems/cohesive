@@ -38,6 +38,53 @@ public sealed record InfrastructureRealizationFingerprint
     public string Value { get; }
 }
 
+/// <summary>Payload-free exact reference to one infrastructure realization candidate.</summary>
+public sealed record InfrastructureRealizationReference
+{
+    /// <summary>Creates an exact realization reference.</summary>
+    /// <param name="definition">Exact canonical definition reference.</param>
+    /// <param name="profile">Exact capability-profile reference.</param>
+    /// <param name="target">Selected interpretation target.</param>
+    /// <param name="variant">Selected coherent target variant.</param>
+    /// <param name="fingerprint">Exact realization fingerprint.</param>
+    /// <exception cref="ArgumentNullException">A reference argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">A target or variant identity is default.</exception>
+    [JsonConstructor]
+    public InfrastructureRealizationReference(
+        InfrastructureDefinitionReference definition,
+        InfrastructureCapabilityProfileReference profile,
+        InfrastructureTargetId target,
+        InfrastructureCapabilityVariantId variant,
+        InfrastructureRealizationFingerprint fingerprint)
+    {
+        Definition = Guard.RequireNotNull(definition);
+        Profile = Guard.RequireNotNull(profile);
+        if (string.IsNullOrWhiteSpace(target.Value))
+            throw new ArgumentException("An infrastructure-realization reference requires a target.", nameof(target));
+        if (string.IsNullOrWhiteSpace(variant.Value))
+            throw new ArgumentException("An infrastructure-realization reference requires a variant.", nameof(variant));
+
+        Target = target;
+        Variant = variant;
+        Fingerprint = Guard.RequireNotNull(fingerprint);
+    }
+
+    /// <summary>Exact canonical definition reference.</summary>
+    public InfrastructureDefinitionReference Definition { get; }
+
+    /// <summary>Exact capability-profile reference.</summary>
+    public InfrastructureCapabilityProfileReference Profile { get; }
+
+    /// <summary>Selected interpretation target.</summary>
+    public InfrastructureTargetId Target { get; }
+
+    /// <summary>Selected coherent target variant.</summary>
+    public InfrastructureCapabilityVariantId Variant { get; }
+
+    /// <summary>Exact realization fingerprint.</summary>
+    public InfrastructureRealizationFingerprint Fingerprint { get; }
+}
+
 /// <summary>Exactly fingerprinted physical-applicability candidate for one infrastructure definition.</summary>
 /// <remarks>
 /// This record joins target-strategy capability closure to selected workload deployments, logical-resource lifecycle
@@ -134,6 +181,15 @@ public sealed record InfrastructureRealization
         CapabilityClosure.IsClosed
         && WitnessDecisions.All(static decision => decision.IsComplete)
         && !Diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+
+    /// <summary>Projects a payload-free exact reference to this realization.</summary>
+    /// <returns>The exact definition, profile, target, variant, and fingerprint fence.</returns>
+    public InfrastructureRealizationReference ToReference() => new(
+        definition: Lifecycle.Definition.ToReference(),
+        profile: CapabilityClosure.Profile,
+        target: CapabilityClosure.Target,
+        variant: CapabilityClosure.Variant,
+        fingerprint: Fingerprint);
 
     /// <summary>Finds the physical-applicability decision for one exact requirement.</summary>
     /// <param name="requirement">Exact declared or binding-derived requirement identity.</param>
