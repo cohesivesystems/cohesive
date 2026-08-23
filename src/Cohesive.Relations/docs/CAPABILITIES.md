@@ -50,14 +50,14 @@ changes without regenerating this artifact.
 ### Cosmos SQL
 
 - Target: `cohesive.adapters.cosmos.sql`
-- Profile: `cohesive.adapters.cosmos.sql/canonical-v2`
-- Capability evidence: 80
+- Profile: `cohesive.adapters.cosmos.sql/canonical-v3`
+- Capability evidence: 81
 - Definition schemas: `relation-query/v1`
 - Compiler profiles: `relation-query-static/v1`
-- Full-profile SHA-256: `0727009663c60635749780993f555cdf113a11f1b243d3e56c3d9a52670e8451`
-- Families: boundary validation=6, expression=19, guarantee=15, logical=21, structural=19
+- Full-profile SHA-256: `dbf40634213abc967372256e5e943a46167a9cbb09d8100712ea6da4200bbd1b`
+- Families: boundary validation=6, expression=19, guarantee=15, logical=22, structural=19
 
-- Logical semantics: `AggregateGrouping`, `Aggregation`, `AlwaysPresentBinding`, `AscendingOrdering`, `CountAggregate`, `DescendingOrdering`, `DistinctRows`, `ExpandCollection`, `Filter`, `MaximumAggregate`, `MinimumAggregate`, `NullsFirst`, `NullsLast`, `OffsetPaging`, `Ordering`, `Projection`, `ProjectionAssignment`, `QueryAggregationResult`, `QueryRowsResult`, `Source`, `StableTieOrdering`
+- Logical semantics: `AggregateGrouping`, `Aggregation`, `AlwaysPresentBinding`, `AscendingOrdering`, `CountAggregate`, `DescendingOrdering`, `DistinctRows`, `ExpandCollection`, `Filter`, `KeysetPaging`, `MaximumAggregate`, `MinimumAggregate`, `NullsFirst`, `NullsLast`, `OffsetPaging`, `Ordering`, `Projection`, `ProjectionAssignment`, `QueryAggregationResult`, `QueryRowsResult`, `Source`, `StableTieOrdering`
 - Expression semantics: `Operation:expr.function.any`, `Operation:expr.function.contains`, `Operation:expr.node.conditional`, `Operation:expr.node.constant`, `Operation:expr.node.currentItem`, `Operation:expr.node.field`, `Operation:expr.node.field.nestedPath`, `Operation:expr.node.parameter`, `Operation:expr.node.typedField`, `Operation:expr.node.typedLiteral`, `Operation:expr.operator.binary.and`, `Operation:expr.operator.binary.eq`, `Operation:expr.operator.binary.ge`, `Operation:expr.operator.binary.gt`, `Operation:expr.operator.binary.le`, `Operation:expr.operator.binary.lt`, `Operation:expr.operator.binary.ne`, `Operation:expr.operator.binary.or`, `Operation:expr.operator.unary.not`
 - Structural paths: `AggregateTarget:NestedField`, `AggregateTarget:RootValue`, `AggregateTarget:TopLevelField`, `BindingRead:NestedField`, `BindingRead:RootValue`, `BindingRead:TopLevelField`, `CompleteValue:NestedField`, `CompleteValue:RootValue`, `CompleteValue:TopLevelField`, `CurrentItemRead:CollectionElement`, `GroupingTarget:NestedField`, `GroupingTarget:RootValue`, `GroupingTarget:TopLevelField`, `OutputSelection:NestedField`, `OutputSelection:RootValue`, `OutputSelection:TopLevelField`, `ProjectionTarget:NestedField`, `ProjectionTarget:RootValue`, `ProjectionTarget:TopLevelField`
 - Preserved guarantees: `AbsenceAvailabilityFailureDistinction`, `Aggregation`, `Cardinality`, `CollectionElementCorrelation`, `DeterministicResult`, `DuplicateHandling`, `EvidenceCompleteness`, `Grouping`, `InconclusiveEvidence`, `MissingNullDistinction`, `NullPlacement`, `Ordering`, `OutputIdentity`, `OutputMode`, `StablePaging`

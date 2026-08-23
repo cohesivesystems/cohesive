@@ -880,7 +880,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.RelationTerminalUnsupported,
-                    "Cosmos SQL v2 does not lower relation terminals until root correlation, cardinality, key, and invariant evidence are represented by the native artifact contract.",
+                    "Cosmos SQL v3 does not lower relation terminals until root correlation, cardinality, key, and invariant evidence are represented by the native artifact contract.",
                     branch.Node);
             }
             if (realization.Observability.OccurrenceProvenance
@@ -888,7 +888,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported,
-                    "Cosmos SQL v2 compiles value results only and cannot provide exact contributor-occurrence lineage.",
+                    "Cosmos SQL v3 compiles value results only and cannot provide exact contributor-occurrence lineage.",
                     branch.Node);
             }
             ValidatePipeline();
@@ -936,7 +936,7 @@ public sealed class CosmosRelationQueryCompiler
                 {
                     throw Fail(
                         CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedBranchTopology,
-                        "Canonical Cosmos SQL v2 supports only a linear single-source branch.",
+                        "Canonical Cosmos SQL v3 supports only a linear single-source branch.",
                         execution.Id);
                 }
                 if (execution.LogicalPlan.Inputs.Any(static input => !input.Bypasses.IsDefaultOrEmpty))
@@ -1003,11 +1003,11 @@ public sealed class CosmosRelationQueryCompiler
                         stage = PipelineStage.Order;
                         break;
                     case PageQueryNode page when sawOrder && !sawPage && stage <= PipelineStage.Page:
-                        if (page.Page is not OffsetPageDefinition)
+                        if (page.Page is not OffsetPageDefinition and not KeysetPageDefinition)
                         {
                             throw Fail(
                                 CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator,
-                                "Canonical Cosmos SQL v2 supports offset paging only.",
+                                "The canonical Cosmos compiler does not recognize this paging definition.",
                                 execution.Id);
                         }
                         sawPage = true;
@@ -1039,7 +1039,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator,
-                    "Cosmos SQL v2 does not claim ordered or paged aggregate-result equivalence; grouped queries cannot combine GROUP BY and ORDER BY.",
+                    "Cosmos SQL v3 does not claim ordered or paged aggregate-result equivalence; grouped queries cannot combine GROUP BY and ORDER BY.",
                     branch.Node);
             }
         }
@@ -1121,7 +1121,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Whole-row DISTINCT requires one complete projected binding in Cosmos SQL v2.",
+                    "Whole-row DISTINCT requires one complete projected binding in Cosmos SQL v3.",
                     distinct.Id);
             }
 
@@ -1327,7 +1327,7 @@ public sealed class CosmosRelationQueryCompiler
                 AggregateOperator.Min or AggregateOperator.Max => CompileNumericMinimumOrMaximum(aggregate),
                 _ => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported,
-                    $"Aggregate operation '{definition.Operation}' is not in the exact Cosmos SQL v2 closure.",
+                    $"Aggregate operation '{definition.Operation}' is not in the exact Cosmos SQL v3 closure.",
                     branch.Node)
             };
         }
@@ -1353,7 +1353,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported,
-                    $"Cosmos SQL v2 requires a known Int32 value for exact '{aggregate.Execution.Definition.Operation}' semantics.",
+                    $"Cosmos SQL v3 requires a known Int32 value for exact '{aggregate.Execution.Definition.Operation}' semantics.",
                     valueSite.Node ?? branch.Node);
             }
 
@@ -1461,31 +1461,160 @@ public sealed class CosmosRelationQueryCompiler
                 return;
             }
 
-            var page = (OffsetPageDefinition)((PageQueryNode)pageExecution.CanonicalNode).Page;
+            var page = ((PageQueryNode)pageExecution.CanonicalNode).Page;
             if (page.Limit > CosmosRelationQueryTargetProfile.MaximumPageSize)
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable,
-                    $"Page size {page.Limit} exceeds the Cosmos v2 boundary of {CosmosRelationQueryTargetProfile.MaximumPageSize}.",
+                    $"Page size {page.Limit} exceeds the Cosmos v3 boundary of {CosmosRelationQueryTargetProfile.MaximumPageSize}.",
                     pageExecution.Id);
             }
             if (orderExecution?.CanonicalNode is not OrderQueryNode ordered)
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable,
-                    "Offset paging requires a preceding deterministic order node.",
+                    "Paging requires a preceding deterministic order node.",
                     pageExecution.Id);
             }
             if (stableOrderingPath is null)
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable,
-                    "The preceding order node has no stable unique path for offset paging.",
+                    "The preceding order node has no stable unique path for paging.",
                     pageExecution.Id);
             }
 
-            builder.OffsetLimit(page.Offset, page.Limit);
-            paging = new(page.Offset, page.Limit, stableOrderingPath.Value);
+            switch (page)
+            {
+                case OffsetPageDefinition offset:
+                    if (!pageExecution.KeysetBoundaries.IsDefaultOrEmpty)
+                    {
+                        throw Fail(
+                            CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable,
+                            "An offset page cannot retain keyset continuation-expression metadata.",
+                            pageExecution.Id);
+                    }
+                    builder.OffsetLimit(offset.Offset, offset.Limit);
+                    paging = new(offset.Offset, offset.Limit, stableOrderingPath.Value);
+                    break;
+                case KeysetPageDefinition keyset:
+                    ConfigureKeysetPage(
+                        pageExecution,
+                        orderExecution,
+                        ordered,
+                        keyset,
+                        stableOrderingPath.Value);
+                    break;
+                default:
+                    throw Fail(
+                        CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator,
+                        "Unknown canonical paging definition.",
+                        pageExecution.Id);
+            }
+        }
+
+        void ConfigureKeysetPage(
+            RelationQueryExecutionNode pageExecution,
+            RelationQueryExecutionNode orderExecution,
+            OrderQueryNode ordered,
+            KeysetPageDefinition keyset,
+            FieldPath stableOrderingPath)
+        {
+            if (keyset.After.IsDefaultOrEmpty)
+            {
+                if (!pageExecution.KeysetBoundaries.IsDefaultOrEmpty)
+                {
+                    throw Fail(
+                        CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable,
+                        "An initial keyset page cannot retain continuation-expression metadata.",
+                        pageExecution.Id);
+                }
+                builder.OffsetLimit(0, keyset.Limit);
+                paging = new(
+                    kind: CosmosRelationQueryPagingKind.Keyset,
+                    offset: 0,
+                    limit: keyset.Limit,
+                    stableUniquePath: stableOrderingPath);
+                return;
+            }
+
+            if (keyset.After.Length != ordered.Orderings.Length
+                || pageExecution.KeysetBoundaries.Length != ordered.Orderings.Length)
+            {
+                throw Fail(
+                    CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable,
+                    "Keyset continuation expressions must align exactly with ordered keys.",
+                    pageExecution.Id);
+            }
+
+            CosmosSqlExpression? equalityPrefix = null;
+            CosmosSqlExpression? strictAfter = null;
+            for (var index = 0; index < ordered.Orderings.Length; index++)
+            {
+                var ordering = ordered.Orderings[index];
+                var keySite = orderExecution.OrderKeys.Single(candidate => candidate.Ordinal == index);
+                var boundarySite = pageExecution.KeysetBoundaries.Single(candidate => candidate.Ordinal == index);
+                RequireNonNullResult(keySite, pageExecution.Id, "keyset ordering");
+                RequireNonNullResult(boundarySite, pageExecution.Id, "keyset continuation");
+                var sourcePath = TryResolveStableSourcePath(ordering.Key, keySite);
+                RequireCosmosOrderableResult(keySite, pageExecution.Id, sourcePath);
+                if (!AreCosmosKeysetComparable(keySite, boundarySite, sourcePath))
+                {
+                    throw Fail(
+                        CosmosRelationQueryCompilationDiagnosticCodes.PagingUnstable,
+                        "A keyset continuation must have the same exact scalar ordering domain as its ordered key.",
+                        pageExecution.Id);
+                }
+
+                var key = CompileExpression(ordering.Key, keySite, requireNonNullInputs: true);
+                var continuation = CompileExpression(
+                    keyset.After[index],
+                    boundarySite,
+                    requireNonNullInputs: true);
+                var comparison = CosmosSqlExpression.Binary(
+                    ordering.Direction == QuerySortDirection.Ascending
+                        ? CosmosSqlBinaryOperator.GreaterThan
+                        : CosmosSqlBinaryOperator.LessThan,
+                    key,
+                    continuation);
+                var term = equalityPrefix is null
+                    ? comparison
+                    : CosmosSqlExpression.Binary(CosmosSqlBinaryOperator.And, equalityPrefix, comparison);
+                strictAfter = strictAfter is null
+                    ? term
+                    : CosmosSqlExpression.Binary(CosmosSqlBinaryOperator.Or, strictAfter, term);
+                var equality = CosmosSqlExpression.Binary(
+                    CosmosSqlBinaryOperator.Equal,
+                    key,
+                    continuation);
+                equalityPrefix = equalityPrefix is null
+                    ? equality
+                    : CosmosSqlExpression.Binary(CosmosSqlBinaryOperator.And, equalityPrefix, equality);
+            }
+
+            builder.Where(strictAfter!);
+            builder.OffsetLimit(0, keyset.Limit);
+            paging = new(
+                kind: CosmosRelationQueryPagingKind.Keyset,
+                offset: 0,
+                limit: keyset.Limit,
+                stableUniquePath: stableOrderingPath);
+        }
+
+        bool AreCosmosKeysetComparable(
+            RelationQueryExpressionSiteAnalysis key,
+            RelationQueryExpressionSiteAnalysis continuation,
+            FieldPath? sourcePath)
+        {
+            var keyType = key.Analysis.KnownResult?.GetEffectiveType();
+            var continuationType = continuation.Analysis.KnownResult?.GetEffectiveType();
+            if (keyType != continuationType)
+                return false;
+            if (keyType is ScalarTypeRef { Kind: ScalarTypeKind.Int32 })
+                return true;
+            return keyType is ScalarTypeRef { Kind: ScalarTypeKind.String or ScalarTypeKind.Date }
+                && sourcePath is { } path
+                && storageBinding.ExactOrderingPaths.Contains(path);
         }
 
         FieldPath? TryResolveStableSourcePath(Expr expression, RelationQueryExpressionSiteAnalysis? site)
@@ -1559,7 +1688,7 @@ public sealed class CosmosRelationQueryCompiler
                                    && call.Arguments.Length == 2 => CompileCollectionAny(call, site),
                 CallExpr call => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Function '{call.Function}' is not in the exact canonical Cosmos SQL v2 expression closure.",
+                    $"Function '{call.Function}' is not in the exact canonical Cosmos SQL v3 expression closure.",
                     site?.Node ?? branch.Node),
                 AggregateExpr => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
@@ -1567,7 +1696,7 @@ public sealed class CosmosRelationQueryCompiler
                     site?.Node ?? branch.Node),
                 _ => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Expression node '{expression.GetType().Name}' is not in the exact canonical Cosmos SQL v2 closure.",
+                    $"Expression node '{expression.GetType().Name}' is not in the exact canonical Cosmos SQL v3 closure.",
                     site?.Node ?? branch.Node)
             };
         }
@@ -1589,7 +1718,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Constant value kind '{value.Kind}' has no exact Cosmos SQL v2 parameter encoding.",
+                    $"Constant value kind '{value.Kind}' has no exact Cosmos SQL v3 parameter encoding.",
                     node);
             }
             if (value.Kind != ObservationValueKind.Null
@@ -1754,7 +1883,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    "Canonical any requires a structured object collection in the Cosmos SQL v2 closure.",
+                    "Canonical any requires a structured object collection in the Cosmos SQL v3 closure.",
                     node);
             }
 
@@ -1762,7 +1891,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    "Canonical any requires one direct physical structured collection field in Cosmos SQL v2.",
+                    "Canonical any requires one direct physical structured collection field in Cosmos SQL v3.",
                     node);
             }
 
@@ -1871,7 +2000,7 @@ public sealed class CosmosRelationQueryCompiler
                         item),
                 _ => throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    $"Expression node '{expression.GetType().Name}' is outside the direct-child Cosmos SQL v2 collection predicate closure.",
+                    $"Expression node '{expression.GetType().Name}' is outside the direct-child Cosmos SQL v3 collection predicate closure.",
                     site.Node ?? branch.Node,
                     collectionField.Input.Id)
             };
@@ -2121,7 +2250,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    "The current collection child is outside the exact Cosmos SQL v2 scalar equality domains.",
+                    "The current collection child is outside the exact Cosmos SQL v3 scalar equality domains.",
                     node,
                     input);
             }
@@ -2309,7 +2438,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                    "A current-item expression requires exactly one visible collection expansion in Cosmos SQL v2.",
+                    "A current-item expression requires exactly one visible collection expansion in Cosmos SQL v3.",
                     branch.Node);
             }
             return CosmosSqlExpression.Alias(collectionAliases.Values.Single());
@@ -2330,7 +2459,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.ParameterUnsupported,
-                    $"Canonical parameter '{parameter.Parameter}' does not have a Cosmos SQL v2 parameter encoding with exact value semantics.",
+                    $"Canonical parameter '{parameter.Parameter}' does not have a Cosmos SQL v3 parameter encoding with exact value semantics.",
                     branch.Node,
                     contract.Input.Id);
             }
@@ -2538,7 +2667,7 @@ public sealed class CosmosRelationQueryCompiler
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                $"Canonical {operation} semantics for missing or null values are not proven exact by Cosmos SQL v2.",
+                $"Canonical {operation} semantics for missing or null values are not proven exact by Cosmos SQL v3.",
                 node);
         }
 
@@ -2566,7 +2695,7 @@ public sealed class CosmosRelationQueryCompiler
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                    "Cosmos SQL v2 result fields require a single-valued semantic contract.",
+                    "Cosmos SQL v3 result fields require a single-valued semantic contract.",
                     node);
             }
 
@@ -2575,7 +2704,7 @@ public sealed class CosmosRelationQueryCompiler
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                "Cosmos SQL v2 cannot prove a canonical physical result encoding for this value contract.",
+                "Cosmos SQL v3 cannot prove a canonical physical result encoding for this value contract.",
                 node);
         }
 
@@ -2591,7 +2720,7 @@ public sealed class CosmosRelationQueryCompiler
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                $"Canonical {operation} requires one proven exact scalar equality domain in Cosmos SQL v2.",
+                $"Canonical {operation} requires one proven exact scalar equality domain in Cosmos SQL v3.",
                 node);
         }
 
@@ -2615,7 +2744,7 @@ public sealed class CosmosRelationQueryCompiler
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
-                "Canonical ordering requires Int32 values or an explicitly proven string/date source path; wider numeric and temporal ordering is not exact in Cosmos SQL v2.",
+                "Canonical ordering requires Int32 values or an explicitly proven string/date source path; wider numeric and temporal ordering is not exact in Cosmos SQL v3.",
                 node);
         }
 
@@ -2659,7 +2788,7 @@ public sealed class CosmosRelationQueryCompiler
             BinaryOperator.Or => CosmosSqlBinaryOperator.Or,
             _ => throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedExpression,
-                $"Binary operator '{@operator}' is not in the Cosmos SQL v2 closure.")
+                $"Binary operator '{@operator}' is not in the Cosmos SQL v3 closure.")
         };
 
         static FieldPath RemoveCurrentItemRoot(FieldPath path)
@@ -2737,7 +2866,7 @@ public sealed class CosmosRelationQueryCompiler
 static class CosmosRelationQueryArtifactFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.cosmos-artifact/v1-c14n/v4";
+    const string Canonicalization = "cohesive.relations.cosmos-artifact/v1-c14n/v5";
 
     public static CosmosRelationQueryArtifactFingerprint Compute(
         RelationQueryNativeResultBranch branch,
@@ -2800,6 +2929,7 @@ static class CosmosRelationQueryArtifactFingerprinter
             Append(canonical, JsonSerializer.Serialize(parameter.Definition, jsonOptions));
             Append(canonical, JsonSerializer.Serialize(parameter.ValueContract, jsonOptions));
         }
+        Append(canonical, paging is null ? -1 : (int)paging.Kind);
         Append(canonical, paging?.Offset ?? -1);
         Append(canonical, paging?.Limit ?? -1);
         Append(canonical, paging is null

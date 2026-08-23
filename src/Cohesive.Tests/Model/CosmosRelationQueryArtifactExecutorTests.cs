@@ -264,6 +264,56 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_CompilerKeysetArtifact_MatchesReferenceInterpreterPage()
+    {
+        var compilerFixture = CosmosRelationQueryCompilerTests.Fixture.Row(keyset: true);
+        var compilation = compilerFixture.Compile(compilerFixture.StorageBindingWithAffinity());
+        Assert.True(compilation.IsSuccessful);
+        var artifact = Assert.Single(compilation.Artifacts);
+        Dictionary<QueryParameterId, ObservationValue> parameters = new()
+        {
+            [new("status")] = ObservationValue.FromString("active"),
+            [new("cursor")] = ObservationValue.FromString("load-1")
+        };
+        var evidence = CreateThreeActiveLoadEvidence(compilerFixture.Plan, parameters);
+        var reference = RelationQueryInMemoryInterpreter.Default.Execute(new(compilerFixture.Plan, evidence));
+        Assert.True(reference.IsSuccessful);
+        var referenceRows = Assert.Single(reference.QueryResults).Rows;
+        var idAlias = Assert.Single(artifact.ResultFields, static field =>
+            field.Field.Path == CosmosRelationQueryCompilerTests.Fixture.IdPath).Alias;
+        var statusAlias = Assert.Single(artifact.ResultFields, static field =>
+            field.Field.Path == CosmosRelationQueryCompilerTests.Fixture.StatusPath).Alias;
+        TrackingFeedIterator iterator = new(
+        [
+            Page(
+                JsonObject((idAlias, "load-2"), (statusAlias, "active")),
+                JsonObject((idAlias, "load-3"), (statusAlias, "active")))
+        ]);
+        CosmosRelationQueryArtifactExecutor executor = new(
+            new CosmosJsonQueryFeedReader(
+                artifact.StorageBinding.AccountEndpoint,
+                artifact.StorageBinding.DatabaseName,
+                artifact.StorageBinding.ContainerName,
+                (_, _) => iterator));
+        CosmosRelationQueryArtifactExecutionRequest request = new(
+            compilerFixture.PlanReference,
+            compilerFixture.Realization.Fingerprint,
+            compilerFixture.Placement.Fingerprint,
+            artifact.StorageBinding.Fingerprint,
+            artifact,
+            maximumRows: 25,
+            parameters);
+
+        var result = await executor.ExecuteAsync(request);
+
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
+        Assert.Equal(
+            referenceRows.Select(static row => row.Value.GetRawText()),
+            result.Rows.Select(static row => row.Value.GetRawText()));
+        Assert.True(iterator.Disposed);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_StructuredCollectionAny_MatchesReferenceForSameSplitAndEmptyEvidence()
     {
         var compilerFixture = CosmosRelationQueryCompilerTests.Fixture.StructuredCollectionAny();
@@ -1287,7 +1337,7 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
         Assert.NotEqual(artifact.Fingerprint, changedProvenanceFingerprint);
         Assert.NotEqual(artifact.Fingerprint, changedAuxiliaryFingerprint);
         Assert.NotEqual(artifact.Fingerprint, changedPlanFingerprint);
-        Assert.EndsWith("/v4", artifact.Fingerprint.Canonicalization, StringComparison.Ordinal);
+        Assert.EndsWith("/v5", artifact.Fingerprint.Canonicalization, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1428,7 +1478,9 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
         Assert.Contains("exact Cosmos representation", exception.Message, StringComparison.Ordinal);
     }
 
-    static RelationQueryRuntimeEvidence CreateThreeActiveLoadEvidence(CompiledRelationQueryPlan plan)
+    static RelationQueryRuntimeEvidence CreateThreeActiveLoadEvidence(
+        CompiledRelationQueryPlan plan,
+        IReadOnlyDictionary<QueryParameterId, ObservationValue>? parameterValues = null)
     {
         var source = Assert.Single(plan.InputContract.Sources);
         ImmutableArray<RelationQueryObservationOccurrence> occurrences =
@@ -1464,10 +1516,13 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
             fields: fields.MoveToImmutable(),
             parameters:
             [
-                .. plan.InputContract.Parameters.Select(static parameter => new RelationQueryParameterEvidence(
+                .. plan.InputContract.Parameters.Select(parameter => new RelationQueryParameterEvidence(
                     parameter.Input.Id,
                     RelationQueryParameterEvidenceState.Provided,
-                    ObservationValue.FromString("active")))
+                    parameterValues is not null
+                    && parameterValues.TryGetValue(parameter.Input.Parameter, out var value)
+                        ? value
+                        : ObservationValue.FromString("active")))
             ],
             capabilities:
             [

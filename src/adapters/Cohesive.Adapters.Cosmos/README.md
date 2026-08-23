@@ -121,7 +121,7 @@ illustrative fragment below assumes `plan`, `loadShape`, an SDK `loadsContainer`
 a `cancellationToken`; the authored query requests both a row branch and an aggregation branch. Source placement
 and the Cosmos storage binding are separate persisted interpretations of that plan. The Cosmos adapter supplies a
 conservative target profile and policy. The realization must explicitly request value results without
-contributor-occurrence lineage because Cosmos SQL v2 does not reconstruct source occurrence identities:
+contributor-occurrence lineage because Cosmos SQL v3 does not reconstruct source occurrence identities:
 
 Profile feasibility establishes what the Cosmos target family could support. `Realize(...)` then qualifies that
 profile against the exact placement, container binding, field evidence, and compiler policy. Only the resulting
@@ -392,16 +392,18 @@ demand-scoped compiled plan and accepts only the exact native variants described
 variant produces an attributable `REL22xx` diagnostic; successful capability realization alone is not a promise
 that every shape of the operation has a Cosmos-native lowering.
 
-### Exact v2 Semantic Envelope
+### Exact v3 Semantic Envelope
 
-The default `cohesive.adapters.cosmos.sql/canonical-v2` profile and compiler support only the closure they can
+The default `cohesive.adapters.cosmos.sql/canonical-v3` profile and compiler support only the closure they can
 currently prove exact:
 
 - One placed source set bound to one Cosmos container, with no relationship traversal or cross-source stage.
 - Named query-row and query-aggregation terminals. Canonical relation terminals remain deferred; the executor can
   reconstruct a retained relation identity when consuming an independently supplied valid artifact contract.
 - Demand-selected source fields, filters, projection, conservatively proven whole-row `DISTINCT`, supported
-  aggregates, ordering, and offset paging in the compiler's validated pipeline order. Unordered ordinary row
+  aggregates, ordering, offset paging, and non-null keyset paging in the compiler's validated pipeline order.
+  Keyset continuations lower to a strict lexicographic predicate over the complete order tuple, honor each key's
+  ascending or descending direction, and require a stable unique final key. Unordered ordinary row
   branches receive an identity-path order only when the binding supplies exact physical ordering evidence.
 - Field and nested-field reads, invocation parameters, constants, typed field/literal sites, collection current
   items, boolean negation, supported comparisons and boolean operators, conditionals, and `contains` when their
@@ -413,8 +415,8 @@ currently prove exact:
 - Ungrouped row `COUNT` (emitted as `COUNT(1)`) when the storage binding proves
   `maximumInputRows <= 2^53 - 1`.
 
-The v2 compiler rejects unsupported topology or semantics with deterministic `REL22xx` diagnostics. Notable
-deferrals include relationship joins, relation-row output, cross-container queries, keyset paging, aggregate
+The v3 compiler rejects unsupported topology or semantics with deterministic `REL22xx` diagnostics. Notable
+deferrals include relationship joins, relation-row output, cross-container queries, nullable keyset ordering, aggregate
 filters, `COUNT(expression)`, `SUM`, ungrouped `MIN`/`MAX`, aggregate ordering or paging, `GROUP BY` combined
 with `ORDER BY`, grouped aggregation without an attributable deterministic output-order strategy, expanded row
 results without collection-element ordering evidence, unordered `DISTINCT`, precision-unsafe numeric comparison
