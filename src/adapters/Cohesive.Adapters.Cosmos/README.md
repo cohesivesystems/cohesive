@@ -525,6 +525,12 @@ semantic field then selects the entity envelope's top-level `observationVersion`
 `observation`. This convention is fingerprinted into a derived source identity and matches the in-memory entity
 source's projection from `Observation.Version`.
 
+When the query consumes a derived snapshot view, pass that view as `shape` and the canonical repository entity as
+`persistedObservationType`. The persisted type remains the exact `observationType` scope predicate and participates
+in the binding fingerprint, while custom selectors map view fields to envelope paths. This keeps metadata such as
+`observationVersion` outside the durable domain payload and gives Cosmos and in-memory registrations the same
+source-view semantics. A source view is derived acquisition structure, not a second entity authority.
+
 Every read includes document-kind, observation-type, and payload-presence predicates so a container shared with
 outbox documents cannot widen the logical entity source. A customized discriminator must be the exact value used by
 the repository. The following illustrative fragment assumes `loadShape`, `entitiesContainer`, `services`, and

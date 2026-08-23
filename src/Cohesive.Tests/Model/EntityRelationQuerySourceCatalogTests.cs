@@ -132,7 +132,7 @@ public sealed class EntityRelationQuerySourceCatalogTests
         var otherShapeSameSource = new EntityRelationQuerySourceRegistration(
             new(new("tests/other-graph"), fixture.SourceShape.Id.ShapeId),
             first.Source,
-            first.Reader);
+            new StubReader(first.Reader.Descriptor));
         var mismatchedReader = new StubReader(new(
             new("source/foreign"),
             first.Source.ExecutionDomain,
@@ -141,6 +141,10 @@ public sealed class EntityRelationQuerySourceCatalogTests
 
         Assert.Throws<ArgumentException>(() => new EntityRelationQuerySourceCatalog([first, second]));
         Assert.Throws<ArgumentException>(() => new EntityRelationQuerySourceCatalog([first, otherShapeSameSource]));
+        Assert.Throws<ArgumentException>(() => new EntityRelationQuerySourceRegistration(
+            new(new("tests/other-graph"), fixture.SourceShape.Id.ShapeId),
+            first.Source,
+            first.Reader));
         Assert.Throws<ArgumentException>(() => new EntityRelationQuerySourceRegistration(
             first.Shape,
             first.Source,
@@ -229,6 +233,89 @@ public sealed class EntityRelationQuerySourceCatalogTests
         var result = Assert.IsType<RelationQueryExecutionResult>(outcome.Result);
         var resultRows = Assert.Single(result.QueryResults).Rows;
         Assert.Equal(["load-b", "load-c"], resultRows.Select(static row => row.Value.GetProperty("id").String));
+        Assert.Equal([2L, 3L], resultRows.Select(static row => row.Value.GetProperty("sourceEntityVersion").Int64));
+    }
+
+    [Fact]
+    public async Task CatalogEvaluator_ProjectsMetadataEnrichedViewWithoutChangingEntityPayloadShape()
+    {
+        var author = RelationQuery.Expression();
+        var entityShape = author.Clr.Shape<StoredLoad>();
+        var viewShape = author.Clr.Shape<StoredLoadSourceView>();
+        var loads = author.Source(viewShape);
+        var filtered = author.Filter(
+            loads.Node,
+            (StoredLoadSourceView view) => view.SourceEntityVersion >= 2,
+            loads.Binding);
+        var projected = author.Project(
+            filtered,
+            (StoredLoadSourceView view) => new StoredLoadSourceViewRow
+            {
+                Id = view.Source.Id,
+                Name = view.Source.Name,
+                SourceEntityVersion = view.SourceEntityVersion
+            },
+            loads.Binding);
+        var ordered = author.Order(
+            projected.Node,
+            (StoredLoadSourceViewRow row) => row.SourceEntityVersion,
+            projected.Binding);
+        var rows = author.Rows(ordered, projected.Binding, id: new("rows"));
+        var query = author.BuildQuery(
+            new("tests/storage/entity-source-view-query"),
+            new("StorageEntitySourceViewQuery"),
+            rows);
+        var evaluation = author.Evaluate(
+            query,
+            new("tests/storage/entity-source-view-query/evaluation")).Build();
+        var canonicalEntityShape = entityShape.Document.Graph.GetShape(entityShape.Id);
+        var repositoryEntityShape = new Shape(
+            canonicalEntityShape.Id,
+            canonicalEntityShape.Fields,
+            canonicalEntityShape.Constraints,
+            canonicalEntityShape.Annotations,
+            role: ShapeRoles.Entity);
+        var repository = new InMemoryEntityOutboxRepository(
+            new EntityDefinition(new(repositoryEntityShape.Id.Value), repositoryEntityShape),
+            partitionKeyFieldName: "tenantId",
+            seedSnapshots:
+            [
+                StoredLoadSnapshot(repositoryEntityShape.Id, "load-c", "Charlie", version: 3),
+                StoredLoadSnapshot(repositoryEntityShape.Id, "load-a", "Alpha", version: 1),
+                StoredLoadSnapshot(repositoryEntityShape.Id, "load-b", "Beta", version: 2)
+            ]);
+        var registration = EntityRelationQuerySourceRegistration.InMemory(
+            viewShape.Id,
+            repository,
+            RelationQueryLogicalPartitionIdentity.WholeSource,
+            source: new("source/tests/storage/entity-source-view/v1"),
+            fieldSourceSelector: SourceViewPayloadSelector,
+            observationVersionSemanticPath: FieldPath.FromField("sourceEntityVersion"),
+            persistedObservationType: entityShape.Id);
+        Assert.Throws<ArgumentException>(() => EntityRelationQuerySourceRegistration.InMemory(
+            viewShape.Id,
+            repository,
+            RelationQueryLogicalPartitionIdentity.WholeSource,
+            fieldSourceSelector: SourceViewPayloadSelector,
+            observationVersionSemanticPath: FieldPath.FromField("sourceEntityVersion"),
+            persistedObservationType: entityShape.Id));
+        Assert.Throws<ArgumentException>(() => EntityRelationQuerySourceRegistration.InMemory(
+            viewShape.Id,
+            repository,
+            RelationQueryLogicalPartitionIdentity.WholeSource,
+            persistedObservationType: new(new("tests/storage/foreign/v1"), new("ForeignEntity"))));
+        var evaluator = new EntityRelationQuerySourceCatalog([registration]).CreateEvaluator(Policy());
+
+        var outcome = await evaluator.EvaluateAsync(evaluation);
+
+        Assert.True(
+            outcome.IsSuccessful,
+            string.Join(Environment.NewLine, outcome.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+        Assert.Equal(entityShape.Id, registration.PersistedObservationType);
+        Assert.Equal(viewShape.Id, registration.Shape);
+        var resultRows = Assert.Single(Assert.IsType<RelationQueryExecutionResult>(outcome.Result).QueryResults).Rows;
+        Assert.Equal(["load-b", "load-c"], resultRows.Select(static row => row.Value.GetProperty("id").String));
+        Assert.Equal(["Beta", "Charlie"], resultRows.Select(static row => row.Value.GetProperty("name").String));
         Assert.Equal([2L, 3L], resultRows.Select(static row => row.Value.GetProperty("sourceEntityVersion").Int64));
     }
 
@@ -445,6 +532,35 @@ public sealed class EntityRelationQuerySourceCatalogTests
         "tenant-a",
         new($"seed/{id}"));
 
+    static EntitySnapshot StoredLoadSnapshot(ShapeId shape, string id, string name, long version) => new(
+        new(
+            shape,
+            id,
+            new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                ["id"] = ObservationValue.FromString(id),
+                ["name"] = ObservationValue.FromString(name),
+                ["tenantId"] = ObservationValue.FromString("tenant-a")
+            },
+            version),
+        "tenant-a",
+        new($"seed/{id}"));
+
+    static string SourceViewPayloadSelector(FieldPath semanticPath)
+    {
+        var segments = semanticPath.Segments;
+        if (segments.Length < 2
+            || segments[0].Kind != SegmentKind.Field
+            || !string.Equals(segments[0].Segment, "source", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Source-view payload field '{semanticPath}' must be nested below 'source'.",
+                nameof(semanticPath));
+        }
+
+        return new FieldPath([.. segments.Skip(1)]).ToString();
+    }
+
     static StoredLoad Stored(string id, string name) => new()
     {
         Id = id,
@@ -516,6 +632,27 @@ public sealed class EntityRelationQuerySourceCatalogTests
     {
         [JsonPropertyName("id")]
         public required string Id { get; init; }
+
+        [JsonPropertyName("sourceEntityVersion")]
+        public long SourceEntityVersion { get; init; }
+    }
+
+    sealed record StoredLoadSourceView
+    {
+        [JsonPropertyName("source")]
+        public required StoredLoad Source { get; init; }
+
+        [JsonPropertyName("sourceEntityVersion")]
+        public long SourceEntityVersion { get; init; }
+    }
+
+    sealed record StoredLoadSourceViewRow
+    {
+        [JsonPropertyName("id")]
+        public required string Id { get; init; }
+
+        [JsonPropertyName("name")]
+        public required string Name { get; init; }
 
         [JsonPropertyName("sourceEntityVersion")]
         public long SourceEntityVersion { get; init; }

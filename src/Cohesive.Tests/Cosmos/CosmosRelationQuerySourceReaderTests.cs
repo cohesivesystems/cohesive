@@ -4,11 +4,14 @@ using System.Net;
 using System.Text.Json;
 using Cohesive.Adapters.Cosmos;
 using Cohesive.Relations.Acquisition;
+using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
+using Cohesive.Relations.Execution;
 using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Storage;
+using System.Text.Json.Serialization;
 using Microsoft.Azure.Cosmos;
 
 namespace Cohesive.Tests.Cosmos;
@@ -22,6 +25,191 @@ public sealed class CosmosRelationQuerySourceReaderTests
     static readonly FieldPath StopsPath = FieldPath.FromField("Stops");
     static readonly FieldPath LocationIdPath = FieldPath.FromField("locationId");
     static readonly FieldPath VersionPath = FieldPath.FromField("SourceEntityVersion");
+
+    [Fact]
+    public async Task SourceView_ProjectsPayloadAndVersionFromExactPersistedObservationType()
+    {
+        var viewShape = new QualifiedShapeId(new("tests/cosmos-source-view/v1"), new("VersionedLoadView"));
+        var sourceNamePath = FieldPath.Parse("Source.Name");
+        RecordingFeedFactory feed = new();
+        feed.Enqueue(Json("""{"_identity":"load-a","_field0":"Alpha","_field1":7}"""));
+        var fixture = CreateFixture(
+            feed,
+            FixedPolicy(),
+            fieldSourceSelector: path => path == sourceNamePath
+                ? "observation.Name"
+                : throw new ArgumentException($"Unexpected source-view path '{path}'.", nameof(path)),
+            observationVersionSemanticPath: VersionPath,
+            shape: viewShape,
+            persistedObservationType: Shape);
+
+        var result = await fixture.Reader.ReadAsync(Request(
+            fixture,
+            [SemanticField(fixture, sourceNamePath), SemanticField(fixture, VersionPath)],
+            new RelationQueryBoundedEnumeration(maximumRows: 10)));
+
+        Assert.Equal(viewShape, fixture.Reader.Shape);
+        Assert.Equal(Shape, fixture.Reader.PersistedObservationType);
+        Assert.Equal("Alpha", result.Observations.Single().Fields[0].Value!.Value.String);
+        Assert.Equal(7, result.Observations.Single().Fields[1].Value!.Value.Int64);
+        var query = Assert.Single(feed.Queries).Query.QueryText;
+        Assert.Contains("c[\"observation\"][\"Name\"]", query, StringComparison.Ordinal);
+        Assert.Contains("c[\"observationVersion\"]", query, StringComparison.Ordinal);
+        Assert.Contains("c[\"observationType\"]", query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SourceView_PortableQueryHasEquivalentInMemoryAndCosmosSemantics()
+    {
+        var author = RelationQuery.Expression();
+        var entityShape = author.Clr.Shape<ConformanceLoad>();
+        var viewShape = author.Clr.Shape<ConformanceLoadSourceView>();
+        var source = author.Source(viewShape);
+        var filtered = author.Filter(
+            source.Node,
+            (ConformanceLoadSourceView view) => view.SourceEntityVersion >= 2,
+            source.Binding);
+        var projected = author.Project(
+            filtered,
+            (ConformanceLoadSourceView view) => new ConformanceLoadRow
+            {
+                Id = view.Source.Id,
+                Name = view.Source.Name,
+                SourceEntityVersion = view.SourceEntityVersion
+            },
+            source.Binding);
+        var ordered = author.Order(
+            projected.Node,
+            (ConformanceLoadRow row) => row.SourceEntityVersion,
+            projected.Binding);
+        var rows = author.Rows(ordered, projected.Binding, id: new("rows"));
+        var query = author.BuildQuery(
+            new("tests/cosmos/entity-source-view-conformance"),
+            new("EntitySourceViewConformance"),
+            rows);
+        var evaluation = author.Evaluate(
+            query,
+            new("tests/cosmos/entity-source-view-conformance/evaluation")).Build();
+        var compilation = RelationQueryStaticCompiler.Compile(evaluation.Compilation);
+        Assert.True(
+            compilation.IsSuccessful,
+            string.Join(Environment.NewLine, compilation.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+        var plan = Assert.IsType<CompiledRelationQueryPlan>(compilation.Plan);
+        var canonicalEntityShape = entityShape.Document.Graph.GetShape(entityShape.Id);
+        var repositoryShape = new Shape(
+            canonicalEntityShape.Id,
+            canonicalEntityShape.Fields,
+            canonicalEntityShape.Constraints,
+            canonicalEntityShape.Annotations,
+            role: ShapeRoles.Entity);
+        EntitySnapshot[] snapshots =
+        [
+            ConformanceSnapshot(repositoryShape.Id, "load-c", "Charlie", version: 3),
+            ConformanceSnapshot(repositoryShape.Id, "load-a", "Alpha", version: 1),
+            ConformanceSnapshot(repositoryShape.Id, "load-b", "Beta", version: 2)
+        ];
+        var repository = new InMemoryEntityOutboxRepository(
+            new EntityDefinition(new(repositoryShape.Id.Value), repositoryShape),
+            partitionKeyFieldName: "tenantId",
+            seedSnapshots: snapshots);
+        var inMemoryRegistration = EntityRelationQuerySourceRegistration.InMemory(
+            viewShape.Id,
+            repository,
+            RelationQueryLogicalPartitionIdentity.WholeSource,
+            source: new("source/tests/entity-source-view/in-memory/v1"),
+            fieldSourceSelector: SourceViewPayloadSelector,
+            observationVersionSemanticPath: FieldPath.FromField("sourceEntityVersion"),
+            persistedObservationType: entityShape.Id);
+        var physicalPolicy = SourceViewPhysicalPolicy();
+        var inMemoryOutcome = await new EntityRelationQuerySourceCatalog([inMemoryRegistration])
+            .CreateEvaluator(physicalPolicy)
+            .EvaluateAsync(evaluation);
+
+        RecordingFeedFactory feed = new();
+        var cosmosPolicy = new CosmosRelationQuerySourcePolicy(
+            partitionSourceSelector: "partitionKey",
+            logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
+            CosmosRelationQueryCrossPartitionPolicy.AllowBoundedQueries,
+            readConsistencyLevel: ConsistencyLevel.Strong);
+        var cosmosSource = new RelationQuerySourceInstance(
+            new("source/tests/entity-source-view/cosmos/v1"),
+            new("domain/tests/entity-source-view/cosmos/v1"),
+            CosmosRelationQuerySourceReader.TargetProfile,
+            cosmosPolicy.GetEffectivePlacementLimits(CosmosRelationQuerySourceReader.DefaultLimits));
+        var cosmosReader = new CosmosRelationQuerySourceReader(
+            viewShape.Id,
+            cosmosSource,
+            new CosmosJsonQueryFeedReader(
+                new Uri("https://tests.invalid"),
+                "operations",
+                "entities",
+                feed.Create),
+            "https://tests.invalid",
+            "operations",
+            "entities",
+            cosmosPolicy,
+            fieldSourceSelector: CosmosSourceViewPayloadSelector,
+            persistedObservationType: entityShape.Id,
+            observationVersionSemanticPath: FieldPath.FromField("sourceEntityVersion"));
+        var cosmosRegistration = new EntityRelationQuerySourceRegistration(
+            viewShape.Id,
+            cosmosSource,
+            cosmosReader,
+            identitySourceSelector: cosmosReader.IdentitySourceSelector,
+            fieldSourceSelector: cosmosReader.FieldSourceSelector,
+            relationshipKeySourceSelector: cosmosReader.RelationshipKeySourceSelector,
+            observationVersionSemanticPath: FieldPath.FromField("sourceEntityVersion"),
+            persistedObservationType: entityShape.Id);
+        var cosmosCatalog = new EntityRelationQuerySourceCatalog([cosmosRegistration]);
+        var sourceBinding = Assert.Single(cosmosCatalog.Resolve(plan).Bindings);
+        List<JsonElement> providerRows = [];
+        foreach (var snapshot in snapshots)
+        {
+            Dictionary<string, object?> row = new(StringComparer.Ordinal)
+            {
+                ["_identity"] = snapshot.Entity.Id,
+                ["_partition"] = "tenant-a"
+            };
+            for (var index = 0; index < sourceBinding.Fields.Length; index++)
+            {
+                var field = sourceBinding.Fields[index];
+                row[$"_field{index}"] = field.SemanticPath.ToString() switch
+                {
+                    "source.id" => snapshot.Entity.Id,
+                    "source.name" => snapshot.Entity.Fields["name"].String,
+                    "sourceEntityVersion" => snapshot.Entity.Version,
+                    var path => throw new InvalidOperationException($"Unexpected conformance field '{path}'.")
+                };
+            }
+            providerRows.Add(Json(JsonSerializer.Serialize(row)));
+        }
+        feed.Enqueue([.. providerRows]);
+        var cosmosOutcome = await cosmosCatalog
+            .CreateEvaluator(physicalPolicy)
+            .EvaluateAsync(evaluation);
+
+        Assert.True(
+            inMemoryOutcome.IsSuccessful,
+            string.Join(Environment.NewLine, inMemoryOutcome.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+        Assert.True(
+            cosmosOutcome.IsSuccessful,
+            string.Join(
+                Environment.NewLine,
+                cosmosOutcome.Diagnostics.Select(static diagnostic => diagnostic.Message)
+                    .Concat(cosmosOutcome.PhysicalPlanning?.Diagnostics.Select(static diagnostic => diagnostic.Message) ?? [])
+                    .Concat(cosmosOutcome.PhysicalExecution?.Diagnostics.Select(static diagnostic => diagnostic.Message) ?? [])
+                    .Concat(cosmosOutcome.PhysicalExecution?.SourceReads.Select(static read =>
+                        $"{read.Stage.Value}: {read.State} ({read.ReturnedRows}) {read.EvidenceReference}") ?? [])));
+        var inMemoryRows = Assert.Single(
+            Assert.IsType<RelationQueryExecutionResult>(inMemoryOutcome.Result).QueryResults).Rows;
+        var cosmosRows = Assert.Single(
+            Assert.IsType<RelationQueryExecutionResult>(cosmosOutcome.Result).QueryResults).Rows;
+        Assert.Equal(
+            inMemoryRows.Select(static row => row.Value.GetProperty("id").String),
+            cosmosRows.Select(static row => row.Value.GetProperty("id").String));
+        Assert.Equal(["load-b", "load-c"], cosmosRows.Select(static row => row.Value.GetProperty("id").String));
+        Assert.Equal([2L, 3L], cosmosRows.Select(static row => row.Value.GetProperty("sourceEntityVersion").Int64));
+    }
 
     [Fact]
     public async Task ObservationVersionProjection_SelectsExactEntityEnvelopeMetadata()
@@ -113,6 +301,21 @@ public sealed class CosmosRelationQuerySourceReaderTests
             "operations",
             "entities",
             policy);
+        var viewShape = new QualifiedShapeId(new("tests/cosmos-source-view/v1"), new("VersionedLoadView"));
+        var sourceView = CosmosEntityRelationQuerySourceRegistration.Create(
+            viewShape,
+            container,
+            "operations",
+            "entities",
+            policy,
+            persistedObservationType: Shape);
+        var otherPersistedTypeView = CosmosEntityRelationQuerySourceRegistration.Create(
+            viewShape,
+            container,
+            "operations",
+            "entities",
+            policy,
+            persistedObservationType: new(new("tests/cosmos-source/v1"), new("OtherLoad")));
         var reader = Assert.IsType<CosmosRelationQuerySourceReader>(first.Reader);
         ServiceCollection services = new();
         services.RegisterEntityRelationQuerySource(first);
@@ -134,6 +337,10 @@ public sealed class CosmosRelationQuerySourceReaderTests
         Assert.Equal("entities", reader.ContainerId);
         Assert.Same(first, registered);
         Assert.NotEqual(first.Source.Id, payloadOnly.Source.Id);
+        Assert.Equal(Shape, sourceView.PersistedObservationType);
+        Assert.Equal(Shape, Assert.IsType<CosmosRelationQuerySourceReader>(sourceView.Reader).PersistedObservationType);
+        Assert.NotEqual(first.Source.Id, sourceView.Source.Id);
+        Assert.NotEqual(sourceView.Source.Id, otherPersistedTypeView.Source.Id);
         Assert.Throws<ArgumentException>(() => CosmosEntityRelationQuerySourceRegistration.Create(
             Shape,
             container,
@@ -1151,13 +1358,57 @@ public sealed class CosmosRelationQuerySourceReaderTests
         fixedPartitionKey: new("tenant-a"),
         readConsistencyLevel: ConsistencyLevel.Strong);
 
+    static RelationQueryPhysicalPlanningPolicy SourceViewPhysicalPolicy() => new(
+        new("tests/entity-source-view/physical-policy/v1"),
+        conventionSetVersion: "tests/entity-source-view/conventions/v1",
+        maximumBatchSize: 100,
+        maximumBufferedRows: 1_000,
+        maximumLocalRows: 1_000,
+        maximumFanOut: 100,
+        maximumReferenceKeysPerObservation: 100,
+        maximumConcurrency: 4);
+
+    static EntitySnapshot ConformanceSnapshot(ShapeId shape, string id, string name, long version) => new(
+        new(
+            shape,
+            id,
+            new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                ["id"] = ObservationValue.FromString(id),
+                ["name"] = ObservationValue.FromString(name),
+                ["tenantId"] = ObservationValue.FromString("tenant-a")
+            },
+            version),
+        "tenant-a",
+        new($"seed/{id}"));
+
+    static string SourceViewPayloadSelector(FieldPath semanticPath)
+    {
+        var segments = semanticPath.Segments;
+        if (segments.Length < 2
+            || segments[0].Kind != SegmentKind.Field
+            || !string.Equals(segments[0].Segment, "source", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Source-view payload field '{semanticPath}' must be nested below 'source'.",
+                nameof(semanticPath));
+        }
+
+        return new FieldPath([.. segments.Skip(1)]).ToString();
+    }
+
+    static string CosmosSourceViewPayloadSelector(FieldPath semanticPath) =>
+        $"observation.{SourceViewPayloadSelector(semanticPath)}";
+
     static ReaderFixture CreateFixture(
         RecordingFeedFactory feed,
         CosmosRelationQuerySourcePolicy policy,
         RelationQuerySourcePlacementLimits? limits = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         bool constrainLimits = true,
-        FieldPath? observationVersionSemanticPath = null)
+        FieldPath? observationVersionSemanticPath = null,
+        QualifiedShapeId? shape = null,
+        QualifiedShapeId? persistedObservationType = null)
     {
         var configuredLimits = limits ?? CosmosRelationQuerySourceReader.DefaultLimits;
         var effectiveLimits = constrainLimits
@@ -1174,7 +1425,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
             "entities",
             feed.Create);
         CosmosRelationQuerySourceReader reader = new(
-            Shape,
+            shape ?? Shape,
             source,
             feedReader,
             "https://tests.invalid",
@@ -1182,6 +1433,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
             "entities",
             policy,
             fieldSourceSelector: fieldSourceSelector,
+            persistedObservationType: persistedObservationType,
             observationVersionSemanticPath: observationVersionSemanticPath);
         return new(source, reader);
     }
@@ -1207,7 +1459,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
         new("read/source"),
         new("placement/source"),
         fixture.Source.Id,
-        Shape,
+        fixture.Reader.Shape,
         fixture.Reader.IdentitySourceSelector,
         fields,
         constraint,
@@ -1218,6 +1470,39 @@ public sealed class CosmosRelationQuerySourceReaderTests
     sealed record ReaderFixture(
         RelationQuerySourceInstance Source,
         CosmosRelationQuerySourceReader Reader);
+
+    sealed record ConformanceLoad
+    {
+        [JsonPropertyName("id")]
+        public required string Id { get; init; }
+
+        [JsonPropertyName("name")]
+        public required string Name { get; init; }
+
+        [JsonPropertyName("tenantId")]
+        public required string TenantId { get; init; }
+    }
+
+    sealed record ConformanceLoadSourceView
+    {
+        [JsonPropertyName("source")]
+        public required ConformanceLoad Source { get; init; }
+
+        [JsonPropertyName("sourceEntityVersion")]
+        public long SourceEntityVersion { get; init; }
+    }
+
+    sealed record ConformanceLoadRow
+    {
+        [JsonPropertyName("id")]
+        public required string Id { get; init; }
+
+        [JsonPropertyName("name")]
+        public required string Name { get; init; }
+
+        [JsonPropertyName("sourceEntityVersion")]
+        public long SourceEntityVersion { get; init; }
+    }
 
     sealed class RecordingFeedFactory
     {

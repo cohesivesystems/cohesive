@@ -135,6 +135,38 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
     }
 
     [Fact]
+    public async Task CustomSelectors_ReadTheDeclaredPhysicalPayloadPaths()
+    {
+        var physicalName = FieldPath.FromField("PhysicalName");
+        var physicalCustomerIds = FieldPath.FromField("PhysicalCustomerIds");
+        var fixture = CreateFixture(
+            snapshots:
+            [
+                Snapshot(
+                    "entity-a",
+                    ("PhysicalName", ObservationValue.FromString("Alpha")),
+                    ("PhysicalCustomerIds", ObservationValue.FromString("customer-1")))
+            ],
+            fieldSourceSelector: path => path == NamePath
+                ? physicalName.ToString()
+                : path.ToString(),
+            relationshipKeySourceSelector: path => path == CustomerIdsPath
+                ? physicalCustomerIds.ToString()
+                : path.ToString());
+
+        var projected = await fixture.Reader.ReadAsync(Request(
+            fixture,
+            [SemanticField(fixture, NamePath)],
+            new RelationQueryBoundedEnumeration(maximumRows: 10)));
+        var related = await fixture.Reader.ReadAsync(RelationshipRequest(
+            fixture,
+            fixture.Registration.RelationshipKeySourceSelector(CustomerIdsPath)));
+
+        Assert.Equal("Alpha", projected.Observations.Single().Fields.Single().Value!.Value.String);
+        Assert.Equal("entity-a", related.Observations.Single().Identity);
+    }
+
+    [Fact]
     public async Task IdentityBatch_ReturnsCompleteSubsetNotFoundAndBoundaryEvidence()
     {
         var fixture = CreateFixture(
