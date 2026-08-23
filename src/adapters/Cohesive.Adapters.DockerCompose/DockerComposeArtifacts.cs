@@ -260,11 +260,14 @@ public sealed record DockerComposeOperationMapping
 /// <summary>Canonical provenance manifest adjacent to emitted Compose YAML.</summary>
 public sealed record DockerComposeArtifactManifest
 {
+    /// <summary>Current Docker Compose lifecycle-interpreter identity.</summary>
+    public const string CurrentTarget = "docker-compose/v2";
+
     /// <summary>Current manifest schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-docker-compose-manifest/v1";
+    public const string CurrentSchemaVersion = "cohesive-docker-compose-manifest/v2";
 
     /// <summary>Current deterministic compiler identity.</summary>
-    public const string CurrentCompiler = "cohesive.adapters.docker-compose/v1";
+    public const string CurrentCompiler = "cohesive.adapters.docker-compose/v2";
 
     /// <summary>Creates a Compose artifact manifest.</summary>
     /// <param name="schemaVersion">Exact manifest schema.</param>
@@ -283,6 +286,7 @@ public sealed record DockerComposeArtifactManifest
     /// <param name="volumes">Canonical volume mappings.</param>
     /// <param name="configs">Canonical generated-config mappings.</param>
     /// <param name="operations">Retained operation mappings.</param>
+    /// <param name="decisions">Inspectable target lowering decisions.</param>
     /// <param name="maximumLifetime">Optional environment deadline requiring lifecycle-runner enforcement.</param>
     /// <exception cref="ArgumentNullException">A required reference or string is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">A schema, compiler, project name, or collection is malformed.</exception>
@@ -305,6 +309,7 @@ public sealed record DockerComposeArtifactManifest
         ImmutableArray<DockerComposeVolumeMapping> volumes,
         ImmutableArray<DockerComposeConfigMapping> configs,
         ImmutableArray<DockerComposeOperationMapping> operations,
+        ImmutableArray<InfrastructureLocalTargetDecision> decisions,
         TimeSpan? maximumLifetime = null)
     {
         SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
@@ -337,6 +342,9 @@ public sealed record DockerComposeArtifactManifest
         Volumes = Normalize(volumes, static item => item.VolumeName, nameof(volumes));
         Configs = Normalize(configs, static item => item.ConfigName, nameof(configs));
         Operations = Normalize(operations, static item => item.Operation.Value, nameof(operations));
+        Decisions = Normalize(decisions, static item => item.Concern, nameof(decisions));
+        if (Decisions.Any(static decision => !string.Equals(decision.Target, CurrentTarget, StringComparison.Ordinal)))
+            throw new ArgumentException("Compose manifest decisions must identify the current Docker Compose target.", nameof(decisions));
         if (maximumLifetime.HasValue && maximumLifetime.Value <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(maximumLifetime), maximumLifetime, "Maximum lifetime must be positive.");
         MaximumLifetime = maximumLifetime;
@@ -389,6 +397,9 @@ public sealed record DockerComposeArtifactManifest
 
     /// <summary>Retained operation mappings in operation-identity order.</summary>
     public ImmutableArray<DockerComposeOperationMapping> Operations { get; }
+
+    /// <summary>Inspectable target lowering decisions.</summary>
+    public ImmutableArray<InfrastructureLocalTargetDecision> Decisions { get; }
 
     /// <summary>Optional environment deadline requiring lifecycle-runner enforcement.</summary>
     public TimeSpan? MaximumLifetime { get; }

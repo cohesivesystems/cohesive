@@ -88,6 +88,8 @@ public static class FreightMaterializationInfrastructure
         public static InfrastructureSettingId ElasticsearchJavaOptions { get; } = new("elasticsearch-java-options");
         /// <summary>Kibana host port.</summary>
         public static InfrastructureSettingId KibanaPort { get; } = new("kibana-port");
+        /// <summary>Kibana Node.js runtime options.</summary>
+        public static InfrastructureSettingId KibanaNodeOptions { get; } = new("kibana-node-options");
         /// <summary>pgAdmin host port.</summary>
         public static InfrastructureSettingId PgAdminPort { get; } = new("pgadmin-port");
         /// <summary>pgAdmin login email.</summary>
@@ -200,6 +202,7 @@ public static class FreightMaterializationInfrastructure
             .Environment("SERVER_HOST", new InfrastructureLocalLiteralValue("0.0.0.0"))
             .Environment("XPACK_SECURITY_ENABLED", new InfrastructureLocalLiteralValue("false"))
             .Environment("TELEMETRY_ENABLED", new InfrastructureLocalLiteralValue("false"))
+            .Environment("NODE_OPTIONS", Configuration(Settings.KibanaNodeOptions))
             .Endpoint(id: new("ui"), scheme: "http", containerPort: 5601, exposure: InfrastructureLocalEndpointExposure.HostLoopback, role: InfrastructureLocalEndpointRole.UserInterface, hostPort: Configuration(Settings.KibanaPort))
             .HttpHealth(endpoint: new("ui"), path: "/api/status")
             .HealthTiming(interval: TimeSpan.FromSeconds(5), timeout: TimeSpan.FromSeconds(5), retries: 60, startPeriod: TimeSpan.FromSeconds(30))
@@ -230,6 +233,7 @@ public static class FreightMaterializationInfrastructure
             Default(Settings.ElasticsearchPort, "59200"),
             Default(Settings.ElasticsearchJavaOptions, "-Xms512m -Xmx512m"),
             Default(Settings.KibanaPort, "55601"),
+            Default(Settings.KibanaNodeOptions, "--max-old-space-size=768"),
             Default(Settings.PgAdminPort, "55050"),
             Default(Settings.PgAdminEmail, "harness@cohesivesystems.com")
         ]);
@@ -272,6 +276,7 @@ public static class FreightMaterializationInfrastructure
             (Settings.ElasticsearchPort, "COHESIVE_HARNESS_ELASTIC_PORT"),
             (Settings.ElasticsearchJavaOptions, "COHESIVE_HARNESS_ELASTIC_JAVA_OPTS"),
             (Settings.KibanaPort, "COHESIVE_HARNESS_KIBANA_PORT"),
+            (Settings.KibanaNodeOptions, "COHESIVE_HARNESS_KIBANA_NODE_OPTIONS"),
             (Settings.PgAdminPort, "COHESIVE_HARNESS_PGADMIN_PORT"),
             (Settings.PgAdminEmail, "COHESIVE_HARNESS_PGADMIN_EMAIL")
         ];

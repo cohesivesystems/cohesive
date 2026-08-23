@@ -47,6 +47,7 @@ services:
     image: 'docker.elastic.co/kibana/kibana:8.19.13'
     environment:
       ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
+      NODE_OPTIONS: '--max-old-space-size=768'
       SERVER_HOST: '0.0.0.0'
       TELEMETRY_ENABLED: 'false'
       XPACK_SECURITY_ENABLED: 'false'

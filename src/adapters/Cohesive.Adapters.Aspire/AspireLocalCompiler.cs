@@ -156,67 +156,63 @@ public static class AspireLocalCompiler
 
         var endpoints = EndpointMappings(source, effective, serviceNames);
         var sourceReference = $"local-realization:{source.Fingerprint.Value}";
-        List<AspireTargetDecision> decisions =
+        List<InfrastructureLocalTargetDecision> decisions =
         [
             Decision(
-                concern: "aspire/dashboard-observability",
+                concern: "local/observability",
                 kind: CapabilityRealizationKind.Native,
                 rationale: "Aspire/DCP owns the dashboard, health display, resource logs, and OpenTelemetry collection.",
                 boundaries: [],
                 sourceReferences: [sourceReference, TargetReference]),
             Decision(
-                concern: "aspire/orchestration/dcp-tls",
+                concern: "local/orchestration-control-plane",
                 kind: CapabilityRealizationKind.Native,
                 rationale: options.DcpTlsCertificateMode == AspireDcpTlsCertificateMode.EphemeralSelfSigned
                     ? "DCP generates an ephemeral self-signed TLS identity so AppHost orchestration does not export host private-key material."
                     : "DCP reuses the host ASP.NET Core developer certificate for its local TLS identity.",
-                boundaries: options.DcpTlsCertificateMode == AspireDcpTlsCertificateMode.EphemeralSelfSigned
-                    ? ["The DCP TLS identity is regenerated for each AppHost run."]
-                    : ["The host developer-certificate private key must be exportable to the AppHost process."],
+                boundaries: [],
                 sourceReferences: [sourceReference, TargetReference]),
             Decision(
-                concern: "aspire/endpoints-and-discovery",
+                concern: "local/endpoints-and-discovery",
                 kind: CapabilityRealizationKind.Native,
                 rationale: "Canonical endpoints become proxyless Aspire endpoints and derived values use those same endpoint references.",
-                boundaries: ["Host-loopback ports remain fixed by exact effective Infra configuration."],
+                boundaries: [],
                 sourceReferences: [sourceReference, TargetReference]),
             Decision(
-                concern: "aspire/health/http",
+                concern: "local/health/http",
                 kind: CapabilityRealizationKind.Native,
                 rationale: "Canonical HTTP probes become Aspire endpoint health checks with exact paths and expected status codes.",
                 boundaries: [],
                 sourceReferences: [sourceReference, TargetReference]),
             Decision(
-                concern: "aspire/health/timing",
+                concern: "local/health/timing",
                 kind: CapabilityRealizationKind.Constrained,
                 rationale: "Aspire owns health-check scheduling while the exact canonical timing policy remains inspectable in every service projection.",
                 boundaries: ["Aspire 13.5.2 stable HTTP health APIs do not expose per-resource interval, timeout, retry, or start-period policy."],
                 sourceReferences: [sourceReference, TargetReference]),
             Decision(
-                concern: "aspire/operations/host",
-                kind: CapabilityRealizationKind.Native,
+                concern: "local/operations/host",
+                kind: CapabilityRealizationKind.Constrained,
                 rationale: "Read-only and application-mutation host operations become Aspire process commands visible to UI and API clients.",
                 boundaries: ["Environment mutations are lifecycle-controlled and are retained but not executed as nested harness processes."],
                 sourceReferences: [sourceReference, TargetReference]),
             Decision(
-                concern: "aspire/readiness",
+                concern: "local/readiness",
                 kind: CapabilityRealizationKind.Native,
                 rationale: "Canonical ready dependencies become Aspire WaitFor relationships.",
                 boundaries: [],
                 sourceReferences: [sourceReference, TargetReference]),
             Decision(
-                concern: "aspire/volume-lifetime",
+                concern: "local/volume-lifetime",
                 kind: CapabilityRealizationKind.Composed,
                 rationale: source.Environment.DataLifetime == InfrastructureLocalDataLifetime.Persistent
                     ? "Persistent local data uses deterministic named container volumes retained across ordinary AppHost stops."
                     : "Isolated ephemeral local data uses anonymous container volumes removed with the exact AppHost environment.",
-                boundaries: source.Environment.DataLifetime == InfrastructureLocalDataLifetime.Persistent
-                    ? []
-                    : ["An anonymous volume may be mounted by only one service."],
+                boundaries: [],
                 sourceReferences: [sourceReference, TargetReference])
         ];
         decisions.AddRange(acceptedOverrides.Select(item => Decision(
-            concern: $"aspire/health/command/{item.PhysicalResource.Value}/{item.Executable}",
+            concern: $"local/health/command/{item.PhysicalResource.Value}/{item.Executable}",
             kind: CapabilityRealizationKind.Override,
             rationale: item.Rationale,
             boundaries: ["TCP connectivity proves listener readiness, not command-level database acceptance semantics."],
@@ -556,12 +552,13 @@ public static class AspireLocalCompiler
         return normalized.ToString().TrimEnd('-');
     }
 
-    static AspireTargetDecision Decision(
+    static InfrastructureLocalTargetDecision Decision(
         string concern,
         CapabilityRealizationKind kind,
         string rationale,
         ImmutableArray<string> boundaries,
         ImmutableArray<string> sourceReferences) => new(
+        target: AspireLocalProjectionDocument.CurrentTarget,
         concern: concern,
         kind: kind,
         rationale: rationale,

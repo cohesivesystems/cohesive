@@ -1,6 +1,6 @@
 {
-  "schemaVersion": "cohesive-docker-compose-manifest/v1",
-  "compiler": "cohesive.adapters.docker-compose/v1",
+  "schemaVersion": "cohesive-docker-compose-manifest/v2",
+  "compiler": "cohesive.adapters.docker-compose/v2",
   "sourceRealization": {
     "definition": {
       "schemaVersion": "cohesive-infrastructure/v1",
@@ -32,7 +32,7 @@
   "localRealization": {
     "algorithm": "sha256",
     "canonicalization": "cohesive-infra-local-realization/v1-c14n/v1",
-    "value": "858ad9d64865a8a89789f27a9e5fc212a09461bc797757e26738e3f7dac56995"
+    "value": "413a63465f5abec8fc55dbe3e09f7d597b4e8df8d1af00a80490db06479f3a0b"
   },
   "environment": "materialization-harness/interactive/v1",
   "lifecycleAuthority": "local/materialization-harness",
@@ -87,6 +87,16 @@
         "value": "59200",
         "attribution": {
           "setting": "environment/materialization-harness/elasticsearch-port",
+          "origin": "FrameworkDefault",
+          "authority": "materialization-harness/local-defaults/v1"
+        }
+      },
+      {
+        "subject": "environment/materialization-harness",
+        "setting": "kibana-node-options",
+        "value": "--max-old-space-size=768",
+        "attribution": {
+          "setting": "environment/materialization-harness/kibana-node-options",
           "origin": "FrameworkDefault",
           "authority": "materialization-harness/local-defaults/v1"
         }
@@ -168,7 +178,7 @@
   "yamlFingerprint": {
     "algorithm": "sha256",
     "canonicalization": "cohesive-docker-compose/yaml-utf8-lf/v1",
-    "value": "2dd86078d17085ba85f5219df8045ee459ca20789874c331197faf0fe940747b"
+    "value": "50f65ecc65178cf58be04ffacc1b23cf5d677bc08b3f36fcaf0eed2d53bc5b31"
   },
   "services": [
     {
@@ -359,6 +369,109 @@
         "verify"
       ],
       "mutationAuthority": null
+    }
+  ],
+  "decisions": [
+    {
+      "target": "docker-compose/v2",
+      "concern": "local/endpoints-and-discovery",
+      "kind": "Native",
+      "rationale": "Canonical endpoints become project-network service addresses and fixed host-loopback publications.",
+      "boundaries": [],
+      "sourceReferences": [
+        "https://docs.docker.com/compose/compose-file/",
+        "local-realization:413a63465f5abec8fc55dbe3e09f7d597b4e8df8d1af00a80490db06479f3a0b"
+      ]
+    },
+    {
+      "target": "docker-compose/v2",
+      "concern": "local/health/command/local/postgres/pg_isready",
+      "kind": "Native",
+      "rationale": "The canonical PostgreSQL command probe executes directly in the Compose container.",
+      "boundaries": [],
+      "sourceReferences": [
+        "https://docs.docker.com/compose/compose-file/",
+        "local-realization:413a63465f5abec8fc55dbe3e09f7d597b4e8df8d1af00a80490db06479f3a0b"
+      ]
+    },
+    {
+      "target": "docker-compose/v2",
+      "concern": "local/health/http",
+      "kind": "Native",
+      "rationale": "Canonical HTTP probes become exact Compose healthcheck commands.",
+      "boundaries": [],
+      "sourceReferences": [
+        "https://docs.docker.com/compose/compose-file/",
+        "local-realization:413a63465f5abec8fc55dbe3e09f7d597b4e8df8d1af00a80490db06479f3a0b"
+      ]
+    },
+    {
+      "target": "docker-compose/v2",
+      "concern": "local/health/timing",
+      "kind": "Native",
+      "rationale": "Compose healthchecks preserve the canonical interval, timeout, retries, and start period.",
+      "boundaries": [],
+      "sourceReferences": [
+        "https://docs.docker.com/compose/compose-file/",
+        "local-realization:413a63465f5abec8fc55dbe3e09f7d597b4e8df8d1af00a80490db06479f3a0b"
+      ]
+    },
+    {
+      "target": "docker-compose/v2",
+      "concern": "local/observability",
+      "kind": "Constrained",
+      "rationale": "Docker Compose exposes container state and logs while the canonical UI services provide data inspection; it does not supply a unified dashboard or OpenTelemetry collector.",
+      "boundaries": [
+        "Runtime telemetry and cross-resource dashboard behavior require an additional explicit facility."
+      ],
+      "sourceReferences": [
+        "https://docs.docker.com/compose/compose-file/",
+        "local-realization:413a63465f5abec8fc55dbe3e09f7d597b4e8df8d1af00a80490db06479f3a0b"
+      ]
+    },
+    {
+      "target": "docker-compose/v2",
+      "concern": "local/operations/host",
+      "kind": "Composed",
+      "rationale": "The adjacent manifest retains canonical host operations and the harness SDK/CLI wrapper executes them against the exact Compose project.",
+      "boundaries": [],
+      "sourceReferences": [
+        "https://docs.docker.com/compose/compose-file/",
+        "local-realization:413a63465f5abec8fc55dbe3e09f7d597b4e8df8d1af00a80490db06479f3a0b"
+      ]
+    },
+    {
+      "target": "docker-compose/v2",
+      "concern": "local/orchestration-control-plane",
+      "kind": "Native",
+      "rationale": "Docker Compose v2 owns project-scoped container lifecycle through the local Docker engine.",
+      "boundaries": [],
+      "sourceReferences": [
+        "https://docs.docker.com/compose/compose-file/",
+        "local-realization:413a63465f5abec8fc55dbe3e09f7d597b4e8df8d1af00a80490db06479f3a0b"
+      ]
+    },
+    {
+      "target": "docker-compose/v2",
+      "concern": "local/readiness",
+      "kind": "Native",
+      "rationale": "Canonical ready dependencies become service_healthy Compose dependencies.",
+      "boundaries": [],
+      "sourceReferences": [
+        "https://docs.docker.com/compose/compose-file/",
+        "local-realization:413a63465f5abec8fc55dbe3e09f7d597b4e8df8d1af00a80490db06479f3a0b"
+      ]
+    },
+    {
+      "target": "docker-compose/v2",
+      "concern": "local/volume-lifetime",
+      "kind": "Composed",
+      "rationale": "Persistent data uses project-scoped named volumes retained by ordinary Compose down operations.",
+      "boundaries": [],
+      "sourceReferences": [
+        "https://docs.docker.com/compose/compose-file/",
+        "local-realization:413a63465f5abec8fc55dbe3e09f7d597b4e8df8d1af00a80490db06479f3a0b"
+      ]
     }
   ],
   "maximumLifetime": null

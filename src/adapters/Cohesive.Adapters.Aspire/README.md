@@ -1,6 +1,6 @@
 # Cohesive.Adapters.Aspire
 
-This adapter projects an exact `InfrastructureLocalRealizationDocument` into an inspectable Aspire resource graph. `Cohesive.Infra.Local` remains the semantic authority: the projection retains the exact physical-realization reference, local-realization fingerprint, environment policy, effective configuration attribution, canonical services, endpoints, health, readiness, operations, and target-specific decisions.
+This adapter projects an exact `InfrastructureLocalRealizationDocument` into an inspectable Aspire resource graph. `Cohesive.Infra.Local` remains the semantic authority: the projection retains the exact physical-realization reference, local-realization fingerprint, environment policy, effective configuration attribution, canonical services, endpoints, health, readiness, operations, and target-specific decisions. Those decisions use the shared `InfrastructureLocalTargetDecision` evidence contract and target-neutral concern identities so differential conformance can compare Aspire with other lifecycle interpreters without inventing another capability catalog.
 
 `AspireLocalCompiler.Compile` is pure and deterministic. It performs no Aspire, Docker, filesystem, network, or secret I/O. `AddCohesiveLocalInfrastructure` is the separate runtime application boundary that turns a successful projection into AppHost resources.
 

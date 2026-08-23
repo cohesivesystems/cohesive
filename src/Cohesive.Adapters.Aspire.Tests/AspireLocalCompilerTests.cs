@@ -3,6 +3,7 @@ using System.Text.Json;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Cohesive.Adapters.Aspire;
+using Cohesive.Adapters.DockerCompose;
 using Cohesive.Infra.Configuration;
 using Cohesive.Infra.Local;
 using Cohesive.MaterializationHarness.Model;
@@ -57,24 +58,116 @@ public sealed class AspireLocalCompilerTests
             endpoint.PhysicalResource == FreightMaterializationInfrastructure.KibanaService
             && endpoint.HostAddress == "http://localhost:55601");
         Assert.Contains(projection.Decisions, decision =>
-            decision.Concern == "aspire/health/timing"
+            decision.Concern == "local/health/timing"
             && decision.Kind == CapabilityRealizationKind.Constrained);
         Assert.Contains(projection.Decisions, decision =>
-            decision.Concern == "aspire/health/command/local/postgres/pg_isready"
+            decision.Concern == "local/health/command/local/postgres/pg_isready"
             && decision.Kind == CapabilityRealizationKind.Override);
         Assert.Contains(projection.Decisions, decision =>
-            decision.Concern == "aspire/dashboard-observability"
+            decision.Concern == "local/observability"
             && decision.Kind == CapabilityRealizationKind.Native);
         Assert.Equal(AspireDcpTlsCertificateMode.EphemeralSelfSigned, projection.DcpTlsCertificateMode);
         Assert.Contains(projection.Decisions, decision =>
-            decision.Concern == "aspire/orchestration/dcp-tls"
-            && decision.Boundaries.Contains("The DCP TLS identity is regenerated for each AppHost run."));
+            decision.Concern == "local/orchestration-control-plane"
+            && decision.Kind == CapabilityRealizationKind.Native
+            && decision.Boundaries.IsEmpty
+            && decision.Rationale.Contains("ephemeral self-signed TLS identity", StringComparison.Ordinal));
         Assert.Contains(projection.Operations, operation =>
             operation.Operation.Id.Value == "seed"
             && operation.Realization == AspireOperationRealization.ProcessCommand);
         Assert.Contains(projection.Operations, operation =>
             operation.Operation.Id.Value == "reset"
             && operation.Realization == AspireOperationRealization.LifecycleControl);
+    }
+
+    [Fact]
+    public void Compose_and_aspire_projections_satisfy_one_exact_local_conformance_contract()
+    {
+        var source = InteractiveSource();
+        var compose = DockerComposeCompiler.Compile(source: source).Artifact!;
+        var aspire = Compile(source).Projection!;
+
+        Assert.Equal(source.Realization, compose.Manifest.SourceRealization);
+        Assert.Equal(source.Realization, aspire.SourceRealization);
+        Assert.Equal(source.Fingerprint, compose.Manifest.LocalRealization);
+        Assert.Equal(source.Fingerprint, aspire.LocalRealization);
+        Assert.All(compose.Manifest.Decisions, static item =>
+            Assert.Equal(DockerComposeArtifactManifest.CurrentTarget, item.Target));
+        Assert.All(aspire.Decisions, static item =>
+            Assert.Equal(AspireLocalProjectionDocument.CurrentTarget, item.Target));
+        Assert.Equal(compose.Manifest.Environment, aspire.Environment.Id);
+        Assert.Equal(compose.Manifest.LifecycleAuthority, aspire.Environment.Authority);
+        Assert.Equal(compose.Manifest.DataLifetime, aspire.Environment.DataLifetime);
+        Assert.Equal(compose.Manifest.Isolation, aspire.Environment.Isolation);
+        Assert.Equal(compose.Manifest.MaximumLifetime, aspire.Environment.MaximumLifetime);
+        Assert.Equal(compose.Manifest.ProjectName, aspire.ProjectName);
+        Assert.Equal(compose.Manifest.Configuration, aspire.Configuration);
+
+        var composeServices = compose.Manifest.Services.ToDictionary(static item => item.PhysicalResource);
+        var aspireServices = aspire.Services.ToDictionary(static item => item.Service.PhysicalResource);
+        Assert.Equal(source.Topology.Services.Length, composeServices.Count);
+        Assert.Equal(source.Topology.Services.Length, aspireServices.Count);
+        foreach (var service in source.Topology.Services)
+        {
+            var composeService = composeServices[service.PhysicalResource];
+            var aspireService = aspireServices[service.PhysicalResource];
+            Assert.Equal(service.Resource, composeService.Resource);
+            Assert.Equal(service.Resource, aspireService.Service.Resource);
+            Assert.Same(service, aspireService.Service);
+            Assert.Equal(composeService.ServiceName, aspireService.ResourceName);
+            Assert.Contains($"{composeService.ServiceName}:\n    image: '{service.Image}'", compose.Yaml, StringComparison.Ordinal);
+        }
+
+        var composeEndpoints = compose.Manifest.Endpoints.ToDictionary(static item => (item.PhysicalResource, item.Endpoint));
+        var aspireEndpoints = aspire.Endpoints.ToDictionary(static item => (item.PhysicalResource, item.Endpoint.Id));
+        Assert.Equal(
+            composeEndpoints.Keys.Select(static item => $"{item.PhysicalResource.Value}/{item.Endpoint.Value}").Order(StringComparer.Ordinal),
+            aspireEndpoints.Keys.Select(static item => $"{item.PhysicalResource.Value}/{item.Id.Value}").Order(StringComparer.Ordinal));
+        foreach (var (identity, composeEndpoint) in composeEndpoints)
+        {
+            var aspireEndpoint = aspireEndpoints[identity];
+            Assert.Equal(composeEndpoint.Exposure, aspireEndpoint.Endpoint.Exposure);
+            Assert.Equal(composeEndpoint.Role, aspireEndpoint.Endpoint.Role);
+            Assert.Equal(composeEndpoint.ServiceAddress, aspireEndpoint.ServiceAddress);
+            Assert.Equal(composeEndpoint.HostAddress, aspireEndpoint.HostAddress);
+        }
+
+        Assert.Equal(
+            compose.Manifest.Volumes.Select(static item => item.Volume.Value).Order(StringComparer.Ordinal),
+            aspire.Volumes.Select(static item => item.Volume.Value).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            compose.Manifest.Configs.Select(static item => item.File.Value).Order(StringComparer.Ordinal),
+            aspire.Files.Select(static item => item.File.Value).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            compose.Manifest.Operations.Select(static item => item.Operation.Value).Order(StringComparer.Ordinal),
+            aspire.Operations.Select(static item => item.Operation.Id.Value).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            compose.Manifest.Endpoints.Where(static item => item.Role == InfrastructureLocalEndpointRole.UserInterface)
+                .Select(static item => item.HostAddress).Order(),
+            aspire.Endpoints.Where(static item => item.Endpoint.Role == InfrastructureLocalEndpointRole.UserInterface)
+                .Select(static item => item.HostAddress).Order());
+
+        Assert.Equal(
+            compose.Manifest.Decisions.Select(static item => item.Concern).Order(StringComparer.Ordinal),
+            aspire.Decisions.Select(static item => item.Concern).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(compose.Manifest.Decisions, static item =>
+            item.Kind is CapabilityRealizationKind.Unavailable or CapabilityRealizationKind.Unknown);
+        Assert.DoesNotContain(aspire.Decisions, static item =>
+            item.Kind is CapabilityRealizationKind.Unavailable or CapabilityRealizationKind.Unknown);
+        Assert.All(compose.Manifest.Decisions, decision => Assert.Contains(
+            decision.SourceReferences,
+            reference => reference.Contains(source.Fingerprint.Value, StringComparison.Ordinal)));
+        Assert.All(aspire.Decisions, decision => Assert.Contains(
+            decision.SourceReferences,
+            reference => reference.Contains(source.Fingerprint.Value, StringComparison.Ordinal)));
+        Assert.Contains(compose.Manifest.Decisions, static decision =>
+            decision.Concern == "local/health/timing" && decision.Kind == CapabilityRealizationKind.Native);
+        Assert.Contains(aspire.Decisions, static decision =>
+            decision.Concern == "local/health/timing" && decision.Kind == CapabilityRealizationKind.Constrained);
+        Assert.Contains(compose.Manifest.Decisions, static decision =>
+            decision.Concern == "local/observability" && decision.Kind == CapabilityRealizationKind.Constrained);
+        Assert.Contains(aspire.Decisions, static decision =>
+            decision.Concern == "local/observability" && decision.Kind == CapabilityRealizationKind.Native);
     }
 
     [Fact]

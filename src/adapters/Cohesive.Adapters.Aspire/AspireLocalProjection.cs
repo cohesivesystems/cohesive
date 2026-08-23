@@ -333,54 +333,6 @@ public sealed record AspireOperationProjection
     public ImmutableArray<string> RequiredResources { get; }
 }
 
-/// <summary>Inspectable capability decision made while lowering local Infra into Aspire.</summary>
-public sealed record AspireTargetDecision
-{
-    /// <summary>Creates a target decision.</summary>
-    /// <param name="concern">Stable adapter-local concern identity.</param>
-    /// <param name="kind">Capability realization kind.</param>
-    /// <param name="rationale">Human-readable lowering rationale.</param>
-    /// <param name="boundaries">Exact semantic boundaries or constraints.</param>
-    /// <param name="sourceReferences">Attributable source references.</param>
-    /// <exception cref="ArgumentException">A string or reference collection is invalid.</exception>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
-    [JsonConstructor]
-    public AspireTargetDecision(
-        string concern,
-        CapabilityRealizationKind kind,
-        string rationale,
-        ImmutableArray<string> boundaries,
-        ImmutableArray<string> sourceReferences)
-    {
-        if (!Enum.IsDefined(kind))
-            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported capability realization kind.");
-        if (!boundaries.IsDefaultOrEmpty && boundaries.Any(static item => string.IsNullOrWhiteSpace(item)))
-            throw new ArgumentException("Aspire target-decision boundaries cannot contain empty values.", nameof(boundaries));
-        if (sourceReferences.IsDefaultOrEmpty || sourceReferences.Any(static item => string.IsNullOrWhiteSpace(item)))
-            throw new ArgumentException("Aspire target decisions require source references.", nameof(sourceReferences));
-        Concern = Guard.RequireNotNullOrWhiteSpace(concern);
-        Kind = kind;
-        Rationale = Guard.RequireNotNullOrWhiteSpace(rationale);
-        Boundaries = boundaries.IsDefaultOrEmpty ? [] : boundaries.Sort(StringComparer.Ordinal);
-        SourceReferences = sourceReferences.Sort(StringComparer.Ordinal);
-    }
-
-    /// <summary>Stable adapter-local concern identity.</summary>
-    public string Concern { get; }
-
-    /// <summary>Capability realization kind.</summary>
-    public CapabilityRealizationKind Kind { get; }
-
-    /// <summary>Human-readable lowering rationale.</summary>
-    public string Rationale { get; }
-
-    /// <summary>Exact semantic boundaries or constraints.</summary>
-    public ImmutableArray<string> Boundaries { get; }
-
-    /// <summary>Attributable source references.</summary>
-    public ImmutableArray<string> SourceReferences { get; }
-}
-
 /// <summary>SHA-256 fingerprint of one canonical Aspire projection document.</summary>
 public sealed record AspireLocalProjectionFingerprint
 {
@@ -388,7 +340,7 @@ public sealed record AspireLocalProjectionFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Current projection canonicalization profile.</summary>
-    public const string CurrentCanonicalization = "cohesive-aspire-local-projection/json-jcs/v1";
+    public const string CurrentCanonicalization = "cohesive-aspire-local-projection/json-jcs/v2";
 
     /// <summary>Creates projection fingerprint metadata.</summary>
     /// <param name="algorithm">Digest algorithm.</param>
@@ -422,11 +374,14 @@ public sealed record AspireLocalProjectionFingerprint
 /// <summary>Canonical, inspectable projection of one exact local Infra realization into Aspire.</summary>
 public sealed record AspireLocalProjectionDocument
 {
+    /// <summary>Current Aspire lifecycle-interpreter identity.</summary>
+    public const string CurrentTarget = "aspire/dcp-13.5.2";
+
     /// <summary>Current portable projection schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-aspire-local-projection/v1";
+    public const string CurrentSchemaVersion = "cohesive-aspire-local-projection/v2";
 
     /// <summary>Current deterministic compiler identity.</summary>
-    public const string CurrentCompiler = "cohesive.adapters.aspire/v1";
+    public const string CurrentCompiler = "cohesive.adapters.aspire/v2";
 
     /// <summary>Creates or restores an exact Aspire projection.</summary>
     /// <param name="schemaVersion">Exact projection schema.</param>
@@ -467,7 +422,7 @@ public sealed record AspireLocalProjectionDocument
         ImmutableArray<AspireSecretProjection> secrets,
         ImmutableArray<AspireOperationProjection> operations,
         ImmutableArray<AspireCommandHealthOverride> commandHealthOverrides,
-        ImmutableArray<AspireTargetDecision> decisions,
+        ImmutableArray<InfrastructureLocalTargetDecision> decisions,
         AspireLocalProjectionFingerprint? fingerprint = null)
     {
         SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
@@ -505,6 +460,8 @@ public sealed record AspireLocalProjectionDocument
         Operations = Normalize(operations, static item => item.Operation.Id.Value, nameof(operations));
         CommandHealthOverrides = Normalize(commandHealthOverrides, static item => $"{item.PhysicalResource.Value}/{item.Executable}/{string.Join('\u001f', item.Arguments)}", nameof(commandHealthOverrides));
         Decisions = Normalize(decisions, static item => item.Concern, nameof(decisions));
+        if (Decisions.Any(static decision => !string.Equals(decision.Target, CurrentTarget, StringComparison.Ordinal)))
+            throw new ArgumentException("Aspire projection decisions must identify the current Aspire target.", nameof(decisions));
 
         var computed = ComputeFingerprint(
             SchemaVersion,
@@ -578,7 +535,7 @@ public sealed record AspireLocalProjectionDocument
     public ImmutableArray<AspireCommandHealthOverride> CommandHealthOverrides { get; }
 
     /// <summary>Inspectable target lowering decisions.</summary>
-    public ImmutableArray<AspireTargetDecision> Decisions { get; }
+    public ImmutableArray<InfrastructureLocalTargetDecision> Decisions { get; }
 
     /// <summary>Exact projection fingerprint.</summary>
     public AspireLocalProjectionFingerprint Fingerprint { get; }
@@ -606,7 +563,7 @@ public sealed record AspireLocalProjectionDocument
         ImmutableArray<AspireSecretProjection> secrets,
         ImmutableArray<AspireOperationProjection> operations,
         ImmutableArray<AspireCommandHealthOverride> commandHealthOverrides,
-        ImmutableArray<AspireTargetDecision> decisions)
+        ImmutableArray<InfrastructureLocalTargetDecision> decisions)
     {
         var bytes = StrictDocumentJson.GetCanonicalBytes(
             new FingerprintInput(
@@ -667,7 +624,7 @@ public sealed record AspireLocalProjectionDocument
         ImmutableArray<AspireSecretProjection> Secrets,
         ImmutableArray<AspireOperationProjection> Operations,
         ImmutableArray<AspireCommandHealthOverride> CommandHealthOverrides,
-        ImmutableArray<AspireTargetDecision> Decisions);
+        ImmutableArray<InfrastructureLocalTargetDecision> Decisions);
 }
 
 /// <summary>Result of deterministically compiling one exact local realization into Aspire.</summary>
