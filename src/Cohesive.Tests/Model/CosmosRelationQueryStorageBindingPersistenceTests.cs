@@ -55,6 +55,7 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
         Assert.Equal(binding.Fields.ToArray(), rehydrated.Fields.ToArray());
         Assert.Equal(binding.StableUniqueOrderingPaths.ToArray(), rehydrated.StableUniqueOrderingPaths.ToArray());
         Assert.Equal(binding.ExactOrderingPaths.ToArray(), rehydrated.ExactOrderingPaths.ToArray());
+        Assert.Equal(binding.SourceScopeEqualities.ToArray(), rehydrated.SourceScopeEqualities.ToArray());
         Assert.Equal(json, JsonSerializer.Serialize(rehydrated, JsonOptions));
     }
 
@@ -70,6 +71,7 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
         Reverse(collectionField["collectionScope"]!["childFields"]!.AsArray());
         Reverse(document["stableUniqueOrderingPaths"]!.AsArray());
         Reverse(document["exactOrderingPaths"]!.AsArray());
+        Reverse(document["sourceScopeEqualities"]!.AsArray());
         Reverse(document["configurationDecisions"]!.AsArray());
         document["accountEndpoint"] = "HTTPS://LOCALHOST:8081";
 
@@ -80,6 +82,7 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
         Assert.Equal(binding.Fields.ToArray(), rehydrated.Fields.ToArray());
         Assert.Equal(binding.StableUniqueOrderingPaths.ToArray(), rehydrated.StableUniqueOrderingPaths.ToArray());
         Assert.Equal(binding.ExactOrderingPaths.ToArray(), rehydrated.ExactOrderingPaths.ToArray());
+        Assert.Equal(binding.SourceScopeEqualities.ToArray(), rehydrated.SourceScopeEqualities.ToArray());
         Assert.Equal(binding.ConfigurationDecisions.ToArray(), rehydrated.ConfigurationDecisions.ToArray());
     }
 
@@ -155,6 +158,21 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
     {
         var document = SerializeToObject(CreateBinding());
         document[setting] = value;
+
+        var exception = Assert.Throws<ArgumentException>(() => Deserialize(document));
+
+        Assert.Contains("fingerprint does not match normalized content", exception.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("documentPath", "otherKind")]
+    [InlineData("value", "outbox")]
+    public void JsonRehydration_RejectsSourceScopeTamperedAfterFingerprinting(string setting, string value)
+    {
+        var document = SerializeToObject(CreateBinding());
+        document["sourceScopeEqualities"]!.AsArray()[0]![setting] = setting == "documentPath"
+            ? JsonSerializer.SerializeToNode(FieldPath.FromField(value), JsonOptions)
+            : value;
 
         var exception = Assert.Throws<ArgumentException>(() => Deserialize(document));
 
@@ -239,7 +257,12 @@ public sealed class CosmosRelationQueryStorageBindingPersistenceTests
             new("containerName", EffectiveConfigurationOrigin.Explicit, "tests")
         ],
         compiledPlanFingerprint: includeAffinity ? CompiledPlanFingerprint : null,
-        placementFingerprint: includeAffinity ? PlacementFingerprint : null);
+        placementFingerprint: includeAffinity ? PlacementFingerprint : null,
+        sourceScopeEqualities:
+        [
+            new(FieldPath.FromField("recordFamily"), "observations"),
+            new(FieldPath.FromField("documentKind"), "entity")
+        ]);
 
     static CosmosRelationQueryCollectionScopeEvidence CollectionScope() => new(
         "tests/cosmos-json-array/v1",

@@ -11,7 +11,7 @@ namespace Cohesive.Adapters.Cosmos;
 public sealed record CosmosRelationQueryCompilerOptions
 {
     /// <summary>Current canonical Cosmos SQL compiler profile.</summary>
-    public const string CurrentCompilerProfile = "cohesive.adapters.cosmos.sql/compiler-v4";
+    public const string CurrentCompilerProfile = "cohesive.adapters.cosmos.sql/compiler-v5";
 
     /// <summary>Creates canonical Cosmos compiler options.</summary>
     /// <param name="compilerProfile">Stable compiler implementation/profile identity.</param>

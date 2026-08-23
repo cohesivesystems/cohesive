@@ -74,6 +74,95 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
     }
 
     [Fact]
+    public void Build_EntitySourceScopeIsFingerprintBoundPersistableAndConjoinedByNativeCompilation()
+    {
+        var fixture = CreateRowFixture();
+        const string authority = "tests/cosmos-entity-scope/v1";
+
+        var binding = CosmosRelationQueryBinding.For(fixture.Placed, explicitAuthority: authority)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
+            .Container("shared")
+            .EntityDocuments("entity-v2")
+            .Identity(load => load.Id)
+            .StableUnique(load => load.Id)
+            .ExactOrdering(load => load.Id)
+            .Build()
+            .RequireValue();
+
+        var scope = Assert.Single(binding.SourceScopeEqualities);
+        Assert.Equal(FieldPath.FromField("documentKind"), scope.DocumentPath);
+        Assert.Equal("entity-v2", scope.Value);
+        Assert.Contains(binding.ConfigurationDecisions, decision =>
+            decision.Setting.StartsWith("sourceScopeEquality/", StringComparison.Ordinal)
+            && decision.Origin == EffectiveConfigurationOrigin.Explicit
+            && string.Equals(decision.Authority, authority, StringComparison.Ordinal));
+
+        var json = JsonSerializer.Serialize(binding, JsonOptions);
+        var restored = Assert.IsType<CosmosRelationQueryStorageBinding>(
+            JsonSerializer.Deserialize<CosmosRelationQueryStorageBinding>(json, JsonOptions));
+        Assert.Equal(binding.Fingerprint, restored.Fingerprint);
+        Assert.Equal(scope, Assert.Single(restored.SourceScopeEqualities));
+
+        var realization = RelationQueryRealizationCompiler.Compile(
+            fixture.Plan,
+            CosmosRelationQueryTargetProfile.Default,
+            CosmosRelationQueryTargetProfile.Policy,
+            RelationQueryResultObservability.NotRequested);
+        var compilation = new CosmosRelationQueryCompiler().Compile(
+            new RelationQueryBoundRealizationRequest(
+                fixture.Plan,
+                realization,
+                fixture.AuthoredPlacement.Placement),
+            binding);
+
+        Assert.True(compilation.IsSuccessful, Format(compilation.Diagnostics));
+        var template = Assert.Single(compilation.Artifacts).Statement;
+        Assert.Contains("WHERE (c[\"documentKind\"] = @p0)", template.Text, StringComparison.Ordinal);
+        var discriminator = Assert.Single(template.Parameters, static parameter =>
+            parameter.Kind == CosmosSqlParameterBindingKind.Constant
+            && Equals(parameter.ConstantValue, "entity-v2"));
+        Assert.Equal("@p0", discriminator.Name);
+
+        var changed = CosmosRelationQueryBinding.For(fixture.Placed, explicitAuthority: authority)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
+            .Container("shared")
+            .EntityDocuments("entity-v3")
+            .Identity(load => load.Id)
+            .StableUnique(load => load.Id)
+            .ExactOrdering(load => load.Id)
+            .Build()
+            .RequireValue();
+        Assert.NotEqual(binding.Id, changed.Id);
+        Assert.NotEqual(binding.Fingerprint, changed.Fingerprint);
+    }
+
+    [Fact]
+    public void Build_SourceScopeRejectsMalformedAndDuplicateMembershipFacts()
+    {
+        var fixture = CreateRowFixture();
+        var builder = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
+            .Container("shared")
+            .Identity(load => load.Id);
+
+        Assert.Throws<ArgumentException>(() => builder.SourceScopeEquals(FieldPath.Parse("envelope.kind"), "entity"));
+        Assert.Throws<ArgumentException>(() => builder.SourceScopeEquals(FieldPath.FromField("documentKind"), " "));
+
+        var duplicate = builder
+            .EntityDocuments("entity")
+            .EntityDocuments("entity")
+            .Build();
+        Assert.False(duplicate.IsSuccess);
+        Assert.Contains(duplicate.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingDuplicate
+            && diagnostic.Setting is not null
+            && diagnostic.Setting.StartsWith("sourceScopeEquality/", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Build_TypedStructuredCollectionFlowsFromExpressionAuthoringToSdkQueryDefinition()
     {
         var fixture = CreateStructuredCollectionFixture();

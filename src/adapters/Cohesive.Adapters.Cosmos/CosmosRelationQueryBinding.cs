@@ -493,6 +493,44 @@ public sealed record CosmosRelationQueryFieldBinding
 }
 
 /// <summary>
+/// One exact top-level string equality that defines membership in the physical Cosmos source represented by a
+/// canonical source instance.
+/// </summary>
+/// <remarks>
+/// This is adapter binding evidence, not a canonical business predicate. Native compilation conjoins every equality
+/// with the canonical query filter so shared-container envelope records outside the bound source cannot participate.
+/// </remarks>
+public sealed record CosmosRelationQuerySourceScopeEquality
+{
+    /// <summary>Creates one exact top-level physical source-membership equality.</summary>
+    /// <param name="documentPath">One direct top-level Cosmos document property.</param>
+    /// <param name="value">Non-empty ordinal string value required for source membership.</param>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="documentPath"/> is not one direct property or <paramref name="value"/> is empty.
+    /// </exception>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
+    public CosmosRelationQuerySourceScopeEquality(FieldPath documentPath, string value)
+    {
+        var normalizedPath = CosmosRelationQueryStorageBinding.RequirePropertyPath(documentPath, nameof(documentPath));
+        if (normalizedPath.Segments.Length != 1)
+        {
+            throw new ArgumentException(
+                "A Cosmos source-scope equality requires one direct top-level document property.",
+                nameof(documentPath));
+        }
+
+        DocumentPath = normalizedPath;
+        Value = Guard.RequireNotNullOrWhiteSpace(value);
+    }
+
+    /// <summary>Direct top-level physical document property tested for membership.</summary>
+    public FieldPath DocumentPath { get; }
+
+    /// <summary>Exact ordinal string value required for membership.</summary>
+    public string Value { get; }
+}
+
+/// <summary>
 /// Immutable, versioned binding from one exact placed semantic source to one Cosmos account, database, container,
 /// and document shape.
 /// </summary>
@@ -504,7 +542,7 @@ public sealed record CosmosRelationQueryFieldBinding
 public sealed class CosmosRelationQueryStorageBinding
 {
     /// <summary>Current portable Cosmos relation/query storage-binding schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive.relations.cosmos-binding/v5";
+    public const string CurrentSchemaVersion = "cohesive.relations.cosmos-binding/v6";
 
     /// <summary>Default deterministic convention set for semantic-path document bindings.</summary>
     public const string SemanticPathConventionSet = "cohesive.relations.cosmos/semantic-path-conventions/v1";
@@ -557,6 +595,9 @@ public sealed class CosmosRelationQueryStorageBinding
     /// Exact source-placement fingerprint, or <see langword="null"/> together with
     /// <paramref name="compiledPlanFingerprint"/> for an explicitly unverified low-level binding.
     /// </param>
+    /// <param name="sourceScopeEqualities">
+    /// Exact top-level physical source-membership equalities conjoined with every compiled canonical filter.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="accountEndpoint"/>, <paramref name="databaseName"/>, or <paramref name="containerName"/> is
     /// <see langword="null"/>.
@@ -596,7 +637,8 @@ public sealed class CosmosRelationQueryStorageBinding
         string? conventionSetVersion = null,
         ImmutableArray<EffectiveConfigurationDecision> configurationDecisions = default,
         RelationQueryPlanComponentFingerprint? compiledPlanFingerprint = null,
-        RelationQuerySourcePlacementFingerprint? placementFingerprint = null)
+        RelationQuerySourcePlacementFingerprint? placementFingerprint = null,
+        ImmutableArray<CosmosRelationQuerySourceScopeEquality> sourceScopeEqualities = default)
     {
         if (string.IsNullOrWhiteSpace(id.Value) || string.IsNullOrWhiteSpace(source.Value)
             || string.IsNullOrWhiteSpace(placementBinding.Value) || string.IsNullOrWhiteSpace(target.Value)
@@ -662,6 +704,20 @@ public sealed class CosmosRelationQueryStorageBinding
                 nameof(configurationDecisions));
         }
 
+        var normalizedSourceScope = sourceScopeEqualities.IsDefault ? [] : sourceScopeEqualities;
+        if (normalizedSourceScope.Any(static equality => equality is null))
+        {
+            throw new ArgumentException("Cosmos source-scope equalities cannot contain null entries.", nameof(sourceScopeEqualities));
+        }
+
+        if (normalizedSourceScope.GroupBy(static equality => equality.DocumentPath)
+            .Any(static group => group.Count() > 1))
+        {
+            throw new ArgumentException(
+                "A Cosmos storage binding cannot repeat a physical source-scope path.",
+                nameof(sourceScopeEqualities));
+        }
+
         if ((compiledPlanFingerprint is null) != (placementFingerprint is null))
         {
             throw new ArgumentException(
@@ -715,6 +771,12 @@ public sealed class CosmosRelationQueryStorageBinding
         PartitionPath = partitionPath is { } partition ? RequirePropertyPath(partition, nameof(partitionPath)) : null;
         StableUniqueOrderingPaths = normalizedStablePaths;
         ExactOrderingPaths = normalizedExactOrderingPaths;
+        SourceScopeEqualities =
+        [
+            .. normalizedSourceScope.OrderBy(
+                static equality => FieldPathKey(equality.DocumentPath),
+                StringComparer.Ordinal)
+        ];
         MaximumInputRows = maximumInputRows;
         MissingValueEncoding = missingValueEncoding;
         NullValueEncoding = nullValueEncoding;
@@ -769,6 +831,9 @@ public sealed class CosmosRelationQueryStorageBinding
     /// Exact persisted source-placement fingerprint, or <see langword="null"/> together with
     /// <paramref name="compiledPlanFingerprint"/> for an unverified low-level binding.
     /// </param>
+    /// <param name="sourceScopeEqualities">
+    /// Exact top-level physical source-membership equalities conjoined with every compiled canonical filter.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="schemaVersion"/> or <paramref name="fingerprint"/> is <see langword="null"/>, or another
     /// required value is <see langword="null"/>.
@@ -804,7 +869,8 @@ public sealed class CosmosRelationQueryStorageBinding
         string? conventionSetVersion = null,
         ImmutableArray<EffectiveConfigurationDecision> configurationDecisions = default,
         RelationQueryPlanComponentFingerprint? compiledPlanFingerprint = null,
-        RelationQuerySourcePlacementFingerprint? placementFingerprint = null)
+        RelationQuerySourcePlacementFingerprint? placementFingerprint = null,
+        ImmutableArray<CosmosRelationQuerySourceScopeEquality> sourceScopeEqualities = default)
         : this(
             id,
             source,
@@ -828,7 +894,8 @@ public sealed class CosmosRelationQueryStorageBinding
             conventionSetVersion,
             configurationDecisions,
             compiledPlanFingerprint,
-            placementFingerprint)
+            placementFingerprint,
+            sourceScopeEqualities)
     {
         var persistedSchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
         if (!string.Equals(persistedSchemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
@@ -898,6 +965,12 @@ public sealed class CosmosRelationQueryStorageBinding
 
     /// <summary>Paths explicitly proven to preserve canonical ordering under Cosmos SQL.</summary>
     public ImmutableArray<FieldPath> ExactOrderingPaths { get; }
+
+    /// <summary>
+    /// Exact top-level physical source-membership equalities in stable path order. These predicates are outside
+    /// <see cref="DocumentRoot"/> because they classify complete container documents.
+    /// </summary>
+    public ImmutableArray<CosmosRelationQuerySourceScopeEquality> SourceScopeEqualities { get; }
 
     /// <summary>Asserted maximum participating rows, or <see langword="null"/> when no cardinality proof exists.</summary>
     public long? MaximumInputRows { get; }
@@ -1139,6 +1212,11 @@ public sealed class CosmosRelationQueryStorageBinding
             allowed.Add("exactOrderingPath/" + FieldPathKey(path));
         }
 
+        foreach (var equality in binding.SourceScopeEqualities)
+        {
+            allowed.Add("sourceScopeEquality/" + FieldPathKey(equality.DocumentPath));
+        }
+
         var foreign = decisions.FirstOrDefault(decision => !allowed.Contains(decision.Setting));
         if (foreign is not null)
         {
@@ -1228,7 +1306,7 @@ internal sealed record CosmosRelationQueryCollectionScopeGap(
 static class CosmosRelationQueryBindingFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.cosmos-binding/v5-c14n/v1";
+    const string Canonicalization = "cohesive.relations.cosmos-binding/v6-c14n/v1";
 
     public static CosmosRelationQueryBindingFingerprint Compute(CosmosRelationQueryStorageBinding binding)
     {
@@ -1300,6 +1378,13 @@ static class CosmosRelationQueryBindingFingerprinter
         foreach (var path in binding.ExactOrderingPaths)
         {
             Append(canonical, path);
+        }
+
+        Append(canonical, binding.SourceScopeEqualities.Length);
+        foreach (var equality in binding.SourceScopeEqualities)
+        {
+            Append(canonical, equality.DocumentPath);
+            Append(canonical, equality.Value);
         }
 
         Append(canonical, binding.MaximumInputRows?.ToString(CultureInfo.InvariantCulture));
