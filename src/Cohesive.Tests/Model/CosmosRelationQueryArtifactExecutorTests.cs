@@ -603,6 +603,30 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
     }
 
     [Theory]
+    [InlineData("-9007199254740991", -9_007_199_254_740_991L)]
+    [InlineData("-7e0", -7L)]
+    [InlineData("0", 0L)]
+    [InlineData("9007199254740991", 9_007_199_254_740_991L)]
+    public async Task ExecuteAsync_ExactInt64Result_DecodesSafeIntegralJsonForms(string jsonNumber, long expected)
+    {
+        var fixture = ArtifactFixture.ExactInt64Row();
+        var alias = fixture.Alias(ValuePath);
+        TrackingFeedIterator iterator = new(
+        [
+            Page(Json($$"""{"{{alias}}":{{jsonNumber}}}"""))
+        ]);
+        var executor = Executor(fixture, (_, _) => iterator);
+
+        var result = await executor.ExecuteAsync(fixture.Request(maximumRows: 5));
+
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
+        var row = Assert.Single(result.Rows);
+        Assert.True(row.Value.TryGetField(ValuePath, out var value));
+        Assert.True(value.TryGetInt64(out var actual));
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
     [InlineData("0.99999999999999999999999999999")]
     [InlineData("1e-100")]
     [InlineData("7.00000000000000000000000000001")]
@@ -639,6 +663,28 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
         TrackingFeedIterator iterator = new(
         [
             Page(Json($$"""{"{{countAlias}}":{{jsonNumber}},"{{statusAlias}}":"active"}"""))
+        ]);
+        var executor = Executor(fixture, (_, _) => iterator);
+
+        var result = await executor.ExecuteAsync(fixture.Request(maximumRows: 5));
+
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
+        Assert.Empty(result.Rows);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryArtifactExecutionDiagnosticCodes.ResultInvalid);
+    }
+
+    [Theory]
+    [InlineData("-9007199254740992")]
+    [InlineData("9007199254740992")]
+    [InlineData("7.00000000000000000000000000001")]
+    public async Task ExecuteAsync_ExactInt64Result_RejectsInexactOrUnsafeNumbers(string jsonNumber)
+    {
+        var fixture = ArtifactFixture.ExactInt64Row();
+        var alias = fixture.Alias(ValuePath);
+        TrackingFeedIterator iterator = new(
+        [
+            Page(Json($$"""{"{{alias}}":{{jsonNumber}}}"""))
         ]);
         var executor = Executor(fixture, (_, _) => iterator);
 
@@ -1404,7 +1450,7 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
         Assert.NotEqual(artifact.Fingerprint, changedProvenanceFingerprint);
         Assert.NotEqual(artifact.Fingerprint, changedAuxiliaryFingerprint);
         Assert.NotEqual(artifact.Fingerprint, changedPlanFingerprint);
-        Assert.EndsWith("/v7", artifact.Fingerprint.Canonicalization, StringComparison.Ordinal);
+        Assert.EndsWith("/v8", artifact.Fingerprint.Canonicalization, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1464,7 +1510,7 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
             artifact.Provenance);
 
         Assert.NotEqual(artifact.Fingerprint, changed);
-        Assert.EndsWith("/v7", changed.Canonicalization, StringComparison.Ordinal);
+        Assert.EndsWith("/v8", changed.Canonicalization, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1906,6 +1952,12 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
             RelationQueryNativeResultKind.QueryRows,
             Shape("Int32Row"),
             [new(ValuePath, Required(ScalarTypeKind.Int32), CosmosRelationQueryResultValueEncoding.JsonInt32)]);
+
+        public static ArtifactFixture ExactInt64Row() => Create(
+            "exact-int64-row",
+            RelationQueryNativeResultKind.QueryRows,
+            Shape("ExactInt64Row"),
+            [new(ValuePath, Required(ScalarTypeKind.Int64), CosmosRelationQueryResultValueEncoding.JsonExactInt64)]);
 
         public static ArtifactFixture TemporalRow(ScalarTypeKind kind)
         {

@@ -450,6 +450,52 @@ public sealed record CosmosRelationQueryCollectionScopeEvidence
     }
 }
 
+/// <summary>Exact integer domain asserted for one physical Cosmos JSON-number field.</summary>
+/// <remarks>
+/// Cosmos SQL evaluates JSON numbers in a binary64 domain. This evidence is valid only when the physical source
+/// guarantees every retained integer lies between <see cref="Minimum"/> and <see cref="Maximum"/>; both bounds must
+/// remain inside <see cref="CosmosRelationQueryTargetProfile.MaximumExactInteger"/>. It does not change the canonical
+/// semantic type.
+/// </remarks>
+public sealed record CosmosRelationQueryExactIntegerDomain
+{
+    /// <summary>Creates exact physical integer-domain evidence.</summary>
+    /// <param name="minimum">Inclusive minimum retained by the physical source.</param>
+    /// <param name="maximum">Inclusive maximum retained by the physical source.</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// A bound exceeds Cosmos's exact integer domain or <paramref name="minimum"/> exceeds
+    /// <paramref name="maximum"/>.
+    /// </exception>
+    public CosmosRelationQueryExactIntegerDomain(long minimum, long maximum)
+    {
+        if (minimum < -CosmosRelationQueryTargetProfile.MaximumExactInteger
+            || maximum > CosmosRelationQueryTargetProfile.MaximumExactInteger
+            || minimum > maximum)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximum),
+                maximum,
+                $"A Cosmos exact integer domain must be ordered and remain inside "
+                + $"[-{CosmosRelationQueryTargetProfile.MaximumExactInteger}, "
+                + $"{CosmosRelationQueryTargetProfile.MaximumExactInteger}].");
+        }
+
+        Minimum = minimum;
+        Maximum = maximum;
+    }
+
+    /// <summary>Inclusive physical minimum.</summary>
+    public long Minimum { get; }
+
+    /// <summary>Inclusive physical maximum.</summary>
+    public long Maximum { get; }
+
+    /// <summary>Nonnegative exact integer domain used by Cosmos observation versions.</summary>
+    public static CosmosRelationQueryExactIntegerDomain NonNegative { get; } = new(
+        0,
+        CosmosRelationQueryTargetProfile.MaximumExactInteger);
+}
+
 /// <summary>Physical Cosmos document selector for one exact compiled field input.</summary>
 public sealed record CosmosRelationQueryFieldBinding
 {
@@ -462,13 +508,17 @@ public sealed record CosmosRelationQueryFieldBinding
     /// <param name="collectionScope">
     /// Optional explicit structured-collection evidence owned by this outer collection field.
     /// </param>
+    /// <param name="exactIntegerDomain">
+    /// Optional exact physical JSON-number domain for a scalar integer field.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// <paramref name="input"/> is default, or <paramref name="documentPath"/> is empty or malformed.
     /// </exception>
     public CosmosRelationQueryFieldBinding(
         RelationQueryInputId input,
         FieldPath documentPath,
-        CosmosRelationQueryCollectionScopeEvidence? collectionScope = null)
+        CosmosRelationQueryCollectionScopeEvidence? collectionScope = null,
+        CosmosRelationQueryExactIntegerDomain? exactIntegerDomain = null)
     {
         if (string.IsNullOrWhiteSpace(input.Value))
         {
@@ -476,10 +526,17 @@ public sealed record CosmosRelationQueryFieldBinding
         }
 
         Input = input;
+        if (collectionScope is not null && exactIntegerDomain is not null)
+        {
+            throw new ArgumentException(
+                "A Cosmos field binding cannot combine scalar exact-integer and structured-collection evidence.",
+                nameof(exactIntegerDomain));
+        }
         DocumentPath = collectionScope is null
             ? CosmosRelationQueryStorageBinding.RequireDocumentSelectorPath(documentPath, nameof(documentPath))
             : CosmosRelationQueryStorageBinding.RequirePropertyPath(documentPath, nameof(documentPath));
         CollectionScope = collectionScope;
+        ExactIntegerDomain = exactIntegerDomain;
     }
 
     /// <summary>Exact compiled field-input identity.</summary>
@@ -490,6 +547,9 @@ public sealed record CosmosRelationQueryFieldBinding
 
     /// <summary>Explicit structured-collection scope evidence, or <see langword="null"/>.</summary>
     public CosmosRelationQueryCollectionScopeEvidence? CollectionScope { get; }
+
+    /// <summary>Exact scalar integer-domain evidence, or <see langword="null"/>.</summary>
+    public CosmosRelationQueryExactIntegerDomain? ExactIntegerDomain { get; }
 }
 
 /// <summary>
@@ -1306,7 +1366,7 @@ internal sealed record CosmosRelationQueryCollectionScopeGap(
 static class CosmosRelationQueryBindingFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.cosmos-binding/v6-c14n/v1";
+    const string Canonicalization = "cohesive.relations.cosmos-binding/v7-c14n/v1";
 
     public static CosmosRelationQueryBindingFingerprint Compute(CosmosRelationQueryStorageBinding binding)
     {
@@ -1345,6 +1405,12 @@ static class CosmosRelationQueryBindingFingerprinter
         {
             Append(canonical, field.Input.Value);
             Append(canonical, field.DocumentPath);
+            Append(canonical, field.ExactIntegerDomain is null ? 0 : 1);
+            if (field.ExactIntegerDomain is { } integerDomain)
+            {
+                Append(canonical, integerDomain.Minimum);
+                Append(canonical, integerDomain.Maximum);
+            }
             Append(canonical, field.CollectionScope is null ? 0 : 1);
             if (field.CollectionScope is { } collection)
             {
@@ -1409,6 +1475,9 @@ static class CosmosRelationQueryBindingFingerprinter
     }
 
     static void Append(StringBuilder builder, int value) =>
+        Append(builder, value.ToString(CultureInfo.InvariantCulture));
+
+    static void Append(StringBuilder builder, long value) =>
         Append(builder, value.ToString(CultureInfo.InvariantCulture));
 
     static void Append(StringBuilder builder, FieldPath? path)

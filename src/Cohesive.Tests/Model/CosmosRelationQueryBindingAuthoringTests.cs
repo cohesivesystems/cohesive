@@ -74,6 +74,61 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
     }
 
     [Fact]
+    public void Build_ExactIntegerDomain_IsTypeCheckedFingerprintBoundAndPersistable()
+    {
+        var fixture = CreateExactIntegerFixture();
+        var domain = new CosmosRelationQueryExactIntegerDomain(0, 1_000_000);
+        var baseline = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
+            .Container("loads")
+            .Identity(load => load.Id)
+            .Build()
+            .RequireValue();
+
+        var binding = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
+            .Container("loads")
+            .Identity(load => load.Id)
+            .Field(load => load.Version, FieldPath.FromField("observationVersion"), domain)
+            .Build()
+            .RequireValue();
+
+        var version = binding.ResolveFieldBinding(fixture.Placed.GetField(load => load.Version).Input.Id);
+        Assert.Equal(domain, version.ExactIntegerDomain);
+        Assert.NotEqual(baseline.Fingerprint, binding.Fingerprint);
+        var restored = JsonSerializer.Deserialize<CosmosRelationQueryStorageBinding>(
+            JsonSerializer.Serialize(binding, JsonOptions),
+            JsonOptions);
+        Assert.Equal(domain, restored!.ResolveFieldBinding(version.Input).ExactIntegerDomain);
+
+        var invalid = CosmosRelationQueryBinding.For(fixture.Placed)
+            .Account(AccountEndpoint)
+            .Database(DatabaseName)
+            .Container("loads")
+            .Identity(load => load.Id)
+            .Field(load => load.Id, IdPath, domain)
+            .Build();
+        Assert.False(invalid.IsSuccess);
+        Assert.Contains(invalid.Diagnostics, static diagnostic =>
+            diagnostic.Code == CosmosRelationQueryBindingAuthoringDiagnosticCodes.SelectorInvalid
+            && diagnostic.Message.Contains("non-integer", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ExactIntegerDomain_RejectsUnorderedOrUnsafeBounds()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CosmosRelationQueryExactIntegerDomain(2, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CosmosRelationQueryExactIntegerDomain(
+            -CosmosRelationQueryTargetProfile.MaximumExactInteger - 1,
+            0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CosmosRelationQueryExactIntegerDomain(
+            0,
+            CosmosRelationQueryTargetProfile.MaximumExactInteger + 1));
+    }
+
+    [Fact]
     public void Build_EntitySourceScopeIsFingerprintBoundPersistableAndConjoinedByNativeCompilation()
     {
         var fixture = CreateRowFixture();
@@ -1024,6 +1079,44 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         return new(plan, authoredPlacement, placed);
     }
 
+    static RowFixture CreateExactIntegerFixture()
+    {
+        var author = RelationQuery.Expression();
+        var loadShape = author.Clr.Shape<LoadDocument>();
+        var loads = author.Source(loadShape);
+        var projected = author.Project(
+            loads.Node,
+            (LoadDocument load) => new VersionedLoadRow
+            {
+                Id = load.Id,
+                Version = load.Version
+            },
+            loads.Binding);
+        var ordered = author.Order(
+            projected.Node,
+            (VersionedLoadRow row) => row.Id,
+            projected.Binding);
+        var rows = author.Rows(ordered, projected.Binding, id: "rows");
+        var query = author.BuildQuery(
+            new("cosmos-binding-authoring-exact-integer"),
+            new("CosmosBindingAuthoringExactInteger"),
+            rows);
+        Assert.True(query.Validation.IsValid, Format(query.Validation.Diagnostics));
+
+        var compilation = RelationQueryStaticCompiler.Compile(new(query.CreateDocument(), author.ShapeDocuments));
+        Assert.True(compilation.IsSuccessful, Format(compilation.Diagnostics));
+        var plan = Assert.IsType<CompiledRelationQueryPlan>(compilation.Plan);
+        var placementBuilder = RelationQueryPlacement.For(plan);
+        var source = placementBuilder.Source(
+            sourceKey: "tests/cosmos/loads",
+            targetProfile: CosmosRelationQueryTargetProfile.Default);
+        var placedSource = placementBuilder.PlaceSource(source, loadShape)
+            .Identity(load => load.Id)
+            .FieldsBySemanticPath();
+        var authoredPlacement = placementBuilder.Build().RequireValue();
+        return new(plan, authoredPlacement, authoredPlacement.GetInput(placedSource));
+    }
+
     static RowFixture CreateStructuredCollectionFixture()
     {
         var author = RelationQuery.Expression();
@@ -1172,6 +1265,9 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         [JsonPropertyName("status")]
         public required string Status { get; init; }
 
+        [JsonPropertyName("version")]
+        public long Version { get; init; }
+
         [JsonPropertyName("stops")]
         public required IReadOnlyList<StopDocument> Stops { get; init; }
 
@@ -1195,6 +1291,16 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
 
         [JsonPropertyName("status")]
         public required string Status { get; init; }
+
+    }
+
+    sealed class VersionedLoadRow
+    {
+        [JsonPropertyName("id")]
+        public required string Id { get; init; }
+
+        [JsonPropertyName("version")]
+        public long Version { get; init; }
     }
 
     sealed class StatusCount

@@ -606,25 +606,31 @@ public sealed class CosmosRelationQueryStorageBindingBuilder<T>
     /// <typeparam name="TValue">CLR value selected by the semantic property chain.</typeparam>
     /// <param name="selector">Readable CLR property chain selecting the semantic field.</param>
     /// <param name="documentPath">Physical path relative to the effective document root.</param>
+    /// <param name="exactIntegerDomain">Optional exact physical integer-domain evidence.</param>
     /// <returns>This typed builder.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="selector"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="documentPath"/> is empty.</exception>
     public CosmosRelationQueryStorageBindingBuilder<T> Field<TValue>(
         System.Linq.Expressions.Expression<Func<T, TValue>> selector,
-        FieldPath documentPath)
+        FieldPath documentPath,
+        CosmosRelationQueryExactIntegerDomain? exactIntegerDomain = null)
     {
-        inner.Field(placedInput, selector, documentPath);
+        inner.Field(placedInput, selector, documentPath, exactIntegerDomain);
         return this;
     }
 
     /// <summary>Overrides one structurally selected semantic field's physical Cosmos document path.</summary>
     /// <param name="semanticPath">Demanded semantic path on the selected placed input.</param>
     /// <param name="documentPath">Physical path relative to the effective document root.</param>
+    /// <param name="exactIntegerDomain">Optional exact physical integer-domain evidence.</param>
     /// <returns>This typed builder.</returns>
     /// <exception cref="ArgumentException">A path is empty.</exception>
-    public CosmosRelationQueryStorageBindingBuilder<T> Field(FieldPath semanticPath, FieldPath documentPath)
+    public CosmosRelationQueryStorageBindingBuilder<T> Field(
+        FieldPath semanticPath,
+        FieldPath documentPath,
+        CosmosRelationQueryExactIntegerDomain? exactIntegerDomain = null)
     {
-        inner.Field(semanticPath, documentPath);
+        inner.Field(semanticPath, documentPath, exactIntegerDomain);
         return this;
     }
 
@@ -776,7 +782,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder<T>
 /// </remarks>
 public sealed class CosmosRelationQueryStorageBindingBuilder
 {
-    const string DerivedIdAuthority = "cohesive.relations.cosmos/binding-id-convention/v6";
+    const string DerivedIdAuthority = "cohesive.relations.cosmos/binding-id-convention/v7";
     const string TargetSetting = "target";
     const string TargetProfileSetting = "targetProfile";
     const string AccountEndpointSetting = "accountEndpoint";
@@ -1103,12 +1109,14 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
     /// <summary>Overrides one exact demanded field's physical Cosmos document path.</summary>
     /// <param name="field">Exact demanded field owned by the selected placed input.</param>
     /// <param name="documentPath">Physical path relative to the effective document root.</param>
+    /// <param name="exactIntegerDomain">Optional exact physical integer-domain evidence.</param>
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="field"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="documentPath"/> is empty.</exception>
     public CosmosRelationQueryStorageBindingBuilder Field(
         RelationQueryFieldInputContract field,
-        FieldPath documentPath)
+        FieldPath documentPath,
+        CosmosRelationQueryExactIntegerDomain? exactIntegerDomain = null)
     {
         ArgumentNullException.ThrowIfNull(field);
         RequireNonEmpty(documentPath, nameof(documentPath));
@@ -1123,7 +1131,8 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                     field,
                     documentPath,
                     Collection: null,
-                    Decision(
+                    ExactIntegerDomain: exactIntegerDomain,
+                    Decision: Decision(
                         FieldSetting(field.Input.Id),
                         EffectiveConfigurationOrigin.Explicit,
                         explicitAuthority))))
@@ -1191,7 +1200,8 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                 field,
                 documentPath,
                 collection,
-                Decision(
+                ExactIntegerDomain: null,
+                Decision: Decision(
                     FieldSetting(field.Input.Id),
                     EffectiveConfigurationOrigin.Explicit,
                     explicitAuthority)));
@@ -1245,15 +1255,19 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
     /// <summary>Overrides one structurally selected semantic field's physical Cosmos document path.</summary>
     /// <param name="semanticPath">Demanded semantic path on the selected placed input.</param>
     /// <param name="documentPath">Physical path relative to the effective document root.</param>
+    /// <param name="exactIntegerDomain">Optional exact physical integer-domain evidence.</param>
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentException">A path is empty.</exception>
-    public CosmosRelationQueryStorageBindingBuilder Field(FieldPath semanticPath, FieldPath documentPath)
+    public CosmosRelationQueryStorageBindingBuilder Field(
+        FieldPath semanticPath,
+        FieldPath documentPath,
+        CosmosRelationQueryExactIntegerDomain? exactIntegerDomain = null)
     {
         RequireNonEmpty(semanticPath, nameof(semanticPath));
         RequireNonEmpty(documentPath, nameof(documentPath));
         if (TryGetField(semanticPath, FieldSetting(semanticPath), out var field))
         {
-            Field(field, documentPath);
+            Field(field, documentPath, exactIntegerDomain);
         }
 
         return this;
@@ -1265,19 +1279,21 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
     /// <param name="input">Typed view of the same placed input supplied to <see cref="CosmosRelationQueryBinding.For"/>.</param>
     /// <param name="selector">Readable CLR property chain selecting the semantic field.</param>
     /// <param name="documentPath">Physical path relative to the effective document root.</param>
+    /// <param name="exactIntegerDomain">Optional exact physical integer-domain evidence.</param>
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="input"/> or <paramref name="selector"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="documentPath"/> is empty.</exception>
     internal CosmosRelationQueryStorageBindingBuilder Field<T, TValue>(
         RelationQueryPlacedInput<T> input,
         System.Linq.Expressions.Expression<Func<T, TValue>> selector,
-        FieldPath documentPath)
+        FieldPath documentPath,
+        CosmosRelationQueryExactIntegerDomain? exactIntegerDomain = null)
         where T : notnull
     {
         RequireNonEmpty(documentPath, nameof(documentPath));
         if (TryResolveTypedField(input, selector, "field", out var field))
         {
-            Field(field, documentPath);
+            Field(field, documentPath, exactIntegerDomain);
         }
 
         return this;
@@ -1476,7 +1492,8 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                     .. effective.Fields.Select(static field => new CosmosRelationQueryFieldBinding(
                         field.Field.Input.Id,
                         field.Path,
-                        field.CollectionScope))
+                        field.CollectionScope,
+                        field.ExactIntegerDomain))
                 ],
                 effective.DocumentRoot.Value,
                 effective.PartitionPath.Value,
@@ -1713,8 +1730,9 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                     field,
                     field.Input.Field.Path,
                     CollectionScope: null,
+                    ExactIntegerDomain: null,
                     CollectionDecisions: [],
-                    Decision(
+                    Decision: Decision(
                         FieldSetting(field.Input.Id),
                         EffectiveConfigurationOrigin.AdapterConvention,
                         convention));
@@ -1734,8 +1752,9 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                     field,
                     mapping.Value,
                     CollectionScope: null,
+                    ExactIntegerDomain: null,
                     CollectionDecisions: [],
-                    Decision(FieldSetting(field.Input.Id), EffectiveConfigurationOrigin.ScopedProfile, options.Authority));
+                    Decision: Decision(FieldSetting(field.Input.Id), EffectiveConfigurationOrigin.ScopedProfile, options.Authority));
             }
         }
 
@@ -1746,6 +1765,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                 field.Field,
                 field.Path,
                 collection.Scope,
+                field.ExactIntegerDomain,
                 collection.Decisions,
                 field.Decision);
         }
@@ -1770,6 +1790,19 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
             {
                 ValidatePropertyPath(
                     field.Path,
+                    field.Field.Input.Id,
+                    field.Field.Input.Field.Path,
+                    field.Decision.Setting);
+            }
+            if (field.ExactIntegerDomain is not null
+                && field.Field.Input.ValueContract?.GetEffectiveType() is not ScalarTypeRef
+                {
+                    Kind: ScalarTypeKind.Int32 or ScalarTypeKind.Int64
+                })
+            {
+                Error(
+                    CosmosRelationQueryBindingAuthoringDiagnosticCodes.SelectorInvalid,
+                    $"Field '{field.Field.Input.Field.Path}' declares exact integer evidence for a non-integer semantic contract.",
                     field.Field.Input.Id,
                     field.Field.Input.Field.Path,
                     field.Decision.Setting);
@@ -2549,12 +2582,14 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         RelationQueryFieldInputContract Field,
         FieldPath Path,
         CosmosCollectionDeclaration? Collection,
+        CosmosRelationQueryExactIntegerDomain? ExactIntegerDomain,
         EffectiveConfigurationDecision Decision);
 
     sealed record EffectiveField(
         RelationQueryFieldInputContract Field,
         FieldPath Path,
         CosmosRelationQueryCollectionScopeEvidence? CollectionScope,
+        CosmosRelationQueryExactIntegerDomain? ExactIntegerDomain,
         ImmutableArray<EffectiveConfigurationDecision> CollectionDecisions,
         EffectiveConfigurationDecision Decision);
 

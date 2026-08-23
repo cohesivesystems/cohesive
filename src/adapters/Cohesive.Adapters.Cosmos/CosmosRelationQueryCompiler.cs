@@ -1174,7 +1174,9 @@ public sealed class CosmosRelationQueryCompiler
                     "relation identity");
                 var identityEncoding = ResolveResultEncoding(
                     identityContract,
-                    keySite.Node ?? branch.Node);
+                    keySite.Node ?? branch.Node,
+                    relation.Definition.Key,
+                    keySite);
                 builder.Select(
                     CompileExpression(
                         relation.Definition.Key!,
@@ -1238,7 +1240,11 @@ public sealed class CosmosRelationQueryCompiler
                         projection.ValueSite,
                         requireNonNullInputs: false),
                     valueContract,
-                    ResolveResultEncoding(valueContract, projection.ValueSite.Node ?? branch.Node),
+                    ResolveResultEncoding(
+                        valueContract,
+                        projection.ValueSite.Node ?? branch.Node,
+                        projection.Definition.Value,
+                        projection.ValueSite),
                     projection.Definition.Id);
             }
             if (groupings.TryGetValue((branch.Binding, path), out var grouping))
@@ -1253,7 +1259,11 @@ public sealed class CosmosRelationQueryCompiler
                         grouping.KeySite,
                         requireNonNullInputs: true),
                     valueContract,
-                    ResolveResultEncoding(valueContract, grouping.KeySite.Node ?? branch.Node),
+                    ResolveResultEncoding(
+                        valueContract,
+                        grouping.KeySite.Node ?? branch.Node,
+                        grouping.Definition.Key,
+                        grouping.KeySite),
                     grouping.Definition.Id);
             }
             if (aggregates.TryGetValue((branch.Binding, path), out var aggregate))
@@ -1271,7 +1281,7 @@ public sealed class CosmosRelationQueryCompiler
                 return new(
                     CompileSourceField(sourceField, requireNonNull: false),
                     valueContract,
-                    ResolveResultEncoding(valueContract, branch.Node),
+                    ResolveResultEncoding(valueContract, branch.Node, directField: sourceField),
                     Assignment: null);
             }
             throw Fail(
@@ -2828,9 +2838,12 @@ public sealed class CosmosRelationQueryCompiler
                 node);
         }
 
-        static CosmosRelationQueryResultValueEncoding ResolveResultEncoding(
+        CosmosRelationQueryResultValueEncoding ResolveResultEncoding(
             ValueContract contract,
-            QueryNodeId node)
+            QueryNodeId node,
+            Expr? expression = null,
+            RelationQueryExpressionSiteAnalysis? site = null,
+            RelationQueryFieldInputContract? directField = null)
         {
             if (contract.Cardinality != FieldCardinality.Single)
             {
@@ -2842,6 +2855,21 @@ public sealed class CosmosRelationQueryCompiler
 
             if (CosmosRelationQueryCanonicalValueCodec.TryResolveResultEncoding(contract, out var encoding))
                 return encoding;
+
+            var sourceField = directField;
+            if (sourceField is null
+                && expression is not null
+                && site is not null
+                && TryResolveSourceField(expression, site, out var resolvedField))
+            {
+                sourceField = resolvedField;
+            }
+            if (contract.GetEffectiveType() is ScalarTypeRef { Kind: ScalarTypeKind.Int64 }
+                && sourceField is not null
+                && storageBinding.ResolveFieldBinding(sourceField.Input.Id).ExactIntegerDomain is not null)
+            {
+                return CosmosRelationQueryResultValueEncoding.JsonExactInt64;
+            }
 
             throw Fail(
                 CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
@@ -3013,7 +3041,7 @@ public sealed class CosmosRelationQueryCompiler
 static class CosmosRelationQueryArtifactFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.cosmos-artifact/v1-c14n/v7";
+    const string Canonicalization = "cohesive.relations.cosmos-artifact/v1-c14n/v8";
 
     public static CosmosRelationQueryArtifactFingerprint Compute(
         RelationQueryNativeResultBranch branch,

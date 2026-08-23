@@ -86,6 +86,11 @@ internal static class CosmosRelationQueryCanonicalValueCodec
             }
             && contract.GetEffectiveType() is ScalarTypeRef { Kind: ScalarTypeKind.Int64 };
         }
+        if (encoding == CosmosRelationQueryResultValueEncoding.JsonExactInt64)
+        {
+            return contract.Cardinality == FieldCardinality.Single
+                   && contract.GetEffectiveType() is ScalarTypeRef { Kind: ScalarTypeKind.Int64 };
+        }
 
         return TryResolveResultEncoding(contract, out var expected) && expected == encoding;
     }
@@ -223,6 +228,17 @@ internal static class CosmosRelationQueryCanonicalValueCodec
                         out var count))
                 {
                     value = ObservationValue.FromInt64(count);
+                    return true;
+                }
+                break;
+            case CosmosRelationQueryResultValueEncoding.JsonExactInt64:
+                if (TryDecodeExactInteger(
+                        element,
+                        -CosmosRelationQueryTargetProfile.MaximumExactInteger,
+                        CosmosRelationQueryTargetProfile.MaximumExactInteger,
+                        out var exactInt64))
+                {
+                    value = ObservationValue.FromInt64(exactInt64);
                     return true;
                 }
                 break;

@@ -242,7 +242,7 @@ Current portable and adapter contracts expose their schema versions through cons
 - `relation-query-source-placement/v3`
 - `relation-query-physical-plan/v1`
 - `relation-query-explain/v1`
-- Cosmos SQL profile `canonical-v4`, compiler `compiler-v5`, binding `cosmos-binding/v6`, and artifact canonicalization v7
+- Cosmos SQL profile `canonical-v4`, compiler `compiler-v6`, binding `cosmos-binding/v7`, and artifact canonicalization v8
 - Elasticsearch profile `canonical-v2` and binding `elastic-binding/v4`
 - PostgreSQL SQL profile `canonical-v2`, source-reader profile `source-reader-v1`, binding `postgres-binding/v1`, and
   artifact `postgres-artifact/v3`
@@ -257,6 +257,13 @@ Cosmos binding `cosmos-binding/v6` adds fingerprinted top-level physical source-
 canonicalization v7 covers the resulting statement and binding fingerprint. Reauthor shared entity/outbox-container
 bindings with `.EntityDocuments(repository.EntityDocumentKind)` and regenerate their native artifacts. Do not move
 the document discriminator into canonical Relation Query IR: it classifies the adapter envelope, not the domain.
+
+Cosmos binding `cosmos-binding/v7` adds explicit exact-integer value-domain evidence for scalar physical fields.
+Compiler `compiler-v6` uses that evidence only for direct canonical `Int64` result projections and emits the
+`JsonExactInt64` encoding; absent evidence still fails closed. Reauthor affected fields with
+`.Field(..., new CosmosRelationQueryExactIntegerDomain(minimum, maximum))` and regenerate native artifacts under
+artifact canonicalization v8. `CosmosEntityOutboxRepository` accepts observation versions only from zero through
+`MaximumExactObservationVersion`, so its `observationVersion` field may use the reusable `NonNegative` domain.
 
 Migration rules:
 

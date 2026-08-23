@@ -16,6 +16,11 @@ namespace Cohesive.Adapters.Cosmos;
 /// </summary>
 public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
 {
+    /// <summary>
+    /// Largest observation version this repository can persist while retaining exact Cosmos SQL numeric semantics.
+    /// </summary>
+    public const long MaximumExactObservationVersion = CosmosRelationQueryTargetProfile.MaximumExactInteger;
+
     readonly EntityDefinition entityDefinition;
     readonly string observationType;
     readonly Container container;
@@ -419,6 +424,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(observation);
         ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
+        ValidateObservationVersion(observation.Version);
         return new(
             Id: itemIdSelector(observation),
             PartitionKey: partitionKey,
@@ -446,6 +452,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(commit);
         ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
+        ValidateObservationVersion(commit.Write.Entity.Version);
 
         var documents = new CosmosObservationContainerDocument[commit.Envelopes.Length];
         for (var index = 0; index < commit.Envelopes.Length; index++)
@@ -478,6 +485,17 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
         }
 
         return documents;
+    }
+
+    internal static void ValidateObservationVersion(long version)
+    {
+        if (version is < 0 or > MaximumExactObservationVersion)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(version),
+                version,
+                $"A Cosmos observation version must be between 0 and {MaximumExactObservationVersion} so Cosmos SQL retains it exactly.");
+        }
     }
 
     async Task<EntityCommitResult?> TryReplayOutboxCommit(
