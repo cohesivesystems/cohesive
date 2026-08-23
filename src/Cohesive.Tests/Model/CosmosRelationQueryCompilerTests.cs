@@ -91,6 +91,35 @@ public sealed class CosmosRelationQueryCompilerTests
     }
 
     [Fact]
+    public void Compile_NestedNamedTypeProjection_UsesResolvedResultContractAndEncoding()
+    {
+        var result = Fixture.NestedNamedProjection().Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var artifact = Assert.Single(result.Artifacts);
+        Assert.Contains(
+            "c[\"Payload\"][\"Status\"] AS f1",
+            artifact.Statement.Text,
+            StringComparison.Ordinal);
+        var projected = Assert.Single(artifact.ResultFields, static field =>
+            field.Field.Path == Fixture.StatusPath);
+        Assert.Equal(new ScalarTypeRef(ScalarTypeKind.String), projected.ValueContract.GetEffectiveType());
+        Assert.Equal(CosmosRelationQueryResultValueEncoding.JsonString, projected.Encoding);
+    }
+
+    [Fact]
+    public void Compile_OptionalNestedNamedTypeProjection_RetainsWeakGuarantees()
+    {
+        var result = Fixture.NestedNamedProjection(optional: true).Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var projected = Assert.Single(Assert.Single(result.Artifacts).ResultFields, static field =>
+            field.Field.Path == Fixture.ValuePath);
+        Assert.Equal(FieldPresence.Optional, projected.ValueContract.Presence);
+        Assert.Equal(FieldNullability.Nullable, projected.ValueContract.Nullability);
+    }
+
+    [Fact]
     public void Compile_UngroupedRowCount_ProducesDeterministicSingleRowArtifact()
     {
         var fixture = Fixture.UngroupedRowCount();
@@ -2189,7 +2218,7 @@ public sealed class CosmosRelationQueryCompilerTests
         static readonly FieldPath StopSequencePath = FieldPath.FromField("Sequence");
         static readonly FieldPath StopExternalIdPath = FieldPath.FromField("ExternalId");
         static readonly FieldPath StopServiceDatePath = FieldPath.FromField("ServiceDate");
-        static readonly FieldPath ValuePath = FieldPath.FromField("Value");
+        public static readonly FieldPath ValuePath = FieldPath.FromField("Value");
         static readonly FieldPath PayloadPath = FieldPath.FromField("Payload");
         static readonly FieldPath ObservedInstantPath = FieldPath.FromField("ObservedInstant");
         static readonly FieldPath ObservedDateTimePath = FieldPath.FromField("ObservedDateTime");
@@ -2515,6 +2544,31 @@ public sealed class CosmosRelationQueryCompilerTests
                         new(StatusParameter, new ScalarTypeRef(ScalarTypeKind.String))
                     ]),
                 [new RowsQueryResultDefinition(Rows, Page)]);
+            return Create(RelationQueryDocument.FromDefinition(definition));
+        }
+
+        public static Fixture NestedNamedProjection(bool optional = false)
+        {
+            var rowShape = optional ? NullableRowShape : RowShape;
+            var resultPath = optional ? ValuePath : StatusPath;
+            var sourcePath = optional ? PayloadNotesPath : PayloadStatusPath;
+            IRQueryDefinition definition = new(
+                new(optional ? "optional-nested-named-projection" : "nested-named-projection"),
+                new(optional ? "OptionalNestedNamedProjection" : "NestedNamedProjection"),
+                new(
+                [
+                    new SourceQueryNode(LoadSource, Load, LoadShape),
+                    new ProjectQueryNode(
+                        Project,
+                        LoadSource,
+                        RowBinding,
+                        rowShape,
+                        [
+                            new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
+                            new(new("row-value"), resultPath, Expr.Field(Load, sourcePath))
+                        ])
+                ]),
+                [new RowsQueryResultDefinition(Rows, Project)]);
             return Create(RelationQueryDocument.FromDefinition(definition));
         }
 

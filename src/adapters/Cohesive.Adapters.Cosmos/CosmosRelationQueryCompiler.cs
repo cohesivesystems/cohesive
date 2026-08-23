@@ -1140,9 +1140,9 @@ public sealed class CosmosRelationQueryCompiler
 
             foreach (var assignment in projectionExecution.ProjectionAssignments)
             {
-                if (!IsRequiredNonNull(assignment.ValueSite.Analysis.KnownResult)
-                    || !IsCosmosEqualityScalar(
-                        assignment.ValueSite.Analysis.KnownResult?.GetEffectiveType()))
+                var valueContract = ResolveSiteResultContract(assignment.ValueSite);
+                if (!IsRequiredNonNull(valueContract)
+                    || !IsCosmosEqualityScalar(valueContract?.GetEffectiveType()))
                 {
                     throw Fail(
                         CosmosRelationQueryCompilationDiagnosticCodes.GuaranteeUnavailable,
@@ -1362,7 +1362,7 @@ public sealed class CosmosRelationQueryCompiler
         {
             var valueSite = aggregate.Execution.ValueSite!;
             RequireNonNullResult(valueSite, valueSite.Node ?? branch.Node, "aggregate");
-            if (!IsExactNumericScalar(valueSite.Analysis.KnownResult?.GetEffectiveType()))
+            if (!IsExactNumericScalar(ResolveSiteResultContract(valueSite)?.GetEffectiveType()))
             {
                 throw Fail(
                     CosmosRelationQueryCompilationDiagnosticCodes.AggregateUnsupported,
@@ -1580,7 +1580,7 @@ public sealed class CosmosRelationQueryCompiler
                 }
                 RetainTemporalParameterValueDomain(
                     keyset.After[index],
-                    boundarySite.Analysis.KnownResult?.GetEffectiveType());
+                    ResolveSiteResultContract(boundarySite)?.GetEffectiveType());
 
                 var key = CompileExpression(ordering.Key, keySite, requireNonNullInputs: true);
                 var continuation = CompileExpression(
@@ -1622,8 +1622,8 @@ public sealed class CosmosRelationQueryCompiler
             RelationQueryExpressionSiteAnalysis continuation,
             FieldPath? sourcePath)
         {
-            var keyType = key.Analysis.KnownResult?.GetEffectiveType();
-            var continuationType = continuation.Analysis.KnownResult?.GetEffectiveType();
+            var keyType = ResolveSiteResultContract(key)?.GetEffectiveType();
+            var continuationType = ResolveSiteResultContract(continuation)?.GetEffectiveType();
             if (keyType != continuationType)
                 return false;
             if (keyType is ScalarTypeRef { Kind: ScalarTypeKind.Int32 })
@@ -1847,14 +1847,24 @@ public sealed class CosmosRelationQueryCompiler
             RelationQueryExpressionSiteAnalysis site,
             string operand)
         {
-            if (TryResolveSourceField(expression, site, out var field)
-                && field.Input.ValueContract is { } resolved)
+            if (ResolveDirectSourceContract(expression, site) is { } resolved)
             {
                 return resolved;
             }
 
             return AnalyzeSubexpression(expression, site, operand);
         }
+
+        ValueContract? ResolveSiteResultContract(RelationQueryExpressionSiteAnalysis site) =>
+            ResolveDirectSourceContract(site.Analysis.Site.Expression, site)
+            ?? site.Analysis.KnownResult;
+
+        ValueContract? ResolveDirectSourceContract(
+            Expr expression,
+            RelationQueryExpressionSiteAnalysis site) =>
+            TryResolveSourceField(expression, site, out var field)
+                ? field.Input.ValueContract
+                : null;
 
         bool HasExactTemporalComparisonDomain(
             Expr leftExpression,
@@ -2786,12 +2796,12 @@ public sealed class CosmosRelationQueryCompiler
             RelationQueryExpressionSiteKind kind) =>
             execution.ExpressionSites.Single(site => site.Kind == kind);
 
-        static void RequireNonNullResult(
+        void RequireNonNullResult(
             RelationQueryExpressionSiteAnalysis site,
             QueryNodeId node,
             string operation)
         {
-            if (IsRequiredNonNull(site.Analysis.KnownResult))
+            if (IsRequiredNonNull(ResolveSiteResultContract(site)))
             {
                 return;
             }
@@ -2802,12 +2812,12 @@ public sealed class CosmosRelationQueryCompiler
                 node);
         }
 
-        static ValueContract RequireKnownResultContract(
+        ValueContract RequireKnownResultContract(
             RelationQueryExpressionSiteAnalysis site,
             QueryNodeId node,
             string operation)
         {
-            if (site.Analysis.KnownResult is { } result)
+            if (ResolveSiteResultContract(site) is { } result)
             {
                 return result;
             }
@@ -2839,12 +2849,12 @@ public sealed class CosmosRelationQueryCompiler
                 node);
         }
 
-        static void RequireCosmosScalarResult(
+        void RequireCosmosScalarResult(
             RelationQueryExpressionSiteAnalysis site,
             QueryNodeId node,
             string operation)
         {
-            if (IsCosmosEqualityScalar(site.Analysis.KnownResult?.GetEffectiveType()))
+            if (IsCosmosEqualityScalar(ResolveSiteResultContract(site)?.GetEffectiveType()))
             {
                 return;
             }
@@ -2860,7 +2870,7 @@ public sealed class CosmosRelationQueryCompiler
             QueryNodeId node,
             FieldPath? sourcePath)
         {
-            var type = site.Analysis.KnownResult?.GetEffectiveType();
+            var type = ResolveSiteResultContract(site)?.GetEffectiveType();
             if (type is ScalarTypeRef { Kind: ScalarTypeKind.Int32 })
             {
                 return;
