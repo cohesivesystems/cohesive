@@ -26,6 +26,23 @@ public sealed class EntityDefinitionCreateStateTests
     }
 
     [Fact]
+    public void ValidateObservation_AcceptsACompleteValidObservationWithoutConstructingState()
+    {
+        var entity = new CustomerEntity();
+        var observation = new Observation(
+            shapeId: entity.Definition.Shape.Id,
+            id: "customer-1",
+            fields: new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                [nameof(CustomerEntity.Id)] = ObservationValue.FromString("customer-1"),
+                [nameof(CustomerEntity.Name)] = ObservationValue.FromString("Acme Freight")
+            },
+            version: 7);
+
+        entity.Definition.ValidateObservation(observation);
+    }
+
+    [Fact]
     public void CreateState_FromObservation_RejectsValuedUnknownFieldWithoutMaterializingState()
     {
         var entity = new CustomerEntity();
@@ -46,9 +63,13 @@ public sealed class EntityDefinitionCreateStateTests
         var hasValues = new[] { true, true, true };
         var observation = new Observation(layout, id: "customer-1", values, hasValues);
 
-        var error = Assert.Throws<SemanticRuleViolationException>(() => entity.Definition.CreateState(observation));
+        var validationError = Assert.Throws<SemanticRuleViolationException>(() =>
+            entity.Definition.ValidateObservation(observation));
+        var stateError = Assert.Throws<SemanticRuleViolationException>(() =>
+            entity.Definition.CreateState(observation));
 
-        Assert.Contains("unknown field 'Unexpected'", error.Message, StringComparison.Ordinal);
+        Assert.Equal(validationError.Message, stateError.Message);
+        Assert.Contains("unknown field 'Unexpected'", validationError.Message, StringComparison.Ordinal);
     }
 
     sealed class CustomerEntity : Entity<CustomerEntity>

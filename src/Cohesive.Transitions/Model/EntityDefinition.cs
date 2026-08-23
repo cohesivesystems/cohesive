@@ -237,16 +237,37 @@ public sealed record EntityDefinition
     /// <exception cref="SemanticRuleViolationException">
     /// The observation shape, fields, or values do not satisfy this entity definition.
     /// </exception>
+    /// <exception cref="EntityShapeGraphValidationException">
+    /// This entity definition does not have a valid inline or graph-backed state schema.
+    /// </exception>
     public EntityState CreateState(Observation observation)
+    {
+        ValidateObservation(observation);
+        return new(observation);
+    }
+
+    /// <summary>
+    /// Validates a complete observation against this entity definition without constructing another state wrapper.
+    /// </summary>
+    /// <param name="observation">The complete canonical observation to validate without mutation.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="observation"/> is <see langword="null"/>.</exception>
+    /// <exception cref="SemanticRuleViolationException">
+    /// The observation shape, fields, or values do not satisfy this entity definition.
+    /// </exception>
+    /// <exception cref="EntityShapeGraphValidationException">
+    /// This entity definition does not have a valid inline or graph-backed state schema.
+    /// </exception>
+    public void ValidateObservation(Observation observation)
     {
         ArgumentNullException.ThrowIfNull(observation);
 
         if (observation.ShapeId != Shape.Id)
             throw new SemanticRuleViolationException($"Observation shape '{observation.ShapeId.Value}' does not match entity '{Name.Value}' shape '{Shape.Id.Value}'.");
 
-        var validationPlan = StateValidationPlanByEntityDefinition.GetValue(key: this, createValueCallback: static definition => StateValidationPlan.Build(definition));
+        var validationPlan = StateValidationPlanByEntityDefinition.GetValue(
+            key: this,
+            createValueCallback: static definition => StateValidationPlan.Build(definition));
         ValidateObservationStateValues(observation, validationPlan);
-        return new(observation);
     }
 
     /// <summary>
