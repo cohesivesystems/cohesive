@@ -1381,6 +1381,23 @@ public sealed class CosmosRelationQueryCompilerTests
     }
 
     [Fact]
+    public void Compile_Int64DirectProjection_WithExactPhysicalDomain_UsesExactEncoding()
+    {
+        var fixture = Fixture.PrecisionUnsafeProjection(ScalarTypeKind.Int64);
+        var binding = fixture.StorageBindingWithExactIntegerDomain(
+            Fixture.Int64ValuePath,
+            CosmosRelationQueryExactIntegerDomain.NonNegative);
+
+        var result = fixture.Compile(binding);
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var value = Assert.Single(Assert.Single(result.Artifacts).ResultFields, static field =>
+            field.Field.Path == Fixture.ValuePath);
+        Assert.Equal(new ScalarTypeRef(ScalarTypeKind.Int64), value.ValueContract.GetEffectiveType());
+        Assert.Equal(CosmosRelationQueryResultValueEncoding.JsonExactInt64, value.Encoding);
+    }
+
+    [Fact]
     public void Compile_BytesRuntimeParameter_IsRejectedBeforeArtifactConstruction()
     {
         var result = Fixture.BytesParameterProjection().Compile();
@@ -2206,7 +2223,7 @@ public sealed class CosmosRelationQueryCompilerTests
         public static readonly FieldPath StatusPath = FieldPath.FromField("Status");
         static readonly FieldPath AmountPath = FieldPath.FromField("Amount");
         static readonly FieldPath NotesPath = FieldPath.FromField("Notes");
-        static readonly FieldPath Int64ValuePath = FieldPath.FromField("Int64Value");
+        public static readonly FieldPath Int64ValuePath = FieldPath.FromField("Int64Value");
         static readonly FieldPath DecimalValuePath = FieldPath.FromField("DecimalValue");
         static readonly FieldPath TagsPath = FieldPath.FromField("Tags");
         static readonly FieldPath ItemsPath = FieldPath.FromField("Items");
@@ -2366,6 +2383,23 @@ public sealed class CosmosRelationQueryCompilerTests
             [
                 .. StorageBinding.Fields.Select(field => field.Input == input
                     ? new CosmosRelationQueryFieldBinding(field.Input, field.DocumentPath, collectionScope)
+                    : field)
+            ]);
+        }
+
+        public CosmosRelationQueryStorageBinding StorageBindingWithExactIntegerDomain(
+            FieldPath path,
+            CosmosRelationQueryExactIntegerDomain domain)
+        {
+            var input = InputFor(path);
+            return StorageBindingWithFields(
+            [
+                .. StorageBinding.Fields.Select(field => field.Input == input
+                    ? new CosmosRelationQueryFieldBinding(
+                        field.Input,
+                        field.DocumentPath,
+                        field.CollectionScope,
+                        domain)
                     : field)
             ]);
         }

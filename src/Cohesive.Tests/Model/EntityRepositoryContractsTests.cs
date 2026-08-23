@@ -77,6 +77,53 @@ public sealed class EntityRepositoryContractsTests
             read: new EntityReadOptions(expectedConcurrencyToken: new("etag-7")));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(CosmosEntityOutboxRepository.MaximumExactObservationVersion)]
+    public void CosmosEntityOutboxRepository_ObservationVersionWithinExactDomain_IsAccepted(long version)
+    {
+        CosmosEntityOutboxRepository.ValidateObservationVersion(version);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(CosmosEntityOutboxRepository.MaximumExactObservationVersion + 1)]
+    public void CosmosEntityOutboxRepository_ObservationVersionOutsideExactDomain_IsRejected(long version)
+    {
+        var error = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            CosmosEntityOutboxRepository.ValidateObservationVersion(version));
+
+        Assert.Contains("Cosmos SQL retains it exactly", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CosmosEntityOutboxRepository_OutboxMaterializationRejectsUnsafeVersionBeforeProviderIo()
+    {
+        var state = RepositoryEntity.Instance.CreateState(
+            "obs-unsafe",
+            new RepositoryState("obs-unsafe", "tenant-a", "payload"));
+        using CosmosClient client = new(
+            "https://localhost:8081/",
+            EmulatorMasterKey,
+            new CosmosClientOptions { ConnectionMode = ConnectionMode.Gateway });
+        var repository = new CosmosEntityOutboxRepository(
+            RepositoryEntity.Instance.Definition,
+            client.GetContainer("tests", "entities"),
+            partitionKeyPolicy: EntityPartitionKeyPolicy.FromField(nameof(RepositoryState.Tenant)));
+
+        var error = Assert.Throws<ArgumentOutOfRangeException>(() => repository.CreateOutboxDocuments(
+            OperationContext.Create(),
+            new EntityOutboxCommit(
+                new(state.Observation with
+                {
+                    Version = CosmosEntityOutboxRepository.MaximumExactObservationVersion + 1
+                }),
+                []),
+            partitionKey: "tenant-a"));
+
+        Assert.Equal("version", error.ParamName);
+    }
+
     [Fact]
     public void CosmosObservationOutboxRepositoryOptions_RequireDistinctNonemptyDocumentKinds()
     {

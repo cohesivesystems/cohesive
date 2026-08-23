@@ -11,7 +11,7 @@ namespace Cohesive.Adapters.Cosmos;
 public sealed record CosmosRelationQueryCompilerOptions
 {
     /// <summary>Current canonical Cosmos SQL compiler profile.</summary>
-    public const string CurrentCompilerProfile = "cohesive.adapters.cosmos.sql/compiler-v5";
+    public const string CurrentCompilerProfile = "cohesive.adapters.cosmos.sql/compiler-v6";
 
     /// <summary>Creates canonical Cosmos compiler options.</summary>
     /// <param name="compilerProfile">Stable compiler implementation/profile identity.</param>
@@ -116,7 +116,13 @@ public enum CosmosRelationQueryResultValueEncoding
     JsonString = 2,
 
     /// <summary>A row count proven to remain inside Cosmos's exact integer domain.</summary>
-    ExactCountInteger = 6
+    ExactCountInteger = 6,
+
+    /// <summary>
+    /// A JSON number decoded as canonical <see cref="ScalarTypeKind.Int64"/> after its source binding proves the
+    /// physical value remains inside Cosmos's exact integer domain.
+    /// </summary>
+    JsonExactInt64 = 7
 }
 
 /// <summary>Binding from one safe SQL result alias to one canonical output field.</summary>
