@@ -33,6 +33,13 @@ public sealed class FreightMaterializationInfrastructureTests
             InfrastructureLocalEndpointRole.UserInterface,
             document.Topology.Services.Single(service => service.PhysicalResource == FreightMaterializationInfrastructure.KibanaService)
                 .Endpoints.Single().Role);
+        var cosmosHealth = document.Topology.Services.Single(service =>
+            service.PhysicalResource == FreightMaterializationInfrastructure.CosmosService).Health;
+        Assert.NotNull(cosmosHealth);
+        Assert.Equal(TimeSpan.FromSeconds(3), cosmosHealth.Interval);
+        Assert.Equal(TimeSpan.FromSeconds(5), cosmosHealth.Timeout);
+        Assert.Equal(60, cosmosHealth.Retries);
+        Assert.Equal(TimeSpan.FromSeconds(20), cosmosHealth.StartPeriod);
 
         var generated = Assert.Single(document.Topology.Files);
         var content = string.Concat(generated.Content.Select(segment => segment switch

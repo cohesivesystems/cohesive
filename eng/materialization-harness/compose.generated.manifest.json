@@ -1,0 +1,365 @@
+{
+  "schemaVersion": "cohesive-docker-compose-manifest/v1",
+  "compiler": "cohesive.adapters.docker-compose/v1",
+  "sourceRealization": {
+    "definition": {
+      "schemaVersion": "cohesive-infrastructure/v1",
+      "id": "materialization-harness",
+      "revision": "local-infrastructure-v1",
+      "fingerprint": {
+        "algorithm": "sha256",
+        "canonicalization": "cohesive-infrastructure-definition/v1-c14n/v1",
+        "value": "b84471677f7ec53a02a94a9b7faaac9730c3cef5bdef35f308f96e77d6c38328"
+      }
+    },
+    "profile": {
+      "schemaVersion": "cohesive.infra.capabilities/1",
+      "id": "materialization-harness/local-containers/v1",
+      "fingerprint": {
+        "algorithm": "sha256",
+        "canonicalization": "cohesive-infra-capability-profile/v1-c14n/v1",
+        "value": "57c97601f4bb1ec81223d6bdeacc5348dc3e597c2fa4aaf9aa797b88fb5a443e"
+      }
+    },
+    "target": "local-orchestration",
+    "variant": "local-containers",
+    "fingerprint": {
+      "algorithm": "sha256",
+      "canonicalization": "cohesive-infra-realization/v1-c14n/v1",
+      "value": "d5c2ddded8ec02316393321f49f28ad5f187b8519fff23ec15e233fccc997633"
+    }
+  },
+  "localRealization": {
+    "algorithm": "sha256",
+    "canonicalization": "cohesive-infra-local-realization/v1-c14n/v1",
+    "value": "a73ba8b0dd9f705a254f6f061a8ad375e7dda5bf87170276ce4a1a18fa2843cc"
+  },
+  "environment": "materialization-harness/interactive/v1",
+  "lifecycleAuthority": "local/materialization-harness",
+  "dataLifetime": "Persistent",
+  "isolation": "Shared",
+  "projectName": "cohesive-materialization-local",
+  "configuration": {
+    "configuration": [
+      {
+        "subject": "environment/materialization-harness",
+        "setting": "cosmos-explorer-port",
+        "value": "58082",
+        "attribution": {
+          "setting": "environment/materialization-harness/cosmos-explorer-port",
+          "origin": "FrameworkDefault",
+          "authority": "materialization-harness/local-defaults/v1"
+        }
+      },
+      {
+        "subject": "environment/materialization-harness",
+        "setting": "cosmos-health-port",
+        "value": "58080",
+        "attribution": {
+          "setting": "environment/materialization-harness/cosmos-health-port",
+          "origin": "FrameworkDefault",
+          "authority": "materialization-harness/local-defaults/v1"
+        }
+      },
+      {
+        "subject": "environment/materialization-harness",
+        "setting": "cosmos-port",
+        "value": "58081",
+        "attribution": {
+          "setting": "environment/materialization-harness/cosmos-port",
+          "origin": "FrameworkDefault",
+          "authority": "materialization-harness/local-defaults/v1"
+        }
+      },
+      {
+        "subject": "environment/materialization-harness",
+        "setting": "elasticsearch-java-options",
+        "value": "-Xms512m -Xmx512m",
+        "attribution": {
+          "setting": "environment/materialization-harness/elasticsearch-java-options",
+          "origin": "FrameworkDefault",
+          "authority": "materialization-harness/local-defaults/v1"
+        }
+      },
+      {
+        "subject": "environment/materialization-harness",
+        "setting": "elasticsearch-port",
+        "value": "59200",
+        "attribution": {
+          "setting": "environment/materialization-harness/elasticsearch-port",
+          "origin": "FrameworkDefault",
+          "authority": "materialization-harness/local-defaults/v1"
+        }
+      },
+      {
+        "subject": "environment/materialization-harness",
+        "setting": "kibana-port",
+        "value": "55601",
+        "attribution": {
+          "setting": "environment/materialization-harness/kibana-port",
+          "origin": "FrameworkDefault",
+          "authority": "materialization-harness/local-defaults/v1"
+        }
+      },
+      {
+        "subject": "environment/materialization-harness",
+        "setting": "pgadmin-email",
+        "value": "harness@cohesivesystems.com",
+        "attribution": {
+          "setting": "environment/materialization-harness/pgadmin-email",
+          "origin": "FrameworkDefault",
+          "authority": "materialization-harness/local-defaults/v1"
+        }
+      },
+      {
+        "subject": "environment/materialization-harness",
+        "setting": "pgadmin-port",
+        "value": "55050",
+        "attribution": {
+          "setting": "environment/materialization-harness/pgadmin-port",
+          "origin": "FrameworkDefault",
+          "authority": "materialization-harness/local-defaults/v1"
+        }
+      },
+      {
+        "subject": "environment/materialization-harness",
+        "setting": "postgres-database",
+        "value": "cohesive_materialization",
+        "attribution": {
+          "setting": "environment/materialization-harness/postgres-database",
+          "origin": "FrameworkDefault",
+          "authority": "materialization-harness/local-defaults/v1"
+        }
+      },
+      {
+        "subject": "environment/materialization-harness",
+        "setting": "postgres-port",
+        "value": "55432",
+        "attribution": {
+          "setting": "environment/materialization-harness/postgres-port",
+          "origin": "FrameworkDefault",
+          "authority": "materialization-harness/local-defaults/v1"
+        }
+      },
+      {
+        "subject": "environment/materialization-harness",
+        "setting": "postgres-user",
+        "value": "cohesive",
+        "attribution": {
+          "setting": "environment/materialization-harness/postgres-user",
+          "origin": "FrameworkDefault",
+          "authority": "materialization-harness/local-defaults/v1"
+        }
+      },
+      {
+        "subject": "environment/materialization-harness",
+        "setting": "project-name",
+        "value": "cohesive-materialization-local",
+        "attribution": {
+          "setting": "environment/materialization-harness/project-name",
+          "origin": "FrameworkDefault",
+          "authority": "materialization-harness/local-defaults/v1"
+        }
+      }
+    ],
+    "diagnostics": [],
+    "isValid": true
+  },
+  "yamlFingerprint": {
+    "algorithm": "sha256",
+    "canonicalization": "cohesive-docker-compose/yaml-utf8-lf/v1",
+    "value": "2dd86078d17085ba85f5219df8045ee459ca20789874c331197faf0fe940747b"
+  },
+  "services": [
+    {
+      "resource": "resource/cosmos",
+      "physicalResource": "local/cosmos",
+      "serviceName": "cosmos"
+    },
+    {
+      "resource": "resource/elasticsearch",
+      "physicalResource": "local/elasticsearch",
+      "serviceName": "elasticsearch"
+    },
+    {
+      "resource": "resource/kibana",
+      "physicalResource": "local/kibana",
+      "serviceName": "kibana"
+    },
+    {
+      "resource": "resource/pgadmin",
+      "physicalResource": "local/pgadmin",
+      "serviceName": "pgadmin"
+    },
+    {
+      "resource": "resource/postgres",
+      "physicalResource": "local/postgres",
+      "serviceName": "postgres"
+    }
+  ],
+  "endpoints": [
+    {
+      "physicalResource": "local/cosmos",
+      "endpoint": "cosmos",
+      "exposure": "HostLoopback",
+      "role": "Data",
+      "serviceAddress": "https://cosmos:58081",
+      "hostAddress": "https://localhost:58081"
+    },
+    {
+      "physicalResource": "local/cosmos",
+      "endpoint": "explorer",
+      "exposure": "HostLoopback",
+      "role": "UserInterface",
+      "serviceAddress": "http://cosmos:1234",
+      "hostAddress": "http://localhost:58082"
+    },
+    {
+      "physicalResource": "local/cosmos",
+      "endpoint": "health",
+      "exposure": "HostLoopback",
+      "role": "Management",
+      "serviceAddress": "http://cosmos:8080",
+      "hostAddress": "http://localhost:58080"
+    },
+    {
+      "physicalResource": "local/elasticsearch",
+      "endpoint": "http",
+      "exposure": "HostLoopback",
+      "role": "Data",
+      "serviceAddress": "http://elasticsearch:9200",
+      "hostAddress": "http://localhost:59200"
+    },
+    {
+      "physicalResource": "local/kibana",
+      "endpoint": "ui",
+      "exposure": "HostLoopback",
+      "role": "UserInterface",
+      "serviceAddress": "http://kibana:5601",
+      "hostAddress": "http://localhost:55601"
+    },
+    {
+      "physicalResource": "local/pgadmin",
+      "endpoint": "ui",
+      "exposure": "HostLoopback",
+      "role": "UserInterface",
+      "serviceAddress": "http://pgadmin:80",
+      "hostAddress": "http://localhost:55050"
+    },
+    {
+      "physicalResource": "local/postgres",
+      "endpoint": "postgres",
+      "exposure": "HostLoopback",
+      "role": "Data",
+      "serviceAddress": "postgresql://postgres:5432",
+      "hostAddress": "postgresql://localhost:55432"
+    }
+  ],
+  "volumes": [
+    {
+      "volume": "cosmos-data",
+      "volumeName": "cosmos-data"
+    },
+    {
+      "volume": "elasticsearch-data",
+      "volumeName": "elasticsearch-data"
+    },
+    {
+      "volume": "pgadmin-data",
+      "volumeName": "pgadmin-data"
+    },
+    {
+      "volume": "postgres-data",
+      "volumeName": "postgres-data"
+    }
+  ],
+  "configs": [
+    {
+      "file": "pgadmin-servers",
+      "configName": "pgadmin-servers"
+    }
+  ],
+  "operations": [
+    {
+      "operation": "inspect",
+      "placement": "Host",
+      "effect": "ReadOnly",
+      "executable": "eng/materialization-harness/harness.sh",
+      "arguments": [
+        "process-inspect"
+      ],
+      "mutationAuthority": null
+    },
+    {
+      "operation": "materialize",
+      "placement": "Host",
+      "effect": "ApplicationMutation",
+      "executable": "eng/materialization-harness/harness.sh",
+      "arguments": [
+        "materialize"
+      ],
+      "mutationAuthority": null
+    },
+    {
+      "operation": "reset",
+      "placement": "Host",
+      "effect": "EnvironmentMutation",
+      "executable": "eng/materialization-harness/harness.sh",
+      "arguments": [
+        "reset"
+      ],
+      "mutationAuthority": "local/materialization-harness"
+    },
+    {
+      "operation": "seed",
+      "placement": "Host",
+      "effect": "ApplicationMutation",
+      "executable": "eng/materialization-harness/harness.sh",
+      "arguments": [
+        "seed"
+      ],
+      "mutationAuthority": null
+    },
+    {
+      "operation": "start",
+      "placement": "Host",
+      "effect": "EnvironmentMutation",
+      "executable": "eng/materialization-harness/harness.sh",
+      "arguments": [
+        "up"
+      ],
+      "mutationAuthority": "local/materialization-harness"
+    },
+    {
+      "operation": "status",
+      "placement": "Host",
+      "effect": "ReadOnly",
+      "executable": "eng/materialization-harness/harness.sh",
+      "arguments": [
+        "status"
+      ],
+      "mutationAuthority": null
+    },
+    {
+      "operation": "stop",
+      "placement": "Host",
+      "effect": "EnvironmentMutation",
+      "executable": "eng/materialization-harness/harness.sh",
+      "arguments": [
+        "down"
+      ],
+      "mutationAuthority": "local/materialization-harness"
+    },
+    {
+      "operation": "verify",
+      "placement": "Host",
+      "effect": "ReadOnly",
+      "executable": "eng/materialization-harness/harness.sh",
+      "arguments": [
+        "verify"
+      ],
+      "mutationAuthority": null
+    }
+  ],
+  "maximumLifetime": null
+}

@@ -167,6 +167,8 @@ public static class InfrastructureLocalRealizationCompiler
         public const string SecretValueRequired = "infra.local.environment.secretValueRequired";
         /// <summary>An isolated environment relies on a global or adapter convention for its lifecycle namespace.</summary>
         public const string IsolationConfigurationRequired = "infra.local.environment.isolationConfigurationRequired";
+        /// <summary>A ready dependency has no health policy to establish readiness.</summary>
+        public const string DependencyHealthMissing = "infra.local.readiness.dependencyHealthMissing";
     }
 
     /// <summary>Compiles one exact local realization.</summary>
@@ -295,9 +297,11 @@ public static class InfrastructureLocalRealizationCompiler
             {
                 if (!serviceIds.Contains(dependency))
                     Add(diagnostics, DiagnosticCodes.ReferenceUnknown, $"Ready dependency '{dependency.Value}' is not a service.", $"/topology/services/{service.PhysicalResource.Value}/readyDependencies", dependency.Value);
+                else if (topology.Services.Single(candidate => candidate.PhysicalResource == dependency).Health is null)
+                    Add(diagnostics, DiagnosticCodes.DependencyHealthMissing, $"Ready dependency '{dependency.Value}' has no health policy.", $"/topology/services/{service.PhysicalResource.Value}/readyDependencies", dependency.Value);
             }
 
-            foreach (var probe in service.HealthProbes.OfType<InfrastructureLocalHttpHealthProbe>())
+            foreach (var probe in service.Health?.Probes.OfType<InfrastructureLocalHttpHealthProbe>() ?? [])
             {
                 if (!service.Endpoints.Any(endpoint => endpoint.Id == probe.Endpoint))
                     Add(diagnostics, DiagnosticCodes.ReferenceUnknown, $"Health endpoint '{probe.Endpoint.Value}' is not exposed by the service.", $"/topology/services/{service.PhysicalResource.Value}/healthProbes", probe.Endpoint.Value);

@@ -475,6 +475,59 @@ public sealed record InfrastructureLocalCommandHealthProbe : InfrastructureLocal
     public ImmutableArray<string> Arguments { get; }
 }
 
+/// <summary>Complete local health policy used for readiness and lifecycle supervision.</summary>
+public sealed record InfrastructureLocalHealthPolicy
+{
+    /// <summary>Creates a local health policy.</summary>
+    /// <param name="probes">Probes that must all succeed.</param>
+    /// <param name="interval">Delay between probe attempts.</param>
+    /// <param name="timeout">Maximum duration of one attempt.</param>
+    /// <param name="retries">Consecutive failures allowed before unhealthy state.</param>
+    /// <param name="startPeriod">Optional initialization grace period.</param>
+    /// <exception cref="ArgumentException">No probe is supplied or a collection entry is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A duration or retry count is not positive.</exception>
+    [JsonConstructor]
+    public InfrastructureLocalHealthPolicy(
+        ImmutableArray<InfrastructureLocalHealthProbe> probes,
+        TimeSpan interval,
+        TimeSpan timeout,
+        int retries,
+        TimeSpan? startPeriod = null)
+    {
+        if (probes.IsDefaultOrEmpty)
+            throw new ArgumentException("A local health policy requires at least one probe.", nameof(probes));
+        Probes = InfrastructureLocalCollections.Items(probes, nameof(probes));
+        if (interval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(interval), interval, "Health interval must be positive.");
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout), timeout, "Health timeout must be positive.");
+        if (retries <= 0)
+            throw new ArgumentOutOfRangeException(nameof(retries), retries, "Health retries must be positive.");
+        if (startPeriod.HasValue && startPeriod.Value <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(startPeriod), startPeriod, "Health start period must be positive.");
+
+        Interval = interval;
+        Timeout = timeout;
+        Retries = retries;
+        StartPeriod = startPeriod;
+    }
+
+    /// <summary>Probes that must all succeed.</summary>
+    public ImmutableArray<InfrastructureLocalHealthProbe> Probes { get; }
+
+    /// <summary>Delay between probe attempts.</summary>
+    public TimeSpan Interval { get; }
+
+    /// <summary>Maximum duration of one attempt.</summary>
+    public TimeSpan Timeout { get; }
+
+    /// <summary>Consecutive failures allowed before unhealthy state.</summary>
+    public int Retries { get; }
+
+    /// <summary>Optional initialization grace period.</summary>
+    public TimeSpan? StartPeriod { get; }
+}
+
 /// <summary>One exact container-backed service in a local topology.</summary>
 public sealed record InfrastructureLocalService
 {
@@ -487,7 +540,7 @@ public sealed record InfrastructureLocalService
     /// <param name="endpoints">Service endpoints.</param>
     /// <param name="mounts">Volume mounts.</param>
     /// <param name="fileMounts">Generated-file mounts.</param>
-    /// <param name="healthProbes">Health probes, all of which must succeed.</param>
+    /// <param name="health">Complete health and readiness policy.</param>
     /// <param name="readyDependencies">Services that must become ready first.</param>
     /// <param name="stopGracePeriod">Grace period before forced termination.</param>
     /// <exception cref="ArgumentException">An identity is default or a collection is malformed.</exception>
@@ -502,7 +555,7 @@ public sealed record InfrastructureLocalService
         ImmutableArray<InfrastructureLocalEndpoint> endpoints = default,
         ImmutableArray<InfrastructureLocalVolumeMount> mounts = default,
         ImmutableArray<InfrastructureLocalFileMount> fileMounts = default,
-        ImmutableArray<InfrastructureLocalHealthProbe> healthProbes = default,
+        InfrastructureLocalHealthPolicy? health = null,
         ImmutableArray<InfrastructurePhysicalResourceId> readyDependencies = default,
         TimeSpan? stopGracePeriod = null)
     {
@@ -521,7 +574,7 @@ public sealed record InfrastructureLocalService
         Endpoints = InfrastructureLocalCollections.Normalize(endpoints, static item => item.Id.Value, nameof(endpoints));
         Mounts = InfrastructureLocalCollections.Normalize(mounts, static item => item.TargetPath, nameof(mounts));
         FileMounts = InfrastructureLocalCollections.Normalize(fileMounts, static item => item.TargetPath, nameof(fileMounts));
-        HealthProbes = InfrastructureLocalCollections.Items(healthProbes, nameof(healthProbes));
+        Health = health;
         ReadyDependencies = InfrastructureLocalCollections.Identities(readyDependencies, static item => item.Value, nameof(readyDependencies));
         StopGracePeriod = stopGracePeriod;
     }
@@ -550,8 +603,8 @@ public sealed record InfrastructureLocalService
     /// <summary>Generated-file mounts in target-path order.</summary>
     public ImmutableArray<InfrastructureLocalFileMount> FileMounts { get; }
 
-    /// <summary>Health probes, all of which must succeed.</summary>
-    public ImmutableArray<InfrastructureLocalHealthProbe> HealthProbes { get; }
+    /// <summary>Complete health and readiness policy, when the service exposes one.</summary>
+    public InfrastructureLocalHealthPolicy? Health { get; }
 
     /// <summary>Physical services that must become ready first.</summary>
     public ImmutableArray<InfrastructurePhysicalResourceId> ReadyDependencies { get; }

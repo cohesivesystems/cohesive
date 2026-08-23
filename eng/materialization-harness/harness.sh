@@ -3,7 +3,8 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
-compose_file="$script_dir/compose.yaml"
+compose_file="$script_dir/.runtime/compose.yaml"
+infra_generator_built=false
 
 if [[ -f "$script_dir/.env" ]]; then
   set -a
@@ -31,9 +32,25 @@ export COHESIVE_HARNESS_PGADMIN_PASSWORD="${COHESIVE_HARNESS_PGADMIN_PASSWORD:-c
 export COHESIVE_HARNESS_HOST_PORT="${COHESIVE_HARNESS_HOST_PORT:-59399}"
 
 compose() {
+  generate_infra --runtime >/dev/null
   docker compose \
     --project-name "$COHESIVE_HARNESS_PROJECT_NAME" \
     --file "$compose_file" \
+    "$@"
+}
+
+generate_infra() {
+  if [[ "$infra_generator_built" != "true" ]]; then
+    dotnet build \
+      "$script_dir/infra/Cohesive.MaterializationHarness.Infra.csproj" \
+      --configuration Release \
+      --maxcpucount:1 \
+      --property:UseSharedCompilation=false \
+      --nodeReuse:false
+    infra_generator_built=true
+  fi
+  dotnet \
+    "$script_dir/infra/bin/Release/net10.0/Cohesive.MaterializationHarness.Infra.dll" \
     "$@"
 }
 
@@ -365,6 +382,9 @@ Commands:
   seed     Replace both source databases through Cohesive.Storage repositories (default).
   seed-direct Replace both source databases through raw Npgsql/Cosmos SDK calls as an independent oracle.
   validate Validate the canonical scenario journal without starting Docker.
+  infra-generate Regenerate Compose YAML and its exact provenance manifest from Cohesive.Infra.
+  infra-check Fail when either checked-in generated artifact differs from the canonical realization.
+  infra-parity Compare the generated default artifact with the handwritten Compose parity oracle.
   verify   Verify that both source databases still equal the journal; do not mutate them.
   mutate   Apply the deterministic incremental journal suffix to both source replicas.
   verify-final Verify both source replicas equal the journal's final semantic state.
@@ -411,6 +431,16 @@ case "$command" in
     ;;
   validate)
     validate
+    ;;
+  infra-generate)
+    generate_infra
+    ;;
+  infra-check)
+    generate_infra --check
+    "$script_dir/compare-compose.sh"
+    ;;
+  infra-parity)
+    "$script_dir/compare-compose.sh"
     ;;
   verify)
     up

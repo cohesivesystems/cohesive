@@ -4,7 +4,7 @@ This harness is the local infrastructure boundary for ARI-399 and its materializ
 
 The journal at `scenarios/freight-baseline.json` is the only seed-data authority. The .NET seed projection validates tenant-local references, aggregate ownership, and cardinality before replacing the harness PostgreSQL schema and Cosmos database. The default seed path sends independent Customer and Location states through `GenericRepositorySeedDataService` for both providers and sends the whole Order aggregate through `CosmosEntityOutboxRepository`. PostgreSQL currently projects the Order root and its owned stop rows through one explicit adapter-backed transaction because the scalar entity repository does not yet expose an aggregate writer. A separate direct path retains raw Npgsql and Cosmos SDK writes as an independent oracle. Elasticsearch starts empty after a fresh reset; `materialize` creates candidate generations and promotes their read aliases.
 
-Common materialization conformance orchestration consumes an open catalog of explicit replica fixtures. The runner owns deterministic replica ordering, semantic-fingerprint fencing, and canonical document equality; it has no PostgreSQL/Cosmos switch. Each fixture owns its physical Relations dialect, source construction, capability preflight, and provider diagnostics. Elasticsearch remains an explicit materialization-target adapter, while raw source seeding and verification remain independent provider oracles. This follows the Cohesive.Storage semantic/adapter model without introducing a lowest-common-denominator datastore facade. `FreightMaterializationInfrastructure` is now the canonical Cohesive.Infra authority for the local service graph, environment policies, effective settings, health/readiness, and harness operations. The checked-in Compose file remains the executable implementation until its adapter is introduced; Aspire and Compose will both project the same exact local realization rather than own parallel topologies.
+Common materialization conformance orchestration consumes an open catalog of explicit replica fixtures. The runner owns deterministic replica ordering, semantic-fingerprint fencing, and canonical document equality; it has no PostgreSQL/Cosmos switch. Each fixture owns its physical Relations dialect, source construction, capability preflight, and provider diagnostics. Elasticsearch remains an explicit materialization-target adapter, while raw source seeding and verification remain independent provider oracles. This follows the Cohesive.Storage semantic/adapter model without introducing a lowest-common-denominator datastore facade. `FreightMaterializationInfrastructure` is the canonical Cohesive.Infra authority for the local service graph, environment policies, effective settings, health/readiness, and harness operations. `Cohesive.Adapters.DockerCompose` projects that exact local realization into deterministic YAML and an adjacent provenance manifest. The prior handwritten Compose file remains only a temporary parity oracle; Aspire and Compose will both project the same realization rather than own parallel topologies.
 
 ## Prerequisites
 
@@ -18,6 +18,9 @@ Run these from the repository root:
 
 ```bash
 eng/materialization-harness/harness.sh up
+eng/materialization-harness/harness.sh infra-check
+eng/materialization-harness/harness.sh infra-generate
+eng/materialization-harness/harness.sh infra-parity
 eng/materialization-harness/harness.sh validate
 eng/materialization-harness/harness.sh seed
 eng/materialization-harness/harness.sh seed-direct
@@ -49,6 +52,8 @@ eng/materialization-harness/harness.sh logs
 eng/materialization-harness/harness.sh down
 eng/materialization-harness/harness.sh reset
 ```
+
+`infra-generate` refreshes the checked-in default YAML and manifest. `infra-check` proves those bytes are current and then runs Docker Compose's semantic parity comparison against the handwritten oracle; health command implementations are allowed to differ, while their canonical endpoints, expected statuses, timings, and readiness semantics are covered by compiler tests. `infra-parity` runs only that independent comparison. Ordinary lifecycle commands compile an ignored `.runtime/compose.yaml` and manifest from a fixed whitelist of exported harness settings, preserving `.env` overrides without making ambient configuration part of canonical Infra IR. Secret values are never configuration candidates or manifest content.
 
 `seed` uses Cohesive.Storage repositories and is the normal path. `seed-direct` performs the same baseline projection with raw provider clients, keeping seed verification independent from the repository implementation being tested. The direct Cosmos envelope timestamp is journal-derived; repository-managed persistence metadata remains adapter evidence rather than canonical freight state. `mutate` applies the journal's ordered incremental suffix to both real replicas, and `verify-final` checks their exact final entity state and mutation evidence without rewriting either source. Replaying `mutate` is an explicit idempotency check. `test` seeds, verifies, and materializes the direct path first, then replaces it with the repository path, repeats the same baseline checks, applies and replays the mutation suffix, and runs the focused compiler, inverse-impact, adapter, Process, repository, and persistence tests. `down` preserves database, checkpoint, and index volumes. After `down` and `up`, `verify` proves both source databases still match the journal's exact baseline logical state without rewriting them. `materialize` creates and promotes a new generation for each replica. `verify-index` is read-only and displays the active aliases and their document counts. `reset` is intentionally destructive: it removes only this Compose project's volumes, starts fresh services, and replays the canonical scenario baseline through Cohesive.Storage.
 
@@ -90,7 +95,7 @@ eng/test-materialization-harness.sh
 
 ## Parallel worktrees and ports
 
-The command wrapper derives a Compose project name from the absolute worktree path, so named volumes and services do not collide. Host ports are fixed by default and can be overridden in `eng/materialization-harness/.env`; copy `.env.example` as a starting point. Override `COHESIVE_HARNESS_PROJECT_NAME` when a stable external name is required.
+The command wrapper derives a Compose project name from the absolute worktree path, so named volumes and services do not collide. Host ports are fixed by default and can be overridden in `eng/materialization-harness/.env`; copy `.env.example` as a starting point. Override `COHESIVE_HARNESS_PROJECT_NAME` when a stable external name is required. Each command projects those effective values into the ignored runtime artifact before invoking Docker, so the generated topology and the connection strings consumed by the .NET tools cannot drift.
 
 Default endpoints:
 
