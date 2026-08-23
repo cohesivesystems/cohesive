@@ -83,9 +83,21 @@ public sealed class DockerComposeCompilerTests
     {
         var overrideProfile = FreightMaterializationInfrastructure.CreateIsolatedProjectConfiguration(
             "materialization-tests-42");
+        var portProfile = new InfrastructureConventionProfile(
+            id: new("materialization-tests-42/ports/v1"),
+            candidates:
+            [
+                new(
+                    subject: FreightMaterializationInfrastructure.ConfigurationSubject,
+                    setting: FreightMaterializationInfrastructure.Settings.CosmosPort,
+                    value: "65081",
+                    origin: EffectiveConfigurationOrigin.Explicit,
+                    authority: "materialization-tests-42/ports/v1")
+            ]);
         var source = FreightMaterializationInfrastructure.CreateLocalRealization(
             FreightMaterializationInfrastructure.IsolatedTestProfile,
-            overrideProfile);
+            overrideProfile,
+            portProfile);
 
         var artifact = DockerComposeCompiler.Compile(source).Artifact!;
 
@@ -94,6 +106,9 @@ public sealed class DockerComposeCompilerTests
         Assert.Equal(InfrastructureLocalDataLifetime.Ephemeral, artifact.Manifest.DataLifetime);
         Assert.Equal(InfrastructureLocalEnvironmentIsolation.Isolated, artifact.Manifest.Isolation);
         Assert.Contains("name: 'materialization-tests-42'", artifact.Yaml, StringComparison.Ordinal);
+        Assert.Contains("PORT: '65081'", artifact.Yaml, StringComparison.Ordinal);
+        Assert.Contains("\"127.0.0.1:65081:65081\"", artifact.Yaml, StringComparison.Ordinal);
+        Assert.Contains("GATEWAY_PUBLIC_ENDPOINT: 'https://localhost:65081'", artifact.Yaml, StringComparison.Ordinal);
         Assert.Contains("\"MaintenanceDB\": \"cohesive_materialization\"", artifact.Yaml, StringComparison.Ordinal);
         Assert.Contains("\"Username\": \"cohesive\"", artifact.Yaml, StringComparison.Ordinal);
         Assert.Contains(artifact.Manifest.Operations, operation =>

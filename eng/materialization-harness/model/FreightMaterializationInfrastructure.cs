@@ -162,7 +162,7 @@ public static class FreightMaterializationInfrastructure
             .Environment("ENABLE_EXPLORER", new InfrastructureLocalLiteralValue("true"))
             .Environment("EXPLORER_PROTOCOL", new InfrastructureLocalLiteralValue("http"))
             .Environment("GATEWAY_PUBLIC_ENDPOINT", new InfrastructureLocalEndpointValue(service: CosmosService, endpoint: new("cosmos"), address: InfrastructureLocalEndpointAddress.HostLoopback))
-            .Endpoint(id: new("cosmos"), scheme: "https", containerPort: 58081, exposure: InfrastructureLocalEndpointExposure.HostLoopback, role: InfrastructureLocalEndpointRole.Data, hostPort: Configuration(Settings.CosmosPort))
+            .Endpoint(id: new("cosmos"), scheme: "https", containerPort: Configuration(Settings.CosmosPort), exposure: InfrastructureLocalEndpointExposure.HostLoopback, role: InfrastructureLocalEndpointRole.Data, hostPort: Configuration(Settings.CosmosPort))
             .Endpoint(id: new("health"), scheme: "http", containerPort: 8080, exposure: InfrastructureLocalEndpointExposure.HostLoopback, role: InfrastructureLocalEndpointRole.Management, hostPort: Configuration(Settings.CosmosHealthPort))
             .Endpoint(id: new("explorer"), scheme: "http", containerPort: 1234, exposure: InfrastructureLocalEndpointExposure.HostLoopback, role: InfrastructureLocalEndpointRole.UserInterface, hostPort: Configuration(Settings.CosmosExplorerPort))
             .Mount(volume: new("cosmos-data"), targetPath: "/data")
@@ -250,6 +250,48 @@ public static class FreightMaterializationInfrastructure
                 origin: EffectiveConfigurationOrigin.ScopedProfile,
                 authority: $"materialization-harness/isolated-project/{projectName}/v1")
         ]);
+
+    /// <summary>Creates explicit runtime configuration from the harness environment-variable contract.</summary>
+    /// <param name="readEnvironmentVariable">Optional environment lookup; defaults to <see cref="Environment.GetEnvironmentVariable(string)"/>.</param>
+    /// <returns>Explicit configuration candidates for every harness runtime setting.</returns>
+    /// <exception cref="ArgumentException">A required environment variable is absent, empty, or white-space.</exception>
+    public static InfrastructureConventionProfile CreateRuntimeConfiguration(
+        Func<string, string?>? readEnvironmentVariable = null)
+    {
+        const string authority = "materialization-harness/runtime-environment/v1";
+        readEnvironmentVariable ??= Environment.GetEnvironmentVariable;
+        (InfrastructureSettingId Setting, string EnvironmentVariable)[] bindings =
+        [
+            (Settings.ProjectName, "COHESIVE_HARNESS_PROJECT_NAME"),
+            (Settings.PostgresPort, "COHESIVE_HARNESS_POSTGRES_PORT"),
+            (Settings.PostgresDatabase, "COHESIVE_HARNESS_POSTGRES_DATABASE"),
+            (Settings.PostgresUser, "COHESIVE_HARNESS_POSTGRES_USER"),
+            (Settings.CosmosPort, "COHESIVE_HARNESS_COSMOS_PORT"),
+            (Settings.CosmosHealthPort, "COHESIVE_HARNESS_COSMOS_HEALTH_PORT"),
+            (Settings.CosmosExplorerPort, "COHESIVE_HARNESS_COSMOS_EXPLORER_PORT"),
+            (Settings.ElasticsearchPort, "COHESIVE_HARNESS_ELASTIC_PORT"),
+            (Settings.ElasticsearchJavaOptions, "COHESIVE_HARNESS_ELASTIC_JAVA_OPTS"),
+            (Settings.KibanaPort, "COHESIVE_HARNESS_KIBANA_PORT"),
+            (Settings.PgAdminPort, "COHESIVE_HARNESS_PGADMIN_PORT"),
+            (Settings.PgAdminEmail, "COHESIVE_HARNESS_PGADMIN_EMAIL")
+        ];
+        var candidates = ImmutableArray.CreateBuilder<InfrastructureConfigurationCandidate>(bindings.Length);
+        foreach (var binding in bindings)
+        {
+            var value = readEnvironmentVariable(binding.EnvironmentVariable);
+            if (string.IsNullOrWhiteSpace(value))
+                throw new ArgumentException($"Runtime configuration requires environment variable '{binding.EnvironmentVariable}'.", nameof(readEnvironmentVariable));
+            candidates.Add(new(
+                subject: ConfigurationSubject,
+                setting: binding.Setting,
+                value: value,
+                origin: EffectiveConfigurationOrigin.Explicit,
+                authority: authority));
+        }
+        return new(
+            id: new(authority),
+            candidates: candidates.MoveToImmutable());
+    }
 
     /// <summary>Compiles the canonical fixture for one local environment policy.</summary>
     /// <param name="environment">Interactive or isolated-test environment policy.</param>

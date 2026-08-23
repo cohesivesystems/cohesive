@@ -216,6 +216,87 @@ public sealed record InfrastructureLocalConfigurationValue : InfrastructureLocal
     public InfrastructureSettingId Setting { get; }
 }
 
+/// <summary>Literal or effective-configuration source for a service listener port.</summary>
+public sealed record InfrastructureLocalPort
+{
+    /// <summary>Creates a listener-port source.</summary>
+    /// <param name="literal">Literal port, when the listener is fixed.</param>
+    /// <param name="configuration">Effective-configuration reference, when the listener is environment-specific.</param>
+    /// <exception cref="ArgumentException">Both or neither source is supplied.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="literal"/> is outside 1-65535.</exception>
+    [JsonConstructor]
+    public InfrastructureLocalPort(
+        int? literal,
+        InfrastructureLocalConfigurationValue? configuration)
+    {
+        if (literal.HasValue == (configuration is not null))
+            throw new ArgumentException("A local port requires exactly one literal or configuration source.", nameof(configuration));
+        if (literal is < 1 or > 65535)
+            throw new ArgumentOutOfRangeException(nameof(literal), literal, "A port must be between 1 and 65535.");
+        Literal = literal;
+        Configuration = configuration;
+    }
+
+    /// <summary>Creates a fixed listener port.</summary>
+    /// <param name="literal">Literal port.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="literal"/> is outside 1-65535.</exception>
+    public InfrastructureLocalPort(int literal)
+        : this(literal: literal, configuration: null)
+    {
+    }
+
+    /// <summary>Creates an environment-specific listener port.</summary>
+    /// <param name="configuration">Effective-configuration reference.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="configuration"/> is <see langword="null"/>.</exception>
+    public InfrastructureLocalPort(InfrastructureLocalConfigurationValue configuration)
+        : this(literal: null, configuration: Guard.RequireNotNull(configuration))
+    {
+    }
+
+    /// <summary>Literal port, when fixed.</summary>
+    public int? Literal { get; }
+
+    /// <summary>Effective-configuration reference, when environment-specific.</summary>
+    public InfrastructureLocalConfigurationValue? Configuration { get; }
+
+    /// <summary>Resolves the exact listener port from effective configuration.</summary>
+    /// <param name="resolution">Effective configuration and attribution.</param>
+    /// <returns>The exact port in the range 1-65535.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="resolution"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">The configured value is missing or is outside 1-65535.</exception>
+    public int Resolve(InfrastructureConventionResolution resolution)
+    {
+        ArgumentNullException.ThrowIfNull(resolution);
+        if (Literal is { } literal)
+            return literal;
+        var reference = Configuration!;
+        var effective = resolution.Configuration.FirstOrDefault(item =>
+            item.Subject == reference.Subject && item.Setting == reference.Setting);
+        if (effective is null)
+        {
+            throw new InvalidOperationException(
+                $"Local port configuration '{reference.Subject.Value}/{reference.Setting.Value}' is unresolved.");
+        }
+        if (!int.TryParse(effective.Value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var port)
+            || port is < 1 or > 65535)
+        {
+            throw new InvalidOperationException(
+                $"Effective local port '{effective.Value}' for '{reference.Subject.Value}/{reference.Setting.Value}' is outside 1-65535.");
+        }
+        return port;
+    }
+
+    /// <summary>Converts a literal integer to a fixed local port.</summary>
+    /// <param name="literal">Literal port.</param>
+    /// <returns>A validated fixed listener-port source.</returns>
+    public static implicit operator InfrastructureLocalPort(int literal) => new(literal);
+
+    /// <summary>Converts an effective-configuration reference to an environment-specific local port.</summary>
+    /// <param name="configuration">Effective-configuration reference.</param>
+    /// <returns>A configured listener-port source.</returns>
+    public static implicit operator InfrastructureLocalPort(InfrastructureLocalConfigurationValue configuration) => new(configuration);
+}
+
 /// <summary>Reference to a secret supplied at lifecycle execution time.</summary>
 public sealed record InfrastructureLocalSecretValue : InfrastructureLocalValue
 {
@@ -301,7 +382,7 @@ public sealed record InfrastructureLocalEndpoint
     /// <summary>Creates an endpoint.</summary>
     /// <param name="id">Stable service-local identity.</param>
     /// <param name="scheme">URI scheme.</param>
-    /// <param name="containerPort">Port inside the service environment.</param>
+    /// <param name="containerPort">Literal or configured port inside the service environment.</param>
     /// <param name="exposure">Endpoint exposure semantics.</param>
     /// <param name="role">Endpoint user-facing role.</param>
     /// <param name="hostPort">Effective host-port setting when exposed on loopback.</param>
@@ -311,15 +392,13 @@ public sealed record InfrastructureLocalEndpoint
     public InfrastructureLocalEndpoint(
         InfrastructureLocalEndpointId id,
         string scheme,
-        int containerPort,
+        InfrastructureLocalPort containerPort,
         InfrastructureLocalEndpointExposure exposure,
         InfrastructureLocalEndpointRole role,
         InfrastructureLocalConfigurationValue? hostPort = null)
     {
         if (string.IsNullOrWhiteSpace(id.Value))
             throw new ArgumentException("A local endpoint requires an identity.", nameof(id));
-        if (containerPort is < 1 or > 65535)
-            throw new ArgumentOutOfRangeException(nameof(containerPort), containerPort, "A port must be between 1 and 65535.");
         if (!Enum.IsDefined(exposure))
             throw new ArgumentOutOfRangeException(nameof(exposure), exposure, "Unsupported endpoint exposure.");
         if (!Enum.IsDefined(role))
@@ -329,7 +408,7 @@ public sealed record InfrastructureLocalEndpoint
 
         Id = id;
         Scheme = Guard.RequireNotNullOrWhiteSpace(scheme);
-        ContainerPort = containerPort;
+        ContainerPort = Guard.RequireNotNull(containerPort);
         Exposure = exposure;
         Role = role;
         HostPort = hostPort;
@@ -341,8 +420,8 @@ public sealed record InfrastructureLocalEndpoint
     /// <summary>URI scheme.</summary>
     public string Scheme { get; }
 
-    /// <summary>Port inside the service environment.</summary>
-    public int ContainerPort { get; }
+    /// <summary>Literal or configured port inside the service environment.</summary>
+    public InfrastructureLocalPort ContainerPort { get; }
 
     /// <summary>Endpoint exposure semantics.</summary>
     public InfrastructureLocalEndpointExposure Exposure { get; }

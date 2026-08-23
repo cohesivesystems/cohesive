@@ -183,7 +183,8 @@ public static class DockerComposeCompiler
                 foreach (var endpoint in service.Endpoints.Where(static endpoint => endpoint.Exposure == InfrastructureLocalEndpointExposure.HostLoopback))
                 {
                     var hostPort = Effective(endpoint.HostPort!.Subject, endpoint.HostPort.Setting, effective).Value;
-                    Line(yaml, 3, $"- {DoubleQuoted($"127.0.0.1:{hostPort}:{endpoint.ContainerPort.ToString(CultureInfo.InvariantCulture)}")}");
+                    var containerPort = endpoint.ContainerPort.Resolve(source.Configuration);
+                    Line(yaml, 3, $"- {DoubleQuoted($"127.0.0.1:{hostPort}:{containerPort.ToString(CultureInfo.InvariantCulture)}")}");
                 }
             }
             if (!service.Mounts.IsEmpty)
@@ -214,7 +215,7 @@ public static class DockerComposeCompiler
                 }
             }
             if (service.Health is { } health)
-                EmitHealth(yaml, service, health, diagnostics);
+                EmitHealth(yaml, service, health, source.Configuration, diagnostics);
             if (service.StopGracePeriod is { } grace)
             {
                 var duration = Duration(grace, diagnostics, $"/topology/services/{service.PhysicalResource.Value}/stopGracePeriod");
@@ -250,6 +251,7 @@ public static class DockerComposeCompiler
         StringBuilder yaml,
         InfrastructureLocalService service,
         InfrastructureLocalHealthPolicy health,
+        InfrastructureConventionResolution configuration,
         ICollection<DocumentValidationDiagnostic> diagnostics)
     {
         List<string> probes = [];
@@ -262,7 +264,8 @@ public static class DockerComposeCompiler
                     break;
                 case InfrastructureLocalHttpHealthProbe http:
                     var endpoint = service.Endpoints.Single(candidate => candidate.Id == http.Endpoint);
-                    var uri = $"{endpoint.Scheme}://localhost:{endpoint.ContainerPort.ToString(CultureInfo.InvariantCulture)}{http.Path}";
+                    var containerPort = endpoint.ContainerPort.Resolve(configuration);
+                    var uri = $"{endpoint.Scheme}://localhost:{containerPort.ToString(CultureInfo.InvariantCulture)}{http.Path}";
                     var expectedStatus = http.ExpectedStatus.ToString(CultureInfo.InvariantCulture);
                     probes.Add($"if command -v curl >/dev/null 2>&1; then status=$(curl --silent --output /dev/null --write-out '%{{http_code}}' {ShellLiteral(uri)}) && [ \"$status\" -eq {expectedStatus} ]; else wget --quiet --server-response --spider {ShellLiteral(uri)} 2>&1 | awk '/^  HTTP\\// {{ status=$2 }} END {{ exit status == {expectedStatus} ? 0 : 1 }}'; fi");
                     break;
@@ -292,7 +295,8 @@ public static class DockerComposeCompiler
         {
             foreach (var endpoint in service.Endpoints)
             {
-                var serviceAddress = $"{endpoint.Scheme}://{serviceNames[service.PhysicalResource]}:{endpoint.ContainerPort.ToString(CultureInfo.InvariantCulture)}";
+                var containerPort = endpoint.ContainerPort.Resolve(source.Configuration);
+                var serviceAddress = $"{endpoint.Scheme}://{serviceNames[service.PhysicalResource]}:{containerPort.ToString(CultureInfo.InvariantCulture)}";
                 string? hostAddress = endpoint.HostPort is null
                     ? null
                     : $"{endpoint.Scheme}://localhost:{Effective(endpoint.HostPort.Subject, endpoint.HostPort.Setting, effective).Value}";
@@ -353,7 +357,7 @@ public static class DockerComposeCompiler
                     ? serviceNames[service.PhysicalResource]
                     : "localhost";
                 var port = endpointValue.Address == InfrastructureLocalEndpointAddress.ServiceNetwork
-                    ? endpoint.ContainerPort.ToString(CultureInfo.InvariantCulture)
+                    ? endpoint.ContainerPort.Resolve(source.Configuration).ToString(CultureInfo.InvariantCulture)
                     : Effective(endpoint.HostPort!.Subject, endpoint.HostPort.Setting, effective).Value;
                 var uri = $"{endpoint.Scheme}://{host}:{port}";
                 return endpointValue.Format switch

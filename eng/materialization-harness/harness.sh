@@ -5,6 +5,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 compose_file="$script_dir/.runtime/compose.yaml"
 infra_generator_built=false
+aspire_apphost="$script_dir/apphost/Cohesive.MaterializationHarness.AppHost.csproj"
 
 if [[ -f "$script_dir/.env" ]]; then
   set -a
@@ -64,7 +65,34 @@ configure_runtime() {
   export COHESIVE_POSTGRES_TEST_CONNECTION_STRING="$COHESIVE_MATERIALIZATION_POSTGRES_CONNECTION_STRING"
 }
 
+aspire_cli() {
+  ASPIRE_CLI_TELEMETRY_OPTOUT=1 dnx --yes aspire.cli@13.5.2 -- \
+    --non-interactive \
+    --nologo \
+    "$@"
+}
+
+aspire_up() {
+  local profile="${1:-interactive}"
+  if [[ "$profile" != "interactive" && "$profile" != "isolated" ]]; then
+    printf 'aspire-up profile must be interactive or isolated.\n' >&2
+    exit 2
+  fi
+  export COHESIVE_HARNESS_ASPIRE_PROFILE="$profile"
+  aspire_cli start --apphost "$aspire_apphost" --format Json
+  for resource in postgres cosmos elasticsearch pgadmin kibana; do
+    aspire_cli wait "$resource" --apphost "$aspire_apphost" --status healthy --timeout 240
+  done
+}
+
+aspire_command() {
+  aspire_cli resource materialization-workflow "$1" --apphost "$aspire_apphost"
+}
+
 up() {
+  if [[ "${COHESIVE_HARNESS_SKIP_INFRA_UP:-false}" == "true" ]]; then
+    return
+  fi
   compose up --detach --wait --wait-timeout 240
 }
 
@@ -385,6 +413,14 @@ Commands:
   infra-generate Regenerate Compose YAML and its exact provenance manifest from Cohesive.Infra.
   infra-check Fail when either checked-in generated artifact differs from the canonical realization.
   infra-parity Compare the generated default artifact with the handwritten Compose parity oracle.
+  aspire-up [interactive|isolated] Start the canonical topology through Aspire and wait for every service.
+  aspire-status Inspect live Aspire resource identity, endpoints, readiness, and dashboard links.
+  aspire-logs [resource] Read or follow Aspire/DCP resource logs.
+  aspire-seed Execute the canonical seed operation through the Aspire UI/API command surface.
+  aspire-materialize Execute the canonical materialization operation through Aspire.
+  aspire-verify Execute the canonical read-only verification operation through Aspire.
+  aspire-test Start, seed, verify, materialize, and verify through the Aspire interpretation.
+  aspire-stop Stop the AppHost without deleting interactive named volumes.
   verify   Verify that both source databases still equal the journal; do not mutate them.
   mutate   Apply the deterministic incremental journal suffix to both source replicas.
   verify-final Verify both source replicas equal the journal's final semantic state.
@@ -441,6 +477,46 @@ case "$command" in
     ;;
   infra-parity)
     "$script_dir/compare-compose.sh"
+    ;;
+  aspire-up)
+    if [[ "$#" -gt 2 ]]; then
+      usage
+      exit 2
+    fi
+    aspire_up "${2:-interactive}"
+    ;;
+  aspire-status)
+    aspire_cli describe --apphost "$aspire_apphost" --format Table
+    ;;
+  aspire-logs)
+    if [[ "$#" -gt 2 ]]; then
+      usage
+      exit 2
+    fi
+    if [[ "$#" -eq 2 ]]; then
+      aspire_cli logs "$2" --apphost "$aspire_apphost" --tail 200
+    else
+      aspire_cli logs --apphost "$aspire_apphost" --tail 200
+    fi
+    ;;
+  aspire-seed)
+    aspire_command seed
+    ;;
+  aspire-materialize)
+    aspire_command materialize
+    ;;
+  aspire-verify)
+    aspire_command verify
+    ;;
+  aspire-test)
+    aspire_up interactive
+    aspire_command seed
+    aspire_command verify
+    aspire_command materialize
+    aspire_command verify
+    ;;
+  aspire-stop)
+    aspire_cli stop --apphost "$aspire_apphost"
     ;;
   verify)
     up
