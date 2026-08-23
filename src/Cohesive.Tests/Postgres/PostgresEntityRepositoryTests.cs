@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Model;
 using Cohesive.Relations.Authoring;
+using Cohesive.Relations.Model;
 using Cohesive.Storage;
 using Cohesive.Transitions.Model;
 using Npgsql;
@@ -95,6 +96,75 @@ public sealed class PostgresEntityRepositoryTests
 
         Assert.Contains("at most 1", capacityError.Message, StringComparison.Ordinal);
         Assert.Contains("multiple partitions", partitionError.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WriteRejectsSchemaInvalidObservationBeforeDatabaseAccess()
+    {
+        var entity = OrderEntity();
+        using var dataSource = DataSource();
+        var repository = new PostgresEntityRepository(entity, Runtime(dataSource), OrderMapping());
+        var invalid = InvalidObservation(entity, "order-invalid");
+
+        var error = await Assert.ThrowsAsync<SemanticRuleViolationException>(() => repository.Upsert(
+            context: OperationContext.Create(),
+            write: new(invalid)));
+
+        Assert.Contains("unknown field 'unexpected'", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadRejectsSchemaInvalidCompleteObservationBeforeSelectedFieldProjection()
+    {
+        var entity = OrderEntity();
+        using var dataSource = DataSource();
+        var repository = new PostgresEntityRepository(entity, Runtime(dataSource), OrderMapping());
+        var invalid = InvalidObservation(entity, "order-invalid");
+
+        var error = Assert.Throws<SemanticRuleViolationException>(() => repository.CreateValidatedReadSnapshot(
+            complete: invalid,
+            partition: "tenant-a",
+            concurrencyToken: new("7"),
+            selectedFields: new HashSet<string>(["id"], StringComparer.Ordinal)));
+
+        Assert.Contains("unknown field 'unexpected'", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadValidatesCompleteObservationThenRetainsPartialSnapshotSemantics()
+    {
+        var entity = OrderEntity();
+        using var dataSource = DataSource();
+        var repository = new PostgresEntityRepository(entity, Runtime(dataSource), OrderMapping());
+        var complete = Write(entity, id: "order-1", tenant: "tenant-a").Entity;
+        IReadOnlySet<string> selectedFields = new HashSet<string>(["id", "orderNumber"], StringComparer.Ordinal);
+
+        var snapshot = repository.CreateValidatedReadSnapshot(
+            complete: complete,
+            partition: "tenant-a",
+            concurrencyToken: new("7"),
+            selectedFields: selectedFields);
+
+        Assert.Equal(selectedFields, snapshot.LoadedFields);
+        Assert.Equal(2, snapshot.Entity.Layout.Count);
+        Assert.Equal("order-1", snapshot.Entity.GetField("id").GetRequiredString());
+        Assert.Equal("ORD-order-1", snapshot.Entity.GetField("orderNumber").GetRequiredString());
+        Assert.False(snapshot.Entity.TryGetField("tenantId", out _));
+    }
+
+    static Observation InvalidObservation(EntityDefinition entity, string id)
+    {
+        var valid = Write(entity, id: id, tenant: "tenant-a").Entity;
+        Dictionary<string, ObservationValue> fields = valid.Fields.ToDictionary(
+            static item => item.Key,
+            static item => item.Value,
+            StringComparer.Ordinal);
+        fields.Add("unexpected", ObservationValue.FromString("invalid"));
+        return new(
+            shapeId: entity.Shape.Id,
+            id: id,
+            fields: fields,
+            version: valid.Version);
     }
 
     static EntityWriteRequest Write(EntityDefinition entity, string id, string tenant) => new(

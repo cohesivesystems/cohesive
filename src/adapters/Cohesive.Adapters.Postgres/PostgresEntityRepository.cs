@@ -391,21 +391,35 @@ public sealed class PostgresEntityRepository : IEntityRepository
         var identity = fields[mapping.IdentityField].GetRequiredString();
         var partition = fields[mapping.PartitionField].GetRequiredString();
         var complete = new Observation(EntityDefinition.Shape.Id, identity, fields, version);
-        EntityDefinition.CreateState(complete);
+        return CreateValidatedReadSnapshot(
+            complete: complete,
+            partition: partition,
+            concurrencyToken: new(token),
+            selectedFields: selectedFields);
+    }
+
+    internal EntitySnapshot CreateValidatedReadSnapshot(
+        Observation complete,
+        string partition,
+        EntityConcurrencyToken concurrencyToken,
+        IReadOnlySet<string>? selectedFields)
+    {
+        ArgumentNullException.ThrowIfNull(complete);
+        EntityDefinition.ValidateObservation(complete);
 
         if (selectedFields is null)
-            return new(complete, partition, new(token));
+            return new(complete, partition, concurrencyToken);
 
         Dictionary<string, ObservationValue> projected = new(selectedFields.Count, StringComparer.Ordinal);
         foreach (var field in selectedFields)
         {
-            if (fields.TryGetValue(field, out var value))
+            if (complete.TryGetField(field, out var value))
                 projected.Add(field, value);
         }
         return new(
-            new(EntityDefinition.Shape.Id, identity, projected, version),
+            new(EntityDefinition.Shape.Id, complete.Id, projected, complete.Version),
             partition,
-            new(token),
+            concurrencyToken,
             selectedFields);
     }
 
@@ -413,7 +427,7 @@ public sealed class PostgresEntityRepository : IEntityRepository
     {
         ArgumentNullException.ThrowIfNull(write);
         ArgumentNullException.ThrowIfNull(write.Entity);
-        EntityDefinition.CreateState(write.Entity);
+        EntityDefinition.ValidateObservation(write.Entity);
         var identity = write.Entity.GetField(mapping.IdentityField).GetRequiredString();
         if (!string.Equals(identity, write.Entity.Id, StringComparison.Ordinal))
         {
