@@ -76,6 +76,12 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
     /// </summary>
     public Container Container => container;
 
+    /// <summary>
+    /// Exact persisted entity-document discriminator. Native queries over the shared container must retain this value
+    /// as physical source-scope evidence.
+    /// </summary>
+    public string EntityDocumentKind => options.EntityDocumentKind;
+
     /// <inheritdoc />
     public EntityDefinition EntityDefinition => entityDefinition;
 

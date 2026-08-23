@@ -242,7 +242,7 @@ Current portable and adapter contracts expose their schema versions through cons
 - `relation-query-source-placement/v3`
 - `relation-query-physical-plan/v1`
 - `relation-query-explain/v1`
-- Cosmos SQL profile `canonical-v4` and binding `cosmos-binding/v5`
+- Cosmos SQL profile `canonical-v4`, compiler `compiler-v5`, binding `cosmos-binding/v6`, and artifact canonicalization v7
 - Elasticsearch profile `canonical-v2` and binding `elastic-binding/v4`
 - PostgreSQL SQL profile `canonical-v2`, source-reader profile `source-reader-v1`, binding `postgres-binding/v1`, and
   artifact `postgres-artifact/v3`
@@ -251,6 +251,12 @@ Cosmos SQL `canonical-v4` adds proof-gated UTC `DateTime`/`Instant` ranges and k
 parameters retain their exact UTC round-trip value domain, and Cosmos artifact canonicalization advances to v6 so
 older artifacts cannot silently omit that invocation constraint. Recompile persisted Cosmos artifacts against the
 same canonical plan and storage binding; do not rewrite their profile, parameter, or fingerprint metadata.
+
+Cosmos binding `cosmos-binding/v6` adds fingerprinted top-level physical source-scope equalities. Compiler
+`compiler-v5` conjoins those parameterized membership predicates with every canonical filter, and artifact
+canonicalization v7 covers the resulting statement and binding fingerprint. Reauthor shared entity/outbox-container
+bindings with `.EntityDocuments(repository.EntityDocumentKind)` and regenerate their native artifacts. Do not move
+the document discriminator into canonical Relation Query IR: it classifies the adapter envelope, not the domain.
 
 Migration rules:
 

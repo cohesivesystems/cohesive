@@ -1404,7 +1404,7 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
         Assert.NotEqual(artifact.Fingerprint, changedProvenanceFingerprint);
         Assert.NotEqual(artifact.Fingerprint, changedAuxiliaryFingerprint);
         Assert.NotEqual(artifact.Fingerprint, changedPlanFingerprint);
-        Assert.EndsWith("/v6", artifact.Fingerprint.Canonicalization, StringComparison.Ordinal);
+        Assert.EndsWith("/v7", artifact.Fingerprint.Canonicalization, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1464,7 +1464,7 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
             artifact.Provenance);
 
         Assert.NotEqual(artifact.Fingerprint, changed);
-        Assert.EndsWith("/v6", changed.Canonicalization, StringComparison.Ordinal);
+        Assert.EndsWith("/v7", changed.Canonicalization, StringComparison.Ordinal);
     }
 
     [Fact]

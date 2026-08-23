@@ -532,6 +532,52 @@ public sealed class CosmosRelationQueryCompilerTests
     }
 
     [CosmosRelationQueryArtifactFact]
+    public async Task CosmosArtifact_PhysicalEntityScopeExcludesOutboxDocumentsFromSharedContainer()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("COSMOS_RELATION_QUERY_CONNECTION_STRING")
+            ?? throw new InvalidOperationException("The Cosmos connection string disappeared after discovery.");
+        var databaseId = $"cohesive-relation-query-tests-{Guid.NewGuid():N}";
+        using var client = CreateCosmosClient(connectionString);
+        var database = (await client.CreateDatabaseAsync(databaseId)).Database;
+        try
+        {
+            const string containerId = "shared";
+            var container = (await database.CreateContainerAsync(
+                new ContainerProperties(containerId, "/pk"))).Container;
+            await container.UpsertItemAsync(
+                new { id = "entity-1", pk = "tenant-a", documentKind = "entity-v2", Id = "load-1", Status = "ready" },
+                new PartitionKey("tenant-a"));
+            await container.UpsertItemAsync(
+                new { id = "outbox-1", pk = "tenant-a", documentKind = "outbox-v2", Id = "outbox-1", Status = "ready" },
+                new PartitionKey("tenant-a"));
+
+            var fixture = Fixture.Row(offset: 0);
+            var unscoped = EmulatorBinding(fixture, client.Endpoint, databaseId, containerId);
+            var binding = WithEntitySourceScope(unscoped, "entity-v2");
+            var artifact = Assert.Single(fixture.Compile(binding).Artifacts);
+            var executor = new CosmosRelationQueryArtifactExecutor(container);
+
+            var result = await executor.ExecuteAsync(ExecutionRequest(
+                fixture,
+                binding,
+                artifact,
+                new Dictionary<QueryParameterId, ObservationValue>
+                {
+                    [new("status")] = ObservationValue.FromString("ready")
+                }));
+
+            Assert.True(result.IsSuccessful, string.Join(Environment.NewLine, result.Diagnostics.Select(static x => x.Message)));
+            Assert.Equal(
+                ["load-1"],
+                result.Rows.Select(static row => row.Value.GetProperty("Id").String));
+        }
+        finally
+        {
+            await database.DeleteAsync();
+        }
+    }
+
+    [CosmosRelationQueryArtifactFact]
     public async Task CosmosArtifact_ProofGatedUtcInstantKeysetMatchesCanonicalPage()
     {
         var connectionString = Environment.GetEnvironmentVariable("COSMOS_RELATION_QUERY_CONNECTION_STRING")
@@ -1915,6 +1961,34 @@ public sealed class CosmosRelationQueryCompilerTests
         return new CosmosClient(connectionString, options);
     }
 
+    static CosmosRelationQueryStorageBinding WithEntitySourceScope(
+        CosmosRelationQueryStorageBinding binding,
+        string entityDocumentKind) => new(
+        binding.Id,
+        binding.Source,
+        binding.PlacementBinding,
+        binding.Target,
+        binding.TargetProfile,
+        binding.AccountEndpoint,
+        binding.DatabaseName,
+        binding.ContainerName,
+        binding.RootAlias,
+        binding.IdentityPath,
+        binding.Fields,
+        binding.DocumentRoot,
+        binding.PartitionPath,
+        binding.StableUniqueOrderingPaths,
+        binding.ExactOrderingPaths,
+        binding.MaximumInputRows,
+        binding.MissingValueEncoding,
+        binding.NullValueEncoding,
+        binding.Origin,
+        binding.ConventionSetVersion,
+        binding.ConfigurationDecisions,
+        binding.CompiledPlanFingerprint,
+        binding.PlacementFingerprint,
+        [new(FieldPath.FromField(CosmosRelationQuerySourceReader.DocumentKindSourceSelector), entityDocumentKind)]);
+
     static CosmosRelationQueryArtifactExecutionRequest ExecutionRequest(
         Fixture fixture,
         CosmosRelationQueryStorageBinding binding,
@@ -2142,7 +2216,8 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.ConventionSetVersion,
             StorageBinding.ConfigurationDecisions,
             RelationQueryCompiledPlanReferenceFingerprinter.Compute(PlanReference),
-            Placement.Fingerprint);
+            Placement.Fingerprint,
+            StorageBinding.SourceScopeEqualities);
 
         public RelationQueryRealizationReport RealizeExactContributors() => Realize(
             Plan,
@@ -2173,7 +2248,8 @@ public sealed class CosmosRelationQueryCompilerTests
                 StorageBinding.ConventionSetVersion,
                 StorageBinding.ConfigurationDecisions,
                 StorageBinding.CompiledPlanFingerprint,
-                StorageBinding.PlacementFingerprint);
+                StorageBinding.PlacementFingerprint,
+                StorageBinding.SourceScopeEqualities);
 
         public CosmosRelationQueryStorageBinding StorageBindingWithTarget(RelationQueryTargetId target) => new(
             StorageBinding.Id,
@@ -2198,7 +2274,8 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.ConventionSetVersion,
             StorageBinding.ConfigurationDecisions,
             StorageBinding.CompiledPlanFingerprint,
-            StorageBinding.PlacementFingerprint);
+            StorageBinding.PlacementFingerprint,
+            StorageBinding.SourceScopeEqualities);
 
         public CosmosRelationQueryCollectionScopeEvidence StopsCollectionScope =>
             StorageBinding.ResolveFieldBinding(InputFor(StopsPath)).CollectionScope!;
@@ -2243,7 +2320,8 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.ConventionSetVersion,
             StorageBinding.ConfigurationDecisions,
             StorageBinding.CompiledPlanFingerprint,
-            StorageBinding.PlacementFingerprint);
+            StorageBinding.PlacementFingerprint,
+            StorageBinding.SourceScopeEqualities);
 
         public CosmosRelationQueryStorageBinding StorageBindingWithOrderingProofs(
             ImmutableArray<FieldPath> stableUniqueOrderingPaths,
@@ -2270,7 +2348,8 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.ConventionSetVersion,
             StorageBinding.ConfigurationDecisions,
             StorageBinding.CompiledPlanFingerprint,
-            StorageBinding.PlacementFingerprint);
+            StorageBinding.PlacementFingerprint,
+            StorageBinding.SourceScopeEqualities);
 
         public CosmosRelationQueryStorageBinding StorageBindingWithMaximumInputRows(
             long? maximumInputRows) => new(
@@ -2296,7 +2375,8 @@ public sealed class CosmosRelationQueryCompilerTests
             StorageBinding.ConventionSetVersion,
             StorageBinding.ConfigurationDecisions,
             StorageBinding.CompiledPlanFingerprint,
-            StorageBinding.PlacementFingerprint);
+            StorageBinding.PlacementFingerprint,
+            StorageBinding.SourceScopeEqualities);
 
         public static Fixture Row(
             int offset = 5,

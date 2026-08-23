@@ -141,6 +141,7 @@ public sealed class EntityRepositoryContractsTests
             RepositoryEntity.Instance.Definition,
             client.GetContainer("tests", "entities"),
             partitionKeyPolicy: EntityPartitionKeyPolicy.FromField(nameof(RepositoryState.Tenant)));
+        Assert.Equal(CosmosObservationOutboxRepositoryOptions.DefaultEntityDocumentKind, repository.EntityDocumentKind);
         var document = Assert.Single(repository.CreateOutboxDocuments(
             OperationContext.Create(),
             new EntityOutboxCommit(new(state.Observation), [envelope]),

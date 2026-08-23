@@ -893,6 +893,7 @@ public sealed class CosmosRelationQueryCompiler
                     branch.Node);
             }
             ValidatePipeline();
+            ConfigurePhysicalSourceScope();
             ConfigureSourcePipeline();
             var (resultFields, resultIdentity, auxiliaryResultAliases) = ConfigureProjection();
             ConfigureOrderingAndPaging();
@@ -1042,6 +1043,17 @@ public sealed class CosmosRelationQueryCompiler
                     CosmosRelationQueryCompilationDiagnosticCodes.UnsupportedLogicalOperator,
                     "Cosmos SQL v4 does not claim ordered or paged aggregate-result equivalence; grouped queries cannot combine GROUP BY and ORDER BY.",
                     branch.Node);
+            }
+        }
+
+        void ConfigurePhysicalSourceScope()
+        {
+            foreach (var equality in storageBinding.SourceScopeEqualities)
+            {
+                builder.Where(CosmosSqlExpression.Binary(
+                    CosmosSqlBinaryOperator.Equal,
+                    CosmosSqlExpression.Property(storageBinding.RootAlias, equality.DocumentPath),
+                    CosmosSqlExpression.Parameter(equality.Value)));
             }
         }
 
@@ -2977,7 +2989,7 @@ public sealed class CosmosRelationQueryCompiler
 static class CosmosRelationQueryArtifactFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.cosmos-artifact/v1-c14n/v6";
+    const string Canonicalization = "cohesive.relations.cosmos-artifact/v1-c14n/v7";
 
     public static CosmosRelationQueryArtifactFingerprint Compute(
         RelationQueryNativeResultBranch branch,

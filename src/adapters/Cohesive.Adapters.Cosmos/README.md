@@ -232,8 +232,8 @@ capability sufficiency. The low-level constructor and `FromSemanticPathConventio
 hatches. A direct constructor call may omit both the compiled-plan and placement fingerprints, but that creates an
 explicitly unverified binding; supplying only one is rejected. Builder-authored bindings always persist both, and
 native compilation rejects either fingerprint when it does not match the request. Account endpoint, database,
-container, document-root, identity, partition, missing/null, stable-unique ordering, exact-ordering,
-maximum-input-row, origin, convention, and per-setting configuration-attribution facts participate in the binding
+container, top-level source-scope equalities, document-root, identity, partition, missing/null, stable-unique ordering,
+exact-ordering, maximum-input-row, origin, convention, and per-setting configuration-attribution facts participate in the binding
 fingerprint. `maximumInputRows` is an asserted deployment fact needed only by plans containing row `COUNT`; it must
 be no greater than `CosmosRelationQueryTargetProfile.MaximumExactInteger` (`2^53 - 1`). When a binding is rehydrated,
 its persisted schema version must be supported and its supplied fingerprint must match the recomputed fingerprint
@@ -485,11 +485,17 @@ or coercing a result type.
 
 The native storage binding retains a normalized account endpoint plus the exact database and container names as
 fingerprinted physical affinity. The executor rejects an SDK container whose normalized account endpoint, database
-`Id`, or container `Id` differs before I/O. The binding still does not carry a physical source predicate. The bound
-container must contain exactly the logical source represented by the placed input. Do not execute a native artifact
-directly against a repository container shared by entity and outbox documents. Register that container through the
-bounded source reader below, whose account, database, container, document-kind, observation-type, and
-payload-presence facts are explicit and attributable.
+`Id`, or container `Id` differs before I/O. Shared-container membership is represented separately by
+`SourceScopeEqualities`: exact top-level string equalities that classify the complete physical document rather than
+filtering the semantic value below `DocumentRoot`. The compiler parameterizes and conjoins every retained equality
+with the canonical query filter, and both the binding and native artifact fingerprints cover the path and value.
+
+For a container shared by entity and outbox documents, author the binding with
+`.EntityDocuments(repository.EntityDocumentKind)`. The repository property exposes the exact configured persistence
+discriminator, so a custom value is not replaced by the adapter default. This is physical adapter evidence rather
+than a canonical business predicate; tenant, time, status, and other domain filters remain in Relation Query IR.
+The initial contract intentionally accepts only direct top-level string equalities. Use the bounded source reader
+below when acquisition requires its broader observation-envelope, partition, or composed-read semantics.
 
 ## Bounded Cosmos Source Acquisition
 

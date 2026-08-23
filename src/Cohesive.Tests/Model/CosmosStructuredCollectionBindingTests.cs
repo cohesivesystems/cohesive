@@ -126,8 +126,8 @@ public sealed class CosmosStructuredCollectionBindingTests
         Assert.All(variants, variant => Assert.NotEqual(baseline, CreateStorageBinding(variant).Fingerprint));
         var withoutEvidence = CreateStorageBinding(collectionScope: null);
         Assert.NotEqual(baseline, withoutEvidence.Fingerprint);
-        Assert.EndsWith("/v5", withoutEvidence.SchemaVersion, StringComparison.Ordinal);
-        Assert.Contains("/v5-c14n/", withoutEvidence.Fingerprint.Canonicalization, StringComparison.Ordinal);
+        Assert.EndsWith("/v6", withoutEvidence.SchemaVersion, StringComparison.Ordinal);
+        Assert.Contains("/v6-c14n/", withoutEvidence.Fingerprint.Canonicalization, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -172,7 +172,7 @@ public sealed class CosmosStructuredCollectionBindingTests
 
         Assert.EndsWith("/canonical-v4", CosmosRelationQueryTargetProfile.ProfileId.Value, StringComparison.Ordinal);
         Assert.EndsWith("/realization-policy-v4", CosmosRelationQueryTargetProfile.Policy.Id.Value, StringComparison.Ordinal);
-        Assert.EndsWith("/compiler-v4", CosmosRelationQueryCompilerOptions.CurrentCompilerProfile, StringComparison.Ordinal);
+        Assert.EndsWith("/compiler-v5", CosmosRelationQueryCompilerOptions.CurrentCompilerProfile, StringComparison.Ordinal);
         Assert.Contains(capabilities, static capability => capability is ExpressionRelationQueryCapability expression
             && expression.Capability == ExprCapabilities.ForFunction(ExprFunctionNames.Any));
         Assert.Contains(capabilities, static capability => capability is ExpressionRelationQueryCapability expression

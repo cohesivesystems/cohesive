@@ -481,6 +481,28 @@ public sealed class CosmosRelationQueryStorageBindingBuilder<T>
         return this;
     }
 
+    /// <summary>Restricts the physical source to entity envelopes with the supplied document discriminator.</summary>
+    /// <param name="entityDocumentKind">Exact entity-document discriminator persisted by the repository.</param>
+    /// <returns>This typed builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="entityDocumentKind"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="entityDocumentKind"/> is empty or white space.</exception>
+    public CosmosRelationQueryStorageBindingBuilder<T> EntityDocuments(string entityDocumentKind)
+    {
+        inner.EntityDocuments(entityDocumentKind);
+        return this;
+    }
+
+    /// <summary>Declares one exact top-level physical source-membership equality.</summary>
+    /// <param name="documentPath">One direct top-level Cosmos document property.</param>
+    /// <param name="value">Non-empty ordinal string value required for source membership.</param>
+    /// <returns>This typed builder.</returns>
+    /// <exception cref="ArgumentException">The path or value is invalid.</exception>
+    public CosmosRelationQueryStorageBindingBuilder<T> SourceScopeEquals(FieldPath documentPath, string value)
+    {
+        inner.SourceScopeEquals(documentPath, value);
+        return this;
+    }
+
     /// <summary>Overrides the deterministic convention-derived storage-binding identity.</summary>
     /// <param name="id">Stable explicit binding identity.</param>
     /// <returns>This typed builder.</returns>
@@ -754,7 +776,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder<T>
 /// </remarks>
 public sealed class CosmosRelationQueryStorageBindingBuilder
 {
-    const string DerivedIdAuthority = "cohesive.relations.cosmos/binding-id-convention/v5";
+    const string DerivedIdAuthority = "cohesive.relations.cosmos/binding-id-convention/v6";
     const string TargetSetting = "target";
     const string TargetProfileSetting = "targetProfile";
     const string AccountEndpointSetting = "accountEndpoint";
@@ -766,6 +788,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
     const string PartitionPathSetting = "partitionPath";
     const string StableOrderingPrefix = "stableUniqueOrderingPath/";
     const string ExactOrderingPrefix = "exactOrderingPath/";
+    const string SourceScopePrefix = "sourceScopeEquality/";
     const string MaximumRowsSetting = "maximumInputRows";
     const string MissingEncodingSetting = "missingValueEncoding";
     const string NullEncodingSetting = "nullValueEncoding";
@@ -782,6 +805,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
     readonly Dictionary<RelationQueryInputId, EffectiveConfigurationDecision> exactFields = [];
     readonly Dictionary<FieldPath, EffectiveConfigurationDecision> stablePaths = [];
     readonly Dictionary<FieldPath, EffectiveConfigurationDecision> exactPaths = [];
+    readonly Dictionary<FieldPath, SourceScopeDeclaration> sourceScopeEqualities = [];
     readonly HashSet<string> explicitScalarDeclarations = new(StringComparer.Ordinal);
 
     Effective<CosmosRelationQueryBindingId>? explicitId;
@@ -853,6 +877,38 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         if (TryDeclareScalar(ContainerSetting))
         {
             containerName = Explicit(validated);
+        }
+
+        return this;
+    }
+
+    /// <summary>Restricts the physical source to entity envelopes with the supplied document discriminator.</summary>
+    /// <param name="entityDocumentKind">Exact entity-document discriminator persisted by the repository.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="entityDocumentKind"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="entityDocumentKind"/> is empty or white space.</exception>
+    public CosmosRelationQueryStorageBindingBuilder EntityDocuments(string entityDocumentKind) =>
+        SourceScopeEquals(
+            FieldPath.FromField(CosmosRelationQuerySourceReader.DocumentKindSourceSelector),
+            entityDocumentKind);
+
+    /// <summary>Declares one exact top-level physical source-membership equality.</summary>
+    /// <param name="documentPath">One direct top-level Cosmos document property.</param>
+    /// <param name="value">Non-empty ordinal string value required for source membership.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentException">The path or value is invalid.</exception>
+    public CosmosRelationQueryStorageBindingBuilder SourceScopeEquals(FieldPath documentPath, string value)
+    {
+        var equality = new CosmosRelationQuerySourceScopeEquality(documentPath, value);
+        var setting = SourceScopePrefix + PathKey(equality.DocumentPath);
+        if (!sourceScopeEqualities.TryAdd(
+                equality.DocumentPath,
+                new(equality, Decision(setting, EffectiveConfigurationOrigin.Explicit, explicitAuthority))))
+        {
+            Error(
+                CosmosRelationQueryBindingAuthoringDiagnosticCodes.BindingDuplicate,
+                $"A source-scope equality for physical path '{equality.DocumentPath}' was already declared.",
+                setting: setting);
         }
 
         return this;
@@ -1435,7 +1491,8 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
                 effective.ConventionSetVersion.Value,
                 [.. decisions],
                 compiledPlanFingerprint,
-                placementFingerprint);
+                placementFingerprint,
+                effective.SourceScopeEqualities);
             return new(artifact, [.. diagnostics]);
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
@@ -1564,6 +1621,9 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         var effectivePartition = ResolvePartition(fieldsById, effectiveRoot, convention);
         var stable = ResolveEvidence(options?.StableUniqueOrderingPaths ?? [], stablePaths, stableFields, fieldsById, StableOrderingPrefix);
         var exact = ResolveEvidence(options?.ExactOrderingPaths ?? [], exactPaths, exactFields, fieldsById, ExactOrderingPrefix);
+        var sourceScope = sourceScopeEqualities.Values
+            .OrderBy(static declaration => PathKey(declaration.Equality.DocumentPath), StringComparer.Ordinal)
+            .ToImmutableArray();
 
         List<EffectiveConfigurationDecision> decisions =
         [
@@ -1594,6 +1654,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         }
         decisions.AddRange(stable.Decisions);
         decisions.AddRange(exact.Decisions);
+        decisions.AddRange(sourceScope.Select(static declaration => declaration.Decision));
 
         Effective<CosmosRelationQueryBindingId>? selectedId = explicitId;
         if (selectedId is null && options?.BindingId is { } optionId)
@@ -1631,6 +1692,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
             fields,
             stable.Paths,
             exact.Paths,
+            [.. sourceScope.Select(static declaration => declaration.Equality)],
             effectiveMaximumRows,
             effectiveMissing,
             effectiveNull,
@@ -2377,6 +2439,12 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
             Append(canonical, path);
         }
 
+        foreach (var equality in effective.SourceScopeEqualities)
+        {
+            Append(canonical, equality.DocumentPath);
+            Append(canonical, equality.Value);
+        }
+
         Append(canonical, effective.MaximumInputRows.Value?.ToString(CultureInfo.InvariantCulture));
         Append(canonical, ((int)effective.MissingValueEncoding.Value).ToString(CultureInfo.InvariantCulture));
         Append(canonical, ((int)effective.NullValueEncoding.Value).ToString(CultureInfo.InvariantCulture));
@@ -2498,6 +2566,10 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         CosmosRelationQueryCollectionScopeEvidence? Scope,
         ImmutableArray<EffectiveConfigurationDecision> Decisions);
 
+    sealed record SourceScopeDeclaration(
+        CosmosRelationQuerySourceScopeEquality Equality,
+        EffectiveConfigurationDecision Decision);
+
     sealed record EffectiveConfiguration(
         Effective<CosmosRelationQueryBindingId>? Id,
         Effective<Uri> AccountEndpoint,
@@ -2510,6 +2582,7 @@ public sealed class CosmosRelationQueryStorageBindingBuilder
         ImmutableArray<EffectiveField> Fields,
         ImmutableArray<FieldPath> StableUniqueOrderingPaths,
         ImmutableArray<FieldPath> ExactOrderingPaths,
+        ImmutableArray<CosmosRelationQuerySourceScopeEquality> SourceScopeEqualities,
         Effective<long?> MaximumInputRows,
         Effective<CosmosMissingValueEncoding> MissingValueEncoding,
         Effective<CosmosNullValueEncoding> NullValueEncoding,
