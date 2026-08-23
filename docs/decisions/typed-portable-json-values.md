@@ -15,6 +15,12 @@ rejected by ordinary portable-value validation.
 to define the graph payload; canonical Process and Transition contracts do not duplicate that schema through CLR
 reflection.
 
+The same alignment rule applies to closed enum contracts. A CLR enum that declares the standard
+`JsonStringEnumConverter` is inferred from its canonical wire member names, including
+`JsonStringEnumMemberNameAttribute` overrides, because observation projection honors those declarations. Plain
+enums retain CLR member names. A custom enum converter falls back to a diagnostic opaque type because Cohesive
+cannot truthfully infer its complete output domain from reflection alone.
+
 ## Why
 
 Portable documents often contain recursive types, polymorphic unions, dictionaries, and extension values. Inferring

@@ -154,6 +154,14 @@ public static class TypeInferenceDiagnosticReasons
     public const string InvalidSingleValueWrapper = "invalidSingleValueWrapper";
 
     /// <summary>
+    /// The enum declares a custom JSON converter whose complete wire-member set cannot be inferred safely.
+    /// </summary>
+    public const string UnsupportedEnumConverter = "unsupportedEnumConverter";
+
+    /// <summary>Multiple enum members map to the same canonical JSON string.</summary>
+    public const string AmbiguousSerializedEnumMember = "ambiguousSerializedEnumMember";
+
+    /// <summary>
     /// The type has no readable public instance properties.
     /// </summary>
     public const string NoReadableProperties = "noReadableProperties";
