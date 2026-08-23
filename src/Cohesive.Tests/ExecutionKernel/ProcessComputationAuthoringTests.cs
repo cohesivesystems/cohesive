@@ -46,6 +46,32 @@ public sealed class ProcessComputationAuthoringTests
     }
 
     [Fact]
+    public void GeneratedComputation_PreservesExplicitTopLevelOccurrenceContracts()
+    {
+        var contract = new ValueContract(
+            new ScalarTypeRef(ScalarTypeKind.String),
+            presence: FieldPresence.Optional,
+            nullability: FieldNullability.Nullable);
+        var metadata = Metadata();
+        var returned = ProcessAuthoringIdentities.NodeFor(new(["body", "return-0"]));
+        var generated = ExplicitOccurrenceProcess.Define(metadata, contract, contract);
+        var lowLevel = ProcessAuthoring.Create<string, string>(
+            metadata.WithEntry(returned),
+            contract,
+            contract,
+            process => process.Return(returned, process.Input.Value));
+
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        Assert.True(lowLevel.IsValid, Format(lowLevel.Validation));
+        Assert.Equal(contract, generated.Definition.Input);
+        Assert.Equal(contract, generated.Definition.Result);
+        Assert.Equal(lowLevel.Definition, generated.Definition);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(lowLevel.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(generated.Document));
+    }
+
+    [Fact]
     public void CancellationFinalizerComputation_IsByteEquivalentToCanonicalBuilderAuthoring()
     {
         var returnId = ProcessAuthoringIdentities.NodeFor(new(["body", "return-0"]));
@@ -2158,6 +2184,16 @@ public static partial class CustomerQueryProcessWithPureLocal
         var queryInput = input;
         var row = await process.Query<string>(CustomerQueryProcess.Relation, queryInput);
         return row;
+    }
+}
+
+/// <summary>Representative generated Process with explicitly authored occurrence contracts.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class ExplicitOccurrenceProcess
+{
+    static async ProcessTask<string> Run(ProcessContext process, string input)
+    {
+        return input;
     }
 }
 

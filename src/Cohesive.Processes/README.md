@@ -49,7 +49,10 @@ This exact excerpt is compiled and exercised by
 [`ProcessComputationAuthoringTests.cs`](../Cohesive.Tests/ExecutionKernel/ProcessComputationAuthoringTests.cs); a
 documentation invariant test prevents the README from drifting from that executable source. The generated `Define`
 factory accepts `ProcessAuthoringMetadata` and returns a typed handle containing the canonical execution-definition
-document and validation result. The annotated `Run` method is never invoked.
+document and validation result. The annotated `Run` method is never invoked. When the Process occurrence must retain
+an already-authored top-level contract—such as a cancellation finalizer whose input embeds the root Process input—use
+the generated `Define(metadata, inputContract, resultContract)` overload. It preserves those exact portable
+occurrence contracts while the generated computation remains the sole authority for the Process graph.
 
 When a Relation is authored through the typed expression frontend, pass its canonical handle directly. C# infers
 both the input and singular result types, while generation lowers the handle's exact reference to the same canonical

@@ -260,6 +260,10 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
         Assert.Contains("__builder.OnCancellation", generated);
         Assert.Contains("cancel/finalize", generated);
         Assert.DoesNotContain("System.Func", generated);
+        Assert.Contains("ValueContract inputContract", generated);
+        Assert.Contains("ValueContract resultContract", generated);
+        Assert.Contains("inputContract: inputContract", generated);
+        Assert.Contains("resultContract: resultContract!", generated);
     }
 
     [Fact]
