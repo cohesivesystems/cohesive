@@ -233,9 +233,10 @@ physical Scheduler operation. Differential tests cover canonical decisions and e
 emulator proves the lifecycle command sequence and replay, completion, bound Request activity dispatch and Reply admission, cross-instance and self-Signal
 delivery, child sub-orchestration including exact failed-Reply admission, recurrence Continue-as-new, authored
 top-level failure, duplicate start admission, and
-worker restart at active host work and at unbound Request, Timer, and AwaitMatch boundaries. Shutdown-attributable
-activity cancellation has one adapter-owned physical failure identity and is the only host failure retried by the
-orchestrator; it does not author semantic cancellation, failure, or attempt lineage. Restart does not re-invoke an
+worker restart at active host work, bound durable Request work, and unbound Request, Timer, and AwaitMatch boundaries.
+Shutdown-attributable activity cancellation has one adapter-owned physical failure identity and is the only hosted or
+Request-adapter failure retried by the orchestrator; it does not author semantic cancellation, Request failure,
+unresolved reconciliation, or attempt lineage. Restart does not re-invoke an
 activity already retained in Scheduler history, change a canonical due instant, or admit an interaction twice.
 Re-executed in-flight work remains at-least-once and retains its exact operation occurrence and declared target
 idempotency boundary. `ProcessWaitState` and

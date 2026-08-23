@@ -268,50 +268,19 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     [Fact]
     public async Task DurableRequestActivities_ProjectCanonicalAuthorityForExecutionAndReconciliation()
     {
-        var (plan, replyContract) = CompileRequestPlan("process/durable-task-authority-request");
-        var binding = Binding(plan, replyContract);
-        var start = Start(plan, "authority/request", "instance/authority-request");
-        DurableOperationInvocation? invocation = null;
-        _ = await RunDurableRequest(
-            plan,
-            start,
-            binding,
-            current =>
-            {
-                invocation = current;
-                return new(
-                    new DurableOperationOutcomeObservation(
-                        new RequestResultOutcome(new("accepted"), StringValue("accepted"))),
-                    deadlineElapsed: false);
-            });
+        var (invocation, reconciliation) = await DurableRequestActivityInputs(
+            "process/durable-task-authority-request",
+            "authority/request",
+            "instance/authority-request");
 
-        DurableOperationState? reconciliation = null;
-        _ = await RunDurableRequest(
-            plan,
-            start,
-            binding,
-            _ => new(
-                new DurableOperationFailureObservation(new(
-                    DurableOperationFailurePhase.InCall,
-                    DurableOperationEffectEvidence.Ambiguous,
-                    DurableOperationFailureDisposition.Retryable,
-                    "tests.authority-projection")),
-                deadlineElapsed: false),
-            current =>
-            {
-                reconciliation = current;
-                return new(
-                    new DurableOperationReconciledOutcome(
-                        new RequestResultOutcome(new("accepted"), StringValue("accepted"))),
-                    deadlineElapsed: false);
-            });
-
-        var adapter = new ContextCapturingDurableOperationAdapter(invocation!.Request.Contract);
+        var adapter = new ContextCapturingDurableOperationAdapter(invocation.Request.Contract);
         var resolver = new AdapterResolver(adapter);
         var projector = new RecordingAuthorityProjector();
+        using var lifetime = new TestHostApplicationLifetime();
         var executionActivity = new DurableTaskDurableOperationActivity(
             resolver,
             ConservativeDurableOperationExceptionClassifier.Instance,
+            lifetime,
             projector);
         var execution = await executionActivity.RunAsync(
             new TestTaskActivityContext("instance/authority-request-execution"),
@@ -319,7 +288,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.IsType<DurableOperationOutcomeObservation>(execution.Observation);
         AssertProjected(Assert.Single(adapter.ExecutionContexts), invocation.Request.Context.AuthorityScope);
 
-        var reconciliationActivity = new DurableTaskDurableOperationReconciliationActivity(resolver, projector);
+        var reconciliationActivity = new DurableTaskDurableOperationReconciliationActivity(
+            resolver,
+            lifetime,
+            projector);
         var reconciled = await reconciliationActivity.RunAsync(
             new TestTaskActivityContext("instance/authority-request-reconciliation"),
             reconciliation!);
@@ -330,6 +302,84 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.Equal(
             [invocation.Request.Context.AuthorityScope, reconciliation.Request.Context.AuthorityScope],
             projector.AuthorityScopes);
+    }
+
+    [Fact]
+    public async Task DurableRequestActivities_WorkerShutdownProjectsRetryablePhysicalFailure()
+    {
+        var (invocation, reconciliation) = await DurableRequestActivityInputs(
+            "process/durable-task-worker-stopping-request",
+            "worker-stopping/request",
+            "instance/worker-stopping-request");
+
+        using var executionLifetime = new TestHostApplicationLifetime();
+        var executionAdapter = new CancellationWaitingDurableOperationAdapter(invocation.Request.Contract);
+        var executionActivity = new DurableTaskDurableOperationActivity(
+            new AdapterResolver(executionAdapter),
+            ConservativeDurableOperationExceptionClassifier.Instance,
+            executionLifetime);
+        var execution = executionActivity.RunAsync(
+            new TestTaskActivityContext("instance/worker-stopping-execution"),
+            invocation);
+        await executionAdapter.ExecutionEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        executionLifetime.StopApplication();
+
+        var executionFailure = await Assert.ThrowsAsync<DurableTaskWorkerStoppingException>(() => execution);
+        Assert.IsAssignableFrom<OperationCanceledException>(executionFailure.InnerException);
+        Assert.True(DurableTaskActivityOperationContext.IsWorkerStoppingFailure(
+            TaskFailureDetails.FromException(executionFailure)));
+        Assert.True(Assert.Single(executionAdapter.ExecutionContexts).CancellationToken.IsCancellationRequested);
+
+        using var reconciliationLifetime = new TestHostApplicationLifetime();
+        var reconciliationAdapter = new CancellationWaitingDurableOperationAdapter(invocation.Request.Contract);
+        var reconciliationActivity = new DurableTaskDurableOperationReconciliationActivity(
+            new AdapterResolver(reconciliationAdapter),
+            reconciliationLifetime);
+        var reconciliationExecution = reconciliationActivity.RunAsync(
+            new TestTaskActivityContext("instance/worker-stopping-reconciliation"),
+            reconciliation);
+        await reconciliationAdapter.ReconciliationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        reconciliationLifetime.StopApplication();
+
+        var reconciliationFailure = await Assert.ThrowsAsync<DurableTaskWorkerStoppingException>(
+            () => reconciliationExecution);
+        Assert.IsAssignableFrom<OperationCanceledException>(reconciliationFailure.InnerException);
+        Assert.True(DurableTaskActivityOperationContext.IsWorkerStoppingFailure(
+            TaskFailureDetails.FromException(reconciliationFailure)));
+        Assert.True(
+            Assert.Single(reconciliationAdapter.ReconciliationContexts).CancellationToken.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task DurableRequestActivities_OrdinaryAdapterFailuresRemainSemanticObservations()
+    {
+        var (invocation, reconciliation) = await DurableRequestActivityInputs(
+            "process/durable-task-ordinary-request-failure",
+            "ordinary-failure/request",
+            "instance/ordinary-failure-request");
+        using var lifetime = new TestHostApplicationLifetime();
+        var adapter = new ThrowingDurableOperationAdapter(invocation.Request.Contract);
+        var resolver = new AdapterResolver(adapter);
+
+        var execution = await new DurableTaskDurableOperationActivity(
+            resolver,
+            ConservativeDurableOperationExceptionClassifier.Instance,
+            lifetime).RunAsync(
+                new TestTaskActivityContext("instance/ordinary-execution-failure"),
+                invocation);
+        var failed = Assert.IsType<DurableOperationFailureObservation>(execution.Observation);
+        Assert.Equal(DurableOperationFailurePhase.InCall, failed.Failure.Phase);
+        Assert.Equal(DurableOperationEffectEvidence.Ambiguous, failed.Failure.EffectEvidence);
+
+        var reconciled = await new DurableTaskDurableOperationReconciliationActivity(
+            resolver,
+            lifetime).RunAsync(
+                new TestTaskActivityContext("instance/ordinary-reconciliation-failure"),
+                reconciliation);
+        Assert.IsType<DurableOperationUnresolved>(reconciled.Observation);
+        Assert.False(lifetime.ApplicationStopping.IsCancellationRequested);
     }
 
     [Fact]
@@ -3685,6 +3735,70 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [DurableTaskSchedulerFact]
+    public async Task SchedulerEmulator_RedeliversExactDurableRequestAfterWorkerShutdown()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
+            ?? throw new InvalidOperationException(
+                "The Durable Task Scheduler connection string disappeared after test discovery.");
+        var (plan, replyContract) = CompileRequestPlan(
+            "process/durable-task-scheduler-request-worker-restart");
+        var binding = Binding(plan, replyContract);
+        var inner = new CountingDurableOperationAdapter(binding.Request);
+        var adapter = new WorkerStoppingDurableOperationAdapter(inner);
+        var adapters = new DurableOperationAdapterCatalog([adapter]);
+        var catalog = new DurableTaskSequentialProcessPlanCatalog(
+            [Physical(plan)],
+            [binding],
+            operationAdapterCapabilities: adapters);
+        var start = Start(
+            plan,
+            "request-worker-restart",
+            $"instance/request-worker-restart/{Guid.NewGuid():N}");
+
+        // The stopped worker can leave its claimed activity invisible until one complete Scheduler lease expires.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(180));
+        var gate = adapter.Arm();
+        using var firstWorker = SchedulerHost(connectionString, catalog, new EchoHost(), adapter);
+        await firstWorker.StartAsync(timeout.Token);
+        var firstClient = firstWorker.Services.GetRequiredService<DurableTaskClient>();
+        var scheduled = await firstClient.ScheduleCohesiveProcessAsync(start, timeout.Token);
+        await gate.WaitUntilEntered(timeout.Token);
+        var firstInvocation = Assert.Single(adapter.Invocations);
+        Assert.Empty(inner.Invocations);
+
+        var stopping = firstWorker.StopAsync(timeout.Token);
+        await gate.WaitUntilCancelled(timeout.Token);
+        await stopping;
+        Assert.Equal(1, gate.CancellationCount);
+        Assert.Empty(inner.Invocations);
+
+        using var replacementWorker = SchedulerHost(connectionString, catalog, new EchoHost(), adapter);
+        await replacementWorker.StartAsync(timeout.Token);
+        var replacementClient = replacementWorker.Services.GetRequiredService<DurableTaskClient>();
+        var retained = await replacementClient.WaitForInstanceCompletionAsync(
+            scheduled.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, retained.RuntimeStatus);
+        var result = Assert.IsType<DurableTaskSequentialProcessResult>(
+            retained.ReadOutputAs<DurableTaskSequentialProcessResult>());
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Single(result.Control.Attempts);
+        var operation = Assert.Single(result.DurableOperations);
+        Assert.Equal(DurableOperationStatus.Dispositioned, operation.State.Status);
+        var attempt = Assert.Single(operation.State.Attempts);
+        Assert.Equal(firstInvocation.Request, operation.State.Request);
+        Assert.Equal(firstInvocation.AttemptId, attempt.Claim.AttemptId);
+        Assert.Equal(firstInvocation.Fence, attempt.Claim.Fence);
+
+        var physicalInvocations = adapter.Invocations;
+        Assert.Equal(2, physicalInvocations.Count);
+        Assert.Equal(firstInvocation, physicalInvocations[1]);
+        Assert.Single(inner.Invocations);
+        await replacementWorker.StopAsync(timeout.Token);
+    }
+
+    [DurableTaskSchedulerFact]
     public async Task SchedulerEmulator_ProvesCompletionFailureDuplicateStartAndWorkerRestart()
     {
         var connectionString = Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
@@ -4420,6 +4534,56 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
 
     static Task<ProcessActivationInput> UnexpectedInteraction() =>
         throw new InvalidOperationException("Unexpected Process interaction wait.");
+
+    static async Task<(
+        DurableOperationInvocation Invocation,
+        DurableOperationState Reconciliation)> DurableRequestActivityInputs(
+        string definitionId,
+        string startIdentity,
+        string instanceId)
+    {
+        var (plan, replyContract) = CompileRequestPlan(definitionId);
+        var binding = Binding(plan, replyContract);
+        var start = Start(plan, startIdentity, instanceId);
+        DurableOperationInvocation? invocation = null;
+        _ = await RunDurableRequest(
+            plan,
+            start,
+            binding,
+            current =>
+            {
+                invocation = current;
+                return new(
+                    new DurableOperationOutcomeObservation(
+                        new RequestResultOutcome(new("accepted"), StringValue("accepted"))),
+                    deadlineElapsed: false);
+            });
+
+        DurableOperationState? reconciliation = null;
+        _ = await RunDurableRequest(
+            plan,
+            start,
+            binding,
+            _ => new(
+                new DurableOperationFailureObservation(new(
+                    DurableOperationFailurePhase.InCall,
+                    DurableOperationEffectEvidence.Ambiguous,
+                    DurableOperationFailureDisposition.Retryable,
+                    "tests.activity-input")),
+                deadlineElapsed: false),
+            current =>
+            {
+                reconciliation = current;
+                return new(
+                    new DurableOperationReconciledOutcome(
+                        new RequestResultOutcome(new("accepted"), StringValue("accepted"))),
+                    deadlineElapsed: false);
+            });
+
+        return (
+            Assert.IsType<DurableOperationInvocation>(invocation),
+            Assert.IsType<DurableOperationState>(reconciliation));
+    }
 
     static (CompiledProcessPlan Plan, ReplyContractReference Reply) CompileRequestPlan(
         string definitionId,
@@ -5897,6 +6061,51 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         }
     }
 
+    sealed class WorkerStoppingDurableOperationAdapter(IDurableOperationAdapter inner)
+        : IDurableOperationAdapter
+    {
+        readonly ConcurrentQueue<DurableOperationInvocation> invocations = [];
+        WorkerStoppingGate? gate;
+
+        public DurableOperationAdapterCapabilities Capabilities => inner.Capabilities;
+
+        internal IReadOnlyList<DurableOperationInvocation> Invocations => invocations.ToArray();
+
+        internal WorkerStoppingGate Arm()
+        {
+            var armed = new WorkerStoppingGate();
+            if (Interlocked.CompareExchange(ref gate, armed, null) is not null)
+                throw new InvalidOperationException("A worker-stopping durable-operation gate is already armed.");
+            return armed;
+        }
+
+        public async ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
+            OperationContext context,
+            DurableOperationInvocation invocation)
+        {
+            invocations.Enqueue(invocation);
+            var claimed = Interlocked.Exchange(ref gate, null);
+            if (claimed is not null)
+            {
+                claimed.Enter();
+                try
+                {
+                    await claimed.WaitForWorkerCancellation(context.CancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+                {
+                    claimed.Cancel();
+                    throw;
+                }
+            }
+            return await inner.ExecuteAsync(context, invocation).ConfigureAwait(false);
+        }
+
+        public ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
+            OperationContext context,
+            DurableOperationReconciliationRequest request) => inner.ReconcileAsync(context, request);
+    }
+
     sealed class WorkerStoppingGate
     {
         readonly TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -6085,6 +6294,68 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 new DurableOperationReconciledOutcome(
                     new RequestResultOutcome(new("accepted"), StringValue("accepted"))));
         }
+    }
+
+    sealed class CancellationWaitingDurableOperationAdapter(RequestContractReference request)
+        : IDurableOperationAdapter
+    {
+        readonly ConcurrentQueue<OperationContext> executionContexts = [];
+        readonly ConcurrentQueue<OperationContext> reconciliationContexts = [];
+
+        public DurableOperationAdapterCapabilities Capabilities { get; } = new(
+            DurableOperationIdempotencyEvidence.TargetDeduplication,
+            DurableOperationReconciliationCapability.Supported,
+            [request]);
+
+        internal TaskCompletionSource ExecutionEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource ReconciliationEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal IReadOnlyCollection<OperationContext> ExecutionContexts => executionContexts.ToArray();
+
+        internal IReadOnlyCollection<OperationContext> ReconciliationContexts => reconciliationContexts.ToArray();
+
+        public async ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
+            OperationContext context,
+            DurableOperationInvocation invocation)
+        {
+            executionContexts.Enqueue(context);
+            ExecutionEntered.TrySetResult();
+            await WaitForCancellation(context.CancellationToken);
+            throw new InvalidOperationException("The cancellation wait returned without cancellation.");
+        }
+
+        public async ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
+            OperationContext context,
+            DurableOperationReconciliationRequest request)
+        {
+            reconciliationContexts.Enqueue(context);
+            ReconciliationEntered.TrySetResult();
+            await WaitForCancellation(context.CancellationToken);
+            throw new InvalidOperationException("The cancellation wait returned without cancellation.");
+        }
+    }
+
+    sealed class ThrowingDurableOperationAdapter(RequestContractReference request) : IDurableOperationAdapter
+    {
+        public DurableOperationAdapterCapabilities Capabilities { get; } = new(
+            DurableOperationIdempotencyEvidence.TargetDeduplication,
+            DurableOperationReconciliationCapability.Supported,
+            [request]);
+
+        public ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
+            OperationContext context,
+            DurableOperationInvocation invocation) =>
+            ValueTask.FromException<DurableOperationAttemptObservation>(
+                new InvalidOperationException("Ordinary adapter execution failure."));
+
+        public ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
+            OperationContext context,
+            DurableOperationReconciliationRequest request) =>
+            ValueTask.FromException<DurableOperationReconciliationObservation>(
+                new InvalidOperationException("Ordinary adapter reconciliation failure."));
     }
 
     sealed class RecordingAuthorityProjector : IInteractionAuthorityOperationContextProjector
