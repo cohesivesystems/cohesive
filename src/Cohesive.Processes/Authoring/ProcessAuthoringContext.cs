@@ -365,6 +365,9 @@ internal sealed class ProcessAuthoringContext
                 AddEdge(entries, recurrence.Exhausted, path.Add("exhausted"), nodeSource);
                 AddEdge(entries, recurrence.Stalled, path.Add("stalled"), nodeSource);
                 break;
+            case CancellationFinalizerProcessNode finalizer:
+                AddConstruct(entries, finalizer.OutcomeMapping, path.Add("outcomeMapping"), nodeSource);
+                break;
             case ReturnProcessNode returned:
                 AddConstruct(entries, returned.Result, path.Add("result"), nodeSource);
                 break;

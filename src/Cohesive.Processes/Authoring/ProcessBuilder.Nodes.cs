@@ -499,6 +499,60 @@ public sealed partial class ProcessBuilder<TInput, TResult>
             source);
     }
 
+    /// <summary>Declares the exact authored child Process that must acknowledge lifecycle cancellation.</summary>
+    /// <remarks>
+    /// The declaration is not part of ordinary graph control flow. Its child input is derived from this Process's
+    /// immutable root input plus canonical cancellation context, and its result must be the exact acknowledgement
+    /// contract. The invocation protocol remains the sole Request/Reply authority.
+    /// </remarks>
+    /// <param name="id">Stable lifecycle declaration and child-invocation identity basis.</param>
+    /// <param name="protocol">Exact typed cancellation-finalizer child invocation protocol.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>This Process builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="protocol"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The handler input or result contract is incompatible, or <paramref name="id"/> duplicates another construct.
+    /// </exception>
+    public ProcessBuilder<TInput, TResult> OnCancellation(
+        ExecutionNodeId id,
+        ProcessInvocationProtocol<
+            ProcessCancellationFinalizationInput<TInput>,
+            ProcessCancellationAcknowledgement> protocol,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(protocol);
+        var handler = protocol.Process.Definition;
+        var expectedInput = ProcessCancellationFinalizationContracts.Input(context.InputContract);
+        if (handler.Input != expectedInput)
+        {
+            throw new InvalidOperationException(
+                "A cancellation finalizer must accept the immutable root input and exact canonical cancellation context.");
+        }
+        if (handler.Result != ProcessCancellationFinalizationContracts.Acknowledgement)
+        {
+            throw new InvalidOperationException(
+                "A cancellation finalizer must return ProcessCancellationAcknowledgement.");
+        }
+
+        var source = context.Source(
+            sourceFile,
+            sourceLine,
+            sourceMember,
+            $"Cancellation finalizer '{id.Value}'");
+        context.RegisterIfAbsent(protocol.OutcomeMapping, source);
+        return Add(
+            new CancellationFinalizerProcessNode(
+                id,
+                protocol.Process.Reference,
+                protocol.Request,
+                protocol.OutcomeMapping),
+            source);
+    }
+
     /// <summary>Adds finite bounded partition work using one exact child Process per partition.</summary>
     /// <typeparam name="TPartitions">CLR finite collection type containing the partitions.</typeparam>
     /// <typeparam name="TPartition">CLR type of one partition value.</typeparam>

@@ -1040,6 +1040,7 @@ public sealed record ExecutionStatus
         {
             ProcessControlMode.Cancelled => ExecutionTerminalOutcomeKind.Cancelled,
             ProcessControlMode.Terminated => ExecutionTerminalOutcomeKind.Terminated,
+            ProcessControlMode.CancellationFailed => ExecutionTerminalOutcomeKind.Failed,
             _ => ExecutionTerminalOutcomeKind.None
         };
         var attemptRequired = current.Disposition switch
@@ -1110,6 +1111,10 @@ public static class ExecutionStatusProjector
                 ExecutionTerminalOutcomeKind.Terminated,
                 state.CurrentAttempt.EndedAtUtc,
                 ExecutionStatusValue.Redacted(RedactedOutcomeDetailContract)),
+            ProcessControlMode.CancellationFailed => new ExecutionTerminalOutcome(
+                ExecutionTerminalOutcomeKind.Failed,
+                state.CurrentAttempt.EndedAtUtc,
+                ExecutionStatusValue.Redacted(RedactedOutcomeDetailContract)),
             _ => terminalOutcome ?? ExecutionTerminalOutcome.None
         };
         var statusUpdatedAtUtc = projectedOutcome.OccurredAtUtc is { } occurredAtUtc
@@ -1172,6 +1177,7 @@ public static class ExecutionStatusProjector
             ProcessControlAttemptDisposition.Abandoned => ExecutionAttemptDisposition.Abandoned,
             ProcessControlAttemptDisposition.Cancelled => ExecutionAttemptDisposition.Cancelled,
             ProcessControlAttemptDisposition.Terminated => ExecutionAttemptDisposition.Terminated,
+            ProcessControlAttemptDisposition.CancellationFailed => ExecutionAttemptDisposition.Failed,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(disposition),
                 disposition,

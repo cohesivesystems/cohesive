@@ -142,6 +142,18 @@ public static class ProcessRequestSemantics
                     partition.Cancellation,
                     ProcessChildRequestMultiplicity.Partitioned);
                 return true;
+            case CancellationFinalizerProcessNode finalizer
+                when finalizer.Process is not null
+                     && finalizer.Contract is not null
+                     && finalizer.OutcomeMapping is not null:
+                child = new(
+                    finalizer.Process,
+                    finalizer.Contract,
+                    finalizer.OutcomeMapping,
+                    ProcessChildPurpose.Compensation,
+                    ProcessChildCancellationPolicy.Propagate,
+                    ProcessChildRequestMultiplicity.Single);
+                return true;
             default:
                 child = default;
                 return false;
@@ -172,6 +184,11 @@ public static class ProcessRequestSemantics
         if (node is ForEachPartitionProcessNode { Contract: not null } partition)
         {
             contract = partition.Contract;
+            return true;
+        }
+        if (node is CancellationFinalizerProcessNode { Contract: not null } finalizer)
+        {
+            contract = finalizer.Contract;
             return true;
         }
 

@@ -34,6 +34,7 @@ public sealed class ProcessInterpreterRealizationTests
             ProcessWireNames.InvokeProcessNode,
             ProcessWireNames.ForEachPartitionNode,
             ProcessWireNames.RepeatAcrossActivationNode,
+            ProcessWireNames.CancellationFinalizerNode,
             ProcessWireNames.ReturnNode,
             ProcessWireNames.FailNode
         ];

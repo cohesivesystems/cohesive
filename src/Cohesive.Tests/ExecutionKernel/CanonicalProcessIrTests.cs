@@ -170,6 +170,11 @@ public sealed class CanonicalProcessIrTests
                 next,
                 next,
                 next),
+            new CancellationFinalizerProcessNode(
+                new("cancellation-finalizer"),
+                DefinitionReference("process/cancellation-finalizer"),
+                new(DefinitionReference("request/cancellation-finalizer")),
+                ChildOutcomeMapping),
             new ReturnProcessNode(new("return"), Expr.Const("approved")),
             new FailProcessNode(new("fail"), Expr.Const("rejected"))
         ];
@@ -191,6 +196,7 @@ public sealed class CanonicalProcessIrTests
             ProcessWireNames.InvokeProcessNode,
             ProcessWireNames.ForEachPartitionNode,
             ProcessWireNames.RepeatAcrossActivationNode,
+            ProcessWireNames.CancellationFinalizerNode,
             ProcessWireNames.ReturnNode,
             ProcessWireNames.FailNode
         ];
@@ -571,7 +577,7 @@ public sealed class CanonicalProcessIrTests
         var nodeTypes = DerivedTypes(typeof(CanonicalProcessNode));
         var clauseTypes = DerivedTypes(typeof(ProcessAwaitClause));
 
-        Assert.Equal(18, nodeTypes.Length);
+        Assert.Equal(19, nodeTypes.Length);
         Assert.Equal(
             [typeof(ProcessAwaitInteractionClause), typeof(ProcessAwaitTimerClause)],
             clauseTypes);

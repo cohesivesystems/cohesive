@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
@@ -1199,6 +1200,459 @@ public sealed class ProcessReferenceInterpreterTests
             static item => item.Kind == ProcessTraceEventKind.CancellationApplied);
     }
 
+    [Fact]
+    public void AuthoredCancellationFinalizer_RequiresExactAcknowledgementBeforeCancellationCompletes()
+    {
+        var fixture = CreateCancellationFinalizerFixture();
+        var continuation = Continuation();
+        var initial = ProcessReferenceInterpreter.Create(
+            fixture.Plan,
+            continuation,
+            StringValue("training-run/42"));
+        var intent = new ProcessCancellationIntent(
+            continuation.ProcessAttemptId,
+            new("operator.cancel"),
+            new("command/cancel-training-run-42"));
+
+        var started = ProcessReferenceInterpreter.Activate(
+            fixture.Plan,
+            initial,
+            Activation(
+                "activation/cancel-finalized",
+                ProcessActivationCause.Control,
+                cancellation: intent),
+            RejectingHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.DurableCut, started.Disposition);
+        Assert.Equal(ExecutionTerminalOutcomeKind.None, started.State.Terminal.Kind);
+        Assert.Equal(
+            ProcessCancellationFinalizationPhase.FinalizerActive,
+            started.State.CancellationFinalization?.Phase);
+        Assert.Equal(ExecutionTokenDisposition.Cancelled, started.State.Tokens.Single(
+            token => token.Node.Value == "return").Disposition);
+        var finalizerToken = started.State.Tokens.Single(token => token.Node.Value == "cancel/finalize");
+        Assert.Equal(ExecutionTokenDisposition.Waiting, finalizerToken.Disposition);
+        var request = Assert.IsType<RequestEnvelope>(Assert.Single(started.Emissions));
+        var child = Assert.Single(started.State.Children);
+        Assert.Equal(ProcessChildPurpose.Compensation, child.Purpose);
+        Assert.Equal(ProcessChildCancellationPolicy.Propagate, child.Cancellation);
+        var startedValidation = ProcessContinuationValidator.Validate(fixture.Plan, started.State);
+        Assert.True(startedValidation.IsValid, FormatDiagnostics(startedValidation));
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        var startedJson = JsonSerializer.Serialize(started.State, options);
+        var restoredStarted = Assert.IsType<ProcessContinuationState>(
+            JsonSerializer.Deserialize<ProcessContinuationState>(startedJson, options));
+        Assert.Equal(startedJson, JsonSerializer.Serialize(restoredStarted, options));
+        Assert.True(
+            ProcessContinuationValidator.Validate(fixture.Plan, restoredStarted).IsValid,
+            FormatDiagnostics(ProcessContinuationValidator.Validate(fixture.Plan, restoredStarted)));
+
+        var acknowledgement = PortableValue.Concrete(
+            ProcessCancellationFinalizationContracts.Acknowledgement,
+            ObservationValue.FromObject(new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                ["attemptId"] = ObservationValue.FromString(continuation.ProcessAttemptId.Value)
+            }));
+        var reply = new ReplyEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            new(
+                new("emission/finalizer-acknowledged"),
+                new ProcessInteractionOrigin(
+                    child.Process,
+                    child.Node,
+                    child.Continuation,
+                    new("activation/finalizer-child"),
+                    child.Token),
+                new("correlation/reference-interpreter-tests"),
+                request.Context.EmissionId,
+                new("authority/tests", "tenant/cohesive"),
+                new("idempotency/finalizer-acknowledged"),
+                ordering: null,
+                new(
+                    InteractionDurabilityDemand.Durable,
+                    InteractionVisibilityDemand.AfterOriginCommit),
+                Provenance()),
+            fixture.CompletedReply,
+            request.Context.EmissionId,
+            new RequestResultOutcome(fixture.Mapping.Completed, acknowledgement));
+        var completed = ProcessReferenceInterpreter.Activate(
+            fixture.Plan,
+            restoredStarted,
+            Activation(
+                "activation/finalizer-acknowledged",
+                ProcessActivationCause.Interaction,
+                StartedAtUtc.AddMinutes(1),
+                inputs:
+                [
+                    new(
+                        Assert.IsType<ProcessTokenInteractionTarget>(request.ResponseTarget),
+                        reply)
+                ]),
+            RejectingHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.Cancelled, completed.Disposition);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Cancelled, completed.State.Terminal.Kind);
+        Assert.Equal(
+            ProcessCancellationFinalizationPhase.Acknowledged,
+            completed.State.CancellationFinalization?.Phase);
+        Assert.Equal(ProcessChildDisposition.Completed, Assert.Single(completed.State.Children).Disposition);
+        var completedValidation = ProcessContinuationValidator.Validate(fixture.Plan, completed.State);
+        Assert.True(completedValidation.IsValid, FormatDiagnostics(completedValidation));
+        Assert.Contains(
+            completed.Evidence.Trace,
+            static item => item.Kind == ProcessTraceEventKind.CancellationFinalizerResolved);
+    }
+
+    [Fact]
+    public void AuthoredCancellationFinalizer_WrongAttemptAcknowledgementFailsExplicitly()
+    {
+        var fixture = CreateCancellationFinalizerFixture();
+        var continuation = Continuation();
+        var initial = ProcessReferenceInterpreter.Create(fixture.Plan, continuation, StringValue("training-run/42"));
+        var started = ProcessReferenceInterpreter.Activate(
+            fixture.Plan,
+            initial,
+            Activation(
+                "activation/cancel-finalizer-failure",
+                ProcessActivationCause.Control,
+                cancellation: new(
+                    continuation.ProcessAttemptId,
+                    new("operator.cancel"),
+                    new("command/cancel-finalizer-failure"))),
+            RejectingHost.Instance);
+        var request = Assert.IsType<RequestEnvelope>(Assert.Single(started.Emissions));
+        var child = Assert.Single(started.State.Children);
+        var wrongAcknowledgement = PortableValue.Concrete(
+            ProcessCancellationFinalizationContracts.Acknowledgement,
+            ObservationValue.FromObject(new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                ["attemptId"] = ObservationValue.FromString("process-attempt/other")
+            }));
+        var reply = new ReplyEnvelope(
+            InteractionEnvelope.CurrentSchemaVersion,
+            new(
+                new("emission/finalizer-wrong-acknowledgement"),
+                new ProcessInteractionOrigin(
+                    child.Process,
+                    child.Node,
+                    child.Continuation,
+                    new("activation/finalizer-child-failure"),
+                    child.Token),
+                new("correlation/reference-interpreter-tests"),
+                request.Context.EmissionId,
+                new("authority/tests", "tenant/cohesive"),
+                new("idempotency/finalizer-wrong-acknowledgement"),
+                ordering: null,
+                new(
+                    InteractionDurabilityDemand.Durable,
+                    InteractionVisibilityDemand.AfterOriginCommit),
+                Provenance()),
+            fixture.CompletedReply,
+            request.Context.EmissionId,
+            new RequestResultOutcome(fixture.Mapping.Completed, wrongAcknowledgement));
+
+        var failed = ProcessReferenceInterpreter.Activate(
+            fixture.Plan,
+            started.State,
+            Activation(
+                "activation/finalizer-wrong-acknowledgement",
+                ProcessActivationCause.Interaction,
+                StartedAtUtc.AddMinutes(1),
+                inputs:
+                [
+                    new(
+                        Assert.IsType<ProcessTokenInteractionTarget>(request.ResponseTarget),
+                        reply)
+                ]),
+            RejectingHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.Failed, failed.Disposition);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Failed, failed.State.Terminal.Kind);
+        Assert.Equal(ProcessCancellationFinalizationPhase.Failed, failed.State.CancellationFinalization?.Phase);
+        Assert.Contains(
+            failed.Diagnostics,
+            static diagnostic => diagnostic.Code == ProcessExecutionDiagnosticCodes.AuthoredFailure);
+        var failedValidation = ProcessContinuationValidator.Validate(fixture.Plan, failed.State);
+        Assert.True(failedValidation.IsValid, FormatDiagnostics(failedValidation));
+    }
+
+    [Fact]
+    public void AuthoredCancellationFinalizer_WaitsForExactPropagatedChildClosure()
+    {
+        var fixture = CreatePropagatedChildCancellationFinalizerFixture();
+        var continuation = Continuation();
+        var initial = ProcessReferenceInterpreter.Create(
+            fixture.Plan,
+            continuation,
+            StringValue("training-run/42"));
+        var childActive = ProcessReferenceInterpreter.Activate(
+            fixture.Plan,
+            initial,
+            Activation("activation/start-propagated-child", ProcessActivationCause.Start),
+            RejectingHost.Instance);
+        var ordinaryChild = Assert.Single(childActive.State.Children);
+        Assert.Equal(ProcessChildDisposition.Active, ordinaryChild.Disposition);
+
+        var cancellation = ProcessReferenceInterpreter.Activate(
+            fixture.Plan,
+            childActive.State,
+            Activation(
+                "activation/cancel-propagated-child",
+                ProcessActivationCause.Control,
+                StartedAtUtc.AddMinutes(1),
+                cancellation: new(
+                    continuation.ProcessAttemptId,
+                    new("operator.cancel"),
+                    new("command/cancel-propagated-child"))),
+            RejectingHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.Quiescent, cancellation.Disposition);
+        Assert.Empty(cancellation.Emissions);
+        Assert.Equal(
+            ProcessCancellationFinalizationPhase.WaitingForPropagatedChildren,
+            cancellation.State.CancellationFinalization?.Phase);
+        var cancellationRequested = Assert.Single(cancellation.State.Children);
+        Assert.Equal(ProcessChildDisposition.CancellationRequested, cancellationRequested.Disposition);
+        var intent = Assert.Single(ProcessChildCancellationIntents.Project(cancellation.State));
+        Assert.Equal(cancellationRequested.Continuation, intent.ChildContinuation);
+
+        var closure = new ProcessChildCancellationClosure(
+            intent.IntentId,
+            intent.ChildContinuation,
+            ExecutionTerminalOutcomeKind.Cancelled,
+            StartedAtUtc.AddMinutes(2));
+        var finalizerStarted = ProcessReferenceInterpreter.Activate(
+            fixture.Plan,
+            cancellation.State,
+            Activation(
+                "activation/propagated-child-closed",
+                ProcessActivationCause.Control,
+                StartedAtUtc.AddMinutes(2),
+                childCancellationClosures: [closure]),
+            RejectingHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.DurableCut, finalizerStarted.Disposition);
+        Assert.Equal(
+            ProcessCancellationFinalizationPhase.FinalizerActive,
+            finalizerStarted.State.CancellationFinalization?.Phase);
+        Assert.Single(finalizerStarted.Emissions);
+        var settled = finalizerStarted.State.Children.Single(child => child.Node.Value == "child/run");
+        Assert.Equal(ProcessChildDisposition.CancellationSettled, settled.Disposition);
+        Assert.Equal(closure, settled.CancellationClosure);
+        Assert.Equal(
+            ProcessChildDisposition.Active,
+            finalizerStarted.State.Children.Single(child => child.Node.Value == "cancel/finalize").Disposition);
+        Assert.Empty(ProcessChildCancellationIntents.Project(finalizerStarted.State));
+        Assert.True(
+            ProcessContinuationValidator.Validate(fixture.Plan, finalizerStarted.State).IsValid,
+            FormatDiagnostics(ProcessContinuationValidator.Validate(fixture.Plan, finalizerStarted.State)));
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        var finalizerStartedJson = JsonSerializer.Serialize(finalizerStarted.State, options);
+        var restoredFinalizerStarted = Assert.IsType<ProcessContinuationState>(
+            JsonSerializer.Deserialize<ProcessContinuationState>(finalizerStartedJson, options));
+        Assert.Equal(finalizerStartedJson, JsonSerializer.Serialize(restoredFinalizerStarted, options));
+        Assert.True(
+            ProcessContinuationValidator.Validate(fixture.Plan, restoredFinalizerStarted).IsValid,
+            FormatDiagnostics(ProcessContinuationValidator.Validate(fixture.Plan, restoredFinalizerStarted)));
+
+        var conflict = ProcessReferenceInterpreter.Activate(
+            fixture.Plan,
+            restoredFinalizerStarted,
+            Activation(
+                "activation/propagated-child-conflict",
+                ProcessActivationCause.Control,
+                StartedAtUtc.AddMinutes(3),
+                childCancellationClosures:
+                [
+                    new(
+                        closure.IntentId,
+                        closure.ChildContinuation,
+                        ExecutionTerminalOutcomeKind.Failed,
+                        StartedAtUtc.AddMinutes(3))
+                ]),
+            RejectingHost.Instance);
+        Assert.Equal(ProcessActivationDisposition.Rejected, conflict.Disposition);
+        Assert.Contains(conflict.Diagnostics, static diagnostic =>
+            diagnostic.Code == ProcessExecutionDiagnosticCodes.InputIdentityConflict);
+    }
+
+    static CancellationFinalizerFixture CreateCancellationFinalizerFixture()
+    {
+        var finalizerInput = ProcessCancellationFinalizationContracts.Input(StringContract);
+        var mapping = new ProcessChildOutcomeMapping(
+            new("completed"),
+            new("failed"),
+            new("cancelled"),
+            new("terminated"));
+        var requestDocument = InteractionDocument(
+            "interaction/request/cancellation-finalizer",
+            new RequestContractDefinition(
+                new(finalizerInput, new("cancellation-finalizer-input/v1")),
+                new RequestResponseObligation(
+                    [
+                        new RequestResultDefinition(
+                            mapping.Completed,
+                            new(
+                                ProcessCancellationFinalizationContracts.Acknowledgement,
+                                new("cancellation-acknowledgement/v1"))),
+                        new RequestFailureDefinition(mapping.Failed, StringSchema("finalizer-failed/v1")),
+                        new RequestFailureDefinition(mapping.Cancelled, StringSchema("finalizer-cancelled/v1")),
+                        new RequestFailureDefinition(mapping.Terminated, StringSchema("finalizer-terminated/v1"))
+                    ],
+                    RequestOptionalTerminalSemantics.Unsupported,
+                    RequestOptionalTerminalSemantics.Unsupported,
+                    RequestResultDisposition.Observe,
+                    RequestResultDisposition.Reject,
+                    RequestResultDisposition.ReusePriorDisposition,
+                    RequestRetrySemantics.StableIdentity,
+                    RequestResolutionSemantics.Reconcile,
+                    RequestResolutionSemantics.Escalate,
+                    TimeSpan.FromDays(30))));
+        RequestContractReference request = new(Reference(requestDocument));
+        var completedReplyDocument = InteractionDocument(
+            "interaction/reply/cancellation-finalizer-completed",
+            new ReplyContractDefinition(request, mapping.Completed));
+        ReplyContractReference completedReply = new(Reference(completedReplyDocument));
+        var contracts = Catalog(requestDocument, completedReplyDocument);
+        var finalizerProcess = DefinitionReference("process/cancellation-finalizer", 'f');
+        var plan = Compile(
+            Definition(
+                "return",
+                [
+                    new ReturnProcessNode(new("return"), Expr.Const("must-not-run")),
+                    new CancellationFinalizerProcessNode(
+                        new("cancel/finalize"),
+                        finalizerProcess,
+                        request,
+                        mapping)
+                ]),
+            contracts,
+            [new(
+                finalizerProcess,
+                ProcessDefinitionLinkKind.Process,
+                finalizerInput,
+                ProcessCancellationFinalizationContracts.Acknowledgement,
+                [],
+                ProcessRecoveryPolicy.ContinueAttempt)]);
+        return new(plan, completedReply, mapping);
+    }
+
+    static PropagatedCancellationFixture CreatePropagatedChildCancellationFinalizerFixture()
+    {
+        var mapping = new ProcessChildOutcomeMapping(
+            new("completed"),
+            new("failed"),
+            new("cancelled"),
+            new("terminated"));
+        var childRequestDocument = InteractionDocument(
+            "interaction/request/cancellable-child",
+            new RequestContractDefinition(
+                new(StringContract, new("cancellable-child-input/v1")),
+                new RequestResponseObligation(
+                    [
+                        new RequestResultDefinition(mapping.Completed, StringSchema("cancellable-child-result/v1")),
+                        new RequestFailureDefinition(mapping.Failed, StringSchema("cancellable-child-failed/v1")),
+                        new RequestFailureDefinition(mapping.Cancelled, StringSchema("cancellable-child-cancelled/v1")),
+                        new RequestFailureDefinition(mapping.Terminated, StringSchema("cancellable-child-terminated/v1"))
+                    ],
+                    RequestOptionalTerminalSemantics.Unsupported,
+                    RequestOptionalTerminalSemantics.Unsupported,
+                    RequestResultDisposition.Observe,
+                    RequestResultDisposition.Reject,
+                    RequestResultDisposition.ReusePriorDisposition,
+                    RequestRetrySemantics.StableIdentity,
+                    RequestResolutionSemantics.Reconcile,
+                    RequestResolutionSemantics.Escalate,
+                    TimeSpan.FromDays(30))));
+        RequestContractReference childRequest = new(Reference(childRequestDocument));
+        var finalizerInput = ProcessCancellationFinalizationContracts.Input(StringContract);
+        var finalizerRequestDocument = InteractionDocument(
+            "interaction/request/cancellation-finalizer-after-child",
+            new RequestContractDefinition(
+                new(finalizerInput, new("cancellation-finalizer-after-child-input/v1")),
+                new RequestResponseObligation(
+                    [
+                        new RequestResultDefinition(
+                            mapping.Completed,
+                            new(
+                                ProcessCancellationFinalizationContracts.Acknowledgement,
+                                new("cancellation-finalizer-after-child-acknowledgement/v1"))),
+                        new RequestFailureDefinition(mapping.Failed, StringSchema("finalizer-after-child-failed/v1")),
+                        new RequestFailureDefinition(mapping.Cancelled, StringSchema("finalizer-after-child-cancelled/v1")),
+                        new RequestFailureDefinition(mapping.Terminated, StringSchema("finalizer-after-child-terminated/v1"))
+                    ],
+                    RequestOptionalTerminalSemantics.Unsupported,
+                    RequestOptionalTerminalSemantics.Unsupported,
+                    RequestResultDisposition.Observe,
+                    RequestResultDisposition.Reject,
+                    RequestResultDisposition.ReusePriorDisposition,
+                    RequestRetrySemantics.StableIdentity,
+                    RequestResolutionSemantics.Reconcile,
+                    RequestResolutionSemantics.Escalate,
+                    TimeSpan.FromDays(30))));
+        RequestContractReference finalizerRequest = new(Reference(finalizerRequestDocument));
+        var childProcess = DefinitionReference("process/cancellable-child", 'e');
+        var finalizerProcess = DefinitionReference("process/cancellation-finalizer-after-child", 'f');
+        var terminalOutcomes = new[]
+        {
+            new ProcessRequestOutcomeBranch(
+                new("child/completed"),
+                mapping.Completed,
+                new(Edge("edge/child-completed", "return"))),
+            new ProcessRequestOutcomeBranch(
+                new("child/failed"),
+                mapping.Failed,
+                new(Edge("edge/child-failed", "fail"))),
+            new ProcessRequestOutcomeBranch(
+                new("child/cancelled"),
+                mapping.Cancelled,
+                new(Edge("edge/child-cancelled", "fail"))),
+            new ProcessRequestOutcomeBranch(
+                new("child/terminated"),
+                mapping.Terminated,
+                new(Edge("edge/child-terminated", "fail")))
+        };
+        var plan = Compile(
+            Definition(
+                "child/run",
+                [
+                    new InvokeProcessProcessNode(
+                        new("child/run"),
+                        childProcess,
+                        childRequest,
+                        mapping,
+                        Expr.BoundValue(ProcessBindingIds.Input),
+                        ProcessChildPurpose.Work,
+                        ProcessChildCancellationPolicy.Propagate,
+                        [.. terminalOutcomes]),
+                    new ReturnProcessNode(new("return"), Expr.Const("done")),
+                    new FailProcessNode(new("fail"), Expr.Const("failed")),
+                    new CancellationFinalizerProcessNode(
+                        new("cancel/finalize"),
+                        finalizerProcess,
+                        finalizerRequest,
+                        mapping)
+                ]),
+            Catalog(childRequestDocument, finalizerRequestDocument),
+            [
+                new(
+                    childProcess,
+                    ProcessDefinitionLinkKind.Process,
+                    StringContract,
+                    StringContract,
+                    [],
+                    ProcessRecoveryPolicy.ContinueAttempt),
+                new(
+                    finalizerProcess,
+                    ProcessDefinitionLinkKind.Process,
+                    finalizerInput,
+                    ProcessCancellationFinalizationContracts.Acknowledgement,
+                    [],
+                    ProcessRecoveryPolicy.ContinueAttempt)
+            ]);
+        return new(plan);
+    }
+
     static CompiledProcessPlan Compile(
         CanonicalProcessDefinition definition,
         InteractionContractCatalog? contracts = null,
@@ -1278,7 +1732,8 @@ public sealed class ProcessReferenceInterpreterTests
         ProcessActivationCause cause,
         DateTimeOffset? observedAtUtc = null,
         ProcessCancellationIntent? cancellation = null,
-        ImmutableArray<ProcessActivationInput> inputs = default) => new(
+        ImmutableArray<ProcessActivationInput> inputs = default,
+        ImmutableArray<ProcessChildCancellationClosure> childCancellationClosures = default) => new(
         new(id),
         cause,
         observedAtUtc ?? StartedAtUtc,
@@ -1290,7 +1745,9 @@ public sealed class ProcessReferenceInterpreterTests
                 InteractionVisibilityDemand.AfterOriginCommit),
             Provenance()),
         inputs,
-        cancellation: cancellation);
+        cancellation: cancellation,
+        admissionOperatingPoints: default,
+        childCancellationClosures: childCancellationClosures);
 
     static InteractionEnvelopeContext IncomingContext(
         CompiledProcessPlan plan,
@@ -1417,4 +1874,11 @@ public sealed class ProcessReferenceInterpreterTests
         public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
             throw new InvalidOperationException($"Unexpected Signal resolution at '{resolution.Node.Value}'.");
     }
+
+    sealed record CancellationFinalizerFixture(
+        CompiledProcessPlan Plan,
+        ReplyContractReference CompletedReply,
+        ProcessChildOutcomeMapping Mapping);
+
+    sealed record PropagatedCancellationFixture(CompiledProcessPlan Plan);
 }

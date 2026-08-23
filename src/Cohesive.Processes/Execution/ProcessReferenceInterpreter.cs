@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
@@ -347,7 +348,9 @@ public static partial class ProcessReferenceInterpreter
         readonly Dictionary<string, int> partitionStarts = new(StringComparer.Ordinal);
         readonly Dictionary<string, int> forkStarts = new(StringComparer.Ordinal);
         readonly Dictionary<ExecutionNodeId, int> nodeIndexes;
+        readonly CancellationFinalizerProcessNode? cancellationFinalizer;
         ExecutionTerminalOutcome terminal;
+        ProcessCancellationFinalizationState? cancellationFinalization;
         ExecutionNodeId? safePointNode;
         bool stopAtDurableCut;
 
@@ -371,6 +374,10 @@ public static partial class ProcessReferenceInterpreter
             receipts = [.. state.InputReceipts];
             requests = [.. state.OutstandingRequests];
             terminal = state.Terminal;
+            cancellationFinalization = state.CancellationFinalization;
+            cancellationFinalizer = plan.Definition.Nodes
+                .OfType<CancellationFinalizerProcessNode>()
+                .SingleOrDefault();
             nodeIndexes = plan.Definition.Nodes
                 .Select(static (node, index) => (node.Id, index))
                 .ToDictionary(static pair => pair.Id, static pair => pair.index);
@@ -393,6 +400,17 @@ public static partial class ProcessReferenceInterpreter
             }
 
             AdmitInputs();
+            if (cancellationFinalization is not null)
+            {
+                return ContinueCancellationFinalization();
+            }
+            if (!activation.ChildCancellationClosures.IsEmpty)
+            {
+                return Rejected(Diagnostic(
+                    ProcessExecutionDiagnosticCodes.ActivationInvalid,
+                    "Child cancellation-closure evidence requires an active authored cancellation-finalization occurrence.",
+                    node: null));
+            }
             if (activation.Cancellation is not null)
             {
                 return ApplyCancellation();
@@ -500,13 +518,326 @@ public static partial class ProcessReferenceInterpreter
 
         ProcessActivationDecision ApplyCancellation()
         {
+            if (cancellationFinalizer is null)
+            {
+                CancelLiveTokens(except: null);
+                CloseAllTokenWork();
+                terminal = new(ExecutionTerminalOutcomeKind.Cancelled, activation.ObservedAtUtc);
+                var immediateAnchor = tokens.OrderBy(static token => token.Id.Value, StringComparer.Ordinal).First();
+                AddTrace(
+                    ProcessTraceEventKind.CancellationApplied,
+                    immediateAnchor,
+                    immediateAnchor.Node,
+                    detail: "safe-point");
+                safePointNode = immediateAnchor.Node;
+                return CompleteDecision(ProcessActivationDisposition.Cancelled);
+            }
+
+            var intent = activation.Cancellation!;
+            if (intent.CommandId is null)
+            {
+                return Rejected(Diagnostic(
+                    ProcessExecutionDiagnosticCodes.ActivationInvalid,
+                    "An authored cancellation finalizer requires the causal cancellation command identity.",
+                    cancellationFinalizer.Id));
+            }
+
             CancelLiveTokens(except: null);
             CloseAllTokenWork();
-            terminal = new(ExecutionTerminalOutcomeKind.Cancelled, activation.ObservedAtUtc);
             var anchor = tokens.OrderBy(static token => token.Id.Value, StringComparer.Ordinal).First();
-            AddTrace(ProcessTraceEventKind.CancellationApplied, anchor, anchor.Node, detail: "safe-point");
-            safePointNode = anchor.Node;
-            return CompleteDecision(ProcessActivationDisposition.Cancelled);
+            AddTrace(ProcessTraceEventKind.CancellationApplied, anchor, anchor.Node, detail: "authored-finalization");
+            cancellationFinalization = new(
+                intent,
+                ProcessCancellationFinalizationPhase.WaitingForPropagatedChildren,
+                activation.ObservedAtUtc);
+            var invalidClosure = ApplyChildCancellationClosures();
+            if (invalidClosure is not null)
+                return Rejected(invalidClosure);
+            return HasUnsettledPropagatedChildren()
+                ? CompleteDecision(ProcessActivationDisposition.Quiescent)
+                : StartCancellationFinalizer();
+        }
+
+        ProcessActivationDecision ContinueCancellationFinalization()
+        {
+            var finalization = cancellationFinalization
+                ?? throw new InvalidOperationException("Cancellation-finalization state is unavailable.");
+            if (activation.Cancellation is { } repeated && repeated != finalization.Intent)
+            {
+                return Rejected(Diagnostic(
+                    ProcessExecutionDiagnosticCodes.ActivationInvalid,
+                    "Cancellation intent conflicts with the retained authored finalization occurrence.",
+                    cancellationFinalizer?.Id));
+            }
+            if (cancellationFinalizer is null)
+            {
+                return Rejected(Diagnostic(
+                    ProcessExecutionDiagnosticCodes.ContinuationInvalid,
+                    "Retained cancellation-finalization state has no authored finalizer declaration.",
+                    node: null));
+            }
+
+            var invalidClosure = ApplyChildCancellationClosures();
+            if (invalidClosure is not null)
+                return Rejected(invalidClosure);
+            if (finalization.Phase == ProcessCancellationFinalizationPhase.WaitingForPropagatedChildren)
+            {
+                return HasUnsettledPropagatedChildren()
+                    ? CompleteDecision(ProcessActivationDisposition.Quiescent)
+                    : StartCancellationFinalizer();
+            }
+            if (finalization.Phase is ProcessCancellationFinalizationPhase.Acknowledged
+                or ProcessCancellationFinalizationPhase.Failed)
+            {
+                return CompleteDecision(DispositionFromTerminal());
+            }
+
+            ResumeExistingWaits();
+            return CompleteDecision(
+                terminal.Kind == ExecutionTerminalOutcomeKind.None
+                    ? ProcessActivationDisposition.Quiescent
+                    : DispositionFromTerminal());
+        }
+
+        DocumentValidationDiagnostic? ApplyChildCancellationClosures()
+        {
+            foreach (var closure in activation.ChildCancellationClosures)
+            {
+                var matching = children.Where(child =>
+                        child.RequestEmission is { } request
+                        && string.Equals(
+                            ProcessReferenceIdentities.ChildCancellationIntent(
+                                original.Continuation,
+                                child.RegistrationId,
+                                request),
+                            closure.IntentId,
+                            StringComparison.Ordinal))
+                    .Take(2)
+                    .ToArray();
+                if (matching is not [var child]
+                    || child.Continuation != closure.ChildContinuation
+                    || closure.ObservedAtUtc > activation.ObservedAtUtc
+                    || cancellationFinalization is not { } finalization
+                    || closure.ObservedAtUtc < finalization.RequestedAtUtc)
+                {
+                    return Diagnostic(
+                        ProcessExecutionDiagnosticCodes.ActivationInvalid,
+                        "Child cancellation-closure evidence does not match one requested propagated child occurrence.",
+                        matching.FirstOrDefault()?.Node);
+                }
+                if (child.Disposition == ProcessChildDisposition.CancellationSettled)
+                {
+                    if (child.CancellationClosure != closure)
+                    {
+                        return Diagnostic(
+                            ProcessExecutionDiagnosticCodes.InputIdentityConflict,
+                            "Child cancellation closure conflicts with retained closure evidence.",
+                            child.Node);
+                    }
+                    continue;
+                }
+                if (child.Disposition != ProcessChildDisposition.CancellationRequested)
+                {
+                    return Diagnostic(
+                        ProcessExecutionDiagnosticCodes.ActivationInvalid,
+                        "Child cancellation closure targets work without a retained propagation request.",
+                        child.Node);
+                }
+
+                ReplaceChild(child with
+                {
+                    Disposition = ProcessChildDisposition.CancellationSettled,
+                    CancellationClosure = closure
+                });
+                var traceToken = tokens.FirstOrDefault(candidate => candidate.Id == child.Token)
+                    ?? tokens.OrderBy(static candidate => candidate.Id.Value, StringComparer.Ordinal).First();
+                AddTrace(
+                    ProcessTraceEventKind.ChildCancellationSettled,
+                    traceToken,
+                    child.Node,
+                    detail: closure.Outcome.ToString());
+            }
+            return null;
+        }
+
+        bool HasUnsettledPropagatedChildren() => children.Any(static child =>
+            child.Disposition == ProcessChildDisposition.CancellationRequested);
+
+        ProcessActivationDecision StartCancellationFinalizer()
+        {
+            var node = cancellationFinalizer
+                ?? throw new InvalidOperationException("Cancellation finalizer is unavailable.");
+            var finalization = cancellationFinalization
+                ?? throw new InvalidOperationException("Cancellation-finalization state is unavailable.");
+            var tokenId = ProcessReferenceIdentities.CancellationFinalizerToken(original.Continuation, node.Id);
+            if (tokens.Any(candidate => candidate.Id == tokenId)
+                || children.Any(candidate => candidate.Node == node.Id))
+            {
+                return Rejected(Diagnostic(
+                    ProcessExecutionDiagnosticCodes.ContinuationInvalid,
+                    "The authored cancellation finalizer can start only once.",
+                    node.Id));
+            }
+
+            var payload = CreateCancellationFinalizerPayload(node, finalization.Intent);
+            if (payload is null)
+            {
+                SetCancellationFinalizationFailure(
+                    node,
+                    "The immutable root Process input cannot be materialized for cancellation finalization.");
+                return CompleteDecision(ProcessActivationDisposition.Failed);
+            }
+            var requestContract = ResolveContract<RequestContractDefinition>(node.Contract, node.Id);
+            if (requestContract.Payload.Contract != payload.Contract)
+            {
+                SetCancellationFinalizationFailure(
+                    node,
+                    "The linked finalizer Request payload contract differs from the canonical finalizer input contract.");
+                return CompleteDecision(ProcessActivationDisposition.Failed);
+            }
+
+            var token = new ProcessTokenState(
+                tokenId,
+                node.Id,
+                ExecutionTokenDisposition.Active,
+                step: 0,
+                [new(ProcessBindingIds.Input, payload)],
+                requestObligations: [],
+                forkMembership: null,
+                failure: null);
+            tokens.Add(token);
+            AddTrace(ProcessTraceEventKind.NodeEntered, token, node.Id);
+            var emissionId = ProcessReferenceIdentities.Emission(
+                original.Continuation,
+                activation.Id,
+                token.Id,
+                node.Id,
+                tokenStep: 0);
+            var registration = ProcessReferenceIdentities.ChildRegistration(
+                original.Continuation,
+                token.Id,
+                node.Id,
+                occurrence: 0,
+                progressIdentity: null);
+            var childContinuation = ProcessReferenceIdentities.ChildContinuation(
+                original.Continuation,
+                token.Id,
+                node.Id,
+                occurrence: 0,
+                progressIdentity: null,
+                node.Process);
+            children.Add(new(
+                registration,
+                token.Id,
+                token.Id,
+                node.Id,
+                occurrence: 0,
+                progressIdentity: null,
+                node.Process,
+                childContinuation,
+                ProcessChildPurpose.Compensation,
+                ProcessChildCancellationPolicy.Propagate,
+                ProcessChildDisposition.Active,
+                emissionId));
+            AddTrace(ProcessTraceEventKind.ChildRegistered, token, node.Id, detail: registration);
+            AddTrace(ProcessTraceEventKind.CancellationFinalizerStarted, token, node.Id, detail: registration);
+            cancellationFinalization = new(
+                finalization.Intent,
+                ProcessCancellationFinalizationPhase.FinalizerActive,
+                finalization.RequestedAtUtc);
+            EmitRequest(
+                token,
+                node.Id,
+                node.Contract,
+                payload,
+                emissionId,
+                new(
+                    node.Process,
+                    childContinuation,
+                    node.OutcomeMapping,
+                    ownerToken: token.Id,
+                    occurrence: 0,
+                    progressIdentity: null));
+            return CompleteDecision(ProcessActivationDisposition.DurableCut);
+        }
+
+        PortableValue? CreateCancellationFinalizerPayload(
+            CancellationFinalizerProcessNode node,
+            ProcessCancellationIntent intent)
+        {
+            var inputs = tokens
+                .SelectMany(static token => token.Bindings)
+                .Where(static binding => binding.Binding == ProcessBindingIds.Input)
+                .Select(static binding => binding.Value)
+                .Distinct()
+                .Take(2)
+                .ToArray();
+            if (inputs is not [var rootInput])
+                return null;
+
+            Dictionary<string, ObservationValue> fields = [];
+            if (rootInput.State == PortableValueState.Concrete && rootInput.Value is { } concrete)
+                fields.Add("input", concrete);
+            else if (rootInput.State == PortableValueState.Null)
+                fields.Add("input", ObservationValue.Null);
+            else if (rootInput.State is not (PortableValueState.Missing or PortableValueState.Absent))
+                return null;
+
+            Dictionary<string, ObservationValue> cancellation = new(StringComparer.Ordinal)
+            {
+                ["attemptId"] = ObservationValue.FromString(intent.AttemptId.Value),
+                ["commandId"] = ObservationValue.FromString(intent.CommandId!.Value.Value),
+                ["processInstanceId"] = ObservationValue.FromString(original.Continuation.ProcessInstanceId.Value),
+                ["reasonCode"] = ObservationValue.FromString(intent.Reason.Code)
+            };
+            if (intent.Reason.Detail is { } detail)
+            {
+                var detailNode = JsonSerializer.SerializeToNode(detail)
+                    ?? throw new InvalidOperationException("Cancellation reason detail did not serialize to strict JSON.");
+                cancellation.Add("reasonDetail", ObservationValue.FromJsonNode(detailNode));
+            }
+            fields.Add("cancellation", ObservationValue.FromObject(cancellation));
+            return PortableValue.Concrete(
+                ProcessCancellationFinalizationContracts.Input(rootInput.Contract),
+                ObservationValue.FromObject(fields));
+        }
+
+        void SetCancellationFinalizationFailure(
+            CancellationFinalizerProcessNode node,
+            string message,
+            ProcessTokenState? token = null)
+        {
+            var diagnostic = Diagnostic(
+                ProcessExecutionDiagnosticCodes.AuthoredFailure,
+                message,
+                node.Id);
+            diagnostics.Add(diagnostic);
+            var retained = cancellationFinalization
+                ?? throw new InvalidOperationException("Cancellation-finalization state is unavailable.");
+            cancellationFinalization = new(
+                retained.Intent,
+                ProcessCancellationFinalizationPhase.Failed,
+                retained.RequestedAtUtc,
+                diagnostic);
+            if (token is not null)
+            {
+                ReplaceToken(token with
+                {
+                    Disposition = ExecutionTokenDisposition.Failed,
+                    Step = token.Step + 1,
+                    Failure = diagnostic
+                });
+            }
+            terminal = new(ExecutionTerminalOutcomeKind.Failed, activation.ObservedAtUtc);
+            safePointNode = node.Id;
+            var traceToken = token
+                ?? tokens.OrderBy(static candidate => candidate.Id.Value, StringComparer.Ordinal).First();
+            AddTrace(
+                ProcessTraceEventKind.CancellationFinalizerResolved,
+                traceToken,
+                node.Id,
+                detail: "failed");
+            AddTrace(ProcessTraceEventKind.TerminalReached, traceToken, node.Id, detail: "Failed");
         }
 
         void AdmitInputs()
@@ -883,6 +1214,11 @@ public static partial class ProcessReferenceInterpreter
                 .OrderBy(item => item.Input.Envelope.Context.EmissionId.Value, StringComparer.Ordinal)
                 .ToArray();
             var node = plan.GetNode(wait.Node);
+            if (node is CancellationFinalizerProcessNode finalizer)
+            {
+                ResumeCancellationFinalizerRequest(wait, token, outstanding, finalizer, candidates);
+                return;
+            }
             if (node is ForEachPartitionProcessNode partitionNode)
             {
                 ResumePartitionRequest(wait, token, outstanding, partitionNode, candidates);
@@ -936,6 +1272,113 @@ public static partial class ProcessReferenceInterpreter
                     GetWait(wait.RegistrationId));
                 return;
             }
+        }
+
+        void ResumeCancellationFinalizerRequest(
+            ProcessWaitState wait,
+            ProcessTokenState token,
+            ProcessOutstandingRequest outstanding,
+            CancellationFinalizerProcessNode node,
+            IReadOnlyList<ProcessBufferedInput> candidates)
+        {
+            foreach (var candidate in candidates)
+            {
+                var reply = (ReplyEnvelope)candidate.Input.Envelope;
+                if (!ReplyMatchesRequest(reply, node.Contract)
+                    || !ReplyMatchesChildRequest(token.Id, node.Id, outstanding.Emission, reply)
+                    || !node.OutcomeMapping.Contains(reply.Outcome.Id))
+                {
+                    DispositionInput(
+                        candidate,
+                        ProcessInputAdmissionDisposition.Rejected,
+                        ProcessInputAdmissionReason.ContractMismatch,
+                        wait.RegistrationId,
+                        "cancellation-finalizer-result-rejected");
+                    continue;
+                }
+
+                DispositionInput(
+                    candidate,
+                    ProcessInputAdmissionDisposition.Consumed,
+                    ProcessInputAdmissionReason.Consumed,
+                    wait.RegistrationId,
+                    "cancellation-finalizer-result");
+                requests.Remove(outstanding);
+                DeactivateWait(wait, winnerInput: reply.Context.EmissionId);
+                var child = children.Single(candidateChild =>
+                    candidateChild.Token == token.Id
+                    && candidateChild.Node == node.Id
+                    && candidateChild.RequestEmission == outstanding.Emission);
+                var acknowledged = reply.Outcome.Id == node.OutcomeMapping.Completed
+                    && IsExactCancellationAcknowledgement(reply.Outcome.Value);
+                ReplaceChild(child with
+                {
+                    Disposition = reply.Outcome.Id == node.OutcomeMapping.Completed
+                        ? ProcessChildDisposition.Completed
+                        : ProcessChildDisposition.Failed,
+                    TerminalOutcome = reply.Outcome.Id,
+                    Result = reply.Outcome.Value
+                });
+                AddTrace(
+                    ProcessTraceEventKind.ChildResolved,
+                    token,
+                    node.Id,
+                    emission: reply.Context.EmissionId,
+                    detail: acknowledged ? "completed" : "failed");
+                if (!acknowledged)
+                {
+                    SetCancellationFinalizationFailure(
+                        node,
+                        reply.Outcome.Id == node.OutcomeMapping.Completed
+                            ? "The cancellation finalizer acknowledgement does not name the exact cancelled attempt."
+                            : $"The cancellation finalizer ended through mapped outcome '{reply.Outcome.Id.Value}'.",
+                        token);
+                }
+                else
+                {
+                    var retained = cancellationFinalization
+                        ?? throw new InvalidOperationException("Cancellation-finalization state is unavailable.");
+                    cancellationFinalization = new(
+                        retained.Intent,
+                        ProcessCancellationFinalizationPhase.Acknowledged,
+                        retained.RequestedAtUtc);
+                    ReplaceToken(token with
+                    {
+                        Disposition = ExecutionTokenDisposition.Completed,
+                        Step = token.Step + 1
+                    });
+                    terminal = new(ExecutionTerminalOutcomeKind.Cancelled, activation.ObservedAtUtc);
+                    safePointNode = node.Id;
+                    AddTrace(
+                        ProcessTraceEventKind.CancellationFinalizerResolved,
+                        token,
+                        node.Id,
+                        emission: reply.Context.EmissionId,
+                        detail: "acknowledged");
+                    AddTrace(ProcessTraceEventKind.TerminalReached, token, node.Id, detail: "Cancelled");
+                }
+                DispositionOtherRequestResults(
+                    token.Id,
+                    outstanding.Emission,
+                    GetWait(wait.RegistrationId));
+                return;
+            }
+        }
+
+        bool IsExactCancellationAcknowledgement(PortableValue value)
+        {
+            if (value.Contract != ProcessCancellationFinalizationContracts.Acknowledgement
+                || value.State != PortableValueState.Concrete
+                || value.Value is not { Kind: ObservationValueKind.Object, Fields: { } fields }
+                || !fields.TryGetValue("attemptId", out var attempt)
+                || attempt.Kind != ObservationValueKind.String)
+            {
+                return false;
+            }
+            return string.Equals(
+                attempt.String,
+                original.Continuation.ProcessAttemptId.Value,
+                StringComparison.Ordinal);
         }
 
         void ResumePartitionRequest(
@@ -3654,7 +4097,8 @@ public static partial class ProcessReferenceInterpreter
                     .OrderBy(static input => input.Input.Envelope.Context.EmissionId.Value, StringComparer.Ordinal)],
                 [.. receipts.OrderBy(static receipt => receipt.Emission.Value, StringComparer.Ordinal)],
                 [.. requests.OrderBy(static request => request.Emission.Value, StringComparer.Ordinal)],
-                terminal);
+                terminal,
+                cancellationFinalization);
             return new(
                 disposition,
                 state,

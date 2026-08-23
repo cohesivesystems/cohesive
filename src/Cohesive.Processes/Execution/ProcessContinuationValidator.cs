@@ -56,6 +56,10 @@ public static class ProcessContinuationDiagnosticCodes
 
     /// <summary>A terminal continuation retains state that can no longer be consumed.</summary>
     public const string TerminalStateInvalid = "processes.execution.continuation.terminalStateInvalid";
+
+    /// <summary>Authored cancellation-finalization state contradicts its declaration, child work, or terminal result.</summary>
+    public const string CancellationFinalizationInvalid =
+        "processes.execution.continuation.cancellationFinalizationInvalid";
 }
 
 /// <summary>Validates a restored Process continuation before any host operation may execute.</summary>
@@ -133,6 +137,7 @@ public static class ProcessContinuationValidator
             ValidateChildren();
             ValidatePartitions();
             ValidateRecurrences();
+            ValidateCancellationFinalization();
             ValidateTerminalState();
             diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
             return DocumentValidationResult.FromDiagnostics(diagnostics);
@@ -197,7 +202,7 @@ public static class ProcessContinuationValidator
                         subject: token.Id.Value);
                 }
 
-                ValidateBindings(token.Bindings, Child(location, "bindings"), token.Id.Value);
+                ValidateBindings(token.Bindings, Child(location, "bindings"), token.Id.Value, token.Node);
                 ValidateObligations(
                     token.RequestObligations,
                     Child(location, "requestObligations"),
@@ -224,7 +229,8 @@ public static class ProcessContinuationValidator
         void ValidateBindings(
             ImmutableArray<ProcessBindingValue> values,
             string location,
-            string subject)
+            string subject,
+            ExecutionNodeId? tokenNode = null)
         {
             HashSet<ValueBindingId> identities = [];
             string? previous = null;
@@ -256,9 +262,18 @@ public static class ProcessContinuationValidator
                 previous = identity;
 
                 var value = binding.Value;
+                var expectedFound = bindingContracts.TryGetValue(binding.Binding, out var expected);
+                if (binding.Binding == ProcessBindingIds.Input
+                    && tokenNode is { } nodeId
+                    && planNodes.TryGetValue(nodeId, out var planNode)
+                    && planNode is CancellationFinalizerProcessNode)
+                {
+                    expected = ProcessCancellationFinalizationContracts.Input(plan.Definition.Input);
+                    expectedFound = true;
+                }
                 var valueValid = value is not null
                     && value.State is not (PortableValueState.Unknown or PortableValueState.Failed)
-                    && bindingContracts.TryGetValue(binding.Binding, out var expected)
+                    && expectedFound
                     && value.Contract == expected
                     && PortableExecutionValidator.Validate(
                         value,
@@ -701,7 +716,10 @@ public static class ProcessContinuationValidator
                 (ProcessWaitKind.AwaitMatch, AwaitMatchProcessNode) => true,
                 (ProcessWaitKind.Timer, TimerProcessNode) => true,
                 (ProcessWaitKind.DurableCut, DurableCutProcessNode) => true,
-                (ProcessWaitKind.Request, RequestProcessNode or InvokeProcessProcessNode or ForEachPartitionProcessNode) => true,
+                (ProcessWaitKind.Request, RequestProcessNode
+                    or InvokeProcessProcessNode
+                    or ForEachPartitionProcessNode
+                    or CancellationFinalizerProcessNode) => true,
                 (ProcessWaitKind.PartitionBatch, ForEachPartitionProcessNode) => true,
                 (ProcessWaitKind.RepeatAcrossActivation, RepeatAcrossActivationProcessNode) => true,
                 _ => false
@@ -758,6 +776,7 @@ public static class ProcessContinuationValidator
                 (ProcessWaitKind.Request, InvokeProcessProcessNode child, { } winner, not null) =>
                     child.Outcomes.Any(outcome => outcome.Id == winner),
                 (ProcessWaitKind.Request, ForEachPartitionProcessNode, null, not null) => true,
+                (ProcessWaitKind.Request, CancellationFinalizerProcessNode, null, not null) => true,
                 (ProcessWaitKind.AwaitMatch, AwaitMatchProcessNode awaitMatch, { } winner, var input) =>
                     awaitMatch.Clauses.Any(clause =>
                         clause.Id == winner
@@ -882,7 +901,9 @@ public static class ProcessContinuationValidator
                         subject: emission.Value);
                 }
 
-                if (node is InvokeProcessProcessNode or ForEachPartitionProcessNode)
+                if (node is InvokeProcessProcessNode
+                    or ForEachPartitionProcessNode
+                    or CancellationFinalizerProcessNode)
                 {
                     var matchingChildren = children.Values.Count(candidate =>
                         candidate.Child.Disposition == ProcessChildDisposition.Active
@@ -1504,7 +1525,8 @@ public static class ProcessContinuationValidator
 
                 if (multiplicity == ProcessChildRequestMultiplicity.Single
                     && child.Disposition is (ProcessChildDisposition.CancellationRequested
-                        or ProcessChildDisposition.Detached)
+                        or ProcessChildDisposition.Detached
+                        or ProcessChildDisposition.CancellationSettled)
                     && (!ownerFound || !IsTerminal(owner.Token.Disposition)))
                 {
                     Error(
@@ -1556,6 +1578,14 @@ public static class ProcessContinuationValidator
                         child.RequestEmission is not null
                         && child.TerminalOutcome is null
                         && child.Result is null
+                        && child.CancellationClosure is null
+                        && requestCount == 0
+                        && waitCount == 0,
+                    ProcessChildDisposition.CancellationSettled =>
+                        child.RequestEmission is not null
+                        && child.TerminalOutcome is null
+                        && child.Result is null
+                        && child.CancellationClosure is not null
                         && requestCount == 0
                         && waitCount == 0,
                     _ => false
@@ -1566,6 +1596,15 @@ public static class ProcessContinuationValidator
                         ProcessContinuationDiagnosticCodes.ChildStateMismatch,
                         $"Child registration '{child.RegistrationId}' has Request or result evidence that contradicts its lifecycle disposition.",
                         location,
+                        subject: child.RegistrationId);
+                }
+                if (child.Disposition != ProcessChildDisposition.CancellationSettled
+                    && child.CancellationClosure is not null)
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.ChildStateMismatch,
+                        $"Child registration '{child.RegistrationId}' carries cancellation closure evidence outside the settled disposition.",
+                        Child(location, "cancellationClosure"),
                         subject: child.RegistrationId);
                 }
 
@@ -1585,7 +1624,8 @@ public static class ProcessContinuationValidator
                     }
                 }
                 else if (child.Disposition is ProcessChildDisposition.CancellationRequested
-                    or ProcessChildDisposition.Detached)
+                    or ProcessChildDisposition.Detached
+                    or ProcessChildDisposition.CancellationSettled)
                 {
                     ValidateCancelledChildEvidence(child, childIndex, expectedRequestWait);
                 }
@@ -1606,6 +1646,10 @@ public static class ProcessContinuationValidator
                             && member.Token.Disposition == ExecutionTokenDisposition.Completed
                             && member.Token.Node == child.Node,
                         ProcessChildDisposition.CancellationRequested or ProcessChildDisposition.Detached =>
+                            memberFound
+                            && member.Token.Disposition == ExecutionTokenDisposition.Cancelled
+                            && member.Token.Node == child.Node,
+                        ProcessChildDisposition.CancellationSettled =>
                             memberFound
                             && member.Token.Disposition == ExecutionTokenDisposition.Cancelled
                             && member.Token.Node == child.Node,
@@ -1729,7 +1773,7 @@ public static class ProcessContinuationValidator
                 ? semantics.Outcomes.SingleOrDefault(candidate => candidate.Outcome == outcome)?.Id
                 : null;
             var winnerShapeValid = wait.WinnerInput is not null
-                && (node is ForEachPartitionProcessNode
+                && (node is ForEachPartitionProcessNode or CancellationFinalizerProcessNode
                     ? wait.WinnerClause is null
                     : expectedWinner is not null && wait.WinnerClause == expectedWinner);
             var consumedReplies = inputReceipts.Values.Where(candidate =>
@@ -1785,12 +1829,27 @@ public static class ProcessContinuationValidator
                 && candidate.Receipt.Target.Token == child.Token
                 && candidate.Receipt.Input.Envelope is ReplyEnvelope reply
                 && reply.InReplyTo == child.RequestEmission);
+            var closureValid = child.Disposition == ProcessChildDisposition.CancellationSettled
+                ? child.CancellationClosure is { } closure
+                    && child.RequestEmission is { } request
+                    && string.Equals(
+                        closure.IntentId,
+                        ProcessReferenceIdentities.ChildCancellationIntent(
+                            state.Continuation,
+                            child.RegistrationId,
+                            request),
+                        StringComparison.Ordinal)
+                    && closure.ChildContinuation == child.Continuation
+                    && state.CancellationFinalization is { } finalization
+                    && closure.ObservedAtUtc >= finalization.RequestedAtUtc
+                : child.CancellationClosure is null;
             if (childRequestWaits is [var waitEntry]
                 && !waitEntry.Wait.Active
                 && waitEntry.Wait.RegistrationId == expectedWait
                 && waitEntry.Wait.WinnerClause is null
                 && waitEntry.Wait.WinnerInput is null
-                && consumedReplies == 0)
+                && consumedReplies == 0
+                && closureValid)
             {
                 return;
             }
@@ -2364,6 +2423,122 @@ public static class ProcessContinuationValidator
                 expected: "no live work",
                 observed: $"tokens={liveTokens}; waits={activeWaits}; forks={liveForks}; children={liveChildren}; partitions={livePartitions}; recurrences={liveRecurrences}; requests={state.OutstandingRequests.Length}; buffered={state.BufferedInputs.Length}");
         }
+
+        void ValidateCancellationFinalization()
+        {
+            var declaration = plan.Definition.Nodes
+                .OfType<CancellationFinalizerProcessNode>()
+                .SingleOrDefault();
+            var finalizationChildren = declaration is null
+                ? []
+                : state.Children.Where(child => child?.Node == declaration.Id).ToArray();
+            if (state.CancellationFinalization is not { } finalization)
+            {
+                if (finalizationChildren.Length != 0
+                    || state.Children.Any(static child =>
+                        child?.Disposition == ProcessChildDisposition.CancellationSettled))
+                {
+                    Error(
+                        ProcessContinuationDiagnosticCodes.CancellationFinalizationInvalid,
+                        "Cancellation-finalizer child or settled propagated-child evidence requires retained authored finalization state.",
+                        "/cancellationFinalization");
+                }
+                return;
+            }
+
+            if (declaration is null
+                || finalization.Intent is null
+                || finalization.Intent.CommandId is null
+                || finalization.Intent.AttemptId != state.Continuation.ProcessAttemptId
+                || finalization.RequestedAtUtc == default
+                || finalization.RequestedAtUtc.Offset != TimeSpan.Zero
+                || !Enum.IsDefined(finalization.Phase)
+                || finalization.Phase == ProcessCancellationFinalizationPhase.Unspecified)
+            {
+                Error(
+                    ProcessContinuationDiagnosticCodes.CancellationFinalizationInvalid,
+                    "Retained cancellation-finalization state lacks its exact declaration, command, attempt, phase, or UTC request time.",
+                    "/cancellationFinalization");
+                return;
+            }
+
+            var expectedToken = ProcessReferenceIdentities.CancellationFinalizerToken(
+                state.Continuation,
+                declaration.Id);
+            tokens.TryGetValue(expectedToken, out var tokenEntry);
+            var finalizerChild = finalizationChildren.Length == 1 ? finalizationChildren[0] : null;
+            var normalWorkClosed = state.Tokens.All(token => token is null
+                || token.Id == expectedToken
+                || IsTerminal(token.Disposition));
+            var unsettledChildren = state.Children.Count(child => child is not null
+                && child.Node != declaration.Id
+                && child.Disposition == ProcessChildDisposition.CancellationRequested);
+            var finalizerIdentityValid = finalizerChild is null
+                || finalizerChild.Token == expectedToken
+                && finalizerChild.Owner == expectedToken
+                && finalizerChild.Occurrence == 0
+                && finalizerChild.ProgressIdentity is null
+                && finalizerChild.Process == declaration.Process
+                && finalizerChild.Purpose == ProcessChildPurpose.Compensation
+                && finalizerChild.Cancellation == ProcessChildCancellationPolicy.Propagate;
+            var shapeValid = finalization.Phase switch
+            {
+                ProcessCancellationFinalizationPhase.WaitingForPropagatedChildren =>
+                    state.Terminal.Kind == ExecutionTerminalOutcomeKind.None
+                    && finalization.Failure is null
+                    && finalizationChildren.Length == 0
+                    && !tokens.ContainsKey(expectedToken)
+                    && unsettledChildren > 0,
+                ProcessCancellationFinalizationPhase.FinalizerActive =>
+                    state.Terminal.Kind == ExecutionTerminalOutcomeKind.None
+                    && finalization.Failure is null
+                    && unsettledChildren == 0
+                    && finalizationChildren.Length == 1
+                    && finalizerChild?.Disposition == ProcessChildDisposition.Active
+                    && tokenEntry.Token?.Disposition == ExecutionTokenDisposition.Waiting,
+                ProcessCancellationFinalizationPhase.Acknowledged =>
+                    state.Terminal.Kind == ExecutionTerminalOutcomeKind.Cancelled
+                    && finalization.Failure is null
+                    && unsettledChildren == 0
+                    && finalizationChildren.Length == 1
+                    && finalizerChild?.Disposition == ProcessChildDisposition.Completed
+                    && tokenEntry.Token?.Disposition == ExecutionTokenDisposition.Completed
+                    && IsExactCancellationAcknowledgement(finalizerChild.Result),
+                ProcessCancellationFinalizationPhase.Failed =>
+                    state.Terminal.Kind == ExecutionTerminalOutcomeKind.Failed
+                    && finalization.Failure is { Severity: DiagnosticSeverity.Error }
+                    && unsettledChildren == 0
+                    && finalizationChildren.Length <= 1
+                    && (finalizerChild is null
+                        || finalizerChild.Disposition is
+                            ProcessChildDisposition.Completed or ProcessChildDisposition.Failed
+                        && tokenEntry.Token?.Disposition == ExecutionTokenDisposition.Failed),
+                _ => false
+            };
+            if (!normalWorkClosed || !finalizerIdentityValid || !shapeValid)
+            {
+                Error(
+                    ProcessContinuationDiagnosticCodes.CancellationFinalizationInvalid,
+                    "Cancellation-finalization phase contradicts normal-work closure, propagated children, the exact finalizer occurrence, or terminal outcome.",
+                    "/cancellationFinalization",
+                    subject: declaration.Id.Value);
+            }
+        }
+
+        bool IsExactCancellationAcknowledgement(PortableValue? value) =>
+            value is
+            {
+                Contract: var contract,
+                State: PortableValueState.Concrete,
+                Value: { Kind: ObservationValueKind.Object, Fields: { } fields }
+            }
+            && contract == ProcessCancellationFinalizationContracts.Acknowledgement
+            && fields.TryGetValue("attemptId", out var attempt)
+            && attempt.Kind == ObservationValueKind.String
+            && string.Equals(
+                attempt.String,
+                state.Continuation.ProcessAttemptId.Value,
+                StringComparison.Ordinal);
 
         static bool TryGetRequestNodeSemantics(
             CanonicalProcessNode node,

@@ -29,7 +29,13 @@ public enum ProcessControlMode
     Cancelled = 6,
 
     /// <summary>The current attempt was forcibly and irreversibly stopped.</summary>
-    Terminated = 7
+    Terminated = 7,
+
+    /// <summary>Normal work is closed while propagated children or authored cancellation finalization settle.</summary>
+    Cancelling = 8,
+
+    /// <summary>Authored cancellation finalization ended unsuccessfully.</summary>
+    CancellationFailed = 9
 }
 
 /// <summary>Lifecycle disposition of one Process attempt retained in control lineage.</summary>
@@ -48,7 +54,58 @@ public enum ProcessControlAttemptDisposition
     Cancelled = 3,
 
     /// <summary>The attempt ended through immediate termination.</summary>
-    Terminated = 4
+    Terminated = 4,
+
+    /// <summary>The attempt ended because authored cancellation finalization failed.</summary>
+    CancellationFailed = 5
+}
+
+/// <summary>How an accepted cancellation reaches terminal lifecycle state.</summary>
+public enum ProcessCancellationCompletionPolicy
+{
+    /// <summary>Preserve the compatibility behavior that closes cancellation at its safe point.</summary>
+    Immediate = 0,
+
+    /// <summary>Remain cancelling until the exact authored finalizer produces terminal evidence.</summary>
+    AuthoredFinalization = 1
+}
+
+/// <summary>Control-level terminal observation of one authored cancellation-finalization occurrence.</summary>
+public sealed record ProcessCancellationFinalizationObservation
+{
+    /// <summary>Creates final cancellation outcome evidence.</summary>
+    /// <param name="intent">Exact accepted cancellation intent and causal command identity.</param>
+    /// <param name="outcome">Cancelled after acknowledgement, or Failed after unsuccessful finalization.</param>
+    /// <param name="observedAtUtc">Explicit UTC terminal observation time.</param>
+    [JsonConstructor]
+    public ProcessCancellationFinalizationObservation(
+        ProcessCancellationIntent intent,
+        ExecutionTerminalOutcomeKind outcome,
+        DateTimeOffset observedAtUtc)
+    {
+        Intent = intent ?? throw new ArgumentNullException(nameof(intent));
+        if (intent.CommandId is null)
+            throw new ArgumentException("Cancellation finalization requires a causal command identity.", nameof(intent));
+        if (outcome is not (ExecutionTerminalOutcomeKind.Cancelled or ExecutionTerminalOutcomeKind.Failed))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(outcome),
+                outcome,
+                "Cancellation finalization must end as acknowledged cancellation or explicit failure.");
+        }
+        ExecutionObservationRequirements.RequireUtc(observedAtUtc, nameof(observedAtUtc));
+        Outcome = outcome;
+        ObservedAtUtc = observedAtUtc;
+    }
+
+    /// <summary>Exact accepted cancellation intent and causal command identity.</summary>
+    public ProcessCancellationIntent Intent { get; }
+
+    /// <summary>Cancelled after acknowledgement, or Failed after unsuccessful finalization.</summary>
+    public ExecutionTerminalOutcomeKind Outcome { get; }
+
+    /// <summary>Explicit UTC terminal observation time.</summary>
+    public DateTimeOffset ObservedAtUtc { get; }
 }
 
 /// <summary>Execution position relevant to invariant-preserving lifecycle control.</summary>
@@ -779,6 +836,35 @@ public sealed record ProcessControlState
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
         new("cohesive-process-control-state/v1");
 
+    /// <summary>Creates persisted Process-control state without authored cancellation-finalization evidence.</summary>
+    public ProcessControlState(
+        ExecutionIrSchemaVersion schemaVersion,
+        ExecutionDefinitionReference definition,
+        InteractionAuthorityScope authorityScope,
+        ProcessInstanceId processInstanceId,
+        ProcessControlRevision revision,
+        ProcessControlMode mode,
+        ImmutableArray<ProcessControlAttemptState> attempts,
+        ProcessControlCommandId? pendingCommandId,
+        ImmutableArray<ProcessControlCommandReceipt> receipts,
+        DateTimeOffset createdAtUtc,
+        DateTimeOffset updatedAtUtc)
+        : this(
+            schemaVersion,
+            definition,
+            authorityScope,
+            processInstanceId,
+            revision,
+            mode,
+            attempts,
+            pendingCommandId,
+            receipts,
+            createdAtUtc,
+            updatedAtUtc,
+            cancellationFinalization: null)
+    {
+    }
+
     /// <summary>Creates complete persisted Process-control state.</summary>
     /// <param name="schemaVersion">Exact control-state schema version.</param>
     /// <param name="definition">Exact pinned Process definition revision and fingerprint.</param>
@@ -791,6 +877,7 @@ public sealed record ProcessControlState
     /// <param name="receipts">Chronological accepted command receipts.</param>
     /// <param name="createdAtUtc">Explicit UTC control-state creation time.</param>
     /// <param name="updatedAtUtc">Latest explicit UTC observation retained by the state.</param>
+    /// <param name="cancellationFinalization">Optional terminal authored cancellation-finalization evidence.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="definition"/> or <paramref name="authorityScope"/> is <see langword="null"/>.
     /// </exception>
@@ -810,7 +897,8 @@ public sealed record ProcessControlState
         ProcessControlCommandId? pendingCommandId,
         ImmutableArray<ProcessControlCommandReceipt> receipts,
         DateTimeOffset createdAtUtc,
-        DateTimeOffset updatedAtUtc)
+        DateTimeOffset updatedAtUtc,
+        ProcessCancellationFinalizationObservation? cancellationFinalization)
     {
         if (schemaVersion != CurrentSchemaVersion)
         {
@@ -860,6 +948,7 @@ public sealed record ProcessControlState
         Receipts = receipts;
         CreatedAtUtc = createdAtUtc;
         UpdatedAtUtc = updatedAtUtc;
+        CancellationFinalization = cancellationFinalization;
 
         var attemptsById = ValidateLineage();
         var receiptsByCommand = ValidateReceipts(attemptsById);
@@ -869,6 +958,7 @@ public sealed record ProcessControlState
         ValidateRevisionReachability();
         ValidateTerminalRevision(receiptsByCommand);
         ValidateLatestEvidence();
+        ValidateCancellationFinalization();
     }
 
     /// <summary>Exact Process-control state schema version.</summary>
@@ -911,13 +1001,18 @@ public sealed record ProcessControlState
     /// <summary>Latest explicit UTC observation retained by the state.</summary>
     public DateTimeOffset UpdatedAtUtc { get; }
 
+    /// <summary>Terminal authored cancellation-finalization evidence, absent before completion or when undeclared.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProcessCancellationFinalizationObservation? CancellationFinalization { get; }
+
     /// <summary>Final current or terminal attempt in the lineage.</summary>
     [JsonIgnore]
     public ProcessControlAttemptState CurrentAttempt => Attempts[^1];
 
     /// <summary>Whether lifecycle control is irreversibly terminal.</summary>
     [JsonIgnore]
-    public bool IsTerminal => Mode is ProcessControlMode.Cancelled or ProcessControlMode.Terminated;
+    public bool IsTerminal => Mode is
+        ProcessControlMode.Cancelled or ProcessControlMode.Terminated or ProcessControlMode.CancellationFailed;
 
     /// <summary>Creates initial running control state for one exact Process attempt.</summary>
     /// <param name="definition">Exact pinned Process definition.</param>
@@ -1005,7 +1100,8 @@ public sealed record ProcessControlState
         && PendingCommandId == other.PendingCommandId
         && Receipts.SequenceEqual(other.Receipts)
         && CreatedAtUtc == other.CreatedAtUtc
-        && UpdatedAtUtc == other.UpdatedAtUtc;
+        && UpdatedAtUtc == other.UpdatedAtUtc
+        && Equals(CancellationFinalization, other.CancellationFinalization);
 
     /// <summary>Returns a structural hash over complete persisted control state.</summary>
     /// <returns>A hash code derived from every scalar and chronological collection entry.</returns>
@@ -1031,6 +1127,7 @@ public sealed record ProcessControlState
 
         hash.Add(CreatedAtUtc);
         hash.Add(UpdatedAtUtc);
+        hash.Add(CancellationFinalization);
         return hash.ToHashCode();
     }
 
@@ -1101,6 +1198,7 @@ public sealed record ProcessControlState
         {
             ProcessControlMode.Cancelled => ProcessControlAttemptDisposition.Cancelled,
             ProcessControlMode.Terminated => ProcessControlAttemptDisposition.Terminated,
+            ProcessControlMode.CancellationFailed => ProcessControlAttemptDisposition.CancellationFailed,
             _ => ProcessControlAttemptDisposition.Current
         };
         if (CurrentAttempt.Disposition != expectedFinalDisposition)
@@ -1119,6 +1217,15 @@ public sealed record ProcessControlState
             && CurrentAttempt.Phase != ProcessControlExecutionPhase.InActivation)
         {
             throw new ArgumentException("A pending safe-point action requires an activation in flight.", nameof(Mode));
+        }
+        if (Mode == ProcessControlMode.Cancelling
+            && CurrentAttempt.Phase is not (ProcessControlExecutionPhase.Ready
+                or ProcessControlExecutionPhase.AtSafePoint
+                or ProcessControlExecutionPhase.InActivation))
+        {
+            throw new ArgumentException(
+                "Authored cancellation finalization must remain at a safe boundary or in its exact activation.",
+                nameof(Mode));
         }
 
         return attemptsById;
@@ -1350,6 +1457,9 @@ public sealed record ProcessControlState
                 (ProcessControlAttemptDisposition.Cancelled, CancelProcessCommand,
                     ProcessControlReceiptDisposition.Applied
                         or ProcessControlReceiptDisposition.DeferredToSafePoint) => true,
+                (ProcessControlAttemptDisposition.CancellationFailed, CancelProcessCommand,
+                    ProcessControlReceiptDisposition.Applied
+                        or ProcessControlReceiptDisposition.DeferredToSafePoint) => true,
                 (ProcessControlAttemptDisposition.Terminated, TerminateProcessCommand,
                     ProcessControlReceiptDisposition.Applied) => true,
                 _ => false
@@ -1359,12 +1469,16 @@ public sealed record ProcessControlState
                 throw new ArgumentException("Attempt closure contradicts its causal command receipt.", nameof(Attempts));
             }
 
+            var finalizedCancellation = CancellationFinalization is { } finalization
+                && finalization.Intent.CommandId == closure.CommandId;
             if (receipt.Disposition == ProcessControlReceiptDisposition.Applied
+                && !finalizedCancellation
                 && receipt.RecordedAtUtc != closure.OccurredAtUtc)
             {
                 throw new ArgumentException("An applied command must close its attempt at the receipt cut.", nameof(Attempts));
             }
             if (receipt.Disposition == ProcessControlReceiptDisposition.DeferredToSafePoint
+                && !finalizedCancellation
                 && attempt.LastSafePoint?.ObservedAtUtc != closure.OccurredAtUtc)
             {
                 throw new ArgumentException(
@@ -1414,6 +1528,12 @@ public sealed record ProcessControlState
                 continue;
             }
             var attempt = FindAttempt(receipt.BeforeAttemptId);
+            if (receipt.Command is CancelProcessCommand
+                && attempt?.Disposition == ProcessControlAttemptDisposition.Current
+                && Mode == ProcessControlMode.Cancelling)
+            {
+                continue;
+            }
             if (attempt?.Closure?.CommandId != receipt.Command.Context.CommandId)
             {
                 throw new ArgumentException(
@@ -1553,6 +1673,13 @@ public sealed record ProcessControlState
             {
                 continue;
             }
+            if (receipt.Command is CancelProcessCommand
+                && FindResolvingSafePoint(attempt, receipt) is not null
+                && (Mode == ProcessControlMode.Cancelling
+                    || CancellationFinalization?.Intent.CommandId == receipt.Command.Context.CommandId))
+            {
+                continue;
+            }
 
             throw new ArgumentException(
                 "A deferred command receipt is neither pending, resolved, nor explicitly preempted.",
@@ -1588,9 +1715,13 @@ public sealed record ProcessControlState
         var closure = CurrentAttempt.Closure
             ?? throw new ArgumentException("Terminal state requires attempt-closure evidence.", nameof(Attempts));
         var receipt = receiptsByCommand[closure.CommandId];
-        var expected = receipt.Disposition == ProcessControlReceiptDisposition.DeferredToSafePoint
-            ? receipt.AfterRevision.Next()
-            : receipt.AfterRevision;
+        var expected = CancellationFinalization is not null
+            ? receipt.Disposition == ProcessControlReceiptDisposition.DeferredToSafePoint
+                ? receipt.AfterRevision.Next().Next()
+                : receipt.AfterRevision.Next()
+            : receipt.Disposition == ProcessControlReceiptDisposition.DeferredToSafePoint
+                ? receipt.AfterRevision.Next()
+                : receipt.AfterRevision;
         if (Revision != expected)
         {
             throw new ArgumentException("Terminal control revision must equal its causal durable cut.", nameof(Revision));
@@ -1642,6 +1773,16 @@ public sealed record ProcessControlState
                     interrupted);
             }
         }
+        if (CancellationFinalization is { } finalization)
+        {
+            var beforeFinalization = new ProcessControlRevision(
+                (Revision.Ordinal - 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            AddRevisionStep(
+                steps,
+                beforeFinalization,
+                "cancellation finalization",
+                finalization);
+        }
         if (steps.Count != Revision.Ordinal - ProcessControlRevision.Initial.Ordinal)
         {
             throw new ArgumentException(
@@ -1675,6 +1816,9 @@ public sealed record ProcessControlState
 
     void ValidateLifecycleHistory(Dictionary<long, object> steps)
     {
+        var cancellationPolicy = Mode == ProcessControlMode.Cancelling || CancellationFinalization is not null
+            ? ProcessCancellationCompletionPolicy.AuthoredFinalization
+            : ProcessCancellationCompletionPolicy.Immediate;
         Dictionary<long, List<ProcessControlCommandReceipt>> receiptsByRevision = [];
         foreach (var receipt in Receipts)
         {
@@ -1700,7 +1844,7 @@ public sealed record ProcessControlState
             {
                 foreach (var receipt in revisionReceipts)
                 {
-                    ValidateHistoricalReceipt(receipt, position);
+                    ValidateHistoricalReceipt(receipt, position, cancellationPolicy);
                     if (ReferenceEquals(receipt, stepReceipt))
                     {
                         continue;
@@ -1727,7 +1871,7 @@ public sealed record ProcessControlState
                 throw new ArgumentException("Control revision evidence is not chronological.", nameof(Revision));
             }
 
-            position = ApplyHistoricalStep(step, position);
+            position = ApplyHistoricalStep(step, position, cancellationPolicy);
             evidenceTime = stepTime;
         }
 
@@ -1735,7 +1879,7 @@ public sealed record ProcessControlState
         {
             foreach (var receipt in finalReceipts)
             {
-                ValidateHistoricalReceipt(receipt, position);
+                ValidateHistoricalReceipt(receipt, position, cancellationPolicy);
                 if (receipt.Disposition is ProcessControlReceiptDisposition.Applied
                     or ProcessControlReceiptDisposition.DeferredToSafePoint)
                 {
@@ -1765,13 +1909,15 @@ public sealed record ProcessControlState
 
     static void ValidateHistoricalReceipt(
         ProcessControlCommandReceipt receipt,
-        ProcessControlLifecycleSemantics.Position position)
+        ProcessControlLifecycleSemantics.Position position,
+        ProcessCancellationCompletionPolicy cancellationPolicy)
     {
         if (!ProcessControlLifecycleSemantics.TryApplyReceipt(
                 position,
                 receipt.Command,
                 receipt.Disposition,
-                out _))
+                out _,
+                cancellationPolicy))
         {
             throw new ArgumentException(
                 "A command receipt is not legal in its retained lifecycle mode and execution phase.",
@@ -1781,7 +1927,8 @@ public sealed record ProcessControlState
 
     ProcessControlLifecycleSemantics.Position ApplyHistoricalStep(
         object step,
-        ProcessControlLifecycleSemantics.Position position)
+        ProcessControlLifecycleSemantics.Position position,
+        ProcessCancellationCompletionPolicy cancellationPolicy)
     {
         switch (step)
         {
@@ -1810,7 +1957,8 @@ public sealed record ProcessControlState
                         position,
                         safePoint.Observation.Expectation.Continuation.ProcessAttemptId,
                         replacementAttemptId,
-                        out var reached))
+                        out var reached,
+                        cancellationPolicy))
                 {
                     throw new ArgumentException(
                         "Safe-point evidence is not legal at its retained lifecycle cut.",
@@ -1833,13 +1981,25 @@ public sealed record ProcessControlState
                         position,
                         receipt.Command,
                         receipt.Disposition,
-                        out var commanded))
+                        out var commanded,
+                        cancellationPolicy))
                 {
                     throw new ArgumentException(
                         "An advancing command receipt has no lifecycle transition.",
                         nameof(Receipts));
                 }
                 return commanded;
+            case ProcessCancellationFinalizationObservation finalization:
+                if (!ProcessControlLifecycleSemantics.TryCompleteCancellationFinalization(
+                        position,
+                        finalization.Outcome,
+                        out var finalized))
+                {
+                    throw new ArgumentException(
+                        "Cancellation-finalization evidence has no lifecycle transition.",
+                        nameof(CancellationFinalization));
+                }
+                return finalized;
             default:
                 throw new ArgumentException("Control revision evidence has an unsupported variant.", nameof(Revision));
         }
@@ -1864,6 +2024,7 @@ public sealed record ProcessControlState
             ProcessActivationStartObservation activation => activation.ObservedAtUtc,
             ProcessControlSafePoint safePoint => safePoint.ObservedAtUtc,
             ProcessAttemptAffinityObservation affinity => affinity.ObservedAtUtc,
+            ProcessCancellationFinalizationObservation finalization => finalization.ObservedAtUtc,
             _ => throw new ArgumentException("Control revision evidence has an unsupported variant.", nameof(evidence))
         };
 
@@ -1944,9 +2105,55 @@ public sealed record ProcessControlState
                 }
             }
         }
+        if (CancellationFinalization is { } finalization)
+        {
+            if (finalization.ObservedAtUtc > UpdatedAtUtc)
+            {
+                throw new ArgumentException(
+                    "Cancellation-finalization evidence cannot follow latest control evidence.",
+                    nameof(UpdatedAtUtc));
+            }
+            if (finalization.ObservedAtUtc > latest)
+            {
+                latest = finalization.ObservedAtUtc;
+            }
+        }
         if (latest != UpdatedAtUtc)
         {
             throw new ArgumentException("Latest control evidence must determine the state update time.", nameof(UpdatedAtUtc));
+        }
+    }
+
+    void ValidateCancellationFinalization()
+    {
+        if (CancellationFinalization is not { } finalization)
+        {
+            if (Mode == ProcessControlMode.CancellationFailed)
+            {
+                throw new ArgumentException(
+                    "Cancellation failure requires exact authored finalization evidence.",
+                    nameof(CancellationFinalization));
+            }
+            return;
+        }
+
+        var expectedMode = finalization.Outcome == ExecutionTerminalOutcomeKind.Cancelled
+            ? ProcessControlMode.Cancelled
+            : ProcessControlMode.CancellationFailed;
+        if (Mode != expectedMode
+            || PendingCommandId is not null
+            || finalization.Intent.AttemptId != CurrentAttempt.AttemptId
+            || finalization.Intent.CommandId is not { } commandId
+            || CurrentAttempt.Closure is not { } closure
+            || closure.CommandId != commandId
+            || closure.OccurredAtUtc != finalization.ObservedAtUtc
+            || UpdatedAtUtc != finalization.ObservedAtUtc
+            || FindReceipt(commandId)?.Command is not CancelProcessCommand cancel
+            || cancel.Reason != finalization.Intent.Reason)
+        {
+            throw new ArgumentException(
+                "Authored cancellation-finalization evidence contradicts its terminal state or causal command.",
+                nameof(CancellationFinalization));
         }
     }
 

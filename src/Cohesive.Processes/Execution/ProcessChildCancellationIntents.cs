@@ -111,6 +111,61 @@ public sealed record ProcessChildCancellationIntent
     public ProcessChildPurpose Purpose { get; }
 }
 
+/// <summary>Exact runtime observation that one propagated child cancellation reached terminal closure.</summary>
+/// <remarks>
+/// The owning parent continuation remains authority for whether cancellation was requested. This observation is
+/// admissible only when its intent identity and child continuation match that retained state exactly.
+/// </remarks>
+public sealed record ProcessChildCancellationClosure
+{
+    /// <summary>Creates one attributable propagated-child closure observation.</summary>
+    /// <param name="intentId">Exact projected child-cancellation intent identity.</param>
+    /// <param name="childContinuation">Exact child Process instance and attempt that closed.</param>
+    /// <param name="outcome">Observed terminal child outcome.</param>
+    /// <param name="observedAtUtc">Explicit UTC closure observation time.</param>
+    /// <exception cref="ArgumentException">Identity or time evidence is invalid.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="outcome"/> is nonterminal or unsupported.</exception>
+    [JsonConstructor]
+    public ProcessChildCancellationClosure(
+        string intentId,
+        ProcessContinuationIdentity childContinuation,
+        ExecutionTerminalOutcomeKind outcome,
+        DateTimeOffset observedAtUtc)
+    {
+        IntentId = Guard.RequireNotNullOrWhiteSpace(intentId);
+        ChildContinuation = childContinuation ?? throw new ArgumentNullException(nameof(childContinuation));
+        if (string.IsNullOrWhiteSpace(childContinuation.ProcessInstanceId.Value)
+            || string.IsNullOrWhiteSpace(childContinuation.ProcessAttemptId.Value))
+        {
+            throw new ArgumentException("A child cancellation closure requires exact child continuation identity.", nameof(childContinuation));
+        }
+        if (outcome is not (ExecutionTerminalOutcomeKind.Completed
+            or ExecutionTerminalOutcomeKind.Failed
+            or ExecutionTerminalOutcomeKind.Cancelled
+            or ExecutionTerminalOutcomeKind.Terminated))
+        {
+            throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "A child cancellation closure must be terminal.");
+        }
+        if (observedAtUtc.Offset != TimeSpan.Zero)
+            throw new ArgumentException("A child cancellation closure time must use the UTC offset.", nameof(observedAtUtc));
+
+        Outcome = outcome;
+        ObservedAtUtc = observedAtUtc;
+    }
+
+    /// <summary>Exact projected child-cancellation intent identity.</summary>
+    public string IntentId { get; }
+
+    /// <summary>Exact child Process instance and attempt that closed.</summary>
+    public ProcessContinuationIdentity ChildContinuation { get; }
+
+    /// <summary>Observed terminal child outcome.</summary>
+    public ExecutionTerminalOutcomeKind Outcome { get; }
+
+    /// <summary>Explicit UTC closure observation time.</summary>
+    public DateTimeOffset ObservedAtUtc { get; }
+}
+
 /// <summary>Projects deterministic cancellation intents from authoritative durable child state.</summary>
 public static class ProcessChildCancellationIntents
 {

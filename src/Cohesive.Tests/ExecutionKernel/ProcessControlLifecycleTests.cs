@@ -174,6 +174,97 @@ public sealed class ProcessControlLifecycleTests
         Assert.IsType<ProcessTerminationIntent>(terminated.Intent);
     }
 
+    [Theory]
+    [InlineData(ExecutionTerminalOutcomeKind.Cancelled)]
+    [InlineData(ExecutionTerminalOutcomeKind.Failed)]
+    public void AuthoredCancellation_RemainsCancellingUntilExactFinalizationEvidence(
+        ExecutionTerminalOutcomeKind outcome)
+    {
+        var fixture = ProcessControlTestFixture.Create();
+        var state = fixture.State();
+        var command = fixture.Cancel(state, id: $"cancel/authored/{outcome}");
+        var requested = fixture.Executor.Apply(
+            state,
+            command,
+            state.UpdatedAtUtc.AddMinutes(1),
+            ProcessCancellationCompletionPolicy.AuthoredFinalization);
+
+        Assert.Equal(ProcessControlMode.Cancelling, requested.State.Mode);
+        Assert.False(requested.State.IsTerminal);
+        Assert.Equal(ProcessControlAttemptDisposition.Current, requested.State.CurrentAttempt.Disposition);
+        Assert.Null(requested.State.CurrentAttempt.Closure);
+        var intent = Assert.IsType<ProcessCancellationIntent>(requested.Intent);
+        Assert.Equal(command.Context.CommandId, intent.CommandId);
+
+        var observation = new ProcessCancellationFinalizationObservation(
+            intent,
+            outcome,
+            requested.State.UpdatedAtUtc.AddMinutes(1));
+        var finalized = fixture.Executor.CompleteCancellationFinalization(
+            requested.State,
+            observation);
+        var replayed = fixture.Executor.CompleteCancellationFinalization(
+            finalized.State,
+            observation);
+
+        Assert.Equal(ProcessControlDecisionDisposition.CancellationFinalized, finalized.Disposition);
+        Assert.Equal(
+            outcome == ExecutionTerminalOutcomeKind.Cancelled
+                ? ProcessControlMode.Cancelled
+                : ProcessControlMode.CancellationFailed,
+            finalized.State.Mode);
+        Assert.Equal(
+            outcome == ExecutionTerminalOutcomeKind.Cancelled
+                ? ProcessControlAttemptDisposition.Cancelled
+                : ProcessControlAttemptDisposition.CancellationFailed,
+            finalized.State.CurrentAttempt.Disposition);
+        Assert.Equal(observation, finalized.State.CancellationFinalization);
+        Assert.Equal(ProcessControlDecisionDisposition.Replayed, replayed.Disposition);
+        Assert.Same(finalized.State, replayed.State);
+    }
+
+    [Fact]
+    public void AuthoredCancellationDeferredDuringActivation_EntersCancellingAtTheExactSafePoint()
+    {
+        var fixture = ProcessControlTestFixture.Create();
+        var active = fixture.BeginActivation(fixture.State()).State;
+        var command = fixture.Cancel(active, id: "cancel/authored-deferred");
+        var deferred = fixture.Executor.Apply(
+            active,
+            command,
+            active.UpdatedAtUtc.AddMinutes(1),
+            ProcessCancellationCompletionPolicy.AuthoredFinalization);
+        var cutTime = deferred.State.UpdatedAtUtc.AddMinutes(1);
+        var safePoint = new ProcessSafePointObservation(
+            new("safe-point/authored-cancellation"),
+            fixture.Expectation(deferred.State),
+            deferred.State.CurrentAttempt.ActiveActivationId
+                ?? throw new InvalidOperationException("Expected an active cancellation boundary."),
+            new("node/authored-cancellation"),
+            cutTime);
+
+        var reached = fixture.Executor.ReachSafePoint(
+            deferred.State,
+            safePoint,
+            ProcessCancellationCompletionPolicy.AuthoredFinalization);
+
+        Assert.Equal(ProcessControlMode.CancellationRequested, deferred.State.Mode);
+        Assert.Equal(ProcessControlDecisionDisposition.SafePointReached, reached.Disposition);
+        Assert.Equal(ProcessControlMode.Cancelling, reached.State.Mode);
+        Assert.Equal(ProcessControlExecutionPhase.AtSafePoint, reached.State.CurrentAttempt.Phase);
+        Assert.Equal(ProcessControlAttemptDisposition.Current, reached.State.CurrentAttempt.Disposition);
+        Assert.Null(reached.State.CurrentAttempt.Closure);
+        Assert.Null(reached.State.PendingCommandId);
+        var intent = Assert.IsType<ProcessCancellationIntent>(reached.Intent);
+        Assert.Equal(command.Context.CommandId, intent.CommandId);
+
+        var finalized = fixture.Executor.CompleteCancellationFinalization(
+            reached.State,
+            new(intent, ExecutionTerminalOutcomeKind.Cancelled, cutTime.AddMinutes(1)));
+        Assert.Equal(ProcessControlMode.Cancelled, finalized.State.Mode);
+        Assert.Equal(ProcessControlAttemptDisposition.Cancelled, finalized.State.CurrentAttempt.Disposition);
+    }
+
     [Fact]
     public void DeferredCancellation_AllowsAPreCutNoOpAtTheSameTimestampAsTheSafePoint()
     {

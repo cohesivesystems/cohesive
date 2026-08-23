@@ -162,6 +162,62 @@ public sealed class ProcessInvocationProtocolAuthoringTests
     }
 
     [Fact]
+    public void TypedFinalizerProtocol_LowersThroughOneLifecycleDeclarationWithoutManualReferences()
+    {
+        var finalizerInput = ProcessCancellationFinalizationContracts.Input(
+            new(new ScalarTypeRef(ScalarTypeKind.String)));
+        var finalizer = ProcessAuthoring.Create<
+            ProcessCancellationFinalizationInput<string>,
+            ProcessCancellationAcknowledgement>(
+            new(
+                new("process/tests/cancellation-finalizer"),
+                new("revision/1"),
+                new("return"),
+                ProcessRecoveryPolicy.ContinueAttempt,
+                Provenance()),
+            finalizerInput,
+            ProcessCancellationFinalizationContracts.Acknowledgement,
+            process => process.Return(
+                new("return"),
+                process.CanonicalValue<ProcessCancellationAcknowledgement>(
+                    Expr.Const(ObservationValue.FromObject(
+                        new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+                        {
+                            ["attemptId"] = ObservationValue.FromString("process-attempt/runtime")
+                        })),
+                    ProcessCancellationFinalizationContracts.Acknowledgement)));
+        var protocol = finalizer.InvocationProtocol(
+            new("request/tests/cancellation-finalizer"),
+            new("revision/1"),
+            ProcessInvocationResponsePolicy.ReconciledJoin(TimeSpan.FromDays(30)),
+            Provenance());
+
+        var parent = ProcessAuthoring.Create<string, string>(
+            new(
+                new("process/tests/cancellable-parent"),
+                new("revision/1"),
+                new("return"),
+                ProcessRecoveryPolicy.ContinueAttempt,
+                Provenance()),
+            process =>
+            {
+                process.OnCancellation(new("cancel/finalize"), protocol);
+                process.Return(new("return"), process.Input.Value);
+            });
+
+        var node = Assert.Single(parent.Definition.Nodes.OfType<CancellationFinalizerProcessNode>());
+        Assert.Equal(protocol.Process.Reference, node.Process);
+        Assert.Equal(protocol.Request, node.Contract);
+        Assert.Equal(protocol.OutcomeMapping, node.OutcomeMapping);
+        var linkValidation = ProcessDefinitionLink.TryCreateProcess(finalizer.Document, out var link);
+        Assert.True(linkValidation.IsValid, Format(linkValidation));
+        var compilation = parent.Compile(new ProcessDefinitionValidationContext(
+            definitions: [Assert.IsType<ProcessDefinitionLink>(link)],
+            interactionContracts: protocol.Catalog));
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+    }
+
+    [Fact]
     public void ProcessChildFailure_RequiresTerminalNodeAndRetainsOptionalDiagnosticsStructurally()
     {
         var diagnostic = new DocumentValidationDiagnostic(
@@ -261,4 +317,9 @@ public sealed class ProcessInvocationProtocolAuthoringTests
         new("tests.process-invocation-protocol", "1"),
         new("tests/ari-366/process-invocation-protocol"),
         DocumentOrigin.User);
+
+    static string Format(DocumentValidationResult validation) => string.Join(
+        Environment.NewLine,
+        validation.Diagnostics.Select(static diagnostic =>
+            $"{diagnostic.Code} at {diagnostic.Location}: {diagnostic.Message}"));
 }

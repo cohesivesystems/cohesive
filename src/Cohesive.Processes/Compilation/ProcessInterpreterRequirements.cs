@@ -330,12 +330,14 @@ public static class ProcessInterpreterRequirementCollector
             plan.Definition.Nodes.Where(static node => node is RequestProcessNode
                 or AwaitMatchProcessNode
                 or InvokeProcessProcessNode
-                or ForEachPartitionProcessNode));
+                or ForEachPartitionProcessNode
+                or CancellationFinalizerProcessNode));
         AddWhen(
             ProcessInterpreterGuarantees.DurableRequestRecovery,
             plan.Definition.Nodes.Where(static node => node is RequestProcessNode
                 or InvokeProcessProcessNode
-                or ForEachPartitionProcessNode));
+                or ForEachPartitionProcessNode
+                or CancellationFinalizerProcessNode));
 
         var externalNodes = plan.EffectSummary.Effects
             .Where(static effect => effect.Kind == ProcessEffectKind.ExternalInteraction)
@@ -352,7 +354,8 @@ public static class ProcessInterpreterRequirementCollector
             plan.Definition.Nodes.Where(static node => node is ForkProcessNode
                 or JoinProcessNode
                 or InvokeProcessProcessNode
-                or ForEachPartitionProcessNode));
+                or ForEachPartitionProcessNode
+                or CancellationFinalizerProcessNode));
         AddWhen(
             ProcessInterpreterGuarantees.BoundedWorkAndRecurrence,
             plan.Definition.Nodes.Where(static node => node is ForkProcessNode

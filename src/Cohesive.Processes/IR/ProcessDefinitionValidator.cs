@@ -196,6 +196,9 @@ public static class ProcessDefinitionDiagnosticCodes
     /// <summary>A direct or linked child-Process dependency introduces recursion.</summary>
     public const string ProcessRecursionUnsupported = "processes.ir.processRecursionUnsupported";
 
+    /// <summary>A cancellation-finalizer declaration is duplicated, graph-reachable, or contract-incompatible.</summary>
+    public const string CancellationFinalizerInvalid = "processes.ir.cancellationFinalizerInvalid";
+
     /// <summary>Durable recurrence limits are non-positive or internally inconsistent.</summary>
     public const string RecurrencePolicyInvalid = "processes.ir.recurrencePolicyInvalid";
 
@@ -282,6 +285,7 @@ public static class ProcessDefinitionValidator
         readonly List<ReplyRequestInfo> replyRequests = [];
         readonly Dictionary<ExecutionNodeId, ForkJoinInfo> forkJoinsByJoin = [];
         readonly List<ChildReferenceInfo> childReferences = [];
+        readonly List<NodeInfo> cancellationFinalizers = [];
 
         public DocumentValidationResult Validate()
         {
@@ -323,6 +327,21 @@ public static class ProcessDefinitionValidator
                 if (!RegisterConstructId(node.Id, idLocation))
                     continue;
                 nodes.Add(node.Id, new(node, location));
+                if (node is CancellationFinalizerProcessNode)
+                    cancellationFinalizers.Add(new(node, location));
+            }
+
+            if (cancellationFinalizers.Count > 1)
+            {
+                foreach (var finalizer in cancellationFinalizers.Skip(1))
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.CancellationFinalizerInvalid,
+                        "A Process may declare at most one authored cancellation finalizer.",
+                        finalizer.Location,
+                        subject: finalizer.Node.Id.Value,
+                        expected: cancellationFinalizers[0].Node.Id.Value);
+                }
             }
 
             if (string.IsNullOrWhiteSpace(definition.Entry.Value)
@@ -331,6 +350,14 @@ public static class ProcessDefinitionValidator
                 Error(
                     ProcessDefinitionDiagnosticCodes.EntryUnresolved,
                     "The Process entry must identify one declared node.",
+                    "/entry",
+                    subject: definition.Entry.Value);
+            }
+            else if (nodes[definition.Entry].Node is CancellationFinalizerProcessNode)
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.CancellationFinalizerInvalid,
+                    "A cancellation finalizer is a lifecycle declaration and cannot be the ordinary Process entry.",
                     "/entry",
                     subject: definition.Entry.Value);
             }
@@ -358,6 +385,9 @@ public static class ProcessDefinitionValidator
 
             switch (node)
             {
+                case CancellationFinalizerProcessNode finalizer:
+                    ValidateCancellationFinalizer(finalizer, location);
+                    break;
                 case InvokeTransitionProcessNode invocation:
                     ValidateInvocation(invocation, location);
                     break;
@@ -414,6 +444,67 @@ public static class ProcessDefinitionValidator
                         location,
                         subject: node.Id.Value);
                     break;
+            }
+        }
+
+        void ValidateCancellationFinalizer(CancellationFinalizerProcessNode finalizer, string location)
+        {
+            var childLink = ResolveDefinition(
+                finalizer.Process,
+                ProcessDefinitionLinkKind.Process,
+                Child(location, "process"));
+            if (finalizer.Process is { } childProcess)
+            {
+                childReferences.Add(new(
+                    childProcess,
+                    Child(location, "process"),
+                    childLink));
+            }
+
+            var request = ResolveInteraction<RequestContractDefinition>(
+                finalizer.Contract,
+                Child(location, "contract"));
+            ValidateChildRequestContracts(
+                childLink,
+                request,
+                finalizer.OutcomeMapping,
+                finalizer.Id,
+                Child(location, "process"),
+                Child(location, "contract"),
+                Child(location, "outcomeMapping"));
+
+            if (childLink is null)
+                return;
+
+            ValueContract? expectedInput = null;
+            try
+            {
+                expectedInput = ProcessCancellationFinalizationContracts.Input(definition.Input);
+            }
+            catch (ArgumentException)
+            {
+                // The root input's own portable validation supplies the primary diagnostic.
+            }
+
+            if (expectedInput is not null && childLink.Input != expectedInput)
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.CancellationFinalizerInvalid,
+                    "The cancellation-finalizer input must contain the immutable root input and exact canonical cancellation context.",
+                    Child(location, "process"),
+                    subject: finalizer.Id.Value,
+                    expected: Describe(expectedInput),
+                    observed: Describe(childLink.Input));
+            }
+            if (childLink.Result != ProcessCancellationFinalizationContracts.Acknowledgement)
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.CancellationFinalizerInvalid,
+                    "The cancellation-finalizer result must be ProcessCancellationAcknowledgement.",
+                    Child(location, "process"),
+                    subject: finalizer.Id.Value,
+                    expected: Describe(ProcessCancellationFinalizationContracts.Acknowledgement),
+                    observed: Describe(childLink.Result));
             }
         }
 
@@ -2069,6 +2160,15 @@ public static class ProcessDefinitionValidator
                 if (!string.IsNullOrWhiteSpace(edge.Edge.Target.Value)
                     && nodes.ContainsKey(edge.Edge.Target))
                 {
+                    if (nodes[edge.Edge.Target].Node is CancellationFinalizerProcessNode)
+                    {
+                        Error(
+                            ProcessDefinitionDiagnosticCodes.CancellationFinalizerInvalid,
+                            $"Process edge '{edge.Edge.Id.Value}' cannot target a lifecycle cancellation-finalizer declaration.",
+                            Child(edge.Location, "target"),
+                            subject: edge.Edge.Id.Value,
+                            observed: edge.Edge.Target.Value);
+                    }
                     continue;
                 }
 
@@ -2089,6 +2189,8 @@ public static class ProcessDefinitionValidator
             var reachable = FindReachable(outgoing);
             foreach (var node in nodes)
             {
+                if (node.Value.Node is CancellationFinalizerProcessNode)
+                    continue;
                 if (reachable.Contains(node.Key))
                     continue;
                 Error(
@@ -2100,6 +2202,8 @@ public static class ProcessDefinitionValidator
 
             foreach (var node in nodes.Values)
             {
+                if (node.Node is CancellationFinalizerProcessNode)
+                    continue;
                 if (IsTerminal(node.Node) || IsDurableBoundary(node.Node))
                     continue;
                 if (outgoing.TryGetValue(node.Node.Id, out var nodeEdges) && nodeEdges.Length > 0)

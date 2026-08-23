@@ -87,6 +87,7 @@ public static class ProcessRequestRequirementCollector
             [typeof(InvokeProcessProcessNode)] = ProcessRequestRequirementKind.ChildProcessInvocation,
             [typeof(ForEachPartitionProcessNode)] = ProcessRequestRequirementKind.ChildProcessInvocation,
             [typeof(RepeatAcrossActivationProcessNode)] = null,
+            [typeof(CancellationFinalizerProcessNode)] = ProcessRequestRequirementKind.ChildProcessInvocation,
             [typeof(ReturnProcessNode)] = null,
             [typeof(FailProcessNode)] = null
         }.ToImmutableDictionary();
@@ -158,6 +159,7 @@ public static class ProcessRequestRequirementCollector
             RequestProcessNode external => external.Contract,
             InvokeProcessProcessNode child => child.Contract,
             ForEachPartitionProcessNode partition => partition.Contract,
+            CancellationFinalizerProcessNode finalizer => finalizer.Contract,
             _ => throw new InvalidOperationException(
                 $"Canonical Process node type '{node.GetType().FullName}' has a Request disposition but no "
                 + "Request acquisition rule.")
