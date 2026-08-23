@@ -296,6 +296,26 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             .Append("    public static global::Cohesive.Processes.Authoring.Process<")
             .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType))
             .AppendLine("> Define(global::Cohesive.Processes.Authoring.ProcessAuthoringMetadata metadata)")
+            .AppendLine("        => DefineCore(metadata, inputContract: null, resultContract: null);")
+            .AppendLine()
+            .Append("    public static global::Cohesive.Processes.Authoring.Process<")
+            .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType))
+            .AppendLine("> Define(")
+            .AppendLine("        global::Cohesive.Processes.Authoring.ProcessAuthoringMetadata metadata,")
+            .AppendLine("        global::Cohesive.Model.ValueContract inputContract,")
+            .AppendLine("        global::Cohesive.Model.ValueContract resultContract)")
+            .AppendLine("    {")
+            .AppendLine("        global::System.ArgumentNullException.ThrowIfNull(inputContract);")
+            .AppendLine("        global::System.ArgumentNullException.ThrowIfNull(resultContract);")
+            .AppendLine("        return DefineCore(metadata, inputContract, resultContract);")
+            .AppendLine("    }")
+            .AppendLine()
+            .Append("    private static global::Cohesive.Processes.Authoring.Process<")
+            .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType))
+            .AppendLine("> DefineCore(")
+            .AppendLine("        global::Cohesive.Processes.Authoring.ProcessAuthoringMetadata metadata,")
+            .AppendLine("        global::Cohesive.Model.ValueContract? inputContract,")
+            .AppendLine("        global::Cohesive.Model.ValueContract? resultContract)")
             .AppendLine("    {")
             .AppendLine("        global::System.ArgumentNullException.ThrowIfNull(metadata);");
 
@@ -306,15 +326,14 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
         builder.Append("        var __metadata = metadata.WithEntry(")
             .Append(body.EntryIdentity).AppendLine(");")
-            .Append("        return global::Cohesive.Processes.Authoring.ProcessAuthoring.Create<")
-            .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType)).AppendLine(">(")
-            .AppendLine("            metadata: __metadata,")
-            .AppendLine("            configure: __builder =>")
-            .AppendLine("            {");
+            .Append("        global::System.Action<global::Cohesive.Processes.Authoring.ProcessBuilder<")
+            .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType))
+            .AppendLine(">> __configure = __builder =>")
+            .AppendLine("        {");
 
         foreach (var output in body.OutputDeclarations)
         {
-            builder.Append("                ").AppendLine(output);
+            builder.Append("            ").AppendLine(output);
         }
 
         if (body.OutputDeclarations.Length != 0)
@@ -322,18 +341,33 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             builder.AppendLine();
         }
 
-        builder.AppendLine("                var __typeMapper = new global::Cohesive.Model.Authoring.DefaultClrTypeRefMapper();");
+        builder.AppendLine("            var __typeMapper = new global::Cohesive.Model.Authoring.DefaultClrTypeRefMapper();");
         builder.AppendLine();
         foreach (var line in body.BuilderStatements)
         {
-            builder.Append("                ").AppendLine(line);
+            builder.Append("            ").AppendLine(line);
         }
 
         var location = SourceLocation(method);
-        builder.AppendLine("            },")
-            .Append("            sourceFile: ").Append(Literal(location.File)).AppendLine(",")
-            .Append("            sourceLine: ").Append(location.Line.ToString(CultureInfo.InvariantCulture)).AppendLine(",")
-            .Append("            sourceMember: ").Append(Literal(method.Identifier.ValueText)).AppendLine(");")
+        builder.AppendLine("        };")
+            .AppendLine()
+            .AppendLine("        return inputContract is null")
+            .Append("            ? global::Cohesive.Processes.Authoring.ProcessAuthoring.Create<")
+            .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType)).AppendLine(">(")
+            .AppendLine("                metadata: __metadata,")
+            .AppendLine("                configure: __configure,")
+            .Append("                sourceFile: ").Append(Literal(location.File)).AppendLine(",")
+            .Append("                sourceLine: ").Append(location.Line.ToString(CultureInfo.InvariantCulture)).AppendLine(",")
+            .Append("                sourceMember: ").Append(Literal(method.Identifier.ValueText)).AppendLine(")")
+            .Append("            : global::Cohesive.Processes.Authoring.ProcessAuthoring.Create<")
+            .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType)).AppendLine(">(")
+            .AppendLine("                metadata: __metadata,")
+            .AppendLine("                inputContract: inputContract,")
+            .AppendLine("                resultContract: resultContract!,")
+            .AppendLine("                configure: __configure,")
+            .Append("                sourceFile: ").Append(Literal(location.File)).AppendLine(",")
+            .Append("                sourceLine: ").Append(location.Line.ToString(CultureInfo.InvariantCulture)).AppendLine(",")
+            .Append("                sourceMember: ").Append(Literal(method.Identifier.ValueText)).AppendLine(");")
             .AppendLine("    }")
             .AppendLine("}");
         return builder.ToString();
