@@ -863,7 +863,9 @@ public sealed class ProcessContext
     /// <paramref name="occurrence"/> must invoke one parameterless local <c>async ProcessTask&lt;TResult&gt;</c>
     /// function. The inline termination and progress projections are fused into the canonical recurrence node;
     /// neither the local function nor the projection delegates survive in persisted IR. A deliberate delay may be
-    /// authored with <see cref="Timer(DateTimeOffset, ExecutionNodeId?)"/> inside the occurrence body.
+    /// authored with <see cref="Timer(DateTimeOffset, ExecutionNodeId?)"/> inside the occurrence body. An occurrence
+    /// may also end in an exhaustive typed <see cref="Effect{TRequest, TOutcome, TOutcomes}"/> switch when exactly one
+    /// outcome returns the occurrence value and every sibling outcome explicitly terminates the root Process.
     /// </remarks>
     /// <typeparam name="TResult">Portable result produced by each occurrence and retained after completion.</typeparam>
     /// <typeparam name="TProgress">Portable progress-evidence type compared across occurrences.</typeparam>
