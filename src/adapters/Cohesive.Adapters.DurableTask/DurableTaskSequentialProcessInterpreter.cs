@@ -66,6 +66,9 @@ static class DurableTaskSequentialProcessInterpreter
         var state = resumed?.State ?? ProcessReferenceInterpreter.Create(plan, start.Receipt);
         var control = resumed?.Control ?? start.Receipt.CreateInitialState();
         var controlExecutor = CreateControlExecutor(plan);
+        var cancellationPolicy = plan.Definition.Nodes.Any(static node => node is CancellationFinalizerProcessNode)
+            ? ProcessCancellationCompletionPolicy.AuthoredFinalization
+            : ProcessCancellationCompletionPolicy.Immediate;
         ProcessControlDecision? latestControlDecision = resumed?.LatestControlDecision;
         var lastDisposition = resumed?.Disposition ?? ProcessActivationDisposition.Quiescent;
         var cause = resumed is null ? ProcessActivationCause.Start : ProcessActivationCause.Continue;
@@ -91,6 +94,7 @@ static class DurableTaskSequentialProcessInterpreter
         Task<ProcessControlCommand>? pendingControl = null;
         HashSet<string> dispatchedChildCancellations = new(StringComparer.Ordinal);
         ProcessCancellationIntent? cancellation = null;
+        ImmutableArray<ProcessChildCancellationClosure> childCancellationClosures = [];
         var planAcceptsAwaitMatchInteractions = plan.Definition.Nodes
             .OfType<AwaitMatchProcessNode>()
             .Any(static node => node.Clauses.Any(static clause => clause is ProcessAwaitInteractionClause));
@@ -106,7 +110,7 @@ static class DurableTaskSequentialProcessInterpreter
         while (true)
         {
             await DrainCompletedControlCommandsAsync().ConfigureAwait(true);
-            if (control.Mode == ProcessControlMode.Terminated)
+            if (control.Mode is ProcessControlMode.Terminated or ProcessControlMode.CancellationFailed)
             {
                 AbandonAttemptOwnedPhysicalWork();
                 return CurrentResult(lastDisposition);
@@ -118,6 +122,29 @@ static class DurableTaskSequentialProcessInterpreter
                 await AwaitPropagatedChildClosuresAsync().ConfigureAwait(true);
                 AbandonAttemptOwnedPhysicalWork();
                 return CurrentResult(lastDisposition);
+            }
+            if (control.Mode == ProcessControlMode.Cancelling
+                && state.CancellationFinalization?.Phase
+                    == ProcessCancellationFinalizationPhase.WaitingForPropagatedChildren)
+            {
+                await SynchronizeChildLifecycleAsync().ConfigureAwait(true);
+                childCancellationClosures = await AwaitPropagatedChildClosuresAsync().ConfigureAwait(true);
+                cause = ProcessActivationCause.Control;
+                observedAtUtc = RequireUtc(getCurrentUtc());
+            }
+            else if (control.Mode == ProcessControlMode.Cancelling
+                     && state.CancellationFinalization?.Phase
+                        == ProcessCancellationFinalizationPhase.FinalizerActive
+                     && inputs.IsEmpty
+                     && pendingOperations.Count != 0)
+            {
+                var finalizerStimulus = await WaitForNextStimulusAsync().ConfigureAwait(true);
+                if (!finalizerStimulus.Available)
+                {
+                    return CurrentResult(lastDisposition);
+                }
+                Apply(finalizerStimulus);
+                observedAtUtc = RequireUtc(getCurrentUtc());
             }
             QueueUnconsumedControlSignals();
             if (control.Mode == ProcessControlMode.Paused)
@@ -145,8 +172,11 @@ static class DurableTaskSequentialProcessInterpreter
                 observedAtUtc,
                 start.ActivationContext,
                 inputs,
-                cancellation);
+                cancellation,
+                admissionOperatingPoints: default,
+                childCancellationClosures: childCancellationClosures);
             cancellation = null;
+            childCancellationClosures = [];
             var beforeActivation = state;
             latestControlDecision = controlExecutor.BeginActivation(
                 control,
@@ -208,7 +238,8 @@ static class DurableTaskSequentialProcessInterpreter
                     Expectation(control),
                     activation.Id,
                     safePointNode,
-                    RequireUtc(getCurrentUtc())));
+                    RequireUtc(getCurrentUtc())),
+                cancellationPolicy);
             if (latestControlDecision.Disposition != ProcessControlDecisionDisposition.SafePointReached)
             {
                 throw new InvalidOperationException(
@@ -216,6 +247,7 @@ static class DurableTaskSequentialProcessInterpreter
                     + FormatControlDiagnostics(latestControlDecision));
             }
             control = latestControlDecision.State;
+            CompleteCancellationControlIfTerminal();
             await RealizeControlIntentAsync(latestControlDecision.Intent).ConfigureAwait(true);
             var result = new DurableTaskSequentialProcessResult(
                 decision.Disposition,
@@ -236,7 +268,7 @@ static class DurableTaskSequentialProcessInterpreter
             result = CurrentResult(decision.Disposition);
             observe?.Invoke(result);
 
-            if (control.Mode == ProcessControlMode.Cancelled)
+            if (control.Mode is ProcessControlMode.Cancelled or ProcessControlMode.CancellationFailed)
             {
                 await AwaitPropagatedChildClosuresAsync().ConfigureAwait(true);
                 AbandonAttemptOwnedPhysicalWork();
@@ -306,40 +338,8 @@ static class DurableTaskSequentialProcessInterpreter
                         case RequestProcessNode:
                         case InvokeProcessProcessNode:
                         case ForEachPartitionProcessNode:
-                            foreach (var request in decision.Emissions
-                                         .OfType<RequestEnvelope>()
-                                         .OrderBy(static request => request.Context.EmissionId.Value, StringComparer.Ordinal))
-                            {
-                                var operationId = request.Context.EmissionId;
-                                if (durableOperations.ContainsKey(operationId)
-                                    || pendingOperations.ContainsKey(operationId))
-                                {
-                                    continue;
-                                }
-                                if (!bindingResolver.TryResolve(request, out var binding) || binding is null)
-                                {
-                                    continue;
-                                }
-                                var contracts = plan.ValidationContext.InteractionContracts
-                                    ?? throw new InvalidOperationException(
-                                        "Automatic durable Request execution requires the compiled interaction catalog.");
-                                var executor = request.ChildTarget is null
-                                    ? executeDurableOperation
-                                    : executeChildProcess;
-                                var operationTask = DurableTaskDurableOperationInterpreter.RunAsync(
-                                    contracts,
-                                    request,
-                                    binding,
-                                    executor,
-                                    reconcileDurableOperation,
-                                    createTimer,
-                                    getCurrentUtc,
-                                    (cut, operationState) => createTimer(
-                                        TimeSpan.Zero,
-                                        CancellationToken.None),
-                                    operationState => ObserveTarget(state, operationState));
-                                pendingOperations.Add(operationId, new(request, operationTask));
-                            }
+                        case CancellationFinalizerProcessNode:
+                            ScheduleDurableRequests(decision.Emissions);
 
                             if (state.Tokens.Any(static token =>
                                     token.Disposition == ExecutionTokenDisposition.Ready))
@@ -409,6 +409,31 @@ static class DurableTaskSequentialProcessInterpreter
             [.. traces],
             [.. domainEventPublications]);
 
+        void CompleteCancellationControlIfTerminal()
+        {
+            if (control.Mode != ProcessControlMode.Cancelling
+                || state.Terminal.Kind is not (
+                    ExecutionTerminalOutcomeKind.Cancelled or ExecutionTerminalOutcomeKind.Failed))
+            {
+                return;
+            }
+
+            var intent = state.CancellationFinalization?.Intent
+                ?? throw new InvalidOperationException(
+                    "A terminal authored cancellation continuation retained no causal cancellation intent.");
+            latestControlDecision = controlExecutor.CompleteCancellationFinalization(
+                control,
+                new(intent, state.Terminal.Kind, RequireUtc(getCurrentUtc())));
+            if (latestControlDecision.Disposition
+                != ProcessControlDecisionDisposition.CancellationFinalized)
+            {
+                throw new InvalidOperationException(
+                    "Canonical lifecycle control rejected terminal authored cancellation evidence: "
+                    + FormatControlDiagnostics(latestControlDecision));
+            }
+            control = latestControlDecision.State;
+        }
+
         async Task DispatchImmediateEmissionsAsync(ImmutableArray<InteractionEnvelope> immediate)
         {
             foreach (var envelope in immediate)
@@ -460,6 +485,44 @@ static class DurableTaskSequentialProcessInterpreter
             }
         }
 
+        void ScheduleDurableRequests(IEnumerable<InteractionEnvelope> scheduledEmissions)
+        {
+            foreach (var request in scheduledEmissions
+                         .OfType<RequestEnvelope>()
+                         .OrderBy(static request => request.Context.EmissionId.Value, StringComparer.Ordinal))
+            {
+                var operationId = request.Context.EmissionId;
+                if (durableOperations.ContainsKey(operationId)
+                    || pendingOperations.ContainsKey(operationId))
+                {
+                    continue;
+                }
+                if (!bindingResolver.TryResolve(request, out var binding) || binding is null)
+                {
+                    continue;
+                }
+                var contracts = plan.ValidationContext.InteractionContracts
+                    ?? throw new InvalidOperationException(
+                        "Automatic durable Request execution requires the compiled interaction catalog.");
+                var executor = request.ChildTarget is null
+                    ? executeDurableOperation
+                    : executeChildProcess;
+                var operationTask = DurableTaskDurableOperationInterpreter.RunAsync(
+                    contracts,
+                    request,
+                    binding,
+                    executor,
+                    reconcileDurableOperation,
+                    createTimer,
+                    getCurrentUtc,
+                    (cut, operationState) => createTimer(
+                        TimeSpan.Zero,
+                        CancellationToken.None),
+                    operationState => ObserveTarget(state, operationState));
+                pendingOperations.Add(operationId, new(request, operationTask));
+            }
+        }
+
         async Task DrainCompletedControlCommandsAsync()
         {
             while (pendingControl?.IsCompleted == true)
@@ -505,7 +568,11 @@ static class DurableTaskSequentialProcessInterpreter
                     + "attempt-resource or affinity cleanup must fail before canonical command admission.");
             }
             observedAtUtc = RequireUtc(getCurrentUtc());
-            latestControlDecision = controlExecutor.Apply(control, command, observedAtUtc);
+            latestControlDecision = controlExecutor.Apply(
+                control,
+                command,
+                observedAtUtc,
+                cancellationPolicy);
             control = latestControlDecision.State;
             await RealizeControlIntentAsync(latestControlDecision.Intent).ConfigureAwait(true);
             observe?.Invoke(CurrentResult(lastDisposition));
@@ -588,13 +655,31 @@ static class DurableTaskSequentialProcessInterpreter
                     var cancellationActivation = new ProcessActivation(
                         DurableTaskSequentialProcessIdentities.CancellationActivation(
                             state,
-                            latestControlDecision?.Receipt?.Command.Context.CommandId),
+                            cancel.CommandId),
                         ProcessActivationCause.Control,
                         RequireUtc(getCurrentUtc()),
                         start.ActivationContext,
                         inputs,
                         cancel);
                     inputs = [];
+                    var beforeCancellation = state;
+                    if (cancellationPolicy == ProcessCancellationCompletionPolicy.AuthoredFinalization)
+                    {
+                        latestControlDecision = controlExecutor.BeginActivation(
+                            control,
+                            new(
+                                Expectation(control),
+                                cancellationActivation.Id,
+                                cancellationActivation.ObservedAtUtc));
+                        if (latestControlDecision.Disposition
+                            != ProcessControlDecisionDisposition.ActivationStarted)
+                        {
+                            throw new InvalidOperationException(
+                                "Canonical lifecycle control rejected the authored cancellation activation: "
+                                + FormatControlDiagnostics(latestControlDecision));
+                        }
+                        control = latestControlDecision.State;
+                    }
                     var cancellationDecision = await ActivateAsync(
                             plan,
                             state,
@@ -602,10 +687,12 @@ static class DurableTaskSequentialProcessInterpreter
                             executeOperation,
                             resolveSignalTarget)
                         .ConfigureAwait(true);
-                    if (cancellationDecision.Disposition != ProcessActivationDisposition.Cancelled)
+                    if (cancellationDecision.Disposition == ProcessActivationDisposition.Rejected
+                        || cancellationPolicy == ProcessCancellationCompletionPolicy.Immediate
+                            && cancellationDecision.Disposition != ProcessActivationDisposition.Cancelled)
                     {
                         throw new InvalidOperationException(
-                            "Canonical cooperative cancellation did not close the Process as Cancelled.");
+                            "Canonical cooperative cancellation rejected its retained cancellation intent.");
                     }
                     var cancellationTrace = ProjectTrace(cancellationDecision);
                     state = cancellationDecision.State;
@@ -616,6 +703,35 @@ static class DurableTaskSequentialProcessInterpreter
                     evidence.Add(cancellationDecision.Evidence);
                     traces.Add(cancellationTrace);
                     await DispatchImmediateEmissionsAsync(cancellationDecision.Emissions).ConfigureAwait(true);
+                    ScheduleDurableRequests(cancellationDecision.Emissions);
+                    if (cancellationPolicy == ProcessCancellationCompletionPolicy.Immediate)
+                    {
+                        return;
+                    }
+                    var cancellationSafePointNode = ResolveSafePointNode(plan, cancellationDecision);
+                    latestControlDecision = controlExecutor.ReachSafePoint(
+                        control,
+                        new(
+                            DurableTaskSequentialProcessIdentities.SafePoint(
+                                beforeCancellation,
+                                cancellationActivation.Id,
+                                cancellationSafePointNode),
+                            Expectation(control),
+                            cancellationActivation.Id,
+                            cancellationSafePointNode,
+                            RequireUtc(getCurrentUtc())),
+                        cancellationPolicy);
+                    if (latestControlDecision.Disposition
+                        != ProcessControlDecisionDisposition.SafePointReached)
+                    {
+                        throw new InvalidOperationException(
+                            "Canonical lifecycle control rejected the authored cancellation safe point: "
+                            + FormatControlDiagnostics(latestControlDecision));
+                    }
+                    control = latestControlDecision.State;
+                    CompleteCancellationControlIfTerminal();
+                    cause = ProcessActivationCause.Control;
+                    observedAtUtc = RequireUtc(getCurrentUtc());
                     return;
 
                 case ProcessTerminationIntent termination:
@@ -963,29 +1079,45 @@ static class DurableTaskSequentialProcessInterpreter
             waitForControl?.Invoke()
             ?? throw new InvalidOperationException("The Durable Task control-wait delegate returned null.");
 
-        async Task AwaitPropagatedChildClosuresAsync()
+        async Task<ImmutableArray<ProcessChildCancellationClosure>> AwaitPropagatedChildClosuresAsync()
         {
-            var propagated = state.Children
-                .Where(static child => child.Disposition == ProcessChildDisposition.CancellationRequested)
-                .Select(static child => child.RequestEmission)
-                .Where(static emission => emission is not null)
-                .Select(static emission => emission!.Value)
-                .ToHashSet();
-            while (pendingOperations.Any(pair => propagated.Contains(pair.Key)))
+            var intents = ProcessChildCancellationIntents.Project(state);
+            if (intents.IsEmpty)
             {
-                var pair = pendingOperations
-                    .Where(pair => propagated.Contains(pair.Key))
-                    .OrderBy(static pair => pair.Key.Value, StringComparer.Ordinal)
-                    .First();
-                var operation = await pair.Value.Execution.ConfigureAwait(true);
-                pendingOperations.Remove(pair.Key);
-                durableOperations[operation.State.OperationId] = operation;
-                if (operation.Disposition == DurableTaskDurableOperationDisposition.ReplyReady)
+                return [];
+            }
+
+            var closures = ImmutableArray.CreateBuilder<ProcessChildCancellationClosure>(intents.Length);
+            foreach (var intent in intents)
+            {
+                if (!pendingOperations.Remove(intent.RequestEmission, out var pending))
                 {
                     throw new InvalidOperationException(
-                        "A cancellation-requested child result advanced a parent target that was already closed.");
+                        $"Cancellation-requested child '{intent.ChildRegistrationId}' has no retained "
+                        + $"Durable Task execution for Request '{intent.RequestEmission.Value}'.");
                 }
+                var operation = await pending.Execution.ConfigureAwait(true);
+                durableOperations[operation.State.OperationId] = operation;
+                var acknowledgement = operation.State.Acknowledgement
+                    ?? throw new InvalidOperationException(
+                        $"Cancellation-requested child '{intent.ChildRegistrationId}' returned no terminal "
+                        + "durable-operation acknowledgement.");
+                var target = pending.Request.ChildTarget
+                    ?? throw new InvalidOperationException(
+                        "A propagated child-cancellation operation retained no exact child target.");
+                if (target.Definition != intent.ChildDefinition
+                    || target.Continuation != intent.ChildContinuation)
+                {
+                    throw new InvalidOperationException(
+                        "A propagated child-cancellation result does not match its retained exact child target.");
+                }
+                closures.Add(new(
+                    intent.IntentId,
+                    intent.ChildContinuation,
+                    TerminalFor(target.OutcomeMapping, acknowledgement.Outcome.Id),
+                    RequireUtc(getCurrentUtc())));
             }
+            return closures.MoveToImmutable();
         }
 
         CancelProcessCommand ToCancellationCommand(ProcessChildCancellationIntent intent)
@@ -1039,6 +1171,16 @@ static class DurableTaskSequentialProcessInterpreter
     static ProcessControlExpectation Expectation(ProcessControlState state) => new(
         new(state.ProcessInstanceId, state.CurrentAttempt.AttemptId),
         state.Revision);
+
+    static ExecutionTerminalOutcomeKind TerminalFor(
+        ProcessChildOutcomeMapping mapping,
+        RequestTerminalOutcomeId outcome) =>
+        outcome == mapping.Completed ? ExecutionTerminalOutcomeKind.Completed
+        : outcome == mapping.Failed ? ExecutionTerminalOutcomeKind.Failed
+        : outcome == mapping.Cancelled ? ExecutionTerminalOutcomeKind.Cancelled
+        : outcome == mapping.Terminated ? ExecutionTerminalOutcomeKind.Terminated
+        : throw new InvalidOperationException(
+            $"Child Request outcome '{outcome.Value}' is absent from its exact terminal mapping.");
 
     internal static DurableTaskDurableOperationResult FenceAbandonedChildResult(
         DurableTaskDurableOperationResult result)

@@ -179,6 +179,34 @@ public sealed record ProcessChildStartPreventionResult
     public ImmutableArray<DocumentValidationDiagnostic> Diagnostics { get; }
 }
 
+/// <summary>
+/// Optional capability of the exact child Request adapter that realizes propagated Process cancellation.
+/// </summary>
+/// <remarks>
+/// Runtimes discover this capability on the adapter already selected by the canonical Request contract. It is not
+/// a second handler registry: the Request remains the physical-dispatch authority, while the retained parent
+/// continuation and exact <see cref="ProcessChildCancellationIntent"/> remain cancellation authority.
+/// </remarks>
+public interface IProcessChildCancellationAdapter
+{
+    /// <summary>Cancels one exact already-authored child occurrence and returns attributable terminal closure.</summary>
+    /// <param name="context">Explicit cancellation, clock, and tracing context.</param>
+    /// <param name="request">Original canonical child Request selected by the ordinary adapter resolver.</param>
+    /// <param name="intent">Exact cancellation intent projected from authoritative parent continuation state.</param>
+    /// <param name="authorization">Authoritative parent control authorization retained with its Process start.</param>
+    /// <param name="requestedAtUtc">Stable UTC time at which the parent entered authored cancellation.</param>
+    /// <returns>Terminal child closure suitable for the parent cancellation activation.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// The Request, intent, child plan, durable child state, or terminal evidence is unavailable or inconsistent.
+    /// </exception>
+    ValueTask<ProcessChildCancellationClosure> CancelChildAsync(
+        OperationContext context,
+        RequestEnvelope request,
+        ProcessChildCancellationIntent intent,
+        ProcessControlAuthorizationContext authorization,
+        DateTimeOffset requestedAtUtc);
+}
+
 public sealed partial class ProcessDurableRuntime
 {
     /// <summary>Loads and validates one exact durable Process continuation without mutating it.</summary>
@@ -532,7 +560,9 @@ public sealed partial class ProcessDurableRuntime
 /// inputs, and child durable Request operations. External Signals, future timers, human waits, and any work beyond
 /// the explicit finite limits remain unresolved rather than being guessed or silently weakened.
 /// </remarks>
-public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapter
+public sealed class ProcessChildDurableOperationAdapter :
+    IDurableOperationAdapter,
+    IProcessChildCancellationAdapter
 {
     readonly ProcessDurableRuntime runtime;
     readonly IProcessChildPlanResolver planResolver;
@@ -566,6 +596,116 @@ public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapt
 
     /// <inheritdoc />
     public DurableOperationAdapterCapabilities Capabilities { get; }
+
+    /// <inheritdoc />
+    public async ValueTask<ProcessChildCancellationClosure> CancelChildAsync(
+        OperationContext context,
+        RequestEnvelope request,
+        ProcessChildCancellationIntent intent,
+        ProcessControlAuthorizationContext authorization,
+        DateTimeOffset requestedAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(intent);
+        ArgumentNullException.ThrowIfNull(authorization);
+        if (requestedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException(
+                "A propagated child-cancellation request time must use the UTC offset.",
+                nameof(requestedAtUtc));
+        }
+        context.ThrowIfCancellationRequested();
+        if (!Capabilities.Supports(request.Contract)
+            || request.ChildTarget is not { } target
+            || target.Definition != intent.ChildDefinition
+            || target.Continuation != intent.ChildContinuation
+            || request.Context.EmissionId != intent.RequestEmission
+            || !planResolver.TryResolve(target.Definition, out var plan)
+            || plan is null
+            || plan.DefinitionReference != target.Definition)
+        {
+            throw new InvalidOperationException(
+                "Propagated child cancellation does not match the exact adapter Request, target, or compiled plan.");
+        }
+
+        var commandContext = new ProcessControlCommandContext(
+            new(intent.IntentId),
+            new(intent.IntentId),
+            target.Continuation.ProcessInstanceId,
+            authorization,
+            requestedAtUtc,
+            request.Context.Provenance);
+        var inspection = await runtime.InspectAsync(context, plan, target.Continuation).ConfigureAwait(false);
+        if (inspection.Disposition == ProcessDurableRuntimeDisposition.NotFound)
+        {
+            var prevented = await runtime.PreventChildStartAsync(
+                    context,
+                    plan,
+                    request,
+                    commandContext,
+                    new("parent.child-cancellation"))
+                .ConfigureAwait(false);
+            if (prevented.Disposition is not (
+                ProcessChildStartPreventionDisposition.Prevented
+                or ProcessChildStartPreventionDisposition.Replayed))
+            {
+                throw new InvalidOperationException(
+                    "Propagated child cancellation could not establish exact pre-start closure.");
+            }
+        }
+        else if (inspection.Disposition == ProcessDurableRuntimeDisposition.Replayed
+                 && inspection.Snapshot is { } snapshot)
+        {
+            if (snapshot.Checkpoint.Continuation.Terminal.Kind == ExecutionTerminalOutcomeKind.None)
+            {
+                var command = new CancelProcessCommand(
+                    ProcessControlCommand.CurrentSchemaVersion,
+                    commandContext,
+                    new(target.Continuation, snapshot.Checkpoint.Control.Revision),
+                    new("parent.child-cancellation"));
+                var cancelled = await runtime.CancelAsync(
+                        context,
+                        plan,
+                        command,
+                        new(
+                            request.Context.AuthorityScope,
+                            request.Context.CorrelationId,
+                            request.Context.Delivery,
+                            plan.Document.Metadata.Provenance,
+                            causationId: request.Context.EmissionId,
+                            ordering: request.Context.Ordering))
+                    .ConfigureAwait(false);
+                if (cancelled.Disposition is not (
+                    ProcessDurableRuntimeDisposition.Applied
+                    or ProcessDurableRuntimeDisposition.Replayed))
+                {
+                    throw new InvalidOperationException(
+                        "Propagated child cancellation was rejected by the exact durable child runtime.");
+                }
+            }
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                "Propagated child cancellation could not inspect the exact durable child continuation.");
+        }
+
+        var driven = await DriveAsync(context, request, initializeWhenAbsent: false).ConfigureAwait(false);
+        var terminalInspection = await runtime.InspectAsync(context, plan, target.Continuation).ConfigureAwait(false);
+        var terminal = terminalInspection.Snapshot?.Checkpoint.Continuation.Terminal.Kind
+            ?? ExecutionTerminalOutcomeKind.None;
+        if (terminal is not (ExecutionTerminalOutcomeKind.Completed
+            or ExecutionTerminalOutcomeKind.Failed
+            or ExecutionTerminalOutcomeKind.Cancelled
+            or ExecutionTerminalOutcomeKind.Terminated))
+        {
+            throw new InvalidOperationException(
+                "Propagated child cancellation did not reach attributable terminal child closure: "
+                + (driven.Failure?.Code ?? ProcessChildDurableOperationDiagnosticCodes.ChildBlocked));
+        }
+        return new(intent.IntentId, intent.ChildContinuation, terminal, context.UtcNow);
+    }
 
     /// <inheritdoc />
     public async ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
@@ -723,6 +863,92 @@ public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapt
                     AmbiguousFailure(ProcessChildDurableOperationDiagnosticCodes.TerminalEvidenceInvalid));
             }
 
+            var cancellationIntents = ProcessChildCancellationIntents.Project(snapshot.Checkpoint.Continuation);
+            if (!cancellationIntents.IsEmpty)
+            {
+                var requestedAtUtc = snapshot.Checkpoint.Continuation.CancellationFinalization?.RequestedAtUtc
+                    ?? throw new InvalidOperationException(
+                        "A cancellation-requested child has no retained parent cancellation occurrence.");
+                var closures = ImmutableArray.CreateBuilder<ProcessChildCancellationClosure>(
+                    cancellationIntents.Length);
+                foreach (var intent in cancellationIntents)
+                {
+                    var childOperation = snapshot.Checkpoint.DurableOperations.SingleOrDefault(candidate =>
+                        candidate.OperationId == intent.RequestEmission)
+                        ?? throw new InvalidOperationException(
+                            $"Cancellation-requested child '{intent.ChildRegistrationId}' has no retained Request operation.");
+                    if (childOperation.Status != DurableOperationStatus.Dispositioned)
+                    {
+                        if (remainingOperationAdvances-- <= 0)
+                        {
+                            return ChildDriveResult.Failed(
+                                AmbiguousFailure(ProcessChildDurableOperationDiagnosticCodes.DriveLimitExceeded));
+                        }
+                        var advanced = await runtime.AdvanceOperationAsync(
+                                context,
+                                plan,
+                                target.Continuation.ProcessInstanceId,
+                                childOperation.OperationId)
+                            .ConfigureAwait(false);
+                        if (advanced.Disposition is not (
+                                ProcessDurableRuntimeDisposition.Applied
+                                or ProcessDurableRuntimeDisposition.Replayed)
+                            || advanced.Snapshot is null)
+                        {
+                            return ChildDriveResult.Failed(
+                                AmbiguousFailure(ProcessChildDurableOperationDiagnosticCodes.ChildRuntimeRejected));
+                        }
+                        snapshot = advanced.Snapshot;
+                        childOperation = snapshot.Checkpoint.DurableOperations.Single(candidate =>
+                            candidate.OperationId == intent.RequestEmission);
+                    }
+
+                    var acknowledgement = childOperation.Acknowledgement
+                        ?? throw new InvalidOperationException(
+                            "A dispositioned propagated-child Request retained no terminal acknowledgement.");
+                    var childTarget = childOperation.Request.ChildTarget
+                        ?? throw new InvalidOperationException(
+                            "A propagated child-cancellation Request retained no exact child target.");
+                    closures.Add(new(
+                        intent.IntentId,
+                        intent.ChildContinuation,
+                        TerminalFor(childTarget.OutcomeMapping, acknowledgement.Outcome.Id),
+                        acknowledgement.AcknowledgedAtUtc < requestedAtUtc
+                            ? requestedAtUtc
+                            : acknowledgement.AcknowledgedAtUtc));
+                }
+
+                if (remainingActivations-- <= 0)
+                {
+                    return ChildDriveResult.Failed(
+                        AmbiguousFailure(ProcessChildDurableOperationDiagnosticCodes.DriveLimitExceeded));
+                }
+                var closureActivation = CreateNextActivation(
+                    snapshot.Checkpoint,
+                    request,
+                    plan.Document.Metadata.Provenance,
+                    context.UtcNow,
+                    closures.MoveToImmutable())
+                    ?? throw new InvalidOperationException(
+                        "Propagated child closures did not create a parent cancellation activation.");
+                var closed = await runtime.ActivateAsync(
+                        context,
+                        plan,
+                        target.Continuation,
+                        closureActivation)
+                    .ConfigureAwait(false);
+                if (closed.Disposition is not (
+                        ProcessDurableRuntimeDisposition.Applied
+                        or ProcessDurableRuntimeDisposition.Replayed)
+                    || closed.Snapshot is null)
+                {
+                    return ChildDriveResult.Failed(
+                        AmbiguousFailure(ProcessChildDurableOperationDiagnosticCodes.ChildRuntimeRejected));
+                }
+                snapshot = closed.Snapshot;
+                continue;
+            }
+
             var operation = SelectNextOperation(snapshot.Checkpoint, attemptedOperationIds);
             if (operation is not null)
             {
@@ -795,7 +1021,8 @@ public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapt
         ProcessDurableCheckpoint checkpoint,
         RequestEnvelope request,
         ExecutionProvenance childProvenance,
-        DateTimeOffset observedAtUtc)
+        DateTimeOffset observedAtUtc,
+        ImmutableArray<ProcessChildCancellationClosure> childCancellationClosures = default)
     {
         var continuation = checkpoint.Continuation;
         var pendingInputs = checkpoint.Inbox
@@ -804,7 +1031,10 @@ public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapt
             .OrderBy(static entry => entry.EmissionId.Value, StringComparer.Ordinal)
             .Select(static entry => entry.Input)
             .ToImmutableArray();
-        var cause = SelectActivationCause(continuation, pendingInputs, observedAtUtc);
+        var normalizedClosures = childCancellationClosures.IsDefault ? [] : childCancellationClosures;
+        var cause = normalizedClosures.IsEmpty
+            ? SelectActivationCause(continuation, pendingInputs, observedAtUtc)
+            : ProcessActivationCause.Control;
         if (cause is null)
         {
             return null;
@@ -822,7 +1052,10 @@ public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapt
                 childProvenance,
                 causationId: request.Context.EmissionId,
                 ordering: request.Context.Ordering),
-            pendingInputs);
+            pendingInputs,
+            cancellation: null,
+            admissionOperatingPoints: default,
+            childCancellationClosures: normalizedClosures);
     }
 
     static DurableOperationState? SelectNextOperation(
@@ -943,6 +1176,16 @@ public sealed class ProcessChildDurableOperationAdapter : IDurableOperationAdapt
             (ProcessActivationDisposition.Cancelled, ExecutionTerminalOutcomeKind.Cancelled) => true,
             _ => false
         };
+
+    static ExecutionTerminalOutcomeKind TerminalFor(
+        ProcessChildOutcomeMapping mapping,
+        RequestTerminalOutcomeId outcome) =>
+        outcome == mapping.Completed ? ExecutionTerminalOutcomeKind.Completed
+        : outcome == mapping.Failed ? ExecutionTerminalOutcomeKind.Failed
+        : outcome == mapping.Cancelled ? ExecutionTerminalOutcomeKind.Cancelled
+        : outcome == mapping.Terminated ? ExecutionTerminalOutcomeKind.Terminated
+        : throw new InvalidOperationException(
+            $"Child Request outcome '{outcome.Value}' is absent from its exact terminal mapping.");
 
     static DurableOperationFailure AmbiguousFailure(string code) => new(
         DurableOperationFailurePhase.PostCommitPreAcknowledgement,

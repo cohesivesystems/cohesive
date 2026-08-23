@@ -266,6 +266,63 @@ public sealed class ProcessControlLifecycleTests
     }
 
     [Fact]
+    public void AuthoredCancellation_RetainsOrdinaryActivationCutsBeforeFinalization()
+    {
+        var fixture = ProcessControlTestFixture.Create();
+        var state = fixture.State();
+        var command = fixture.Cancel(state, id: "cancel/authored-multiple-cuts");
+        var requested = fixture.Executor.Apply(
+            state,
+            command,
+            state.UpdatedAtUtc.AddMinutes(1),
+            ProcessCancellationCompletionPolicy.AuthoredFinalization);
+        var intent = Assert.IsType<ProcessCancellationIntent>(requested.Intent);
+
+        var firstActivation = fixture.Executor.BeginActivation(
+            requested.State,
+            new(
+                fixture.Expectation(requested.State),
+                new("activation/cancellation/1"),
+                requested.State.UpdatedAtUtc.AddMinutes(1)));
+        var firstCut = fixture.Executor.ReachSafePoint(
+            firstActivation.State,
+            new(
+                new("safe-point/cancellation/1"),
+                fixture.Expectation(firstActivation.State),
+                new("activation/cancellation/1"),
+                new("node/cancellation/1"),
+                firstActivation.State.UpdatedAtUtc.AddMinutes(1)),
+            ProcessCancellationCompletionPolicy.AuthoredFinalization);
+        var secondActivation = fixture.Executor.BeginActivation(
+            firstCut.State,
+            new(
+                fixture.Expectation(firstCut.State),
+                new("activation/cancellation/2"),
+                firstCut.State.UpdatedAtUtc.AddMinutes(1)));
+        var secondCut = fixture.Executor.ReachSafePoint(
+            secondActivation.State,
+            new(
+                new("safe-point/cancellation/2"),
+                fixture.Expectation(secondActivation.State),
+                new("activation/cancellation/2"),
+                new("node/cancellation/2"),
+                secondActivation.State.UpdatedAtUtc.AddMinutes(1)),
+            ProcessCancellationCompletionPolicy.AuthoredFinalization);
+
+        var finalized = fixture.Executor.CompleteCancellationFinalization(
+            secondCut.State,
+            new(
+                intent,
+                ExecutionTerminalOutcomeKind.Cancelled,
+                secondCut.State.UpdatedAtUtc.AddMinutes(1)));
+
+        Assert.Equal(ProcessControlMode.Cancelling, firstCut.State.Mode);
+        Assert.Equal(ProcessControlMode.Cancelling, secondCut.State.Mode);
+        Assert.Equal(2, finalized.State.CurrentAttempt.SafePoints.Length);
+        Assert.Equal(ProcessControlMode.Cancelled, finalized.State.Mode);
+    }
+
+    [Fact]
     public void DeferredCancellation_AllowsAPreCutNoOpAtTheSameTimestampAsTheSafePoint()
     {
         var fixture = ProcessControlTestFixture.Create();

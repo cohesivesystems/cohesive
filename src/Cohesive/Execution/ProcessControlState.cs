@@ -1715,11 +1715,18 @@ public sealed record ProcessControlState
         var closure = CurrentAttempt.Closure
             ?? throw new ArgumentException("Terminal state requires attempt-closure evidence.", nameof(Attempts));
         var receipt = receiptsByCommand[closure.CommandId];
-        var expected = CancellationFinalization is not null
-            ? receipt.Disposition == ProcessControlReceiptDisposition.DeferredToSafePoint
-                ? receipt.AfterRevision.Next().Next()
-                : receipt.AfterRevision.Next()
-            : receipt.Disposition == ProcessControlReceiptDisposition.DeferredToSafePoint
+        if (CancellationFinalization is not null)
+        {
+            if (Revision.Ordinal <= receipt.AfterRevision.Ordinal)
+            {
+                throw new ArgumentException(
+                    "Cancellation finalization must follow its causal cancellation receipt.",
+                    nameof(Revision));
+            }
+            return;
+        }
+
+        var expected = receipt.Disposition == ProcessControlReceiptDisposition.DeferredToSafePoint
                 ? receipt.AfterRevision.Next()
                 : receipt.AfterRevision;
         if (Revision != expected)

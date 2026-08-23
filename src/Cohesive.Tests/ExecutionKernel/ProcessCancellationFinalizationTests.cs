@@ -60,7 +60,7 @@ public sealed class ProcessCancellationFinalizationTests
     }
 
     [Fact]
-    public void Compiler_InventoriesExactFinalizerEffectsDependenciesAndTargetGap()
+    public void Compiler_InventoriesExactFinalizerEffectsDependenciesAndComposedTargets()
     {
         var fixture = CompileFinalizerPlan();
 
@@ -103,8 +103,8 @@ public sealed class ProcessCancellationFinalizationTests
 
         var planning = DurableTaskProcessRealizationCompiler.Compile(fixture.Plan);
         var executable = DurableTaskProcessRealizationCompiler.CompileExecutable(fixture.Plan);
-        AssertTargetUnavailable(planning);
-        AssertTargetUnavailable(executable);
+        AssertTargetComposed(planning);
+        AssertTargetComposed(executable);
     }
 
     [Fact]
@@ -149,18 +149,16 @@ public sealed class ProcessCancellationFinalizationTests
             && diagnostic.Message.Contains("result", StringComparison.OrdinalIgnoreCase));
     }
 
-    static void AssertTargetUnavailable(DurableTaskProcessPlanningResult result)
+    static void AssertTargetComposed(DurableTaskProcessPlanningResult result)
     {
         var key = ProcessInterpreterRequirementKey.ForConstruct(ProcessWireNames.CancellationFinalizerNode);
-        Assert.False(result.IsSuccessful);
-        Assert.Null(result.Plan);
+        Assert.True(result.IsSuccessful);
+        Assert.NotNull(result.Plan);
         Assert.Equal(
-            CapabilityRealizationKind.Unavailable,
+            CapabilityRealizationKind.Composed,
             Assert.Single(result.Realization.Decisions, decision => decision.Requirement == key).Realization);
-        var diagnostic = Assert.Single(result.Realization.Diagnostics, candidate =>
-            candidate.Code == ProcessInterpreterRealizationDiagnosticCodes.RequirementUnavailable
-            && candidate.Requirement == key);
-        Assert.Equal(new ExecutionNodeId("cancel/finalize"), Assert.Single(diagnostic.Nodes));
+        Assert.DoesNotContain(result.Realization.Diagnostics, candidate =>
+            candidate.Requirement == key);
     }
 
     static FinalizerFixture CompileFinalizerPlan()
