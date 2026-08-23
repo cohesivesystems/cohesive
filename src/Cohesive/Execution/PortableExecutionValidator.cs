@@ -1132,7 +1132,7 @@ public static class PortableExecutionValidator
             foreach (var enumValue in type.Values)
             {
                 if (enumValue is not null
-                    && MatchesPrimitiveLiteral(type.Underlying, enumValue.Value ?? enumValue.Name, value))
+                    && PrimitiveTypeSemantics.MatchesLiteral(type.Underlying, enumValue.Value ?? enumValue.Name, value))
                 {
                     return Compatibility.Compatible;
                 }
@@ -1153,7 +1153,7 @@ public static class PortableExecutionValidator
             foreach (var unionCase in type.Cases)
             {
                 if (unionCase is not null
-                    && MatchesPrimitiveLiteral(type.Discriminator.Type, unionCase.DiscriminatorValue, discriminator))
+                    && PrimitiveTypeSemantics.MatchesLiteral(type.Discriminator.Type, unionCase.DiscriminatorValue, discriminator))
                 {
                     return MatchType(unionCase.Type, value, remainingDepth - 1);
                 }
@@ -1203,76 +1203,6 @@ public static class PortableExecutionValidator
             return cardinality == FieldCardinality.Many
                 ? MatchArray(new ArrayTypeRef(type), value, remainingDepth)
                 : MatchType(type, value, remainingDepth);
-        }
-
-        static bool IsNumeric(ObservationValue value) => value.Kind is
-            ObservationValueKind.Int64 or ObservationValueKind.Double or ObservationValueKind.Decimal;
-
-        static bool MatchesPrimitiveLiteral(PrimitiveType type, string literal, ObservationValue value)
-        {
-            switch (type)
-            {
-                case PrimitiveType.Bool:
-                    return value.Kind == ObservationValueKind.Bool
-                        && bool.TryParse(literal, out var boolean)
-                        && value.Bool == boolean;
-                case PrimitiveType.Int32:
-                    return IsNumeric(value)
-                        && int.TryParse(literal, NumberStyles.Integer, CultureInfo.InvariantCulture, out var int32)
-                        && value.TryGetInt32(out var actualInt32)
-                        && actualInt32 == int32;
-                case PrimitiveType.Int64:
-                    return IsNumeric(value)
-                        && long.TryParse(literal, NumberStyles.Integer, CultureInfo.InvariantCulture, out var int64)
-                        && value.TryGetInt64(out var actualInt64)
-                        && actualInt64 == int64;
-                case PrimitiveType.Decimal:
-                    return IsNumeric(value)
-                        && decimal.TryParse(literal, NumberStyles.Float, CultureInfo.InvariantCulture, out var dec)
-                        && value.TryGetDecimal(out var actualDecimal)
-                        && actualDecimal == dec;
-                case PrimitiveType.String:
-                    return value.Kind == ObservationValueKind.String
-                        && string.Equals(value.String, literal, StringComparison.Ordinal);
-                case PrimitiveType.Guid:
-                    return value.Kind == ObservationValueKind.String
-                        && Guid.TryParse(literal, out var guid)
-                        && Guid.TryParse(value.String, out var actualGuid)
-                        && actualGuid == guid;
-                case PrimitiveType.Date:
-                    return DateOnly.TryParse(literal, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
-                        && value.TryGetDateOnly(out var actualDate)
-                        && actualDate == date;
-                case PrimitiveType.DateTime:
-                    return DateTimeOffset.TryParse(
-                            literal,
-                            CultureInfo.InvariantCulture,
-                            DateTimeStyles.RoundtripKind,
-                            out var dateTime)
-                        && value.TryGetDateTimeOffset(out var actualDateTime)
-                        && actualDateTime.EqualsExact(dateTime);
-                case PrimitiveType.Instant:
-                    return DateTimeOffset.TryParse(
-                            literal,
-                            CultureInfo.InvariantCulture,
-                            DateTimeStyles.RoundtripKind,
-                            out var instant)
-                        && value.TryGetInstant(out var actualInstant)
-                        && actualInstant.ToUniversalTime() == instant.ToUniversalTime();
-                case PrimitiveType.Bytes:
-                    if (!value.TryGetBytes(out var actualBytes))
-                        return false;
-                    try
-                    {
-                        return actualBytes.Span.SequenceEqual(Convert.FromBase64String(literal));
-                    }
-                    catch (FormatException)
-                    {
-                        return false;
-                    }
-                default:
-                    return false;
-            }
         }
 
         static Compatibility Combine(Compatibility left, Compatibility right)

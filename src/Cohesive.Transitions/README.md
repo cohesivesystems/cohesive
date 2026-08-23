@@ -30,6 +30,16 @@ The earlier flat `Cohesive.Transitions.Model.TransitionDefinition`, delegate-bac
 `Transition` handle, CLR effect-handler surface, and local apply runtime have been removed. Entity
 definitions now own shape and invariant semantics only; transitions are exact canonical documents.
 
+Entity shapes may remain genuinely inline, or bind an exact graph-qualified root through
+`EntityShapeGraphBinding`. A graph-backed definition retains the immutable `ShapeGraphDocument` as
+the named-type authority; state validation resolves nested structural, enum, and union types directly
+from that snapshot without copying their fields into inline object types. `EntityShapeGraphValidator`
+fails closed with deterministic diagnostics for missing bindings or types, duplicate identities,
+incompatible graph revisions or roots, and recursive named components. Runtime state creation refuses
+an invalid binding through `EntityShapeGraphValidationException`, which retains those diagnostics.
+The fluent `EntityBuilder.ShapeGraph(...)` projection lowers to the same graph-backed definition as
+direct IR construction and preserves the graph document's provenance metadata.
+
 ## Canonical C# Authoring
 
 The C# frontend accepts a finite, typed syntax for inputs, observations, absent-subject initialization,

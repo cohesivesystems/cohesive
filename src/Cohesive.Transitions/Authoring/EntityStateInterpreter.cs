@@ -187,9 +187,12 @@ internal sealed class EntityStateInterpreter
         }
     }
 
-    static void EnsureValueMatchesType(string entityId, TypeRef type, ObservationValue value, string context)
+    void EnsureValueMatchesType(string entityId, TypeRef type, ObservationValue value, string context)
     {
-        if (!JsonTypeSemantics.MatchesType(type: type, value: value))
+        if (!JsonTypeSemantics.MatchesType(
+                type: type,
+                value: value,
+                graph: entityDefinition.ShapeGraph?.Document.Graph))
         {
             throw new SemanticRuleViolationException($"{context} on entity '{entityId}' does not satisfy expected type '{JsonTypeSemantics.DescribeType(type)}'.");
         }

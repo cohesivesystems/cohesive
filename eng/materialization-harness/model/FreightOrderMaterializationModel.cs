@@ -287,17 +287,17 @@ public static class FreightOrderMaterializationModel
         var orderEntity = Entity(
             orderShape.Id.ShapeId.Value,
             canonicalOrderShape,
-            orderShape.Document.Graph);
+            orderShape.Document);
         var storage = new FreightOrderStorageDefinitions(
             Order: orderEntity,
             CustomerAccount: Entity(
                 customerShape.Id.ShapeId.Value,
                 customerShape.Document.Graph.TryGetShape(customerShape.Id),
-                customerShape.Document.Graph),
+                customerShape.Document),
             Location: Entity(
                 locationShape.Id.ShapeId.Value,
                 locationShape.Document.Graph.TryGetShape(locationShape.Id),
-                locationShape.Document.Graph));
+                locationShape.Document));
 
         return new(
             compilationRequest,
@@ -311,81 +311,14 @@ public static class FreightOrderMaterializationModel
             definition,
             MaterializationDefinitionFingerprinter.Compute(definition));
 
-        static EntityDefinition Entity(string name, Shape? shape, ShapeGraph graph)
+        static EntityDefinition Entity(string name, Shape? shape, ShapeGraphDocument document)
         {
             var source = shape ?? throw new InvalidOperationException($"Canonical entity shape '{name}' is missing.");
-            // EntityDefinition currently validates one Shape without its named-type graph. Derive an equivalent
-            // inline validation projection while retaining StorageStructureDefinition as aggregate/type authority.
-            // Fail closed below whenever the inline TypeRef surface cannot preserve the named type's semantics.
-            var repositoryFields = source.Fields
-                .Select(field => field with { Type = ResolveRepositoryType(field.Type, graph, []) })
-                .ToImmutableArray();
             return new(
-                new(name),
-                new Shape(source.Id, repositoryFields, source.Constraints, source.Annotations, ShapeRoles.Entity));
-        }
-
-        static TypeRef ResolveRepositoryType(
-            TypeRef type,
-            ShapeGraph graph,
-            HashSet<TypeId> resolutionPath) => type switch
-        {
-            NamedTypeRef named => ResolveNamedRepositoryType(named, graph, resolutionPath),
-            ArrayTypeRef array => new ArrayTypeRef(
-                ResolveRepositoryType(array.ElementType, graph, resolutionPath)),
-            ObjectTypeRef objectType => new ObjectTypeRef(
-            [
-                .. objectType.Fields.Select(field => field with
-                {
-                    Type = ResolveRepositoryType(field.Type, graph, resolutionPath)
-                })
-            ]),
-            _ => type
-        };
-
-        static TypeRef ResolveNamedRepositoryType(
-            NamedTypeRef named,
-            ShapeGraph graph,
-            HashSet<TypeId> resolutionPath)
-        {
-            if (!resolutionPath.Add(named.TypeId))
-            {
-                throw new InvalidOperationException(
-                    $"Repository entity-state validation cannot inline recursive named type '{named.TypeId.Value}'.");
-            }
-
-            try
-            {
-                return graph.GetType(named.TypeId) switch
-                {
-                    TypeDefinition.Structural structural when structural.Constraints.IsDefaultOrEmpty
-                        && structural.Fields.All(static field => field.Constraints.IsDefaultOrEmpty) => new ObjectTypeRef(
-                    [
-                        .. structural.Fields.Select(field => new ObjectFieldTypeDef(
-                            name: field.Name.Value,
-                            type: ResolveRepositoryType(field.Type, graph, resolutionPath),
-                            cardinality: field.Cardinality,
-                            presence: field.Presence,
-                            nullability: field.Nullability,
-                            annotations: field.Annotations))
-                    ]),
-                    TypeDefinition.Structural => throw new InvalidOperationException(
-                        $"Repository entity-state validation cannot inline constrained named type '{named.TypeId.Value}' without weakening it."),
-                    TypeDefinition.Enum enumeration when enumeration.Underlying == PrimitiveType.String => new EnumTypeRef(
-                        name: enumeration.Name,
-                        members: [.. enumeration.Values.Select(static value => value.Value ?? value.Name)]),
-                    TypeDefinition.Enum => throw new InvalidOperationException(
-                        $"Repository entity-state validation cannot inline non-string enum '{named.TypeId.Value}'."),
-                    TypeDefinition.Union => throw new InvalidOperationException(
-                        $"Repository entity-state validation cannot inline union '{named.TypeId.Value}'."),
-                    var unsupported => throw new InvalidOperationException(
-                        $"Repository entity-state validation cannot inline named type '{named.TypeId.Value}' of kind '{unsupported.GetType().Name}'.")
-                };
-            }
-            finally
-            {
-                resolutionPath.Remove(named.TypeId);
-            }
+                name: new(name),
+                shapeGraph: new(
+                    shape: new(document.Graph.Id, source.Id),
+                    document: document));
         }
     }
 
