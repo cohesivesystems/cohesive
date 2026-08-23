@@ -121,10 +121,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     [Fact]
     public async Task HostOperationActivity_AwaitsNaturallyAsyncHostAndProjectsPhysicalContext()
     {
-        var query = HostedQueryHandlerCatalogTests.Query();
-        var evaluation = HostedQueryHandlerCatalogTests.Evaluation(
+        var query = ProcessRelationHandlerCatalogTests.Query();
+        var evaluation = ProcessRelationHandlerCatalogTests.Evaluation(
             query,
-            new HostedQueryHandlerCatalogTests.QueryInput("source/durable-task"));
+            new ProcessRelationHandlerCatalogTests.QueryInput("source/durable-task"));
         using var lifetime = new TestHostApplicationLifetime();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var completion = new TaskCompletionSource<ProcessOperationResult>(
@@ -160,10 +160,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     [Fact]
     public async Task HostOperationActivity_WorkerShutdownProjectsRetryablePhysicalFailureWithoutSemanticCancellation()
     {
-        var query = HostedQueryHandlerCatalogTests.Query();
-        var evaluation = HostedQueryHandlerCatalogTests.Evaluation(
+        var query = ProcessRelationHandlerCatalogTests.Query();
+        var evaluation = ProcessRelationHandlerCatalogTests.Evaluation(
             query,
-            new HostedQueryHandlerCatalogTests.QueryInput("source/cancelled-worker"));
+            new ProcessRelationHandlerCatalogTests.QueryInput("source/cancelled-worker"));
         using var lifetime = new TestHostApplicationLifetime();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         OperationContext? capturedContext = null;
@@ -193,10 +193,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     [Fact]
     public async Task HostOperationActivity_OrdinaryOperationCancellationIsNotWorkerStoppingFailure()
     {
-        var query = HostedQueryHandlerCatalogTests.Query();
-        var evaluation = HostedQueryHandlerCatalogTests.Evaluation(
+        var query = ProcessRelationHandlerCatalogTests.Query();
+        var evaluation = ProcessRelationHandlerCatalogTests.Evaluation(
             query,
-            new HostedQueryHandlerCatalogTests.QueryInput("source/operation-cancelled"));
+            new ProcessRelationHandlerCatalogTests.QueryInput("source/operation-cancelled"));
         using var lifetime = new TestHostApplicationLifetime();
         var expected = new OperationCanceledException("The operation rejected its own work.");
         var host = new DelegateAsyncProcessHost(evaluateRelation: (_, _) =>
@@ -216,10 +216,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     [Fact]
     public async Task SignalTargetActivity_AwaitsNaturallyAsyncResolutionWithoutChangingCanonicalPayload()
     {
-        var query = HostedQueryHandlerCatalogTests.Query();
-        var evaluation = HostedQueryHandlerCatalogTests.Evaluation(
+        var query = ProcessRelationHandlerCatalogTests.Query();
+        var evaluation = ProcessRelationHandlerCatalogTests.Evaluation(
             query,
-            new HostedQueryHandlerCatalogTests.QueryInput("route/durable-task"));
+            new ProcessRelationHandlerCatalogTests.QueryInput("route/durable-task"));
         var resolution = new ProcessSignalTargetResolution(
             evaluation.Input,
             evaluation.Continuation,
@@ -260,10 +260,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     [Fact]
     public async Task DuplicateHostActivityDelivery_PreservesExactOccurrenceAndStructuredEvidence()
     {
-        var query = HostedQueryHandlerCatalogTests.Query();
-        var evaluation = HostedQueryHandlerCatalogTests.Evaluation(
+        var query = ProcessRelationHandlerCatalogTests.Query();
+        var evaluation = ProcessRelationHandlerCatalogTests.Evaluation(
             query,
-            new HostedQueryHandlerCatalogTests.QueryInput("source/duplicate-delivery"));
+            new ProcessRelationHandlerCatalogTests.QueryInput("source/duplicate-delivery"));
         var failure = ProcessOperationResult.Failed(new DocumentValidationDiagnostic(
             ProcessExecutionDiagnosticCodes.OperationFailed,
             DiagnosticSeverity.Error,

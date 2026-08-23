@@ -11,7 +11,7 @@ using Cohesive.Relations.IR;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
-public sealed class HostedQueryHandlerCatalogTests
+public sealed class ProcessRelationHandlerCatalogTests
 {
     static readonly DateTimeOffset ObservedAtUtc = new(2026, 8, 13, 22, 0, 0, TimeSpan.Zero);
 
@@ -21,8 +21,8 @@ public sealed class HostedQueryHandlerCatalogTests
         var query = Query();
         ProcessRelationEvaluation? observed = null;
         OperationContext? observedContext = null;
-        var catalog = new HostedQueryHandlerCatalog([
-            HostedQueryHandlerRegistration.Create(
+        var catalog = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.Create(
                 query,
                 async (context, evaluation, input) =>
                 {
@@ -47,6 +47,140 @@ public sealed class HostedQueryHandlerCatalogTests
     }
 
     [Fact]
+    public async Task Catalog_RoutesHostedQueriesAndAuthoredRelationsByExactCanonicalReference()
+    {
+        var query = Query();
+        var relation = GeneratedTypedRelationCatalog.Normalize;
+        var catalog = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.Create(
+                query,
+                static (context, evaluation, input) =>
+                    ValueTask.FromResult(new QueryResult(input.Id, "queried"))),
+            ProcessRelationHandlerRegistration.Create(
+                relation,
+                static (context, evaluation, input) =>
+                    ValueTask.FromResult(new TypedRelationResult
+                    {
+                        Id = input.Id,
+                        Normalized = input.Value.ToUpperInvariant()
+                    }))
+        ]);
+
+        var queried = await catalog.EvaluateAsync(
+            OperationContext.Create(),
+            Evaluation(query, new QueryInput("source/42")));
+        var related = await catalog.EvaluateAsync(
+            OperationContext.Create(),
+            Evaluation(
+                relation.Reference,
+                relation.InputContract,
+                new TypedRelationInput { Id = "source/42", Value = "value" }));
+
+        Assert.Equal(2, catalog.Count);
+        Assert.Equal(
+            ObservationValue.FromObject(new QueryResult("source/42", "queried")),
+            queried.Value?.Value);
+        Assert.Equal(
+            ObservationValue.FromObject(new TypedRelationResult
+            {
+                Id = "source/42",
+                Normalized = "VALUE"
+            }),
+            related.Value?.Value);
+    }
+
+    [Fact]
+    public async Task Catalog_ReturnsStructuredFailureWhenExactDefinitionIsMissing()
+    {
+        var query = Query();
+        var catalog = new ProcessRelationHandlerCatalog([]);
+
+        var result = await catalog.EvaluateAsync(
+            OperationContext.Create(),
+            Evaluation(query, new QueryInput("source/42")));
+
+        Assert.Equal(ProcessRelationHandlerDiagnosticCodes.DefinitionNotRegistered, result.Failure?.Code);
+    }
+
+    [Fact]
+    public async Task RegisteredHost_ComposesRelationTransitionAndExplicitSignalPolicies()
+    {
+        var query = Query();
+        var catalog = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.Create(
+                query,
+                static (context, evaluation, input) =>
+                    ValueTask.FromResult(new QueryResult(input.Id, "resolved")))
+        ]);
+        ProcessTransitionInvocation? observedTransition = null;
+        var host = new RegisteredAsyncProcessReferenceHost(
+            catalog,
+            (context, invocation) =>
+            {
+                observedTransition = invocation;
+                return ValueTask.FromResult(ProcessOperationResult.Completed(invocation.Input));
+            });
+        var evaluation = Evaluation(query, new QueryInput("source/42"));
+        var invocation = new ProcessTransitionInvocation(
+            query.Reference,
+            query.Reference,
+            evaluation.Input,
+            evaluation.Input,
+            evaluation.Continuation,
+            evaluation.Activation,
+            evaluation.Token,
+            evaluation.Node,
+            evaluation.Occurrence,
+            evaluation.ObservedAtUtc,
+            evaluation.Context);
+        var resolution = new ProcessSignalTargetResolution(
+            evaluation.Input,
+            evaluation.Continuation,
+            evaluation.Activation,
+            evaluation.Token,
+            evaluation.Node,
+            evaluation.Occurrence,
+            evaluation.ObservedAtUtc,
+            evaluation.Context);
+
+        var relationResult = await host.EvaluateRelationAsync(OperationContext.Create(), evaluation);
+        var transitionResult = await host.InvokeTransitionAsync(OperationContext.Create(), invocation);
+        var signalResult = await host.ResolveSignalTargetAsync(OperationContext.Create(), resolution);
+
+        Assert.True(relationResult.IsSuccessful);
+        Assert.Equal(invocation, observedTransition);
+        Assert.Equal(invocation.Input, transitionResult.Value);
+        Assert.Equal(
+            RegisteredAsyncProcessReferenceHostDiagnosticCodes.SignalTargetNotRegistered,
+            signalResult.Failure?.Code);
+    }
+
+    [Fact]
+    public async Task RegisteredHost_RejectsNullTransitionEvidence()
+    {
+        var host = new RegisteredAsyncProcessReferenceHost(
+            new ProcessRelationHandlerCatalog([]),
+            static (context, invocation) => ValueTask.FromResult<ProcessOperationResult>(null!));
+        var query = Query();
+        var evaluation = Evaluation(query, new QueryInput("source/42"));
+        var invocation = new ProcessTransitionInvocation(
+            query.Reference,
+            query.Reference,
+            evaluation.Input,
+            evaluation.Input,
+            evaluation.Continuation,
+            evaluation.Activation,
+            evaluation.Token,
+            evaluation.Node,
+            evaluation.Occurrence,
+            evaluation.ObservedAtUtc,
+            evaluation.Context);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await host.InvokeTransitionAsync(OperationContext.Create(), invocation));
+    }
+
+    [Fact]
     public async Task OutcomeHandler_ReturnsStructuredSemanticFailureWithoutThrowing()
     {
         var query = Query();
@@ -55,9 +189,9 @@ public sealed class HostedQueryHandlerCatalogTests
             DiagnosticSeverity.Error,
             "The admitted source no longer exists.",
             "/source");
-        var outcome = HostedQueryHandlerOutcome<QueryResult>.Failed(failure);
-        var catalog = new HostedQueryHandlerCatalog([
-            HostedQueryHandlerRegistration.CreateOutcome(
+        var outcome = ProcessRelationHandlerOutcome<QueryResult>.Failed(failure);
+        var catalog = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.CreateOutcome(
                 query,
                 (context, evaluation, input) => ValueTask.FromResult(outcome))
         ]);
@@ -77,11 +211,11 @@ public sealed class HostedQueryHandlerCatalogTests
     public async Task OutcomeHandler_SuccessUsesTheSameCanonicalResultValidation()
     {
         var query = Query();
-        var catalog = new HostedQueryHandlerCatalog([
-            HostedQueryHandlerRegistration.CreateOutcome(
+        var catalog = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.CreateOutcome(
                 query,
                 (context, evaluation, input) => ValueTask.FromResult(
-                    HostedQueryHandlerOutcome<QueryResult>.Completed(
+                    ProcessRelationHandlerOutcome<QueryResult>.Completed(
                         new(input.Id, "resolved"))))
         ]);
 
@@ -100,9 +234,9 @@ public sealed class HostedQueryHandlerCatalogTests
     public void Outcome_RejectsNullSuccessAndNonErrorFailure()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            HostedQueryHandlerOutcome<QueryResult>.Completed(null!));
+            ProcessRelationHandlerOutcome<QueryResult>.Completed(null!));
         Assert.Throws<ArgumentException>(() =>
-            HostedQueryHandlerOutcome<QueryResult>.Failed(new(
+            ProcessRelationHandlerOutcome<QueryResult>.Failed(new(
                 "tests.hostedQuery.warning",
                 DiagnosticSeverity.Warning,
                 "Warnings cannot replace a declared result.")));
@@ -113,14 +247,14 @@ public sealed class HostedQueryHandlerCatalogTests
     {
         var query = Query();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var catalog = new HostedQueryHandlerCatalog([
-            HostedQueryHandlerRegistration.CreateOutcome(
+        var catalog = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.CreateOutcome(
                 query,
                 async (context, evaluation, input) =>
                 {
                     entered.SetResult();
                     await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken);
-                    return HostedQueryHandlerOutcome<QueryResult>.Completed(new(input.Id, "unreachable"));
+                    return ProcessRelationHandlerOutcome<QueryResult>.Completed(new(input.Id, "unreachable"));
                 })
         ]);
         using var cancellation = new CancellationTokenSource();
@@ -140,8 +274,8 @@ public sealed class HostedQueryHandlerCatalogTests
         var deployed = Query(policy: "exact");
         var changed = Query(policy: "latest");
         var invocations = 0;
-        var catalog = new HostedQueryHandlerCatalog([
-            HostedQueryHandlerRegistration.Create(
+        var catalog = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.Create(
                 deployed,
                 (context, evaluation, input) =>
                 {
@@ -157,7 +291,7 @@ public sealed class HostedQueryHandlerCatalogTests
         Assert.False(result.IsSuccessful);
         Assert.Equal(0, invocations);
         Assert.Equal(
-            HostedQueryHandlerDiagnosticCodes.DefinitionFingerprintMismatch,
+            ProcessRelationHandlerDiagnosticCodes.DefinitionFingerprintMismatch,
             result.Failure!.Code);
     }
 
@@ -166,8 +300,8 @@ public sealed class HostedQueryHandlerCatalogTests
     {
         var query = Query();
         var invocations = 0;
-        var catalog = new HostedQueryHandlerCatalog([
-            HostedQueryHandlerRegistration.Create(
+        var catalog = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.Create(
                 query,
                 (context, evaluation, input) =>
                 {
@@ -186,7 +320,7 @@ public sealed class HostedQueryHandlerCatalogTests
 
         Assert.False(result.IsSuccessful);
         Assert.Equal(0, invocations);
-        Assert.Equal(HostedQueryHandlerDiagnosticCodes.InputContractMismatch, result.Failure!.Code);
+        Assert.Equal(ProcessRelationHandlerDiagnosticCodes.InputContractMismatch, result.Failure!.Code);
     }
 
     [Fact]
@@ -195,8 +329,8 @@ public sealed class HostedQueryHandlerCatalogTests
         var query = Query();
         CancellationToken observed = default;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var catalog = new HostedQueryHandlerCatalog([
-            HostedQueryHandlerRegistration.Create(
+        var catalog = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.Create(
                 query,
                 async (context, evaluation, input) =>
                 {
@@ -226,15 +360,15 @@ public sealed class HostedQueryHandlerCatalogTests
         var changed = Query(policy: "latest");
         var registration = Registration(first);
 
-        Assert.Throws<ArgumentException>(() => new HostedQueryHandlerCatalog([registration, registration]));
-        Assert.Throws<ArgumentException>(() => new HostedQueryHandlerCatalog([
+        Assert.Throws<ArgumentException>(() => new ProcessRelationHandlerCatalog([registration, registration]));
+        Assert.Throws<ArgumentException>(() => new ProcessRelationHandlerCatalog([
             registration,
             Registration(changed)
         ]));
     }
 
-    static HostedQueryHandlerRegistration Registration(HostedQuery<QueryInput, QueryResult> query) =>
-        HostedQueryHandlerRegistration.Create(
+    static ProcessRelationHandlerRegistration Registration(HostedQuery<QueryInput, QueryResult> query) =>
+        ProcessRelationHandlerRegistration.Create(
             query,
             static (context, evaluation, input) =>
                 ValueTask.FromResult(new QueryResult(input.Id, "resolved")));
@@ -249,9 +383,15 @@ public sealed class HostedQueryHandlerCatalogTests
 
     internal static ProcessRelationEvaluation Evaluation(
         HostedQuery<QueryInput, QueryResult> query,
-        QueryInput input) => new(
-            query.Reference,
-            PortableValue.Concrete(query.InputContract, ObservationValue.FromObject(input)),
+        QueryInput input) => Evaluation(query.Reference, query.InputContract, input);
+
+    internal static ProcessRelationEvaluation Evaluation<TInput>(
+        ExecutionDefinitionReference reference,
+        ValueContract inputContract,
+        TInput input)
+        where TInput : notnull => new(
+            reference,
+            PortableValue.Concrete(inputContract, ObservationValue.FromObject(input)),
             Continuation(),
             new("activation/tests/async-hosted-query"),
             new("token/tests/async-hosted-query"),
@@ -289,10 +429,10 @@ public sealed class ProcessAsyncReferenceInterpreterTests
     [Fact]
     public async Task SynchronousCompatibilityAdapter_ForwardsEveryClosedOperationAndPrechecksCancellation()
     {
-        var query = HostedQueryHandlerCatalogTests.Query();
-        var evaluation = HostedQueryHandlerCatalogTests.Evaluation(
+        var query = ProcessRelationHandlerCatalogTests.Query();
+        var evaluation = ProcessRelationHandlerCatalogTests.Evaluation(
             query,
-            new HostedQueryHandlerCatalogTests.QueryInput("source/42"));
+            new ProcessRelationHandlerCatalogTests.QueryInput("source/42"));
         var invocation = new ProcessTransitionInvocation(
             query.Reference,
             query.Reference,
@@ -339,7 +479,7 @@ public sealed class ProcessAsyncReferenceInterpreterTests
     [Fact]
     public async Task AsyncActivation_ReentersPureReducerWithoutRepeatingMaterializedOccurrences()
     {
-        var query = HostedQueryHandlerCatalogTests.Query();
+        var query = ProcessRelationHandlerCatalogTests.Query();
         var process = AsyncHostedQueryProcess.Define(Metadata());
         var compilation = process.Compile(new ProcessDefinitionValidationContext([
             query.CreateProcessDefinitionLink()
@@ -348,20 +488,20 @@ public sealed class ProcessAsyncReferenceInterpreterTests
         var plan = Assert.IsType<CompiledProcessPlan>(compilation.Plan);
         var input = PortableValue.Concrete(
             process.Definition.Input,
-            ObservationValue.FromObject(new HostedQueryHandlerCatalogTests.QueryInput("source/42")));
+            ObservationValue.FromObject(new ProcessRelationHandlerCatalogTests.QueryInput("source/42")));
         var state = ProcessReferenceInterpreter.Create(
             plan,
-            HostedQueryHandlerCatalogTests.Continuation(),
+            ProcessRelationHandlerCatalogTests.Continuation(),
             input);
         var activation = new ProcessActivation(
             new("activation/tests/async-reference"),
             ProcessActivationCause.Start,
             new(2026, 8, 13, 22, 30, 0, TimeSpan.Zero),
-            HostedQueryHandlerCatalogTests.ActivationContext());
+            ProcessRelationHandlerCatalogTests.ActivationContext());
         var expectedValue = PortableValue.Concrete(
             query.ResultContract,
             ObservationValue.FromObject(
-                new HostedQueryHandlerCatalogTests.QueryResult("source/42", "resolved")));
+                new ProcessRelationHandlerCatalogTests.QueryResult("source/42", "resolved")));
         var synchronous = ProcessReferenceInterpreter.Activate(
             plan,
             state,
@@ -384,7 +524,7 @@ public sealed class ProcessAsyncReferenceInterpreterTests
     [Fact]
     public async Task AsyncActivation_CancellationProducesNoSemanticDecision()
     {
-        var query = HostedQueryHandlerCatalogTests.Query();
+        var query = ProcessRelationHandlerCatalogTests.Query();
         var process = AsyncHostedQueryProcess.Define(Metadata());
         var compilation = process.Compile(new ProcessDefinitionValidationContext([
             query.CreateProcessDefinitionLink()
@@ -393,16 +533,16 @@ public sealed class ProcessAsyncReferenceInterpreterTests
         var plan = Assert.IsType<CompiledProcessPlan>(compilation.Plan);
         var input = PortableValue.Concrete(
             process.Definition.Input,
-            ObservationValue.FromObject(new HostedQueryHandlerCatalogTests.QueryInput("source/42")));
+            ObservationValue.FromObject(new ProcessRelationHandlerCatalogTests.QueryInput("source/42")));
         var state = ProcessReferenceInterpreter.Create(
             plan,
-            HostedQueryHandlerCatalogTests.Continuation(),
+            ProcessRelationHandlerCatalogTests.Continuation(),
             input);
         var activation = new ProcessActivation(
             new("activation/tests/async-reference-cancel"),
             ProcessActivationCause.Start,
             new(2026, 8, 13, 22, 45, 0, TimeSpan.Zero),
-            HostedQueryHandlerCatalogTests.ActivationContext());
+            ProcessRelationHandlerCatalogTests.ActivationContext());
         using var cancellation = new CancellationTokenSource();
         var context = OperationContext.Create(cancellationToken: cancellation.Token);
         var host = new CancellingAsyncHost(cancellation);
@@ -418,7 +558,7 @@ public sealed class ProcessAsyncReferenceInterpreterTests
         new("process/tests/async-hosted-query"),
         new("1"),
         ProcessRecoveryPolicy.ContinueAttempt,
-        HostedQueryHandlerCatalogTests.Provenance());
+        ProcessRelationHandlerCatalogTests.Provenance());
 
     static string Format(DocumentValidationResult validation) =>
         string.Join(Environment.NewLine, validation.Diagnostics.Select(static diagnostic =>
@@ -521,16 +661,16 @@ public sealed class ProcessAsyncReferenceInterpreterTests
 [GenerateProcessDefinition(nameof(Run))]
 public static partial class AsyncHostedQueryProcess
 {
-    static async ProcessTask<HostedQueryHandlerCatalogTests.QueryResult> Run(
+    static async ProcessTask<ProcessRelationHandlerCatalogTests.QueryResult> Run(
         ProcessContext process,
-        HostedQueryHandlerCatalogTests.QueryInput input)
+        ProcessRelationHandlerCatalogTests.QueryInput input)
     {
         var first = await process.Query(
-            HostedQueryHandlerCatalogTests.Query(),
+            ProcessRelationHandlerCatalogTests.Query(),
             input,
             id: new("query/first"));
         var second = await process.Read(
-            HostedQueryHandlerCatalogTests.Query(),
+            ProcessRelationHandlerCatalogTests.Query(),
             input,
             id: new("query/second"));
         return second;
