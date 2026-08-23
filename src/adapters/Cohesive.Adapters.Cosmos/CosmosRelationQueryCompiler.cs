@@ -1792,8 +1792,8 @@ public sealed class CosmosRelationQueryCompiler
                     branch.Node);
             }
 
-            var left = AnalyzeBinaryOperand(binary.Left, site, "left");
-            var right = AnalyzeBinaryOperand(binary.Right, site, "right");
+            var left = AnalyzeOperand(binary.Left, site, "left");
+            var right = AnalyzeOperand(binary.Right, site, "right");
             var leftType = left.GetEffectiveType();
             var rightType = right.GetEffectiveType();
             var exactTemporalDomain = HasExactTemporalComparisonDomain(
@@ -1842,7 +1842,7 @@ public sealed class CosmosRelationQueryCompiler
                 rightExpression);
         }
 
-        ValueContract AnalyzeBinaryOperand(
+        ValueContract AnalyzeOperand(
             Expr expression,
             RelationQueryExpressionSiteAnalysis site,
             string operand)
@@ -1933,8 +1933,8 @@ public sealed class CosmosRelationQueryCompiler
                     branch.Node);
             }
 
-            var collection = AnalyzeSubexpression(call.Arguments[0], site, "contains-source");
-            var candidate = AnalyzeSubexpression(call.Arguments[1], site, "contains-candidate");
+            var collection = AnalyzeOperand(call.Arguments[0], site, "contains-source");
+            var candidate = AnalyzeOperand(call.Arguments[1], site, "contains-candidate");
             if (collection.GetEffectiveType() is not ArrayTypeRef array
                 || !AreCosmosEqualityComparable(array.ElementType, candidate.GetEffectiveType()))
             {
