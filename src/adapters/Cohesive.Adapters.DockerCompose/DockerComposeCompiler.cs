@@ -14,6 +14,7 @@ namespace Cohesive.Adapters.DockerCompose;
 public static class DockerComposeCompiler
 {
     const string Stage = "docker-compose-compilation";
+    const string TargetReference = "https://docs.docker.com/compose/compose-file/";
 
     /// <summary>Stable adapter diagnostic codes.</summary>
     public static class DiagnosticCodes
@@ -135,11 +136,89 @@ public static class DockerComposeCompiler
                     arguments: operation.Arguments,
                     mutationAuthority: operation.MutationAuthority))
             ],
+            decisions: Decisions(source),
             maximumLifetime: source.Environment.MaximumLifetime);
         return new(
             artifact: new DockerComposeArtifact(yaml, manifest),
             diagnostics: [.. diagnostics]);
     }
+
+    static ImmutableArray<InfrastructureLocalTargetDecision> Decisions(InfrastructureLocalRealizationDocument source)
+    {
+        var sourceReference = $"local-realization:{source.Fingerprint.Value}";
+        return
+        [
+            Decision(
+                concern: "local/observability",
+                kind: CapabilityRealizationKind.Constrained,
+                rationale: "Docker Compose exposes container state and logs while the canonical UI services provide data inspection; it does not supply a unified dashboard or OpenTelemetry collector.",
+                boundaries: ["Runtime telemetry and cross-resource dashboard behavior require an additional explicit facility."],
+                sourceReferences: [sourceReference, TargetReference]),
+            Decision(
+                concern: "local/orchestration-control-plane",
+                kind: CapabilityRealizationKind.Native,
+                rationale: "Docker Compose v2 owns project-scoped container lifecycle through the local Docker engine.",
+                boundaries: [],
+                sourceReferences: [sourceReference, TargetReference]),
+            Decision(
+                concern: "local/endpoints-and-discovery",
+                kind: CapabilityRealizationKind.Native,
+                rationale: "Canonical endpoints become project-network service addresses and fixed host-loopback publications.",
+                boundaries: [],
+                sourceReferences: [sourceReference, TargetReference]),
+            Decision(
+                concern: "local/health/http",
+                kind: CapabilityRealizationKind.Native,
+                rationale: "Canonical HTTP probes become exact Compose healthcheck commands.",
+                boundaries: [],
+                sourceReferences: [sourceReference, TargetReference]),
+            Decision(
+                concern: "local/health/timing",
+                kind: CapabilityRealizationKind.Native,
+                rationale: "Compose healthchecks preserve the canonical interval, timeout, retries, and start period.",
+                boundaries: [],
+                sourceReferences: [sourceReference, TargetReference]),
+            Decision(
+                concern: "local/health/command/local/postgres/pg_isready",
+                kind: CapabilityRealizationKind.Native,
+                rationale: "The canonical PostgreSQL command probe executes directly in the Compose container.",
+                boundaries: [],
+                sourceReferences: [sourceReference, TargetReference]),
+            Decision(
+                concern: "local/operations/host",
+                kind: CapabilityRealizationKind.Composed,
+                rationale: "The adjacent manifest retains canonical host operations and the harness SDK/CLI wrapper executes them against the exact Compose project.",
+                boundaries: [],
+                sourceReferences: [sourceReference, TargetReference]),
+            Decision(
+                concern: "local/readiness",
+                kind: CapabilityRealizationKind.Native,
+                rationale: "Canonical ready dependencies become service_healthy Compose dependencies.",
+                boundaries: [],
+                sourceReferences: [sourceReference, TargetReference]),
+            Decision(
+                concern: "local/volume-lifetime",
+                kind: CapabilityRealizationKind.Composed,
+                rationale: source.Environment.DataLifetime == InfrastructureLocalDataLifetime.Persistent
+                    ? "Persistent data uses project-scoped named volumes retained by ordinary Compose down operations."
+                    : "Isolated data uses project-scoped volumes removed only by the exact environment teardown.",
+                boundaries: [],
+                sourceReferences: [sourceReference, TargetReference])
+        ];
+    }
+
+    static InfrastructureLocalTargetDecision Decision(
+        string concern,
+        CapabilityRealizationKind kind,
+        string rationale,
+        ImmutableArray<string> boundaries,
+        ImmutableArray<string> sourceReferences) => new(
+        target: DockerComposeArtifactManifest.CurrentTarget,
+        concern: concern,
+        kind: kind,
+        rationale: rationale,
+        boundaries: boundaries,
+        sourceReferences: sourceReferences);
 
     static string EmitYaml(
         InfrastructureLocalRealizationDocument source,

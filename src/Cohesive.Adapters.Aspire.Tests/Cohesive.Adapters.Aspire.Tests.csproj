@@ -17,6 +17,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../adapters/Cohesive.Adapters.Aspire/Cohesive.Adapters.Aspire.csproj" />
+    <ProjectReference Include="../adapters/Cohesive.Adapters.DockerCompose/Cohesive.Adapters.DockerCompose.csproj" />
     <ProjectReference Include="../../eng/materialization-harness/model/Cohesive.MaterializationHarness.Model.csproj" />
   </ItemGroup>
 </Project>

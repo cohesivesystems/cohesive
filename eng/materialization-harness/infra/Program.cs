@@ -15,12 +15,22 @@ var harnessRoot = Path.Combine(repositoryRoot, "eng", "materialization-harness")
 var outputRoot = runtime ? Path.Combine(harnessRoot, ".runtime") : harnessRoot;
 var yamlPath = Path.Combine(outputRoot, runtime ? "compose.yaml" : "compose.generated.yaml");
 var manifestPath = Path.Combine(outputRoot, runtime ? "compose.manifest.json" : "compose.generated.manifest.json");
+var profileName = runtime
+    ? Environment.GetEnvironmentVariable("COHESIVE_HARNESS_PROFILE") ?? "interactive"
+    : "interactive";
+var environment = profileName switch
+{
+    "interactive" => FreightMaterializationInfrastructure.InteractiveProfile,
+    "isolated" => FreightMaterializationInfrastructure.IsolatedTestProfile,
+    _ => throw new InvalidOperationException(
+        $"Unsupported COHESIVE_HARNESS_PROFILE '{profileName}'; expected 'interactive' or 'isolated'.")
+};
 var source = runtime
     ? FreightMaterializationInfrastructure.CreateLocalRealization(
-        FreightMaterializationInfrastructure.InteractiveProfile,
-        FreightMaterializationInfrastructure.CreateRuntimeConfiguration())
+        environment: environment,
+        additionalConfiguration: FreightMaterializationInfrastructure.CreateRuntimeConfiguration())
     : FreightMaterializationInfrastructure.CreateLocalRealization(
-        FreightMaterializationInfrastructure.InteractiveProfile);
+        environment: environment);
 var compilation = DockerComposeCompiler.Compile(source);
 if (!compilation.IsSuccess)
 {

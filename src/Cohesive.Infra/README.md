@@ -224,8 +224,10 @@ Explorer, Elasticsearch, pgAdmin, Kibana, health/readiness, persistent volumes, 
 profiles, and the `start`, `stop`, `reset`, `status`, `seed`, `materialize`, `verify`, and `inspect` operation intents.
 `Cohesive.Adapters.DockerCompose` emits the checked-in default Compose artifact and exact provenance manifest from this
 fixture. Runtime profiles preserve explicit worktree and `.env` configuration without admitting secret values into
-effective configuration. The handwritten Compose topology remains a temporary semantic parity oracle until it is
-removed. The Aspire AppHost will consume the same fixture and realization rather than maintain a parallel service graph.
+effective configuration. The Aspire AppHost consumes the same fixture and realization rather than maintaining a
+parallel service graph. Both interpreters emit `InfrastructureLocalTargetDecision` evidence under target-neutral
+concern identities, and the harness differential conformance fixture compares their common semantics and requires every
+remaining target difference to be explicit. There is no independently authored Compose topology.
 
 ## First-slice fluent authoring and realization
 

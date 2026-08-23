@@ -14,6 +14,8 @@ values produce structured diagnostics and no artifact.
 
 The YAML fingerprint covers exact UTF-8/LF bytes. The manifest also fences the physical and local realizations, compiler
 version, environment and lifecycle authority, attributed effective configuration, resource/name and endpoint mappings,
-operation intent, and optional maximum lifetime. Secret payloads are lifecycle inputs and never appear in either
+operation intent, optional maximum lifetime, and `InfrastructureLocalTargetDecision` evidence. Decisions use the same
+target-neutral concern identities as other local lifecycle interpreters, making native, composed, constrained, and
+override differences machine-comparable. Secret payloads are lifecycle inputs and never appear in either
 canonical configuration or the manifest. A lifecycle runner must fence previews, execution, receipts, deadline
 enforcement, and observations to the emitted artifact fingerprint.

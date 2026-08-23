@@ -14,6 +14,12 @@ if [[ -f "$script_dir/.env" ]]; then
   set +a
 fi
 
+lifecycle_target="${COHESIVE_HARNESS_LIFECYCLE:-compose}"
+if [[ "$lifecycle_target" != "compose" && "$lifecycle_target" != "aspire" ]]; then
+  printf 'COHESIVE_HARNESS_LIFECYCLE must be compose or aspire.\n' >&2
+  exit 2
+fi
+
 worktree_name="$(basename "$repo_root" | tr -cs '[:alnum:]' '-' | sed 's/^-*//;s/-*$//')"
 worktree_hash="$(printf '%s' "$repo_root" | cksum | awk '{print $1}')"
 export COHESIVE_HARNESS_PROJECT_NAME="${COHESIVE_HARNESS_PROJECT_NAME:-cohesive-materialization-${worktree_name}-${worktree_hash}}"
@@ -27,6 +33,7 @@ export COHESIVE_HARNESS_COSMOS_EXPLORER_PORT="${COHESIVE_HARNESS_COSMOS_EXPLORER
 export COHESIVE_HARNESS_ELASTIC_PORT="${COHESIVE_HARNESS_ELASTIC_PORT:-59200}"
 export COHESIVE_HARNESS_ELASTIC_JAVA_OPTS="${COHESIVE_HARNESS_ELASTIC_JAVA_OPTS:--Xms512m -Xmx512m}"
 export COHESIVE_HARNESS_KIBANA_PORT="${COHESIVE_HARNESS_KIBANA_PORT:-55601}"
+export COHESIVE_HARNESS_KIBANA_NODE_OPTIONS="${COHESIVE_HARNESS_KIBANA_NODE_OPTIONS:---max-old-space-size=768}"
 export COHESIVE_HARNESS_PGADMIN_PORT="${COHESIVE_HARNESS_PGADMIN_PORT:-55050}"
 export COHESIVE_HARNESS_PGADMIN_EMAIL="${COHESIVE_HARNESS_PGADMIN_EMAIL:-harness@cohesivesystems.com}"
 export COHESIVE_HARNESS_PGADMIN_PASSWORD="${COHESIVE_HARNESS_PGADMIN_PASSWORD:-cohesive-local-only}"
@@ -93,7 +100,35 @@ up() {
   if [[ "${COHESIVE_HARNESS_SKIP_INFRA_UP:-false}" == "true" ]]; then
     return
   fi
-  compose up --detach --wait --wait-timeout 240
+  if [[ "$lifecycle_target" == "aspire" ]]; then
+    aspire_up "${COHESIVE_HARNESS_PROFILE:-interactive}"
+  else
+    compose up --detach --wait --wait-timeout 240
+  fi
+}
+
+stop_environment() {
+  local remove_volumes="${1:-false}"
+  if [[ "$lifecycle_target" == "aspire" ]]; then
+    aspire_cli stop --apphost "$aspire_apphost"
+  elif [[ "$remove_volumes" == "true" ]]; then
+    compose down --volumes --remove-orphans
+  else
+    compose down --remove-orphans
+  fi
+}
+
+prepare_clean_environment() {
+  if [[ "$lifecycle_target" == "aspire" ]]; then
+    if [[ "${COHESIVE_HARNESS_PROFILE:-interactive}" != "isolated" ]]; then
+      printf 'Destructive Aspire preparation requires COHESIVE_HARNESS_PROFILE=isolated.\n' >&2
+      return 2
+    fi
+    aspire_cli stop --apphost "$aspire_apphost" >/dev/null 2>&1 || true
+  else
+    compose down --volumes --remove-orphans
+  fi
+  up
 }
 
 seed() {
@@ -196,8 +231,7 @@ failure_test() {
   run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
   local artifact_root="$script_dir/artifacts/failure-$run_id"
 
-  compose down --volumes --remove-orphans
-  up
+  prepare_clean_environment
   seed --cohesive
   configure_runtime
   export COHESIVE_MATERIALIZATION_REPOSITORY_ROOT="$repo_root"
@@ -228,8 +262,7 @@ control_equivalence_test() {
   run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
   local artifact_root="$script_dir/artifacts/control-equivalence-$run_id"
 
-  compose down --volumes --remove-orphans
-  up
+  prepare_clean_environment
   seed --cohesive
   configure_runtime
   export COHESIVE_MATERIALIZATION_REPOSITORY_ROOT="$repo_root"
@@ -265,8 +298,7 @@ source_matrix_test() {
     exit 2
   fi
   for provider in "${providers[@]}"; do
-    compose down --volumes --remove-orphans
-    up
+    prepare_clean_environment
     seed --cohesive
     configure_runtime
     export COHESIVE_MATERIALIZATION_REPOSITORY_ROOT="$repo_root"
@@ -306,8 +338,7 @@ elastic_failure_test() {
     faults+=("$fault")
   done < <(matrix_cells elastic-failures)
   for fault in "${faults[@]}"; do
-    compose down --volumes --remove-orphans
-    up
+    prepare_clean_environment
     seed --cohesive
     configure_runtime
     export COHESIVE_MATERIALIZATION_REPOSITORY_ROOT="$repo_root"
@@ -339,8 +370,7 @@ compatibility_drift_test() {
     exit 2
   fi
   for provider in "${providers[@]}"; do
-    compose down --volumes --remove-orphans
-    up
+    prepare_clean_environment
     seed --cohesive
     configure_runtime
     export COHESIVE_MATERIALIZATION_REPOSITORY_ROOT="$repo_root"
@@ -401,6 +431,126 @@ test_harness() {
     --logger "console;verbosity=minimal"
 }
 
+capture_lifecycle_observation() {
+  local target="$1"
+  local artifact_root="$2"
+  mkdir -p "$artifact_root"
+  if [[ "$target" == "aspire" ]]; then
+    aspire_cli describe --apphost "$aspire_apphost" --format Json > "$artifact_root/runtime-observation.json"
+    cp "$script_dir/.runtime/aspire.manifest.json" "$artifact_root/projection.json"
+  else
+    compose ps --format json > "$artifact_root/runtime-observation.json"
+    cp "$script_dir/.runtime/compose.manifest.json" "$artifact_root/projection.json"
+  fi
+  configure_runtime
+  {
+    curl --fail --silent --show-error "http://localhost:${COHESIVE_HARNESS_COSMOS_HEALTH_PORT}/ready" >/dev/null
+    printf 'cosmos-health=healthy\n'
+    curl --fail --silent --show-error "http://localhost:${COHESIVE_HARNESS_COSMOS_EXPLORER_PORT}/" >/dev/null
+    printf 'cosmos-explorer=healthy\n'
+    curl --fail --silent --show-error "http://localhost:${COHESIVE_HARNESS_PGADMIN_PORT}/misc/ping" >/dev/null
+    printf 'pgadmin=healthy\n'
+    curl --fail --silent --show-error "http://localhost:${COHESIVE_HARNESS_KIBANA_PORT}/api/status" >/dev/null
+    printf 'kibana=healthy\n'
+    curl --fail --silent --show-error "${COHESIVE_MATERIALIZATION_ELASTIC_ENDPOINT}/_cluster/health" >/dev/null
+    printf 'elasticsearch=healthy\n'
+  } > "$artifact_root/endpoints.txt"
+}
+
+run_lifecycle_conformance() (
+  local target="$1"
+  local mode="$2"
+  local run_id="$3"
+  local base_project="$COHESIVE_HARNESS_PROJECT_NAME"
+  local project_suffix
+  project_suffix="$(printf '%s' "$run_id" | tr '[:upper:]' '[:lower:]')"
+  local artifact_root="$script_dir/artifacts/local-lifecycle-$run_id/$target"
+  lifecycle_target="$target"
+  export COHESIVE_HARNESS_LIFECYCLE="$target"
+  export COHESIVE_HARNESS_PROFILE="isolated"
+  export COHESIVE_HARNESS_ASPIRE_PROFILE="isolated"
+  export COHESIVE_HARNESS_PROJECT_NAME="${base_project}-conformance-${project_suffix}"
+  unset COHESIVE_HARNESS_SKIP_INFRA_UP
+  trap 'stop_environment true >/dev/null 2>&1 || true' EXIT
+
+  prepare_clean_environment
+  export COHESIVE_HARNESS_SKIP_INFRA_UP="true"
+  seed --direct
+  verify
+  materialize
+  seed --cohesive
+  verify
+  materialize
+  mutate
+  verify_final
+  materialize
+  verify_index
+
+  if [[ "$mode" == "full" ]]; then
+    unset COHESIVE_HARNESS_SKIP_INFRA_UP
+    failure_test postgres AfterTargetBatch
+    control_equivalence_test postgres
+    matrix_test
+    export COHESIVE_HARNESS_SKIP_INFRA_UP="true"
+  fi
+
+  capture_lifecycle_observation "$target" "$artifact_root"
+  local local_realization
+  local_realization="$(jq --raw-output '.localRealization.value' "$artifact_root/projection.json")"
+  jq --null-input \
+    --arg target "$target" \
+    --arg mode "$mode" \
+    --arg project "$COHESIVE_HARNESS_PROJECT_NAME" \
+    --arg localRealization "$local_realization" \
+    --arg projection "projection.json" \
+    --arg observation "runtime-observation.json" \
+    --arg endpoints "endpoints.txt" \
+    '{schemaVersion:"cohesive-materialization-local-lifecycle-conformance/v1",target:$target,mode:$mode,project:$project,localRealization:$localRealization,projection:$projection,runtimeObservation:$observation,endpointObservation:$endpoints,result:"passed"}' \
+    > "$artifact_root/result.json"
+  unset COHESIVE_HARNESS_SKIP_INFRA_UP
+  stop_environment true
+  trap - EXIT
+  printf 'lifecycle-conformance=%s\n' "$artifact_root/result.json"
+)
+
+lifecycle_conformance_test() {
+  local requested_target="${1:-all}"
+  local mode="${2:-smoke}"
+  if [[ "$requested_target" != "compose" && "$requested_target" != "aspire" && "$requested_target" != "all" ]]; then
+    printf 'lifecycle-conformance-test target must be compose, aspire, or all.\n' >&2
+    exit 2
+  fi
+  if [[ "$mode" != "smoke" && "$mode" != "full" ]]; then
+    printf 'lifecycle-conformance-test mode must be smoke or full.\n' >&2
+    exit 2
+  fi
+  local run_id
+  run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  if [[ "$requested_target" == "compose" || "$requested_target" == "all" ]]; then
+    run_lifecycle_conformance compose "$mode" "$run_id"
+  fi
+  if [[ "$requested_target" == "aspire" || "$requested_target" == "all" ]]; then
+    run_lifecycle_conformance aspire "$mode" "$run_id"
+  fi
+  if [[ "$requested_target" == "all" ]]; then
+    local artifact_root="$script_dir/artifacts/local-lifecycle-$run_id"
+    local compose_realization
+    local aspire_realization
+    compose_realization="$(jq --raw-output '.localRealization' "$artifact_root/compose/result.json")"
+    aspire_realization="$(jq --raw-output '.localRealization' "$artifact_root/aspire/result.json")"
+    if [[ "$compose_realization" != "$aspire_realization" ]]; then
+      printf 'lifecycle conformance local-realization mismatch: compose=%s aspire=%s\n' "$compose_realization" "$aspire_realization" >&2
+      exit 1
+    fi
+    jq --null-input \
+      --arg mode "$mode" \
+      --arg localRealization "$compose_realization" \
+      '{schemaVersion:"cohesive-materialization-local-lifecycle-conformance-set/v1",mode:$mode,localRealization:$localRealization,targets:["aspire","compose"],results:{aspire:"aspire/result.json",compose:"compose/result.json"},result:"passed"}' \
+      > "$artifact_root/result.json"
+    printf 'lifecycle-conformance-set=%s\n' "$artifact_root/result.json"
+  fi
+}
+
 usage() {
   cat <<'USAGE'
 Usage: eng/materialization-harness/harness.sh <command>
@@ -412,7 +562,8 @@ Commands:
   validate Validate the canonical scenario journal without starting Docker.
   infra-generate Regenerate Compose YAML and its exact provenance manifest from Cohesive.Infra.
   infra-check Fail when either checked-in generated artifact differs from the canonical realization.
-  infra-parity Compare the generated default artifact with the handwritten Compose parity oracle.
+  infra-conformance Compare Compose and Aspire projections through the shared local conformance contract.
+  lifecycle-conformance-test [compose|aspire|all] [smoke|full] Run one black-box workflow through either lifecycle target.
   aspire-up [interactive|isolated] Start the canonical topology through Aspire and wait for every service.
   aspire-status Inspect live Aspire resource identity, endpoints, readiness, and dashboard links.
   aspire-logs [resource] Read or follow Aspire/DCP resource logs.
@@ -473,10 +624,23 @@ case "$command" in
     ;;
   infra-check)
     generate_infra --check
-    "$script_dir/compare-compose.sh"
     ;;
-  infra-parity)
-    "$script_dir/compare-compose.sh"
+  infra-conformance)
+    generate_infra --check
+    dotnet test "$repo_root/src/Cohesive.Adapters.Aspire.Tests/Cohesive.Adapters.Aspire.Tests.csproj" \
+      --configuration Release \
+      --filter "FullyQualifiedName~Compose_and_aspire_projections_satisfy_one_exact_local_conformance_contract" \
+      --logger "console;verbosity=minimal" \
+      --maxcpucount:1 \
+      --property:UseSharedCompilation=false \
+      --nodeReuse:false
+    ;;
+  lifecycle-conformance-test)
+    if [[ "$#" -gt 3 ]]; then
+      usage
+      exit 2
+    fi
+    lifecycle_conformance_test "${2:-all}" "${3:-smoke}"
     ;;
   aspire-up)
     if [[ "$#" -gt 2 ]]; then
@@ -640,17 +804,24 @@ case "$command" in
     test_harness
     ;;
   status)
-    compose ps
+    if [[ "$lifecycle_target" == "aspire" ]]; then
+      aspire_cli describe --apphost "$aspire_apphost" --format Table
+    else
+      compose ps
+    fi
     ;;
   logs)
-    compose logs --follow
+    if [[ "$lifecycle_target" == "aspire" ]]; then
+      aspire_cli logs --apphost "$aspire_apphost" --tail 200
+    else
+      compose logs --follow
+    fi
     ;;
   down)
-    compose down --remove-orphans
+    stop_environment false
     ;;
   reset)
-    compose down --volumes --remove-orphans
-    up
+    prepare_clean_environment
     seed
     ;;
   env)
