@@ -93,6 +93,96 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
     }
 
     [Fact]
+    public void Generator_LowersDelegatingSecondaryRecordConstructorToCanonicalMembers()
+    {
+        var source = """
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class SecondaryConstructorProcess
+                     {
+                         private static async ProcessTask<Result> Run(ProcessContext process, Input input)
+                         {
+                             return new Result(input.Value, input);
+                         }
+                     }
+
+                     public sealed record Input(string Value, string Label);
+
+                     public sealed record Result(string First, string Second)
+                     {
+                         public Result(string renamed, Input source)
+                             : this(source, renamed, marker: true)
+                         {
+                         }
+
+                         private Result(Input source, string renamed, bool marker)
+                             : this(source.Label, renamed)
+                         {
+                         }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out var outputCompilation);
+        var generated = Assert.Single(runResult.Results.SelectMany(static result => result.GeneratedSources))
+            .SourceText
+            .ToString();
+
+        Assert.Empty(runResult.Diagnostics);
+        Assert.Empty(runResult.Results.SelectMany(static result => result.Diagnostics));
+        Assert.DoesNotContain(
+            outputCompilation.GetDiagnostics(),
+            static diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Contains("Expr.Const(\"First\")", generated);
+        Assert.Contains("Expr.Const(\"Second\")", generated);
+        Assert.DoesNotContain("Expr.Const(\"renamed\")", generated);
+        Assert.DoesNotContain("Expr.Const(\"source\")", generated);
+    }
+
+    [Fact]
+    public void Generator_RejectsNonDelegatingSecondaryConstructorBeforeGeneration()
+    {
+        var source = """
+                     using Cohesive.Processes.Authoring;
+
+                     namespace Sample;
+
+                     [GenerateProcessDefinition(nameof(Run))]
+                     public static partial class SecondaryConstructorProcess
+                     {
+                         private static async ProcessTask<Result> Run(ProcessContext process, Input input)
+                         {
+                             return new Result(input.Value);
+                         }
+                     }
+
+                     public sealed record Input(string Value);
+
+                     public sealed record Result
+                     {
+                         public Result(string First)
+                         {
+                             this.First = First;
+                         }
+
+                         public string First { get; }
+                     }
+                     """;
+
+        var compilation = CreateCompilation(source);
+        var runResult = RunGenerator(compilation, out _);
+        var diagnostic = Assert.Single(
+            runResult.Results.SelectMany(static result => result.Diagnostics),
+            static diagnostic => diagnostic.Id == "COHPC004");
+
+        Assert.Contains("must delegate through an analyzable this(...) constructor", diagnostic.GetMessage());
+        Assert.Empty(runResult.Results.SelectMany(static result => result.GeneratedSources));
+    }
+
+    [Fact]
     public void Generator_LowersTypedOutboundInteractionsWithoutCallbacks()
     {
         var source = """
