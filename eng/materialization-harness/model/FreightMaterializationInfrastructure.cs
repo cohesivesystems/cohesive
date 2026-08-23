@@ -154,6 +154,7 @@ public static class FreightMaterializationInfrastructure
             .Endpoint(id: new("postgres"), scheme: "postgresql", containerPort: 5432, exposure: InfrastructureLocalEndpointExposure.HostLoopback, role: InfrastructureLocalEndpointRole.Data, hostPort: Configuration(Settings.PostgresPort))
             .Mount(volume: new("postgres-data"), targetPath: "/var/lib/postgresql/data")
             .CommandHealth(executable: "pg_isready", arguments: ["--dbname=$POSTGRES_DB", "--username=$POSTGRES_USER"])
+            .HealthTiming(interval: TimeSpan.FromSeconds(2), timeout: TimeSpan.FromSeconds(3), retries: 30)
             .StopGrace(TimeSpan.FromSeconds(30)))
         .Service(resource: CosmosResource, physicalResource: CosmosService, image: "mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-EN20260810", configure: cosmos => cosmos
             .Environment("PROTOCOL", new InfrastructureLocalLiteralValue("https"))
@@ -167,6 +168,7 @@ public static class FreightMaterializationInfrastructure
             .Mount(volume: new("cosmos-data"), targetPath: "/data")
             .HttpHealth(endpoint: new("health"), path: "/ready")
             .HttpHealth(endpoint: new("explorer"), path: "/")
+            .HealthTiming(interval: TimeSpan.FromSeconds(3), timeout: TimeSpan.FromSeconds(5), retries: 60, startPeriod: TimeSpan.FromSeconds(20))
             .StopGrace(TimeSpan.FromSeconds(30)))
         .Service(resource: ElasticsearchResource, physicalResource: ElasticsearchService, image: "docker.elastic.co/elasticsearch/elasticsearch:8.19.13", configure: elastic => elastic
             .Environment("discovery.type", new InfrastructureLocalLiteralValue("single-node"))
@@ -176,6 +178,7 @@ public static class FreightMaterializationInfrastructure
             .Endpoint(id: new("http"), scheme: "http", containerPort: 9200, exposure: InfrastructureLocalEndpointExposure.HostLoopback, role: InfrastructureLocalEndpointRole.Data, hostPort: Configuration(Settings.ElasticsearchPort))
             .Mount(volume: new("elasticsearch-data"), targetPath: "/usr/share/elasticsearch/data")
             .HttpHealth(endpoint: new("http"), path: "/_cluster/health?wait_for_status=yellow&timeout=2s")
+            .HealthTiming(interval: TimeSpan.FromSeconds(3), timeout: TimeSpan.FromSeconds(5), retries: 60, startPeriod: TimeSpan.FromSeconds(20))
             .StopGrace(TimeSpan.FromSeconds(30)))
         .Service(resource: PgAdminResource, physicalResource: PgAdminService, image: "dpage/pgadmin4:9.17", configure: pgadmin => pgadmin
             .Environment("PGADMIN_DEFAULT_EMAIL", Configuration(Settings.PgAdminEmail))
@@ -189,6 +192,7 @@ public static class FreightMaterializationInfrastructure
             .Mount(volume: new("pgadmin-data"), targetPath: "/var/lib/pgadmin")
             .FileMount(file: new("pgadmin-servers"), targetPath: "/pgadmin4/servers.json")
             .HttpHealth(endpoint: new("ui"), path: "/misc/ping")
+            .HealthTiming(interval: TimeSpan.FromSeconds(5), timeout: TimeSpan.FromSeconds(5), retries: 60, startPeriod: TimeSpan.FromSeconds(20))
             .DependsOn(PostgresService)
             .StopGrace(TimeSpan.FromSeconds(30)))
         .Service(resource: KibanaResource, physicalResource: KibanaService, image: "docker.elastic.co/kibana/kibana:8.19.13", configure: kibana => kibana
@@ -198,6 +202,7 @@ public static class FreightMaterializationInfrastructure
             .Environment("TELEMETRY_ENABLED", new InfrastructureLocalLiteralValue("false"))
             .Endpoint(id: new("ui"), scheme: "http", containerPort: 5601, exposure: InfrastructureLocalEndpointExposure.HostLoopback, role: InfrastructureLocalEndpointRole.UserInterface, hostPort: Configuration(Settings.KibanaPort))
             .HttpHealth(endpoint: new("ui"), path: "/api/status")
+            .HealthTiming(interval: TimeSpan.FromSeconds(5), timeout: TimeSpan.FromSeconds(5), retries: 60, startPeriod: TimeSpan.FromSeconds(30))
             .DependsOn(ElasticsearchService)
             .StopGrace(TimeSpan.FromSeconds(30)))
         .Operation(id: new("start"), placement: InfrastructureLocalExecutionPlacement.Host, effect: InfrastructureLocalOperationEffect.EnvironmentMutation, executable: HarnessScript, arguments: ["up"], mutationAuthority: LifecycleAuthority)

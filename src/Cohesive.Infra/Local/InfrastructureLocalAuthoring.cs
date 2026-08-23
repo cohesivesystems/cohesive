@@ -131,6 +131,7 @@ public sealed class InfrastructureLocalServiceBuilder
     readonly List<InfrastructureLocalHealthProbe> health = [];
     readonly List<InfrastructurePhysicalResourceId> dependencies = [];
     TimeSpan? stopGracePeriod;
+    (TimeSpan Interval, TimeSpan Timeout, int Retries, TimeSpan? StartPeriod)? healthTiming;
 
     internal InfrastructureLocalServiceBuilder(
         InfrastructureNodeId resource,
@@ -240,6 +241,22 @@ public sealed class InfrastructureLocalServiceBuilder
         return this;
     }
 
+    /// <summary>Completes the health policy with exact retry timing.</summary>
+    /// <param name="interval">Delay between probe attempts.</param>
+    /// <param name="timeout">Maximum duration of one attempt.</param>
+    /// <param name="retries">Consecutive failures allowed before unhealthy state.</param>
+    /// <param name="startPeriod">Optional initialization grace period.</param>
+    /// <returns>This builder.</returns>
+    public InfrastructureLocalServiceBuilder HealthTiming(
+        TimeSpan interval,
+        TimeSpan timeout,
+        int retries,
+        TimeSpan? startPeriod = null)
+    {
+        healthTiming = (interval, timeout, retries, startPeriod);
+        return this;
+    }
+
     /// <summary>Adds a ready-service dependency.</summary>
     /// <param name="service">Physical service identity.</param>
     /// <returns>This builder.</returns>
@@ -258,16 +275,32 @@ public sealed class InfrastructureLocalServiceBuilder
         return this;
     }
 
-    internal InfrastructureLocalService Build() => new(
-        resource: resource,
-        physicalResource: physicalResource,
-        image: image,
-        command: [.. command],
-        environment: [.. environment],
-        endpoints: [.. endpoints],
-        mounts: [.. mounts],
-        fileMounts: [.. fileMounts],
-        healthProbes: [.. health],
-        readyDependencies: [.. dependencies],
-        stopGracePeriod: stopGracePeriod);
+    internal InfrastructureLocalService Build()
+    {
+        if (health.Count == 0 && healthTiming.HasValue)
+            throw new InvalidOperationException("Health timing requires at least one health probe.");
+        if (health.Count > 0 && !healthTiming.HasValue)
+            throw new InvalidOperationException("Health probes require explicit interval, timeout, and retry timing.");
+
+        InfrastructureLocalHealthPolicy? policy = healthTiming is { } timing
+            ? new(
+                probes: [.. health],
+                interval: timing.Interval,
+                timeout: timing.Timeout,
+                retries: timing.Retries,
+                startPeriod: timing.StartPeriod)
+            : null;
+        return new(
+            resource: resource,
+            physicalResource: physicalResource,
+            image: image,
+            command: [.. command],
+            environment: [.. environment],
+            endpoints: [.. endpoints],
+            mounts: [.. mounts],
+            fileMounts: [.. fileMounts],
+            health: policy,
+            readyDependencies: [.. dependencies],
+            stopGracePeriod: stopGracePeriod);
+    }
 }

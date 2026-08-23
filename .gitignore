@@ -72,6 +72,7 @@ paket-files/
 local.settings.json
 http-client.private.env.json
 eng/materialization-harness/.env
+eng/materialization-harness/.runtime/
 
 ############################################
 # ASP.NET Core / IIS Express

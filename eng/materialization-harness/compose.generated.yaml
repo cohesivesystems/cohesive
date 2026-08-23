@@ -1,0 +1,148 @@
+name: 'cohesive-materialization-local'
+services:
+  cosmos:
+    image: 'mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-EN20260810'
+    environment:
+      ENABLE_EXPLORER: 'true'
+      EXPLORER_PROTOCOL: 'http'
+      GATEWAY_PUBLIC_ENDPOINT: 'https://localhost:58081'
+      PORT: '58081'
+      PROTOCOL: 'https'
+    ports:
+      - "127.0.0.1:58081:58081"
+      - "127.0.0.1:58082:1234"
+      - "127.0.0.1:58080:8080"
+    volumes:
+      - 'cosmos-data:/data'
+    healthcheck:
+      test:
+        - 'CMD-SHELL'
+        - 'if command -v curl >/dev/null 2>&1; then status=$$(curl --silent --output /dev/null --write-out ''%{http_code}'' ''http://localhost:8080/ready'') && [ "$$status" -eq 200 ]; else wget --quiet --server-response --spider ''http://localhost:8080/ready'' 2>&1 | awk ''/^  HTTP\// { status=$$2 } END { exit status == 200 ? 0 : 1 }''; fi && if command -v curl >/dev/null 2>&1; then status=$$(curl --silent --output /dev/null --write-out ''%{http_code}'' ''http://localhost:1234/'') && [ "$$status" -eq 200 ]; else wget --quiet --server-response --spider ''http://localhost:1234/'' 2>&1 | awk ''/^  HTTP\// { status=$$2 } END { exit status == 200 ? 0 : 1 }''; fi'
+      interval: '3s'
+      timeout: '5s'
+      retries: 60
+      start_period: '20s'
+    stop_grace_period: '30s'
+  elasticsearch:
+    image: 'docker.elastic.co/elasticsearch/elasticsearch:8.19.13'
+    environment:
+      ES_JAVA_OPTS: '-Xms512m -Xmx512m'
+      discovery.type: 'single-node'
+      xpack.license.self_generated.type: 'basic'
+      xpack.security.enabled: 'false'
+    ports:
+      - "127.0.0.1:59200:9200"
+    volumes:
+      - 'elasticsearch-data:/usr/share/elasticsearch/data'
+    healthcheck:
+      test:
+        - 'CMD-SHELL'
+        - 'if command -v curl >/dev/null 2>&1; then status=$$(curl --silent --output /dev/null --write-out ''%{http_code}'' ''http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=2s'') && [ "$$status" -eq 200 ]; else wget --quiet --server-response --spider ''http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=2s'' 2>&1 | awk ''/^  HTTP\// { status=$$2 } END { exit status == 200 ? 0 : 1 }''; fi'
+      interval: '3s'
+      timeout: '5s'
+      retries: 60
+      start_period: '20s'
+    stop_grace_period: '30s'
+  kibana:
+    image: 'docker.elastic.co/kibana/kibana:8.19.13'
+    environment:
+      ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
+      SERVER_HOST: '0.0.0.0'
+      TELEMETRY_ENABLED: 'false'
+      XPACK_SECURITY_ENABLED: 'false'
+    ports:
+      - "127.0.0.1:55601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - 'CMD-SHELL'
+        - 'if command -v curl >/dev/null 2>&1; then status=$$(curl --silent --output /dev/null --write-out ''%{http_code}'' ''http://localhost:5601/api/status'') && [ "$$status" -eq 200 ]; else wget --quiet --server-response --spider ''http://localhost:5601/api/status'' 2>&1 | awk ''/^  HTTP\// { status=$$2 } END { exit status == 200 ? 0 : 1 }''; fi'
+      interval: '5s'
+      timeout: '5s'
+      retries: 60
+      start_period: '30s'
+    stop_grace_period: '30s'
+  pgadmin:
+    image: 'dpage/pgadmin4:9.17'
+    environment:
+      COHESIVE_HARNESS_POSTGRES_PASSWORD: "${COHESIVE_HARNESS_POSTGRES_PASSWORD:?required secret COHESIVE_HARNESS_POSTGRES_PASSWORD}"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+      PGADMIN_CONFIG_UPGRADE_CHECK_ENABLED: 'False'
+      PGADMIN_DEFAULT_EMAIL: 'harness@cohesivesystems.com'
+      PGADMIN_DEFAULT_PASSWORD: "${COHESIVE_HARNESS_PGADMIN_PASSWORD:?required secret COHESIVE_HARNESS_PGADMIN_PASSWORD}"
+      PGADMIN_DISABLE_POSTFIX: 'true'
+      PGADMIN_REPLACE_SERVERS_ON_STARTUP: 'True'
+    ports:
+      - "127.0.0.1:55050:80"
+    volumes:
+      - 'pgadmin-data:/var/lib/pgadmin'
+    configs:
+      - source: 'pgadmin-servers'
+        target: '/pgadmin4/servers.json'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - 'CMD-SHELL'
+        - 'if command -v curl >/dev/null 2>&1; then status=$$(curl --silent --output /dev/null --write-out ''%{http_code}'' ''http://localhost:80/misc/ping'') && [ "$$status" -eq 200 ]; else wget --quiet --server-response --spider ''http://localhost:80/misc/ping'' 2>&1 | awk ''/^  HTTP\// { status=$$2 } END { exit status == 200 ? 0 : 1 }''; fi'
+      interval: '5s'
+      timeout: '5s'
+      retries: 60
+      start_period: '20s'
+    stop_grace_period: '30s'
+  postgres:
+    image: 'postgres:17.10-alpine3.24'
+    environment:
+      POSTGRES_DB: 'cohesive_materialization'
+      POSTGRES_PASSWORD: "${COHESIVE_HARNESS_POSTGRES_PASSWORD:?required secret COHESIVE_HARNESS_POSTGRES_PASSWORD}"
+      POSTGRES_USER: 'cohesive'
+    command:
+      - 'postgres'
+      - '-c'
+      - 'wal_level=logical'
+      - '-c'
+      - 'max_replication_slots=20'
+      - '-c'
+      - 'max_wal_senders=20'
+      - '-c'
+      - 'wal_sender_timeout=1s'
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - 'postgres-data:/var/lib/postgresql/data'
+    healthcheck:
+      test:
+        - 'CMD-SHELL'
+        - '"pg_isready" "--dbname=$$POSTGRES_DB" "--username=$$POSTGRES_USER"'
+      interval: '2s'
+      timeout: '3s'
+      retries: 30
+    stop_grace_period: '30s'
+
+configs:
+  pgadmin-servers:
+    content: |-
+      {
+        "Servers": {
+          "1": {
+            "Name": "Cohesive materialization harness",
+            "Group": "Cohesive",
+            "Host": "postgres",
+            "Port": 5432,
+            "MaintenanceDB": "cohesive_materialization",
+            "Username": "cohesive",
+            "PasswordExecCommand": "printenv COHESIVE_HARNESS_POSTGRES_PASSWORD",
+            "PasswordExecExpiration": 3600,
+            "ConnectionParameters": { "sslmode": "prefer", "connect_timeout": 10 }
+          }
+        }
+      }
+
+volumes:
+  cosmos-data: {}
+  elasticsearch-data: {}
+  pgadmin-data: {}
+  postgres-data: {}

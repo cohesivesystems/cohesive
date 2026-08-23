@@ -34,6 +34,7 @@ public sealed class InfrastructureLocalRealizationTests
                     hostPort: new(Subject, PostgresPort))
                 .Mount(new("postgres-data"), "/var/lib/postgresql/data")
                 .CommandHealth("pg_isready", ["-U", "postgres"])
+                .HealthTiming(interval: TimeSpan.FromSeconds(2), timeout: TimeSpan.FromSeconds(3), retries: 30)
                 .StopGrace(TimeSpan.FromSeconds(30)))
             .Operation(
                 id: new("verify"),
@@ -155,7 +156,22 @@ public sealed class InfrastructureLocalRealizationTests
             [Configuration((ProjectName, "materialization"))]);
 
         Assert.Contains(document.Diagnostics, diagnostic => diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.ReadinessCycle);
+        Assert.Contains(document.Diagnostics, diagnostic => diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.DependencyHealthMissing);
         Assert.Contains(document.Diagnostics, diagnostic => diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.MutationAuthorityMismatch);
+    }
+
+    [Fact]
+    public void Fluent_health_authoring_requires_both_probes_and_timing()
+    {
+        Assert.Throws<InvalidOperationException>(() => InfrastructureLocal.Define(local => local
+            .Service(new("resource/postgres"), new("physical/postgres"), "postgres:17.10", postgres => postgres
+                .CommandHealth(executable: "pg_isready"))));
+        Assert.Throws<InvalidOperationException>(() => InfrastructureLocal.Define(local => local
+            .Service(new("resource/postgres"), new("physical/postgres"), "postgres:17.10", postgres => postgres
+                .HealthTiming(
+                    interval: TimeSpan.FromSeconds(2),
+                    timeout: TimeSpan.FromSeconds(3),
+                    retries: 30))));
     }
 
     static InfrastructureLocalTopology DirectTopology() => new(
@@ -188,7 +204,11 @@ public sealed class InfrastructureLocalRealizationTests
                 hostPort: new(Subject, PostgresPort))
         ],
         mounts: [new(new("postgres-data"), "/var/lib/postgresql/data")],
-        healthProbes: [new InfrastructureLocalCommandHealthProbe("pg_isready", ["-U", "postgres"])],
+        health: new(
+            probes: [new InfrastructureLocalCommandHealthProbe("pg_isready", ["-U", "postgres"])],
+            interval: TimeSpan.FromSeconds(2),
+            timeout: TimeSpan.FromSeconds(3),
+            retries: 30),
         stopGracePeriod: TimeSpan.FromSeconds(30));
 
     static InfrastructureLocalEnvironmentProfile Environment(

@@ -195,7 +195,8 @@ variable, or arbitrary host executable dependency may survive in canonical IR.
 target-neutral local construction topology to one exact `InfrastructureRealizationReference`, a versioned environment
 policy, and the existing four-tier `InfrastructureConventionResolution`. The topology describes pinned container
 services, endpoint exposure and UI roles, external secret references, generated non-secret configuration files,
-volumes, readiness dependencies, health probes, graceful termination, and application-owned harness operations.
+volumes, readiness dependencies, complete health policies with probe timing, graceful termination, and application-owned
+harness operations.
 
 Interactive and isolated-test environments are explicit profiles. Interactive environments retain managed data across
 ordinary stops. Isolated-test environments make disposable data and any maximum lifetime visible to adapters; a
@@ -215,9 +216,10 @@ The freight materialization harness owns the first canonical fixture in
 `eng/materialization-harness/model/FreightMaterializationInfrastructure.cs`. It declares PostgreSQL, Cosmos and its Data
 Explorer, Elasticsearch, pgAdmin, Kibana, health/readiness, persistent volumes, the interactive and isolated-test
 profiles, and the `start`, `stop`, `reset`, `status`, `seed`, `materialize`, `verify`, and `inspect` operation intents.
-The checked-in Compose topology remains an implementation to be replaced by a generated artifact; it is no longer the
-intended semantic authority. The Aspire AppHost will consume the same fixture and realization rather than maintain a
-parallel service graph.
+`Cohesive.Adapters.DockerCompose` emits the checked-in default Compose artifact and exact provenance manifest from this
+fixture. Runtime profiles preserve explicit worktree and `.env` configuration without admitting secret values into
+effective configuration. The handwritten Compose topology remains a temporary semantic parity oracle until it is
+removed. The Aspire AppHost will consume the same fixture and realization rather than maintain a parallel service graph.
 
 ## First-slice fluent authoring and realization
 
