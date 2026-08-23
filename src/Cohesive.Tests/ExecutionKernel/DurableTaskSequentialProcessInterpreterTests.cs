@@ -2456,6 +2456,65 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
+    public async Task StatefulRepeatAcrossActivation_CarriesOnlyCanonicalStateAcrossContinueAsNew()
+    {
+        var plan = CompileStatefulRecurrencePlan();
+        var current = Start(plan, "ignored", "instance/stateful-recurrence");
+        List<DurableTaskSequentialProcessStart> rollovers = [];
+        DurableTaskSequentialProcessResult result;
+
+        do
+        {
+            DurableTaskSequentialProcessStart? next = null;
+            result = await DurableTaskSequentialProcessInterpreter.RunAsync(
+                plan,
+                current,
+                EmptyDurableRequestBindingResolver.Instance,
+                UnexpectedOperation,
+                UnexpectedDurableOperation,
+                UnexpectedChildProcess,
+                UnexpectedReconciliation,
+                UnexpectedInteraction,
+                (delay, cancellationToken) => Task.CompletedTask,
+                () => StartedAtUtc.AddMinutes(rollovers.Count + 1),
+                continueAsNew: resumed =>
+                {
+                    next = resumed;
+                    return Task.CompletedTask;
+                });
+            if (next is null)
+                break;
+            rollovers.Add(next);
+            current = next;
+        }
+        while (true);
+
+        Assert.Equal(3, rollovers.Count);
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(StringValue("state/2"), result.State.Terminal.Detail?.Value);
+        var recurrence = Assert.Single(result.State.Recurrences);
+        Assert.False(recurrence.Active);
+        Assert.Equal(StringValue("state/2"), recurrence.CurrentState);
+        var recurrenceNode = Assert.IsType<RepeatAcrossActivationProcessNode>(plan.GetNode(new("repeat")));
+        Assert.All(rollovers, rollover =>
+        {
+            var validation = ProcessContinuationValidator.Validate(plan, rollover.Resume!.Result.State);
+            Assert.True(validation.IsValid, Format(validation.Diagnostics));
+        });
+        Assert.All(rollovers.Where(static rollover => rollover.Resume!.Result.State.Recurrences.Any()), rollover =>
+        {
+            var state = rollover.Resume!.Result.State;
+            if (state.Waits.Any(static wait =>
+                    wait is { Active: true, Kind: ProcessWaitKind.RepeatAcrossActivation }))
+            {
+                Assert.DoesNotContain(
+                    Assert.Single(state.Tokens).Bindings,
+                    binding => binding.Binding == recurrenceNode.StateOutput!.Binding);
+            }
+        });
+    }
+
+    [Fact]
     public async Task DurableRequest_AutomaticallyDispatchesAndAdmitsTheExactCanonicalReply()
     {
         var (plan, replyContract) = CompileRequestPlan("process/durable-task-durable-request");
@@ -4700,6 +4759,41 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 new FailProcessNode(new("stalled"), Expr.Const("stalled"))
             ]),
         definitionId: "process/durable-task-recurrence");
+
+    static CompiledProcessPlan CompileStatefulRecurrencePlan()
+    {
+        var stateBinding = new ProcessOutputBinding(new("repeat.state"), StringContract);
+        var state = Expr.BoundValue(stateBinding.Binding);
+        var nextState = new ConditionalExpr(
+            Expr.Eq(state, Expr.Const("state/0")),
+            Expr.Const("state/1"),
+            Expr.Const("state/2"),
+            StringContract.Type);
+        return Compile(
+            Definition(
+                "repeat",
+                [
+                    new RepeatAcrossActivationProcessNode(
+                        new("repeat"),
+                        Expr.Eq(nextState, Expr.Const("state/1")),
+                        nextState,
+                        StringContract,
+                        new(maximumOccurrences: 3, maximumUnchangedProgressOccurrences: 1),
+                        Edge("edge/repeat-body", "body-cut"),
+                        Edge("edge/completed-return", "return"),
+                        Edge("edge/exhausted-return", "return"),
+                        Edge("edge/stalled-return", "return"),
+                        initialState: Expr.Const("state/0"),
+                        nextState: nextState,
+                        stateContract: StringContract,
+                        stateOutput: stateBinding),
+                    new DurableCutProcessNode(
+                        new("body-cut"),
+                        Edge("edge/body-cut-repeat", "repeat")),
+                    new ReturnProcessNode(new("return"), state)
+                ]),
+            definitionId: "process/durable-task-stateful-recurrence");
+    }
 
     static CompiledProcessPlan CompileTimerPlan(DateTimeOffset dueAtUtc, string definitionId) => Compile(
         Definition(

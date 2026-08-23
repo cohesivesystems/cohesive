@@ -1482,7 +1482,18 @@ public static partial class ProcessReferenceInterpreter
         {
             var node = (RepeatAcrossActivationProcessNode)plan.GetNode(wait.Node);
             DeactivateWait(wait);
-            Resume(token, node.Repeat, output: null);
+            if (node.StateOutput is null)
+            {
+                Resume(token, node.Repeat, output: null);
+                return;
+            }
+
+            var recurrence = recurrences.Single(candidate =>
+                candidate.Active
+                && candidate.Token == token.Id
+                && candidate.Node == node.Id);
+            var resumed = Bind(token, node.StateOutput, recurrence.CurrentState!);
+            Resume(resumed, node.Repeat, output: null);
         }
 
         bool ReplyMatchesRequest(ReplyEnvelope reply, RequestContractReference request)
@@ -2218,29 +2229,51 @@ public static partial class ProcessReferenceInterpreter
 
         void ExecuteRecurrence(ProcessTokenState token, RepeatAcrossActivationProcessNode node)
         {
+            if (node.StateOutput is not null
+                && token.Bindings.All(candidate => candidate.Binding != node.StateOutput.Binding))
+            {
+                var initialState = EvaluateTyped(node.InitialState!, node.StateContract!, token);
+                Advance(Bind(token, node.StateOutput, initialState), node.Repeat);
+                return;
+            }
+
             var recurrence = recurrences.SingleOrDefault(candidate =>
                 candidate.Active
                 && candidate.Token == token.Id
                 && candidate.Node == node.Id);
+            var nextState = node.StateOutput is null
+                ? null
+                : EvaluateTyped(node.NextState!, node.StateContract!, token);
+            var advancedToken = node.StateOutput is null
+                ? token
+                : Bind(token, node.StateOutput, nextState!);
             if (!EvaluateBoolean(node.ContinueWhen, token, "RepeatAcrossActivation predicate"))
             {
                 if (recurrence is not null)
                 {
-                    ReplaceRecurrence(recurrence with { Active = false });
+                    ReplaceRecurrence(recurrence with
+                    {
+                        Active = false,
+                        CurrentState = nextState
+                    });
                 }
-                Advance(token, node.Completed);
+                Advance(advancedToken, node.Completed);
                 return;
             }
 
             if (recurrence is not null
                 && recurrence.RepeatCount >= node.Policy.MaximumOccurrences)
             {
-                ReplaceRecurrence(recurrence with { Active = false });
-                Advance(token, node.Exhausted);
+                ReplaceRecurrence(recurrence with
+                {
+                    Active = false,
+                    CurrentState = nextState
+                });
+                Advance(advancedToken, node.Exhausted);
                 return;
             }
             var progress = EvaluateTyped(node.Progress, node.ProgressContract, token);
-            recurrence ??= CreateRecurrence(token, node);
+            recurrence ??= CreateRecurrence(token, node, nextState);
             var repeatCount = recurrence.RepeatCount + 1;
 
             var unchanged = recurrence.LastProgress is not null && recurrence.LastProgress == progress
@@ -2253,9 +2286,10 @@ public static partial class ProcessReferenceInterpreter
                 {
                     UnchangedProgressCount = retainedUnchanged,
                     LastProgress = progress,
+                    CurrentState = nextState,
                     Active = false
                 });
-                Advance(token, node.Stalled);
+                Advance(advancedToken, node.Stalled);
                 return;
             }
 
@@ -2263,10 +2297,14 @@ public static partial class ProcessReferenceInterpreter
             {
                 RepeatCount = repeatCount,
                 UnchangedProgressCount = retainedUnchanged,
-                LastProgress = progress
+                LastProgress = progress,
+                CurrentState = nextState
             });
+            var waitingToken = node.StateOutput is null
+                ? token
+                : Unbind(advancedToken, node.StateOutput.Binding);
             var wait = RegisterWait(
-                token,
+                waitingToken,
                 node.Id,
                 ProcessWaitKind.RepeatAcrossActivation,
                 timers: []);
@@ -2281,7 +2319,8 @@ public static partial class ProcessReferenceInterpreter
 
         ProcessRecurrenceState CreateRecurrence(
             ProcessTokenState token,
-            RepeatAcrossActivationProcessNode node)
+            RepeatAcrossActivationProcessNode node,
+            PortableValue? currentState)
         {
             var recurrence = new ProcessRecurrenceState(
                 ProcessReferenceIdentities.RecurrenceRegistration(
@@ -2295,7 +2334,8 @@ public static partial class ProcessReferenceInterpreter
                 repeatCount: 0,
                 unchangedProgressCount: 0,
                 lastProgress: null,
-                active: true);
+                active: true,
+                currentState: currentState);
             recurrences.Add(recurrence);
             return recurrence;
         }
@@ -3239,6 +3279,12 @@ public static partial class ProcessReferenceInterpreter
             values.Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Binding.Value, right.Binding.Value));
             return token with { Bindings = [.. values] };
         }
+
+        static ProcessTokenState Unbind(ProcessTokenState token, ValueBindingId binding) =>
+            token with
+            {
+                Bindings = [.. token.Bindings.Where(candidate => candidate.Binding != binding)]
+            };
 
         ProcessTokenState AddObligation(
             ProcessTokenState token,

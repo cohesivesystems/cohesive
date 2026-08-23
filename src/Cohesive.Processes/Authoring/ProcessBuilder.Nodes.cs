@@ -703,6 +703,76 @@ public sealed partial class ProcessBuilder<TInput, TResult>
             source);
     }
 
+    /// <summary>Adds explicitly bounded recurrence carrying typed state across durable Process activations.</summary>
+    /// <typeparam name="TState">CLR type projected into the durable recurrence-state contract.</typeparam>
+    /// <typeparam name="TProgress">CLR type projected into the recurrence progress contract.</typeparam>
+    /// <param name="id">Stable recurrence node and occurrence identity basis.</param>
+    /// <param name="initialState">Typed state supplied to the first occurrence.</param>
+    /// <param name="state">Binding consumed by each occurrence and populated with the final state on exit.</param>
+    /// <param name="nextState">Typed state produced by the completed occurrence for a later occurrence or exit.</param>
+    /// <param name="continueWhen">Typed Boolean expression deciding whether another occurrence is required.</param>
+    /// <param name="progress">Typed value used to prove progress across occurrences.</param>
+    /// <param name="policy">Explicit occurrence and unchanged-progress limits.</param>
+    /// <param name="repeat">Edge selected at a durable cut when another occurrence is admitted.</param>
+    /// <param name="completed">Edge selected when recurrence is complete.</param>
+    /// <param name="exhausted">Edge selected when the total occurrence limit is reached.</param>
+    /// <param name="stalled">Edge selected when progress remains unchanged beyond its limit.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>This Process builder.</returns>
+    public ProcessBuilder<TInput, TResult> RepeatAcrossActivation<TState, TProgress>(
+        ExecutionNodeId id,
+        ProcessValue<TState> initialState,
+        ProcessBinding<TState> state,
+        ProcessValue<TState> nextState,
+        ProcessValue<bool> continueWhen,
+        ProcessValue<TProgress> progress,
+        ProcessRecurrencePolicy policy,
+        ProcessEdge repeat,
+        ProcessEdge completed,
+        ProcessEdge exhausted,
+        ProcessEdge stalled,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        context.RequireValue(initialState);
+        context.RequireBinding(state);
+        context.RequireValue(nextState);
+        context.RequireValue(continueWhen);
+        context.RequireValue(progress);
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(repeat);
+        ArgumentNullException.ThrowIfNull(completed);
+        ArgumentNullException.ThrowIfNull(exhausted);
+        ArgumentNullException.ThrowIfNull(stalled);
+        if (initialState.Contract != state.Contract || nextState.Contract != state.Contract)
+        {
+            throw new InvalidOperationException(
+                "Stateful recurrence requires one exact portable contract for its initial state, state binding, and next state.");
+        }
+
+        var source = context.Source(sourceFile, sourceLine, sourceMember, $"Durable stateful recurrence '{id.Value}'");
+        context.RegisterIfAbsent(policy, source);
+        return Add(
+            new RepeatAcrossActivationProcessNode(
+                id,
+                continueWhen.Expression,
+                progress.Expression,
+                progress.Contract,
+                policy,
+                repeat,
+                completed,
+                exhausted,
+                stalled,
+                initialState.Expression,
+                nextState.Expression,
+                state.Contract,
+                state.RequireOutput()),
+            source);
+    }
+
     /// <summary>Adds a successful typed terminal Process result.</summary>
     /// <param name="id">Stable terminal node identity.</param>
     /// <param name="result">Typed Process result expression.</param>

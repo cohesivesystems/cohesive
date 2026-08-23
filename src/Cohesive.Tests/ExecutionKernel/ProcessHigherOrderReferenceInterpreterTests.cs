@@ -2628,7 +2628,8 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
         int repeatCount,
         int unchangedProgressCount,
         PortableValue? lastProgress,
-        bool active);
+        bool active,
+        PortableValue? currentState = null);
 
     [UnsafeAccessor(UnsafeAccessorKind.Constructor)]
     static extern ProcessWaitState NewWait(
