@@ -402,9 +402,13 @@ public sealed class InfrastructureCapabilityCompilerTests
         var report = InfrastructureCapabilityCompiler.Compile(SchedulerDefinition(), profile, local);
 
         Assert.False(report.IsClosed);
+        Assert.Null(report.BoundaryAcceptancePolicy);
         var decision = Assert.Single(report.Decisions);
         Assert.Equal(CapabilityRealizationKind.Constrained, decision.Realization);
         Assert.Equal(boundaryId, Assert.Single(decision.OperatingBoundaries));
+        Assert.Empty(decision.AcceptedOperatingBoundaries);
+        Assert.Equal(boundaryId, Assert.Single(decision.MissingOperatingBoundaries));
+        Assert.False(decision.IsAdmissible);
         var diagnostic = Assert.Single(report.Diagnostics);
         Assert.Equal(
             InfrastructureCapabilityDiagnosticCodes.OperatingBoundaryAcceptanceRequired,

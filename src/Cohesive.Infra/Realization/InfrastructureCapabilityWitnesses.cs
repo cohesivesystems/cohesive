@@ -686,14 +686,20 @@ static class InfrastructureCapabilityWitnessEvaluator
                 observed: observed));
 
     static ImmutableArray<string> ExactSources(InfrastructureCapabilityClosureReport closure) =>
-    [
-        InfrastructureDiagnosticReferences.Definition(closure.Definition),
-        ProfileReference(closure.Profile),
-        InfrastructureDiagnosticReferences.BindingProfileReference(closure.BindingElaboration.Profile)
-    ];
-
-    static string ProfileReference(InfrastructureCapabilityProfileReference profile) =>
-        $"{profile.Id.Value}#{profile.Fingerprint.Algorithm}:{profile.Fingerprint.Canonicalization}:{profile.Fingerprint.Value}";
+        closure.BoundaryAcceptancePolicy is { } policy
+            ?
+            [
+                InfrastructureDiagnosticReferences.Definition(closure.Definition),
+                InfrastructureDiagnosticReferences.CapabilityProfileReference(closure.Profile),
+                InfrastructureDiagnosticReferences.BindingProfileReference(closure.BindingElaboration.Profile),
+                InfrastructureDiagnosticReferences.BoundaryAcceptancePolicyReference(policy)
+            ]
+            :
+            [
+                InfrastructureDiagnosticReferences.Definition(closure.Definition),
+                InfrastructureDiagnosticReferences.CapabilityProfileReference(closure.Profile),
+                InfrastructureDiagnosticReferences.BindingProfileReference(closure.BindingElaboration.Profile)
+            ];
 
     static ImmutableArray<string> Merge(ImmutableArray<string> left, ImmutableArray<string> right) =>
     [
@@ -818,6 +824,7 @@ static class InfrastructureRealizationFingerprinting
         var canonical = StrictDocumentJson.GetCanonicalBytes(
             new FingerprintInput(
                 closure.Profile,
+                closure.BoundaryAcceptancePolicy,
                 closure.BindingElaboration.Fingerprint,
                 closure.Target,
                 closure.Variant,
@@ -836,6 +843,7 @@ static class InfrastructureRealizationFingerprinting
 
     sealed record FingerprintInput(
         InfrastructureCapabilityProfileReference Profile,
+        InfrastructureBoundaryAcceptancePolicyReference? BoundaryAcceptancePolicy,
         InfrastructureBindingElaborationFingerprint BindingElaboration,
         InfrastructureTargetId Target,
         InfrastructureCapabilityVariantId Variant,

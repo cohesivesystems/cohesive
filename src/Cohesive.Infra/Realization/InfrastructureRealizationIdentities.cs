@@ -116,3 +116,22 @@ public readonly record struct InfrastructureOperatingBoundaryId
     /// <returns>The value supplied at construction.</returns>
     public override string ToString() => Value;
 }
+
+/// <summary>Stable, versioned identity of an infrastructure boundary-acceptance policy.</summary>
+[JsonConverter(typeof(SingleValueWrapperJsonConverter))]
+public readonly record struct InfrastructureBoundaryAcceptancePolicyId
+{
+    /// <summary>Creates a boundary-acceptance policy identity.</summary>
+    /// <param name="value">Stable identity that changes when the governed acceptance intent changes.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    [JsonConstructor]
+    public InfrastructureBoundaryAcceptancePolicyId(string value) => Value = Guard.RequireNotNullOrWhiteSpace(value);
+
+    /// <summary>Raw stable policy identity.</summary>
+    public string Value { get; }
+
+    /// <summary>Returns the raw policy identity.</summary>
+    /// <returns>The value supplied at construction.</returns>
+    public override string ToString() => Value;
+}
