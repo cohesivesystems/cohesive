@@ -475,10 +475,14 @@ clock, or provider type enters canonical state. A target-neutral asynchronous ho
 interpretation of that same evidence boundary. `ProcessReferenceInterpreter.ActivateAsync` suspends on one exact
 unmaterialized occurrence, awaits it with an `OperationContext`, and re-enters the unchanged reducer with the
 retained result. Caller cancellation aborts physical execution without manufacturing a semantic decision. Typed
-hosted-Query handler catalogs remain runtime deployment projections and require the exact canonical definition
-identity, revision, and fingerprint. Outcome-aware typed registrations preserve the declared CLR result on success
-and may return one structured error diagnostic when an admitted Query cannot semantically produce that result;
-thrown exceptions remain physical failures rather than Process evidence.
+Process Relation/Query handler catalogs remain runtime deployment projections and require the exact canonical
+definition identity, revision, and fingerprint for both authored Relations and hosted Queries. Duplicate exact
+registrations and conflicting fingerprints fail at catalog construction. Outcome-aware typed registrations preserve
+the declared CLR result on success and may return one structured error diagnostic when an admitted evaluation cannot
+semantically produce that result; thrown exceptions remain physical failures rather than Process evidence.
+`RegisteredAsyncProcessReferenceHost` composes that immutable catalog with one physical Transition adapter and an
+optional explicit Signal-target policy. It does not create a second definition catalog or interpreter, and missing
+Signal policy fails structurally instead of falling through registration order.
 
 Presented inputs are grouped by logical emission identity before state mutation, so conflicting same-batch evidence
 cannot acquire caller-order authority. Every admission receipt and `InputAdmitted` trace separates the closed

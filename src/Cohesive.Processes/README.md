@@ -317,33 +317,43 @@ host occurrence, awaits physical execution with `OperationContext` cancellation,
 continuation/attempt/activation/token/node/occurrence, and re-enters the unchanged synchronous reducer. Physical
 cancellation returns no partial Process decision and is distinct from authored semantic cancellation.
 
-Hosted Queries bind their runtime handlers separately from their canonical documents:
+Canonical Relations and hosted Queries bind their runtime handlers separately from their canonical documents:
 
 ```csharp
-var handlers = new HostedQueryHandlerCatalog([
-    HostedQueryHandlerRegistration.CreateOutcome(
+var handlers = new ProcessRelationHandlerCatalog([
+    ProcessRelationHandlerRegistration.CreateOutcome(
         EventSourceQueries.SchemaMapping,
         async (context, evaluation, start) =>
         {
             var source = await repository.ReadPinnedAsync(start, context.CancellationToken);
             return source is null
-                ? HostedQueryHandlerOutcome<PinnedSource>.Failed(new(
+                ? ProcessRelationHandlerOutcome<PinnedSource>.Failed(new(
                     "source.missing",
                     DiagnosticSeverity.Error,
                     "The admitted source no longer exists."))
-                : HostedQueryHandlerOutcome<PinnedSource>.Completed(source);
-        })
+                : ProcessRelationHandlerOutcome<PinnedSource>.Completed(source);
+        }),
+    ProcessRelationHandlerRegistration.Create(
+        TrainingRelations.CreatePlan,
+        (context, evaluation, input) => planning.EvaluateAsync(input, context.CancellationToken))
 ]);
+
+IAsyncProcessReferenceHost host = new RegisteredAsyncProcessReferenceHost(
+    handlers,
+    transitions.ExecuteAsync);
 ```
 
 The immutable catalog dispatches only by complete definition identity, revision, and fingerprint, validates the
 portable input and output contracts, and passes the complete `ProcessRelationEvaluation` to the handler unchanged.
 A change to contracts, implementation version, dependencies, or portable configuration changes the document
 fingerprint and cannot silently reach the old handler. Handler delegates, repositories, credentials, and deployment
-state never enter canonical content. `CreateOutcome` preserves a statically typed success while allowing an expected
-inability to produce that value to become structured Process failure evidence. Thrown exceptions remain physical
-execution failures. `SynchronousProcessReferenceHostAdapter` is the explicit bounded compatibility path; it checks
-cancellation before invocation but cannot interrupt a synchronous call already in progress.
+state never enter canonical content. Duplicate exact registrations and conflicting fingerprints fail when the
+catalog is constructed. `CreateOutcome` preserves a statically typed success while allowing an expected inability
+to produce that value to become structured Process failure evidence. Thrown exceptions remain physical execution
+failures. `RegisteredAsyncProcessReferenceHost` composes this catalog with one exact Transition adapter and optional
+Signal-target policy, avoiding application-owned family routers or registration-order selection.
+`SynchronousProcessReferenceHostAdapter` is the explicit bounded compatibility path; it checks cancellation before
+invocation but cannot interrupt a synchronous call already in progress.
 
 `IProcessExecutionTraceRepository` is the opt-in runtime boundary for reading retained payload-safe traces without
 adding them to ordinary execution status or listing records. Its result distinguishes not found, in-progress,
