@@ -1508,6 +1508,29 @@ public sealed class CosmosRelationQueryCompilerTests
     }
 
     [Fact]
+    public void Compile_ContainsNestedNamedTypeCandidate_UsesResolvedRequirementContract()
+    {
+        var result = Fixture.ContainsFilter(ScalarTypeKind.String, nestedCandidate: true).Compile();
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        Assert.Contains(
+            "ARRAY_CONTAINS(@p0, c[\"Payload\"][\"Status\"])",
+            Assert.Single(result.Artifacts).Statement.Text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Compile_ContainsOptionalNestedNamedTypeCandidate_RemainsFailClosed()
+    {
+        var result = Fixture.ContainsFilter(ScalarTypeKind.String, optionalCandidate: true).Compile();
+
+        Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Message.Contains("may be missing or null", StringComparison.Ordinal));
+        Assert.Empty(result.Artifacts);
+    }
+
+    [Fact]
     public void Compile_StructuredCollectionAny_EmitsOneCorrelatedExistsWithoutMultiplyingRoots()
     {
         var fixture = Fixture.StructuredCollectionAny(includeCount: true);
@@ -2899,11 +2922,20 @@ public sealed class CosmosRelationQueryCompilerTests
             return Create(RelationQueryDocument.FromDefinition(definition));
         }
 
-        public static Fixture ContainsFilter(ScalarTypeKind elementKind)
+        public static Fixture ContainsFilter(
+            ScalarTypeKind elementKind,
+            bool nestedCandidate = false,
+            bool optionalCandidate = false)
         {
             var (sourcePath, scalarType) = elementKind switch
             {
-                ScalarTypeKind.String => (StatusPath, (TypeRef)new ScalarTypeRef(ScalarTypeKind.String)),
+                ScalarTypeKind.String => (
+                    optionalCandidate
+                        ? PayloadNotesPath
+                        : nestedCandidate
+                            ? PayloadStatusPath
+                            : StatusPath,
+                    (TypeRef)new ScalarTypeRef(ScalarTypeKind.String)),
                 ScalarTypeKind.Int64 or ScalarTypeKind.Decimal => PrecisionUnsafeNumeric(elementKind),
                 _ => throw new ArgumentOutOfRangeException(
                     nameof(elementKind),
