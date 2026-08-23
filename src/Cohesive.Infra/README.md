@@ -26,7 +26,7 @@ Infra keeps four related authorities distinct:
 | --- | --- | --- |
 | Application IR | Application behavior and the storage, execution, identity, API, and process guarantees it induces | Vendor resources or deployment mechanics |
 | `InfrastructureDefinition` | In this slice, portable workloads, logical resources, capability requirements, directed contract bindings, and resource lifecycle intent | A selected provider topology |
-| `InfrastructureRealization` | One exact definition's capability-closure report and validated physical-resource lifecycle partition | Backend execution state or the original application semantics |
+| `InfrastructureRealization` | One exact definition's capability closure, physical placements, lifecycle partition, and demand-scoped evidence witnesses | Deployment readiness, backend execution state, or the original application semantics |
 | Backend state and observations | Backend-native identities, receipts, outputs, drift, and time-indexed operational evidence | An implicit rewrite of the definition or realization |
 
 The normal flow is:
@@ -37,6 +37,7 @@ application definitions and explicit Infra authoring
     -> deterministic convention resolution
     -> exact binding elaboration and attributable obligation derivation
     -> capability proof against one coherent target variant
+    -> exact workload placements and demand-scoped physical evidence witnesses
     -> InfrastructureRealization
     -> lifecycle-backend projection
     -> backend state, receipts, outputs, and observations
@@ -54,19 +55,26 @@ extensions without changing this authority boundary. Requirements should normall
 derived from their owning Cohesive definitions. Infra must not copy a Process retry contract, Storage durability
 guarantee, or Identity authorization rule into a second independently maintained model.
 
-An `InfrastructureRealization` currently joins an `InfrastructureCapabilityClosureReport` to an
-`InfrastructureLifecyclePlan` for the same exact fingerprinted definition. The closure report identifies the selected
-exactly fingerprinted profile, target, and coherent variant and retains one evidence-backed, unavailable, or unknown
-planning decision for every declared node requirement and every successfully elaborated binding obligation. Its exact
-`InfrastructureBindingElaborationReport` is both compiler state and a machine-readable explanation path from binding
-to selected rule, induced requirements, capability decisions, or residual diagnostics. The lifecycle plan
-independently associates logical resources with physical identities and one lifecycle authority.
+An `InfrastructureRealization` joins an `InfrastructureCapabilityClosureReport` to an
+`InfrastructureLifecyclePlan`, workload placements, and capability-evidence witnesses for the same exact fingerprinted
+definition. The closure report identifies the selected exactly fingerprinted profile, target, and coherent variant and
+retains one evidence-backed, unavailable, or unknown planning decision for every declared node requirement and every
+successfully elaborated binding obligation. Its exact `InfrastructureBindingElaborationReport` is both compiler state
+and a machine-readable explanation path from binding to selected rule, induced requirements, capability decisions, or
+residual diagnostics. The lifecycle plan associates logical resources with physical identities and one lifecycle
+authority; workload placements do the corresponding job for executable nodes.
 
-This is a realization candidate, not deployment authority. Target-profile evidence describes reusable construction
-strategies and is not yet scoped to a selected node or physical instance; composed auxiliary evidence is not yet a
-physical resource recipe. Backend adapters must join those witnesses and extend the exact definition/profile fence
-with compiler version, emitted-artifact fingerprint, preview, and backend receipts before claiming deployment
-authority. A stale, partially matched, or merely capability-closed plan is not deployment authority.
+This is a realization candidate, not deployment authority. Target-profile evidence describes reusable planning
+strategies. An adapter or other attributable interpreter must supply an
+`InfrastructureCapabilityEvidenceWitness` for every selected transitive evidence identity and exact requirement, and
+those witnesses must cover the physical workload and resource identities owned by the demand. Binding-derived demands
+cover both endpoints. Auxiliary physical identities may also be retained for composed strategies. Missing, stale,
+unexpected, unavailable, or incorrectly scoped evidence fails closed with structured diagnostics.
+
+Physical witnesses still are not construction recipes or execution receipts. Backend adapters must extend the exact
+definition/profile/realization fence with compiler version, emitted-artifact fingerprint, preview, and backend receipts
+before claiming deployment authority. A stale, partially matched, or merely capability-closed plan is not deployment
+authority.
 
 ## Bindings are primary semantics
 
@@ -183,9 +191,10 @@ variable, or arbitrary host executable dependency may survive in canonical IR.
 
 ## First-slice fluent authoring and realization
 
-The package API below is concrete; the small `AriCapabilities`, `AriContracts`, and `AzureCapabilities` catalogs are
-conceptual application/adapter authorities. Application-owned capabilities should normally be referenced from their
-owning IR rather than copied into Infra by hand.
+The package API below is concrete; the small `AriCapabilities`, `AriContracts`, `AzureCapabilities`, and `AzurePlan`
+catalogs/projections are conceptual application or adapter authorities. Application-owned capabilities should normally
+be referenced from their owning IR rather than copied into Infra by hand. A real adapter would derive `AzurePlan` from
+its attributable, versioned plan rather than maintain it manually.
 
 ```csharp
 using Cohesive.Infra;
@@ -244,9 +253,13 @@ var lifecycle = new InfrastructureLifecyclePlan(
             InfrastructureLifecycleDisposition.Managed)
     ]);
 
-var realization = new InfrastructureRealization(closure, lifecycle);
+var realization = InfrastructureRealizationCompiler.Compile(
+    closure,
+    lifecycle,
+    AzurePlan.WorkloadPlacements,
+    AzurePlan.CapabilityWitnesses);
 
-foreach (var diagnostic in realization.CapabilityClosure.Diagnostics)
+foreach (var diagnostic in realization.CapabilityClosure.Diagnostics.Concat(realization.Diagnostics))
     Console.Error.WriteLine($"{diagnostic.Code}: {diagnostic.Message}");
 ```
 
@@ -256,8 +269,10 @@ selected variant can plan every declared node requirement and binding-derived ob
 ambiguous proof, unaccepted boundary, or unavailable or ambiguous binding contract yields a non-closed report.
 `InfrastructureBindingElaborationReport.FindDecision` exposes selected rules and stable obligation identities to
 tooling. `InfrastructureLifecyclePlan` rejects a missing, duplicated, external, or conflicting manager. The resulting
-`InfrastructureRealization` deliberately exposes no
-deployment-readiness flag until physical witnesses and backend receipts are part of the model.
+`InfrastructureRealization.FindWitnessDecision` explains the exact subjects, selected evidence, physical coverage, and
+residual gaps for one requirement. `IsCapabilityWitnessComplete` reports only that closure and physical applicability
+are complete; it is deliberately not a deployment-readiness flag. Artifact fingerprints, previews, and backend
+receipts remain required for that later authority.
 
 ## Lifecycle ownership
 
