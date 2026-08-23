@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using Cohesive.Adapters.Cosmos;
@@ -288,6 +289,72 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
             Page(
                 JsonObject((idAlias, "load-2"), (statusAlias, "active")),
                 JsonObject((idAlias, "load-3"), (statusAlias, "active")))
+        ]);
+        CosmosRelationQueryArtifactExecutor executor = new(
+            new CosmosJsonQueryFeedReader(
+                artifact.StorageBinding.AccountEndpoint,
+                artifact.StorageBinding.DatabaseName,
+                artifact.StorageBinding.ContainerName,
+                (_, _) => iterator));
+        CosmosRelationQueryArtifactExecutionRequest request = new(
+            compilerFixture.PlanReference,
+            compilerFixture.Realization.Fingerprint,
+            compilerFixture.Placement.Fingerprint,
+            artifact.StorageBinding.Fingerprint,
+            artifact,
+            maximumRows: 25,
+            parameters);
+
+        var result = await executor.ExecuteAsync(request);
+
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, result.Status);
+        Assert.Equal(
+            referenceRows.Select(static row => row.Value.GetRawText()),
+            result.Rows.Select(static row => row.Value.GetRawText()));
+        Assert.True(iterator.Disposed);
+    }
+
+    [Theory]
+    [InlineData(ScalarTypeKind.Instant)]
+    [InlineData(ScalarTypeKind.DateTime)]
+    public async Task ExecuteAsync_ProofGatedTemporalKeyset_MatchesReferenceInterpreterPage(
+        ScalarTypeKind temporalKind)
+    {
+        var compilerFixture = CosmosRelationQueryCompilerTests.Fixture.TemporalKeyset(temporalKind);
+        var sourcePath = CosmosRelationQueryCompilerTests.Fixture.TemporalSourcePath(temporalKind);
+        var compilation = compilerFixture.Compile(compilerFixture.StorageBindingWithOrderingProofs(
+            stableUniqueOrderingPaths: [CosmosRelationQueryCompilerTests.Fixture.IdPath],
+            exactOrderingPaths: [sourcePath, CosmosRelationQueryCompilerTests.Fixture.IdPath]));
+        Assert.True(compilation.IsSuccessful);
+        var artifact = Assert.Single(compilation.Artifacts);
+        var atTen = TemporalValue(temporalKind, "2026-08-23T10:00:00");
+        var atEleven = TemporalValue(temporalKind, "2026-08-23T11:00:00");
+        Dictionary<QueryParameterId, ObservationValue> parameters = new()
+        {
+            [new("temporal-cursor")] = atTen,
+            [new("id-cursor")] = ObservationValue.FromString("load-1")
+        };
+        var evidence = CreateTemporalKeysetEvidence(
+            compilerFixture.Plan,
+            temporalKind,
+            parameters,
+            atTen,
+            atTen,
+            atEleven);
+        var reference = RelationQueryInMemoryInterpreter.Default.Execute(new(compilerFixture.Plan, evidence));
+        Assert.True(reference.IsSuccessful, string.Join(
+            Environment.NewLine,
+            reference.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")));
+        var referenceRows = Assert.Single(reference.QueryResults).Rows;
+        var idAlias = Assert.Single(artifact.ResultFields, static field =>
+            field.Field.Path == CosmosRelationQueryCompilerTests.Fixture.IdPath).Alias;
+        var temporalAlias = Assert.Single(artifact.ResultFields, static field =>
+            field.Field.Path == CosmosRelationQueryCompilerTests.Fixture.OccurredAtPath).Alias;
+        TrackingFeedIterator iterator = new(
+        [
+            Page(
+                JsonObject((idAlias, "load-2"), (temporalAlias, atTen.String)),
+                JsonObject((idAlias, "load-3"), (temporalAlias, atEleven.String)))
         ]);
         CosmosRelationQueryArtifactExecutor executor = new(
             new CosmosJsonQueryFeedReader(
@@ -1337,7 +1404,7 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
         Assert.NotEqual(artifact.Fingerprint, changedProvenanceFingerprint);
         Assert.NotEqual(artifact.Fingerprint, changedAuxiliaryFingerprint);
         Assert.NotEqual(artifact.Fingerprint, changedPlanFingerprint);
-        Assert.EndsWith("/v5", artifact.Fingerprint.Canonicalization, StringComparison.Ordinal);
+        Assert.EndsWith("/v6", artifact.Fingerprint.Canonicalization, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1368,6 +1435,36 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
             artifact.Provenance);
 
         Assert.NotEqual(artifact.Fingerprint, changedFingerprint);
+    }
+
+    [Fact]
+    public void ArtifactFingerprint_ChangesWithRetainedTemporalParameterDomain()
+    {
+        var artifact = ArtifactFixture.Parameterized(new ScalarTypeRef(ScalarTypeKind.Instant)).Artifact;
+        var parameter = Assert.Single(artifact.Parameters);
+        ImmutableArray<CosmosRelationQueryParameterBinding> constrained =
+        [
+            new(
+                parameter.SqlName,
+                parameter.Definition,
+                parameter.ValueContract,
+                CosmosRelationQueryParameterValueDomain.UtcRoundTripInstant)
+        ];
+
+        var changed = CosmosRelationQueryArtifactFingerprinter.Compute(
+            artifact.Branch,
+            artifact.Statement,
+            artifact.StorageBinding,
+            artifact.SelectedFields,
+            artifact.ResultFields,
+            artifact.ResultIdentity,
+            artifact.AuxiliaryResultAliases,
+            constrained,
+            artifact.Paging,
+            artifact.Provenance);
+
+        Assert.NotEqual(artifact.Fingerprint, changed);
+        Assert.EndsWith("/v6", changed.Canonicalization, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1533,6 +1630,72 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
                         RelationQueryCapabilityEvidenceState.Available))
             ]);
     }
+
+    static RelationQueryRuntimeEvidence CreateTemporalKeysetEvidence(
+        CompiledRelationQueryPlan plan,
+        ScalarTypeKind temporalKind,
+        IReadOnlyDictionary<QueryParameterId, ObservationValue> parameterValues,
+        params ObservationValue[] temporalValues)
+    {
+        var source = Assert.Single(plan.InputContract.Sources);
+        var temporalPath = CosmosRelationQueryCompilerTests.Fixture.TemporalSourcePath(temporalKind);
+        ImmutableArray<RelationQueryObservationOccurrence> occurrences =
+        [
+            .. temporalValues.Select((_, index) => new RelationQueryObservationOccurrence(
+                new($"load/{index + 1}"),
+                source.Binding,
+                source.Shape,
+                $"load-{index + 1}"))
+        ];
+        ImmutableArray<RelationQueryFieldEvidence>.Builder fields =
+            ImmutableArray.CreateBuilder<RelationQueryFieldEvidence>(source.Fields.Length * occurrences.Length);
+        for (var index = 0; index < occurrences.Length; index++)
+        {
+            foreach (var field in source.Fields)
+            {
+                var value = field.Input.Field.Path == CosmosRelationQueryCompilerTests.Fixture.IdPath
+                    ? ObservationValue.FromString($"load-{index + 1}")
+                    : field.Input.Field.Path == temporalPath
+                        ? temporalValues[index]
+                        : throw new InvalidOperationException(
+                            $"Unexpected temporal differential-test field '{field.Input.Field.Path}'.");
+                fields.Add(new(
+                    field.Input.Id,
+                    occurrences[index].Id,
+                    RelationQueryFieldEvidenceState.Value,
+                    value));
+            }
+        }
+
+        return new(
+            new("tests/cosmos-temporal-keyset-differential"),
+            plan,
+            sources: [new(source.Input.Id, RelationQuerySourceEvidenceState.Provided, occurrences)],
+            fields: fields.MoveToImmutable(),
+            parameters:
+            [
+                .. plan.InputContract.Parameters.Select(parameter => new RelationQueryParameterEvidence(
+                    parameter.Input.Id,
+                    RelationQueryParameterEvidenceState.Provided,
+                    parameterValues[parameter.Input.Parameter]))
+            ],
+            capabilities:
+            [
+                .. plan.RequirementGraph.Inputs
+                    .OfType<RelationQueryCapabilityInput>()
+                    .Select(static input => new RelationQueryCapabilityEvidence(
+                        input.Id,
+                        RelationQueryCapabilityEvidenceState.Available))
+            ]);
+    }
+
+    static ObservationValue TemporalValue(ScalarTypeKind temporalKind, string localTimestamp) => temporalKind switch
+    {
+        ScalarTypeKind.Instant => ObservationValue.FromDateTimeOffset(
+            DateTimeOffset.Parse($"{localTimestamp}+00:00", CultureInfo.InvariantCulture)),
+        ScalarTypeKind.DateTime => ObservationValue.FromString($"{localTimestamp}.0000000Z"),
+        _ => throw new ArgumentOutOfRangeException(nameof(temporalKind), temporalKind, "Unsupported temporal test kind.")
+    };
 
     static RelationQueryRuntimeEvidence CreateStructuredAnyEvidence(CompiledRelationQueryPlan plan)
     {

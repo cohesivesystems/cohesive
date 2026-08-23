@@ -50,11 +50,11 @@ changes without regenerating this artifact.
 ### Cosmos SQL
 
 - Target: `cohesive.adapters.cosmos.sql`
-- Profile: `cohesive.adapters.cosmos.sql/canonical-v3`
+- Profile: `cohesive.adapters.cosmos.sql/canonical-v4`
 - Capability evidence: 81
 - Definition schemas: `relation-query/v1`
 - Compiler profiles: `relation-query-static/v1`
-- Full-profile SHA-256: `dbf40634213abc967372256e5e943a46167a9cbb09d8100712ea6da4200bbd1b`
+- Full-profile SHA-256: `c782509dac4c7332e6ff55d5319ffc24b58d6fbbf45c385a6221104f95670ead`
 - Families: boundary validation=6, expression=19, guarantee=15, logical=22, structural=19
 
 - Logical semantics: `AggregateGrouping`, `Aggregation`, `AlwaysPresentBinding`, `AscendingOrdering`, `CountAggregate`, `DescendingOrdering`, `DistinctRows`, `ExpandCollection`, `Filter`, `KeysetPaging`, `MaximumAggregate`, `MinimumAggregate`, `NullsFirst`, `NullsLast`, `OffsetPaging`, `Ordering`, `Projection`, `ProjectionAssignment`, `QueryAggregationResult`, `QueryRowsResult`, `Source`, `StableTieOrdering`

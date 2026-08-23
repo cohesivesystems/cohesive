@@ -531,6 +531,63 @@ public sealed class CosmosRelationQueryCompilerTests
         }
     }
 
+    [CosmosRelationQueryArtifactFact]
+    public async Task CosmosArtifact_ProofGatedUtcInstantKeysetMatchesCanonicalPage()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("COSMOS_RELATION_QUERY_CONNECTION_STRING")
+            ?? throw new InvalidOperationException("The Cosmos connection string disappeared after discovery.");
+        var databaseId = $"cohesive-relation-query-tests-{Guid.NewGuid():N}";
+        using var client = CreateCosmosClient(connectionString);
+        var database = (await client.CreateDatabaseAsync(databaseId)).Database;
+        try
+        {
+            const string containerId = "temporal-loads";
+            var container = (await database.CreateContainerAsync(
+                new ContainerProperties(containerId, "/pk"))).Container;
+            var atTen = new DateTimeOffset(2026, 8, 23, 10, 0, 0, TimeSpan.Zero);
+            var atEleven = atTen.AddHours(1);
+            await container.UpsertItemAsync(
+                new { id = "load-1", pk = "tenant-a", Id = "load-1", ObservedInstant = atTen.ToString("O") },
+                new PartitionKey("tenant-a"));
+            await container.UpsertItemAsync(
+                new { id = "load-2", pk = "tenant-a", Id = "load-2", ObservedInstant = atTen.ToString("O") },
+                new PartitionKey("tenant-a"));
+            await container.UpsertItemAsync(
+                new { id = "load-3", pk = "tenant-a", Id = "load-3", ObservedInstant = atEleven.ToString("O") },
+                new PartitionKey("tenant-a"));
+
+            var fixture = Fixture.TemporalKeyset(ScalarTypeKind.Instant);
+            var binding = EmulatorBinding(
+                fixture,
+                client.Endpoint,
+                databaseId,
+                containerId,
+                stableUniqueOrderingPaths: [Fixture.IdPath],
+                exactOrderingPaths: [Fixture.TemporalSourcePath(ScalarTypeKind.Instant), Fixture.IdPath]);
+            var artifact = Assert.Single(fixture.Compile(binding).Artifacts);
+            var executor = new CosmosRelationQueryArtifactExecutor(container);
+
+            var result = await executor.ExecuteAsync(ExecutionRequest(
+                fixture,
+                binding,
+                artifact,
+                new Dictionary<QueryParameterId, ObservationValue>
+                {
+                    [new("temporal-cursor")] = ObservationValue.FromDateTimeOffset(atTen),
+                    [new("id-cursor")] = ObservationValue.FromString("load-1")
+                }));
+
+            Assert.True(result.IsSuccessful, string.Join(Environment.NewLine, result.Diagnostics.Select(static x => x.Message)));
+            Assert.Equal(
+                ["load-2", "load-3"],
+                result.Rows.Select(static row => row.Value.GetProperty("Id").String));
+        }
+        finally
+        {
+            await database.DeleteAsync();
+        }
+    }
+
     [Fact]
     public void Compile_MixedDirectionKeysetPage_ProducesLexicographicStrictAfterPredicate()
     {
@@ -583,6 +640,26 @@ public sealed class CosmosRelationQueryCompilerTests
             options);
 
         Assert.Equal(contract, rehydrated);
+    }
+
+    [Fact]
+    public void ParameterBinding_TemporalValueDomainSurvivesPortableJsonRoundTrip()
+    {
+        QueryParameterDefinition definition = new(
+            new("cursor"),
+            new ScalarTypeRef(ScalarTypeKind.Instant));
+        CosmosRelationQueryParameterBinding binding = new(
+            "@p0",
+            definition,
+            definition.EffectiveValueContract,
+            CosmosRelationQueryParameterValueDomain.UtcRoundTripInstant);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        var rehydrated = JsonSerializer.Deserialize<CosmosRelationQueryParameterBinding>(
+            JsonSerializer.Serialize(binding, options),
+            options);
+
+        Assert.Equal(binding, rehydrated);
     }
 
     [Fact]
@@ -744,6 +821,27 @@ public sealed class CosmosRelationQueryCompilerTests
     [Theory]
     [InlineData(ScalarTypeKind.Instant)]
     [InlineData(ScalarTypeKind.DateTime)]
+    public void Compile_TemporalOrdering_UsesExplicitUtcPhysicalOrderingProof(
+        ScalarTypeKind temporalKind)
+    {
+        var fixture = Fixture.TemporalOrdering(temporalKind);
+        var sourcePath = Fixture.TemporalSourcePath(temporalKind);
+        var binding = fixture.StorageBindingWithOrderingProofs(
+            stableUniqueOrderingPaths: [sourcePath],
+            exactOrderingPaths: [sourcePath]);
+
+        var result = fixture.Compile(binding);
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        Assert.Contains(
+            $"ORDER BY c[\"{sourcePath}\"] ASC",
+            Assert.Single(result.Artifacts).Statement.Text,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(ScalarTypeKind.Instant)]
+    [InlineData(ScalarTypeKind.DateTime)]
     public void Compile_TemporalEquality_FailsClosedWithoutCanonicalStorageEncoding(
         ScalarTypeKind temporalKind)
     {
@@ -754,6 +852,82 @@ public sealed class CosmosRelationQueryCompilerTests
             diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
         Assert.Contains("proven exact Cosmos JSON value domain", diagnostic.Message, StringComparison.Ordinal);
         Assert.Empty(result.Artifacts);
+    }
+
+    [Theory]
+    [InlineData(ScalarTypeKind.Instant, CosmosRelationQueryParameterValueDomain.UtcRoundTripInstant)]
+    [InlineData(ScalarTypeKind.DateTime, CosmosRelationQueryParameterValueDomain.UtcRoundTripDateTime)]
+    public void Compile_ProofGatedTemporalRange_RetainsCanonicalUtcParameterDomain(
+        ScalarTypeKind temporalKind,
+        CosmosRelationQueryParameterValueDomain expectedDomain)
+    {
+        var fixture = Fixture.TemporalComparison(temporalKind, BinaryOperator.Ge);
+        var sourcePath = Fixture.TemporalSourcePath(temporalKind);
+        var binding = fixture.StorageBindingWithOrderingProofs(
+            stableUniqueOrderingPaths: [Fixture.IdPath],
+            exactOrderingPaths: [sourcePath, Fixture.IdPath]);
+
+        var result = fixture.Compile(binding);
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var artifact = Assert.Single(result.Artifacts);
+        Assert.Contains($"(c[\"{sourcePath}\"] >= @p0)", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Equal(expectedDomain, Assert.Single(artifact.Parameters).ValueDomain);
+        var canonical = temporalKind == ScalarTypeKind.DateTime
+            ? ObservationValue.FromString("2026-08-23T12:34:56.0000000Z")
+            : ObservationValue.FromDateTimeOffset(new DateTimeOffset(2026, 8, 23, 12, 34, 56, TimeSpan.Zero));
+        Assert.NotNull(artifact.Bind(new Dictionary<QueryParameterId, ObservationValue>
+        {
+            [new("temporal-value")] = canonical
+        }));
+    }
+
+    [Theory]
+    [InlineData(ScalarTypeKind.Instant)]
+    [InlineData(ScalarTypeKind.DateTime)]
+    public void Bind_ProofGatedTemporalRange_RejectsNonCanonicalOrNonUtcBoundary(
+        ScalarTypeKind temporalKind)
+    {
+        var fixture = Fixture.TemporalComparison(temporalKind, BinaryOperator.Ge);
+        var sourcePath = Fixture.TemporalSourcePath(temporalKind);
+        var compilation = fixture.Compile(fixture.StorageBindingWithOrderingProofs(
+            stableUniqueOrderingPaths: [Fixture.IdPath],
+            exactOrderingPaths: [sourcePath, Fixture.IdPath]));
+        Assert.True(compilation.IsSuccessful, Diagnostics(compilation));
+        var artifact = Assert.Single(compilation.Artifacts);
+        var invalid = temporalKind == ScalarTypeKind.DateTime
+            ? ObservationValue.FromString("2026-08-23T12:34:56Z")
+            : ObservationValue.FromDateTimeOffset(new DateTimeOffset(2026, 8, 23, 12, 34, 56, TimeSpan.FromHours(2)));
+
+        Assert.Throws<ArgumentException>(() => artifact.Bind(new Dictionary<QueryParameterId, ObservationValue>
+        {
+            [new("temporal-value")] = invalid
+        }));
+    }
+
+    [Theory]
+    [InlineData(ScalarTypeKind.Instant, CosmosRelationQueryParameterValueDomain.UtcRoundTripInstant)]
+    [InlineData(ScalarTypeKind.DateTime, CosmosRelationQueryParameterValueDomain.UtcRoundTripDateTime)]
+    public void Compile_TemporalKeyset_UsesProofGatedLexicographicContinuation(
+        ScalarTypeKind temporalKind,
+        CosmosRelationQueryParameterValueDomain expectedDomain)
+    {
+        var fixture = Fixture.TemporalKeyset(temporalKind);
+        var sourcePath = Fixture.TemporalSourcePath(temporalKind);
+        var binding = fixture.StorageBindingWithOrderingProofs(
+            stableUniqueOrderingPaths: [Fixture.IdPath],
+            exactOrderingPaths: [sourcePath, Fixture.IdPath]);
+
+        var result = fixture.Compile(binding);
+
+        Assert.True(result.IsSuccessful, Diagnostics(result));
+        var artifact = Assert.Single(result.Artifacts);
+        Assert.Contains($"(c[\"{sourcePath}\"] > @p0)", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Contains($"(c[\"{sourcePath}\"] = @p0)", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Contains("(c[\"Id\"] > @p1)", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Equal(expectedDomain, artifact.Parameters[0].ValueDomain);
+        Assert.Equal(CosmosRelationQueryParameterValueDomain.Canonical, artifact.Parameters[1].ValueDomain);
+        Assert.Equal(CosmosRelationQueryPagingKind.Keyset, artifact.Paging!.Kind);
     }
 
     [Theory]
@@ -1116,7 +1290,7 @@ public sealed class CosmosRelationQueryCompilerTests
         Assert.Equal(RelationQueryNativeCompilationStatus.Unsupported, result.Status);
         var diagnostic = Assert.Single(result.Diagnostics, static diagnostic =>
             diagnostic.Code == RelationQueryRealizationDiagnosticCodes.ContextUnavailable);
-        Assert.Contains("does not have a Cosmos SQL v3 parameter encoding", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("does not have a Cosmos SQL v4 parameter encoding", diagnostic.Message, StringComparison.Ordinal);
         Assert.NotNull(diagnostic.Input);
         Assert.DoesNotContain(result.Diagnostics, static diagnostic =>
             diagnostic.Code == CosmosRelationQueryCompilationDiagnosticCodes.ArtifactInvalid);
@@ -1700,7 +1874,9 @@ public sealed class CosmosRelationQueryCompilerTests
         Fixture fixture,
         Uri accountEndpoint,
         string databaseName,
-        string containerName)
+        string containerName,
+        ImmutableArray<FieldPath> stableUniqueOrderingPaths = default,
+        ImmutableArray<FieldPath> exactOrderingPaths = default)
     {
         var placement = fixture.Placement.Bindings.Single(binding =>
             binding.Id == fixture.StorageBinding.PlacementBinding);
@@ -1713,8 +1889,10 @@ public sealed class CosmosRelationQueryCompilerTests
             databaseName,
             containerName,
             Fixture.IdPath,
-            stableUniqueOrderingPaths: [Fixture.IdPath],
-            exactOrderingPaths: [Fixture.IdPath],
+            stableUniqueOrderingPaths: stableUniqueOrderingPaths.IsDefault
+                ? [Fixture.IdPath]
+                : stableUniqueOrderingPaths,
+            exactOrderingPaths: exactOrderingPaths.IsDefault ? [Fixture.IdPath] : exactOrderingPaths,
             maximumInputRows: 100);
     }
 
@@ -1894,7 +2072,7 @@ public sealed class CosmosRelationQueryCompilerTests
         static readonly FieldPath PayloadPath = FieldPath.FromField("Payload");
         static readonly FieldPath ObservedInstantPath = FieldPath.FromField("ObservedInstant");
         static readonly FieldPath ObservedDateTimePath = FieldPath.FromField("ObservedDateTime");
-        static readonly FieldPath OccurredAtPath = FieldPath.FromField("OccurredAt");
+        public static readonly FieldPath OccurredAtPath = FieldPath.FromField("OccurredAt");
         static readonly FieldPath CountPath = FieldPath.FromField("Count");
         static readonly FieldPath TotalPath = FieldPath.FromField("Total");
         static readonly FieldPath MinimumStatusPath = FieldPath.FromField("MinimumStatus");
@@ -2837,21 +3015,27 @@ public sealed class CosmosRelationQueryCompilerTests
             return Create(RelationQueryDocument.FromDefinition(definition));
         }
 
-        public static Fixture TemporalEquality(ScalarTypeKind temporalKind)
+        public static Fixture TemporalEquality(ScalarTypeKind temporalKind) =>
+            TemporalComparison(temporalKind, BinaryOperator.Eq);
+
+        public static Fixture TemporalComparison(
+            ScalarTypeKind temporalKind,
+            BinaryOperator comparison)
         {
-            var sourcePath = temporalKind switch
-            {
-                ScalarTypeKind.Instant => ObservedInstantPath,
-                ScalarTypeKind.DateTime => ObservedDateTimePath,
-                _ => throw new ArgumentOutOfRangeException(
-                    nameof(temporalKind),
-                    temporalKind,
-                    "The fixture supports instant and date-time equality only.")
-            };
+            var sourcePath = TemporalSourcePath(temporalKind);
             QueryParameterId parameter = new("temporal-value");
+            var predicate = comparison switch
+            {
+                BinaryOperator.Eq => Expr.Eq(Expr.Field(Load, sourcePath), Expr.Param(parameter.Value)),
+                BinaryOperator.Ge => Expr.Ge(Expr.Field(Load, sourcePath), Expr.Param(parameter.Value)),
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(comparison),
+                    comparison,
+                    "The fixture supports equality and greater-than-or-equal temporal comparison only.")
+            };
             IRQueryDefinition definition = new(
-                new($"{temporalKind}-equality-query"),
-                new($"{temporalKind}EqualityQuery"),
+                new($"{temporalKind}-{comparison}-query"),
+                new($"{temporalKind}{comparison}Query"),
                 new(
                     nodes:
                     [
@@ -2859,9 +3043,7 @@ public sealed class CosmosRelationQueryCompilerTests
                         new FilterQueryNode(
                             Filter,
                             LoadSource,
-                            Expr.Eq(
-                                Expr.Field(Load, sourcePath),
-                                Expr.Param(parameter.Value))),
+                            predicate),
                         new ProjectQueryNode(
                             Project,
                             Filter,
@@ -2876,6 +3058,61 @@ public sealed class CosmosRelationQueryCompilerTests
                 [new RowsQueryResultDefinition(Rows, Project)]);
             return Create(RelationQueryDocument.FromDefinition(definition));
         }
+
+        public static Fixture TemporalKeyset(ScalarTypeKind temporalKind)
+        {
+            var sourcePath = TemporalSourcePath(temporalKind);
+            var rowShape = temporalKind == ScalarTypeKind.Instant ? InstantRowShape : DateTimeRowShape;
+            QueryParameterId temporalCursor = new("temporal-cursor");
+            QueryParameterId idCursor = new("id-cursor");
+            IRQueryDefinition definition = new(
+                new($"{temporalKind}-keyset-query"),
+                new($"{temporalKind}KeysetQuery"),
+                new(
+                    nodes:
+                    [
+                        new SourceQueryNode(LoadSource, Load, LoadShape),
+                        new ProjectQueryNode(
+                            Project,
+                            LoadSource,
+                            RowBinding,
+                            rowShape,
+                            [
+                                new(new("row-id"), IdPath, Expr.Field(Load, IdPath)),
+                                new(new("row-occurred-at"), OccurredAtPath, Expr.Field(Load, sourcePath))
+                            ]),
+                        new OrderQueryNode(
+                            Order,
+                            Project,
+                            [
+                                new(Expr.Field(RowBinding, OccurredAtPath), QuerySortDirection.Ascending),
+                                new(Expr.Field(RowBinding, IdPath), QuerySortDirection.Ascending)
+                            ]),
+                        new PageQueryNode(
+                            Page,
+                            Order,
+                            new KeysetPageDefinition(
+                                25,
+                                [Expr.Param(temporalCursor.Value), Expr.Param(idCursor.Value)]))
+                    ],
+                    parameters:
+                    [
+                        new(temporalCursor, new ScalarTypeRef(temporalKind)),
+                        new(idCursor, new ScalarTypeRef(ScalarTypeKind.String))
+                    ]),
+                [new RowsQueryResultDefinition(Rows, Page)]);
+            return Create(RelationQueryDocument.FromDefinition(definition));
+        }
+
+        public static FieldPath TemporalSourcePath(ScalarTypeKind temporalKind) => temporalKind switch
+        {
+            ScalarTypeKind.Instant => ObservedInstantPath,
+            ScalarTypeKind.DateTime => ObservedDateTimePath,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(temporalKind),
+                temporalKind,
+                "The fixture supports instant and date-time semantics only.")
+        };
 
         public static Fixture Aggregation(AggregateOperator operation = AggregateOperator.Min)
         {

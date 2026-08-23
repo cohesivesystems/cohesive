@@ -242,10 +242,15 @@ Current portable and adapter contracts expose their schema versions through cons
 - `relation-query-source-placement/v3`
 - `relation-query-physical-plan/v1`
 - `relation-query-explain/v1`
-- Cosmos SQL profile `canonical-v3` and binding `cosmos-binding/v5`
+- Cosmos SQL profile `canonical-v4` and binding `cosmos-binding/v5`
 - Elasticsearch profile `canonical-v2` and binding `elastic-binding/v4`
 - PostgreSQL SQL profile `canonical-v2`, source-reader profile `source-reader-v1`, binding `postgres-binding/v1`, and
   artifact `postgres-artifact/v3`
+
+Cosmos SQL `canonical-v4` adds proof-gated UTC `DateTime`/`Instant` ranges and keysets. Compiled temporal
+parameters retain their exact UTC round-trip value domain, and Cosmos artifact canonicalization advances to v6 so
+older artifacts cannot silently omit that invocation constraint. Recompile persisted Cosmos artifacts against the
+same canonical plan and storage binding; do not rewrite their profile, parameter, or fingerprint metadata.
 
 Migration rules:
 
