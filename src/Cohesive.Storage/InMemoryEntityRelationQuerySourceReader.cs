@@ -19,7 +19,7 @@ namespace Cohesive.Storage;
 /// references use the source's maximum batch size as their per-observation normalization boundary and return
 /// inconclusive evidence when that boundary is exceeded.
 /// </remarks>
-public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySourceReader
+public sealed class InMemoryEntityRelationQuerySourceReader : IEntityRelationQuerySourceReader
 {
     const string EvidencePrefix = "cohesive.storage.in-memory/entity-source/v1";
     readonly InMemoryEntityOutboxRepository repository;
@@ -37,7 +37,7 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
     public static RelationQueryTargetCapabilityProfile TargetProfile { get; } = CreateTargetProfile();
 
     /// <summary>Creates a deterministic in-memory canonical source reader.</summary>
-    /// <param name="shape">Exact graph-qualified shape represented by <paramref name="repository"/>.</param>
+    /// <param name="shape">Exact graph-qualified semantic source-view shape projected by the reader.</param>
     /// <param name="source">Canonical physical source instance and limits implemented by the reader.</param>
     /// <param name="repository">In-memory repository supplying entity observations.</param>
     /// <param name="logicalPartition">Provider-neutral logical partition implemented by every repository read.</param>
@@ -53,9 +53,14 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
     /// <param name="observationVersionSemanticPath">
     /// Optional semantic path projected from repository snapshot observation-version metadata.
     /// </param>
+    /// <param name="persistedObservationType">
+    /// Exact entity observation retained by <paramref name="repository"/>, or <see langword="null"/> when it is
+    /// <paramref name="shape"/>.
+    /// </param>
     /// <exception cref="ArgumentException">
-    /// <paramref name="shape"/> is incomplete or does not identify the repository entity shape; an identity
-    /// selector is empty; or <paramref name="source"/> does not use <see cref="TargetProfile"/>.
+    /// <paramref name="shape"/> is incomplete; <paramref name="persistedObservationType"/> does not identify the
+    /// repository entity shape; an identity selector is empty; or <paramref name="source"/> does not use
+    /// <see cref="TargetProfile"/>.
     /// </exception>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="source"/>, <paramref name="repository"/>, or <paramref name="logicalPartition"/> is
@@ -69,18 +74,27 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
         string? identitySourceSelector = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
-        FieldPath? observationVersionSemanticPath = null)
+        FieldPath? observationVersionSemanticPath = null,
+        QualifiedShapeId? persistedObservationType = null)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
             throw new ArgumentException("An in-memory entity reader requires a graph-qualified shape.", nameof(shape));
 
         this.source = Guard.RequireNotNull(source);
         this.repository = Guard.RequireNotNull(repository);
-        if (shape.ShapeId != repository.EntityDefinition.Shape.Id)
+        var effectivePersistedObservationType = persistedObservationType ?? shape;
+        if (string.IsNullOrWhiteSpace(effectivePersistedObservationType.GraphId.Value)
+            || string.IsNullOrWhiteSpace(effectivePersistedObservationType.ShapeId.Value))
         {
             throw new ArgumentException(
-                $"Qualified shape '{shape}' does not identify repository entity shape '{repository.EntityDefinition.Shape.Id.Value}'.",
-                nameof(shape));
+                "An in-memory entity reader requires a graph-qualified persisted observation type.",
+                nameof(persistedObservationType));
+        }
+        if (effectivePersistedObservationType.ShapeId != repository.EntityDefinition.Shape.Id)
+        {
+            throw new ArgumentException(
+                $"Persisted observation type '{effectivePersistedObservationType}' does not identify repository entity shape '{repository.EntityDefinition.Shape.Id.Value}'.",
+                nameof(persistedObservationType));
         }
 
         if (!source.TargetProfile.HasSameSemantics(TargetProfile))
@@ -91,6 +105,7 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
         }
 
         Shape = shape;
+        PersistedObservationType = effectivePersistedObservationType;
         Descriptor = new(
             source.Id,
             source.ExecutionDomain,
@@ -120,6 +135,9 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
 
     /// <summary>Exact graph-qualified shape returned by this reader.</summary>
     public QualifiedShapeId Shape { get; }
+
+    /// <summary>Exact graph-qualified entity observation retained by the repository.</summary>
+    public QualifiedShapeId PersistedObservationType { get; }
 
     /// <inheritdoc />
     public RelationQuerySourceReaderDescriptor Descriptor { get; }
@@ -158,7 +176,7 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
             foreach (var snapshot in snapshots)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (snapshot.Entity.ShapeId != Shape.ShapeId)
+                if (snapshot.Entity.ShapeId != PersistedObservationType.ShapeId)
                     return ValueTask.FromResult(Failed(request, "repository-shape-mismatch", version));
                 if (!identities.Add(snapshot.Entity.Id))
                     return ValueTask.FromResult(Failed(request, "duplicate-observation-identity", version));
@@ -258,16 +276,27 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
         HashSet<string> requestedKeys = new(lookup.Keys, StringComparer.Ordinal);
         Dictionary<string, long> fanOutByKey = new(requestedKeys.Count, StringComparer.Ordinal);
         List<EntitySnapshot> selected = [];
+        FieldPath relationshipSourcePath;
+        try
+        {
+            relationshipSourcePath = FieldPath.Parse(lookup.SourceSelector);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException
+                                          and not OutOfMemoryException
+                                          and not StackOverflowException)
+        {
+            return Failed(request, "relationship-reference-path-invalid", version);
+        }
         foreach (var snapshot in snapshots)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!IsFieldAuthoritative(snapshot, lookup.RelationshipReference))
+            if (!IsFieldAuthoritative(snapshot, relationshipSourcePath))
                 return Inconclusive(request, "relationship-reference-inconclusive", version);
 
             ObservationValue reference;
             try
             {
-                if (!snapshot.Entity.TryGetField(lookup.RelationshipReference, out reference)
+                if (!snapshot.Entity.TryGetField(relationshipSourcePath, out reference)
                     || reference.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)
                 {
                     continue;
@@ -354,7 +383,21 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
                 ObservationValue.FromInt64(snapshot.Entity.Version),
                 evidence);
         }
-        if (!IsFieldAuthoritative(snapshot, field.SemanticPath))
+        FieldPath sourcePath;
+        try
+        {
+            sourcePath = FieldPath.Parse(field.SourceSelector);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException
+                                          and not OutOfMemoryException
+                                          and not StackOverflowException)
+        {
+            return new(
+                field,
+                RelationQuerySourceReadFieldState.Failed,
+                evidenceReference: evidence);
+        }
+        if (!IsFieldAuthoritative(snapshot, sourcePath))
         {
             return new(
                 field,
@@ -365,7 +408,7 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
         ObservationValue value;
         try
         {
-            if (!snapshot.Entity.TryGetField(field.SemanticPath, out value)
+            if (!snapshot.Entity.TryGetField(sourcePath, out value)
                 || value.Kind == ObservationValueKind.Undefined)
             {
                 return new(

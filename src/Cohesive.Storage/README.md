@@ -164,7 +164,18 @@ var outcome = await evaluator.EvaluateAsync(evaluation, cancellationToken);
 
 When `observationVersionSemanticPath` is configured, that semantic field is projected from the repository
 snapshot's `Observation.Version`; a same-named payload field cannot become a competing authority. The convention is
-part of the derived source identity. The in-memory reader supports bounded enumeration, identity batches,
+part of the derived source identity.
+
+A query may instead consume a derived snapshot view while the repository entity remains the semantic authority.
+Pass the view as `shape`, the exact repository entity as `persistedObservationType`, and an explicit deterministic
+field selector when view paths differ from payload paths. For example, a view field `Source.Name` can select the
+entity payload path `Name`, while `SourceEntityVersion` continues to come only from snapshot metadata. The persisted
+type participates in convention-derived source identity, and the reader rejects a persisted shape ID that does not
+match the repository definition. The view is a query projection: it does not extend or replace the entity payload
+shape. Because a selector delegate has no portable content identity, a view with a custom selector must also declare
+an explicit, versioned source identity.
+
+The in-memory reader supports bounded enumeration, identity batches,
 relationship-reference batches, exact field selection, authoritative absence, partial/inconclusive evidence, and
 cancellation. Canonical interpretation owns
 filters, joins, output shaping, aggregation, and paging. Query source roots are read from registered sources;

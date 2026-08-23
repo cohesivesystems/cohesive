@@ -13,6 +13,7 @@ using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 using Cohesive.Relations.Serialization;
+using Cohesive.Storage;
 using Microsoft.Azure.Cosmos;
 
 namespace Cohesive.Adapters.Cosmos;
@@ -29,7 +30,7 @@ namespace Cohesive.Adapters.Cosmos;
 /// rejection is returned as failed source evidence. Partition selectors and fixed keys are caller assertions under
 /// <see cref="CosmosRelationQuerySourcePolicy"/>, not facts discovered from container metadata.
 /// </remarks>
-public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
+public sealed class CosmosRelationQuerySourceReader : IEntityRelationQuerySourceReader
 {
     /// <summary>Conventional entity-envelope observation identity property.</summary>
     public const string ObservationIdentitySourceSelector = "observationId";

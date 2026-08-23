@@ -18,6 +18,7 @@ namespace Cohesive.Adapters.Cosmos;
 public static class CosmosEntityRelationQuerySourceRegistration
 {
     const string SourceBindingProfile = "cohesive.adapters.cosmos/entity-source-binding/v2";
+    const string SourceViewBindingProfile = "cohesive.adapters.cosmos/entity-source-view-binding/v3";
 
     /// <summary>Creates a deterministic Cosmos-backed canonical entity source registration.</summary>
     /// <param name="shape">Exact graph-qualified entity shape stored in the container.</param>
@@ -65,6 +66,10 @@ public static class CosmosEntityRelationQuerySourceRegistration
     /// <param name="observationVersionSemanticPath">
     /// Optional canonical field path projected from the entity envelope's exact <c>observationVersion</c> metadata.
     /// </param>
+    /// <param name="persistedObservationType">
+    /// Exact graph-qualified entity observation stored in matching envelopes, or <see langword="null"/> when it is
+    /// <paramref name="shape"/>. Supply this when <paramref name="shape"/> is a derived query source view.
+    /// </param>
     /// <returns>
     /// A canonical Storage registration whose reader, identity, domain, capability profile, limits, and selectors agree.
     /// </returns>
@@ -93,12 +98,21 @@ public static class CosmosEntityRelationQuerySourceRegistration
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
         string? entityDocumentKind = null,
-        FieldPath? observationVersionSemanticPath = null)
+        FieldPath? observationVersionSemanticPath = null,
+        QualifiedShapeId? persistedObservationType = null)
     {
         ArgumentNullException.ThrowIfNull(container);
         ArgumentNullException.ThrowIfNull(policy);
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
             throw new ArgumentException("A Cosmos entity source requires a graph-qualified shape.", nameof(shape));
+        var effectivePersistedObservationType = persistedObservationType ?? shape;
+        if (string.IsNullOrWhiteSpace(effectivePersistedObservationType.GraphId.Value)
+            || string.IsNullOrWhiteSpace(effectivePersistedObservationType.ShapeId.Value))
+        {
+            throw new ArgumentException(
+                "A Cosmos entity source requires a graph-qualified persisted observation type.",
+                nameof(persistedObservationType));
+        }
 
         var normalizedDatabase = Guard.RequireNotNullOrWhiteSpace(databaseId);
         var normalizedContainer = Guard.RequireNotNullOrWhiteSpace(containerId);
@@ -150,7 +164,8 @@ public static class CosmosEntityRelationQuerySourceRegistration
             effectiveLimits,
             effectiveIdentitySelector,
             effectiveEntityDocumentKind,
-            observationVersionSemanticPath);
+            observationVersionSemanticPath,
+            effectivePersistedObservationType);
         var effectiveSource = source ?? new RelationQuerySourceInstanceId(
             $"source/cohesive.adapters.cosmos/{bindingFingerprint}/{shapeKey}");
         var effectiveDomain = executionDomain ?? new RelationQueryExecutionDomainId(
@@ -171,6 +186,7 @@ public static class CosmosEntityRelationQuerySourceRegistration
             fieldSourceSelector,
             relationshipKeySourceSelector,
             effectiveEntityDocumentKind,
+            persistedObservationType: effectivePersistedObservationType,
             observationVersionSemanticPath: observationVersionSemanticPath);
         return new(
             shape: shape,
@@ -180,7 +196,8 @@ public static class CosmosEntityRelationQuerySourceRegistration
             identitySemanticPath: identitySemanticPath,
             fieldSourceSelector: reader.FieldSourceSelector,
             relationshipKeySourceSelector: reader.RelationshipKeySourceSelector,
-            observationVersionSemanticPath: observationVersionSemanticPath);
+            observationVersionSemanticPath: observationVersionSemanticPath,
+            persistedObservationType: effectivePersistedObservationType);
     }
 
     static string FingerprintBinding(
@@ -192,10 +209,11 @@ public static class CosmosEntityRelationQuerySourceRegistration
         RelationQuerySourcePlacementLimits limits,
         string identitySourceSelector,
         string entityDocumentKind,
-        FieldPath? observationVersionSemanticPath)
+        FieldPath? observationVersionSemanticPath,
+        QualifiedShapeId persistedObservationType)
     {
         StringBuilder canonical = new();
-        Append(SourceBindingProfile);
+        Append(persistedObservationType == shape ? SourceBindingProfile : SourceViewBindingProfile);
         Append(accountEndpoint);
         Append(databaseId);
         Append(containerId);
@@ -203,6 +221,12 @@ public static class CosmosEntityRelationQuerySourceRegistration
         Append(shape.ShapeId.Value);
         Append(identitySourceSelector);
         Append(entityDocumentKind);
+        if (persistedObservationType != shape)
+        {
+            Append("persisted-observation-type");
+            Append(persistedObservationType.GraphId.Value);
+            Append(persistedObservationType.ShapeId.Value);
+        }
         Append(policy.PartitionSourceSelector);
         Append(policy.LogicalPartition.Value);
         Append(((int)policy.CrossPartitionPolicy).ToString(CultureInfo.InvariantCulture));

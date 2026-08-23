@@ -43,6 +43,10 @@ public sealed class EntityRelationQuerySourceRegistration
     /// Optional canonical field path whose value is projected from repository snapshot metadata as the exact
     /// observation version rather than read from the observation payload.
     /// </param>
+    /// <param name="persistedObservationType">
+    /// Exact entity observation retained by the repository, or <see langword="null"/> when it is
+    /// <paramref name="shape"/>. Supply this when <paramref name="shape"/> is a derived query source view.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// <paramref name="shape"/> is incomplete, <paramref name="identitySourceSelector"/> is empty, or the reader
     /// descriptor does not match <paramref name="source"/>.
@@ -58,7 +62,8 @@ public sealed class EntityRelationQuerySourceRegistration
         FieldPath? identitySemanticPath = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
-        FieldPath? observationVersionSemanticPath = null)
+        FieldPath? observationVersionSemanticPath = null,
+        QualifiedShapeId? persistedObservationType = null)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
             throw new ArgumentException("An entity relation/query source requires a graph-qualified shape.", nameof(shape));
@@ -76,6 +81,23 @@ public sealed class EntityRelationQuerySourceRegistration
         }
 
         Shape = shape;
+        var effectivePersistedObservationType = persistedObservationType ?? shape;
+        if (string.IsNullOrWhiteSpace(effectivePersistedObservationType.GraphId.Value)
+            || string.IsNullOrWhiteSpace(effectivePersistedObservationType.ShapeId.Value))
+        {
+            throw new ArgumentException(
+                "An entity relation/query source requires a graph-qualified persisted observation type.",
+                nameof(persistedObservationType));
+        }
+        PersistedObservationType = effectivePersistedObservationType;
+        if (reader is IEntityRelationQuerySourceReader entityReader
+            && (entityReader.Shape != shape
+                || entityReader.PersistedObservationType != effectivePersistedObservationType))
+        {
+            throw new ArgumentException(
+                "The entity source reader must project the registered source-view shape from the registered persisted observation type.",
+                nameof(reader));
+        }
         if (identitySemanticPath is { Segments.IsDefaultOrEmpty: true })
             throw new ArgumentException("An identity semantic path cannot be empty.", nameof(identitySemanticPath));
         if (observationVersionSemanticPath is { Segments.IsDefaultOrEmpty: true })
@@ -95,8 +117,14 @@ public sealed class EntityRelationQuerySourceRegistration
         RelationshipKeySourceSelector = relationshipKeySourceSelector ?? SemanticPathSelector;
     }
 
-    /// <summary>Exact graph-qualified entity shape supplied by this registration.</summary>
+    /// <summary>Exact graph-qualified semantic source-view shape supplied by this registration.</summary>
     public QualifiedShapeId Shape { get; }
+
+    /// <summary>
+    /// Exact graph-qualified entity observation retained by the repository. This may differ from
+    /// <see cref="Shape"/> when the source projects a derived metadata-enriched view.
+    /// </summary>
+    public QualifiedShapeId PersistedObservationType { get; }
 
     /// <summary>Canonical physical source instance, target profile, and execution limits.</summary>
     public RelationQuerySourceInstance Source { get; }
@@ -122,7 +150,7 @@ public sealed class EntityRelationQuerySourceRegistration
     public RelationQueryPlacementFieldSelector RelationshipKeySourceSelector { get; }
 
     /// <summary>Creates an in-memory entity source registration using deterministic conventions.</summary>
-    /// <param name="shape">Exact graph-qualified shape represented by <paramref name="repository"/>.</param>
+    /// <param name="shape">Exact graph-qualified semantic source-view shape supplied to queries.</param>
     /// <param name="repository">In-memory entity repository supplying observations.</param>
     /// <param name="logicalPartition">Provider-neutral logical partition implemented by the registration.</param>
     /// <param name="source">Explicit source identity, or <see langword="null"/> for a shape-derived identity.</param>
@@ -140,13 +168,17 @@ public sealed class EntityRelationQuerySourceRegistration
     /// <param name="observationVersionSemanticPath">
     /// Optional canonical field path projected from <see cref="Cohesive.Relations.Model.Observation.Version"/>.
     /// </param>
+    /// <param name="persistedObservationType">
+    /// Exact graph-qualified entity observation retained by <paramref name="repository"/>, or
+    /// <see langword="null"/> when it is <paramref name="shape"/>.
+    /// </param>
     /// <returns>A registration whose source, reader, limits, profile, and selector policies agree exactly.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="repository"/> or <paramref name="logicalPartition"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// <paramref name="shape"/> does not identify the repository entity shape, or an explicit identity or selector
-    /// is invalid.
+    /// <paramref name="persistedObservationType"/> does not identify the repository entity shape, or an explicit
+    /// identity or selector is invalid.
     /// </exception>
     public static EntityRelationQuerySourceRegistration InMemory(
         QualifiedShapeId shape,
@@ -159,14 +191,23 @@ public sealed class EntityRelationQuerySourceRegistration
         FieldPath? identitySemanticPath = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
-        FieldPath? observationVersionSemanticPath = null)
+        FieldPath? observationVersionSemanticPath = null,
+        QualifiedShapeId? persistedObservationType = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
-        if (shape.ShapeId != repository.EntityDefinition.Shape.Id)
+        var effectivePersistedObservationType = persistedObservationType ?? shape;
+        if (string.IsNullOrWhiteSpace(effectivePersistedObservationType.GraphId.Value)
+            || string.IsNullOrWhiteSpace(effectivePersistedObservationType.ShapeId.Value))
         {
             throw new ArgumentException(
-                $"Qualified shape '{shape}' does not identify repository entity shape '{repository.EntityDefinition.Shape.Id.Value}'.",
-                nameof(shape));
+                "An in-memory entity source requires a graph-qualified persisted observation type.",
+                nameof(persistedObservationType));
+        }
+        if (effectivePersistedObservationType.ShapeId != repository.EntityDefinition.Shape.Id)
+        {
+            throw new ArgumentException(
+                $"Persisted observation type '{effectivePersistedObservationType}' does not identify repository entity shape '{repository.EntityDefinition.Shape.Id.Value}'.",
+                nameof(persistedObservationType));
         }
 
         if (observationVersionSemanticPath is { Segments.IsDefaultOrEmpty: true })
@@ -178,18 +219,32 @@ public sealed class EntityRelationQuerySourceRegistration
                 "Observation identity and observation version cannot use the same physical selector.",
                 nameof(identitySourceSelector));
         }
+        if (effectivePersistedObservationType != shape
+            && source is null
+            && (fieldSourceSelector is not null || relationshipKeySourceSelector is not null))
+        {
+            throw new ArgumentException(
+                "A convention-derived metadata-enriched source view cannot fingerprint custom selector delegates; supply an explicit source identity.",
+                nameof(source));
+        }
 
         var shapeKey = ShapeKey(shape);
-        var sourceKey = observationVersionSemanticPath is null
+        var sourceViewKey = effectivePersistedObservationType == shape
             ? shapeKey
             : string.Concat(
                 shapeKey,
+                "/persisted-observation/",
+                ShapeKey(effectivePersistedObservationType));
+        var sourceKey = observationVersionSemanticPath is null
+            ? sourceViewKey
+            : string.Concat(
+                sourceViewKey,
                 "/metadata/observation-version/",
                 Uri.EscapeDataString(observationVersionSemanticPath.Value.ToString()));
         var effectiveSource = source ?? new RelationQuerySourceInstanceId(
             $"source/cohesive.storage.in-memory/{sourceKey}");
         var effectiveDomain = executionDomain ?? new RelationQueryExecutionDomainId(
-            $"domain/cohesive.storage.in-memory/{shapeKey}");
+            $"domain/cohesive.storage.in-memory/{ShapeKey(effectivePersistedObservationType)}");
         var effectiveLimits = limits ?? InMemoryEntityRelationQuerySourceReader.DefaultLimits;
         var sourceInstance = new RelationQuerySourceInstance(
             effectiveSource,
@@ -204,7 +259,8 @@ public sealed class EntityRelationQuerySourceRegistration
             identitySourceSelector,
             fieldSourceSelector,
             relationshipKeySourceSelector,
-            observationVersionSemanticPath);
+            observationVersionSemanticPath,
+            effectivePersistedObservationType);
         return new(
             shape,
             sourceInstance,
@@ -213,7 +269,8 @@ public sealed class EntityRelationQuerySourceRegistration
             identitySemanticPath,
             reader.FieldSourceSelector,
             reader.RelationshipKeySourceSelector,
-            observationVersionSemanticPath);
+            observationVersionSemanticPath,
+            effectivePersistedObservationType);
     }
 
     internal static string SelectSemanticPath(FieldPath path) => SemanticPathSelector(path);
