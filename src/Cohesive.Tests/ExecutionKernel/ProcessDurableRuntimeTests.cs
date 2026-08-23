@@ -1,4 +1,6 @@
 using Cohesive.Execution;
+using Cohesive.Model.Authoring;
+using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
@@ -1579,6 +1581,167 @@ public sealed partial class ProcessDurableRuntimeTests
         Assert.Equal(0, host.RelationCalls);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AuthoredCancellationFinalizer_RemainsCancellingUntilItsOrdinaryRequestAcknowledges(
+        bool finalizerFails)
+    {
+        var fixture = CancellationFinalizerDurabilityTestFixture.Create();
+        var store = new InMemoryProcessDurableStore();
+        var adapter = new CancellationFinalizerAdapter(fixture, finalizerFails);
+        var runtime = new ProcessDurableRuntime(
+            store,
+            RejectingProcessHost.Instance,
+            new("worker/authored-cancellation-tests", WorkerLease),
+            new BindingResolver(fixture.Binding),
+            operationAdapterResolver: new SingleAdapterResolver(adapter));
+        var initialized = await runtime.InitializeAsync(
+            Context(fixture.Start.AcceptedAtUtc),
+            fixture.Plan,
+            fixture.Start);
+        var initial = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot).Checkpoint;
+        var cancelAtUtc = fixture.Start.AcceptedAtUtc.AddSeconds(1);
+        var command = ProcessControlTestFixture.Create().Cancel(
+            initial.Control,
+            id: "cancel/runtime-authored-finalizer",
+            issuedAtUtc: cancelAtUtc);
+
+        var cancelling = await runtime.CancelAsync(
+            Context(cancelAtUtc),
+            fixture.Plan,
+            command,
+            fixture.ActivationContext);
+        var cancellingCheckpoint = Assert.IsType<ProcessDurableStoreSnapshot>(cancelling.Snapshot).Checkpoint;
+        var operation = Assert.Single(cancellingCheckpoint.DurableOperations);
+
+        Assert.Equal(ProcessControlMode.Cancelling, cancellingCheckpoint.Control.Mode);
+        Assert.False(cancellingCheckpoint.Control.IsTerminal);
+        Assert.Equal(
+            ProcessCancellationFinalizationPhase.FinalizerActive,
+            cancellingCheckpoint.Continuation.CancellationFinalization?.Phase);
+        Assert.Equal(ProcessActivationDisposition.DurableCut, Assert.Single(cancellingCheckpoint.Activations).Disposition);
+
+        var cancellationReplay = await runtime.CancelAsync(
+            Context(cancelAtUtc.AddMilliseconds(1)),
+            fixture.Plan,
+            command,
+            fixture.ActivationContext);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Replayed, cancellationReplay.Disposition);
+        Assert.Equal(cancelling.Snapshot?.Revision, cancellationReplay.Snapshot?.Revision);
+
+        var advanced = await runtime.AdvanceOperationAsync(
+            OperationContext.Create(timeProvider: new IncrementingTimeProvider(cancelAtUtc.AddSeconds(1))),
+            fixture.Plan,
+            initial.ContinuationIdentity.ProcessInstanceId,
+            operation.OperationId);
+        Assert.True(
+            advanced.Disposition is ProcessDurableRuntimeDisposition.Applied or ProcessDurableRuntimeDisposition.Replayed,
+            $"{advanced.Disposition}; operation={advanced.Operation?.Status}; "
+            + $"commit={advanced.Commit?.Id.Value}; revision={advanced.Snapshot?.Revision.Value}: "
+            + string.Join("; ", advanced.Diagnostics.Select(static item => item.Message)));
+        var advancedCheckpoint = Assert.IsType<ProcessDurableStoreSnapshot>(advanced.Snapshot).Checkpoint;
+        var input = Assert.Single(advancedCheckpoint.Inbox.Where(static entry => entry.Receipt is null)).Input;
+        var finalActivation = new ProcessActivation(
+            new("activation/runtime-authored-finalizer-ack"),
+            ProcessActivationCause.Interaction,
+            cancelAtUtc.AddSeconds(2),
+            fixture.ActivationContext,
+            [input]);
+        var finalized = await runtime.ActivateAsync(
+            Context(cancelAtUtc.AddSeconds(2)),
+            fixture.Plan,
+            advancedCheckpoint.ContinuationIdentity,
+            finalActivation);
+        var finalizedCheckpoint = Assert.IsType<ProcessDurableStoreSnapshot>(finalized.Snapshot).Checkpoint;
+
+        var expectedDisposition = finalizerFails
+            ? ProcessActivationDisposition.Failed
+            : ProcessActivationDisposition.Cancelled;
+        var expectedTerminal = finalizerFails
+            ? ExecutionTerminalOutcomeKind.Failed
+            : ExecutionTerminalOutcomeKind.Cancelled;
+        var expectedControl = finalizerFails
+            ? ProcessControlMode.CancellationFailed
+            : ProcessControlMode.Cancelled;
+        Assert.True(
+            finalized.Decision?.Disposition == expectedDisposition,
+            $"{finalized.Decision?.Disposition}: "
+            + string.Join("; ", finalized.Decision?.Diagnostics.Select(static item => item.Message) ?? []));
+        Assert.Equal(expectedControl, finalizedCheckpoint.Control.Mode);
+        Assert.Equal(expectedTerminal, finalizedCheckpoint.Continuation.Terminal.Kind);
+        Assert.Equal(expectedTerminal, finalizedCheckpoint.Control.CancellationFinalization?.Outcome);
+        Assert.Equal(2, finalizedCheckpoint.Activations.Length);
+        Assert.Equal(2, finalizedCheckpoint.Control.CurrentAttempt.SafePoints.Length);
+
+        var finalizationReplay = await runtime.ActivateAsync(
+            Context(cancelAtUtc.AddSeconds(3)),
+            fixture.Plan,
+            advancedCheckpoint.ContinuationIdentity,
+            finalActivation);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Replayed, finalizationReplay.Disposition);
+        Assert.Equal(finalized.Snapshot?.Revision, finalizationReplay.Snapshot?.Revision);
+    }
+
+    [Theory]
+    [InlineData(false, ProcessDurableRuntimeDisposition.Applied)]
+    [InlineData(true, ProcessDurableRuntimeDisposition.Replayed)]
+    public async Task AuthoredCancellationFinalizer_RecoversAcceptedCancellationCommitWithoutDuplicateWork(
+        bool crashAfterCommit,
+        ProcessDurableRuntimeDisposition expectedDisposition)
+    {
+        var fixture = CancellationFinalizerDurabilityTestFixture.Create();
+        var crash = ProcessStoreCrashScript.Once(
+            ProcessStoreMutationKind.AggregateCommit,
+            crashAfterCommit
+                ? ProcessStoreCrashPhase.AfterAtomicCommitBeforeReturn
+                : ProcessStoreCrashPhase.BeforeAtomicCommit);
+        var store = new InMemoryProcessDurableStore(crash.ShouldCrash);
+        var runtime = new ProcessDurableRuntime(
+            store,
+            RejectingProcessHost.Instance,
+            new("worker/authored-cancellation-crash-tests", WorkerLease),
+            new BindingResolver(fixture.Binding),
+            operationAdapterResolver: new SingleAdapterResolver(
+                new CancellationFinalizerAdapter(fixture)));
+        var initialized = await runtime.InitializeAsync(
+            Context(fixture.Start.AcceptedAtUtc),
+            fixture.Plan,
+            fixture.Start);
+        var initial = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot).Checkpoint;
+        var cancelAtUtc = fixture.Start.AcceptedAtUtc.AddSeconds(1);
+        var command = ProcessControlTestFixture.Create().Cancel(
+            initial.Control,
+            id: $"cancel/runtime-authored-finalizer-crash/{crashAfterCommit}",
+            issuedAtUtc: cancelAtUtc);
+
+        var cancellation = await runtime.CancelAsync(
+            Context(cancelAtUtc),
+            fixture.Plan,
+            command,
+            fixture.ActivationContext);
+        var checkpoint = Assert.IsType<ProcessDurableStoreSnapshot>(cancellation.Snapshot).Checkpoint;
+
+        Assert.True(crash.IsComplete);
+        Assert.Equal(expectedDisposition, cancellation.Disposition);
+        Assert.Equal(ProcessControlMode.Cancelling, checkpoint.Control.Mode);
+        Assert.Equal(
+            ProcessCancellationFinalizationPhase.FinalizerActive,
+            checkpoint.Continuation.CancellationFinalization?.Phase);
+        Assert.Single(checkpoint.Control.Receipts);
+        Assert.Single(checkpoint.Control.CurrentAttempt.SafePoints);
+        Assert.Single(checkpoint.Activations);
+        Assert.Single(checkpoint.DurableOperations);
+
+        var replay = await runtime.CancelAsync(
+            Context(cancelAtUtc.AddSeconds(1)),
+            fixture.Plan,
+            command,
+            fixture.ActivationContext);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Replayed, replay.Disposition);
+        Assert.Equal(cancellation.Snapshot?.Revision, replay.Snapshot?.Revision);
+    }
+
     static (CompiledProcessPlan Plan, ProcessStartReceipt Start) SignalAwaitProcess(
         ProcessControlTestFixture controls)
     {
@@ -1809,6 +1972,13 @@ public sealed partial class ProcessDurableRuntimeTests
                 : steppedUtcNow;
     }
 
+    sealed class IncrementingTimeProvider(DateTimeOffset initialUtcNow) : TimeProvider
+    {
+        long ticks;
+
+        public override DateTimeOffset GetUtcNow() => initialUtcNow.AddTicks(Interlocked.Increment(ref ticks));
+    }
+
     sealed class BindingResolver(DurableRequestBinding binding) : IDurableRequestBindingResolver
     {
         public bool TryResolve(RequestEnvelope request, out DurableRequestBinding? resolved)
@@ -1816,6 +1986,70 @@ public sealed partial class ProcessDurableRuntimeTests
             resolved = binding;
             return true;
         }
+    }
+
+    sealed class SingleAdapterResolver(IDurableOperationAdapter adapter) : IDurableOperationAdapterResolver
+    {
+        public bool TryResolve(RequestEnvelope request, out IDurableOperationAdapter? resolved)
+        {
+            resolved = adapter.Capabilities.Supports(request.Contract) ? adapter : null;
+            return resolved is not null;
+        }
+    }
+
+    sealed class CancellationFinalizerAdapter(
+        CancellationFinalizerDurabilityTestFixture fixture,
+        bool fail = false) : IDurableOperationAdapter
+    {
+        public DurableOperationAdapterCapabilities Capabilities { get; } = new(
+            DurableOperationIdempotencyEvidence.TargetDeduplication,
+            DurableOperationReconciliationCapability.Supported,
+            [fixture.Protocol.Request]);
+
+        public ValueTask<DurableOperationAttemptObservation> ExecuteAsync(
+            OperationContext context,
+            DurableOperationInvocation invocation)
+        {
+            var target = Assert.IsType<ProcessChildRequestTarget>(invocation.Request.ChildTarget);
+            RequestTerminalOutcome outcome = fail
+                ? new RequestFailureOutcome(
+                    target.OutcomeMapping.Failed,
+                    PortableValue.Concrete(
+                        new(new DefaultClrTypeRefMapper().Map(typeof(ProcessChildFailure), null)),
+                        ObservationValue.FromObject(new ProcessChildFailure(new("fail"), []))))
+                : new RequestResultOutcome(
+                    target.OutcomeMapping.Completed,
+                    fixture.Acknowledgement(fixture.Start.Request.InitialContinuation.ProcessAttemptId));
+            return ValueTask.FromResult<DurableOperationAttemptObservation>(
+                new DurableOperationOutcomeObservation(
+                    outcome,
+                    replyOrigin: new ProcessInteractionOrigin(
+                        target.Definition,
+                        fail ? new("fail") : new("return"),
+                        target.Continuation,
+                        new("activation/finalizer-child"),
+                        new("token/finalizer-child"),
+                        outcome: fail ? new("fail") : new("return"))));
+        }
+
+        public ValueTask<DurableOperationReconciliationObservation> ReconcileAsync(
+            OperationContext context,
+            DurableOperationReconciliationRequest request) =>
+            ValueTask.FromResult<DurableOperationReconciliationObservation>(new DurableOperationUnresolved());
+    }
+
+    sealed class RejectingProcessHost : IProcessReferenceHost
+    {
+        internal static RejectingProcessHost Instance { get; } = new();
+
+        public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation) =>
+            throw new InvalidOperationException("Unexpected Transition invocation.");
+
+        public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) =>
+            throw new InvalidOperationException("Unexpected Relation invocation.");
+
+        public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
+            throw new InvalidOperationException("Unexpected Signal resolution.");
     }
 
     sealed class RecordingHost(ProcessOperationResult result) : IProcessReferenceHost

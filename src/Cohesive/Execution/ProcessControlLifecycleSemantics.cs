@@ -181,6 +181,7 @@ internal static class ProcessControlLifecycleSemantics
     {
         next = position;
         if (position.Mode is not (ProcessControlMode.Running
+                or ProcessControlMode.Cancelling
                 or ProcessControlMode.PauseRequested
                 or ProcessControlMode.RestartRequested
                 or ProcessControlMode.CancellationRequested)
@@ -193,6 +194,7 @@ internal static class ProcessControlLifecycleSemantics
         next = position.Mode switch
         {
             ProcessControlMode.Running => position with { Phase = ProcessControlExecutionPhase.AtSafePoint },
+            ProcessControlMode.Cancelling => position with { Phase = ProcessControlExecutionPhase.AtSafePoint },
             ProcessControlMode.PauseRequested => position with
             {
                 Mode = ProcessControlMode.Paused,

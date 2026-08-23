@@ -3,6 +3,7 @@ using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
+using Cohesive.Processes.IR;
 
 namespace Cohesive.Storage.Processes;
 
@@ -132,6 +133,9 @@ public sealed partial class ProcessDurableRuntime
                 var workerFence = ownedSnapshot.WorkerLease?.Fence
                     ?? throw new InvalidOperationException(
                         "External reconciliation requires its owning Process worker fence.");
+                var childCancellation = FindChildCancellationIntent(
+                    ownedSnapshot.Checkpoint,
+                    ownedOperation);
 
                 using var reconciliationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                     context.CancellationToken);
@@ -147,11 +151,13 @@ public sealed partial class ProcessDurableRuntime
                     sourceAttempt.Claim.AttemptId,
                     sourceAttempt.Claim.Fence,
                     workerFence);
-                var reconciliationTask = DurableOperationReferenceExecutor.ReconcileAsync(
+                var reconciliationTask = ReconcileAdapterAsync(
                         reconciliationContext,
                         ownedOperation,
-                        selectedAdapter)
-                    .AsTask();
+                        selectedAdapter,
+                        childCancellation,
+                        ownedSnapshot.Checkpoint.Start.Request.Context.Authorization,
+                        ownedSnapshot.Checkpoint.Continuation.CancellationFinalization?.RequestedAtUtc);
 
                 var firstCompleted = await Task.WhenAny(reconciliationTask, maintenanceTask)
                     .ConfigureAwait(false);
@@ -258,6 +264,35 @@ public sealed partial class ProcessDurableRuntime
                     null);
             }
 
+            static async Task<DurableOperationReconciliationObservation> ReconcileAdapterAsync(
+                OperationContext reconciliationContext,
+                DurableOperationState ownedOperation,
+                IDurableOperationAdapter selectedAdapter,
+                ProcessChildCancellationIntent? childCancellation,
+                ProcessControlAuthorizationContext authorization,
+                DateTimeOffset? cancellationRequestedAtUtc)
+            {
+                if (childCancellation is not null)
+                {
+                    var childAdapter = selectedAdapter as IProcessChildCancellationAdapter
+                        ?? throw new InvalidOperationException(
+                            "The exact child Request adapter does not realize propagated Process cancellation.");
+                    await childAdapter.CancelChildAsync(
+                            reconciliationContext,
+                            ownedOperation.Request,
+                            childCancellation,
+                            authorization,
+                            cancellationRequestedAtUtc ?? throw new InvalidOperationException(
+                                "Propagated child cancellation retained no stable request time."))
+                        .ConfigureAwait(false);
+                }
+                return await DurableOperationReferenceExecutor.ReconcileAsync(
+                        reconciliationContext,
+                        ownedOperation,
+                        selectedAdapter)
+                    .ConfigureAwait(false);
+            }
+
             if (operation.Status == DurableOperationStatus.Dispositioned)
             {
                 return CurrentOperationResult(disposition, snapshot, operation, lastCommit);
@@ -324,6 +359,14 @@ public sealed partial class ProcessDurableRuntime
                 {
                     return AdapterIncompatible(snapshot, operation, exception.Message);
                 }
+                if (FindChildCancellationIntent(snapshot.Checkpoint, operation) is not null
+                    && reconciliationAdapter is not IProcessChildCancellationAdapter)
+                {
+                    return AdapterIncompatible(
+                        snapshot,
+                        operation,
+                        "The exact child Request adapter does not realize propagated Process cancellation.");
+                }
 
                 var reconciliation = await ReconcileOutsideInstanceGateAsync(reconciliationAdapter!)
                     .ConfigureAwait(false);
@@ -370,6 +413,15 @@ public sealed partial class ProcessDurableRuntime
             catch (InvalidOperationException exception)
             {
                 return AdapterIncompatible(snapshot, operation, exception.Message);
+            }
+            var projectedChildCancellation = FindChildCancellationIntent(snapshot.Checkpoint, operation);
+            if (projectedChildCancellation is not null
+                && adapter is not IProcessChildCancellationAdapter)
+            {
+                return AdapterIncompatible(
+                    snapshot,
+                    operation,
+                    "The exact child Request adapter does not realize propagated Process cancellation.");
             }
 
             if (operation.Status is (DurableOperationStatus.Claimed or DurableOperationStatus.Dispatched)
@@ -693,7 +745,14 @@ public sealed partial class ProcessDurableRuntime
                 workerFence,
                 operation.Binding.ClaimLease,
                 executor);
-            var adapterTask = InvokeAdapterAsync(inFlightContext, invocation, adapter!);
+            var activeChildCancellation = FindChildCancellationIntent(snapshot.Checkpoint, operation);
+            var adapterTask = InvokeAdapterAsync(
+                inFlightContext,
+                invocation,
+                adapter!,
+                activeChildCancellation,
+                snapshot.Checkpoint.Start.Request.Context.Authorization,
+                snapshot.Checkpoint.Continuation.CancellationFinalization?.RequestedAtUtc);
 
             var firstCompleted = await Task.WhenAny(adapterTask, maintenanceTask).ConfigureAwait(false);
             if (firstCompleted == maintenanceTask)
@@ -1249,9 +1308,29 @@ public sealed partial class ProcessDurableRuntime
     static async Task<DurableOperationAttemptObservation> InvokeAdapterAsync(
         OperationContext context,
         DurableOperationInvocation invocation,
-        IDurableOperationAdapter adapter) =>
-        await adapter.ExecuteAsync(context, invocation).ConfigureAwait(false)
-        ?? throw new InvalidOperationException("A durable operation adapter returned a null attempt observation.");
+        IDurableOperationAdapter adapter,
+        ProcessChildCancellationIntent? childCancellation = null,
+        ProcessControlAuthorizationContext? authorization = null,
+        DateTimeOffset? cancellationRequestedAtUtc = null)
+    {
+        if (childCancellation is not null)
+        {
+            var childAdapter = adapter as IProcessChildCancellationAdapter
+                ?? throw new InvalidOperationException(
+                    "The exact child Request adapter does not realize propagated Process cancellation.");
+            await childAdapter.CancelChildAsync(
+                    context,
+                    invocation.Request,
+                    childCancellation,
+                    authorization ?? throw new InvalidOperationException(
+                        "Propagated child cancellation retained no parent authorization evidence."),
+                    cancellationRequestedAtUtc ?? throw new InvalidOperationException(
+                        "Propagated child cancellation retained no stable request time."))
+                .ConfigureAwait(false);
+        }
+        return await adapter.ExecuteAsync(context, invocation).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("A durable operation adapter returned a null attempt observation.");
+    }
 
     static void ObserveAbandonedAdapterTask(Task adapterTask) =>
         _ = adapterTask.ContinueWith(
@@ -1862,6 +1941,12 @@ public sealed partial class ProcessDurableRuntime
             or DurableOperationStatus.RetryEligible
             or DurableOperationStatus.ReconciliationRequired;
 
+    static ProcessChildCancellationIntent? FindChildCancellationIntent(
+        ProcessDurableCheckpoint checkpoint,
+        DurableOperationState operation) =>
+        ProcessChildCancellationIntents.Project(checkpoint.Continuation)
+            .SingleOrDefault(intent => intent.RequestEmission == operation.OperationId);
+
     static bool HasOpenOriginAttempt(
         ProcessDurableCheckpoint checkpoint,
         DurableOperationState operation) =>
@@ -1869,8 +1954,37 @@ public sealed partial class ProcessDurableRuntime
         && origin.Continuation == checkpoint.ContinuationIdentity
         && origin.Continuation.ProcessAttemptId == checkpoint.Control.CurrentAttempt.AttemptId
         && checkpoint.Continuation.Terminal.Kind == ExecutionTerminalOutcomeKind.None
-        && checkpoint.Control.Mode == ProcessControlMode.Running
+        && (checkpoint.Control.Mode == ProcessControlMode.Running
+            || IsActiveCancellationFinalizer(checkpoint, operation)
+            || IsCancellationRequestedChild(checkpoint, operation))
         && checkpoint.Control.CurrentAttempt.Disposition == ProcessControlAttemptDisposition.Current;
+
+    static bool IsActiveCancellationFinalizer(
+        ProcessDurableCheckpoint checkpoint,
+        DurableOperationState operation) =>
+        checkpoint.Control.Mode == ProcessControlMode.Cancelling
+        && checkpoint.Continuation.CancellationFinalization?.Phase
+            == ProcessCancellationFinalizationPhase.FinalizerActive
+        && operation.Request.ChildTarget is { } target
+        && checkpoint.Continuation.Children.Any(child =>
+            child.Purpose == ProcessChildPurpose.Compensation
+            && child.Disposition == ProcessChildDisposition.Active
+            && child.RequestEmission == operation.OperationId
+            && child.Process == target.Definition
+            && child.Continuation == target.Continuation);
+
+    static bool IsCancellationRequestedChild(
+        ProcessDurableCheckpoint checkpoint,
+        DurableOperationState operation) =>
+        checkpoint.Control.Mode == ProcessControlMode.Cancelling
+        && checkpoint.Continuation.CancellationFinalization?.Phase
+            == ProcessCancellationFinalizationPhase.WaitingForPropagatedChildren
+        && operation.Request.ChildTarget is { } target
+        && checkpoint.Continuation.Children.Any(child =>
+            child.Disposition == ProcessChildDisposition.CancellationRequested
+            && child.RequestEmission == operation.OperationId
+            && child.Process == target.Definition
+            && child.Continuation == target.Continuation);
 
     static ProcessDurableOperationResult ClosedOriginOperationResult(
         ProcessDurableStoreSnapshot snapshot,

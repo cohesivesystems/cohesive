@@ -16,13 +16,13 @@ public static class DurableTaskProcessTargetProfile
     public static ProcessInterpreterTargetId Target { get; } = new(
         "cohesive.adapters.durable-task.scheduler");
 
-    /// <summary>Stable identity of the initial realization-planning profile.</summary>
+    /// <summary>Stable identity of the current realization-planning profile.</summary>
     public static ProcessInterpreterCapabilityProfileId PlanningProfileId { get; } = new(
-        "cohesive.adapters.durable-task.scheduler/realization-planning-v1");
+        "cohesive.adapters.durable-task.scheduler/realization-planning-v2");
 
     /// <summary>Stable identity of the bounded, conformance-tested executable profile.</summary>
     public static ProcessInterpreterCapabilityProfileId ExecutableProfileId { get; } = new(
-        "cohesive.adapters.durable-task.scheduler/executable-v2");
+        "cohesive.adapters.durable-task.scheduler/executable-v3");
 
     /// <summary>
     /// Boundary requiring every externally visible effect to supply stable idempotency or authored reconciliation.
@@ -47,7 +47,7 @@ public static class DurableTaskProcessTargetProfile
         "durable-task/boundary/payload-limit-redaction-and-externalization/v1");
 
     /// <summary>
-    /// Complete initial planning profile. Every currently declared canonical construct and guarantee has one explicit
+    /// Complete planning profile. Every currently declared canonical construct and guarantee has one explicit
     /// native, composed, constrained, or unavailable disposition.
     /// </summary>
     public static ProcessInterpreterCapabilityProfile Planning { get; } = CreatePlanningProfile();
@@ -125,9 +125,10 @@ public static class DurableTaskProcessTargetProfile
                 ProcessWireNames.RepeatAcrossActivationNode,
                 "continue-as-new-recurrence",
                 ["canonical-recurrence-evidence", "continue-as-new"]),
-            UnavailableConstruct(
+            ComposedConstruct(
                 ProcessWireNames.CancellationFinalizerNode,
-                "authored-cancellation-finalization"),
+                "authored-cancellation-finalization",
+                ["canonical-cancellation-evidence", "sub-orchestration", "external-event", "orchestration-history-replay"]),
             NativeConstruct(ProcessWireNames.ReturnNode, "orchestration-completion"),
             NativeConstruct(ProcessWireNames.FailNode, "orchestration-failure"),
 
@@ -247,9 +248,10 @@ public static class DurableTaskProcessTargetProfile
                 ProcessWireNames.RepeatAcrossActivationNode,
                 "canonical-bounded-recurrence",
                 ["sequential-interpreter", "canonical-recurrence-evidence", "continue-as-new"]),
-            ExecutableUnavailableConstruct(
+            ExecutableComposedConstruct(
                 ProcessWireNames.CancellationFinalizerNode,
-                "authored-cancellation-finalization"),
+                "canonical-authored-cancellation-finalization",
+                ["sequential-interpreter", "canonical-cancellation-evidence", "sub-orchestration", "external-event"]),
             ExecutableNativeConstruct(ProcessWireNames.ReturnNode, "canonical-return"),
             ExecutableNativeConstruct(ProcessWireNames.FailNode, "canonical-failure"),
 

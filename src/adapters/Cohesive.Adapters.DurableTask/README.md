@@ -361,7 +361,12 @@ Old target-local timers and non-child pending result tasks are abandoned. Propag
 replacement child executions from overlapping, but it cannot undo a child side effect that committed before the
 child reached its cancellation safe point. Such operations must retain their declared domain idempotency or target
 deduplication boundary across a replacement attempt. Cancel performs a canonical cooperative cancellation activation
-and retains its terminal trace. Terminate is represented by terminal `ProcessControlState`; the physical orchestration
+and retains its terminal trace. A definition with `CancellationFinalizerProcessNode` remains `Cancelling` after
+normal work closes, waits for every propagated child closure, then schedules the finalizer through its ordinary
+child Request/sub-orchestration protocol. Only an exact acknowledgement closes lifecycle control as `Cancelled`;
+the finalizer's failure, cancellation, termination, invalid acknowledgement, or unmapped outcome is retained as
+`CancellationFailed`. Replayed orchestration history reuses the same child occurrence, Request emission, activation,
+and safe-point evidence. Terminate is represented by terminal `ProcessControlState`; the physical orchestration
 completes normally so the canonical termination receipt and cleanup decision remain queryable. The adapter
 intentionally does not substitute similarly named Scheduler suspend/terminate APIs because they cannot preserve this
 complete protocol.

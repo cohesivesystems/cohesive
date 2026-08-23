@@ -187,6 +187,62 @@ public sealed class ProcessChildDurableOperationAdapterTests
     }
 
     [Fact]
+    public async Task CancellationCapability_CancelsExactStartedChildAndReturnsAttributableClosure()
+    {
+        var fixture = CreateFixture();
+        var exactStart = ProcessChildStartSemantics.Create(
+            fixture.ParentRequest,
+            fixture.ChildTarget,
+            ObservedAtUtc);
+        var initialized = await fixture.ChildRuntime.InitializeAsync(
+            fixture.Context,
+            fixture.ChildPlan,
+            exactStart);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Applied, initialized.Disposition);
+
+        var requestedAtUtc = ObservedAtUtc.AddMinutes(1);
+        var cancellationContext = OperationContext.Create(
+            timeProvider: new FixedTimeProvider(requestedAtUtc));
+        var origin = Assert.IsType<ProcessInteractionOrigin>(fixture.ParentRequest.Context.Origin);
+        var responseTarget = Assert.IsType<ProcessTokenInteractionTarget>(fixture.ParentRequest.ResponseTarget);
+        var intent = new ProcessChildCancellationIntent(
+            "child-cancellation/process-child-adapter-tests/started",
+            origin.Definition,
+            origin.Continuation,
+            fixture.ChildTarget.OwnerToken,
+            responseTarget.Token,
+            origin.Node,
+            "child/process-child-adapter-tests/started",
+            fixture.ParentRequest.Context.EmissionId,
+            fixture.ChildTarget.Definition,
+            fixture.ChildTarget.Continuation,
+            ProcessChildPurpose.Work);
+
+        var closure = await fixture.ChildAdapter().CancelChildAsync(
+            cancellationContext,
+            fixture.ParentRequest,
+            intent,
+            new(
+                "tests.process-child-adapter.lifecycle",
+                fixture.ParentRequest.Context.AuthorityScope,
+                "tests/parent-cancellation"),
+            requestedAtUtc);
+
+        Assert.Equal(intent.IntentId, closure.IntentId);
+        Assert.Equal(fixture.ChildTarget.Continuation, closure.ChildContinuation);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Cancelled, closure.Outcome);
+        Assert.Equal(requestedAtUtc, closure.ObservedAtUtc);
+        Assert.Equal(0, fixture.WorkerAdapter.ExecutionCalls);
+        var inspected = await fixture.ChildRuntime.InspectAsync(
+            cancellationContext,
+            fixture.ChildPlan,
+            fixture.ChildTarget.Continuation);
+        Assert.Equal(
+            ExecutionTerminalOutcomeKind.Cancelled,
+            Assert.IsType<ProcessDurableStoreSnapshot>(inspected.Snapshot).Checkpoint.Continuation.Terminal.Kind);
+    }
+
+    [Fact]
     public async Task PreventChildStart_ExactOrdinaryInitializationWinningRaceIsReportedAsStarted()
     {
         var fixture = CreateFixture();

@@ -3,6 +3,7 @@ using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
+using Cohesive.Processes.IR;
 
 namespace Cohesive.Storage.Processes;
 
@@ -292,6 +293,7 @@ public sealed partial class ProcessDurableRuntime
 
             var checkpoint = snapshot.Checkpoint;
             var controlExecutor = ControlExecutor(plan);
+            var cancellationPolicy = CancellationPolicy(plan);
             var begun = controlExecutor.BeginActivation(
                 checkpoint.Control,
                 new(
@@ -348,7 +350,8 @@ public sealed partial class ProcessDurableRuntime
                     Expectation(begun.State),
                     activation.Id,
                     safePointNode,
-                    committedAtUtc));
+                    committedAtUtc),
+                cancellationPolicy);
             if (safePoint.Disposition != ProcessControlDecisionDisposition.SafePointReached)
             {
                 return new(
@@ -358,12 +361,17 @@ public sealed partial class ProcessDurableRuntime
                     diagnostics: safePoint.Diagnostics);
             }
 
+            var committedControl = CompleteCancellationIfTerminal(
+                controlExecutor,
+                safePoint.State,
+                decision.State,
+                committedAtUtc);
             if (!ProcessDurableCheckpointReducer.TryApplyActivation(
                     plan,
                     checkpoint,
                     activation,
                     decision,
-                    safePoint.State,
+                    committedControl,
                     replayHost.Observations,
                     bindingResolver,
                     committedAtUtc,
@@ -484,8 +492,13 @@ public sealed partial class ProcessDurableRuntime
             }
 
             var controller = ControlExecutor(plan);
+            var cancellationPolicy = CancellationPolicy(plan);
             var decisionObservedAtUtc = context.UtcNow;
-            var preview = controller.Apply(loaded.Checkpoint.Control, command, decisionObservedAtUtc);
+            var preview = controller.Apply(
+                loaded.Checkpoint.Control,
+                command,
+                decisionObservedAtUtc,
+                cancellationPolicy);
             if (IsRejected(preview.Disposition))
             {
                 return new(
@@ -678,8 +691,13 @@ public sealed partial class ProcessDurableRuntime
             }
 
             var controller = ControlExecutor(plan);
+            var cancellationPolicy = CancellationPolicy(plan);
             var decisionObservedAtUtc = context.UtcNow;
-            var preview = controller.Apply(loaded.Checkpoint.Control, command, decisionObservedAtUtc);
+            var preview = controller.Apply(
+                loaded.Checkpoint.Control,
+                command,
+                decisionObservedAtUtc,
+                cancellationPolicy);
             if (IsRejected(preview.Disposition))
             {
                 return new(
@@ -725,7 +743,11 @@ public sealed partial class ProcessDurableRuntime
 
             var checkpoint = snapshot.Checkpoint;
             var expectedContinuation = checkpoint.ContinuationIdentity;
-            var decision = controller.Apply(checkpoint.Control, command, decisionObservedAtUtc);
+            var decision = controller.Apply(
+                checkpoint.Control,
+                command,
+                decisionObservedAtUtc,
+                cancellationPolicy);
             if (decision.Disposition == ProcessControlDecisionDisposition.Replayed)
             {
                 return ResolveCancellationReplay(snapshot, command, activationContext, decision);
@@ -805,12 +827,33 @@ public sealed partial class ProcessDurableRuntime
                     .Where(static entry => entry.Receipt is null)
                     .Select(static entry => entry.Input)],
                 cancellation: cancellation);
+            ProcessControlState? activeControl = null;
+            if (cancellationPolicy == ProcessCancellationCompletionPolicy.AuthoredFinalization)
+            {
+                var begun = controller.BeginActivation(
+                    decision.State,
+                    new(
+                        Expectation(decision.State),
+                        activation.Id,
+                        activation.ObservedAtUtc));
+                if (begun.Disposition != ProcessControlDecisionDisposition.ActivationStarted)
+                {
+                    return new(
+                        ProcessDurableRuntimeDisposition.Rejected,
+                        snapshot,
+                        decision,
+                        diagnostics: begun.Diagnostics);
+                }
+                activeControl = begun.State;
+            }
             var activationDecision = Activate(
                 plan,
                 checkpoint.Continuation,
                 activation,
                 host);
-            if (activationDecision.Disposition != ProcessActivationDisposition.Cancelled)
+            if (activationDecision.Disposition is ProcessActivationDisposition.Rejected
+                || cancellationPolicy == ProcessCancellationCompletionPolicy.Immediate
+                    && activationDecision.Disposition != ProcessActivationDisposition.Cancelled)
             {
                 return new(
                     ProcessDurableRuntimeDisposition.Rejected,
@@ -821,12 +864,42 @@ public sealed partial class ProcessDurableRuntime
 
             var before = ProcessStorageContentFingerprints.Continuation(checkpoint.Continuation);
             var committedAtUtc = context.UtcNow;
+            var committedControl = decision.State;
+            if (activeControl is not null)
+            {
+                var safePointNode = ResolveSafePointNode(plan, activationDecision);
+                var safePoint = controller.ReachSafePoint(
+                    activeControl,
+                    new(
+                        ProcessDurableRuntimeIdentities.SafePoint(
+                            expectedContinuation,
+                            activation,
+                            before),
+                        Expectation(activeControl),
+                        activation.Id,
+                        safePointNode,
+                        committedAtUtc),
+                    cancellationPolicy);
+                if (safePoint.Disposition != ProcessControlDecisionDisposition.SafePointReached)
+                {
+                    return new(
+                        ProcessDurableRuntimeDisposition.Rejected,
+                        snapshot,
+                        decision,
+                        diagnostics: safePoint.Diagnostics);
+                }
+                committedControl = CompleteCancellationIfTerminal(
+                    controller,
+                    safePoint.State,
+                    activationDecision.State,
+                    committedAtUtc);
+            }
             if (!ProcessDurableCheckpointReducer.TryApplyActivation(
                     plan,
                     checkpoint,
                     activation,
                     activationDecision,
-                    decision.State,
+                    committedControl,
                     [],
                     bindingResolver,
                     committedAtUtc,
@@ -1340,7 +1413,7 @@ public sealed partial class ProcessDurableRuntime
                     "A terminal Process cannot enter another finite activation.",
                     "/continuation/terminal")]);
         }
-        if (checkpoint.Control.Mode != ProcessControlMode.Running
+        if (checkpoint.Control.Mode is not (ProcessControlMode.Running or ProcessControlMode.Cancelling)
             || checkpoint.Control.CurrentAttempt.Phase is not (
                 ProcessControlExecutionPhase.Ready or ProcessControlExecutionPhase.AtSafePoint))
         {
@@ -1361,6 +1434,39 @@ public sealed partial class ProcessDurableRuntime
         ?? (decision.Evidence.Trace.IsEmpty
             ? plan.Definition.Entry
             : decision.Evidence.Trace[^1].Node);
+
+    static ProcessCancellationCompletionPolicy CancellationPolicy(CompiledProcessPlan plan) =>
+        plan.Definition.Nodes.Any(static node => node is CancellationFinalizerProcessNode)
+            ? ProcessCancellationCompletionPolicy.AuthoredFinalization
+            : ProcessCancellationCompletionPolicy.Immediate;
+
+    static ProcessControlState CompleteCancellationIfTerminal(
+        ProcessControlReferenceExecutor controller,
+        ProcessControlState control,
+        ProcessContinuationState continuation,
+        DateTimeOffset observedAtUtc)
+    {
+        if (control.Mode != ProcessControlMode.Cancelling
+            || continuation.Terminal.Kind is not (
+                ExecutionTerminalOutcomeKind.Cancelled or ExecutionTerminalOutcomeKind.Failed))
+        {
+            return control;
+        }
+
+        var intent = continuation.CancellationFinalization?.Intent
+            ?? throw new InvalidOperationException(
+                "A terminal authored cancellation continuation retained no causal cancellation intent.");
+        var completed = controller.CompleteCancellationFinalization(
+            control,
+            new(intent, continuation.Terminal.Kind, observedAtUtc));
+        if (completed.Disposition != ProcessControlDecisionDisposition.CancellationFinalized)
+        {
+            throw new InvalidOperationException(
+                "Canonical lifecycle control rejected terminal authored cancellation evidence: "
+                + string.Join("; ", completed.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+        }
+        return completed.State;
+    }
 
     static bool IsReplay(ProcessControlDecisionDisposition disposition) =>
         disposition is ProcessControlDecisionDisposition.Inspected
@@ -1396,8 +1502,7 @@ public sealed partial class ProcessDurableRuntime
             command.Context.CommandId);
         var receipt = snapshot.Checkpoint.Activations.FirstOrDefault(candidate =>
             candidate.Continuation == continuation
-            && candidate.Activation.Id == activationId
-            && candidate.Disposition == ProcessActivationDisposition.Cancelled);
+            && candidate.Activation.Id == activationId);
         if (receipt is null)
         {
             return new(
@@ -1406,7 +1511,7 @@ public sealed partial class ProcessDurableRuntime
                 decision,
                 diagnostics: [Error(
                     ProcessCheckpointDiagnosticCodes.ActivationReceiptIncompatible,
-                    "The replayed Cancel receipt has no exact terminal activation evidence.",
+                    "The replayed Cancel receipt has no exact cancellation activation evidence.",
                     "/checkpoint/activations")]);
         }
 

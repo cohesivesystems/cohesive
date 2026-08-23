@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Processes.Execution;
+using Cohesive.Processes.IR;
 
 namespace Cohesive.Storage.Processes;
 
@@ -610,7 +611,8 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
                 continue;
             }
 
-            if (!physicalAdmissionIsOpen
+            if ((!physicalAdmissionIsOpen
+                    && !IsCancellationProtocolOperation(current, emission.EmissionId))
                 || IsAttributedToClosedAttempt(
                     emission.Envelope,
                     replacementClosedOperationEmissions,
@@ -631,7 +633,8 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
                 continue;
             }
 
-            if (!physicalAdmissionIsOpen)
+            if (!physicalAdmissionIsOpen
+                && !IsCancellationProtocolOperation(current, operation.OperationId))
             {
                 return true;
             }
@@ -645,6 +648,34 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
             }
         }
         return false;
+    }
+
+    static bool IsCancellationProtocolOperation(
+        ProcessDurableCheckpoint checkpoint,
+        EmissionId operationId)
+    {
+        if (checkpoint.Control.Mode != ProcessControlMode.Cancelling
+            || checkpoint.Continuation.Terminal.Kind != ExecutionTerminalOutcomeKind.None)
+        {
+            return false;
+        }
+
+        var operation = checkpoint.DurableOperations.FirstOrDefault(candidate =>
+            candidate.OperationId == operationId);
+        if (operation?.Request.ChildTarget is not { } target)
+        {
+            return false;
+        }
+        var phase = checkpoint.Continuation.CancellationFinalization?.Phase;
+        return checkpoint.Continuation.Children.Any(child =>
+            child.RequestEmission == operationId
+            && child.Process == target.Definition
+            && child.Continuation == target.Continuation
+            && (phase == ProcessCancellationFinalizationPhase.FinalizerActive
+                    && child.Purpose == ProcessChildPurpose.Compensation
+                    && child.Disposition == ProcessChildDisposition.Active
+                || phase == ProcessCancellationFinalizationPhase.WaitingForPropagatedChildren
+                    && child.Disposition == ProcessChildDisposition.CancellationRequested));
     }
 
     static bool AppendsEvidenceToClosedAttempt(

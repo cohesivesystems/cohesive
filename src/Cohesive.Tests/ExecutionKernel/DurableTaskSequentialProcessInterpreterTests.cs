@@ -6,6 +6,7 @@ using Cohesive.Execution;
 using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
+using Cohesive.Processes.Authoring;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
 using Cohesive.Processes.Runtime;
@@ -669,6 +670,246 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
         Assert.Equal(ProcessControlMode.Running, result.Control.Mode);
         Assert.Equal(start.Receipt.Request.InitialContinuation, result.State.Continuation);
+    }
+
+    [Theory]
+    [InlineData("exact-acknowledgement")]
+    [InlineData("wrong-acknowledgement")]
+    [InlineData("failed-finalizer")]
+    public async Task AuthoredCancellationFinalizer_UsesOrdinaryChildRequestAndClosesControlAfterAcknowledgement(
+        string scenario)
+    {
+        var fixture = CancellationFinalizerDurabilityTestFixture.Create();
+        var start = new DurableTaskSequentialProcessStart(
+            fixture.Start,
+            fixture.ActivationContext);
+        var initialControl = fixture.Start.CreateInitialState();
+        var cancelAtUtc = fixture.Start.AcceptedAtUtc.AddSeconds(1);
+        var cancel = ProcessControlTestFixture.Create().Cancel(
+            initialControl,
+            id: "cancel/durable-task-authored-finalizer",
+            issuedAtUtc: cancelAtUtc);
+        var controls = Channel.CreateUnbounded<ProcessControlCommand>();
+        await controls.Writer.WriteAsync(cancel);
+        var now = cancelAtUtc;
+
+        var result = await DurableTaskSequentialProcessInterpreter.RunAsync(
+            fixture.Plan,
+            start,
+            new DurableRequestBindingCatalog([fixture.Binding]),
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            invocation =>
+            {
+                var target = Assert.IsType<ProcessChildRequestTarget>(invocation.Request.ChildTarget);
+                RequestTerminalOutcome outcome = scenario switch
+                {
+                    "exact-acknowledgement" or "wrong-acknowledgement" => new RequestResultOutcome(
+                        target.OutcomeMapping.Completed,
+                        fixture.Acknowledgement(scenario == "exact-acknowledgement"
+                            ? initialControl.CurrentAttempt.AttemptId
+                            : new("process-attempt/wrong"))),
+                    "failed-finalizer" => new RequestFailureOutcome(
+                        target.OutcomeMapping.Failed,
+                        PortableValue.Concrete(
+                            ProcessChildFailureContract(),
+                            ObservationValue.FromObject(new ProcessChildFailure(
+                                new("fail"),
+                                [])))),
+                    _ => throw new InvalidOperationException($"Unknown test scenario '{scenario}'.")
+                };
+                var observation = new DurableOperationOutcomeObservation(
+                    outcome,
+                    replyOrigin: new ProcessInteractionOrigin(
+                        target.Definition,
+                        scenario == "failed-finalizer" ? new("fail") : new("return"),
+                        target.Continuation,
+                        new("activation/durable-task-finalizer-child"),
+                        new("token/durable-task-finalizer-child"),
+                        outcome: scenario == "failed-finalizer" ? new("fail") : new("return")));
+                now = now.AddTicks(1);
+                return Task.FromResult(new DurableTaskDurableOperationAttemptResult(
+                    observation,
+                    deadlineElapsed: false));
+            },
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            TestDurableTimer,
+            () => now,
+            waitForControl: () => controls.Reader.ReadAsync().AsTask());
+
+        var exactAcknowledgement = scenario == "exact-acknowledgement";
+        var expectedOutcome = exactAcknowledgement
+            ? ExecutionTerminalOutcomeKind.Cancelled
+            : ExecutionTerminalOutcomeKind.Failed;
+        Assert.Equal(
+            exactAcknowledgement ? ProcessActivationDisposition.Cancelled : ProcessActivationDisposition.Failed,
+            result.Disposition);
+        Assert.Equal(
+            exactAcknowledgement ? ProcessControlMode.Cancelled : ProcessControlMode.CancellationFailed,
+            result.Control.Mode);
+        Assert.Equal(expectedOutcome, result.State.Terminal.Kind);
+        Assert.Equal(
+            expectedOutcome,
+            result.Control.CancellationFinalization?.Outcome);
+        var status = DurableTaskProcessStatus.Project(result);
+        Assert.Equal(result.Control.Mode, status.ControlMode);
+        Assert.Equal(expectedOutcome, status.TerminalOutcome.Kind);
+        Assert.Single(result.DurableOperations);
+        Assert.Equal(DurableOperationStatus.Dispositioned, result.DurableOperations[0].State.Status);
+        Assert.Equal(2, result.Evidence.Length);
+        Assert.Equal(2, result.Control.CurrentAttempt.SafePoints.Length);
+    }
+
+    [Fact]
+    public async Task AuthoredCancellationFinalizer_WaitsForPropagatedChildClosureBeforeStarting()
+    {
+        var finalizer = CancellationFinalizerDurabilityTestFixture.Create();
+        var child = ProcessAuthoring.Create<string, string>(
+            new(
+                new("process/tests/durable-task-cancellable-child"),
+                new("revision/1"),
+                new("return"),
+                ProcessRecoveryPolicy.ContinueAttempt,
+                Provenance()),
+            process => process.Return(new("return"), process.Input.Value));
+        var childProtocol = child.InvocationProtocol(
+            new("request/tests/durable-task-cancellable-child"),
+            new("revision/1"),
+            ProcessInvocationResponsePolicy.ReconciledJoin(TimeSpan.FromDays(30)),
+            Provenance());
+        var catalogValidation = InteractionContractCatalog.TryCreate(
+            [.. childProtocol.Documents, .. finalizer.Protocol.Documents],
+            out var catalog);
+        Assert.True(catalogValidation.IsValid, Format(catalogValidation.Diagnostics));
+        var parent = Compile(
+            Definition(
+                "child/run",
+                [
+                    new InvokeProcessProcessNode(
+                        new("child/run"),
+                        child.Reference,
+                        childProtocol.Request,
+                        childProtocol.OutcomeMapping,
+                        Expr.BoundValue(ProcessBindingIds.Input),
+                        ProcessChildPurpose.Work,
+                        ProcessChildCancellationPolicy.Propagate,
+                        [
+                            new(new("child/completed"), childProtocol.OutcomeMapping.Completed, new(Edge("edge/child-completed", "return"))),
+                            new(new("child/failed"), childProtocol.OutcomeMapping.Failed, new(Edge("edge/child-failed", "fail"))),
+                            new(new("child/cancelled"), childProtocol.OutcomeMapping.Cancelled, new(Edge("edge/child-cancelled", "fail"))),
+                            new(new("child/terminated"), childProtocol.OutcomeMapping.Terminated, new(Edge("edge/child-terminated", "fail")))
+                        ]),
+                    new ReturnProcessNode(new("return"), Expr.Const("done")),
+                    new FailProcessNode(new("fail"), Expr.Const("failed")),
+                    new CancellationFinalizerProcessNode(
+                        new("cancel/finalize"),
+                        finalizer.Protocol.Process.Reference,
+                        finalizer.Protocol.Request,
+                        finalizer.Protocol.OutcomeMapping)
+                ]),
+            Assert.IsType<InteractionContractCatalog>(catalog),
+            [
+                new(
+                    child.Reference,
+                    ProcessDefinitionLinkKind.Process,
+                    child.Definition.Input,
+                    child.Definition.Result,
+                    [],
+                    child.Definition.RecoveryPolicy),
+                new(
+                    finalizer.Protocol.Process.Reference,
+                    ProcessDefinitionLinkKind.Process,
+                    finalizer.Protocol.Process.Definition.Input,
+                    finalizer.Protocol.Process.Definition.Result,
+                    [],
+                    finalizer.Protocol.Process.Definition.RecoveryPolicy)
+            ],
+            "process/tests/durable-task-propagated-cancellation-parent");
+        var start = Start(parent, "input", "instance/durable-task-propagated-cancellation");
+        var now = StartedAtUtc;
+        var controls = Channel.CreateUnbounded<ProcessControlCommand>();
+        var ordinaryResult = new TaskCompletionSource<DurableTaskDurableOperationAttemptResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var childScheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ConcurrentQueue<DurableTaskSequentialProcessResult> observations = [];
+        ProcessChildRequestTarget? ordinaryTarget = null;
+
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            parent,
+            start,
+            new DurableRequestBindingCatalog(
+            [
+                childProtocol.BindDurably(
+                    3,
+                    TimeSpan.FromMinutes(1),
+                    DurableOperationIdempotencyEvidence.TargetDeduplication,
+                    reconciliationTarget: new(child.Reference, new("return"))),
+                finalizer.Binding
+            ]),
+            UnexpectedOperation,
+            UnexpectedDurableOperation,
+            invocation =>
+            {
+                var target = Assert.IsType<ProcessChildRequestTarget>(invocation.Request.ChildTarget);
+                if (target.Definition == child.Reference)
+                {
+                    ordinaryTarget = target;
+                    childScheduled.TrySetResult();
+                    return ordinaryResult.Task;
+                }
+                return Task.FromResult(new DurableTaskDurableOperationAttemptResult(
+                    new DurableOperationOutcomeObservation(
+                        new RequestResultOutcome(
+                            target.OutcomeMapping.Completed,
+                            finalizer.Acknowledgement(start.Receipt.Request.InitialContinuation.ProcessAttemptId)),
+                        replyOrigin: new ProcessInteractionOrigin(
+                            target.Definition,
+                            new("return"),
+                            target.Continuation,
+                            new("activation/finalizer-after-child"),
+                            new("token/finalizer-after-child"),
+                            outcome: new("return"))),
+                    deadlineElapsed: false));
+            },
+            UnexpectedReconciliation,
+            UnexpectedInteraction,
+            TestDurableTimer,
+            () => now,
+            observations.Enqueue,
+            dispatchChildCancellation: intent =>
+            {
+                var target = Assert.IsType<ProcessChildRequestTarget>(ordinaryTarget);
+                Assert.Equal(target.Continuation, intent.ChildContinuation);
+                ordinaryResult.TrySetResult(CancelledTypedProcessChild(intent.RequestEmission, target));
+                return Task.CompletedTask;
+            },
+            waitForControl: () => controls.Reader.ReadAsync().AsTask());
+
+        await childScheduled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var running = await WaitForObservationAsync(
+            observations,
+            static result => result.Control.Mode == ProcessControlMode.Running
+                && result.State.Children.Any(static child => child.Disposition == ProcessChildDisposition.Active));
+        now = now.AddSeconds(1);
+        await controls.Writer.WriteAsync(new CancelProcessCommand(
+            ProcessControlCommand.CurrentSchemaVersion,
+            ControlContext(start, "cancel/propagated-child", now),
+            Expectation(running.Control),
+            new("operator.cancel")));
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ProcessControlMode.Cancelled, result.Control.Mode);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Cancelled, result.State.Terminal.Kind);
+        var ordinary = result.State.Children.Single(item => item.Node.Value == "child/run");
+        Assert.Equal(ProcessChildDisposition.CancellationSettled, ordinary.Disposition);
+        Assert.NotNull(ordinary.CancellationClosure);
+        Assert.Equal(
+            ProcessChildDisposition.Completed,
+            result.State.Children.Single(item => item.Node.Value == "cancel/finalize").Disposition);
+        Assert.Contains(
+            result.Evidence.SelectMany(static item => item.Trace),
+            static item => item.Kind == ProcessTraceEventKind.ChildCancellationSettled);
     }
 
     [Fact]
@@ -3060,6 +3301,69 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [DurableTaskSchedulerFact]
+    public async Task SchedulerEmulator_AuthoredCancellationRunsExactFinalizerBeforeTerminalControl()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
+            ?? throw new InvalidOperationException(
+                "The Durable Task Scheduler connection string disappeared after test discovery.");
+        var fixture = CancellationFinalizerDurabilityTestFixture.Create();
+        var catalog = new DurableTaskSequentialProcessPlanCatalog(
+            [Physical(fixture.Plan), Physical(fixture.FinalizerPlan)],
+            [fixture.Binding]);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var worker = SchedulerHost(connectionString, catalog, RejectingHost.Instance);
+        await worker.StartAsync(timeout.Token);
+        var client = worker.Services.GetRequiredService<DurableTaskClient>();
+        var start = Start(
+            fixture.Plan,
+            "input/durable-cancellable-parent",
+            $"instance/scheduler-authored-cancellation/{Guid.NewGuid():N}");
+        var scheduled = await client.ScheduleCohesiveProcessAsync(start, timeout.Token);
+        var waiting = await WaitForActiveWait(
+            client,
+            scheduled.InstanceId,
+            ProcessWaitKind.Timer,
+            timeout.Token);
+        var cancel = new CancelProcessCommand(
+            ProcessControlCommand.CurrentSchemaVersion,
+            ControlContext(start, "scheduler-control/authored-cancellation", DateTimeOffset.UtcNow),
+            Expectation(waiting),
+            new("scheduler.authored-cancellation"));
+
+        await client.RaiseCohesiveProcessControlAsync(start, cancel, timeout.Token);
+        var completed = await client.WaitForInstanceCompletionAsync(
+            scheduled.InstanceId,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, completed.RuntimeStatus);
+        var result = Assert.IsType<DurableTaskSequentialProcessResult>(
+            completed.ReadOutputAs<DurableTaskSequentialProcessResult>());
+
+        Assert.Equal(ProcessActivationDisposition.Cancelled, result.Disposition);
+        Assert.Equal(ProcessControlMode.Cancelled, result.Control.Mode);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Cancelled, result.State.Terminal.Kind);
+        Assert.Equal(
+            ProcessChildDisposition.Completed,
+            Assert.Single(result.State.Children, static child =>
+                child.Purpose == ProcessChildPurpose.Compensation).Disposition);
+        var finalizerOperation = Assert.Single(result.DurableOperations);
+        var finalizerTarget = Assert.IsType<ProcessChildRequestTarget>(
+            finalizerOperation.State.Request.ChildTarget);
+        var finalizerInstance = await client.GetInstanceAsync(
+            DurableTaskSequentialProcessIdentities.OrchestrationInstance(
+                start.ActivationContext.AuthorityScope,
+                finalizerTarget.Continuation.ProcessInstanceId),
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, finalizerInstance?.RuntimeStatus);
+        Assert.Equal(
+            ProcessActivationDisposition.Completed,
+            finalizerInstance?.ReadOutputAs<DurableTaskSequentialProcessResult>()?.Disposition);
+
+        await worker.StopAsync(timeout.Token);
+    }
+
+    [DurableTaskSchedulerFact]
     public async Task SchedulerEmulator_RestartAttemptClosesOldChildBeforeReplacementCompletes()
     {
         var connectionString = Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
@@ -4809,6 +5113,28 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         ProcessChildRequestTarget target)
     {
         var outcome = new RequestFailureOutcome(ChildOutcomeMapping.Cancelled, StringValue("cancelled"));
+        return new(
+            new DurableOperationOutcomeObservation(
+                outcome,
+                replyOrigin: new ProcessInteractionOrigin(
+                    target.Definition,
+                    new("cancelled"),
+                    target.Continuation,
+                    new($"activation/{request.Value}/cancelled"),
+                    new($"token/{request.Value}/cancelled"),
+                    outcome: new("cancelled"))),
+            deadlineElapsed: false);
+    }
+
+    static DurableTaskDurableOperationAttemptResult CancelledTypedProcessChild(
+        EmissionId request,
+        ProcessChildRequestTarget target)
+    {
+        var outcome = new RequestFailureOutcome(
+            target.OutcomeMapping.Cancelled,
+            PortableValue.Concrete(
+                ExecutionTerminalOutcomeKindContract(),
+                ObservationValue.FromObject(ExecutionTerminalOutcomeKind.Cancelled)));
         return new(
             new DurableOperationOutcomeObservation(
                 outcome,

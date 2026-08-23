@@ -81,6 +81,27 @@ disposition. Target profiles must add an explicit realization disposition; an un
 completeness validation before execution. Durable runtimes may reuse existing child orchestration and durable
 Request mechanisms, but may not add a cancellation-only registry or infer support from a handler type.
 
+## Durable realization
+
+The native Storage runtime and the Durable Task sequential interpreter derive cancellation policy from the exact
+compiled plan. When no finalizer node exists they retain immediate cancellation. When one exists they keep the
+control state in `Cancelling`, persist ordinary activation and safe-point cuts, and allow physical work only for the
+exact retained finalizer Request or a child whose canonical disposition is `CancellationRequested`. No ordinary
+work is reopened while cancellation is active.
+
+The finalizer uses the same Request binding, adapter or sub-orchestration, acknowledgement, and Reply admission
+mechanisms as an ordinary child invocation. Durable Task schedules it as a normal child sub-orchestration. The
+Storage runtime resolves the adapter already selected for the child Request. Propagated child cancellation is an
+optional capability of that exact adapter (`IProcessChildCancellationAdapter`), not a parallel cancellation-handler
+catalog. The built-in child adapter realizes the capability by preventing an absent child from starting or by
+issuing the exact canonical cancellation command to an existing child, driving it to terminal evidence, and
+returning an attributable closure.
+
+Replays reuse the accepted cancellation receipt, child occurrence, finalizer Request emission, operation ledger,
+activation identity, and terminal control revision. A valid acknowledgement closes both the Process continuation
+and lifecycle control as `Cancelled`; failure, cancellation, termination, invalid acknowledgement, or an unmapped
+outcome closes the continuation as failed and the control state as `CancellationFailed`.
+
 ## Consequences
 
 - Application/provider cancellation becomes ordinary canonical Process work with exact dependencies and adapter
@@ -89,8 +110,8 @@ Request mechanisms, but may not add a cancellation-only registry or infer suppor
   reacquired from its authority.
 - Parent status remains nonterminal while propagated children or the finalizer are active.
 - Finalizer failure is operationally visible and cannot masquerade as `Cancelled`.
-- Native durable-store and Durable Task interpretations require follow-up realization and differential tests
-  before advertising support for the new construct.
+- Native durable-store and Durable Task interpretations realize the protocol through their existing durable child
+  mechanisms and retain source-attributed status, trace, and replay evidence.
 - A Process needing best-effort or fire-and-forget child behavior continues to express that per child through its
   existing cancellation policy; the finalizer protocol itself is required once declared.
 

@@ -35,9 +35,9 @@ public sealed class DurableTaskProcessRealizationPlanningTests
             ProcessWireNames.ReplyNode,
             ProcessWireNames.DurableCutNode,
             ProcessWireNames.InvokeProcessNode,
+            ProcessWireNames.CancellationFinalizerNode,
             ProcessWireNames.RepeatAcrossActivationNode);
         AssertDisposition(actual, CapabilityRealizationKind.Constrained, ProcessWireNames.ForEachPartitionNode);
-        AssertDisposition(actual, CapabilityRealizationKind.Unavailable, ProcessWireNames.CancellationFinalizerNode);
 
         AssertGuaranteeDisposition(actual, CapabilityRealizationKind.Composed,
             ProcessInterpreterGuarantees.ExactDefinitionPinning,
@@ -79,13 +79,13 @@ public sealed class DurableTaskProcessRealizationPlanningTests
             ProcessWireNames.TimerNode,
             ProcessWireNames.DurableCutNode,
             ProcessWireNames.InvokeProcessNode,
+            ProcessWireNames.CancellationFinalizerNode,
             ProcessWireNames.RepeatAcrossActivationNode);
         AssertDisposition(actual, CapabilityRealizationKind.Constrained,
             ProcessWireNames.EmitEventNode,
             ProcessWireNames.ForEachPartitionNode);
         AssertDisposition(actual, CapabilityRealizationKind.Unavailable,
-            ProcessWireNames.ReplyNode,
-            ProcessWireNames.CancellationFinalizerNode);
+            ProcessWireNames.ReplyNode);
 
         AssertGuaranteeDisposition(actual, CapabilityRealizationKind.Composed,
             ProcessInterpreterGuarantees.ExactDefinitionPinning,
