@@ -360,6 +360,12 @@ internal sealed class ProcessAuthoringContext
                 AddConstruct(entries, recurrence.ContinueWhen, path.Add("continueWhen"), nodeSource);
                 AddConstruct(entries, recurrence.Progress, path.Add("progress"), nodeSource);
                 AddConstruct(entries, recurrence.Policy, path.Add("policy"), nodeSource);
+                if (recurrence.InitialState is not null)
+                    AddConstruct(entries, recurrence.InitialState, path.Add("initialState"), nodeSource);
+                if (recurrence.NextState is not null)
+                    AddConstruct(entries, recurrence.NextState, path.Add("nextState"), nodeSource);
+                if (recurrence.StateOutput is not null)
+                    AddOutput(entries, recurrence.StateOutput, path.Add("stateOutput"), nodeSource);
                 AddEdge(entries, recurrence.Repeat, path.Add("repeat"), nodeSource);
                 AddEdge(entries, recurrence.Completed, path.Add("completed"), nodeSource);
                 AddEdge(entries, recurrence.Exhausted, path.Add("exhausted"), nodeSource);

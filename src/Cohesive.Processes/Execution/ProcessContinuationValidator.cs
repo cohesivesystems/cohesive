@@ -2246,6 +2246,28 @@ public static class ProcessContinuationValidator
                         or PortableValueState.Unknown
                         or PortableValueState.Failed)
                     && PortableExecutionValidator.Validate(progress, plan.ValidationContext.ShapeGraph).IsValid;
+                var waitingAtRecurrence = waits.Values.Any(candidate =>
+                    candidate.Wait.Active
+                    && candidate.Wait.Kind == ProcessWaitKind.RepeatAcrossActivation
+                    && candidate.Wait.Token == recurrence.Token
+                    && candidate.Wait.Node == recurrence.Node);
+                var retainedStateBinding = tokenFound && node.StateOutput is not null
+                    ? token.Token.Bindings.SingleOrDefault(binding =>
+                        binding.Binding == node.StateOutput.Binding)
+                    : null;
+                var stateValid = node.StateOutput is null
+                    ? recurrence.CurrentState is null
+                    : recurrence.CurrentState is { } currentState
+                      && currentState.Contract == node.StateContract
+                      && currentState.State is not (
+                          PortableValueState.Missing
+                          or PortableValueState.Unknown
+                          or PortableValueState.Failed)
+                      && PortableExecutionValidator.Validate(currentState, plan.ValidationContext.ShapeGraph).IsValid
+                      && (!recurrence.Active
+                          || waitingAtRecurrence
+                              ? retainedStateBinding is null
+                              : retainedStateBinding?.Value == currentState);
                 var activeValid = !recurrence.Active
                     || tokenFound
                        && IsLive(token.Token.Disposition)
@@ -2265,12 +2287,13 @@ public static class ProcessContinuationValidator
                 if (!identityValid
                     || !countsValid
                     || !progressValid
+                    || !stateValid
                     || !activeValid
                     || initialWaitCount != 1)
                 {
                     Error(
                         ProcessContinuationDiagnosticCodes.RecurrenceStateMismatch,
-                        $"Recurrence registration '{recurrence.RegistrationId}' contradicts its identity, progress, limits, token lifecycle, or initial wait tombstone.",
+                        $"Recurrence registration '{recurrence.RegistrationId}' contradicts its identity, progress, state, limits, token lifecycle, or initial wait tombstone.",
                         location,
                         subject: recurrence.RegistrationId);
                 }
@@ -2610,6 +2633,9 @@ public static class ProcessContinuationValidator
                         break;
                     case ForEachPartitionProcessNode partition:
                         Add(contracts, partition.Partition);
+                        break;
+                    case RepeatAcrossActivationProcessNode recurrence:
+                        Add(contracts, recurrence.StateOutput);
                         break;
                     case AwaitMatchProcessNode awaitMatch:
                         foreach (var clause in awaitMatch.Clauses)

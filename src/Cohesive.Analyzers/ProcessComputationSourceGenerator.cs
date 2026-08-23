@@ -1555,7 +1555,6 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             var occurrenceOperation = occurrenceArgument is null ? null : Strip(occurrenceArgument.Value);
             if (occurrenceOperation is not IInvocationOperation occurrenceInvocation
                 || occurrenceInvocation.Instance is not null
-                || occurrenceInvocation.Arguments.Length != 0
                 || !localFunctions.TryGetValue(occurrenceInvocation.TargetMethod, out var occurrenceFunction)
                 || occurrenceInvocation.TargetMethod.ReturnType is not INamedTypeSymbol
                 {
@@ -1568,7 +1567,44 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 return StatementFailure(
                     occurrenceArgument?.Syntax ?? statement,
-                    "RepeatAcrossActivation occurrence must invoke one parameterless local async ProcessTask<T> function");
+                    "RepeatAcrossActivation occurrence must invoke one local async ProcessTask<T> function");
+            }
+
+            var occurrenceParameters = occurrenceInvocation.TargetMethod.Parameters;
+            var stateful = occurrenceParameters.Length == 1 && occurrenceInvocation.Arguments.Length == 1;
+            if (!(occurrenceParameters.Length == 0 && occurrenceInvocation.Arguments.Length == 0)
+                && !stateful)
+            {
+                return StatementFailure(
+                    occurrenceArgument?.Syntax ?? statement,
+                    "RepeatAcrossActivation occurrence must be parameterless or accept exactly one initial-state argument");
+            }
+            if (stateful
+                && !SymbolEqualityComparer.Default.Equals(
+                    occurrenceParameters[0].Type,
+                    occurrenceTask.TypeArguments[0]))
+            {
+                return StatementFailure(
+                    occurrenceArgument?.Syntax ?? statement,
+                    "RepeatAcrossActivation state parameter and occurrence result must have the same type");
+            }
+
+            AuthoredOutput? state = null;
+            IOperation? initialState = null;
+            IParameterSymbol? stateParameter = null;
+            if (stateful)
+            {
+                stateParameter = occurrenceParameters[0];
+                initialState = occurrenceInvocation.Arguments[0].Value;
+                state = new AuthoredOutput(
+                    resultLocal,
+                    stateParameter.Type,
+                    identity,
+                    "state",
+                    $"__authored_output_{authoredOutputs.Count.ToString(CultureInfo.InvariantCulture)}",
+                    null,
+                    SourceLocation(statement));
+                authoredOutputs.Add(state);
             }
 
             if (!TryParse(
@@ -1638,12 +1674,15 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return false;
             }
 
-            if (!pureLocals.ContainsKey(resultLocal))
+            if (!stateful && !pureLocals.ContainsKey(resultLocal))
             {
                 pureLocals.Add(resultLocal, occurrenceResult);
             }
             flow = new(
                 identity,
+                state,
+                stateParameter,
+                initialState,
                 occurrenceInvocation.TargetMethod.Name,
                 occurrenceBody,
                 occurrenceResult,
@@ -4502,6 +4541,24 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             string successor,
             out string occurrenceEntry)
         {
+            if (recurrence.State is not null && recurrence.StateParameter is not null)
+                outputBySymbol.Add(recurrence.StateParameter, recurrence.State.Variable);
+            try
+            {
+                return TryEmitRecurrenceCore(recurrence, successor, out occurrenceEntry);
+            }
+            finally
+            {
+                if (recurrence.StateParameter is not null)
+                    outputBySymbol.Remove(recurrence.StateParameter);
+            }
+        }
+
+        bool TryEmitRecurrenceCore(
+            RecurrenceFlow recurrence,
+            string successor,
+            out string occurrenceEntry)
+        {
             occurrenceEntry = string.Empty;
             if (!TryLowerBlock(recurrence.Exhausted, successor, out var exhaustedEntry)
                 || exhaustedEntry is null)
@@ -4517,7 +4574,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     recurrence.Syntax,
                     $"RepeatAcrossActivation stalled branch '{recurrence.StalledName}' requires a reachable continuation");
             }
-            if (!TryLowerBlock(recurrence.Occurrence, recurrence.Identity.Variable, out var loweredOccurrence)
+            string? loweredOccurrence;
+            if (!TryLowerBlock(recurrence.Occurrence, recurrence.Identity.Variable, out loweredOccurrence)
                 || loweredOccurrence is null)
             {
                 return StatementFailure(
@@ -4542,9 +4600,30 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return false;
             }
 
+            if (recurrence.State is null || recurrence.InitialState is null)
+            {
+                builderStatements.Add(
+                    $"__builder.RepeatAcrossActivation(id: {recurrence.Identity.Variable}, continueWhen: {continueWhen}, progress: {progress}, policy: {policyExpression}, repeat: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"repeat\", target: {loweredOccurrence}, {SourceArguments(recurrence.Source, method.Name)}), completed: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"completed\", target: {successor}, {SourceArguments(recurrence.Source, method.Name)}), exhausted: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"exhausted\", target: {exhaustedEntry}, {SourceArguments(recurrence.Source, method.Name)}), stalled: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"stalled\", target: {stalledEntry}, {SourceArguments(recurrence.Source, method.Name)}), {SourceArguments(recurrence.Source, method.Name)});");
+                occurrenceEntry = loweredOccurrence;
+                return true;
+            }
+
+            if (!TryEmitValue(
+                    recurrence.InitialState,
+                    recurrence.InitialState.Type!,
+                    recurrence.Source,
+                    out var initialState)
+                || !TryEmitValue(
+                    recurrence.Result,
+                    recurrence.Result.Type!,
+                    recurrence.Source,
+                    out var nextState))
+            {
+                return false;
+            }
             builderStatements.Add(
-                $"__builder.RepeatAcrossActivation(id: {recurrence.Identity.Variable}, continueWhen: {continueWhen}, progress: {progress}, policy: {policyExpression}, repeat: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"repeat\", target: {loweredOccurrence}, {SourceArguments(recurrence.Source, method.Name)}), completed: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"completed\", target: {successor}, {SourceArguments(recurrence.Source, method.Name)}), exhausted: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"exhausted\", target: {exhaustedEntry}, {SourceArguments(recurrence.Source, method.Name)}), stalled: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"stalled\", target: {stalledEntry}, {SourceArguments(recurrence.Source, method.Name)}), {SourceArguments(recurrence.Source, method.Name)});");
-            occurrenceEntry = loweredOccurrence;
+                $"__builder.RepeatAcrossActivation(id: {recurrence.Identity.Variable}, initialState: {initialState}, state: {recurrence.State.Variable}, nextState: {nextState}, continueWhen: {continueWhen}, progress: {progress}, policy: {policyExpression}, repeat: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"repeat\", target: {loweredOccurrence}, {SourceArguments(recurrence.Source, method.Name)}), completed: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"completed\", target: {successor}, {SourceArguments(recurrence.Source, method.Name)}), exhausted: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"exhausted\", target: {exhaustedEntry}, {SourceArguments(recurrence.Source, method.Name)}), stalled: __builder.Edge(owner: {recurrence.Identity.Variable}, role: \"stalled\", target: {stalledEntry}, {SourceArguments(recurrence.Source, method.Name)}), {SourceArguments(recurrence.Source, method.Name)});");
+            occurrenceEntry = recurrence.Identity.Variable;
             return true;
         }
 
@@ -6380,6 +6459,9 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
     sealed record RecurrenceFlow(
         FlowIdentity Identity,
+        AuthoredOutput? State,
+        IParameterSymbol? StateParameter,
+        IOperation? InitialState,
         string OccurrenceName,
         FlowBlock Occurrence,
         IOperation Result,

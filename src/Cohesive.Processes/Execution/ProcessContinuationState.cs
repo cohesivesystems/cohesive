@@ -504,6 +504,7 @@ public sealed record ProcessRecurrenceState
     /// <param name="unchangedProgressCount">Consecutive repeat decisions with unchanged progress.</param>
     /// <param name="lastProgress">Last exact typed progress value, or null before the first repeat.</param>
     /// <param name="active">Whether later execution may continue this recurrence occurrence.</param>
+    /// <param name="currentState">Exact typed state to supply to the next occurrence, when recurrence is stateful.</param>
     [JsonConstructor]
     internal ProcessRecurrenceState(
         string registrationId,
@@ -513,7 +514,8 @@ public sealed record ProcessRecurrenceState
         int repeatCount,
         int unchangedProgressCount,
         PortableValue? lastProgress,
-        bool active)
+        bool active,
+        PortableValue? currentState = null)
     {
         RegistrationId = registrationId;
         Token = token;
@@ -523,6 +525,7 @@ public sealed record ProcessRecurrenceState
         UnchangedProgressCount = unchangedProgressCount;
         LastProgress = lastProgress;
         Active = active;
+        CurrentState = currentState;
     }
 
     /// <summary>Opaque replay-stable recurrence occurrence identity.</summary>
@@ -548,6 +551,10 @@ public sealed record ProcessRecurrenceState
 
     /// <summary>Whether later execution may continue this recurrence occurrence.</summary>
     public bool Active { get; internal init; }
+
+    /// <summary>Exact typed state to supply to the next occurrence, when recurrence is stateful.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PortableValue? CurrentState { get; internal init; }
 }
 
 /// <summary>Kind of durable semantic wait held by a Process token.</summary>

@@ -832,6 +832,35 @@ public sealed class ProcessDefinitionValidatorTests
     }
 
     [Fact]
+    public void Validate_RepeatAcrossActivationWithPartialStateContract_FailsClosed()
+    {
+        var definition = Definition(
+            entry: "repeat",
+            nodes:
+            [
+                new RepeatAcrossActivationProcessNode(
+                    new("repeat"),
+                    Expr.Const(false),
+                    Expr.Const("progress"),
+                    StringContract,
+                    new(maximumOccurrences: 10, maximumUnchangedProgressOccurrences: 2),
+                    Edge("edge/repeat", "repeat"),
+                    Edge("edge/completed", "return"),
+                    Edge("edge/exhausted", "return"),
+                    Edge("edge/stalled", "return"),
+                    initialState: Expr.Const("cursor/0")),
+                new ReturnProcessNode(new("return"), Expr.Const("done"))
+            ]);
+
+        var validation = ProcessDefinitionValidator.Validate(definition);
+
+        AssertDiagnostic(
+            validation,
+            ProcessDefinitionDiagnosticCodes.RequiredMemberMissing,
+            "/nodes/0");
+    }
+
+    [Fact]
     public void DocumentFacade_PrioritizesProvenRecursionOverMissingSiblingEvidence()
     {
         var child = DefinitionReference("process/child");

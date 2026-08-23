@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Cohesive.Execution;
 using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
@@ -1397,6 +1398,86 @@ public sealed class ProcessComputationAuthoringTests
         Assert.DoesNotContain("ProcessTask", json, StringComparison.Ordinal);
         Assert.DoesNotContain("ProcessProjection", json, StringComparison.Ordinal);
         Assert.DoesNotContain("delegate", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void StatefulRecurrenceComputation_CheckpointsAndSuppliesTheNextOccurrenceState()
+    {
+        var generated = GeneratedStatefulRecurrenceProcess.Define(RecurrenceMetadata());
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        var recurrence = Assert.Single(generated.Definition.Nodes.OfType<RepeatAcrossActivationProcessNode>());
+        Assert.NotNull(recurrence.InitialState);
+        Assert.NotNull(recurrence.NextState);
+        Assert.NotNull(recurrence.StateContract);
+        Assert.NotNull(recurrence.StateOutput);
+        Assert.Equal(recurrence.Id, generated.Definition.Entry);
+
+        var compilation = generated.Compile(RelationContext(GeneratedStatefulRecurrenceProcess.Poll));
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        var plan = Assert.IsType<CompiledProcessPlan>(compilation.Plan);
+        var continuation = new ProcessContinuationIdentity(
+            new("process-instance/stateful-recurrence"),
+            new("attempt/1"));
+        var state = ProcessReferenceInterpreter.Create(
+            plan,
+            continuation,
+            PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromString("cursor/0")));
+        var host = new SequenceRelationHost("cursor/1", "approved");
+
+        var first = ProcessReferenceInterpreter.Activate(
+            plan,
+            state,
+            Activation(
+                plan,
+                continuation,
+                "activation/stateful-recurrence/1",
+                ProcessActivationCause.Start,
+                new(2026, 8, 23, 12, 0, 0, TimeSpan.Zero)),
+            host);
+
+        Assert.Equal(ProcessActivationDisposition.DurableCut, first.Disposition);
+        var checkpoint = Assert.Single(first.State.Recurrences);
+        Assert.Equal(
+            PortableValue.Concrete(recurrence.StateContract!, ObservationValue.FromString("cursor/1")),
+            checkpoint.CurrentState);
+        Assert.DoesNotContain(
+            Assert.Single(first.State.Tokens).Bindings,
+            binding => binding.Binding == recurrence.StateOutput!.Binding);
+        Assert.True(ProcessContinuationValidator.Validate(plan, first.State).IsValid);
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        var checkpointJson = JsonSerializer.Serialize(first.State, options);
+        var restored = Assert.IsType<ProcessContinuationState>(
+            JsonSerializer.Deserialize<ProcessContinuationState>(checkpointJson, options));
+        Assert.Equal(checkpointJson, JsonSerializer.Serialize(restored, options));
+        Assert.Equal(checkpoint.CurrentState, Assert.Single(restored.Recurrences).CurrentState);
+        var tamperedJson = JsonNode.Parse(checkpointJson)!.AsObject();
+        var tamperedState = tamperedJson["recurrences"]![0]!["currentState"]!.AsObject();
+        tamperedState["state"] = "missing";
+        tamperedState.Remove("value");
+        var tampered = Assert.IsType<ProcessContinuationState>(
+            JsonSerializer.Deserialize<ProcessContinuationState>(tamperedJson.ToJsonString(), options));
+        Assert.Contains(
+            ProcessContinuationValidator.Validate(plan, tampered).Diagnostics,
+            static diagnostic => diagnostic.Code == ProcessContinuationDiagnosticCodes.RecurrenceStateMismatch);
+
+        var completed = ProcessReferenceInterpreter.Activate(
+            plan,
+            restored,
+            Activation(
+                plan,
+                continuation,
+                "activation/stateful-recurrence/2",
+                ProcessActivationCause.Continue,
+                new(2026, 8, 23, 12, 1, 0, TimeSpan.Zero)),
+            host);
+
+        Assert.Equal(ProcessActivationDisposition.Completed, completed.Disposition);
+        Assert.Equal(
+            PortableValue.Concrete(plan.Definition.Result, ObservationValue.FromString("approved")),
+            completed.State.Terminal.Detail?.Value);
+        Assert.Equal(
+            [ObservationValue.FromString("cursor/0"), ObservationValue.FromString("cursor/1")],
+            host.Evaluations.Select(static evaluation => evaluation.Input.Value));
     }
 
     [Fact]
@@ -3508,6 +3589,37 @@ public static partial class GeneratedRecurrenceProcess
             exhausted: Exhausted,
             stalled: Stalled);
         return observation;
+    }
+}
+
+/// <summary>Representative recurrence carrying a cursor between durable activations.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedStatefulRecurrenceProcess
+{
+    /// <summary>Exact Relation used to advance the cursor.</summary>
+    public static ExecutionDefinitionReference Poll => GeneratedRecurrenceProcess.Poll;
+
+    static async ProcessTask<string> Run(ProcessContext process, string input)
+    {
+        async ProcessTask<string> PollOnce(string cursor)
+        {
+            var observation = await process.Query<string>(Poll, cursor);
+            return observation;
+        }
+
+        async ProcessTask Exhausted() { }
+        async ProcessTask Stalled() { }
+
+        var final = await process.RepeatAcrossActivation(
+            occurrence: PollOnce(input),
+            continueWhen: cursor => cursor != "approved",
+            progress: cursor => cursor,
+            policy: new ProcessRecurrencePolicy(
+                maximumOccurrences: 3,
+                maximumUnchangedProgressOccurrences: 1),
+            exhausted: Exhausted,
+            stalled: Stalled);
+        return final;
     }
 }
 

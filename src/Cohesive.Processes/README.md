@@ -116,6 +116,31 @@ for business-shaped branching, Request outcomes, durable waits, bounded parallel
 recurrence. Those executable definitions remain the source of truth; this smaller excerpt illustrates the typed-wait
 shape in isolation.
 
+Recurrence may be stateless or carry one portable state value explicitly. A parameterless occurrence preserves the
+original polling form. A one-parameter occurrence uses its invocation argument as the initial state and each result
+as the state supplied to the next durable occurrence:
+
+```csharp
+var final = await process.RepeatAcrossActivation(
+    occurrence: ReadPage(new PageCursor(source, after: null, processed: 0)),
+    continueWhen: page => page.HasMore,
+    progress: page => page.After,
+    policy: new ProcessRecurrencePolicy(100, 1),
+    exhausted: Exhausted,
+    stalled: Stalled);
+
+async ProcessTask<PageCursor> ReadPage(PageCursor cursor)
+{
+    var page = await process.Query<PageCursor>(ReadNextPage, cursor);
+    return page;
+}
+```
+
+The initial expression, exact state contract, next-state expression, and state binding lower into canonical IR.
+At a recurrence cut, the recurrence checkpoint is the single authority for the next state; the waiting token does
+not duplicate it. Recovery restores that value before entering the next occurrence. No local function, suspended
+frame, delegate, or ambient cursor store survives lowering.
+
 When one Process invokes another, derive the closed Request/Reply protocol from the typed child handle:
 
 ```csharp
@@ -290,6 +315,8 @@ diagnostic, not a callback deferred to runtime.
 Durability- and scheduling-relevant policy remains explicit. Await arbitration and input disposition, Fork/Join
 completion and cancellation, admission limits, child cancellation, recurrence bounds, and compensation purpose are
 canonical facts. The C# frontend does not infer weaker guarantees or hide those policies behind convenient syntax.
+Stateful recurrence also requires one explicit portable initial value; its occurrence result is the only state
+transition admitted between occurrences.
 
 `Read` is an authoring alias for exact Relation/Query evaluation; it does not create a second entity-read execution
 model. `Effect` lowers to a typed durable Request and selected terminal outcome. `EmitEvent` and `SendSignal` lower

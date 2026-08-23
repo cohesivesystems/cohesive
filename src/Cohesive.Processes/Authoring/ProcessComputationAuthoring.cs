@@ -860,8 +860,10 @@ public sealed class ProcessContext
 
     /// <summary>Declares one finite recurrence whose occurrences are separated by durable activation cuts.</summary>
     /// <remarks>
-    /// <paramref name="occurrence"/> must invoke one parameterless local <c>async ProcessTask&lt;TResult&gt;</c>
-    /// function. The inline termination and progress projections are fused into the canonical recurrence node;
+    /// <paramref name="occurrence"/> must invoke either a parameterless local
+    /// <c>async ProcessTask&lt;TResult&gt;</c> function or one whose single <typeparamref name="TResult"/> parameter is
+    /// supplied with the initial state. In the latter form, each occurrence result becomes the durable state passed
+    /// to the next occurrence. The inline termination and progress projections are fused into the canonical recurrence node;
     /// neither the local function nor the projection delegates survive in persisted IR. A deliberate delay may be
     /// authored with <see cref="Timer(DateTimeOffset, ExecutionNodeId?)"/> inside the occurrence body. An occurrence
     /// may also end in an exhaustive typed <see cref="Effect{TRequest, TOutcome, TOutcomes}"/> switch when exactly one

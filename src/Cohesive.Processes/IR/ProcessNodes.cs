@@ -1205,6 +1205,10 @@ public sealed record RepeatAcrossActivationProcessNode : ProcessNode
     /// <param name="completed">Edge selected when <paramref name="continueWhen"/> is false.</param>
     /// <param name="exhausted">Edge selected when the total occurrence limit is reached.</param>
     /// <param name="stalled">Edge selected when progress remains unchanged beyond its declared limit.</param>
+    /// <param name="initialState">Optional portable state supplied to the first occurrence.</param>
+    /// <param name="nextState">Optional portable state retained for and supplied to the next occurrence.</param>
+    /// <param name="stateContract">Exact portable contract shared by recurrence state expressions.</param>
+    /// <param name="stateOutput">Binding populated with the state consumed by each occurrence and returned at termination.</param>
     [JsonConstructor]
     public RepeatAcrossActivationProcessNode(
         ExecutionNodeId id,
@@ -1215,7 +1219,11 @@ public sealed record RepeatAcrossActivationProcessNode : ProcessNode
         ProcessEdge repeat,
         ProcessEdge completed,
         ProcessEdge exhausted,
-        ProcessEdge stalled)
+        ProcessEdge stalled,
+        Expr? initialState = null,
+        Expr? nextState = null,
+        ValueContract? stateContract = null,
+        ProcessOutputBinding? stateOutput = null)
         : base(id)
     {
         ContinueWhen = continueWhen;
@@ -1226,6 +1234,10 @@ public sealed record RepeatAcrossActivationProcessNode : ProcessNode
         Completed = completed;
         Exhausted = exhausted;
         Stalled = stalled;
+        InitialState = initialState;
+        NextState = nextState;
+        StateContract = stateContract;
+        StateOutput = stateOutput;
     }
 
     /// <summary>Portable Boolean expression deciding whether another occurrence is required.</summary>
@@ -1251,6 +1263,22 @@ public sealed record RepeatAcrossActivationProcessNode : ProcessNode
 
     /// <summary>Edge selected when progress remains unchanged beyond its declared limit.</summary>
     public ProcessEdge Stalled { get; }
+
+    /// <summary>Optional portable state supplied to the first occurrence.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Expr? InitialState { get; }
+
+    /// <summary>Optional portable state retained for and supplied to the next occurrence.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Expr? NextState { get; }
+
+    /// <summary>Exact portable contract shared by <see cref="InitialState"/> and <see cref="NextState"/>.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ValueContract? StateContract { get; }
+
+    /// <summary>Binding populated with the state consumed by each occurrence and returned at recurrence termination.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProcessOutputBinding? StateOutput { get; }
 }
 
 /// <summary>Terminates the Process successfully with a typed result expression.</summary>

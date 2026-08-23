@@ -280,6 +280,7 @@ public static class ProcessDefinitionValidator
         readonly Dictionary<ValueBindingId, BindingInfo> bindings = [];
         readonly Dictionary<ValueBindingId, string> localBindings = [];
         readonly List<ExpressionInfo> expressions = [];
+        readonly List<RecurrenceDecisionExpressionInfo> recurrenceDecisionExpressions = [];
         readonly List<JoinResultExpressionInfo> joinResultExpressions = [];
         readonly Dictionary<RequestObligationBindingId, RequestObligationInfo> requestObligations = [];
         readonly List<ReplyRequestInfo> replyRequests = [];
@@ -659,16 +660,71 @@ public static class ProcessDefinitionValidator
             string location)
         {
             ValidateContract(recurrence.ProgressContract, Child(location, "progressContract"));
-            AddExpression(
-                recurrence.Id,
-                recurrence.ContinueWhen,
-                Child(location, "continueWhen"),
-                expectedBoolean: true);
-            AddExpression(
-                recurrence.Id,
-                recurrence.Progress,
-                Child(location, "progress"),
-                recurrence.ProgressContract);
+            var stateMemberCount = new object?[]
+            {
+                recurrence.InitialState,
+                recurrence.NextState,
+                recurrence.StateContract,
+                recurrence.StateOutput
+            }.Count(static member => member is not null);
+            var stateful = stateMemberCount == 4;
+            if (stateMemberCount is > 0 and < 4)
+            {
+                Error(
+                    ProcessDefinitionDiagnosticCodes.RequiredMemberMissing,
+                    "Stateful recurrence requires initialState, nextState, stateContract, and stateOutput together.",
+                    location,
+                    subject: recurrence.Id.Value,
+                    expected: "all four state members");
+            }
+
+            if (stateful)
+            {
+                ValidateContract(recurrence.StateContract, Child(location, "stateContract"));
+                AddExpression(
+                    recurrence.Id,
+                    recurrence.InitialState,
+                    Child(location, "initialState"),
+                    recurrence.StateContract);
+                AddRecurrenceDecisionExpression(
+                    recurrence.Id,
+                    recurrence.ContinueWhen,
+                    Child(location, "continueWhen"),
+                    expectedBoolean: true);
+                AddRecurrenceDecisionExpression(
+                    recurrence.Id,
+                    recurrence.Progress,
+                    Child(location, "progress"),
+                    recurrence.ProgressContract);
+                AddRecurrenceDecisionExpression(
+                    recurrence.Id,
+                    recurrence.NextState,
+                    Child(location, "nextState"),
+                    recurrence.StateContract);
+                if (recurrence.StateOutput!.Contract != recurrence.StateContract)
+                {
+                    Error(
+                        ProcessDefinitionDiagnosticCodes.OutputContractMismatch,
+                        "The recurrence state output contract differs from the exact recurrence state contract.",
+                        Child(location, "stateOutput/contract"),
+                        subject: recurrence.StateOutput.Binding.Value,
+                        expected: Describe(recurrence.StateContract),
+                        observed: Describe(recurrence.StateOutput.Contract));
+                }
+            }
+            else
+            {
+                AddExpression(
+                    recurrence.Id,
+                    recurrence.ContinueWhen,
+                    Child(location, "continueWhen"),
+                    expectedBoolean: true);
+                AddExpression(
+                    recurrence.Id,
+                    recurrence.Progress,
+                    Child(location, "progress"),
+                    recurrence.ProgressContract);
+            }
 
             if (recurrence.Policy is null)
             {
@@ -699,10 +755,38 @@ public static class ProcessDefinitionValidator
                 }
             }
 
-            RegisterEdge(recurrence.Repeat, Child(location, "repeat"), recurrence.Id);
-            RegisterEdge(recurrence.Completed, Child(location, "completed"), recurrence.Id);
-            RegisterEdge(recurrence.Exhausted, Child(location, "exhausted"), recurrence.Id);
-            RegisterEdge(recurrence.Stalled, Child(location, "stalled"), recurrence.Id);
+            var repeat = RegisterEdge(recurrence.Repeat, Child(location, "repeat"), recurrence.Id);
+            var completed = RegisterEdge(recurrence.Completed, Child(location, "completed"), recurrence.Id);
+            var exhausted = RegisterEdge(recurrence.Exhausted, Child(location, "exhausted"), recurrence.Id);
+            var stalled = RegisterEdge(recurrence.Stalled, Child(location, "stalled"), recurrence.Id);
+            if (stateful)
+            {
+                RegisterBinding(recurrence.StateOutput!, Child(location, "stateOutput"), recurrence.Id, repeat);
+                if (completed is not null)
+                    completed.ProducedBindings.Add(recurrence.StateOutput!.Binding);
+                if (exhausted is not null)
+                    exhausted.ProducedBindings.Add(recurrence.StateOutput!.Binding);
+                if (stalled is not null)
+                    stalled.ProducedBindings.Add(recurrence.StateOutput!.Binding);
+            }
+        }
+
+        void AddRecurrenceDecisionExpression(
+            ExecutionNodeId owner,
+            Expr? expression,
+            string location,
+            ValueContract? expected = null,
+            bool expectedBoolean = false)
+        {
+            if (expression is null)
+            {
+                Missing(location, "A Process expression cannot be null.");
+                return;
+            }
+            AppendValidation(
+                PortableExecutionValidator.Validate(expression, context?.ShapeGraph),
+                location);
+            recurrenceDecisionExpressions.Add(new(owner, expression, location, expected, expectedBoolean));
         }
 
         void ValidateWorkLimit(
@@ -2712,7 +2796,10 @@ public static class ProcessDefinitionValidator
 
         void ValidateBindingFlowAndExpressions()
         {
-            if (nodes.Count == 0 || (expressions.Count == 0 && joinResultExpressions.Count == 0))
+            if (nodes.Count == 0
+                || (expressions.Count == 0
+                    && recurrenceDecisionExpressions.Count == 0
+                    && joinResultExpressions.Count == 0))
                 return;
 
             var visible = ComputeDefiniteFlow(
@@ -2742,6 +2829,8 @@ public static class ProcessDefinitionValidator
                     expression.LocalBinding,
                     available);
             }
+
+            ValidateRecurrenceDecisionExpressions(visible);
 
             foreach (var expression in joinResultExpressions)
             {
@@ -2778,6 +2867,57 @@ public static class ProcessDefinitionValidator
                     expectedBoolean: false,
                     localBinding: null,
                     available ?? []);
+            }
+        }
+
+        void ValidateRecurrenceDecisionExpressions(
+            IReadOnlyDictionary<ExecutionNodeId, HashSet<ValueBindingId>> visible)
+        {
+            if (recurrenceDecisionExpressions.Count == 0)
+                return;
+
+            var outgoing = edges
+                .GroupBy(static edge => edge.Source)
+                .ToDictionary(static group => group.Key, static group => group.ToImmutableArray());
+            var incoming = edges
+                .Where(edge => nodes.ContainsKey(edge.Edge.Target))
+                .GroupBy(static edge => edge.Edge.Target)
+                .ToDictionary(static group => group.Key, static group => group.ToImmutableArray());
+
+            foreach (var recurrenceGroup in recurrenceDecisionExpressions.GroupBy(static expression => expression.Owner))
+            {
+                if (!nodes.TryGetValue(recurrenceGroup.Key, out var nodeInfo)
+                    || nodeInfo.Node is not RepeatAcrossActivationProcessNode recurrence
+                    || !incoming.TryGetValue(recurrence.Id, out var recurrenceIncoming))
+                {
+                    continue;
+                }
+
+                HashSet<ValueBindingId>? available = null;
+                foreach (var ingress in recurrenceIncoming.Where(ingress =>
+                             CanReach(recurrence.Repeat.Target, ingress.Source, outgoing)))
+                {
+                    var ingressBindings = visible.TryGetValue(ingress.Source, out var sourceVisible)
+                        ? new HashSet<ValueBindingId>(sourceVisible)
+                        : [];
+                    ingressBindings.UnionWith(ingress.ProducedBindings);
+                    if (available is null)
+                        available = ingressBindings;
+                    else
+                        available.IntersectWith(ingressBindings);
+                }
+
+                foreach (var expression in recurrenceGroup)
+                {
+                    AnalyzeExpression(
+                        expression.Owner,
+                        expression.Expression,
+                        expression.Location,
+                        expression.Expected,
+                        expression.ExpectedBoolean,
+                        localBinding: null,
+                        available ?? []);
+                }
             }
         }
 
@@ -3215,6 +3355,13 @@ public static class ProcessDefinitionValidator
             ValueContract? Expected,
             bool ExpectedBoolean,
             ProcessOutputBinding? LocalBinding);
+
+        sealed record RecurrenceDecisionExpressionInfo(
+            ExecutionNodeId Owner,
+            Expr Expression,
+            string Location,
+            ValueContract? Expected,
+            bool ExpectedBoolean);
 
         sealed record JoinResultExpressionInfo(
             ExecutionNodeId Join,
