@@ -15,6 +15,55 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
     static readonly QualifiedShapeId Shape = new(Graph, SampleEntity.Instance.Definition.Shape.Id);
     static readonly FieldPath NamePath = FieldPath.FromField("Name");
     static readonly FieldPath CustomerIdsPath = FieldPath.FromField("CustomerIds");
+    static readonly FieldPath VersionPath = FieldPath.FromField("SourceEntityVersion");
+
+    [Fact]
+    public async Task ObservationVersionProjection_UsesSnapshotMetadataAndChangesConventionalSourceIdentity()
+    {
+        var projected = CreateFixture(
+            snapshots:
+            [
+                VersionedSnapshot(
+                    "entity-a",
+                    version: 7,
+                    ("SourceEntityVersion", ObservationValue.FromInt64(999)))
+            ],
+            observationVersionSemanticPath: VersionPath);
+        var payload = CreateFixture(
+            snapshots:
+            [
+                VersionedSnapshot(
+                    "entity-a",
+                    version: 7,
+                    ("SourceEntityVersion", ObservationValue.FromInt64(999)))
+            ]);
+
+        var projectedResult = await projected.Reader.ReadAsync(Request(
+            projected,
+            [SemanticField(projected, VersionPath)],
+            new RelationQueryBoundedEnumeration(maximumRows: 10)));
+        var payloadResult = await payload.Reader.ReadAsync(Request(
+            payload,
+            [SemanticField(VersionPath)],
+            new RelationQueryBoundedEnumeration(maximumRows: 10)));
+
+        Assert.Equal(VersionPath, projected.Registration.ObservationVersionSemanticPath);
+        Assert.Equal(VersionPath, projected.Reader.ObservationVersionSemanticPath);
+        Assert.Equal(
+            EntityRelationQuerySourceRegistration.ObservationVersionSourceSelector,
+            projected.Registration.FieldSourceSelector(VersionPath));
+        Assert.Equal(7, projectedResult.Observations.Single().Fields.Single().Value!.Value.Int64);
+        Assert.Equal(999, payloadResult.Observations.Single().Fields.Single().Value!.Value.Int64);
+        Assert.NotEqual(projected.Registration.Source.Id, payload.Registration.Source.Id);
+        Assert.Throws<ArgumentException>(() => EntityRelationQuerySourceRegistration.InMemory(
+            Shape,
+            new InMemoryEntityOutboxRepository(
+                SampleEntity.Instance.Definition,
+                partitionKeyFieldName: "PartitionKey"),
+            RelationQueryLogicalPartitionIdentity.WholeSource,
+            identitySourceSelector: EntityRelationQuerySourceRegistration.ObservationVersionSourceSelector,
+            observationVersionSemanticPath: VersionPath));
+    }
 
     [Fact]
     public async Task BoundedEnumeration_ProjectsExactFieldStatesAndDeterministicIdentityOrder()
@@ -301,6 +350,12 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
         path.ToString(),
         RelationQuerySourceReadFieldPurpose.SemanticInput);
 
+    static RelationQuerySourceReadField SemanticField(ReaderFixture fixture, FieldPath path) => new(
+        new RelationQueryInputId($"field/{Uri.EscapeDataString(path.ToString())}"),
+        path,
+        fixture.Registration.FieldSourceSelector(path),
+        RelationQuerySourceReadFieldPurpose.SemanticInput);
+
     static RelationQuerySourceReadRequest Request(
         ReaderFixture fixture,
         ImmutableArray<RelationQuerySourceReadField> fields,
@@ -320,7 +375,8 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
         ImmutableArray<EntitySnapshot> snapshots,
         RelationQuerySourcePlacementLimits? limits = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
-        RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null)
+        RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
+        FieldPath? observationVersionSemanticPath = null)
     {
         var repository = new InMemoryEntityOutboxRepository(
             SampleEntity.Instance.Definition,
@@ -332,7 +388,8 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
             RelationQueryLogicalPartitionIdentity.WholeSource,
             limits: limits,
             fieldSourceSelector: fieldSourceSelector,
-            relationshipKeySourceSelector: relationshipKeySourceSelector);
+            relationshipKeySourceSelector: relationshipKeySourceSelector,
+            observationVersionSemanticPath: observationVersionSemanticPath);
         return new(
             registration,
             Assert.IsType<InMemoryEntityRelationQuerySourceReader>(registration.Reader));
@@ -354,6 +411,18 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
         string partitionKey,
         params (string Name, ObservationValue Value)[] fields) =>
         Snapshot(id, fields, partitionKey, loadedFields: null);
+
+    static EntitySnapshot VersionedSnapshot(
+        string id,
+        long version,
+        params (string Name, ObservationValue Value)[] fields) => new(
+        new(
+            SampleEntity.Instance.Definition.Shape.Id,
+            id,
+            fields.ToDictionary(static field => field.Name, static field => field.Value, StringComparer.Ordinal),
+            version),
+        "tenant-a",
+        new($"seed/tenant-a/{id}"));
 
     static EntitySnapshot Snapshot(
         string id,
@@ -380,6 +449,7 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
             PartitionKey = WriteOnceField<string>(nameof(PartitionKey));
             Name = WriteOnceField<string>(nameof(Name));
             CustomerIds = WriteOnceField<string[]>(nameof(CustomerIds));
+            SourceEntityVersion = WriteOnceField<long>(nameof(SourceEntityVersion));
         }
 
         public Field<string> PartitionKey { get; }
@@ -387,5 +457,7 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
         public Field<string> Name { get; }
 
         public Field<string[]> CustomerIds { get; }
+
+        public Field<long> SourceEntityVersion { get; }
     }
 }

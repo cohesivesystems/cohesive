@@ -24,6 +24,7 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
     const string EvidencePrefix = "cohesive.storage.in-memory/entity-source/v1";
     readonly InMemoryEntityOutboxRepository repository;
     readonly RelationQuerySourceInstance source;
+    readonly RelationQueryPlacementFieldSelector payloadFieldSourceSelector;
 
     /// <summary>Conventional physical limits for an in-memory entity source.</summary>
     public static RelationQuerySourcePlacementLimits DefaultLimits { get; } = new(
@@ -49,6 +50,9 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
     /// <param name="relationshipKeySourceSelector">
     /// Semantic-to-physical relationship-reference selector, or <see langword="null"/> to use semantic path text.
     /// </param>
+    /// <param name="observationVersionSemanticPath">
+    /// Optional semantic path projected from repository snapshot observation-version metadata.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// <paramref name="shape"/> is incomplete or does not identify the repository entity shape; an identity
     /// selector is empty; or <paramref name="source"/> does not use <see cref="TargetProfile"/>.
@@ -64,7 +68,8 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
         RelationQueryLogicalPartitionIdentity logicalPartition,
         string? identitySourceSelector = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
-        RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null)
+        RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
+        FieldPath? observationVersionSemanticPath = null)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
             throw new ArgumentException("An in-memory entity reader requires a graph-qualified shape.", nameof(shape));
@@ -94,7 +99,21 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
         IdentitySourceSelector = identitySourceSelector is null
             ? EntityRelationQuerySourceRegistration.ObservationIdentitySourceSelector
             : Guard.RequireNotNullOrWhiteSpace(identitySourceSelector);
-        FieldSourceSelector = fieldSourceSelector ?? EntityRelationQuerySourceRegistration.SelectSemanticPath;
+        if (observationVersionSemanticPath is { Segments.IsDefaultOrEmpty: true })
+            throw new ArgumentException("An observation-version semantic path cannot be empty.", nameof(observationVersionSemanticPath));
+        if (observationVersionSemanticPath is not null
+            && string.Equals(
+                IdentitySourceSelector,
+                EntityRelationQuerySourceRegistration.ObservationVersionSourceSelector,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Observation identity and observation version cannot use the same physical selector.",
+                nameof(identitySourceSelector));
+        }
+        ObservationVersionSemanticPath = observationVersionSemanticPath;
+        payloadFieldSourceSelector = fieldSourceSelector ?? EntityRelationQuerySourceRegistration.SelectSemanticPath;
+        FieldSourceSelector = SelectFieldSource;
         RelationshipKeySourceSelector = relationshipKeySourceSelector
             ?? EntityRelationQuerySourceRegistration.SelectSemanticPath;
     }
@@ -107,6 +126,9 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
 
     /// <summary>Stable physical selector interpreted as <see cref="Observation.Id"/>.</summary>
     public string IdentitySourceSelector { get; }
+
+    /// <summary>Semantic field projected from authoritative observation-version metadata, when configured.</summary>
+    public FieldPath? ObservationVersionSemanticPath { get; }
 
     /// <summary>Deterministic semantic-to-physical field selector.</summary>
     public RelationQueryPlacementFieldSelector FieldSourceSelector { get; }
@@ -324,6 +346,14 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
         long version)
     {
         var evidence = Evidence(request, $"field/{Uri.EscapeDataString(field.SemanticPath.ToString())}", version);
+        if (field.SemanticPath == ObservationVersionSemanticPath)
+        {
+            return new(
+                field,
+                RelationQuerySourceReadFieldState.Value,
+                ObservationValue.FromInt64(snapshot.Entity.Version),
+                evidence);
+        }
         if (!IsFieldAuthoritative(snapshot, field.SemanticPath))
         {
             return new(
@@ -415,6 +445,10 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IRelationQuerySour
 
         return null;
     }
+
+    string SelectFieldSource(FieldPath semanticPath) => semanticPath == ObservationVersionSemanticPath
+        ? EntityRelationQuerySourceRegistration.ObservationVersionSourceSelector
+        : payloadFieldSourceSelector(semanticPath);
 
     bool BatchBoundaryExceeded(RelationQuerySourceReadConstraint constraint) => constraint switch
     {

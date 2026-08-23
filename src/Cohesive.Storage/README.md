@@ -150,6 +150,7 @@ var source = EntityRelationQuerySourceRegistration.InMemory(
     loadShape,
     loadRepository,
     logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
+    observationVersionSemanticPath: FieldPath.FromField("SourceEntityVersion"),
     limits: new(
         maximumBatchSize: 100,
         maximumBufferedRows: 10_000,
@@ -161,8 +162,11 @@ IRelationQueryEvaluator evaluator = catalog.CreateEvaluator(physicalPlanningPoli
 var outcome = await evaluator.EvaluateAsync(evaluation, cancellationToken);
 ```
 
-The in-memory reader supports bounded enumeration, identity batches, relationship-reference batches, exact field
-selection, authoritative absence, partial/inconclusive evidence, and cancellation. Canonical interpretation owns
+When `observationVersionSemanticPath` is configured, that semantic field is projected from the repository
+snapshot's `Observation.Version`; a same-named payload field cannot become a competing authority. The convention is
+part of the derived source identity. The in-memory reader supports bounded enumeration, identity batches,
+relationship-reference batches, exact field selection, authoritative absence, partial/inconclusive evidence, and
+cancellation. Canonical interpretation owns
 filters, joins, output shaping, aggregation, and paging. Query source roots are read from registered sources;
 relation roots remain invocation inputs and must be supplied by the evaluation.
 
