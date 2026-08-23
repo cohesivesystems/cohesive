@@ -395,15 +395,19 @@ terminal control evidence before replacement child work begins. Complete durable
 pausing, general external cleanup, lifecycle Signal qualification, and exhaustive crash/race closure remain the
 follow-up qualification scope tracked by ARI-302.
 
-Transport cancellation tokens cancel only scheduling or event delivery. Worker shutdown cancels the activity
-`OperationContext` through `ApplicationStopping`. The activity boundary projects only that shutdown-attributable
+Transport cancellation tokens cancel only scheduling or event delivery. Worker shutdown cancels the
+`OperationContext` for hosted operations, durable Request execution, durable Request reconciliation, and Signal-target
+resolution through `ApplicationStopping`. Each activity boundary projects only that shutdown-attributable
 `OperationCanceledException` as `DurableTaskWorkerStoppingException`, and the orchestrator's deterministic retry
-handler retries only that physical failure on an equivalent worker. It never becomes `CancelProcessCommand`,
-authored failure, replacement-attempt, or other semantic evidence. Ordinary host exceptions and cancellation without
-`ApplicationStopping` remain failures rather than being reclassified as worker loss. The current standalone .NET
-Durable Task activity context exposes no per-activity cancellation token, and terminating an orchestration does not
-recall an already-running activity. Activity execution and repeated worker loss therefore remain at-least-once;
-host implementations must honor their exact-operation idempotency or natural-deduplication boundary.
+handler retries only that physical failure on an equivalent worker. It never becomes `CancelProcessCommand`, an
+authored Request failure or unresolved reconciliation, replacement-attempt, or other semantic evidence. Ordinary
+adapter and host exceptions, including cancellation without `ApplicationStopping`, retain their existing semantic or
+physical failure interpretation rather than being reclassified as worker loss. The current standalone .NET Durable
+Task activity context exposes no per-activity cancellation token, and terminating an orchestration does not recall an
+already-running activity. Activity execution and repeated worker loss therefore remain at-least-once; hosts and
+Request adapters must honor their exact-operation idempotency or natural-deduplication boundary. The emulator
+qualification stops the worker inside a bound Request adapter and requires the replacement worker to receive the
+identical canonical Request, operation attempt, and fence before admitting one target outcome.
 
 Entity-creation Transitions hosted through `EntityTransitionProcessOperationAdapter` provide one such natural
 boundary when their repository implements `IEntityTransitionOperationRepository`: after exact-occurrence lookup,

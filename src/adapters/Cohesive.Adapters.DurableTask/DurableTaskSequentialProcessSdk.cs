@@ -219,11 +219,13 @@ public sealed class DurableTaskSequentialProcessOrchestrator
                 DurableTaskActivityOperationContext.WorkerStoppingRetryOptions),
             invocation => context.CallActivityAsync<DurableTaskDurableOperationAttemptResult>(
                 DurableTaskSequentialProcessNames.DurableOperationActivity,
-                invocation),
+                invocation,
+                DurableTaskActivityOperationContext.WorkerStoppingRetryOptions),
             invocation => ExecuteChildProcessAsync(context, catalog, invocation),
             state => context.CallActivityAsync<DurableTaskDurableOperationReconciliationResult>(
                 DurableTaskSequentialProcessNames.DurableOperationReconciliationActivity,
-                state),
+                state,
+                DurableTaskActivityOperationContext.WorkerStoppingRetryOptions),
             () => context.WaitForExternalEvent<ProcessActivationInput>(
                 DurableTaskSequentialProcessNames.InteractionEvent),
             (delay, cancellationToken) => context.CreateTimer(delay, cancellationToken),
@@ -452,17 +454,21 @@ public sealed class DurableTaskDurableOperationActivity
 {
     readonly IDurableOperationAdapterResolver resolver;
     readonly IDurableOperationExceptionClassifier exceptionClassifier;
+    readonly IHostApplicationLifetime applicationLifetime;
     readonly IInteractionAuthorityOperationContextProjector contextProjector;
 
     /// <summary>Creates an activity over exact adapter resolution and explicit exception classification.</summary>
     /// <param name="resolver">Exact canonical Request adapter resolver.</param>
     /// <param name="exceptionClassifier">Provider-aware adapter exception classifier.</param>
-    /// <exception cref="ArgumentNullException">Either dependency is <see langword="null"/>.</exception>
+    /// <param name="applicationLifetime">Worker lifetime supplying physical shutdown cancellation.</param>
+    /// <exception cref="ArgumentNullException">Any dependency is <see langword="null"/>.</exception>
     public DurableTaskDurableOperationActivity(
         IDurableOperationAdapterResolver resolver,
-        IDurableOperationExceptionClassifier exceptionClassifier) : this(
+        IDurableOperationExceptionClassifier exceptionClassifier,
+        IHostApplicationLifetime applicationLifetime) : this(
             resolver,
             exceptionClassifier,
+            applicationLifetime,
             PassthroughInteractionAuthorityOperationContextProjector.Instance)
     {
     }
@@ -470,15 +476,19 @@ public sealed class DurableTaskDurableOperationActivity
     /// <summary>Creates an activity with explicit canonical-authority context projection.</summary>
     /// <param name="resolver">Exact canonical Request adapter resolver.</param>
     /// <param name="exceptionClassifier">Provider-aware adapter exception classifier.</param>
+    /// <param name="applicationLifetime">Worker lifetime supplying physical shutdown cancellation.</param>
     /// <param name="contextProjector">Host interpretation of canonical interaction authority.</param>
     /// <exception cref="ArgumentNullException">Any dependency is <see langword="null"/>.</exception>
     public DurableTaskDurableOperationActivity(
         IDurableOperationAdapterResolver resolver,
         IDurableOperationExceptionClassifier exceptionClassifier,
+        IHostApplicationLifetime applicationLifetime,
         IInteractionAuthorityOperationContextProjector contextProjector)
     {
         this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         this.exceptionClassifier = exceptionClassifier ?? throw new ArgumentNullException(nameof(exceptionClassifier));
+        this.applicationLifetime = applicationLifetime
+            ?? throw new ArgumentNullException(nameof(applicationLifetime));
         this.contextProjector = contextProjector ?? throw new ArgumentNullException(nameof(contextProjector));
     }
 
@@ -493,15 +503,20 @@ public sealed class DurableTaskDurableOperationActivity
         DurableOperationReferenceExecutor.ValidateAdapterCapabilities(input.Binding, adapter.Capabilities);
         try
         {
-            var observation = await DurableOperationReferenceExecutor.ExecuteAsync(
-                    DurableTaskActivityOperationContext.Project(
-                        OperationContext.Create(),
-                        input.Request.Context.AuthorityScope,
-                        contextProjector),
-                    input,
-                    adapter)
+            var observation = await DurableTaskActivityOperationContext.ExecuteAsync(
+                    applicationLifetime,
+                    input.Request.Context.AuthorityScope,
+                    contextProjector,
+                    operationContext => DurableOperationReferenceExecutor.ExecuteAsync(
+                        operationContext,
+                        input,
+                        adapter))
                 .ConfigureAwait(false);
             return new(observation, deadlineElapsed: false);
+        }
+        catch (DurableTaskWorkerStoppingException)
+        {
+            throw;
         }
         catch (DurableOperationDeadlineElapsedException)
         {
@@ -528,26 +543,35 @@ public sealed class DurableTaskDurableOperationReconciliationActivity
     : TaskActivity<DurableOperationState, DurableTaskDurableOperationReconciliationResult>
 {
     readonly IDurableOperationAdapterResolver resolver;
+    readonly IHostApplicationLifetime applicationLifetime;
     readonly IInteractionAuthorityOperationContextProjector contextProjector;
 
     /// <summary>Creates an activity over exact adapter resolution.</summary>
     /// <param name="resolver">Exact canonical Request adapter resolver.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="resolver"/> is <see langword="null"/>.</exception>
-    public DurableTaskDurableOperationReconciliationActivity(IDurableOperationAdapterResolver resolver) : this(
-        resolver,
-        PassthroughInteractionAuthorityOperationContextProjector.Instance)
+    /// <param name="applicationLifetime">Worker lifetime supplying physical shutdown cancellation.</param>
+    /// <exception cref="ArgumentNullException">Either dependency is <see langword="null"/>.</exception>
+    public DurableTaskDurableOperationReconciliationActivity(
+        IDurableOperationAdapterResolver resolver,
+        IHostApplicationLifetime applicationLifetime) : this(
+            resolver,
+            applicationLifetime,
+            PassthroughInteractionAuthorityOperationContextProjector.Instance)
     {
     }
 
     /// <summary>Creates a reconciliation activity with explicit canonical-authority context projection.</summary>
     /// <param name="resolver">Exact canonical Request adapter resolver.</param>
+    /// <param name="applicationLifetime">Worker lifetime supplying physical shutdown cancellation.</param>
     /// <param name="contextProjector">Host interpretation of canonical interaction authority.</param>
     /// <exception cref="ArgumentNullException">Either dependency is <see langword="null"/>.</exception>
     public DurableTaskDurableOperationReconciliationActivity(
         IDurableOperationAdapterResolver resolver,
+        IHostApplicationLifetime applicationLifetime,
         IInteractionAuthorityOperationContextProjector contextProjector)
     {
         this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        this.applicationLifetime = applicationLifetime
+            ?? throw new ArgumentNullException(nameof(applicationLifetime));
         this.contextProjector = contextProjector ?? throw new ArgumentNullException(nameof(contextProjector));
     }
 
@@ -567,15 +591,20 @@ public sealed class DurableTaskDurableOperationReconciliationActivity
             adapter.Capabilities);
         try
         {
-            var observation = await DurableOperationReferenceExecutor.ReconcileAsync(
-                    DurableTaskActivityOperationContext.Project(
-                        OperationContext.Create(),
-                        input.Request.Context.AuthorityScope,
-                        contextProjector),
-                    input,
-                    adapter)
+            var observation = await DurableTaskActivityOperationContext.ExecuteAsync(
+                    applicationLifetime,
+                    input.Request.Context.AuthorityScope,
+                    contextProjector,
+                    operationContext => DurableOperationReferenceExecutor.ReconcileAsync(
+                        operationContext,
+                        input,
+                        adapter))
                 .ConfigureAwait(false);
             return new(observation, deadlineElapsed: false);
+        }
+        catch (DurableTaskWorkerStoppingException)
+        {
+            throw;
         }
         catch (DurableOperationDeadlineElapsedException)
         {
@@ -837,7 +866,7 @@ public sealed class DurableTaskProcessFailedException : Exception
 }
 
 /// <summary>
-/// Physical activity failure emitted when a Durable Task worker stops while canonical Process host work is in flight.
+/// Physical activity failure emitted when a Durable Task worker stops while canonical Process activity work is in flight.
 /// </summary>
 /// <remarks>
 /// The Process orchestrator retries only this adapter-owned failure on an equivalent worker. It is physical Scheduler
@@ -847,7 +876,7 @@ public sealed class DurableTaskWorkerStoppingException : Exception
 {
     internal DurableTaskWorkerStoppingException(OperationCanceledException innerException)
         : base(
-            "The Durable Task worker stopped while canonical Process host work was in flight; "
+            "The Durable Task worker stopped while canonical Process activity work was in flight; "
             + "an equivalent worker must retry the exact activity.",
             innerException)
     {
