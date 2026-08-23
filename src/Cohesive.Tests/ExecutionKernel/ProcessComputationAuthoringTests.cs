@@ -72,6 +72,55 @@ public sealed class ProcessComputationAuthoringTests
     }
 
     [Fact]
+    public void DelegatingSecondaryConstructor_LowersToCanonicalMembersAndExecutes()
+    {
+        var first = GeneratedSecondaryConstructorProcess.Define(Metadata());
+        var replay = GeneratedSecondaryConstructorProcess.Define(Metadata());
+
+        Assert.True(first.IsValid, Format(first.Validation));
+        Assert.Equal(first.Definition, replay.Definition);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(first.Document),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(replay.Document));
+
+        var returned = Assert.Single(first.Definition.Nodes.OfType<ReturnProcessNode>());
+        Assert.True(
+            PortableExecutionValidator.Validate(returned.Result).IsValid,
+            Format(PortableExecutionValidator.Validate(returned.Result)));
+        var objectExpression = Assert.IsType<CallExpr>(returned.Result);
+        Assert.Equal(ExprFunctionNames.Object, objectExpression.Function);
+        Assert.Equal("First", Assert.IsType<ConstantExpr>(objectExpression.Arguments[0]).Value.String);
+        Assert.Equal("Second", Assert.IsType<ConstantExpr>(objectExpression.Arguments[2]).Value.String);
+
+        var compilation = first.Compile(new ProcessDefinitionValidationContext());
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        var plan = Assert.IsType<CompiledProcessPlan>(compilation.Plan);
+        var continuation = new ProcessContinuationIdentity(
+            new("process-instance/secondary-constructor"),
+            new("attempt/1"));
+        var input = PortableValue.Concrete(
+            plan.Definition.Input,
+            ObservationValue.FromObject(new SecondaryConstructorInput("payload", "label")));
+        var decision = ProcessReferenceInterpreter.Activate(
+            plan,
+            ProcessReferenceInterpreter.Create(plan, continuation, input),
+            Activation(
+                plan,
+                continuation,
+                id: "activation/secondary-constructor",
+                cause: ProcessActivationCause.Start,
+                observedAtUtc: new(2026, 8, 22, 10, 0, 0, TimeSpan.Zero)),
+            EchoRelationHost.Instance);
+
+        Assert.Equal(ProcessActivationDisposition.Completed, decision.Disposition);
+        Assert.Equal(
+            PortableValue.Concrete(
+                plan.Definition.Result,
+                ObservationValue.FromObject(new SecondaryConstructorResult("label", "payload"))),
+            decision.State.Terminal.Detail?.Value);
+    }
+
+    [Fact]
     public void CancellationFinalizerComputation_IsByteEquivalentToCanonicalBuilderAuthoring()
     {
         var returnId = ProcessAuthoringIdentities.NodeFor(new(["body", "return-0"]));
@@ -2237,6 +2286,37 @@ public static partial class ExplicitOccurrenceProcess
     static async ProcessTask<string> Run(ProcessContext process, string input)
     {
         return input;
+    }
+}
+
+/// <summary>Generated Process exercising a renamed and reordered delegating record constructor.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedSecondaryConstructorProcess
+{
+    static async ProcessTask<SecondaryConstructorResult> Run(
+        ProcessContext process,
+        SecondaryConstructorInput input)
+    {
+        return new SecondaryConstructorResult(input.Value, input);
+    }
+}
+
+/// <summary>Input projected through the secondary constructor delegation chain.</summary>
+/// <param name="Value">Value passed through the renamed constructor parameter.</param>
+/// <param name="Label">Value reordered ahead of <paramref name="Value"/>.</param>
+public sealed record SecondaryConstructorInput(string Value, string Label);
+
+/// <summary>Canonical result whose member names, rather than convenience-constructor parameters, own the shape.</summary>
+/// <param name="First">First canonical result member.</param>
+/// <param name="Second">Second canonical result member.</param>
+public sealed record SecondaryConstructorResult(string First, string Second)
+{
+    /// <summary>Creates the canonical result through an analyzable delegation.</summary>
+    /// <param name="renamed">Value assigned to <see cref="Second"/>.</param>
+    /// <param name="source">Source whose label is assigned to <see cref="First"/>.</param>
+    public SecondaryConstructorResult(string renamed, SecondaryConstructorInput source)
+        : this(source.Label, renamed)
+    {
     }
 }
 

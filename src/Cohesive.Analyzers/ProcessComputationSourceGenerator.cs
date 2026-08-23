@@ -191,6 +191,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
         var emitter = new DefinitionEmitter(
             productionContext,
+            compilation,
             method,
             inputParameter,
             resultType,
@@ -2989,6 +2990,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
     sealed class DefinitionEmitter
     {
         readonly SourceProductionContext productionContext;
+        readonly Compilation compilation;
         readonly IMethodSymbol method;
         readonly IParameterSymbol inputParameter;
         readonly ITypeSymbol resultType;
@@ -3010,6 +3012,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
         public DefinitionEmitter(
             SourceProductionContext productionContext,
+            Compilation compilation,
             IMethodSymbol method,
             IParameterSymbol inputParameter,
             ITypeSymbol resultType,
@@ -3021,6 +3024,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             IReadOnlyList<BranchObligation> requestObligations)
         {
             this.productionContext = productionContext;
+            this.compilation = compilation;
             this.method = method;
             this.inputParameter = inputParameter;
             this.resultType = resultType;
@@ -3302,6 +3306,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         bool TryValidateForkResults(FlowBlock body)
         {
             var translator = new PureExpressionEmitter(
+                compilation,
                 method,
                 inputParameter,
                 pureLocals,
@@ -4960,6 +4965,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             }
 
             var translator = new PureExpressionEmitter(
+                compilation,
                 method,
                 inputParameter,
                 pureLocals,
@@ -5018,6 +5024,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
     sealed class PureExpressionEmitter
     {
+        readonly Compilation compilation;
         readonly IMethodSymbol method;
         readonly IParameterSymbol inputParameter;
         readonly IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals;
@@ -5028,6 +5035,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly IReadOnlyDictionary<IParameterSymbol, IOperation>? projectedParameters;
 
         public PureExpressionEmitter(
+            Compilation compilation,
             IMethodSymbol method,
             IParameterSymbol inputParameter,
             IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals,
@@ -5037,6 +5045,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             HashSet<ILocalSymbol> resolving,
             IReadOnlyDictionary<IParameterSymbol, IOperation>? projectedParameters = null)
         {
+            this.compilation = compilation;
             this.method = method;
             this.inputParameter = inputParameter;
             this.pureLocals = pureLocals;
@@ -5056,9 +5065,16 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             }
 
             if (operation is IPropertyReferenceOperation pureMember
-                && TryResolvePureMember(pureMember, out var projected))
+                && TryResolvePureMember(
+                    pureMember,
+                    out var projected,
+                    out var memberProjections))
             {
-                return TryEmit(projected, out expression, out failure);
+                return TryEmitProjected(
+                    projected,
+                    memberProjections,
+                    out expression,
+                    out failure);
             }
 
             if (TryEmitCount(operation, out expression, out failure))
@@ -5225,42 +5241,19 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 
         bool TryEmitObject(IObjectCreationOperation creation, out string expression, out string failure)
         {
-            if (creation.Constructor is null)
+            if (!TryResolveObjectCreation(
+                    creation,
+                    out var projectedMembers,
+                    out var constructorProjections,
+                    out failure))
             {
-                return Failure("object creation requires a named constructor", out expression, out failure);
+                expression = string.Empty;
+                return false;
             }
 
             List<(string Name, IOperation Value)> members = [];
-            foreach (var argument in creation.Arguments)
-            {
-                if (argument.Parameter is null)
-                {
-                    return Failure("object constructor arguments must map to named parameters", out expression, out failure);
-                }
-
-                var property = creation.Type?.GetMembers().OfType<IPropertySymbol>()
-                    .SingleOrDefault(candidate =>
-                        !candidate.IsStatic
-                        && candidate.GetMethod is not null
-                        && SymbolEqualityComparer.Default.Equals(candidate.Type, argument.Parameter.Type)
-                        && string.Equals(candidate.Name, argument.Parameter.Name, StringComparison.OrdinalIgnoreCase));
-                members.Add((SerializedName(property) ?? argument.Parameter.Name, argument.Value));
-            }
-            if (creation.Initializer is not null)
-            {
-                foreach (var initializer in creation.Initializer.Initializers)
-                {
-                    if (initializer is not ISimpleAssignmentOperation assignment
-                        || Strip(assignment.Target) is not IPropertyReferenceOperation property)
-                    {
-                        return Failure(
-                            "object initializers support only named property assignments",
-                            out expression,
-                            out failure);
-                    }
-                    members.Add((SerializedName(property.Property) ?? property.Property.Name, assignment.Value));
-                }
-            }
+            members.AddRange(projectedMembers.Select(static member =>
+                (SerializedName(member.Property) ?? member.Property.Name, member.Value)));
             members.Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Name, right.Name));
             for (var index = 1; index < members.Count; index++)
             {
@@ -5275,7 +5268,11 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             List<string> arguments = [];
             foreach (var member in members)
             {
-                if (!TryEmit(member.Value, out var value, out failure))
+                if (!TryEmitProjected(
+                        member.Value,
+                        constructorProjections,
+                        out var value,
+                        out failure))
                 {
                     expression = string.Empty;
                     return false;
@@ -5288,6 +5285,204 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             failure = string.Empty;
             return true;
         }
+
+        bool TryResolveObjectCreation(
+            IObjectCreationOperation creation,
+            out List<ProjectedObjectMember> members,
+            out IReadOnlyDictionary<IParameterSymbol, IOperation> projections,
+            out string failure) =>
+            TryResolveObjectCreation(
+                creation,
+                projectedParameters,
+                out members,
+                out projections,
+                out failure);
+
+        bool TryResolveObjectCreation(
+            IObjectCreationOperation creation,
+            IReadOnlyDictionary<IParameterSymbol, IOperation>? inheritedProjections,
+            out List<ProjectedObjectMember> members,
+            out IReadOnlyDictionary<IParameterSymbol, IOperation> projections,
+            out string failure)
+        {
+            members = [];
+            Dictionary<IParameterSymbol, IOperation> scopedProjections =
+                new(SymbolEqualityComparer.Default);
+            if (inheritedProjections is not null)
+            {
+                foreach (var projection in inheritedProjections)
+                {
+                    scopedProjections[projection.Key] = projection.Value;
+                }
+            }
+
+            if (creation.Constructor is null)
+            {
+                projections = scopedProjections;
+                failure = "object creation requires a named constructor";
+                return false;
+            }
+            foreach (var argument in creation.Arguments)
+            {
+                if (argument.Parameter is null)
+                {
+                    projections = scopedProjections;
+                    failure = "object constructor arguments must map to named parameters";
+                    return false;
+                }
+                scopedProjections[argument.Parameter] = argument.Value;
+            }
+
+            if (!TryProjectConstructor(
+                    creation.Constructor,
+                    scopedProjections,
+                    new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default),
+                    out members,
+                    out failure))
+            {
+                projections = scopedProjections;
+                return false;
+            }
+
+            if (creation.Initializer is not null)
+            {
+                foreach (var initializer in creation.Initializer.Initializers)
+                {
+                    if (initializer is not ISimpleAssignmentOperation assignment
+                        || Strip(assignment.Target) is not IPropertyReferenceOperation property)
+                    {
+                        projections = scopedProjections;
+                        failure = "object initializers support only named property assignments";
+                        return false;
+                    }
+                    members.Add(new(property.Property, assignment.Value));
+                }
+            }
+
+            projections = scopedProjections;
+            failure = string.Empty;
+            return true;
+        }
+
+        bool TryProjectConstructor(
+            IMethodSymbol constructor,
+            Dictionary<IParameterSymbol, IOperation> projections,
+            HashSet<IMethodSymbol> observed,
+            out List<ProjectedObjectMember> members,
+            out string failure)
+        {
+            members = [];
+            if (!observed.Add(constructor))
+            {
+                failure = $"constructor delegation for '{constructor.ContainingType.Name}' forms a cycle";
+                return false;
+            }
+
+            var directlyProjected = true;
+            foreach (var parameter in constructor.Parameters)
+            {
+                var property = SemanticProperty(constructor.ContainingType, parameter);
+                if (property is null || !projections.TryGetValue(parameter, out var value))
+                {
+                    directlyProjected = false;
+                    break;
+                }
+                members.Add(new(property, value));
+            }
+            var hasAuthoredConstructorBody = constructor.DeclaringSyntaxReferences.Any(reference =>
+                reference.GetSyntax() is ConstructorDeclarationSyntax);
+            if (directlyProjected && !hasAuthoredConstructorBody)
+            {
+                failure = string.Empty;
+                return true;
+            }
+
+            members.Clear();
+            if (constructor.DeclaringSyntaxReferences.Length != 1
+                || constructor.DeclaringSyntaxReferences[0].GetSyntax() is not ConstructorDeclarationSyntax syntax
+                || syntax.Initializer is null
+                || !syntax.Initializer.ThisOrBaseKeyword.IsKind(SyntaxKind.ThisKeyword))
+            {
+                failure =
+                    $"constructor '{constructor.ToDisplayString()}' does not map directly to semantic properties and must delegate through an analyzable this(...) constructor";
+                return false;
+            }
+
+            var semanticModel = compilation.GetSemanticModel(syntax.SyntaxTree);
+            if (semanticModel.GetSymbolInfo(syntax.Initializer).Symbol is not IMethodSymbol target
+                || target.MethodKind != MethodKind.Constructor
+                || !SymbolEqualityComparer.Default.Equals(target.ContainingType, constructor.ContainingType))
+            {
+                failure =
+                    $"constructor '{constructor.ToDisplayString()}' has a this(...) target that cannot be resolved exactly";
+                return false;
+            }
+
+            HashSet<IParameterSymbol> assigned = new(SymbolEqualityComparer.Default);
+            var positionalIndex = 0;
+            foreach (var argumentSyntax in syntax.Initializer.ArgumentList.Arguments)
+            {
+                var argument = semanticModel.GetOperation(argumentSyntax) as IArgumentOperation;
+                var parameter = argument?.Parameter;
+                if (parameter is null && argumentSyntax.NameColon is not null)
+                {
+                    parameter = target.Parameters.SingleOrDefault(candidate => string.Equals(
+                        candidate.Name,
+                        argumentSyntax.NameColon.Name.Identifier.ValueText,
+                        StringComparison.Ordinal));
+                }
+                else if (parameter is null && positionalIndex < target.Parameters.Length)
+                {
+                    parameter = target.Parameters[positionalIndex];
+                }
+                positionalIndex++;
+
+                var value = argument?.Value ?? semanticModel.GetOperation(argumentSyntax.Expression);
+                if (parameter is null || value is null || !assigned.Add(parameter))
+                {
+                    failure =
+                        $"constructor '{constructor.ToDisplayString()}' has a this(...) argument that cannot be bound exactly";
+                    return false;
+                }
+                projections[parameter] = value;
+            }
+            if (target.Parameters.Any(parameter => !assigned.Contains(parameter)))
+            {
+                failure =
+                    $"constructor '{constructor.ToDisplayString()}' must supply every this(...) parameter explicitly";
+                return false;
+            }
+
+            return TryProjectConstructor(target, projections, observed, out members, out failure);
+        }
+
+        bool TryEmitProjected(
+            IOperation operation,
+            IReadOnlyDictionary<IParameterSymbol, IOperation> projections,
+            out string expression,
+            out string failure) =>
+            new PureExpressionEmitter(
+                compilation,
+                method,
+                inputParameter,
+                pureLocals,
+                forkResultTuples,
+                outputs,
+                patternOutputs,
+                resolving,
+                projections)
+            .TryEmit(operation, out expression, out failure);
+
+        static IPropertySymbol? SemanticProperty(
+            INamedTypeSymbol type,
+            IParameterSymbol parameter) =>
+            type.GetMembers()
+                .OfType<IPropertySymbol>()
+                .SingleOrDefault(candidate =>
+                    !candidate.IsStatic
+                    && candidate.GetMethod is not null
+                    && SymbolEqualityComparer.Default.Equals(candidate.Type, parameter.Type)
+                    && string.Equals(candidate.Name, parameter.Name, StringComparison.OrdinalIgnoreCase));
 
         bool TryEmitInterpolation(
             IInterpolatedStringOperation interpolation,
@@ -5430,69 +5625,56 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             return true;
         }
 
-        bool TryResolvePureMember(IPropertyReferenceOperation property, out IOperation value)
+        bool TryResolvePureMember(
+            IPropertyReferenceOperation property,
+            out IOperation value,
+            out IReadOnlyDictionary<IParameterSymbol, IOperation> projections)
         {
             value = null!;
+            projections = null!;
             if (property.Instance is null)
             {
                 return false;
             }
 
             var instance = Strip(property.Instance);
+            IReadOnlyDictionary<IParameterSymbol, IOperation>? inheritedProjections = projectedParameters;
             if (TryResolvePureAlias(instance, out var alias))
             {
                 instance = alias;
             }
             else if (instance is IPropertyReferenceOperation parent
-                     && TryResolvePureMember(parent, out var parentValue))
+                     && TryResolvePureMember(
+                         parent,
+                         out var parentValue,
+                         out var parentProjections))
             {
                 instance = Strip(parentValue);
+                inheritedProjections = parentProjections;
             }
 
             if (instance is not IObjectCreationOperation creation)
             {
                 return false;
             }
-
-            foreach (var argument in creation.Arguments)
-            {
-                if (argument.Parameter is null)
-                {
-                    continue;
-                }
-
-                var candidate = creation.Type?.GetMembers().OfType<IPropertySymbol>()
-                    .SingleOrDefault(member =>
-                        !member.IsStatic
-                        && member.GetMethod is not null
-                        && SymbolEqualityComparer.Default.Equals(member.Type, argument.Parameter.Type)
-                        && string.Equals(member.Name, argument.Parameter.Name, StringComparison.OrdinalIgnoreCase));
-                if (!SymbolEqualityComparer.Default.Equals(candidate, property.Property))
-                {
-                    continue;
-                }
-
-                value = argument.Value;
-                return true;
-            }
-            if (creation.Initializer is null)
+            if (!TryResolveObjectCreation(
+                    creation,
+                    inheritedProjections,
+                    out var members,
+                    out projections,
+                    out _))
             {
                 return false;
             }
-
-            foreach (var memberInitializer in creation.Initializer.Initializers)
+            var matches = members
+                .Where(member => SymbolEqualityComparer.Default.Equals(member.Property, property.Property))
+                .ToArray();
+            if (matches.Length != 1)
             {
-                if (memberInitializer is not ISimpleAssignmentOperation assignment
-                    || Strip(assignment.Target) is not IPropertyReferenceOperation target
-                    || !SymbolEqualityComparer.Default.Equals(target.Property, property.Property))
-                {
-                    continue;
-                }
-
-                value = assignment.Value;
-                return true;
+                return false;
             }
-            return false;
+            value = matches[0].Value;
+            return true;
         }
 
         bool TryResolvePureAlias(IOperation operation, out IOperation value)
@@ -6113,6 +6295,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         ImmutableArray<string> OutputDeclarations,
         ImmutableArray<string> BuilderStatements,
         string EntryIdentity);
+
+    readonly record struct ProjectedObjectMember(
+        IPropertySymbol Property,
+        IOperation Value);
 
     enum AwaitKind
     {
