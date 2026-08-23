@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Model;
 
 namespace Cohesive.Transitions.Model;
@@ -19,6 +20,9 @@ public sealed record EntityDefinition
     /// <param name="fields">Fields used when <paramref name="shape"/> is not supplied.</param>
     /// <param name="invariants">Entity-level invariants.</param>
     /// <param name="shape">Optional explicit entity shape whose identifier and metadata are preserved.</param>
+    /// <param name="shapeGraph">
+    /// Optional exact graph-qualified snapshot used to resolve named state types. Omit for genuinely inline shapes.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// <paramref name="name"/> is default, the resolved shape is not an entity shape, has no fields,
     /// carries an entity-type annotation that contradicts <paramref name="name"/>.
@@ -28,7 +32,8 @@ public sealed record EntityDefinition
         EntityTypeName name,
         ImmutableArray<FieldDefinition> fields,
         ImmutableArray<InvariantDefinition> invariants = default,
-        Shape? shape = null
+        Shape? shape = null,
+        EntityShapeGraphBinding? shapeGraph = null
         )
     {
         if (string.IsNullOrWhiteSpace(name.Value))
@@ -51,6 +56,7 @@ public sealed record EntityDefinition
             throw new ArgumentException(exception.Message, nameof(shape), exception);
         }
         Invariants = invariants.IsDefault ? [] : invariants;
+        ShapeGraph = shapeGraph;
     }
 
     /// <summary>
@@ -73,7 +79,41 @@ public sealed record EntityDefinition
             name: name,
             fields: Guard.RequireNotNull(shape).Fields,
             invariants: invariants,
-            shape: shape)
+            shape: shape,
+            shapeGraph: null)
+    {
+    }
+
+    /// <summary>Creates a graph-backed entity definition from one exact canonical root-shape snapshot.</summary>
+    /// <param name="name">Stable logical entity type name.</param>
+    /// <param name="shapeGraph">Exact graph-qualified root and immutable graph document.</param>
+    /// <param name="invariants">Entity-level invariants.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="shapeGraph"/> is <see langword="null"/>.</exception>
+    /// <exception cref="KeyNotFoundException">The referenced root shape is absent from the supplied graph.</exception>
+    /// <exception cref="ArgumentException">The graph revision or entity shape is invalid or inconsistent.</exception>
+    public EntityDefinition(
+        EntityTypeName name,
+        EntityShapeGraphBinding shapeGraph,
+        ImmutableArray<InvariantDefinition> invariants = default)
+        : this(
+            name: name,
+            resolvedShape: ResolveShape(name, shapeGraph),
+            shapeGraph: shapeGraph,
+            invariants: invariants)
+    {
+    }
+
+    EntityDefinition(
+        EntityTypeName name,
+        Shape resolvedShape,
+        EntityShapeGraphBinding shapeGraph,
+        ImmutableArray<InvariantDefinition> invariants)
+        : this(
+            name: name,
+            fields: resolvedShape.Fields,
+            invariants: invariants,
+            shape: resolvedShape,
+            shapeGraph: shapeGraph)
     {
     }
 
@@ -86,6 +126,11 @@ public sealed record EntityDefinition
     /// Canonical entity shape.
     /// </summary>
     public Shape Shape { get; init; }
+
+    /// <summary>
+    /// Exact graph-qualified snapshot used to resolve named entity-state types, or null for an inline declaration.
+    /// </summary>
+    public EntityShapeGraphBinding? ShapeGraph { get; init; }
 
     /// <summary>
     /// Owned field definitions.
@@ -101,6 +146,10 @@ public sealed record EntityDefinition
     /// Entity-level invariants.
     /// </summary>
     public ImmutableArray<InvariantDefinition> Invariants { get; init; }
+
+    /// <summary>Validates this entity's inline or graph-backed state-schema linkage.</summary>
+    /// <returns>Structured deterministic shape-graph diagnostics.</returns>
+    public DocumentValidationResult ValidateShapeGraph() => EntityShapeGraphValidator.Validate(this);
     
     /// <summary>
     /// Creates an immutable state snapshot for this entity definition after validating field names and types.
@@ -306,7 +355,10 @@ public sealed record EntityDefinition
 
     void EnsureValueMatchesType(TypeRef type, ObservationValue value, string context)
     {
-        if (!JsonTypeSemantics.MatchesType(type: type, value: value))
+        if (!JsonTypeSemantics.MatchesType(
+                type: type,
+                value: value,
+                graph: ShapeGraph?.Document.Graph))
             throw new SemanticRuleViolationException($"{context} on entity type '{Name.Value}' does not satisfy expected type '{JsonTypeSemantics.DescribeType(type)}'.");
     }
 
@@ -332,6 +384,10 @@ public sealed record EntityDefinition
 
         public static StateValidationPlan Build(EntityDefinition definition)
         {
+            var shapeGraphValidation = definition.ValidateShapeGraph();
+            if (!shapeGraphValidation.IsValid)
+                throw new EntityShapeGraphValidationException(shapeGraphValidation.Diagnostics);
+
             Dictionary<string, FieldDefinition> fieldByName = new(definition.Fields.Length, StringComparer.Ordinal);
             List<FieldDefinition> requiredFields = [];
             foreach (var field in definition.Fields)
@@ -371,4 +427,24 @@ public sealed record EntityDefinition
 	    role: ShapeRoles.Entity,
 	    fields: fields
 	);
+
+    static Shape ResolveShape(EntityTypeName name, EntityShapeGraphBinding shapeGraph)
+    {
+        ArgumentNullException.ThrowIfNull(shapeGraph);
+        if (shapeGraph.Shape.GraphId != shapeGraph.Document.Graph.Id)
+        {
+            throw new ArgumentException(
+                $"Entity shape graph revision '{shapeGraph.Shape.GraphId.Value}' does not match supplied snapshot '{shapeGraph.Document.Graph.Id.Value}'.",
+                nameof(shapeGraph));
+        }
+
+        var source = shapeGraph.Document.Graph.GetShape(shapeGraph.Shape.ShapeId);
+        return new Shape(
+                id: source.Id,
+                fields: source.Fields,
+                constraints: source.Constraints,
+                annotations: source.Annotations,
+                role: ShapeRoles.Entity)
+            .WithEntityType(name);
+    }
 }

@@ -83,14 +83,17 @@ public sealed class FreightOrderHarnessModelTests
         Assert.DoesNotContain(first.Storage.Order.Fields, static field => field.Name.Value is
             "pickupStopId" or "deliveryStopId" or "originLocationId" or "destinationLocationId");
         Assert.Contains(first.Storage.Order.Fields, static field => field.Name.Value == "stops");
-        Assert.IsType<ObjectTypeRef>(
+        var repositoryStops = Assert.IsType<NamedTypeRef>(
             first.Storage.Order.Fields.Single(static field => field.Name.Value == "stops").Type);
+        Assert.True(first.Storage.Order.ValidateShapeGraph().IsValid);
+        Assert.Equal(first.Structure.SemanticModel, first.Storage.Order.ShapeGraph?.Document);
         var ownedStops = Assert.Single(first.Structure.OwnedCollections);
         Assert.Equal(FieldPath.FromField("stops"), ownedStops.CollectionPath);
         var canonicalStopsField = first.Structure.SemanticModel.Graph
             .GetShape(first.Structure.RootShape)
             .Fields.Single(static field => field.Name.Value == "stops");
         Assert.Equal(Assert.IsType<NamedTypeRef>(canonicalStopsField.Type).TypeId, ownedStops.ComponentType);
+        Assert.Equal(repositoryStops.TypeId, ownedStops.ComponentType);
         Assert.Equal(FieldPath.FromField("sequence"), ownedStops.OrdinalPath);
         Assert.Equal(
             RelationQueryCompiledPlanReferenceFingerprinter.Compute(

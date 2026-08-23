@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Cohesive.Model.Serialization;
 using Cohesive.Transitions.Model;
 
 namespace Cohesive.Transitions.Authoring;
@@ -12,6 +13,7 @@ public sealed class EntityBuilder
     readonly List<FieldDefinition> fields = [];
     readonly List<InvariantDefinition> invariants = [];
     ImmutableDictionary<AnnotationKey, AnnotationValue>.Builder? annotations;
+    EntityShapeGraphBinding? shapeGraph;
 
     /// <summary>
     /// Creates an entity builder for the supplied type name.
@@ -34,6 +36,7 @@ public sealed class EntityBuilder
         TypeRef type,
         Action<FieldBuilder>? configure = null)
     {
+        RequireInlineShape(nameof(Field));
         var fieldBuilder = new FieldBuilder(new FieldName(value: name), type);
         configure?.Invoke(fieldBuilder);
         fields.Add(fieldBuilder.Build());
@@ -48,7 +51,33 @@ public sealed class EntityBuilder
     /// <exception cref="ArgumentNullException"><paramref name="definition"/> is <see langword="null"/>.</exception>
     public EntityBuilder Field(FieldDefinition definition)
     {
+        RequireInlineShape(nameof(Field));
         fields.Add(Guard.RequireNotNull(definition));
+        return this;
+    }
+
+    /// <summary>Binds this entity to one exact canonical root shape and named-type graph snapshot.</summary>
+    /// <param name="shape">Graph-qualified canonical root shape.</param>
+    /// <param name="document">Exact immutable graph document containing the root and named-type closure.</param>
+    /// <returns>This builder for further invariant declarations.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="document"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The builder already contains inline fields, entity-shape annotations, or another shape-graph binding.
+    /// </exception>
+    public EntityBuilder ShapeGraph(
+        QualifiedShapeId shape,
+        ShapeGraphDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (shapeGraph is not null)
+            throw new InvalidOperationException($"Entity '{name.Value}' already has a shape-graph binding.");
+        if (fields.Count != 0 || annotations is not null)
+        {
+            throw new InvalidOperationException(
+                $"Entity '{name.Value}' cannot combine a canonical shape-graph binding with inline fields or shape annotations.");
+        }
+
+        shapeGraph = new(shape: shape, document: document);
         return this;
     }
 
@@ -61,6 +90,7 @@ public sealed class EntityBuilder
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
     public EntityBuilder Annotation(string key, AnnotationValue value)
     {
+        RequireInlineShape(nameof(Annotation));
         ArgumentNullException.ThrowIfNull(value);
         annotations ??= ImmutableDictionary.CreateBuilder<AnnotationKey, AnnotationValue>();
         annotations[new AnnotationKey(key)] = value;
@@ -108,6 +138,14 @@ public sealed class EntityBuilder
     /// <returns>The canonical entity definition produced by this builder.</returns>
     public EntityDefinition Build()
     {
+        if (shapeGraph is not null)
+        {
+            return new(
+                name: name,
+                shapeGraph: shapeGraph,
+                invariants: [.. invariants]);
+        }
+
         return new(
             name: name,
             shape: new Shape(
@@ -117,5 +155,14 @@ public sealed class EntityBuilder
                 annotations: annotations?.ToImmutable()),
             invariants: [.. invariants]
         );
+    }
+
+    void RequireInlineShape(string operation)
+    {
+        if (shapeGraph is not null)
+        {
+            throw new InvalidOperationException(
+                $"Entity '{name.Value}' cannot apply '{operation}' after selecting its canonical shape graph.");
+        }
     }
 }

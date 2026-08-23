@@ -14,6 +14,7 @@ static class JsonTypeSemantics
         ScalarTypeRef scalar => scalar.Kind.ToString(),
         EnumTypeRef enumType => $"Enum({enumType.Name})",
         EntityReferenceTypeRef entityRef => $"EntityRef({entityRef.Entity.Value})",
+        NamedTypeRef named => $"Named({named.TypeId.Value})",
         ArrayTypeRef array => $"Array({DescribeType(array.ElementType)})",
         ObjectTypeRef => "Object",
         QuantityTypeRef quantity => $"Quantity({quantity.Quantity},{quantity.BaseKind})",
@@ -85,7 +86,10 @@ static class JsonTypeSemantics
         throw new InvalidOperationException(message: $"Unsupported type reference '{type.GetType().Name}'.");
     }
 
-    public static bool MatchesType(TypeRef type, ObservationValue value)
+    public static bool MatchesType(
+        TypeRef type,
+        ObservationValue value,
+        ShapeGraph? graph = null)
     {
         if (value.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)
             return false;
@@ -114,7 +118,7 @@ static class JsonTypeSemantics
 
                 foreach (var item in value.EnumerateArray())
                 {
-                    if (!MatchesType(type: arrayType.ElementType, value: item))
+                    if (!MatchesType(type: arrayType.ElementType, value: item, graph: graph))
                         return false;
                 }
 
@@ -154,23 +158,124 @@ static class JsonTypeSemantics
                             return false;
                         foreach (var item in fieldValue.EnumerateArray())
                         {
-                            if (!MatchesType(field.Type, item))
+                            if (!MatchesType(field.Type, item, graph))
                                 return false;
                         }
                         continue;
                     }
 
-                    if (!MatchesType(type: field.Type, value: fieldValue))
+                    if (!MatchesType(type: field.Type, value: fieldValue, graph: graph))
                         return false;
                 }
 
                 return true;
+
+            case NamedTypeRef namedType:
+                return graph is not null
+                    && graph.TryGetType(namedType.TypeId, out var definition)
+                    && MatchesNamedType(definition, value, graph);
 
             case QuantityTypeRef quantityType:
                 return MatchesQuantityType(type: quantityType, value: value);
         }
 
         throw new InvalidOperationException(message: $"Unsupported type reference '{type.GetType().Name}'.");
+    }
+
+    static bool MatchesNamedType(
+        TypeDefinition definition,
+        ObservationValue value,
+        ShapeGraph graph) => definition switch
+    {
+        TypeDefinition.Structural structural => MatchesStructuralType(structural, value, graph),
+        TypeDefinition.Enum enumeration => enumeration.Values.Any(enumValue =>
+            PrimitiveTypeSemantics.MatchesLiteral(
+                enumeration.Underlying,
+                enumValue.Value ?? enumValue.Name,
+                value)),
+        TypeDefinition.Union union => MatchesUnionType(union, value, graph),
+        _ => false
+    };
+
+    static bool MatchesStructuralType(
+        TypeDefinition.Structural structural,
+        ObservationValue value,
+        ShapeGraph graph)
+    {
+        if (value.Kind != ObservationValueKind.Object || value.Fields is null)
+            return false;
+
+        foreach (var field in structural.Fields)
+        {
+            if (!value.Fields.TryGetValue(field.Name.Value, out var fieldValue))
+            {
+                if (field.Presence == FieldPresence.Required)
+                    return false;
+                continue;
+            }
+
+            if (!MatchesField(
+                    field.Type,
+                    field.Cardinality,
+                    field.Nullability,
+                    fieldValue,
+                    graph))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    static bool MatchesUnionType(
+        TypeDefinition.Union union,
+        ObservationValue value,
+        ShapeGraph graph)
+    {
+        if (value.Kind != ObservationValueKind.Object
+            || value.Fields is null
+            || !value.Fields.TryGetValue(union.Discriminator.FieldName, out var discriminator))
+        {
+            return false;
+        }
+
+        foreach (var unionCase in union.Cases)
+        {
+            if (PrimitiveTypeSemantics.MatchesLiteral(
+                    union.Discriminator.Type,
+                    unionCase.DiscriminatorValue,
+                    discriminator))
+            {
+                return MatchesType(unionCase.Type, value, graph);
+            }
+        }
+
+        return false;
+    }
+
+    static bool MatchesField(
+        TypeRef type,
+        FieldCardinality cardinality,
+        FieldNullability nullability,
+        ObservationValue value,
+        ShapeGraph graph)
+    {
+        if (value.Kind == ObservationValueKind.Null)
+            return nullability == FieldNullability.Nullable;
+        if (value.Kind == ObservationValueKind.Undefined)
+            return false;
+        if (cardinality == FieldCardinality.Single)
+            return MatchesType(type, value, graph);
+        if (value.Kind != ObservationValueKind.Array)
+            return false;
+
+        foreach (var item in value.EnumerateArray())
+        {
+            if (!MatchesType(type, item, graph))
+                return false;
+        }
+        return true;
     }
 
     static bool MatchesType(TypeRef type, JsonElement value)
