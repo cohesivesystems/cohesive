@@ -34,6 +34,9 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
     /// <summary>Conventional entity-envelope observation identity property.</summary>
     public const string ObservationIdentitySourceSelector = "observationId";
 
+    /// <summary>Conventional entity-envelope observation version property.</summary>
+    public const string ObservationVersionSourceSelector = "observationVersion";
+
     /// <summary>Conventional entity-envelope scalar partition-coordinate property.</summary>
     public const string ObservationPartitionSourceSelector = "partitionKey";
 
@@ -57,6 +60,7 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
 
     readonly RelationQuerySourceInstance source;
     readonly CosmosJsonQueryFeedReader feedReader;
+    readonly RelationQueryPlacementFieldSelector payloadFieldSourceSelector;
     readonly FieldPath identityPath;
     readonly string accountFingerprint;
 
@@ -111,6 +115,9 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
     /// Optional exact top-level stream name required of matching envelopes. This keeps an outbox baseline query
     /// identical to a stream-filtered managed change binding.
     /// </param>
+    /// <param name="observationVersionSemanticPath">
+    /// Optional semantic field projected from the entity envelope's exact observation-version metadata.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="source"/>, <paramref name="container"/>, <paramref name="databaseId"/>,
     /// <paramref name="containerId"/>, or <paramref name="policy"/> is <see langword="null"/>.
@@ -134,7 +141,8 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
         string? entityDocumentKind = null,
         QualifiedShapeId? persistedObservationType = null,
-        string? persistedStreamName = null)
+        string? persistedStreamName = null,
+        FieldPath? observationVersionSemanticPath = null)
         : this(
             shape: shape,
             source: source,
@@ -149,7 +157,8 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
             entityDocumentKind: entityDocumentKind,
             clientConsistencyLevel: container.Database.Client.ClientOptions.ConsistencyLevel,
             persistedObservationType: persistedObservationType,
-            persistedStreamName: persistedStreamName)
+            persistedStreamName: persistedStreamName,
+            observationVersionSemanticPath: observationVersionSemanticPath)
     {
     }
 
@@ -167,7 +176,8 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         string? entityDocumentKind = null,
         ConsistencyLevel? clientConsistencyLevel = null,
         QualifiedShapeId? persistedObservationType = null,
-        string? persistedStreamName = null)
+        string? persistedStreamName = null,
+        FieldPath? observationVersionSemanticPath = null)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
             throw new ArgumentException("A Cosmos entity reader requires a graph-qualified shape.", nameof(shape));
@@ -245,7 +255,18 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
         identityPath = CosmosRelationQuerySourceSelectors.RequirePropertyPath(
             IdentitySourceSelector,
             nameof(identitySourceSelector));
-        FieldSourceSelector = fieldSourceSelector ?? GetObservationFieldSourceSelector;
+        if (observationVersionSemanticPath is { Segments.IsDefaultOrEmpty: true })
+            throw new ArgumentException("An observation-version semantic path cannot be empty.", nameof(observationVersionSemanticPath));
+        if (observationVersionSemanticPath is not null
+            && string.Equals(IdentitySourceSelector, ObservationVersionSourceSelector, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Observation identity and observation version cannot use the same physical selector.",
+                nameof(identitySourceSelector));
+        }
+        ObservationVersionSemanticPath = observationVersionSemanticPath;
+        payloadFieldSourceSelector = fieldSourceSelector ?? GetObservationFieldSourceSelector;
+        FieldSourceSelector = SelectFieldSource;
         RelationshipKeySourceSelector = relationshipKeySourceSelector ?? GetObservationFieldSourceSelector;
         EntityDocumentKind = entityDocumentKind is null
             ? DefaultEntityDocumentKind
@@ -271,6 +292,9 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
 
     /// <summary>Exact graph-qualified shape returned by this reader.</summary>
     public QualifiedShapeId Shape { get; }
+
+    /// <summary>Semantic field projected from authoritative entity-envelope version metadata, when configured.</summary>
+    public FieldPath? ObservationVersionSemanticPath { get; }
 
     /// <inheritdoc />
     public RelationQuerySourceReaderDescriptor Descriptor { get; }
@@ -326,6 +350,10 @@ public sealed class CosmosRelationQuerySourceReader : IRelationQuerySourceReader
     /// for each request.
     /// </summary>
     public RelationQueryPlacementFieldSelector RelationshipKeySourceSelector { get; }
+
+    string SelectFieldSource(FieldPath semanticPath) => semanticPath == ObservationVersionSemanticPath
+        ? ObservationVersionSourceSelector
+        : payloadFieldSourceSelector(semanticPath);
 
     /// <summary>Projects one semantic field path into the conventional Cosmos observation-envelope selector.</summary>
     /// <param name="semanticPath">Non-empty semantic field path to place below <c>observation</c>.</param>

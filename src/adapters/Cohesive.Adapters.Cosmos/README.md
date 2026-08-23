@@ -509,6 +509,11 @@ selectors are overridable. Custom field and relationship selector delegates are 
 validated for each requested semantic path; because delegates have no portable content identity, registration also
 requires an explicit source identity when either delegate is customized.
 
+Set `observationVersionSemanticPath` when a query shape exposes exact repository version evidence. The configured
+semantic field then selects the entity envelope's top-level `observationVersion`, never a same-named field below
+`observation`. This convention is fingerprinted into a derived source identity and matches the in-memory entity
+source's projection from `Observation.Version`.
+
 Every read includes document-kind, observation-type, and payload-presence predicates so a container shared with
 outbox documents cannot widen the logical entity source. A customized discriminator must be the exact value used by
 the repository. The following illustrative fragment assumes `loadShape`, `entitiesContainer`, `services`, and
@@ -537,6 +542,7 @@ var cosmosSource = CosmosEntityRelationQuerySourceRegistration.Create(
         maximumKeysPerQuery: 100,
         maximumQueryChunks: 16,
         maximumSdkPageSize: 256),
+    observationVersionSemanticPath: FieldPath.FromField("SourceEntityVersion"),
     entityDocumentKind: repositoryOptions.EntityDocumentKind);
 
 services.RegisterEntityRelationQuerySource(cosmosSource);

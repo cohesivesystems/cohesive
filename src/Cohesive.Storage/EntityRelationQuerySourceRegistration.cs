@@ -18,6 +18,9 @@ public sealed class EntityRelationQuerySourceRegistration
     public const string ObservationIdentitySourceSelector =
         RelationQueryPlacementBuilder.FrameworkIdentitySourceSelector;
 
+    /// <summary>Conventional in-memory selector for <see cref="Cohesive.Relations.Model.Observation.Version"/>.</summary>
+    public const string ObservationVersionSourceSelector = "$version";
+
     /// <summary>Creates one immutable entity-backed canonical source registration.</summary>
     /// <param name="shape">Exact graph-qualified entity shape supplied by the source.</param>
     /// <param name="source">Canonical physical source instance, capability profile, and limits.</param>
@@ -36,6 +39,10 @@ public sealed class EntityRelationQuerySourceRegistration
     /// Semantic-to-physical relationship-reference selector, or <see langword="null"/> to use canonical semantic
     /// path text.
     /// </param>
+    /// <param name="observationVersionSemanticPath">
+    /// Optional canonical field path whose value is projected from repository snapshot metadata as the exact
+    /// observation version rather than read from the observation payload.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// <paramref name="shape"/> is incomplete, <paramref name="identitySourceSelector"/> is empty, or the reader
     /// descriptor does not match <paramref name="source"/>.
@@ -50,7 +57,8 @@ public sealed class EntityRelationQuerySourceRegistration
         string? identitySourceSelector = null,
         FieldPath? identitySemanticPath = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
-        RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null)
+        RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
+        FieldPath? observationVersionSemanticPath = null)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
             throw new ArgumentException("An entity relation/query source requires a graph-qualified shape.", nameof(shape));
@@ -70,10 +78,19 @@ public sealed class EntityRelationQuerySourceRegistration
         Shape = shape;
         if (identitySemanticPath is { Segments.IsDefaultOrEmpty: true })
             throw new ArgumentException("An identity semantic path cannot be empty.", nameof(identitySemanticPath));
+        if (observationVersionSemanticPath is { Segments.IsDefaultOrEmpty: true })
+            throw new ArgumentException("An observation-version semantic path cannot be empty.", nameof(observationVersionSemanticPath));
+        if (observationVersionSemanticPath is { } versionPath && identitySemanticPath == versionPath)
+        {
+            throw new ArgumentException(
+                "Observation identity and observation version cannot occupy the same semantic path.",
+                nameof(observationVersionSemanticPath));
+        }
         IdentitySourceSelector = identitySourceSelector is null
             ? ObservationIdentitySourceSelector
             : Guard.RequireNotNullOrWhiteSpace(identitySourceSelector);
         IdentitySemanticPath = identitySemanticPath;
+        ObservationVersionSemanticPath = observationVersionSemanticPath;
         FieldSourceSelector = fieldSourceSelector ?? SemanticPathSelector;
         RelationshipKeySourceSelector = relationshipKeySourceSelector ?? SemanticPathSelector;
     }
@@ -92,6 +109,11 @@ public sealed class EntityRelationQuerySourceRegistration
 
     /// <summary>Canonical field path equal to the observation identity, when explicitly evidenced.</summary>
     public FieldPath? IdentitySemanticPath { get; }
+
+    /// <summary>
+    /// Canonical field path projected from authoritative repository observation-version metadata, when configured.
+    /// </summary>
+    public FieldPath? ObservationVersionSemanticPath { get; }
 
     /// <summary>Deterministic semantic-to-physical field selector.</summary>
     public RelationQueryPlacementFieldSelector FieldSourceSelector { get; }
@@ -115,6 +137,9 @@ public sealed class EntityRelationQuerySourceRegistration
     /// <param name="relationshipKeySourceSelector">
     /// Explicit relationship-reference selector policy, or <see langword="null"/> for semantic paths.
     /// </param>
+    /// <param name="observationVersionSemanticPath">
+    /// Optional canonical field path projected from <see cref="Cohesive.Relations.Model.Observation.Version"/>.
+    /// </param>
     /// <returns>A registration whose source, reader, limits, profile, and selector policies agree exactly.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="repository"/> or <paramref name="logicalPartition"/> is <see langword="null"/>.
@@ -133,7 +158,8 @@ public sealed class EntityRelationQuerySourceRegistration
         string? identitySourceSelector = null,
         FieldPath? identitySemanticPath = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
-        RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null)
+        RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
+        FieldPath? observationVersionSemanticPath = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
         if (shape.ShapeId != repository.EntityDefinition.Shape.Id)
@@ -143,9 +169,25 @@ public sealed class EntityRelationQuerySourceRegistration
                 nameof(shape));
         }
 
+        if (observationVersionSemanticPath is { Segments.IsDefaultOrEmpty: true })
+            throw new ArgumentException("An observation-version semantic path cannot be empty.", nameof(observationVersionSemanticPath));
+        if (observationVersionSemanticPath is not null
+            && string.Equals(identitySourceSelector, ObservationVersionSourceSelector, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Observation identity and observation version cannot use the same physical selector.",
+                nameof(identitySourceSelector));
+        }
+
         var shapeKey = ShapeKey(shape);
+        var sourceKey = observationVersionSemanticPath is null
+            ? shapeKey
+            : string.Concat(
+                shapeKey,
+                "/metadata/observation-version/",
+                Uri.EscapeDataString(observationVersionSemanticPath.Value.ToString()));
         var effectiveSource = source ?? new RelationQuerySourceInstanceId(
-            $"source/cohesive.storage.in-memory/{shapeKey}");
+            $"source/cohesive.storage.in-memory/{sourceKey}");
         var effectiveDomain = executionDomain ?? new RelationQueryExecutionDomainId(
             $"domain/cohesive.storage.in-memory/{shapeKey}");
         var effectiveLimits = limits ?? InMemoryEntityRelationQuerySourceReader.DefaultLimits;
@@ -161,7 +203,8 @@ public sealed class EntityRelationQuerySourceRegistration
             logicalPartition,
             identitySourceSelector,
             fieldSourceSelector,
-            relationshipKeySourceSelector);
+            relationshipKeySourceSelector,
+            observationVersionSemanticPath);
         return new(
             shape,
             sourceInstance,
@@ -169,7 +212,8 @@ public sealed class EntityRelationQuerySourceRegistration
             reader.IdentitySourceSelector,
             identitySemanticPath,
             reader.FieldSourceSelector,
-            reader.RelationshipKeySourceSelector);
+            reader.RelationshipKeySourceSelector,
+            observationVersionSemanticPath);
     }
 
     internal static string SelectSemanticPath(FieldPath path) => SemanticPathSelector(path);

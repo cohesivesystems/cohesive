@@ -62,6 +62,9 @@ public static class CosmosEntityRelationQuerySourceRegistration
     /// Entity-document discriminator, or <see langword="null"/> for
     /// <see cref="CosmosRelationQuerySourceReader.DefaultEntityDocumentKind"/>.
     /// </param>
+    /// <param name="observationVersionSemanticPath">
+    /// Optional canonical field path projected from the entity envelope's exact <c>observationVersion</c> metadata.
+    /// </param>
     /// <returns>
     /// A canonical Storage registration whose reader, identity, domain, capability profile, limits, and selectors agree.
     /// </returns>
@@ -89,7 +92,8 @@ public static class CosmosEntityRelationQuerySourceRegistration
         FieldPath? identitySemanticPath = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
-        string? entityDocumentKind = null)
+        string? entityDocumentKind = null,
+        FieldPath? observationVersionSemanticPath = null)
     {
         ArgumentNullException.ThrowIfNull(container);
         ArgumentNullException.ThrowIfNull(policy);
@@ -105,6 +109,18 @@ public static class CosmosEntityRelationQuerySourceRegistration
             : CosmosRelationQuerySourceSelectors.RequirePropertyPath(
                 identitySourceSelector,
                 nameof(identitySourceSelector)).ToString();
+        if (observationVersionSemanticPath is { Segments.IsDefaultOrEmpty: true })
+            throw new ArgumentException("An observation-version semantic path cannot be empty.", nameof(observationVersionSemanticPath));
+        if (observationVersionSemanticPath is not null
+            && string.Equals(
+                effectiveIdentitySelector,
+                CosmosRelationQuerySourceReader.ObservationVersionSourceSelector,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Observation identity and observation version cannot use the same physical selector.",
+                nameof(identitySourceSelector));
+        }
         var effectiveEntityDocumentKind = entityDocumentKind is null
             ? CosmosRelationQuerySourceReader.DefaultEntityDocumentKind
             : Guard.RequireNotNullOrWhiteSpace(entityDocumentKind);
@@ -133,7 +149,8 @@ public static class CosmosEntityRelationQuerySourceRegistration
             policy,
             effectiveLimits,
             effectiveIdentitySelector,
-            effectiveEntityDocumentKind);
+            effectiveEntityDocumentKind,
+            observationVersionSemanticPath);
         var effectiveSource = source ?? new RelationQuerySourceInstanceId(
             $"source/cohesive.adapters.cosmos/{bindingFingerprint}/{shapeKey}");
         var effectiveDomain = executionDomain ?? new RelationQueryExecutionDomainId(
@@ -153,7 +170,8 @@ public static class CosmosEntityRelationQuerySourceRegistration
             effectiveIdentitySelector,
             fieldSourceSelector,
             relationshipKeySourceSelector,
-            effectiveEntityDocumentKind);
+            effectiveEntityDocumentKind,
+            observationVersionSemanticPath: observationVersionSemanticPath);
         return new(
             shape: shape,
             source: sourceInstance,
@@ -161,7 +179,8 @@ public static class CosmosEntityRelationQuerySourceRegistration
             identitySourceSelector: reader.IdentitySourceSelector,
             identitySemanticPath: identitySemanticPath,
             fieldSourceSelector: reader.FieldSourceSelector,
-            relationshipKeySourceSelector: reader.RelationshipKeySourceSelector);
+            relationshipKeySourceSelector: reader.RelationshipKeySourceSelector,
+            observationVersionSemanticPath: observationVersionSemanticPath);
     }
 
     static string FingerprintBinding(
@@ -172,7 +191,8 @@ public static class CosmosEntityRelationQuerySourceRegistration
         CosmosRelationQuerySourcePolicy policy,
         RelationQuerySourcePlacementLimits limits,
         string identitySourceSelector,
-        string entityDocumentKind)
+        string entityDocumentKind,
+        FieldPath? observationVersionSemanticPath)
     {
         StringBuilder canonical = new();
         Append(SourceBindingProfile);
@@ -200,6 +220,11 @@ public static class CosmosEntityRelationQuerySourceRegistration
         Append(limits.MaximumBufferedRows.ToString(CultureInfo.InvariantCulture));
         Append(limits.MaximumFanOut.ToString(CultureInfo.InvariantCulture));
         Append(limits.MaximumConcurrency.ToString(CultureInfo.InvariantCulture));
+        if (observationVersionSemanticPath is { } versionPath)
+        {
+            Append("metadata/observation-version");
+            Append(versionPath.ToString());
+        }
         return CosmosPhysicalAffinity.Fingerprint(canonical.ToString());
 
         void Append(string? value) => canonical

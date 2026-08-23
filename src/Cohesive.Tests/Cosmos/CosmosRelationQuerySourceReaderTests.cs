@@ -21,6 +21,32 @@ public sealed class CosmosRelationQuerySourceReaderTests
     static readonly FieldPath CustomerIdsPath = FieldPath.FromField("CustomerIds");
     static readonly FieldPath StopsPath = FieldPath.FromField("Stops");
     static readonly FieldPath LocationIdPath = FieldPath.FromField("locationId");
+    static readonly FieldPath VersionPath = FieldPath.FromField("SourceEntityVersion");
+
+    [Fact]
+    public async Task ObservationVersionProjection_SelectsExactEntityEnvelopeMetadata()
+    {
+        RecordingFeedFactory feed = new();
+        feed.Enqueue(Json("""{"_identity":"load-a","_field0":7}"""));
+        var fixture = CreateFixture(
+            feed,
+            FixedPolicy(),
+            observationVersionSemanticPath: VersionPath);
+
+        var result = await fixture.Reader.ReadAsync(Request(
+            fixture,
+            [SemanticField(fixture, VersionPath)],
+            new RelationQueryBoundedEnumeration(maximumRows: 10)));
+
+        Assert.Equal(VersionPath, fixture.Reader.ObservationVersionSemanticPath);
+        Assert.Equal(
+            CosmosRelationQuerySourceReader.ObservationVersionSourceSelector,
+            fixture.Reader.FieldSourceSelector(VersionPath));
+        Assert.Equal(7, result.Observations.Single().Fields.Single().Value!.Value.Int64);
+        var query = Assert.Single(feed.Queries).Query.QueryText;
+        Assert.Contains("c[\"observationVersion\"]", query, StringComparison.Ordinal);
+        Assert.DoesNotContain("c[\"observation\"][\"SourceEntityVersion\"]", query, StringComparison.Ordinal);
+    }
 
     [Fact]
     public async Task Reader_EmitsBoundedNonSensitiveAcquisitionActivity()
@@ -72,8 +98,16 @@ public sealed class CosmosRelationQuerySourceReaderTests
             "operations",
             "entities",
             policy,
-            identitySemanticPath: FieldPath.FromField("id"));
+            identitySemanticPath: FieldPath.FromField("id"),
+            observationVersionSemanticPath: VersionPath);
         var second = CosmosEntityRelationQuerySourceRegistration.Create(
+            Shape,
+            container,
+            "operations",
+            "entities",
+            policy,
+            observationVersionSemanticPath: VersionPath);
+        var payloadOnly = CosmosEntityRelationQuerySourceRegistration.Create(
             Shape,
             container,
             "operations",
@@ -89,6 +123,8 @@ public sealed class CosmosRelationQuerySourceReaderTests
         Assert.Equal(first.Source.ExecutionDomain, second.Source.ExecutionDomain);
         Assert.Equal("observationId", first.IdentitySourceSelector);
         Assert.Equal(FieldPath.FromField("id"), first.IdentitySemanticPath);
+        Assert.Equal(VersionPath, first.ObservationVersionSemanticPath);
+        Assert.Equal("observationVersion", first.FieldSourceSelector(VersionPath));
         Assert.Equal("observation.Name", first.FieldSourceSelector(NamePath));
         Assert.Equal("observation.CustomerIds", first.RelationshipKeySourceSelector(CustomerIdsPath));
         Assert.Same(policy, reader.Policy);
@@ -97,6 +133,15 @@ public sealed class CosmosRelationQuerySourceReaderTests
         Assert.Equal("operations", reader.DatabaseId);
         Assert.Equal("entities", reader.ContainerId);
         Assert.Same(first, registered);
+        Assert.NotEqual(first.Source.Id, payloadOnly.Source.Id);
+        Assert.Throws<ArgumentException>(() => CosmosEntityRelationQuerySourceRegistration.Create(
+            Shape,
+            container,
+            "operations",
+            "entities",
+            policy,
+            identitySourceSelector: CosmosRelationQuerySourceReader.ObservationVersionSourceSelector,
+            observationVersionSemanticPath: VersionPath));
         Assert.Throws<ArgumentException>(() => CosmosEntityRelationQuerySourceRegistration.Create(
             Shape,
             container,
@@ -1111,7 +1156,8 @@ public sealed class CosmosRelationQuerySourceReaderTests
         CosmosRelationQuerySourcePolicy policy,
         RelationQuerySourcePlacementLimits? limits = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
-        bool constrainLimits = true)
+        bool constrainLimits = true,
+        FieldPath? observationVersionSemanticPath = null)
     {
         var configuredLimits = limits ?? CosmosRelationQuerySourceReader.DefaultLimits;
         var effectiveLimits = constrainLimits
@@ -1135,7 +1181,8 @@ public sealed class CosmosRelationQuerySourceReaderTests
             "operations",
             "entities",
             policy,
-            fieldSourceSelector: fieldSourceSelector);
+            fieldSourceSelector: fieldSourceSelector,
+            observationVersionSemanticPath: observationVersionSemanticPath);
         return new(source, reader);
     }
 

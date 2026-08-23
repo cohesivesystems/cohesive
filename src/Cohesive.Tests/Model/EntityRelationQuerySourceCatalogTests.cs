@@ -170,6 +170,69 @@ public sealed class EntityRelationQuerySourceCatalogTests
     }
 
     [Fact]
+    public async Task CatalogEvaluator_FiltersAndOrdersByAuthoritativeObservationVersion()
+    {
+        var author = RelationQuery.Expression();
+        var sourceShape = author.Clr.Shape<VersionedStoredLoad>();
+        var loads = author.Source(sourceShape);
+        var filtered = author.Filter(
+            loads.Node,
+            (VersionedStoredLoad load) => load.SourceEntityVersion >= 2,
+            loads.Binding);
+        var projected = author.Project(
+            filtered,
+            (VersionedStoredLoad load) => new VersionedStoredLoadRow
+            {
+                Id = load.Id,
+                SourceEntityVersion = load.SourceEntityVersion
+            },
+            loads.Binding);
+        var ordered = author.Order(
+            projected.Node,
+            (VersionedStoredLoadRow row) => row.SourceEntityVersion,
+            projected.Binding);
+        var rows = author.Rows(ordered, projected.Binding, id: new("rows"));
+        var query = author.BuildQuery(
+            new("tests/storage/versioned-entity-query"),
+            new("VersionedStorageEntityQuery"),
+            rows);
+        var evaluation = author.Evaluate(
+            query,
+            new("tests/storage/versioned-entity-query/evaluation")).Build();
+        var canonicalShape = sourceShape.Document.Graph.GetShape(sourceShape.Id);
+        var entityShape = new Shape(
+            canonicalShape.Id,
+            canonicalShape.Fields,
+            canonicalShape.Constraints,
+            canonicalShape.Annotations,
+            role: ShapeRoles.Entity);
+        var repository = new InMemoryEntityOutboxRepository(
+            new EntityDefinition(new(entityShape.Id.Value), entityShape),
+            static _ => "tenant-a",
+            [
+                VersionedSnapshot(entityShape.Id, "load-c", version: 3),
+                VersionedSnapshot(entityShape.Id, "load-a", version: 1),
+                VersionedSnapshot(entityShape.Id, "load-b", version: 2)
+            ]);
+        var registration = EntityRelationQuerySourceRegistration.InMemory(
+            sourceShape.Id,
+            repository,
+            RelationQueryLogicalPartitionIdentity.WholeSource,
+            observationVersionSemanticPath: FieldPath.FromField("sourceEntityVersion"));
+        var evaluator = new EntityRelationQuerySourceCatalog([registration]).CreateEvaluator(Policy());
+
+        var outcome = await evaluator.EvaluateAsync(evaluation);
+
+        Assert.True(
+            outcome.IsSuccessful,
+            string.Join(Environment.NewLine, outcome.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+        var result = Assert.IsType<RelationQueryExecutionResult>(outcome.Result);
+        var resultRows = Assert.Single(result.QueryResults).Rows;
+        Assert.Equal(["load-b", "load-c"], resultRows.Select(static row => row.Value.GetProperty("id").String));
+        Assert.Equal([2L, 3L], resultRows.Select(static row => row.Value.GetProperty("sourceEntityVersion").Int64));
+    }
+
+    [Fact]
     public async Task CatalogEvaluator_ExecutesForwardTraversalQueryAcrossEntitySources()
     {
         var fixture = CreateTraversalQueryFixture();
@@ -369,6 +432,19 @@ public sealed class EntityRelationQuerySourceCatalogTests
         "partition",
         new($"seed/{id}"));
 
+    static EntitySnapshot VersionedSnapshot(ShapeId shape, string id, long version) => new(
+        new(
+            shape,
+            id,
+            new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                ["id"] = ObservationValue.FromString(id),
+                ["sourceEntityVersion"] = ObservationValue.FromInt64(999)
+            },
+            version),
+        "tenant-a",
+        new($"seed/{id}"));
+
     static StoredLoad Stored(string id, string name) => new()
     {
         Id = id,
@@ -425,6 +501,24 @@ public sealed class EntityRelationQuerySourceCatalogTests
 
         [JsonPropertyName("name")]
         public required string Name { get; init; }
+    }
+
+    sealed record VersionedStoredLoad
+    {
+        [JsonPropertyName("id")]
+        public required string Id { get; init; }
+
+        [JsonPropertyName("sourceEntityVersion")]
+        public long SourceEntityVersion { get; init; }
+    }
+
+    sealed record VersionedStoredLoadRow
+    {
+        [JsonPropertyName("id")]
+        public required string Id { get; init; }
+
+        [JsonPropertyName("sourceEntityVersion")]
+        public long SourceEntityVersion { get; init; }
     }
 
     sealed record JoinedLoad
