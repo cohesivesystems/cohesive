@@ -84,6 +84,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Identity", "src\Co
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Relations.Contracts", "src\Cohesive.Relations.Contracts\Cohesive.Relations.Contracts.csproj", "{4FDB867D-BDEE-4101-A8BE-5982E842174D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Processes.Contracts", "src\Cohesive.Processes.Contracts\Cohesive.Processes.Contracts.csproj", "{B438A896-9589-4285-97D2-9145088B3373}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Json", "src\adapters\Cohesive.Adapters.Json\Cohesive.Adapters.Json.csproj", "{05FD9E64-5AE4-4271-993B-63B7FF4824A7}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{6F2CE868-7A5C-4DAE-8016-66309C69FDFE}"
@@ -622,6 +624,18 @@ Global
 		{4FDB867D-BDEE-4101-A8BE-5982E842174D}.Release|x64.Build.0 = Release|Any CPU
 		{4FDB867D-BDEE-4101-A8BE-5982E842174D}.Release|x86.ActiveCfg = Release|Any CPU
 		{4FDB867D-BDEE-4101-A8BE-5982E842174D}.Release|x86.Build.0 = Release|Any CPU
+		{B438A896-9589-4285-97D2-9145088B3373}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B438A896-9589-4285-97D2-9145088B3373}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B438A896-9589-4285-97D2-9145088B3373}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B438A896-9589-4285-97D2-9145088B3373}.Debug|x64.Build.0 = Debug|Any CPU
+		{B438A896-9589-4285-97D2-9145088B3373}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{B438A896-9589-4285-97D2-9145088B3373}.Debug|x86.Build.0 = Debug|Any CPU
+		{B438A896-9589-4285-97D2-9145088B3373}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B438A896-9589-4285-97D2-9145088B3373}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B438A896-9589-4285-97D2-9145088B3373}.Release|x64.ActiveCfg = Release|Any CPU
+		{B438A896-9589-4285-97D2-9145088B3373}.Release|x64.Build.0 = Release|Any CPU
+		{B438A896-9589-4285-97D2-9145088B3373}.Release|x86.ActiveCfg = Release|Any CPU
+		{B438A896-9589-4285-97D2-9145088B3373}.Release|x86.Build.0 = Release|Any CPU
 		{05FD9E64-5AE4-4271-993B-63B7FF4824A7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{05FD9E64-5AE4-4271-993B-63B7FF4824A7}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{05FD9E64-5AE4-4271-993B-63B7FF4824A7}.Debug|x64.ActiveCfg = Debug|Any CPU

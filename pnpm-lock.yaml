@@ -207,6 +207,19 @@ importers:
         specifier: ^4.1.7
         version: 4.1.7(@types/node@24.12.4)(vite@8.0.13(@types/node@24.12.4))
 
+  src/frontend/processes:
+    dependencies:
+      '@cohesivesystems/relations':
+        specifier: workspace:*
+        version: link:../relations
+    devDependencies:
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.7
+        version: 4.1.7(@types/node@24.12.4)(vite@8.0.13(@types/node@24.12.4))
+
   src/frontend/relations:
     devDependencies:
       typescript:

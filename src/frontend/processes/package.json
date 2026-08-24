@@ -1,0 +1,53 @@
+{
+  "name": "@cohesivesystems/processes",
+  "version": "0.1.0-alpha.1",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./generated/*": {
+      "types": "./dist/generated/*.d.ts",
+      "import": "./dist/generated/*.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src/**/*.ts",
+    "!src/**/*.test.ts"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node ../../../eng/fix-package-js-imports.mjs dist",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@cohesivesystems/relations": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.7"
+  },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "description": "Generated TypeScript contracts for canonical Cohesive Processes.",
+  "keywords": [
+    "cohesive",
+    "processes",
+    "orchestration",
+    "typescript"
+  ],
+  "author": "Cohesive Systems",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cohesivesystems/cohesive.git",
+    "directory": "src/frontend/processes"
+  },
+  "bugs": {
+    "url": "https://github.com/cohesivesystems/cohesive/issues"
+  },
+  "homepage": "https://github.com/cohesivesystems/cohesive#readme"
+}

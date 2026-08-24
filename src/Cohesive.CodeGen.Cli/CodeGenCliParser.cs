@@ -29,6 +29,7 @@ public static class CodeGenCliParser
         var shapeProjection = ContractShapeProjection.Clr;
         var emitKinds = ImmutableArray.CreateBuilder<CodeGenEmitKind>();
         var externalShapeModules = ImmutableArray.CreateBuilder<TypeScriptExternalTypeModule>();
+        var unionDiscriminatorCatalogs = ImmutableArray.CreateBuilder<TypeScriptUnionDiscriminatorCatalog>();
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -72,6 +73,14 @@ public static class CodeGenCliParser
             if (string.Equals(current, "--external-shapes", StringComparison.OrdinalIgnoreCase))
             {
                 if (!TryParseExternalShapeModule(value, externalShapeModules, out error))
+                    return false;
+
+                continue;
+            }
+
+            if (string.Equals(current, "--union-catalog", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryParseUnionDiscriminatorCatalog(value, unionDiscriminatorCatalogs, out error))
                     return false;
 
                 continue;
@@ -123,9 +132,39 @@ public static class CodeGenCliParser
             ModuleName = module,
             EmitKinds = emitKinds.ToImmutable(),
             ExternalTypeScriptShapeModules = externalShapeModules.ToImmutable(),
+            TypeScriptUnionDiscriminatorCatalogs = unionDiscriminatorCatalogs.ToImmutable(),
             ShapeProjection = shapeProjection
         };
 
+        return true;
+    }
+
+    static bool TryParseUnionDiscriminatorCatalog(
+        string value,
+        ImmutableArray<TypeScriptUnionDiscriminatorCatalog>.Builder catalogs,
+        out string? error)
+    {
+        error = null;
+        var separatorIndex = value.IndexOf('=');
+        if (separatorIndex <= 0 || separatorIndex + 1 >= value.Length)
+        {
+            error = "Union catalogs must use '<generated-union-type>=<typescript-export-name>'.";
+            return false;
+        }
+
+        var unionTypeName = value[..separatorIndex].Trim();
+        var exportName = value[(separatorIndex + 1)..].Trim();
+        if (string.IsNullOrWhiteSpace(unionTypeName) || string.IsNullOrWhiteSpace(exportName))
+        {
+            error = "Union catalogs require a generated union type name and TypeScript export name.";
+            return false;
+        }
+
+        catalogs.Add(new()
+        {
+            UnionTypeName = unionTypeName,
+            ExportName = exportName
+        });
         return true;
     }
 

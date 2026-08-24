@@ -31,4 +31,23 @@ public sealed record TypeScriptEmitterOptions
     /// External TypeScript modules that own generated declarations for matching shape graph types.
     /// </summary>
     public ImmutableArray<TypeScriptExternalTypeModule> ExternalTypeModules { get; init; } = [];
+
+    /// <summary>
+    /// Runtime discriminator catalogs to derive from named closed unions in the emitted shape graph.
+    /// </summary>
+    /// <remarks>
+    /// Catalog values come from the union cases themselves. This option only assigns a target-language export
+    /// name, so callers do not maintain a second list of discriminator values beside the canonical contract.
+    /// </remarks>
+    public ImmutableArray<TypeScriptUnionDiscriminatorCatalog> UnionDiscriminatorCatalogs { get; init; } = [];
+}
+
+/// <summary>Names one runtime TypeScript catalog derived from a closed union's discriminator cases.</summary>
+public sealed record TypeScriptUnionDiscriminatorCatalog
+{
+    /// <summary>Generated TypeScript name of the union whose cases own the catalog values.</summary>
+    public required string UnionTypeName { get; init; }
+
+    /// <summary>Exported TypeScript constant name for the generated readonly catalog.</summary>
+    public required string ExportName { get; init; }
 }

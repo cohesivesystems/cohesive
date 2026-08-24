@@ -21,6 +21,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Relations.Contracts` | Contract assembly for relation-oriented generated surfaces. |
 | `Cohesive.Transitions` | Canonical entity-transition IR, typed authoring, validation, compilation, decisions, and reference interpretation. |
 | `Cohesive.Processes` | Canonical multistep Process IR, typed authoring, validation, compilation, continuations, and reference interpretation. |
+| `Cohesive.Processes.Contracts` | Code-generation roots for canonical Process documents and closed construct inventories. |
 | `Cohesive.Processes.Distribution` | Optional portable worker pools, durable competing-consumer claims, capacity, leases, fencing, and recovery for canonical Process work. |
 | `Cohesive.Presentation` | Backend-declared presentation IR for navigation, views, actions, forms, and flows. |
 | `Cohesive.Api` | Semantic API declarations and endpoint metadata. |

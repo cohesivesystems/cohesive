@@ -7,6 +7,9 @@ Package boundaries should preserve the semantic model:
 
 - `@cohesivesystems/presentation-contracts` exports generated TypeScript contracts for
   `Cohesive.Presentation`.
+- `@cohesivesystems/processes` exports generated canonical Process definitions, closed node/clause unions,
+  and runtime discriminator inventories. Shared portable model contracts come from
+  `@cohesivesystems/relations` rather than being regenerated.
 - `@cohesivesystems/presentation-core` contains pure TypeScript projection/runtime
   logic. It must not import React, router, query, table, design-system, editor,
   or product-specific modules.
