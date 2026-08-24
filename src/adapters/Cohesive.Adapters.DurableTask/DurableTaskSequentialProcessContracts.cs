@@ -14,6 +14,12 @@ public static class DurableTaskSequentialProcessNames
     /// <summary>Generic orchestration that interprets an exact canonical Process plan.</summary>
     public const string Orchestration = "Cohesive.Processes.Sequential.v1";
 
+    /// <summary>Orchestration that durably admits one canonical top-level Process start.</summary>
+    public const string StartAdmissionOrchestration = "Cohesive.Processes.StartAdmission.v1";
+
+    /// <summary>Bounded entity that retains one authority-scoped Process-start index claim.</summary>
+    public const string StartAdmissionIndexEntity = "Cohesive.Processes.StartAdmissionIndex.v1";
+
     /// <summary>Activity that materializes one exact Transition or Relation/Query operation.</summary>
     public const string HostOperationActivity = "Cohesive.Processes.HostOperation.v1";
 
@@ -533,6 +539,22 @@ static class DurableTaskSequentialProcessIdentities
             scope.Authority,
             scope.Tenant ?? string.Empty,
             processInstanceId.Value);
+    }
+
+    internal static string StartAdmissionIndex(
+        InteractionAuthorityScope scope,
+        string indexKind,
+        string logicalIdentity)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        ArgumentException.ThrowIfNullOrWhiteSpace(indexKind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(logicalIdentity);
+        return indexKind + ":v1:sha256:" + Hash(
+            "start-admission-index",
+            scope.Authority,
+            scope.Tenant ?? string.Empty,
+            indexKind,
+            logicalIdentity);
     }
 
     internal static ActivationId Activation(ProcessContinuationState state)

@@ -312,7 +312,63 @@ an equivalent immutable catalog and deterministic Request bindings after restart
 portable JSON converter for worker and client payloads. The initial public SDK names retain `Sequential` for source
 compatibility, but executable qualification includes the bounded higher-order constructs listed above.
 
-Schedule the admitted start evidence with the client extension:
+### Top-level Process-start admission
+
+Application-facing top-level starts use the canonical `ProcessStartRequest` boundary rather than constructing an
+accepted receipt in advance. Compose the Durable Task binding into the transport-neutral execution dispatcher:
+
+```csharp
+ExecutionProcessStartDispatcher startDispatcher =
+    client.CreateCohesiveProcessStartDispatcher(
+        (context, request, invocation) => new ProcessActivationContext(
+            invocation.Authorization.AuthorityScope,
+            correlationId,
+            durableAfterCommit,
+            invocation.Provenance));
+
+IExecutionControlApiDispatcher executionApi = new InMemoryExecutionControlApiAdapter(
+    interactionContracts,
+    apiCatalog,
+    startDispatcher: startDispatcher);
+
+ExecutionApiDispatchResult dispatched = await executionApi.DispatchAsync(
+    operationContext,
+    apiCatalog.Start,
+    request,
+    trustedInvocation);
+```
+
+The activation projection owns application or transport correlation, delivery, causation, and ordering policy; the
+adapter always replaces its authority scope and provenance with trusted invocation evidence. The reference API
+adapter does not use its local Process registry when an authoritative Start dispatcher is supplied. Until the
+standalone Durable Task lifecycle dispatcher is composed, callers must not mistake that adapter's independent local
+lifecycle endpoints for control of the newly scheduled Durable Task Process; COH-37 owns removal of that temporary
+composition boundary.
+
+`trustedInvocation` must grant the canonical Process-start authorization requirement. Admission replaces caller
+authority, issuance, and provenance with that trusted evidence, resolves the exact definition fingerprint from the
+immutable worker catalog, and validates the typed input before it mutates durable registry state. The canonical
+`ProcessStartReferenceEvaluator` remains the authority for accepted, replayed, command-identity conflict,
+idempotency conflict, and instance-conflict decisions.
+
+The physical registry consists of three bounded Durable Entity index entries for command identity, idempotency
+identity, and logical Process instance. Their versioned SHA-256 keys include the authority scope and do not expose
+tenant, command, idempotency, or logical-instance text. One admission orchestration locks all three entries, retains
+the exact winning receipt plus activation context in each, and lets only the newly claimed instance entry schedule
+the generic Process orchestration. Concurrent admissions for one logical instance therefore produce exactly one
+accepted result; exact retries restore the retained occurrence evidence and return the same public admission as
+`Replayed`, including after worker replacement.
+
+This is a Durable Task critical-section completion protocol, not a database transaction. Worker shutdown and
+transient redelivery are recovered by orchestration replay while the entity locks exclude competing admissions.
+Operators must not terminate or purge an incomplete start-admission orchestration; doing so can interrupt the
+bounded three-index commit. Completed admission orchestration history may be purged independently, but the index
+entities must be retained for as long as command, idempotency, or instance reuse must still be detected. Cancelling
+`AdmitCohesiveProcessAsync` cancels only the client's wait and never semantically cancels an accepted Process.
+
+`ScheduleCohesiveProcessAsync` is the lower-level boundary for a receipt that another authoritative admission path
+has already committed, including canonical child-start projection and compatibility tooling. It must not be used to
+fabricate accepted top-level evidence. Schedule the already-admitted evidence with:
 
 ```csharp
 DurableTaskProcessScheduleResult scheduled =
@@ -320,7 +376,7 @@ DurableTaskProcessScheduleResult scheduled =
 ```
 
 The physical instance ID is deterministic for the authority scope and canonical Process instance. A duplicate,
-byte-equivalent start reuses the instance; conflicting start evidence is rejected. Each Transition or Relation/Query
+byte-equivalent admitted start reuses the instance; conflicting admitted evidence is rejected. Each Transition or Relation/Query
 invocation runs as a bounded activity, awaits `IAsyncProcessReferenceHost` without blocking, and is materialized back
 into the reference interpreter. The activity creates an `OperationContext` with the active worker trace and
 `IHostApplicationLifetime.ApplicationStopping` token. Durable Task replay then reuses activity history instead of
@@ -528,7 +584,10 @@ Run the Scheduler-emulator integration test with Docker, or point the same scrip
 eng/test-durable-task-integration.sh
 ```
 
-The script pins the emulator image by digest. Emulator coverage proves successful completion, canonical Pause,
+The script pins the emulator image by digest. Emulator coverage proves concurrent linearizable Process-start
+admission, all three canonical start conflicts, idempotent and exact replay, retry after uncertain transport
+acknowledgement, definition/input rejection without Process scheduling, exact replay after worker replacement,
+successful completion, canonical Pause,
 Inspect, exact replay, Continue, RestartAttempt, Cancel, and Terminate through the public event API, bound Request
 activity dispatch and Reply admission, child sub-orchestration, recurrence history rollover, authored failure,
 duplicate start admission, cross-instance and self-Signal delivery, and worker restart during active Transition work

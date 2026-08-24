@@ -5,6 +5,7 @@ using Cohesive.Processes.Execution;
 using DurableTask.Core.Exceptions;
 using Microsoft.DurableTask;
 using Microsoft.DurableTask.Client;
+using Microsoft.DurableTask.Entities;
 using Microsoft.DurableTask.Worker;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -126,7 +127,11 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
             ConservativeDurableOperationExceptionClassifier.Instance);
         builder.Services.TryAddSingleton<IInteractionAuthorityOperationContextProjector>(
             PassthroughInteractionAuthorityOperationContextProjector.Instance);
-        builder.Configure(options => options.DataConverter = converter);
+        builder.Configure(options =>
+        {
+            options.DataConverter = converter;
+            options.EnableEntitySupport = true;
+        });
         return builder.AddTasks(tasks =>
         {
             // Standalone Durable Task resolves activities through the service provider, but type-based orchestrator
@@ -135,6 +140,11 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
             tasks.AddOrchestrator(
                 DurableTaskSequentialProcessNames.Orchestration,
                 orchestratorActivation.Create);
+            tasks.AddOrchestrator(
+                DurableTaskSequentialProcessNames.StartAdmissionOrchestration,
+                orchestratorActivation.CreateStartAdmission);
+            tasks.AddEntity<DurableTaskProcessStartIndexEntity>(
+                new(DurableTaskSequentialProcessNames.StartAdmissionIndexEntity));
             tasks.AddActivity<DurableTaskProcessHostOperationActivity>();
             tasks.AddActivity<DurableTaskProcessSignalTargetActivity>();
             tasks.AddActivity<DurableTaskDomainEventPublicationActivity>();
@@ -182,6 +192,11 @@ sealed class DurableTaskSequentialProcessOrchestratorActivation
         Volatile.Read(ref admittedCatalog)
         ?? throw new InvalidOperationException(
             "The Durable Task Process worker attempted orchestrator activation before exact plan catalog admission."));
+
+    public ITaskOrchestrator CreateStartAdmission() => new DurableTaskProcessStartAdmissionOrchestrator(
+        Volatile.Read(ref admittedCatalog)
+        ?? throw new InvalidOperationException(
+            "The Durable Task Process worker attempted start admission before exact plan catalog admission."));
 }
 
 /// <summary>Generic standalone Durable Task orchestration over one exact canonical Process plan.</summary>
@@ -952,11 +967,7 @@ public static class DurableTaskSequentialProcessClientExtensions
         var instanceId = DurableTaskProcessExecutionIdentity.GetPhysicalInstanceId(
             start.Receipt.Request.Context.Authorization.AuthorityScope,
             start.Receipt.Request.InitialContinuation.ProcessInstanceId);
-        var options = new StartOrchestrationOptions(instanceId)
-        {
-            Tags = DurableTaskProcessTags.Create(start.Receipt)
-        }
-            .WithDedupeStatuses([.. StartOrchestrationOptionsExtensions.ValidDedupeStatuses]);
+        var options = CreateStartOptions(start);
         try
         {
             _ = await client.ScheduleNewOrchestrationInstanceAsync(
@@ -989,6 +1000,19 @@ public static class DurableTaskSequentialProcessClientExtensions
             }
             return new(instanceId, Replayed: true);
         }
+    }
+
+    internal static StartOrchestrationOptions CreateStartOptions(DurableTaskSequentialProcessStart start)
+    {
+        ArgumentNullException.ThrowIfNull(start);
+        var instanceId = DurableTaskProcessExecutionIdentity.GetPhysicalInstanceId(
+            start.Receipt.Request.Context.Authorization.AuthorityScope,
+            start.Receipt.Request.InitialContinuation.ProcessInstanceId);
+        return new StartOrchestrationOptions(instanceId)
+        {
+            Tags = DurableTaskProcessTags.Create(start.Receipt)
+        }
+            .WithDedupeStatuses([.. StartOrchestrationOptionsExtensions.ValidDedupeStatuses]);
     }
 
     /// <summary>Raises one canonical interaction to the exact physical instance selected by a Process start.</summary>

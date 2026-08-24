@@ -4,7 +4,7 @@ status: accepted
 authority: cohesive.processes.interpreters.durable-task
 owners: [cohesive-core]
 applies_to: [cohesive-processes, cohesive-adapters-durable-task]
-last_verified: 2026-08-10
+last_verified: 2026-08-23
 supersedes: []
 ---
 
@@ -49,6 +49,7 @@ preserve the requested canonical semantics.
 | --- | --- |
 | Process meaning | Canonical `ExecutionDefinitionDocument` and exact `CompiledProcessPlan` |
 | Definition compatibility | Canonical definition identity, revision, fingerprint and Process IR schema compatibility |
+| Top-level start admission | Canonical `ProcessStartReferenceEvaluator`, retained winning receipt, and initial control state; Durable Entity indexes are physical lookup and exclusion evidence |
 | Finite decisions | Canonical Process interpreter semantics and normalized decision evidence |
 | Lifecycle control | Canonical `ProcessControlState`, `ProcessControlReferenceExecutor`, command receipts and intents |
 | Physical scheduling and replay | Exact Durable Task orchestration history for the selected target profile |
@@ -68,6 +69,26 @@ pins the exact definition before physical execution. Orchestrator replay must no
 or resolve a mutable latest definition. Pure Process decisions execute deterministically inside the
 orchestrator; target or domain I/O crosses an attributable activity or external-event boundary and
 returns exact portable evidence to the interpreter.
+
+Top-level start admission is a separate generic orchestration over the canonical `ProcessStartRequest`. It rebinds
+trusted API authorization, issuance, and provenance; validates the exact deployed plan and typed input; then locks
+three authority-scoped Durable Entity entries for command, idempotency, and logical-instance identity. The canonical
+start evaluator alone decides acceptance, replay, or the precise conflict. Each index retains the exact winning
+receipt and activation evidence, and the instance index schedules physical execution only on its first claim.
+Versioned SHA-256 physical keys keep sensitive logical identities out of Scheduler entity names.
+
+The three claims form a bounded Durable Task critical section whose forward completion survives worker replacement;
+they are not advertised as a general multi-resource transaction. Deployment policy must not terminate or purge an
+incomplete admission orchestration, and must retain the three index entities for the required identity-reuse
+window. A future profile requiring arbitrary interruption recovery or atomic work outside these three indexes must
+provide a stronger transactional protocol rather than silently inheriting this constraint.
+
+The adapter exposes this boundary as an `ExecutionProcessStartDispatcher`, so the canonical
+`IExecutionControlApiDispatcher` remains the shared entry point for HTTP, CLI, generated clients, and direct SDK
+callers. An activation-context factory supplies correlation and delivery policy without authoring a second start
+contract. The reference API adapter's external-Start composition is a temporary boundary until COH-37 provides the
+matching standalone Durable Task lifecycle dispatcher; its local lifecycle registry does not control Durable Task
+instances.
 
 Lifecycle commands use one versioned Durable Task external-event stream, but the event and Scheduler instance are
 transport rather than control authority. The orchestration encloses each finite activation with canonical
@@ -208,7 +229,7 @@ a native realization.
 
 ## Implementation status and provenance
 
-This decision remains accepted direction for Durable Task execution. As of 2026-08-22,
+This decision remains accepted direction for Durable Task execution. As of 2026-08-23,
 `Cohesive.Processes` implements the target-neutral requirement inventory, capability evidence, exhaustive
 disposition ledger, structured matching diagnostics, and reference interpreter, including authored cancellation
 finalization after exact propagated-child settlement. `Cohesive.Adapters.DurableTask`
@@ -216,7 +237,10 @@ implements historical monitoring, complete planning and executable profiles, and
 Relation/Query, Request, Signal send to a Process token, Choice, Match, Fork, Join, AwaitMatch, Timer, child Process,
 bounded partition, bounded recurrence, Durable Cut, Return, and Fail constructs. It resolves only exact
 definition identity/revision/fingerprint tuples from an immutable worker deployment catalog and uses standalone SDK
-activities for bounded host I/O. Signal target resolution uses the existing canonical
+activities for bounded host I/O. Top-level starts use a generic admission orchestration and three bounded
+authority-scoped Durable Entity indexes to preserve canonical command, idempotency, and instance-conflict semantics;
+concurrent admission and exact replay after worker replacement are Scheduler-emulator tested. Signal target
+resolution uses the existing canonical
 `ProcessSignalTargetResolution` and closed `ProcessSignalTargetResult`; the resulting exact `SignalEnvelope` is
 routed unchanged as a physical external event, while recipient admission and every disposition remain decisions of
 the reference interpreter. Bound Requests reuse the canonical `DurableOperationReferenceExecutor` and ledger

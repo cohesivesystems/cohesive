@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Threading.Channels;
+using Cohesive.Api.Execution;
 using Cohesive.Execution;
 using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
@@ -3794,6 +3795,190 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [DurableTaskSchedulerFact]
+    public async Task SchedulerEmulator_StartAdmissionIsLinearizableAndSurvivesWorkerReplacement()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
+            ?? throw new InvalidOperationException(
+                "The Durable Task Scheduler connection string disappeared after test discovery.");
+        var plan = Compile(
+            Definition(
+                "return",
+                [new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))]),
+            definitionId: "process/durable-task-scheduler-start-admission");
+        var catalog = new DurableTaskSequentialProcessPlanCatalog([Physical(plan)]);
+        var run = Guid.NewGuid().ToString("N");
+        var start = Start(plan, "accepted", $"instance/start-admission/{run}");
+        var first = StartAdmission(
+            start,
+            $"command/start-admission/{run}/first",
+            $"idempotency/start-admission/{run}/first");
+        var second = StartAdmission(
+            start,
+            $"command/start-admission/{run}/second",
+            $"idempotency/start-admission/{run}/second");
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var firstWorker = SchedulerHost(connectionString, catalog, RejectingHost.Instance);
+        await firstWorker.StartAsync(timeout.Token);
+        var firstClient = firstWorker.Services.GetRequiredService<DurableTaskClient>();
+        var apiCatalog = ExecutionControlApiCatalog.Create();
+        IExecutionControlApiDispatcher firstDispatcher = new InMemoryExecutionControlApiAdapter(
+            Catalog(),
+            apiCatalog,
+            startDispatcher: firstClient.CreateCohesiveProcessStartDispatcher(
+                (_, _, _) => start.ActivationContext));
+
+        var admissions = new[] { first, second };
+        var decisions = await Task.WhenAll(admissions.Select(admission =>
+            DispatchStart(firstDispatcher, apiCatalog, admission, timeout.Token)));
+        var acceptedIndex = Array.FindIndex(
+            decisions,
+            static decision => decision.Disposition == ProcessStartDisposition.Accepted);
+        Assert.InRange(acceptedIndex, 0, admissions.Length - 1);
+        Assert.Single(decisions, static decision => decision.Disposition == ProcessStartDisposition.Accepted);
+        Assert.Single(decisions, static decision => decision.Disposition == ProcessStartDisposition.InstanceConflict);
+        var accepted = decisions[acceptedIndex];
+        var winner = admissions[acceptedIndex];
+        var commandConflict = await DispatchStart(
+            firstDispatcher,
+            apiCatalog,
+            StartAdmission(
+                start,
+                winner.Request.Context.CommandId.Value,
+                winner.Request.Context.IdempotencyKey.Value,
+                input: "changed-by-command"),
+            timeout.Token);
+        var idempotencyConflict = await DispatchStart(
+            firstDispatcher,
+            apiCatalog,
+            StartAdmission(
+                start,
+                $"command/start-admission/{run}/idempotency-conflict",
+                winner.Request.Context.IdempotencyKey.Value,
+                input: "changed-by-idempotency"),
+            timeout.Token);
+        var idempotentReplay = await DispatchStart(
+            firstDispatcher,
+            apiCatalog,
+            StartAdmission(
+                start,
+                $"command/start-admission/{run}/idempotent-retry",
+                winner.Request.Context.IdempotencyKey.Value),
+            timeout.Token);
+
+        Assert.Equal(ProcessStartDisposition.CommandIdentityConflict, commandConflict.Disposition);
+        Assert.Equal(ProcessStartDisposition.IdempotencyConflict, idempotencyConflict.Disposition);
+        Assert.Equal(ProcessStartDisposition.Replayed, idempotentReplay.Disposition);
+        Assert.Equal(accepted.Admission, idempotentReplay.Admission);
+        var physicalInstance = DurableTaskSequentialProcessIdentities.OrchestrationInstance(
+            start.ActivationContext.AuthorityScope,
+            start.Receipt.Request.Context.ProcessInstanceId);
+        var completed = await firstClient.WaitForInstanceCompletionAsync(
+            physicalInstance,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, completed.RuntimeStatus);
+        Assert.Equal(
+            ProcessActivationDisposition.Completed,
+            completed.ReadOutputAs<DurableTaskSequentialProcessResult>()?.Disposition);
+
+        var unavailableStart = Start(
+            plan,
+            "unavailable-definition",
+            $"instance/start-admission/{run}/unavailable");
+        var unavailableAdmission = StartAdmission(
+            unavailableStart,
+            $"command/start-admission/{run}/unavailable",
+            $"idempotency/start-admission/{run}/unavailable",
+            definition: DefinitionReference("process/not-deployed-start-admission", 'f'));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => DispatchStart(
+            firstDispatcher,
+            apiCatalog,
+            unavailableAdmission,
+            timeout.Token));
+        Assert.Null(await firstClient.GetInstanceAsync(
+            DurableTaskSequentialProcessIdentities.OrchestrationInstance(
+                unavailableStart.ActivationContext.AuthorityScope,
+                unavailableStart.Receipt.Request.Context.ProcessInstanceId),
+            getInputsAndOutputs: false,
+            timeout.Token));
+
+        var invalidInputStart = Start(
+            plan,
+            "invalid-input",
+            $"instance/start-admission/{run}/invalid-input");
+        var invalidInputAdmission = StartAdmission(
+            invalidInputStart,
+            $"command/start-admission/{run}/invalid-input",
+            $"idempotency/start-admission/{run}/invalid-input",
+            inputValue: PortableValue.Concrete(
+                new(new ScalarTypeRef(ScalarTypeKind.Int64)),
+                ObservationValue.FromInt64(42)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => DispatchStart(
+            firstDispatcher,
+            apiCatalog,
+            invalidInputAdmission,
+            timeout.Token));
+        Assert.Null(await firstClient.GetInstanceAsync(
+            DurableTaskSequentialProcessIdentities.OrchestrationInstance(
+                invalidInputStart.ActivationContext.AuthorityScope,
+                invalidInputStart.Receipt.Request.Context.ProcessInstanceId),
+            getInputsAndOutputs: false,
+            timeout.Token));
+
+        var uncertainStart = Start(
+            plan,
+            "accepted-after-uncertain-transport",
+            $"instance/start-admission/{run}/uncertain");
+        var uncertainAdmission = StartAdmission(
+            uncertainStart,
+            $"command/start-admission/{run}/uncertain",
+            $"idempotency/start-admission/{run}/uncertain");
+        var uncertainAdmissionInstance = $"cohesive-process-start-admission-tests:{run}";
+        _ = await firstClient.ScheduleNewOrchestrationInstanceAsync(
+            DurableTaskSequentialProcessNames.StartAdmissionOrchestration,
+            uncertainAdmission,
+            new StartOrchestrationOptions(uncertainAdmissionInstance),
+            timeout.Token);
+        var uncertainRetry = await DispatchStart(
+            firstDispatcher,
+            apiCatalog,
+            uncertainAdmission,
+            timeout.Token);
+        var uncertainOriginal = await firstClient.WaitForInstanceCompletionAsync(
+            uncertainAdmissionInstance,
+            getInputsAndOutputs: true,
+            timeout.Token);
+        Assert.Equal(OrchestrationRuntimeStatus.Completed, uncertainOriginal.RuntimeStatus);
+        var uncertainOriginalResult = Assert.IsType<Cohesive.Execution.ProcessStartResult>(
+            uncertainOriginal.ReadOutputAs<Cohesive.Execution.ProcessStartResult>());
+        Assert.Equal(
+            [ProcessStartDisposition.Accepted, ProcessStartDisposition.Replayed],
+            new[] { uncertainOriginalResult.Disposition, uncertainRetry.Disposition }.Order());
+        Assert.Equal(uncertainOriginalResult.Admission, uncertainRetry.Admission);
+
+        await firstWorker.StopAsync(timeout.Token);
+        using var replacementWorker = SchedulerHost(connectionString, catalog, RejectingHost.Instance);
+        await replacementWorker.StartAsync(timeout.Token);
+        var replacementClient = replacementWorker.Services.GetRequiredService<DurableTaskClient>();
+        IExecutionControlApiDispatcher replacementDispatcher = new InMemoryExecutionControlApiAdapter(
+            Catalog(),
+            apiCatalog,
+            startDispatcher: replacementClient.CreateCohesiveProcessStartDispatcher(
+                (_, _, _) => start.ActivationContext));
+
+        var replay = await DispatchStart(
+            replacementDispatcher,
+            apiCatalog,
+            admissions[acceptedIndex],
+            timeout.Token);
+
+        Assert.Equal(ProcessStartDisposition.Replayed, replay.Disposition);
+        Assert.Equal(accepted.Admission, replay.Admission);
+        await replacementWorker.StopAsync(timeout.Token);
+    }
+
+    [DurableTaskSchedulerFact]
     public async Task SchedulerEmulator_RedeliversExactDurableRequestAfterWorkerShutdown()
     {
         var connectionString = Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
@@ -5657,6 +5842,53 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                     InteractionDurabilityDemand.Durable,
                     InteractionVisibilityDemand.AfterOriginCommit),
                 Provenance()));
+    }
+
+    static DurableTaskProcessStartAdmission StartAdmission(
+        DurableTaskSequentialProcessStart start,
+        string commandId,
+        string idempotencyKey,
+        string? input = null,
+        ExecutionDefinitionReference? definition = null,
+        PortableValue? inputValue = null)
+    {
+        var request = start.Receipt.Request;
+        var context = request.Context;
+        var admittedRequest = new ProcessStartRequest(
+            request.SchemaVersion,
+            definition ?? request.Definition,
+            new(
+                new(commandId),
+                new(idempotencyKey),
+                context.ProcessInstanceId,
+                context.Authorization,
+                context.IssuedAtUtc,
+                context.Provenance),
+            request.InitialContinuation,
+            inputValue ?? (input is null ? request.Input : StringValue(input)));
+        return new(
+            admittedRequest,
+            start.ActivationContext,
+            new(
+                context.Authorization,
+                context.Provenance,
+                context.IssuedAtUtc,
+                start.Receipt.AcceptedAtUtc,
+                [ExecutionControlApiWireNames.AuthorizationRequirement(ProcessStartWireNames.Start)]));
+    }
+
+    static async Task<Cohesive.Execution.ProcessStartResult> DispatchStart(
+        IExecutionControlApiDispatcher dispatcher,
+        ExecutionControlApiCatalog catalog,
+        DurableTaskProcessStartAdmission admission,
+        CancellationToken cancellationToken)
+    {
+        var dispatched = await dispatcher.DispatchAsync(
+            OperationContext.Create(cancellationToken: cancellationToken),
+            catalog.Start,
+            admission.Request,
+            admission.Invocation);
+        return Assert.IsType<Cohesive.Execution.ProcessStartResult>(dispatched.Body);
     }
 
     static ProcessActivation Activation(
