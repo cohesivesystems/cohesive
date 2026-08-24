@@ -77,6 +77,12 @@ public static class RelationsContractsDefinition
             .Action("RelationQueryExplainArtifact")
             .Route("GET", "/relations/contracts/relation-query-explain-artifact")
             .Returns<RelationQueryExplainArtifact>()
+            .Build(),
+        CohesiveApi
+            .Define("RelationsContracts")
+            .Action("ValueContract")
+            .Route("GET", "/relations/contracts/value-contract")
+            .Returns<ValueContract>()
             .Build()
     );
 }

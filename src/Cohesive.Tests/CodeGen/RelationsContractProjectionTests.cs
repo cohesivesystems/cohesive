@@ -23,6 +23,8 @@ public sealed class RelationsContractProjectionTests
         Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(RelationshipCatalogDocument), StringComparison.Ordinal));
         Assert.Contains(graph.Shapes, shape =>
+            shape.Id.Value.EndsWith(nameof(ValueContract), StringComparison.Ordinal));
+        Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(RelationDraftDocument), StringComparison.Ordinal));
         Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(RelationQueryTargetCapabilityProfile), StringComparison.Ordinal));
@@ -85,6 +87,12 @@ public sealed class RelationsContractProjectionTests
         Assert.Contains("readonly $temporalBound: 'unbounded';", text, StringComparison.Ordinal);
         Assert.Contains("readonly $temporalBound: 'expression';", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationshipCatalogDocument", text, StringComparison.Ordinal);
+        Assert.Contains("export interface ValueContract", text, StringComparison.Ordinal);
+        Assert.Contains("type?: TypeRef | null;", text, StringComparison.Ordinal);
+        Assert.Contains("shape?: QualifiedShapeId | null;", text, StringComparison.Ordinal);
+        Assert.Contains("cardinality: FieldCardinality;", text, StringComparison.Ordinal);
+        Assert.Contains("presence: FieldPresence;", text, StringComparison.Ordinal);
+        Assert.Contains("nullability: FieldNullability;", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationDraftDocument", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationQueryTargetCapabilityProfile", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationQueryRealizationReport", text, StringComparison.Ordinal);

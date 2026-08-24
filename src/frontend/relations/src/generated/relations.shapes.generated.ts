@@ -4,6 +4,102 @@ export type GraphId = string;
 
 export type ShapeId = string;
 
+export type TypeRef = {
+  readonly $type: 'named';
+} & NamedTypeRef | {
+  readonly $type: 'opaque';
+} & OpaqueRuntimeTypeRef | {
+  readonly $type: 'scalar';
+} & ScalarTypeRef | {
+  readonly $type: 'enum';
+} & EnumTypeRef | {
+  readonly $type: 'entityRef';
+} & EntityReferenceTypeRef | {
+  readonly $type: 'array';
+} & ArrayTypeRef | {
+  readonly $type: 'object';
+} & ObjectTypeRef | {
+  readonly $type: 'quantity';
+} & QuantityTypeRef | {
+  readonly $type: 'json';
+} & JsonTypeRef;
+
+export interface NamedTypeRef {
+  typeId: TypeId;
+}
+
+export interface OpaqueRuntimeTypeRef {
+  runtimeType: string;
+  inferenceDiagnostic?: TypeInferenceDiagnostic | null;
+}
+
+export interface ScalarTypeRef {
+  kind: ScalarTypeKind;
+  format: PrimitiveFormat;
+}
+
+export interface EnumTypeRef {
+  name: string;
+  members: string[];
+}
+
+export interface EntityReferenceTypeRef {
+  entity: EntityTypeName;
+}
+
+export interface ArrayTypeRef {
+  elementType: TypeRef;
+}
+
+export interface ObjectTypeRef {
+  fields: ObjectFieldTypeDef[];
+}
+
+export interface QuantityTypeRef {
+  quantity: string;
+  baseKind: ScalarTypeKind;
+}
+
+export interface JsonTypeRef {
+  kind: JsonTypeKind;
+}
+
+export type FieldCardinality = 'Single' | 'Many';
+
+export const fieldCardinalities = {
+  single: 'Single',
+  many: 'Many',
+} as const satisfies Record<string, FieldCardinality>;
+
+export const fieldCardinalityLabels: Record<FieldCardinality, string> = {
+  Single: 'Single',
+  Many: 'Many',
+};
+
+export type FieldPresence = 'Required' | 'Optional';
+
+export const fieldPresences = {
+  required: 'Required',
+  optional: 'Optional',
+} as const satisfies Record<string, FieldPresence>;
+
+export const fieldPresenceLabels: Record<FieldPresence, string> = {
+  Required: 'Required',
+  Optional: 'Optional',
+};
+
+export type FieldNullability = 'NonNullable' | 'Nullable';
+
+export const fieldNullabilities = {
+  nonNullable: 'NonNullable',
+  nullable: 'Nullable',
+} as const satisfies Record<string, FieldNullability>;
+
+export const fieldNullabilityLabels: Record<FieldNullability, string> = {
+  NonNullable: 'NonNullable',
+  Nullable: 'Nullable',
+};
+
 export type RelationQueryExplainStage = {
   readonly $stage: 'staticCompilation';
 } & RelationQueryStaticCompilationExplainStage | {
@@ -430,6 +526,100 @@ export interface RelationshipCatalogDocumentMetadata {
   updatedAtUtc?: string | null;
   annotations: Record<string, AnnotationValue>;
 }
+
+export type TypeId = string;
+
+export interface TypeInferenceDiagnostic {
+  reason: string;
+  message?: string | null;
+}
+
+export type ScalarTypeKind = 'Bool' | 'Int32' | 'Int64' | 'Decimal' | 'String' | 'Guid' | 'Date' | 'DateTime' | 'Instant' | 'Bytes';
+
+export const scalarTypeKinds = {
+  bool: 'Bool',
+  int32: 'Int32',
+  int64: 'Int64',
+  decimal: 'Decimal',
+  string: 'String',
+  guid: 'Guid',
+  date: 'Date',
+  dateTime: 'DateTime',
+  instant: 'Instant',
+  bytes: 'Bytes',
+} as const satisfies Record<string, ScalarTypeKind>;
+
+export const scalarTypeKindLabels: Record<ScalarTypeKind, string> = {
+  Bool: 'Bool',
+  Int32: 'Int32',
+  Int64: 'Int64',
+  Decimal: 'Decimal',
+  String: 'String',
+  Guid: 'Guid',
+  Date: 'Date',
+  DateTime: 'DateTime',
+  Instant: 'Instant',
+  Bytes: 'Bytes',
+};
+
+export type PrimitiveFormat = 'None' | 'Uuid' | 'IsoDate' | 'IsoDateTime' | 'IsoInstant' | 'CurrencyCode' | 'CountryCode' | 'Email' | 'Uri' | 'Base64';
+
+export const primitiveFormats = {
+  none: 'None',
+  uuid: 'Uuid',
+  isoDate: 'IsoDate',
+  isoDateTime: 'IsoDateTime',
+  isoInstant: 'IsoInstant',
+  currencyCode: 'CurrencyCode',
+  countryCode: 'CountryCode',
+  email: 'Email',
+  uri: 'Uri',
+  base64: 'Base64',
+} as const satisfies Record<string, PrimitiveFormat>;
+
+export const primitiveFormatLabels: Record<PrimitiveFormat, string> = {
+  None: 'None',
+  Uuid: 'Uuid',
+  IsoDate: 'IsoDate',
+  IsoDateTime: 'IsoDateTime',
+  IsoInstant: 'IsoInstant',
+  CurrencyCode: 'CurrencyCode',
+  CountryCode: 'CountryCode',
+  Email: 'Email',
+  Uri: 'Uri',
+  Base64: 'Base64',
+};
+
+export type EntityTypeName = string;
+
+export interface ObjectFieldTypeDef {
+  name: string;
+  type: TypeRef;
+  cardinality: FieldCardinality;
+  presence: FieldPresence;
+  nullability: FieldNullability;
+  annotations: Record<string, AnnotationValue>;
+}
+
+export type JsonTypeKind = 'Any' | 'Object' | 'Array' | 'String' | 'Number' | 'Boolean';
+
+export const jsonTypeKinds = {
+  any: 'Any',
+  object: 'Object',
+  array: 'Array',
+  string: 'String',
+  number: 'Number',
+  boolean: 'Boolean',
+} as const satisfies Record<string, JsonTypeKind>;
+
+export const jsonTypeKindLabels: Record<JsonTypeKind, string> = {
+  Any: 'Any',
+  Object: 'Object',
+  Array: 'Array',
+  String: 'String',
+  Number: 'Number',
+  Boolean: 'Boolean',
+};
 
 export type RelationQueryExplainStageStatus = 'Complete' | 'Unavailable' | 'Invalid' | 'Incomplete' | 'Failed';
 
@@ -1890,66 +2080,6 @@ export const binaryOperatorLabels: Record<BinaryOperator, string> = {
   Div: 'Div',
 };
 
-export type TypeRef = {
-  readonly $type: 'named';
-} & NamedTypeRef | {
-  readonly $type: 'opaque';
-} & OpaqueRuntimeTypeRef | {
-  readonly $type: 'scalar';
-} & ScalarTypeRef | {
-  readonly $type: 'enum';
-} & EnumTypeRef | {
-  readonly $type: 'entityRef';
-} & EntityReferenceTypeRef | {
-  readonly $type: 'array';
-} & ArrayTypeRef | {
-  readonly $type: 'object';
-} & ObjectTypeRef | {
-  readonly $type: 'quantity';
-} & QuantityTypeRef | {
-  readonly $type: 'json';
-} & JsonTypeRef;
-
-export interface NamedTypeRef {
-  typeId: TypeId;
-}
-
-export interface OpaqueRuntimeTypeRef {
-  runtimeType: string;
-  inferenceDiagnostic?: TypeInferenceDiagnostic | null;
-}
-
-export interface ScalarTypeRef {
-  kind: ScalarTypeKind;
-  format: PrimitiveFormat;
-}
-
-export interface EnumTypeRef {
-  name: string;
-  members: string[];
-}
-
-export interface EntityReferenceTypeRef {
-  entity: EntityTypeName;
-}
-
-export interface ArrayTypeRef {
-  elementType: TypeRef;
-}
-
-export interface ObjectTypeRef {
-  fields: ObjectFieldTypeDef[];
-}
-
-export interface QuantityTypeRef {
-  quantity: string;
-  baseKind: ScalarTypeKind;
-}
-
-export interface JsonTypeRef {
-  kind: JsonTypeKind;
-}
-
 export type AggregateOperator = 'Count' | 'Sum' | 'Min' | 'Max' | 'Any' | 'All' | 'Average';
 
 export const aggregateOperators = {
@@ -2291,18 +2421,6 @@ export interface KeysetPageDefinition {
 
 export type QueryParameterId = string;
 
-export type FieldPresence = 'Required' | 'Optional';
-
-export const fieldPresences = {
-  required: 'Required',
-  optional: 'Optional',
-} as const satisfies Record<string, FieldPresence>;
-
-export const fieldPresenceLabels: Record<FieldPresence, string> = {
-  Required: 'Required',
-  Optional: 'Optional',
-};
-
 export type QueryParameterDefaultKind = 'None' | 'Value';
 
 export const queryParameterDefaultKinds = {
@@ -2343,100 +2461,6 @@ export interface UnresolvedRelationDraftAssignmentResolution {
 export interface AmbiguousRelationDraftAssignmentResolution {
   candidateIds: RelationDraftCandidateId[];
 }
-
-export type TypeId = string;
-
-export interface TypeInferenceDiagnostic {
-  reason: string;
-  message?: string | null;
-}
-
-export type ScalarTypeKind = 'Bool' | 'Int32' | 'Int64' | 'Decimal' | 'String' | 'Guid' | 'Date' | 'DateTime' | 'Instant' | 'Bytes';
-
-export const scalarTypeKinds = {
-  bool: 'Bool',
-  int32: 'Int32',
-  int64: 'Int64',
-  decimal: 'Decimal',
-  string: 'String',
-  guid: 'Guid',
-  date: 'Date',
-  dateTime: 'DateTime',
-  instant: 'Instant',
-  bytes: 'Bytes',
-} as const satisfies Record<string, ScalarTypeKind>;
-
-export const scalarTypeKindLabels: Record<ScalarTypeKind, string> = {
-  Bool: 'Bool',
-  Int32: 'Int32',
-  Int64: 'Int64',
-  Decimal: 'Decimal',
-  String: 'String',
-  Guid: 'Guid',
-  Date: 'Date',
-  DateTime: 'DateTime',
-  Instant: 'Instant',
-  Bytes: 'Bytes',
-};
-
-export type PrimitiveFormat = 'None' | 'Uuid' | 'IsoDate' | 'IsoDateTime' | 'IsoInstant' | 'CurrencyCode' | 'CountryCode' | 'Email' | 'Uri' | 'Base64';
-
-export const primitiveFormats = {
-  none: 'None',
-  uuid: 'Uuid',
-  isoDate: 'IsoDate',
-  isoDateTime: 'IsoDateTime',
-  isoInstant: 'IsoInstant',
-  currencyCode: 'CurrencyCode',
-  countryCode: 'CountryCode',
-  email: 'Email',
-  uri: 'Uri',
-  base64: 'Base64',
-} as const satisfies Record<string, PrimitiveFormat>;
-
-export const primitiveFormatLabels: Record<PrimitiveFormat, string> = {
-  None: 'None',
-  Uuid: 'Uuid',
-  IsoDate: 'IsoDate',
-  IsoDateTime: 'IsoDateTime',
-  IsoInstant: 'IsoInstant',
-  CurrencyCode: 'CurrencyCode',
-  CountryCode: 'CountryCode',
-  Email: 'Email',
-  Uri: 'Uri',
-  Base64: 'Base64',
-};
-
-export type EntityTypeName = string;
-
-export interface ObjectFieldTypeDef {
-  name: string;
-  type: TypeRef;
-  cardinality: FieldCardinality;
-  presence: FieldPresence;
-  nullability: FieldNullability;
-  annotations: Record<string, AnnotationValue>;
-}
-
-export type JsonTypeKind = 'Any' | 'Object' | 'Array' | 'String' | 'Number' | 'Boolean';
-
-export const jsonTypeKinds = {
-  any: 'Any',
-  object: 'Object',
-  array: 'Array',
-  string: 'String',
-  number: 'Number',
-  boolean: 'Boolean',
-} as const satisfies Record<string, JsonTypeKind>;
-
-export const jsonTypeKindLabels: Record<JsonTypeKind, string> = {
-  Any: 'Any',
-  Object: 'Object',
-  Array: 'Array',
-  String: 'String',
-  Number: 'Number',
-  Boolean: 'Boolean',
-};
 
 export interface RelationQueryLogicalPlanInput {
   canonicalInput: QueryNodeId;
@@ -2587,30 +2611,6 @@ export const relationDraftUnresolvedReasonLabels: Record<RelationDraftUnresolved
   MultipleCandidates: 'MultipleCandidates',
 };
 
-export type FieldCardinality = 'Single' | 'Many';
-
-export const fieldCardinalities = {
-  single: 'Single',
-  many: 'Many',
-} as const satisfies Record<string, FieldCardinality>;
-
-export const fieldCardinalityLabels: Record<FieldCardinality, string> = {
-  Single: 'Single',
-  Many: 'Many',
-};
-
-export type FieldNullability = 'NonNullable' | 'Nullable';
-
-export const fieldNullabilities = {
-  nonNullable: 'NonNullable',
-  nullable: 'Nullable',
-} as const satisfies Record<string, FieldNullability>;
-
-export const fieldNullabilityLabels: Record<FieldNullability, string> = {
-  NonNullable: 'NonNullable',
-  Nullable: 'Nullable',
-};
-
 export interface RelationQueryLogicalBypass {
   kind: RelationQueryLogicalBypassKind;
   node: QueryNodeId;
@@ -2704,6 +2704,14 @@ export const temporalNullBoundBehaviorLabels: Record<TemporalNullBoundBehavior, 
 export interface QualifiedShapeId {
   graphId: GraphId;
   shapeId: ShapeId;
+}
+
+export interface ValueContract {
+  type?: TypeRef | null;
+  shape?: QualifiedShapeId | null;
+  cardinality: FieldCardinality;
+  presence: FieldPresence;
+  nullability: FieldNullability;
 }
 
 export interface RelationQueryExplainArtifact {
