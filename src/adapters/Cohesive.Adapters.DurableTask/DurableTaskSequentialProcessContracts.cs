@@ -17,8 +17,17 @@ public static class DurableTaskSequentialProcessNames
     /// <summary>Orchestration that durably admits one canonical top-level Process start.</summary>
     public const string StartAdmissionOrchestration = "Cohesive.Processes.StartAdmission.v1";
 
+    /// <summary>Orchestration that durably resolves and awaits one canonical lifecycle command.</summary>
+    public const string ControlAdmissionOrchestration = "Cohesive.Processes.ControlAdmission.v1";
+
     /// <summary>Bounded entity that retains one authority-scoped Process-start index claim.</summary>
     public const string StartAdmissionIndexEntity = "Cohesive.Processes.StartAdmissionIndex.v1";
+
+    /// <summary>Bounded entity retaining one content-addressed safe lifecycle-command response.</summary>
+    public const string ControlResponseEntity = "Cohesive.ControlResponse.v1";
+
+    /// <summary>Per-Process canonical control-state authority after semantic terminal handoff.</summary>
+    public const string TerminalControlEntity = "Cohesive.TerminalControl.v1";
 
     /// <summary>Activity that materializes one exact Transition or Relation/Query operation.</summary>
     public const string HostOperationActivity = "Cohesive.Processes.HostOperation.v1";
@@ -555,6 +564,37 @@ static class DurableTaskSequentialProcessIdentities
             scope.Tenant ?? string.Empty,
             indexKind,
             logicalIdentity);
+    }
+
+    internal static string ControlResponse(
+        InteractionAuthorityScope scope,
+        string requestFingerprint)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        ArgumentException.ThrowIfNullOrWhiteSpace(requestFingerprint);
+        return "cr:v1:" + Hash(
+            "control-response",
+            scope.Authority,
+            scope.Tenant ?? string.Empty,
+            requestFingerprint);
+    }
+
+    internal static string TerminalControl(
+        InteractionAuthorityScope scope,
+        ProcessInstanceId processInstanceId)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        if (string.IsNullOrWhiteSpace(processInstanceId.Value))
+        {
+            throw new ArgumentException(
+                "A terminal-control identity requires a Process instance.",
+                nameof(processInstanceId));
+        }
+        return "tc:v1:" + Hash(
+            "terminal-control",
+            scope.Authority,
+            scope.Tenant ?? string.Empty,
+            processInstanceId.Value);
     }
 
     internal static ActivationId Activation(ProcessContinuationState state)

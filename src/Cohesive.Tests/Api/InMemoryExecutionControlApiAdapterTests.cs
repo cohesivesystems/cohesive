@@ -135,6 +135,75 @@ public sealed class InMemoryExecutionControlApiAdapterTests
     }
 
     [Fact]
+    public async Task LifecycleMutationAsync_UsesAuthoritativeDispatcherAndPreservesOpaqueFailures()
+    {
+        var fixture = ProcessControlTestFixture.Create();
+        var catalog = ExecutionControlApiCatalog.Create();
+        var initial = fixture.State();
+        var request = fixture.Pause(initial, id: "pause/authoritative-dispatch");
+        var invocation = Invocation(
+            catalog,
+            BaselineUtc.AddSeconds(1),
+            BaselineUtc.AddSeconds(2));
+        var context = OperationContext.Create();
+        var calls = 0;
+        ProcessControlCommand? receivedRequest = null;
+        ExecutionApiInvocationContext? receivedInvocation = null;
+        var executor = new ProcessControlReferenceExecutor(fixture.Catalog);
+        var canonical = ExecutionProcessControlCommandAdmission.Rebind(request, invocation, initial);
+        var decision = executor.Apply(initial, canonical, invocation.ObservedAtUtc);
+        var expected = ExecutionControlResult.FromDecision(decision);
+        var adapter = new InMemoryExecutionControlApiAdapter(
+            fixture.Catalog,
+            catalog,
+            processControlDispatcher: (_, candidate, trusted) =>
+            {
+                calls++;
+                receivedRequest = candidate;
+                receivedInvocation = trusted;
+                return ValueTask.FromResult(expected);
+            });
+
+        var applied = await DispatchAsync<ExecutionControlResult>(
+            adapter,
+            context,
+            catalog.Pause,
+            request,
+            invocation);
+        var denied = await adapter.DispatchAsync(
+            context,
+            catalog.Pause,
+            request,
+            Invocation(
+                catalog,
+                BaselineUtc.AddSeconds(3),
+                BaselineUtc.AddSeconds(4),
+                grantedRequirements: []));
+
+        Assert.Same(expected, applied);
+        Assert.Same(request, receivedRequest);
+        Assert.Same(invocation, receivedInvocation);
+        Assert.Equal(1, calls);
+        Assert.Equal(ApiResultKind.Forbidden, denied.Result.Kind);
+        Assert.Equal(ExecutionApiProblemCodes.Forbidden, Assert.IsType<ExecutionApiProblem>(denied.Body).Code);
+        Assert.Throws<InvalidOperationException>(() => adapter.Dispatch(catalog.Pause, request, invocation));
+
+        var missing = new InMemoryExecutionControlApiAdapter(
+            fixture.Catalog,
+            catalog,
+            processControlDispatcher: (_, _, _) => throw new KeyNotFoundException());
+        var missingResult = await missing.DispatchAsync(
+            context,
+            catalog.Pause,
+            request,
+            invocation);
+        Assert.Equal(ApiResultKind.NotFound, missingResult.Result.Kind);
+        Assert.Equal(
+            ExecutionApiProblemCodes.NotFound,
+            Assert.IsType<ExecutionApiProblem>(missingResult.Body).Code);
+    }
+
+    [Fact]
     public void AuthorizationRunsBeforeLookupAndCanonicalCommandsUseTrustedServerEvidence()
     {
         var fixture = ProcessControlTestFixture.Create();

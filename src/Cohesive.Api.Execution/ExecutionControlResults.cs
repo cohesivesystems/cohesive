@@ -347,6 +347,45 @@ public sealed record ExecutionControlResult
             decision.Receipt is null ? null : ExecutionControlReceiptSummary.From(decision.Receipt),
             [.. decision.Diagnostics.Select(static diagnostic => diagnostic.Code)]);
     }
+
+    /// <summary>Projects one canonical decision using an already-safe exact runtime status projection.</summary>
+    /// <param name="decision">Canonical reducer decision to project.</param>
+    /// <param name="status">Safe status projected from <paramref name="decision"/>'s exact replacement state.</param>
+    /// <returns>A structurally safe result retaining exact disposition, receipt fence, and supplied status.</returns>
+    /// <exception cref="ArgumentNullException">Either argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="status"/> does not identify the decision's exact definition, Process instance, and revision.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The decision is an authorization or target-concealment failure that must be projected as an opaque problem.
+    /// </exception>
+    public static ExecutionControlResult FromDecision(
+        ProcessControlDecision decision,
+        ExecutionStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        ArgumentNullException.ThrowIfNull(status);
+        if (decision.Disposition is ProcessControlDecisionDisposition.Unauthorized
+            or ProcessControlDecisionDisposition.TargetMismatch)
+        {
+            throw new InvalidOperationException(
+                "Authorization and target-concealment decisions cannot be projected with Process state.");
+        }
+        if (status.Definition != decision.State.Definition
+            || status.ProcessInstanceId != decision.State.ProcessInstanceId
+            || status.ControlRevision != decision.State.Revision)
+        {
+            throw new ArgumentException(
+                "Execution status must project the decision's exact definition, Process instance, and revision.",
+                nameof(status));
+        }
+
+        return new(
+            decision.Disposition,
+            status,
+            decision.Receipt is null ? null : ExecutionControlReceiptSummary.From(decision.Receipt),
+            [.. decision.Diagnostics.Select(static diagnostic => diagnostic.Code)]);
+    }
 }
 
 /// <summary>Runtime result selected by an in-memory execution API adapter from one declared result variant.</summary>

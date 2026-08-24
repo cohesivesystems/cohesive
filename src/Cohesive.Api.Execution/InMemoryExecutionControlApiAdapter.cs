@@ -48,6 +48,27 @@ public delegate ValueTask<Cohesive.Execution.ProcessStartResult> ExecutionProces
     ProcessStartRequest request,
     ExecutionApiInvocationContext invocation);
 
+/// <summary>Asynchronously admits one canonical Process lifecycle mutation through an authoritative runtime.</summary>
+/// <remarks>
+/// The dispatcher receives the caller request and trusted invocation separately. It must resolve the retained
+/// Process by the trusted authority scope plus logical Process identity, restore retained occurrence evidence for
+/// replay, and return only after the exact safe canonical result is durably recoverable. Provider event admission
+/// alone is not a successful return condition.
+/// </remarks>
+/// <param name="context">Explicit cancellation, time, and tracing context.</param>
+/// <param name="request">Canonical caller request whose authority evidence is not trusted.</param>
+/// <param name="invocation">Trusted API authorization, issuance, observation, and provenance evidence.</param>
+/// <returns>The exact safe result of canonical Process-control reduction.</returns>
+/// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
+/// <exception cref="ArgumentException"><paramref name="request"/> is not a lifecycle mutation.</exception>
+/// <exception cref="UnauthorizedAccessException">Canonical authorization rejects the command.</exception>
+/// <exception cref="KeyNotFoundException">No Process is visible at the trusted logical address.</exception>
+/// <exception cref="OperationCanceledException">Waiting for the durable result is cancelled.</exception>
+public delegate ValueTask<ExecutionControlResult> ExecutionProcessControlDispatcher(
+    OperationContext context,
+    ProcessControlCommand request,
+    ExecutionApiInvocationContext invocation);
+
 /// <summary>Trusted server-side evidence used to admit one execution-control API invocation.</summary>
 /// <remarks>
 /// This value is materialized by an API, identity, or test adapter after authentication and authorization. It is
@@ -197,9 +218,9 @@ public sealed class ExecutionApiInvocationContext
 /// This adapter is the package's reference integration and test realization, not a durable production store. Each admitted
 /// operation is linearized under the addressed resource lock. Start registry insertion is atomic across instance,
 /// command, and idempotency indexes. Canonical reducers remain the sole owners of replay, optimistic-fence, and
-/// lifecycle semantics. When an authoritative Start or limit-update dispatcher is configured, that operation
-/// bypasses its local registry entirely; the adapter only authorizes and projects the authoritative decision.
-/// External dispatchers remain responsible for trusted-context rebinding and durable occurrence replay.
+/// lifecycle semantics. When an authoritative Start, lifecycle-mutation, or limit-update dispatcher is configured,
+/// that operation bypasses its local registry entirely; the adapter only authorizes and projects the authoritative
+/// decision. External dispatchers remain responsible for trusted-context rebinding and durable occurrence replay.
 /// </remarks>
 public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDispatcher
 {
@@ -214,6 +235,7 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
     readonly Func<InspectProcessCommand, ProcessExecutionTraceReadResult>? traces;
     readonly ExecutionControlLimitUpdateDispatcher? limitUpdateDispatcher;
     readonly ExecutionProcessStartDispatcher? startDispatcher;
+    readonly ExecutionProcessControlDispatcher? processControlDispatcher;
     readonly Dictionary<ProcessKey, ProcessEntry> processes = [];
     readonly Dictionary<StartCommandKey, ProcessStartReceipt> startsByCommand = [];
     readonly Dictionary<StartIdempotencyKey, ProcessStartReceipt> startsByIdempotency = [];
@@ -238,6 +260,11 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
     /// Optional authoritative asynchronous Process-start admission. When supplied, callers MUST use
     /// <see cref="DispatchAsync"/> for Start; the local Process-start registry is not consulted.
     /// </param>
+    /// <param name="processControlDispatcher">
+    /// Optional authoritative asynchronous lifecycle-mutation admission. When supplied, callers MUST use
+    /// <see cref="DispatchAsync"/> for Pause, Continue, RestartAttempt, Cancel, and Terminate; the local Process
+    /// registry is not consulted for those operations.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="contracts"/> is <see langword="null"/>.</exception>
     public InMemoryExecutionControlApiAdapter(
         InteractionContractCatalog contracts,
@@ -247,7 +274,8 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
         Func<InspectProcessCommand, ExecutionExplainArtifact?>? explain = null,
         ExecutionControlLimitUpdateDispatcher? limitUpdateDispatcher = null,
         Func<InspectProcessCommand, ProcessExecutionTraceReadResult>? traces = null,
-        ExecutionProcessStartDispatcher? startDispatcher = null)
+        ExecutionProcessStartDispatcher? startDispatcher = null,
+        ExecutionProcessControlDispatcher? processControlDispatcher = null)
     {
         ArgumentNullException.ThrowIfNull(contracts);
         this.catalog = catalog ?? ExecutionControlApiCatalog.Create();
@@ -258,6 +286,7 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
         this.traces = traces;
         this.limitUpdateDispatcher = limitUpdateDispatcher;
         this.startDispatcher = startDispatcher;
+        this.processControlDispatcher = processControlDispatcher;
     }
 
     /// <summary>Canonical semantic endpoint catalog bound by this adapter.</summary>
@@ -274,9 +303,9 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
     /// </exception>
     /// <exception cref="InvalidOperationException">
     /// <paramref name="endpoint"/> is not owned by this adapter, or a first-time Signal invocation lacks a trusted
-    /// <see cref="ExecutionApiInvocationContext.SignalContext"/>, or synchronous Start or <c>updateLimits</c>
-    /// dispatch is attempted while an authoritative asynchronous dispatcher is configured, or an explanation
-    /// projection returns evidence for another Process instance or attempt.
+    /// <see cref="ExecutionApiInvocationContext.SignalContext"/>, or synchronous Start, lifecycle mutation, or
+    /// <c>updateLimits</c> dispatch is attempted while an authoritative asynchronous dispatcher is configured, or
+    /// an explanation projection returns evidence for another Process instance or attempt.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// Trusted observation time precedes durable state or first-time command issuance.
@@ -298,6 +327,12 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
                 "An authoritative asynchronous Process-start dispatcher requires DispatchAsync.");
         }
 
+        if (processControlDispatcher is not null && IsLifecycleMutationEndpoint(endpoint))
+        {
+            throw new InvalidOperationException(
+                "An authoritative asynchronous Process-control dispatcher requires DispatchAsync.");
+        }
+
         if (!IsAuthorized(endpoint, invocation))
             return Problem(endpoint, ApiResultKind.Forbidden, ExecutionApiProblemCodes.Forbidden);
 
@@ -312,7 +347,10 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
         {
             if (request is not InspectProcessCommand inspect)
                 return TypeMismatch(endpoint);
-            var canonical = (InspectProcessCommand)Rebind(inspect, invocation, prior: null);
+            var canonical = (InspectProcessCommand)ExecutionProcessControlCommandAdmission.Rebind(
+                inspect,
+                invocation,
+                prior: null);
             var artifact = explain?.Invoke(canonical);
             if (artifact is null)
                 return Problem(endpoint, ApiResultKind.NotFound, ExecutionApiProblemCodes.NotFound);
@@ -330,7 +368,10 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
         {
             if (request is not InspectProcessCommand inspect)
                 return TypeMismatch(endpoint);
-            var canonical = (InspectProcessCommand)Rebind(inspect, invocation, prior: null);
+            var canonical = (InspectProcessCommand)ExecutionProcessControlCommandAdmission.Rebind(
+                inspect,
+                invocation,
+                prior: null);
             var read = traces?.Invoke(canonical) ?? ProcessExecutionTraceReadResult.NotFound();
             var result = catalog.GetTraceResult(read.State);
             if (read.State != ProcessExecutionTraceReadState.Available)
@@ -423,6 +464,37 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
                 endpoint,
                 startResult.IsConflict ? ApiResultKind.Conflict : ApiResultKind.Success,
                 startResult);
+        }
+
+
+        if (processControlDispatcher is not null && IsLifecycleMutationEndpoint(endpoint))
+        {
+            EnsureOwnedEndpoint(endpoint);
+            if (!IsAuthorized(endpoint, invocation))
+                return Problem(endpoint, ApiResultKind.Forbidden, ExecutionApiProblemCodes.Forbidden);
+            if (!RequestMatchesLifecycleEndpoint(endpoint, request))
+                return TypeMismatch(endpoint);
+
+            ExecutionControlResult controlResult;
+            try
+            {
+                controlResult = await processControlDispatcher(
+                        context,
+                        (ProcessControlCommand)request,
+                        invocation)
+                    .ConfigureAwait(false)
+                    ?? throw new InvalidOperationException(
+                        "The authoritative Process-control dispatcher returned no canonical result.");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Problem(endpoint, ApiResultKind.Forbidden, ExecutionApiProblemCodes.Forbidden);
+            }
+            catch (KeyNotFoundException)
+            {
+                return Problem(endpoint, ApiResultKind.NotFound, ExecutionApiProblemCodes.NotFound);
+            }
+            return Result(endpoint, controlResult.ResultKind, controlResult);
         }
 
         if (limitUpdateDispatcher is null || !ReferenceEquals(endpoint, catalog.UpdateLimits))
@@ -591,8 +663,7 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
 
         lock (entry.Gate)
         {
-            var prior = FindPriorCommand(entry.State, request.Context);
-            var canonical = Rebind(request, invocation, prior);
+            var canonical = ExecutionProcessControlCommandAdmission.Rebind(request, invocation, entry.State);
             var decision = processExecutor.Apply(entry.State, canonical, invocation.ObservedAtUtc);
             entry.State = decision.State;
             if (decision.Disposition == ProcessControlDecisionDisposition.Unauthorized)
@@ -606,23 +677,6 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
                 terminalOutcome?.Invoke(decision.State));
             return Result(endpoint, result.ResultKind, result);
         }
-    }
-
-    static ProcessControlCommand? FindPriorCommand(
-        ProcessControlState state,
-        ProcessControlCommandContext context)
-    {
-        if (state.FindReceipt(context.CommandId) is { } sameCommand)
-            return sameCommand.Command;
-
-        for (var index = 0; index < state.Receipts.Length; index++)
-        {
-            var candidate = state.Receipts[index].Command;
-            if (candidate.Context.IdempotencyKey == context.IdempotencyKey)
-                return candidate;
-        }
-
-        return null;
     }
 
     ExecutionApiDispatchResult DispatchLimitUpdate(
@@ -750,56 +804,6 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
             prior?.IssuedAtUtc ?? invocation.IssuedAtUtc,
             prior?.Provenance ?? invocation.Provenance);
 
-    ProcessControlCommand Rebind(
-        ProcessControlCommand command,
-        ExecutionApiInvocationContext invocation,
-        ProcessControlCommand? prior)
-    {
-        var context = Rebind(command.Context, invocation, prior?.Context);
-        return command switch
-        {
-            InspectProcessCommand inspect => new InspectProcessCommand(
-                inspect.SchemaVersion,
-                context,
-                inspect.Expectation),
-            SignalProcessCommand signal => new SignalProcessCommand(
-                signal.SchemaVersion,
-                context,
-                signal.Expectation!,
-                Rebind(
-                    signal.Signal,
-                    (prior as SignalProcessCommand)?.Signal.Context
-                        ?? invocation.SignalContext
-                        ?? throw new InvalidOperationException(
-                            "A first-time Signal invocation requires trusted envelope context."))),
-            PauseProcessCommand pause => new PauseProcessCommand(
-                pause.SchemaVersion,
-                context,
-                pause.Expectation!),
-            ContinueProcessCommand continueProcess => new ContinueProcessCommand(
-                continueProcess.SchemaVersion,
-                context,
-                continueProcess.Expectation!),
-            RestartProcessAttemptCommand restart => new RestartProcessAttemptCommand(
-                restart.SchemaVersion,
-                context,
-                restart.Expectation!,
-                restart.Plan),
-            CancelProcessCommand cancel => new CancelProcessCommand(
-                cancel.SchemaVersion,
-                context,
-                cancel.Expectation!,
-                cancel.Reason),
-            TerminateProcessCommand terminate => new TerminateProcessCommand(
-                terminate.SchemaVersion,
-                context,
-                terminate.Expectation!,
-                terminate.Reason,
-                terminate.Cleanup),
-            _ => throw new ArgumentOutOfRangeException(nameof(command), command.GetType(), "Unsupported control command.")
-        };
-    }
-
     static ProcessControlCommandContext Rebind(
         ProcessControlCommandContext context,
         ExecutionApiInvocationContext invocation,
@@ -812,14 +816,6 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
             prior?.IssuedAtUtc ?? invocation.IssuedAtUtc,
             prior?.Provenance ?? invocation.Provenance);
 
-    static SignalEnvelope Rebind(SignalEnvelope signal, InteractionEnvelopeContext trustedContext) =>
-        new(
-            signal.SchemaVersion,
-            trustedContext,
-            signal.Contract,
-            signal.Payload,
-            signal.Target);
-
     bool IsAuthorized(ApiEndpoint endpoint, ExecutionApiInvocationContext invocation)
     {
         var requirements = endpoint.Operation.AuthorizationRequirements;
@@ -831,6 +827,20 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
 
         return true;
     }
+
+    bool IsLifecycleMutationEndpoint(ApiEndpoint endpoint) =>
+        ReferenceEquals(endpoint, catalog.Pause)
+        || ReferenceEquals(endpoint, catalog.Continue)
+        || ReferenceEquals(endpoint, catalog.RestartAttempt)
+        || ReferenceEquals(endpoint, catalog.Cancel)
+        || ReferenceEquals(endpoint, catalog.Terminate);
+
+    bool RequestMatchesLifecycleEndpoint(ApiEndpoint endpoint, object request) =>
+        ReferenceEquals(endpoint, catalog.Pause) && request is PauseProcessCommand
+        || ReferenceEquals(endpoint, catalog.Continue) && request is ContinueProcessCommand
+        || ReferenceEquals(endpoint, catalog.RestartAttempt) && request is RestartProcessAttemptCommand
+        || ReferenceEquals(endpoint, catalog.Cancel) && request is CancelProcessCommand
+        || ReferenceEquals(endpoint, catalog.Terminate) && request is TerminateProcessCommand;
 
     void EnsureOwnedEndpoint(ApiEndpoint endpoint)
     {
