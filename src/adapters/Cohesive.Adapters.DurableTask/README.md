@@ -151,8 +151,8 @@ administration. ASP.NET inspect, explain, and retained-trace bindings perform on
 caller-authored authority evidence. Inspect returns the retained canonical custom-status projection; a valid pending
 admission without custom status remains unavailable rather than being inferred from Scheduler lifecycle. The trace
 binding writes exact portable artifact bytes and maps every repository availability state through the route-neutral
-catalog. Lifecycle mutation bindings, live trace streaming, richer dashboard presentation, and history-event
-normalization remain follow-up work.
+catalog. Lifecycle mutation bindings are available; live trace streaming, richer dashboard presentation, and
+history-event normalization remain follow-up work.
 
 ## Realization planning
 
@@ -329,7 +329,8 @@ ExecutionProcessStartDispatcher startDispatcher =
 IExecutionControlApiDispatcher executionApi = new InMemoryExecutionControlApiAdapter(
     interactionContracts,
     apiCatalog,
-    startDispatcher: startDispatcher);
+    startDispatcher: startDispatcher,
+    processControlDispatcher: client.CreateCohesiveProcessControlDispatcher());
 
 ExecutionApiDispatchResult dispatched = await executionApi.DispatchAsync(
     operationContext,
@@ -340,10 +341,7 @@ ExecutionApiDispatchResult dispatched = await executionApi.DispatchAsync(
 
 The activation projection owns application or transport correlation, delivery, causation, and ordering policy; the
 adapter always replaces its authority scope and provenance with trusted invocation evidence. The reference API
-adapter does not use its local Process registry when an authoritative Start dispatcher is supplied. Until the
-standalone Durable Task lifecycle dispatcher is composed, callers must not mistake that adapter's independent local
-lifecycle endpoints for control of the newly scheduled Durable Task Process; COH-37 owns removal of that temporary
-composition boundary.
+adapter does not use its local Process registry when an authoritative Start or lifecycle dispatcher is supplied.
 
 `trustedInvocation` must grant the canonical Process-start authorization requirement. Admission replaces caller
 authority, issuance, and provenance with that trusted evidence, resolves the exact definition fingerprint from the
@@ -389,23 +387,37 @@ second physical identity or silently cache handler results outside Durable Task 
 
 ### Lifecycle control
 
-The worker subscribes to the versioned `Cohesive.Processes.Control.v1` external-event stream and evaluates each
-`InspectProcessCommand`, `PauseProcessCommand`, `ContinueProcessCommand`, `RestartProcessAttemptCommand`,
-`CancelProcessCommand`, or `TerminateProcessCommand` with the canonical `ProcessControlReferenceExecutor`.
-Durable Task transports and replays commands; `ProcessControlState`, exact command receipts, attempt/revision
-expectations, authorization evidence, and canonical intents remain semantic authority.
+The public lifecycle binding accepts `PauseProcessCommand`, `ContinueProcessCommand`,
+`RestartProcessAttemptCommand`, `CancelProcessCommand`, or `TerminateProcessCommand` and resolves the physical
+execution from trusted authority scope plus canonical logical Process identity. The worker evaluates every command
+with `ProcessControlReferenceExecutor`. Durable Task transports and replays commands; `ProcessControlState`, exact
+command receipts, attempt/revision expectations, authorization evidence, and canonical intents remain semantic
+authority.
 
 ```csharp
-await client.RaiseCohesiveProcessControlAsync(start, pauseCommand, cancellationToken);
+ExecutionControlResult result = await client.AdmitCohesiveProcessControlAsync(
+    new(pauseCommand, trustedInvocation),
+    cancellationToken);
 ```
 
-Completion of the client call confirms provider event admission only. Read the orchestration custom status or final
-`DurableTaskSequentialProcessResult.Control` and `LatestControlDecision` according to the evidence required. Custom
-status is the safe `ExecutionStatus` projection used for the current lifecycle fence and operational location; it
-deliberately omits commands, receipts, reasons, and payloads. The final result retains the canonical command
-disposition, diagnostics, receipt, and control state. The result requires its continuation and control state to
-identify the same exact definition, Process instance, and current attempt; Continue-as-new carries both without
-making target history a second checkpoint authority.
+The call schedules a short-lived admission orchestration, locates the authority-scoped start index, sends the
+command to the selected physical Process, and waits for its exact safe response. A content-addressed response entity
+retains the first response so exact delivery and caller retry return the original safe result. Reusing an
+idempotency key with an equivalent new command identity returns the canonical replay decision and original receipt;
+conflicting content remains a canonical identity or idempotency conflict. Cancelling the client token stops only the
+wait and never semantically cancels the Process. `RaiseCohesiveProcessControlAsync` remains a lower-level transport
+operation whose completion confirms provider event admission only; it is not the public request/reply binding.
+Completed admission-orchestration history may be purged independently. Response entities must remain for the
+required command/idempotency replay window, and terminal-control entities must remain for as long as post-terminal
+control is supported for that Process identity. Operators must not purge an incomplete admission orchestration.
+
+While the Process orchestration is active, it remains the sole mutation authority. Before semantic or control
+termination completes the physical orchestration, it hands its terminal result and current `ProcessControlState` to
+one authority-scoped terminal-control entity. That entity applies post-terminal retries and no-op decisions with the
+same canonical executor. This explicit handoff closes completion races without treating Scheduler status, history,
+or custom status as semantic state. Custom status remains a bounded safe `ExecutionStatus` projection and
+deliberately omits commands, receipts, reasons, and payloads. Continue-as-new carries canonical continuation and
+control state without making target history a second checkpoint authority.
 
 Every ordinary finite activation is enclosed by canonical `BeginActivation` and `ReachSafePoint` observations.
 Commands are prioritized when co-ready with an ordinary stimulus. A command arriving while a Transition,
@@ -587,8 +599,9 @@ eng/test-durable-task-integration.sh
 The script pins the emulator image by digest. Emulator coverage proves concurrent linearizable Process-start
 admission, all three canonical start conflicts, idempotent and exact replay, retry after uncertain transport
 acknowledgement, definition/input rejection without Process scheduling, exact replay after worker replacement,
-successful completion, canonical Pause,
-Inspect, exact replay, Continue, RestartAttempt, Cancel, and Terminate through the public event API, bound Request
+successful completion, canonical Pause, Inspect, exact command and idempotency replay, identity conflict, stale
+fences, Continue, RestartAttempt, Cancel, and Terminate through the public durable request/reply binding, terminal
+no-op admission, authority-scope concealment, and lifecycle control across Continue-as-new, bound Request
 activity dispatch and Reply admission, child sub-orchestration, recurrence history rollover, authored failure,
 duplicate start admission, cross-instance and self-Signal delivery, and worker restart during active Transition work
 and while a bound Request operation, canonical Timer, and AwaitMatch are waiting. The restart assertions verify that

@@ -86,17 +86,25 @@ provide a stronger transactional protocol rather than silently inheriting this c
 The adapter exposes this boundary as an `ExecutionProcessStartDispatcher`, so the canonical
 `IExecutionControlApiDispatcher` remains the shared entry point for HTTP, CLI, generated clients, and direct SDK
 callers. An activation-context factory supplies correlation and delivery policy without authoring a second start
-contract. The reference API adapter's external-Start composition is a temporary boundary until COH-37 provides the
-matching standalone Durable Task lifecycle dispatcher; its local lifecycle registry does not control Durable Task
+contract. A matching `ExecutionProcessControlDispatcher` binds the five lifecycle mutations; the reference API
+adapter authorizes and projects both external authorities without using its local registry to control Durable Task
 instances.
 
 Lifecycle commands use one versioned Durable Task external-event stream, but the event and Scheduler instance are
-transport rather than control authority. The orchestration encloses each finite activation with canonical
-`BeginActivation` and `ReachSafePoint` observations and realizes only the resulting canonical intent. Native
-Scheduler suspend or terminate operations are not substituted for Pause or Terminate because doing so would lose
-the exact authorization, expectation, receipt, safe-point, attempt-lineage, and cleanup evidence. Provider event
-admission is therefore distinct from canonical command admission, which is observed through custom status or the
-final result.
+transport rather than control authority. A short-lived admission orchestration resolves the authority-scoped
+logical Process index and waits for a content-addressed safe response. The active Process orchestration evaluates
+the command; before physical completion it hands terminal control state to a per-Process entity that evaluates
+post-terminal replay and no-op commands with the same executor. The orchestration encloses each finite activation
+with canonical `BeginActivation` and `ReachSafePoint` observations and realizes only the resulting canonical intent.
+Native Scheduler suspend or terminate operations are not substituted for Pause or Terminate because doing so would
+lose the exact authorization, expectation, receipt, safe-point, attempt-lineage, and cleanup evidence. Provider event
+admission is therefore distinct from canonical command admission. Custom status remains a bounded operational
+projection and is not a response or receipt channel.
+
+Completed control-admission history is disposable, but response entities remain for the command/idempotency replay
+window and terminal-control entities remain for the supported post-terminal control window. Purging an incomplete
+admission orchestration can strand a caller between event delivery and retained response and is therefore outside
+the supported operating protocol.
 
 The adapter may optimize this shape only when the optimization retains source-node provenance and
 passes the same semantic conformance cases. Generated or hand-authored workflow code per Process is
@@ -248,9 +256,12 @@ for stable claim, attempt, dispatch, bounded retry, acknowledgement, reconciliat
 Because activities are at-least-once, automatic dispatch rejects bindings without target deduplication or natural
 idempotency evidence; SDK activity retry does not substitute for the canonical retry policy. Exact typed timeout,
 terminal-failure, or escalation evidence that this slice cannot author fails the orchestration closed while retaining
-the canonical operation status and recovery intent. Root Inspect, Pause, Continue, RestartAttempt, Cancel, and
+the canonical operation status and recovery intent. Root Inspect plus Pause, Continue, RestartAttempt, Cancel, and
 Terminate commands are transported through one polymorphic event contract and evaluated by the canonical control
-executor. Every ordinary activation carries canonical begin/safe-point evidence; active host work drains before a
+executor. Public mutation admission resolves the physical target from trusted authority scope plus logical Process
+identity, retains content-addressed safe responses, and transfers terminal control state before the orchestration
+exits. Provider event acceptance and Scheduler lifecycle are never substituted for canonical command success. Every
+ordinary activation carries canonical begin/safe-point evidence; active host work drains before a
 deferred action, replacement attempts retain exact lineage, cooperative cancellation produces the canonical terminal
 activation, and termination retains its canonical terminal control result instead of invoking the similarly named
 physical Scheduler operation. Differential tests cover canonical decisions and evidence; a pinned Scheduler
@@ -321,8 +332,8 @@ window. Current logical-ID lookup accepts trusted authority scope plus `ProcessI
 opaque physical ID used at scheduling, and performs one exact lookup. Scheduler tags support dashboard discovery, but
 the pinned .NET `OrchestrationQuery` has no tag predicate; Cohesive therefore does not emulate a tag index by scanning
 task-hub pages. Canonical trace retention, terminal retrieval, and runtime explain composition are implemented;
-status, explain, and retained-trace execution-control API bindings are available. Lifecycle mutation bindings, live
-trace streaming, richer dashboard presentation, and history-event normalization remain ARI-292 follow-up work.
+status, explain, retained-trace, and lifecycle-mutation execution-control API bindings are available. Live trace
+streaming, richer dashboard presentation, and history-event normalization remain ARI-292 follow-up work.
 
 This is not promotion of the full planning profile. Authored timeout, terminal-failure, escalation, and cancellation
 execution paths for general Requests, Reply emission, atomic-with-origin event publication, activation-local and

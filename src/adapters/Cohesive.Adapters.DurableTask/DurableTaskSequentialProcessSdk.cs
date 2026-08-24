@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Cohesive.Api.Execution;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Processes.Execution;
@@ -143,8 +144,15 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
             tasks.AddOrchestrator(
                 DurableTaskSequentialProcessNames.StartAdmissionOrchestration,
                 orchestratorActivation.CreateStartAdmission);
+            tasks.AddOrchestrator(
+                DurableTaskSequentialProcessNames.ControlAdmissionOrchestration,
+                orchestratorActivation.CreateControlAdmission);
             tasks.AddEntity<DurableTaskProcessStartIndexEntity>(
                 new(DurableTaskSequentialProcessNames.StartAdmissionIndexEntity));
+            tasks.AddEntity<DurableTaskProcessControlResponseEntity>(
+                new(DurableTaskSequentialProcessNames.ControlResponseEntity));
+            tasks.AddEntity<DurableTaskTerminalProcessControlEntity>(
+                new(DurableTaskSequentialProcessNames.TerminalControlEntity));
             tasks.AddActivity<DurableTaskProcessHostOperationActivity>();
             tasks.AddActivity<DurableTaskProcessSignalTargetActivity>();
             tasks.AddActivity<DurableTaskDomainEventPublicationActivity>();
@@ -197,6 +205,8 @@ sealed class DurableTaskSequentialProcessOrchestratorActivation
         Volatile.Read(ref admittedCatalog)
         ?? throw new InvalidOperationException(
             "The Durable Task Process worker attempted start admission before exact plan catalog admission."));
+
+    public ITaskOrchestrator CreateControlAdmission() => new DurableTaskProcessControlAdmissionOrchestrator();
 }
 
 /// <summary>Generic standalone Durable Task orchestration over one exact canonical Process plan.</summary>
@@ -267,11 +277,32 @@ public sealed class DurableTaskSequentialProcessOrchestrator
                 resolution,
                 DurableTaskActivityOperationContext.WorkerStoppingRetryOptions),
             signal => DeliverSignal(context, signal),
-            () => context.WaitForExternalEvent<ProcessControlCommand>(
-                DurableTaskSequentialProcessNames.ControlEvent),
-            domainEvent => context.CallActivityAsync<DurableTaskDomainEventPublication>(
+            waitForControl: null,
+            publishDomainEvent: domainEvent => context.CallActivityAsync<DurableTaskDomainEventPublication>(
                 DurableTaskSequentialProcessNames.DomainEventPublicationActivity,
-                domainEvent)).ConfigureAwait(true);
+                domainEvent),
+            waitForControlRequest: () => context.WaitForExternalEvent<DurableTaskProcessControlRequest>(
+                DurableTaskSequentialProcessNames.ControlEvent),
+            retainControlResponse: (responseIdentity, response) =>
+                context.Entities.CallEntityAsync<DurableTaskProcessControlResponse>(
+                    new(
+                        DurableTaskSequentialProcessNames.ControlResponseEntity,
+                        responseIdentity),
+                    nameof(DurableTaskProcessControlResponseEntity.Claim),
+                    response,
+                    new CallEntityOptions())).ConfigureAwait(true);
+
+        if (result.Control.IsTerminal || result.State.Terminal.Kind != ExecutionTerminalOutcomeKind.None)
+        {
+            _ = await context.Entities.CallEntityAsync<DurableTaskTerminalProcessControlState>(
+                    DurableTaskProcessControlProtocol.Terminal(
+                        input.ActivationContext.AuthorityScope,
+                        input.Receipt.Request.InitialContinuation.ProcessInstanceId),
+                    nameof(DurableTaskTerminalProcessControlEntity.Handoff),
+                    result,
+                    new CallEntityOptions())
+                .ConfigureAwait(true);
+        }
 
         var blockedOperation = result.DurableOperations.FirstOrDefault(static operation =>
             operation.State.Status is not DurableOperationStatus.Dispositioned);
@@ -1043,8 +1074,11 @@ public static class DurableTaskSequentialProcessClientExtensions
 
     /// <summary>Raises one canonical lifecycle command to the exact physical instance selected by a Process start.</summary>
     /// <remarks>
-    /// Completion confirms provider admission of the external event only. The command's canonical disposition,
-    /// receipt, diagnostics, and any realization intent are exposed through the orchestration result or custom status.
+    /// This is a lower-level transport operation retained for callers that already hold exact start evidence.
+    /// Completion confirms provider admission of the external event only. Use
+    /// <see cref="DurableTaskProcessControlAdmissionClientExtensions.AdmitCohesiveProcessControlAsync"/> for the
+    /// durable request/reply binding that returns the exact safe canonical result. Custom status is not a command
+    /// receipt channel.
     /// </remarks>
     /// <param name="client">Standalone Durable Task client.</param>
     /// <param name="start">Original canonical start used to derive the physical instance identity.</param>
@@ -1078,10 +1112,24 @@ public static class DurableTaskSequentialProcessClientExtensions
                 nameof(command));
         }
 
+        var action = DurableTaskProcessControlProtocol.GetAction(command);
+        var observedAtUtc = DateTimeOffset.UtcNow;
+        if (observedAtUtc < command.Context.IssuedAtUtc)
+            observedAtUtc = command.Context.IssuedAtUtc;
+        var invocation = new ExecutionApiInvocationContext(
+            command.Context.Authorization,
+            command.Context.Provenance,
+            command.Context.IssuedAtUtc,
+            observedAtUtc,
+            [ExecutionControlApiWireNames.AuthorizationRequirement(action)]);
+        var admission = new DurableTaskProcessControlAdmission(command, invocation);
+        var response = DurableTaskProcessControlProtocol.Response(
+            start.ActivationContext.AuthorityScope,
+            command);
         return client.RaiseEventAsync(
             DurableTaskSequentialProcessIdentities.OrchestrationInstance(start),
             DurableTaskSequentialProcessNames.ControlEvent,
-            command,
+            new DurableTaskProcessControlRequest(admission, response.Key),
             cancellationToken);
     }
 }

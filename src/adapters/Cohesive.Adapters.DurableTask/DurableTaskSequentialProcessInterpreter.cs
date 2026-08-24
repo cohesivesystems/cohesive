@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Cohesive.Api.Execution;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
@@ -27,7 +28,9 @@ static class DurableTaskSequentialProcessInterpreter
         Func<ProcessSignalTargetResolution, Task<ProcessSignalTargetResult>>? resolveSignalTarget = null,
         Func<SignalEnvelope, Task>? deliverSignal = null,
         Func<Task<ProcessControlCommand>>? waitForControl = null,
-        Func<DomainEventPublicationInvocation, Task<DurableTaskDomainEventPublication>>? publishDomainEvent = null)
+        Func<DomainEventPublicationInvocation, Task<DurableTaskDomainEventPublication>>? publishDomainEvent = null,
+        Func<Task<DurableTaskProcessControlRequest>>? waitForControlRequest = null,
+        Func<string, DurableTaskProcessControlResponse, Task>? retainControlResponse = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(start);
@@ -61,6 +64,18 @@ static class DurableTaskSequentialProcessInterpreter
                     nameof(start));
             }
         }
+        if (waitForControl is not null && waitForControlRequest is not null)
+        {
+            throw new ArgumentException(
+                "A Durable Task Process cannot have two lifecycle-control event authorities.",
+                nameof(waitForControlRequest));
+        }
+        if (waitForControlRequest is not null && retainControlResponse is null)
+        {
+            throw new ArgumentNullException(
+                nameof(retainControlResponse),
+                "Durable lifecycle-control admission requires a response-retention callback.");
+        }
 
         var resumed = start.Resume?.Result;
         var state = resumed?.State ?? ProcessReferenceInterpreter.Create(plan, start.Receipt);
@@ -91,7 +106,7 @@ static class DurableTaskSequentialProcessInterpreter
         Dictionary<(ProcessWaitRegistrationId Wait, ExecutionNodeId Clause), PendingProcessTimer> pendingTimers = [];
         Task<ProcessActivationInput>? pendingInteraction = null;
         Task<ProcessChildCancellationIntent>? pendingChildCancellation = null;
-        Task<ProcessControlCommand>? pendingControl = null;
+        Task<PendingProcessControl>? pendingControl = null;
         HashSet<string> dispatchedChildCancellations = new(StringComparer.Ordinal);
         ProcessCancellationIntent? cancellation = null;
         ImmutableArray<ProcessChildCancellationClosure> childCancellationClosures = [];
@@ -102,7 +117,7 @@ static class DurableTaskSequentialProcessInterpreter
         {
             pendingInteraction = BeginInteractionWait();
         }
-        if (waitForControl is not null)
+        if (waitForControl is not null || waitForControlRequest is not null)
         {
             pendingControl = BeginControlWait();
         }
@@ -188,7 +203,7 @@ static class DurableTaskSequentialProcessInterpreter
                     + FormatControlDiagnostics(latestControlDecision));
             }
             control = latestControlDecision.State;
-            if (waitForControl is not null)
+            if (waitForControl is not null || waitForControlRequest is not null)
             {
                 observe?.Invoke(CurrentResult(lastDisposition));
             }
@@ -550,8 +565,15 @@ static class DurableTaskSequentialProcessInterpreter
             await ApplyControlCommandAsync(command).ConfigureAwait(true);
         }
 
-        async Task ApplyControlCommandAsync(ProcessControlCommand command)
+        async Task ApplyControlCommandAsync(PendingProcessControl pending)
         {
+            ArgumentNullException.ThrowIfNull(pending);
+            var command = pending.Admission is null
+                ? pending.Command
+                : ExecutionProcessControlCommandAdmission.Rebind(
+                    pending.Admission.Request,
+                    pending.Admission.Invocation,
+                    control);
             ArgumentNullException.ThrowIfNull(command);
             if (command is RestartProcessAttemptCommand
                 && plan.Definition.RecoveryPolicy != ProcessRecoveryPolicy.RestartAttempt)
@@ -574,6 +596,14 @@ static class DurableTaskSequentialProcessInterpreter
                 observedAtUtc,
                 cancellationPolicy);
             control = latestControlDecision.State;
+            if (pending.ResponseIdentity is not null)
+            {
+                var status = ExecutionStatusProjector.Project(latestControlDecision.State);
+                await retainControlResponse!(
+                        pending.ResponseIdentity,
+                        DurableTaskProcessControlResponse.FromDecision(latestControlDecision, status))
+                    .ConfigureAwait(true);
+            }
             await RealizeControlIntentAsync(latestControlDecision.Intent).ConfigureAwait(true);
             observe?.Invoke(CurrentResult(lastDisposition));
         }
@@ -942,7 +972,8 @@ static class DurableTaskSequentialProcessInterpreter
                 {
                     var intent = await pendingChildCancellation!.ConfigureAwait(true);
                     pendingChildCancellation = null;
-                    await ApplyControlCommandAsync(ToCancellationCommand(intent)).ConfigureAwait(true);
+                    await ApplyControlCommandAsync(
+                        PendingProcessControl.FromCommand(ToCancellationCommand(intent))).ConfigureAwait(true);
                     return NextProcessStimulus.ForControl();
                 }
 
@@ -1075,9 +1106,25 @@ static class DurableTaskSequentialProcessInterpreter
             waitForInteraction()
             ?? throw new InvalidOperationException("The Durable Task interaction-wait delegate returned null.");
 
-        Task<ProcessControlCommand> BeginControlWait() =>
-            waitForControl?.Invoke()
-            ?? throw new InvalidOperationException("The Durable Task control-wait delegate returned null.");
+        Task<PendingProcessControl> BeginControlWait()
+        {
+            if (waitForControlRequest is not null)
+                return AwaitAdmissionAsync();
+            var command = waitForControl?.Invoke()
+                ?? throw new InvalidOperationException("The Durable Task control-wait delegate returned null.");
+            return AwaitCommandAsync(command);
+
+            static async Task<PendingProcessControl> AwaitCommandAsync(Task<ProcessControlCommand> pending) =>
+                PendingProcessControl.FromCommand(await pending.ConfigureAwait(true));
+
+            async Task<PendingProcessControl> AwaitAdmissionAsync()
+            {
+                var request = await (waitForControlRequest.Invoke()
+                    ?? throw new InvalidOperationException(
+                        "The Durable Task control-request wait delegate returned null.")).ConfigureAwait(true);
+                return PendingProcessControl.FromAdmission(request);
+            }
+        }
 
         async Task<ImmutableArray<ProcessChildCancellationClosure>> AwaitPropagatedChildClosuresAsync()
         {
@@ -1524,6 +1571,24 @@ static class DurableTaskSequentialProcessInterpreter
     sealed record PendingProcessTimer(
         CancellationTokenSource Cancellation,
         Task Execution);
+
+    sealed record PendingProcessControl(
+        ProcessControlCommand Command,
+        DurableTaskProcessControlAdmission? Admission,
+        string? ResponseIdentity)
+    {
+        internal static PendingProcessControl FromCommand(ProcessControlCommand command) =>
+            new(command ?? throw new ArgumentNullException(nameof(command)), null, null);
+
+        internal static PendingProcessControl FromAdmission(DurableTaskProcessControlRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            return new(
+                request.Admission.Request,
+                request.Admission,
+                request.ResponseIdentity);
+        }
+    }
 
     readonly record struct NextProcessStimulus(
         bool Available,

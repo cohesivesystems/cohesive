@@ -45,6 +45,14 @@ var catalog = ExecutionControlApiCatalog.Create();
 var traces = catalog.Definition.GetOperation(catalog.Traces);
 ```
 
+Production runtimes can supply authoritative asynchronous dispatchers for Process start, the five lifecycle
+mutations, and Control-limit updates. When one is supplied, the adapter authorizes against the canonical endpoint,
+does not consult its local registry for that operation, and projects only the authoritative result. A lifecycle
+dispatcher receives the untrusted portable command separately from `ExecutionApiInvocationContext`; it resolves the
+Process using the trusted authority scope, rebinds first-occurrence evidence, restores retained occurrence evidence
+for exact replay, and returns only after the safe canonical result is recoverable. Provider message admission alone
+is not lifecycle success. `ExecutionProcessControlCommandAdmission` provides the shared trusted rebinding rule.
+
 The `explain` and `traces` queries return `ExecutionExplainArtifact` and `ProcessExecutionTraceArtifact` directly.
 Adapters must not translate them into parallel response models. Opaque `ExecutionApiProblem` values intentionally
 exclude physical identities, authorization evidence, payloads, and provider history.
@@ -55,6 +63,8 @@ exclude physical identities, authorization evidence, payloads, and provider hist
   from `ExecutionControlApiCatalog`.
 - Trusted authorization, issuance, provenance, and tenant evidence is supplied by an adapter, never deserialized
   from an API caller.
+- Authoritative lifecycle lookup uses trusted authority scope plus canonical logical Process identity. Missing and
+  unauthorized targets remain opaque, and exact command or idempotency replay restores the retained occurrence.
 - Repository availability and lifecycle dispositions map to declared result variants; unspecified or incoherent
   states fail closed.
 - The in-memory adapter accepts only handles owned by its exact catalog and checks returned evidence affinity before
