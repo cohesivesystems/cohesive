@@ -11,6 +11,7 @@ dotnet add package Cohesive.Relations.Contracts
 ## Use When
 
 - You need a contract assembly that exposes canonical relationship-catalog, relation-draft, and relation/query shapes for code generation.
+- You need the generated portable `ValueContract` semantic type used by relation, Process, and execution API contracts.
 - You need portable target-capability profiles, realization reports, source placements, physical plans, or lifecycle explain artifacts for explain tooling, deployment gates, or frontend visualization.
 - You want relation contract definitions to be packaged separately from the relation runtime.
 - You are building generated frontend or API artifacts from Cohesive relation metadata.
@@ -33,6 +34,11 @@ dotnet run --project src/Cohesive.CodeGen.Cli -- \
 The generated TypeScript declarations describe the portable value shape. Strict duplicate-property,
 unknown-property, and case-sensitive input enforcement remains the responsibility of the canonical
 .NET document serializers because TypeScript uses open structural object types.
+
+`ValueContract` is projected from `Cohesive.Model` as part of this package's shared semantic-model surface. It
+retains canonical type, optional qualified shape, cardinality, presence, and nullability; the CLR declaration
+remains semantic authority. Consumer generators can therefore externalize `Cohesive.Model` references to
+`@cohesivesystems/relations` without recreating the contract locally.
 
 `RelationQueryExplainArtifact` is the single code-generation root for relation/query explainability. Its
 `$stage`-discriminated union exposes target-independent static compilation, profile feasibility, exact source
