@@ -142,8 +142,9 @@ Use the common projections:
 
 Use `IProcessExecutionRepository` for provider-neutral safe status acquisition. Application-facing reads supply a
 trusted `InteractionAuthorityScope` plus canonical `ProcessInstanceId`; physical keys are reserved for explicit
-engine administration. A pending admission can retain its exact definition before canonical status exists, and that
-gap must not be filled from provider lifecycle state.
+engine administration. A pending admission retains both its exact definition and canonical logical Process identity
+on `ProcessExecutionRecord` before canonical status exists; that gap must not be filled from provider lifecycle state
+or exposed as a physical engine key.
 
 Use `IProcessExecutionTraceRepository` when a runtime must retrieve retained Process traces separately from status.
 Its explicit read state distinguishes an active execution from a missing execution or a terminal execution without
@@ -155,7 +156,8 @@ keys remain an engine-administration address and never enter the result artifact
 Use `IProcessExecutionExplainRepository` to compose retained runtime observations into the existing canonical
 `ExecutionExplainArtifact`. The repository may return a partial artifact for pending or active execution, but it must
 not invent unavailable trace or realization evidence. Exact definition identity remains available independently on
-`ProcessExecutionRecord.Definition` when runtime status has not yet been published. Application-facing reads address
+`ProcessExecutionRecord.Definition`, and logical identity on `ProcessExecutionRecord.LogicalProcessInstanceId`, when
+runtime status has not yet been published. Application-facing reads address
 the repository with a trusted `InteractionAuthorityScope` plus canonical `ProcessInstanceId`; physical execution
 keys remain an explicit engine-administration path.
 

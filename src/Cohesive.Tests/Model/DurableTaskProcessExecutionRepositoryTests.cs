@@ -66,6 +66,7 @@ public sealed class DurableTaskProcessExecutionRepositoryTests
         Assert.Equal("shape-graph", output.ArtifactId);
         Assert.Null(item.RuntimeStatus);
         Assert.Null(item.Definition);
+        Assert.Null(item.LogicalProcessInstanceId);
     }
 
     [Fact]
