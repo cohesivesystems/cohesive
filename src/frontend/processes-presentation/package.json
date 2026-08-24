@@ -1,0 +1,50 @@
+{
+  "name": "@cohesivesystems/processes-presentation",
+  "version": "0.1.0-alpha.1",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src/**/*.ts",
+    "!src/**/*.test.ts"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node ../../../eng/fix-package-js-imports.mjs dist",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cohesivesystems/processes": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.7"
+  },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "description": "Renderer-neutral semantic graph projection for canonical Cohesive Processes.",
+  "keywords": [
+    "cohesive",
+    "processes",
+    "presentation",
+    "graph",
+    "typescript"
+  ],
+  "author": "Cohesive Systems",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cohesivesystems/cohesive.git",
+    "directory": "src/frontend/processes-presentation"
+  },
+  "bugs": {
+    "url": "https://github.com/cohesivesystems/cohesive/issues"
+  },
+  "homepage": "https://github.com/cohesivesystems/cohesive#readme"
+}

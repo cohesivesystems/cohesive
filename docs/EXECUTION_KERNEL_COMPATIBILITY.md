@@ -527,6 +527,14 @@ inventory, so a newly declared construct cannot disappear from frontend conforma
 it. The normalized envelope payload remains `unknown` until its definition kind is admitted; generated TypeScript
 does not replace strict document validation or fingerprint verification.
 
+`@cohesivesystems/processes-presentation` consumes that exact document and projects a renderer-neutral semantic
+graph. Its executable disposition ledgers are checked against both generated Process-node and Await-clause
+inventories, so every declared construct has an explicit projection. Canonical construct and edge identities form
+graph keys; child and contract references, portable value contracts, semantic source paths, and source-map evidence
+remain attached to derived details. Unknown or malformed constructs stay visible with structured diagnostics. The
+projection is immutable and deterministic, but it is not another serialized authority: ReactFlow/layout state,
+navigation, styling, and product policy remain consumer concerns.
+
 ## Compatibility and retired surfaces
 
 ### Flat transitions

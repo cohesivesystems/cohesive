@@ -289,6 +289,12 @@ derived from those same union cases. `@cohesivesystems/relations` remains the fr
 `Cohesive.Model` contracts such as `Expr`, `TypeRef`, and `ValueContract`; the Process package imports and reexports
 those types instead of creating another semantic model.
 
+Operator tooling can consume `@cohesivesystems/processes-presentation` for a pure projection from one admitted
+canonical Process document to a semantic graph. The package retains canonical identities and evidence and accounts
+for every generated construct kind, but deliberately excludes layout, ReactFlow, application navigation, and
+product-specific presentation policy. Those remain interpretations of the derived graph rather than additions to
+Process authority.
+
 ### Identity
 
 Identity describes who or what acts, within which scope, and with which attributable authority.
