@@ -872,7 +872,27 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         writer.Write("return { endpointKey: ");
         writer.Write(Quote(model.Key));
         writer.Write(", route: ");
-        writer.Write(routeVariable);
+        if (!model.RequiresRouteProjection)
+        {
+            writer.Write(routeVariable);
+        }
+        else
+        {
+            writer.Write("{ ");
+            for (var propertyIndex = 0; propertyIndex < model.RouteProperties.Length; propertyIndex++)
+            {
+                if (propertyIndex > 0)
+                    writer.Write(", ");
+                var property = model.RouteProperties[propertyIndex];
+                writer.Write(property.PropertyName);
+                writer.Write(": ");
+                writer.Write(routeVariable);
+                writer.Write("[");
+                writer.Write(Quote(property.WireName));
+                writer.Write("]");
+            }
+            writer.Write(" }");
+        }
         writer.Write(" as ");
         writer.Write(modulePrefix);
         writer.Write("ApiRouteByEndpoint[");
@@ -957,7 +977,9 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
 
     static void WriteQueryPropertyDecoder(ref PooledCodeWriter writer, QueryPropertyModel property)
     {
-        var variableName = ToCamelCase(property.PropertyName);
+        var variableName = TypeScriptHttpParameterIdentifiers.ToIdentifier(
+            property.PropertyName,
+            "value");
         if (property.IsArray)
         {
             writer.Write("const ");
@@ -1257,17 +1279,19 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
             var operation = definition.Operations[i];
             if (operation.Http is not { } http)
                 continue;
+            var identifiers = TypeScriptHttpParameterIdentifiers.Create(operation, http);
 
             models.Add(new OperationModel(
                 Operation: operation,
                 Http: http,
                 Key: CreateUniqueOperationKey(operation, usedKeys),
-                RouteType: BuildRouteType(http),
-                QueryType: BuildQueryType(http),
+                RouteType: BuildRouteType(http, identifiers),
+                QueryType: BuildQueryType(http, identifiers),
                 BodyType: http.Body is { } body ? GetTypeScriptTypeText(body.BodyType) : "null",
                 ResponseBodyType: BuildResponseBodyType(operation),
                 Results: BuildResultModels(operation),
-                QueryProperties: BuildQueryProperties(http),
+                RouteProperties: BuildRouteProperties(http, identifiers),
+                QueryProperties: BuildQueryProperties(http, identifiers),
                 RouteParameterCount: CountRouteParameters(http.Route),
                 RouteSegmentCount: CountRouteSegments(http.Route)));
         }
@@ -1316,7 +1340,9 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         return $"{ToCamelCase(operationName)}{entityName}";
     }
 
-    static string BuildRouteType(HttpBinding http)
+    static string BuildRouteType(
+        HttpBinding http,
+        TypeScriptHttpParameterIdentifiers identifiers)
     {
         var routeParameters = http.Parameters.Where(static parameter => parameter.Source == HttpParameterSource.Route).ToArray();
         if (routeParameters.Length == 0)
@@ -1329,7 +1355,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
                 builder.Append(' ');
 
             builder.Append("readonly ");
-            builder.Append(ToCamelCase(routeParameters[i].Name));
+            builder.Append(identifiers[routeParameters[i]]);
             builder.Append(": ");
             builder.Append(GetTypeScriptTypeText(routeParameters[i].Type));
             builder.Append(';');
@@ -1339,7 +1365,9 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         return builder.ToString();
     }
 
-    static string BuildQueryType(HttpBinding http)
+    static string BuildQueryType(
+        HttpBinding http,
+        TypeScriptHttpParameterIdentifiers identifiers)
     {
         if (http.Query is { } query)
             return GetTypeScriptTypeText(query.QueryType);
@@ -1356,7 +1384,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
 
             var parameter = queryParameters[i];
             builder.Append("readonly ");
-            builder.Append(ToCamelCase(parameter.Name));
+            builder.Append(identifiers[parameter]);
             if (parameter.IsOptional || CanSkipWhenUndefined(parameter.Type))
                 builder.Append('?');
 
@@ -1433,7 +1461,16 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
             _ => bodyType == typeof(void) ? 204 : 200
         };
 
-    static ImmutableArray<QueryPropertyModel> BuildQueryProperties(HttpBinding http)
+    static ImmutableArray<RoutePropertyModel> BuildRouteProperties(
+        HttpBinding http,
+        TypeScriptHttpParameterIdentifiers identifiers) =>
+        [.. http.Parameters
+            .Where(static parameter => parameter.Source == HttpParameterSource.Route)
+            .Select(parameter => new RoutePropertyModel(identifiers[parameter], parameter.Name))];
+
+    static ImmutableArray<QueryPropertyModel> BuildQueryProperties(
+        HttpBinding http,
+        TypeScriptHttpParameterIdentifiers identifiers)
     {
         var properties = ImmutableArray.CreateBuilder<QueryPropertyModel>();
         if (http.Query is { } query)
@@ -1459,7 +1496,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
                 continue;
 
             properties.Add(new QueryPropertyModel(
-                PropertyName: ToCamelCase(parameter.Name),
+                PropertyName: identifiers[parameter],
                 QueryName: parameter.Name,
                 TypeText: GetTypeScriptTypeText(parameter.Type),
                 Decoder: GetQueryDecoderName(parameter.Type),
@@ -1807,12 +1844,18 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         string BodyType,
         string ResponseBodyType,
         ImmutableArray<ResultModel> Results,
+        ImmutableArray<RoutePropertyModel> RouteProperties,
         ImmutableArray<QueryPropertyModel> QueryProperties,
         int RouteParameterCount,
         int RouteSegmentCount)
     {
         public bool HasQueryInput => QueryProperties.Length > 0;
+
+        public bool RequiresRouteProjection => RouteProperties.Any(static property =>
+            !string.Equals(property.PropertyName, property.WireName, StringComparison.Ordinal));
     }
+
+    sealed record RoutePropertyModel(string PropertyName, string WireName);
 
     sealed record QueryPropertyModel(
         string PropertyName,
