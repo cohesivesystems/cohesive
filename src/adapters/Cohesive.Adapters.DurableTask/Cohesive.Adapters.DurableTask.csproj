@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Cohesive\Cohesive.csproj" />
+    <ProjectReference Include="..\..\Cohesive.Api.Execution\Cohesive.Api.Execution.csproj" />
     <ProjectReference Include="..\..\Cohesive.Processes\Cohesive.Processes.csproj" />
     <ProjectReference Include="..\Cohesive.Adapters.AzureStorage\Cohesive.Adapters.AzureStorage.csproj" />
   </ItemGroup>

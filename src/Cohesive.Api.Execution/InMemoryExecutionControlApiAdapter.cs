@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Cohesive.Control;
 using Cohesive.Execution;
 using Cohesive.Processes.Runtime;
@@ -31,6 +32,22 @@ public delegate ValueTask<ControlLimitUpdateDecision> ExecutionControlLimitUpdat
     ControlLimitUpdateCommand command,
     DateTimeOffset decidedAtUtc);
 
+/// <summary>Asynchronously admits one canonical Process start through an authoritative durable runtime.</summary>
+/// <remarks>
+/// The dispatcher receives the caller request and trusted invocation separately because exact command replay may
+/// restore previously retained occurrence evidence. It must rebind first-time authority, issuance, and provenance,
+/// apply canonical <see cref="ProcessStartReferenceEvaluator"/> semantics, and return only after the winning receipt
+/// and required identity indexes are durably recoverable.
+/// </remarks>
+/// <param name="context">Explicit cancellation, time, and tracing context.</param>
+/// <param name="request">Canonical caller request whose authority evidence is not trusted.</param>
+/// <param name="invocation">Trusted API authorization, issuance, observation, and provenance evidence.</param>
+/// <returns>The canonical accepted, replayed, or precise conflict result.</returns>
+public delegate ValueTask<Cohesive.Execution.ProcessStartResult> ExecutionProcessStartDispatcher(
+    OperationContext context,
+    ProcessStartRequest request,
+    ExecutionApiInvocationContext invocation);
+
 /// <summary>Trusted server-side evidence used to admit one execution-control API invocation.</summary>
 /// <remarks>
 /// This value is materialized by an API, identity, or test adapter after authentication and authorization. It is
@@ -40,6 +57,28 @@ public delegate ValueTask<ControlLimitUpdateDecision> ExecutionControlLimitUpdat
 /// </remarks>
 public sealed class ExecutionApiInvocationContext
 {
+    [JsonConstructor]
+    internal ExecutionApiInvocationContext(
+        ProcessControlAuthorizationContext authorization,
+        ExecutionProvenance provenance,
+        DateTimeOffset issuedAtUtc,
+        DateTimeOffset observedAtUtc,
+        ImmutableArray<string> grantedRequirements,
+        InteractionEnvelopeContext? signalContext = null)
+        : this(
+            authorization,
+            provenance,
+            issuedAtUtc,
+            observedAtUtc,
+            grantedRequirements.IsDefault
+                ? throw new ArgumentException(
+                    "Execution API authorization requirement grants must be materialized.",
+                    nameof(grantedRequirements))
+                : (IReadOnlyList<string>)grantedRequirements,
+            signalContext)
+    {
+    }
+
     /// <summary>Creates trusted invocation evidence.</summary>
     /// <param name="authorization">Attributable authorization decision for the admitted caller.</param>
     /// <param name="provenance">Trusted adapter and semantic-source attribution.</param>
@@ -126,8 +165,15 @@ public sealed class ExecutionApiInvocationContext
     /// <summary>Complete trusted context for first-time Signal admission, when this invocation carries a Signal.</summary>
     public InteractionEnvelopeContext? SignalContext { get; }
 
-    internal bool Grants(string requirement)
+    /// <summary>Determines whether this trusted invocation grants one stable API requirement identity.</summary>
+    /// <param name="requirement">Stable authorization requirement identity to test.</param>
+    /// <returns><see langword="true"/> when the exact requirement was granted.</returns>
+    /// <exception cref="ArgumentException"><paramref name="requirement"/> is empty.</exception>
+    public bool GrantsRequirement(string requirement)
     {
+        if (string.IsNullOrWhiteSpace(requirement))
+            throw new ArgumentException("An API authorization requirement identity cannot be empty.", nameof(requirement));
+
         for (var i = 0; i < GrantedRequirements.Length; i++)
         {
             if (string.Equals(GrantedRequirements[i], requirement, StringComparison.Ordinal))
@@ -151,9 +197,9 @@ public sealed class ExecutionApiInvocationContext
 /// This adapter is the package's reference integration and test realization, not a durable production store. Each admitted
 /// operation is linearized under the addressed resource lock. Start registry insertion is atomic across instance,
 /// command, and idempotency indexes. Canonical reducers remain the sole owners of replay, optimistic-fence, and
-/// lifecycle semantics. When an authoritative limit-update dispatcher is configured, <c>updateLimits</c> bypasses
-/// the local Control registry entirely; the adapter only authorizes, rebinds trusted context, and projects the
-/// authoritative decision.
+/// lifecycle semantics. When an authoritative Start or limit-update dispatcher is configured, that operation
+/// bypasses its local registry entirely; the adapter only authorizes and projects the authoritative decision.
+/// External dispatchers remain responsible for trusted-context rebinding and durable occurrence replay.
 /// </remarks>
 public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDispatcher
 {
@@ -167,6 +213,7 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
     readonly Func<InspectProcessCommand, ExecutionExplainArtifact?>? explain;
     readonly Func<InspectProcessCommand, ProcessExecutionTraceReadResult>? traces;
     readonly ExecutionControlLimitUpdateDispatcher? limitUpdateDispatcher;
+    readonly ExecutionProcessStartDispatcher? startDispatcher;
     readonly Dictionary<ProcessKey, ProcessEntry> processes = [];
     readonly Dictionary<StartCommandKey, ProcessStartReceipt> startsByCommand = [];
     readonly Dictionary<StartIdempotencyKey, ProcessStartReceipt> startsByIdempotency = [];
@@ -187,6 +234,10 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
     /// <param name="traces">
     /// Optional canonical retained-trace projection over a trusted read-only Process inspection request.
     /// </param>
+    /// <param name="startDispatcher">
+    /// Optional authoritative asynchronous Process-start admission. When supplied, callers MUST use
+    /// <see cref="DispatchAsync"/> for Start; the local Process-start registry is not consulted.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="contracts"/> is <see langword="null"/>.</exception>
     public InMemoryExecutionControlApiAdapter(
         InteractionContractCatalog contracts,
@@ -195,7 +246,8 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
         Func<ProcessControlState, ExecutionTerminalOutcome?>? terminalOutcome = null,
         Func<InspectProcessCommand, ExecutionExplainArtifact?>? explain = null,
         ExecutionControlLimitUpdateDispatcher? limitUpdateDispatcher = null,
-        Func<InspectProcessCommand, ProcessExecutionTraceReadResult>? traces = null)
+        Func<InspectProcessCommand, ProcessExecutionTraceReadResult>? traces = null,
+        ExecutionProcessStartDispatcher? startDispatcher = null)
     {
         ArgumentNullException.ThrowIfNull(contracts);
         this.catalog = catalog ?? ExecutionControlApiCatalog.Create();
@@ -205,6 +257,7 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
         this.explain = explain;
         this.traces = traces;
         this.limitUpdateDispatcher = limitUpdateDispatcher;
+        this.startDispatcher = startDispatcher;
     }
 
     /// <summary>Canonical semantic endpoint catalog bound by this adapter.</summary>
@@ -221,9 +274,9 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
     /// </exception>
     /// <exception cref="InvalidOperationException">
     /// <paramref name="endpoint"/> is not owned by this adapter, or a first-time Signal invocation lacks a trusted
-    /// <see cref="ExecutionApiInvocationContext.SignalContext"/>, or synchronous <c>updateLimits</c> dispatch is
-    /// attempted while an authoritative asynchronous dispatcher is configured, or an explanation projection
-    /// returns evidence for another Process instance or attempt.
+    /// <see cref="ExecutionApiInvocationContext.SignalContext"/>, or synchronous Start or <c>updateLimits</c>
+    /// dispatch is attempted while an authoritative asynchronous dispatcher is configured, or an explanation
+    /// projection returns evidence for another Process instance or attempt.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// Trusted observation time precedes durable state or first-time command issuance.
@@ -238,6 +291,12 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(invocation);
         EnsureOwnedEndpoint(endpoint);
+
+        if (startDispatcher is not null && ReferenceEquals(endpoint, catalog.Start))
+        {
+            throw new InvalidOperationException(
+                "An authoritative asynchronous Process-start dispatcher requires DispatchAsync.");
+        }
 
         if (!IsAuthorized(endpoint, invocation))
             return Problem(endpoint, ApiResultKind.Forbidden, ExecutionApiProblemCodes.Forbidden);
@@ -319,8 +378,8 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
     }
 
     /// <summary>
-    /// Dispatches through the authoritative asynchronous limit-update store when configured, and otherwise reuses
-    /// the synchronous reference path.
+    /// Dispatches through an authoritative asynchronous Start or limit-update binding when configured, and
+    /// otherwise reuses the synchronous reference path.
     /// </summary>
     /// <param name="context">Explicit cancellation, time, and tracing context.</param>
     /// <param name="endpoint">Exact typed endpoint handle owned by <see cref="Catalog"/>.</param>
@@ -349,6 +408,23 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(invocation);
         context.ThrowIfCancellationRequested();
+        if (startDispatcher is not null && ReferenceEquals(endpoint, catalog.Start))
+        {
+            EnsureOwnedEndpoint(endpoint);
+            if (!IsAuthorized(endpoint, invocation))
+                return Problem(endpoint, ApiResultKind.Forbidden, ExecutionApiProblemCodes.Forbidden);
+            if (request is not ProcessStartRequest start)
+                return TypeMismatch(endpoint);
+
+            var startResult = await startDispatcher(context, start, invocation).ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    "The authoritative Process-start dispatcher returned no canonical result.");
+            return Result(
+                endpoint,
+                startResult.IsConflict ? ApiResultKind.Conflict : ApiResultKind.Success,
+                startResult);
+        }
+
         if (limitUpdateDispatcher is null || !ReferenceEquals(endpoint, catalog.UpdateLimits))
             return Dispatch(endpoint, request, invocation);
 
@@ -749,7 +825,7 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
         var requirements = endpoint.Operation.AuthorizationRequirements;
         for (var i = 0; i < requirements.Count; i++)
         {
-            if (!invocation.Grants(requirements[i].Id))
+            if (!invocation.GrantsRequirement(requirements[i].Id))
                 return false;
         }
 

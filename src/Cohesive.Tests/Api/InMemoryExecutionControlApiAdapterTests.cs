@@ -79,6 +79,62 @@ public sealed class InMemoryExecutionControlApiAdapterTests
     }
 
     [Fact]
+    public async Task StartAsync_UsesAuthoritativeDispatcherAfterApiAuthorization()
+    {
+        var fixture = ProcessControlTestFixture.Create();
+        var catalog = ExecutionControlApiCatalog.Create();
+        var initial = fixture.State();
+        var request = StartRequest(initial);
+        var invocation = Invocation(
+            catalog,
+            BaselineUtc.AddSeconds(1),
+            BaselineUtc.AddSeconds(2));
+        var context = OperationContext.Create();
+        var calls = 0;
+        OperationContext? receivedContext = null;
+        ProcessStartRequest? receivedRequest = null;
+        ExecutionApiInvocationContext? receivedInvocation = null;
+        var adapter = new InMemoryExecutionControlApiAdapter(
+            fixture.Catalog,
+            catalog,
+            startDispatcher: (operation, candidate, trusted) =>
+            {
+                calls++;
+                receivedContext = operation;
+                receivedRequest = candidate;
+                receivedInvocation = trusted;
+                return ValueTask.FromResult(ExecutionProcessStartResult.Conflict(
+                    ProcessStartDisposition.InstanceConflict));
+            });
+
+        var conflict = await DispatchAsync<ExecutionProcessStartResult>(
+            adapter,
+            context,
+            catalog.Start,
+            request,
+            invocation,
+            ApiResultKind.Conflict);
+        var denied = await adapter.DispatchAsync(
+            context,
+            catalog.Start,
+            request,
+            Invocation(
+                catalog,
+                BaselineUtc.AddSeconds(3),
+                BaselineUtc.AddSeconds(4),
+                grantedRequirements: []));
+
+        Assert.Equal(ProcessStartDisposition.InstanceConflict, conflict.Disposition);
+        Assert.Same(context, receivedContext);
+        Assert.Same(request, receivedRequest);
+        Assert.Same(invocation, receivedInvocation);
+        Assert.Equal(1, calls);
+        Assert.Equal(ApiResultKind.Forbidden, denied.Result.Kind);
+        Assert.Equal(ExecutionApiProblemCodes.Forbidden, Assert.IsType<ExecutionApiProblem>(denied.Body).Code);
+        Assert.Throws<InvalidOperationException>(() => adapter.Dispatch(catalog.Start, request, invocation));
+    }
+
+    [Fact]
     public void AuthorizationRunsBeforeLookupAndCanonicalCommandsUseTrustedServerEvidence()
     {
         var fixture = ProcessControlTestFixture.Create();
