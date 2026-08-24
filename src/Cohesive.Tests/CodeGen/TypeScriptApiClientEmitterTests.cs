@@ -145,6 +145,28 @@ public sealed class TypeScriptApiClientEmitterTests
     }
 
     [Fact]
+    public void Emit_HttpOperationNamedWithReservedWord_ProducesValidFunctionIdentifier()
+    {
+        var continueEndpoint = ExecutionControlApiCatalog.Create().Continue.WithHttp(new HttpBinding(
+            method: "POST",
+            route: "/processes/control/continue",
+            parameters: [],
+            body: new HttpBodyBinding(typeof(ContinueProcessCommand))));
+        var definition = ApiDefinition.From(continueEndpoint);
+
+        var client = new TypeScriptApiClientEmitter().Emit(new ApiCodeGenerationRequest(definition));
+        var clientText = Assert.Single(client.Documents).Text;
+
+        Assert.Contains(
+            "export function _continue(http: ApiHttpClient, body: ContinueProcessCommand): Promise<ExecutionControlResult>",
+            clientText,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("export function continue(", clientText, StringComparison.Ordinal);
+        Assert.Contains("continue: 'cohesive.api.execution-control.continue'", clientText, StringComparison.Ordinal);
+        Assert.Contains("const basePath = '/processes/control/continue';", clientText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Emit_Definition_GeneratesComposableTypeScriptClientFunctions()
     {
         var definition = Cohesive.Api.Api.Define()
