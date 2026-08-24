@@ -396,6 +396,7 @@ public sealed class TypeScriptApiClientAstBuilder
     TsFunctionDeclaration BuildFunction(ApiOperation operation)
     {
         var http = RequireHttp(operation);
+        var identifiers = TypeScriptHttpParameterIdentifiers.Create(operation, http);
         var parameters = ImmutableArray.CreateBuilder<TsParameterDeclaration>();
         parameters.Add(new TsParameterDeclaration("http", new TsTypeReference(options.HttpClientTypeName)));
 
@@ -406,7 +407,7 @@ public sealed class TypeScriptApiClientAstBuilder
                 continue;
 
             parameters.Add(new TsParameterDeclaration(
-                name: ToCamelCase(parameter.Name),
+                name: identifiers[parameter],
                 type: new TsRawType(GetParameterTypeScriptTypeText(parameter)),
                 isOptional: CanRenderAsOptionalParameter(http, parameter)));
         }
@@ -414,7 +415,7 @@ public sealed class TypeScriptApiClientAstBuilder
         if (http.Query is { } query)
         {
             parameters.Add(new TsParameterDeclaration(
-                name: GetQueryObjectParameterName(operation),
+                name: identifiers.QueryObject,
                 type: new TsRawType(AddNullAndUndefined(GetTypeScriptTypeText(query.QueryType))),
                 isOptional: CanRenderQueryObjectAsOptionalParameter(http)));
         }
@@ -426,15 +427,15 @@ public sealed class TypeScriptApiClientAstBuilder
                 continue;
 
             parameters.Add(new TsParameterDeclaration(
-                name: ToCamelCase(parameter.Name),
+                name: identifiers[parameter],
                 type: new TsRawType(GetParameterTypeScriptTypeText(parameter)),
                 isOptional: CanRenderAsOptionalParameter(http, parameter)));
         }
 
         if (http.Body is not null)
-            parameters.Add(new TsParameterDeclaration(GetBodyParameterName(http), new TsRawType(GetTypeScriptTypeText(http.Body.BodyType))));
+            parameters.Add(new TsParameterDeclaration(identifiers.Body, new TsRawType(GetTypeScriptTypeText(http.Body.BodyType))));
 
-        var bodyLines = BuildBody(operation, http);
+        var bodyLines = BuildBody(operation, http, identifiers);
         return new TsFunctionDeclaration(
             name: BuildFunctionName(operation),
             parameters: parameters.ToImmutable(),
@@ -442,10 +443,13 @@ public sealed class TypeScriptApiClientAstBuilder
             bodyLines: bodyLines);
     }
 
-    ImmutableArray<string> BuildBody(ApiOperation operation, HttpBinding http)
+    ImmutableArray<string> BuildBody(
+        ApiOperation operation,
+        HttpBinding http,
+        TypeScriptHttpParameterIdentifiers identifiers)
     {
         var lines = ImmutableArray.CreateBuilder<string>();
-        lines.Add($"const basePath = {BuildRouteExpression(http)};");
+        lines.Add($"const basePath = {BuildRouteExpression(http, identifiers)};");
 
         var hasQuery = http.Query is not null || CountParameters(http, HttpParameterSource.Query) > 0;
         if (hasQuery)
@@ -453,7 +457,7 @@ public sealed class TypeScriptApiClientAstBuilder
             lines.Add("const queryParams = new URLSearchParams();");
 
             if (http.Query is { } query)
-                AppendQueryObjectLines(lines, operation, query);
+                AppendQueryObjectLines(lines, identifiers.QueryObject, query);
 
             for (var i = 0; i < http.Parameters.Count; i++)
             {
@@ -461,7 +465,7 @@ public sealed class TypeScriptApiClientAstBuilder
                 if (parameter.Source != HttpParameterSource.Query)
                     continue;
 
-                AppendQueryLines(lines, parameter);
+                AppendQueryLines(lines, parameter, identifiers[parameter]);
             }
 
             lines.Add("const queryText = queryParams.toString();");
@@ -482,20 +486,22 @@ public sealed class TypeScriptApiClientAstBuilder
                 if (parameter.Source != HttpParameterSource.Header)
                     continue;
 
-                AppendHeaderLines(lines, parameter);
+                AppendHeaderLines(lines, parameter, identifiers[parameter]);
             }
 
             if (http.Body is not null)
                 lines.Add("headers['content-type'] = 'application/json';");
         }
 
-        lines.Add(BuildReturnLine(operation, http, hasHeaders));
+        lines.Add(BuildReturnLine(operation, http, hasHeaders, identifiers.Body));
         return lines.ToImmutable();
     }
 
-    void AppendQueryLines(ImmutableArray<string>.Builder lines, HttpParameter parameter)
+    void AppendQueryLines(
+        ImmutableArray<string>.Builder lines,
+        HttpParameter parameter,
+        string parameterName)
     {
-        var parameterName = ToCamelCase(parameter.Name);
         if (IsSequenceType(parameter.Type))
         {
             lines.Add($"if ({parameterName} !== undefined && {parameterName} !== null) {{");
@@ -513,9 +519,11 @@ public sealed class TypeScriptApiClientAstBuilder
         lines.Add($"queryParams.set('{parameter.Name}', String({parameterName}));");
     }
 
-    void AppendQueryObjectLines(ImmutableArray<string>.Builder lines, ApiOperation operation, HttpQueryBinding query)
+    void AppendQueryObjectLines(
+        ImmutableArray<string>.Builder lines,
+        string parameterName,
+        HttpQueryBinding query)
     {
-        var parameterName = GetQueryObjectParameterName(operation);
         var properties = ShapeTypeInspector.GetReadableProperties(query.QueryType);
         if (properties.Length == 0)
             return;
@@ -540,9 +548,11 @@ public sealed class TypeScriptApiClientAstBuilder
         lines.Add("}");
     }
 
-    void AppendHeaderLines(ImmutableArray<string>.Builder lines, HttpParameter parameter)
+    void AppendHeaderLines(
+        ImmutableArray<string>.Builder lines,
+        HttpParameter parameter,
+        string parameterName)
     {
-        var parameterName = ToCamelCase(parameter.Name);
         if (CanSkipParameter(parameter))
         {
             lines.Add($"if ({parameterName} !== undefined && {parameterName} !== null) headers['{parameter.Name}'] = String({parameterName});");
@@ -552,9 +562,13 @@ public sealed class TypeScriptApiClientAstBuilder
         lines.Add($"headers['{parameter.Name}'] = String({parameterName});");
     }
 
-    string BuildReturnLine(ApiOperation operation, HttpBinding http, bool hasHeaders)
+    string BuildReturnLine(
+        ApiOperation operation,
+        HttpBinding http,
+        bool hasHeaders,
+        string bodyParameterName)
     {
-        var bodyParameterName = http.Body is null ? null : GetBodyParameterName(http);
+        var boundBodyParameterName = http.Body is null ? null : bodyParameterName;
         var init = new List<string>
         {
             $"method: '{http.Method}'"
@@ -563,14 +577,16 @@ public sealed class TypeScriptApiClientAstBuilder
         if (hasHeaders)
             init.Add("headers");
 
-        if (bodyParameterName is not null)
-            init.Add($"body: JSON.stringify({bodyParameterName})");
+        if (boundBodyParameterName is not null)
+            init.Add($"body: JSON.stringify({boundBodyParameterName})");
 
         var responseType = GetTypeScriptTypeText(operation.ResponseType);
         return $"return http(path, {{ {string.Join(", ", init)} }}) as Promise<{responseType}>;";
     }
 
-    string BuildRouteExpression(HttpBinding binding)
+    string BuildRouteExpression(
+        HttpBinding binding,
+        TypeScriptHttpParameterIdentifiers identifiers)
     {
         var routeParameters = GetParameters(binding, HttpParameterSource.Route);
         if (routeParameters.Count == 0)
@@ -601,7 +617,7 @@ public sealed class TypeScriptApiClientAstBuilder
             var token = binding.Route.Substring(index + 1, end - index - 1);
             var parameterName = NormalizeRouteToken(token);
             builder.Append("${encodeURIComponent(String(");
-            builder.Append(ToCamelCase(parameterName));
+            builder.Append(identifiers.Get(HttpParameterSource.Route, parameterName));
             builder.Append("))}");
             index = end;
         }
@@ -626,29 +642,6 @@ public sealed class TypeScriptApiClientAstBuilder
         }
 
         return ToCamelCase(operation.Name);
-    }
-
-    static string GetBodyParameterName(HttpBinding http)
-    {
-        for (var i = 0; i < http.Parameters.Count; i++)
-        {
-            if (string.Equals(http.Parameters[i].Name, "body", StringComparison.OrdinalIgnoreCase))
-                return "request";
-        }
-
-        return "body";
-    }
-
-    static string GetQueryObjectParameterName(ApiOperation operation)
-    {
-        var http = RequireHttp(operation);
-        for (var i = 0; i < http.Parameters.Count; i++)
-        {
-            if (string.Equals(http.Parameters[i].Name, "query", StringComparison.OrdinalIgnoreCase))
-                return "request";
-        }
-
-        return "query";
     }
 
     static int CountParameters(HttpBinding binding, HttpParameterSource source)

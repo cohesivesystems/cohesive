@@ -45,6 +45,11 @@ var client = new TypeScriptApiClientEmitter(new()
 }).Emit(api);
 ```
 
+HTTP parameter names remain wire authority. The client and Playwright emitters project route, query, and header names
+such as `Ari-Process-Key` to valid local TypeScript identifiers such as `ariProcessKey`, while still reading or writing
+the original wire name. Leading digits and reserved words are escaped, and normalized identifier collisions receive
+stable numeric suffixes in declaration order.
+
 ## Related Packages
 
 - `Cohesive` for shape graph metadata.
