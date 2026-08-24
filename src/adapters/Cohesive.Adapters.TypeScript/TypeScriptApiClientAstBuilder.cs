@@ -628,6 +628,7 @@ public sealed class TypeScriptApiClientAstBuilder
 
     static string BuildFunctionName(ApiOperation operation)
     {
+        string candidate;
         if (operation.Entity is { } entity)
         {
             var entityName = GetTypeName(entity.Value);
@@ -635,13 +636,19 @@ public sealed class TypeScriptApiClientAstBuilder
                 && (string.Equals(operation.Name, "GetById", StringComparison.Ordinal)
                     || string.Equals(operation.Name, "Get", StringComparison.Ordinal)))
             {
-                return $"get{entityName}";
+                candidate = $"get{entityName}";
             }
-
-            return $"{ToCamelCase(operation.Name)}{entityName}";
+            else
+            {
+                candidate = $"{ToCamelCase(operation.Name)}{entityName}";
+            }
+        }
+        else
+        {
+            candidate = ToCamelCase(operation.Name);
         }
 
-        return ToCamelCase(operation.Name);
+        return TypeScriptHttpParameterIdentifiers.ToIdentifier(candidate, "operation");
     }
 
     static int CountParameters(HttpBinding binding, HttpParameterSource source)
