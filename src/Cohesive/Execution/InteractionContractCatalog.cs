@@ -38,10 +38,17 @@ public static class InteractionContractCatalogDiagnosticCodes
 public sealed class InteractionContractCatalog
 {
     readonly ImmutableArray<Entry> entries;
+    readonly ExecutionDefinitionDocumentCatalog documents;
+    readonly ImmutableDictionary<ExecutionDefinitionDocument, Entry> entriesByDocument;
 
-    InteractionContractCatalog(ImmutableArray<Entry> entries, ShapeGraph? shapeGraph)
+    InteractionContractCatalog(
+        ImmutableArray<Entry> entries,
+        ExecutionDefinitionDocumentCatalog documents,
+        ShapeGraph? shapeGraph)
     {
         this.entries = entries;
+        this.documents = documents;
+        entriesByDocument = entries.ToImmutableDictionary(static entry => entry.Document);
         ShapeGraph = shapeGraph;
     }
 
@@ -206,47 +213,21 @@ public sealed class InteractionContractCatalog
 
     ResolutionStatus ResolveExact(ExecutionDefinitionReference exact, out Entry? entry)
     {
-        var identityStart = LowerBound(exact.DefinitionId);
-        if (identityStart == entries.Length || entries[identityStart].Reference.DefinitionId != exact.DefinitionId)
+        var status = documents.Resolve(exact, out var documentEntry);
+        if (status != ExecutionDefinitionDocumentResolutionStatus.Resolved)
         {
             entry = null;
-            return ResolutionStatus.DefinitionUnknown;
-        }
-
-        for (var index = identityStart;
-             index < entries.Length && entries[index].Reference.DefinitionId == exact.DefinitionId;
-             index++)
-        {
-            var candidate = entries[index];
-            if (candidate.Reference.RevisionId != exact.RevisionId)
-                continue;
-            if (candidate.Reference.Fingerprint != exact.Fingerprint)
+            return status switch
             {
-                entry = candidate;
-                return ResolutionStatus.FingerprintMismatch;
-            }
-
-            entry = candidate;
-            return ResolutionStatus.Resolved;
+                ExecutionDefinitionDocumentResolutionStatus.DefinitionUnknown => ResolutionStatus.DefinitionUnknown,
+                ExecutionDefinitionDocumentResolutionStatus.RevisionUnknown => ResolutionStatus.RevisionUnknown,
+                ExecutionDefinitionDocumentResolutionStatus.FingerprintMismatch => ResolutionStatus.FingerprintMismatch,
+                _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unsupported resolution status.")
+            };
         }
 
-        entry = null;
-        return ResolutionStatus.RevisionUnknown;
-    }
-
-    int LowerBound(ExecutionDefinitionId definitionId)
-    {
-        var low = 0;
-        var high = entries.Length;
-        while (low < high)
-        {
-            var middle = low + ((high - low) / 2);
-            if (StringComparer.Ordinal.Compare(entries[middle].Reference.DefinitionId.Value, definitionId.Value) < 0)
-                low = middle + 1;
-            else
-                high = middle;
-        }
-        return low;
+        entry = entriesByDocument[documentEntry!.Document];
+        return ResolutionStatus.Resolved;
     }
 
     static DocumentValidationResult TryCreateCore(
@@ -295,34 +276,50 @@ public sealed class InteractionContractCatalog
             {
                 var definition = document.GetDefinition<InteractionContractDefinition>();
                 candidates.Add(new(
-                    new(
-                        document.Metadata.DefinitionId,
-                        document.Metadata.RevisionId,
-                        document.Metadata.Fingerprint),
+                    document,
                     definition,
                     index));
             }
             index++;
         }
 
-        candidates.Sort(static (left, right) =>
-            ExecutionDefinitionReference.CompareCanonical(left.Reference, right.Reference));
-        for (var candidateIndex = 1; candidateIndex < candidates.Count; candidateIndex++)
+        var exactValidation = graph is null
+            ? ExecutionDefinitionDocumentCatalog.TryCreate(
+                candidates.Select(static entry => entry.Document),
+                out var exactDocuments)
+            : ExecutionDefinitionDocumentCatalog.TryCreate(
+                candidates.Select(static entry => entry.Document),
+                graph,
+                out exactDocuments);
+        foreach (var diagnostic in exactValidation.Diagnostics)
         {
-            var previous = candidates[candidateIndex - 1];
-            var current = candidates[candidateIndex];
-            if (previous.Reference.DefinitionId == current.Reference.DefinitionId
-                && previous.Reference.RevisionId == current.Reference.RevisionId)
+            diagnostics.Add(diagnostic with
             {
-                diagnostics.Add(new(
-                    InteractionContractCatalogDiagnosticCodes.DuplicateRevision,
-                    DiagnosticSeverity.Error,
-                    $"Interaction contract '{current.Reference.DefinitionId.Value}' revision '{current.Reference.RevisionId.Value}' is duplicated.",
-                    "/contracts"));
-            }
+                Code = diagnostic.Code == ExecutionDefinitionDiagnosticCodes.CatalogRevisionDuplicate
+                    ? InteractionContractCatalogDiagnosticCodes.DuplicateRevision
+                    : InteractionContractCatalogDiagnosticCodes.DocumentInvalid,
+                Location = diagnostic.Code == ExecutionDefinitionDiagnosticCodes.CatalogRevisionDuplicate
+                    ? "/contracts"
+                    : diagnostic.Location?.Replace("/definitions", "/contracts", StringComparison.Ordinal)
+            });
         }
 
-        var provisional = new InteractionContractCatalog([.. candidates], graph);
+        diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
+        var prelink = DocumentValidationResult.FromDiagnostics(diagnostics);
+        if (!prelink.IsValid || exactDocuments is null)
+        {
+            catalog = null;
+            return prelink;
+        }
+
+        var candidatesByDocument = candidates.ToDictionary(static entry => entry.Document);
+        var ordered = ImmutableArray.CreateBuilder<Entry>(candidates.Count);
+        foreach (var document in exactDocuments.Documents)
+            ordered.Add(candidatesByDocument[document]);
+        var provisional = new InteractionContractCatalog(
+            ordered.MoveToImmutable(),
+            exactDocuments,
+            graph);
         provisional.ValidateReplyLinks(diagnostics);
         diagnostics.Sort(DocumentValidationDiagnosticComparer.Ordinal);
         var result = DocumentValidationResult.FromDiagnostics(diagnostics);
@@ -383,7 +380,7 @@ public sealed class InteractionContractCatalog
         ]);
 
     sealed record Entry(
-        ExecutionDefinitionReference Reference,
+        ExecutionDefinitionDocument Document,
         InteractionContractDefinition Definition,
         int SourceIndex);
 

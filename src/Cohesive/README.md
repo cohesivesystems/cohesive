@@ -52,6 +52,19 @@ serialization is deterministic, and the declared `JsonTypeKind` is guaranteed fo
 
 `Cohesive` is the foundation package. Higher-level blocks such as `Cohesive.Relations`, `Cohesive.Transitions`, `Cohesive.Processes`, `Cohesive.Presentation`, and `Cohesive.Api` depend on it.
 
+## Canonical execution-definition catalogs
+
+`ExecutionDefinitionDocument` remains the semantic and provenance authority for every canonical execution
+definition. `ExecutionDefinitionDocumentCatalog` is an immutable, integrity-checked index over those documents:
+catalog assembly recomputes fingerprint evidence, rejects duplicate identity/revision occupancy, and orders retained
+documents deterministically. Resolution requires the complete `ExecutionDefinitionReference` identity, revision,
+and fingerprint tuple and returns structured unknown-identity, unknown-revision, or fingerprint-incompatibility
+diagnostics. There is intentionally no partial or latest-revision lookup.
+
+Block-specific catalogs compose this shared identity mechanism while retaining their own projection and linking
+rules. For example, `InteractionContractCatalog` adds typed interaction-kind and Reply-link validation without
+reimplementing exact definition lookup or becoming another contract authority.
+
 ## Canonical execution interactions
 
 `Cohesive.Execution` separates reusable interaction contracts from their runtime emissions.
