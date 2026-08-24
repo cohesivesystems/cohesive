@@ -43,6 +43,9 @@ public sealed record CodeGenCliOptions
     /// </summary>
     public ImmutableArray<TypeScriptExternalTypeModule> ExternalTypeScriptShapeModules { get; init; } = [];
 
+    /// <summary>Runtime TypeScript catalogs derived from named closed-union discriminator cases.</summary>
+    public ImmutableArray<TypeScriptUnionDiscriminatorCatalog> TypeScriptUnionDiscriminatorCatalogs { get; init; } = [];
+
     /// <summary>Representation used to derive contract shapes.</summary>
     public ContractShapeProjection ShapeProjection { get; init; } = ContractShapeProjection.Clr;
 }

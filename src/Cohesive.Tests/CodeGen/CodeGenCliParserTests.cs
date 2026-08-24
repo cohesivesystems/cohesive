@@ -85,4 +85,27 @@ public sealed class CodeGenCliParserTests
         Assert.Null(error);
         Assert.Equal(ContractShapeProjection.CanonicalJson, options!.ShapeProjection);
     }
+
+    [Fact]
+    public void TryParse_RecognizesUnionDiscriminatorCatalogs()
+    {
+        var parsed = CodeGenCliParser.TryParse(
+            [
+                "--contracts", "/tmp/contracts.dll",
+                "--out", "/tmp/generated",
+                "--emit", "shapes",
+                "--module", "sample",
+                "--union-catalog", "ProcessNode=canonicalProcessNodeKinds"
+            ],
+            out var options,
+            out var error,
+            out var showHelp);
+
+        Assert.True(parsed);
+        Assert.False(showHelp);
+        Assert.Null(error);
+        var catalog = Assert.Single(options!.TypeScriptUnionDiscriminatorCatalogs);
+        Assert.Equal("ProcessNode", catalog.UnionTypeName);
+        Assert.Equal("canonicalProcessNodeKinds", catalog.ExportName);
+    }
 }

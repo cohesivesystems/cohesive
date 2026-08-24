@@ -25,7 +25,10 @@ public sealed class TypeScriptShapeEmitter : IShapeCodeEmitter
     /// <inheritdoc />
     public CodeEmission Emit(in ShapeCodeGenerationRequest request)
     {
-        var document = new TypeScriptShapeAstBuilder(request.Graph, options.ExternalTypeModules).Build();
+        var document = new TypeScriptShapeAstBuilder(
+            request.Graph,
+            options.ExternalTypeModules,
+            options.UnionDiscriminatorCatalogs).Build();
         var writer = new PooledCodeWriter(
             initialCapacity: EstimateInitialCapacity(request.Graph),
             indentSize: options.IndentSize,

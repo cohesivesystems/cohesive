@@ -25,6 +25,8 @@ public static class CodeGenUsage
         writer.WriteLine("    Project CLR semantics (default) or canonical JSON wire names and values.");
         writer.WriteLine("  --external-shapes <clr-namespace-prefix>=<typescript-import-path>");
         writer.WriteLine("    Treat matching CLR namespace shapes as owned by another generated TypeScript module.");
+        writer.WriteLine("  --union-catalog <generated-union-type>=<typescript-export-name>");
+        writer.WriteLine("    Emit a readonly runtime catalog derived from a closed union's discriminator cases.");
         writer.WriteLine();
         writer.WriteLine("Supported emit kinds:");
         writer.WriteLine("  shapes");

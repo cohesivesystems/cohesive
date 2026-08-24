@@ -283,6 +283,12 @@ libraries, and test drivers interpret the presentation model.
 When backend IR owns identifiers or roles, frontend packages should consume generated contracts
 rather than handwritten strings or duplicated TypeScript models.
 
+Canonical Process tooling consumes `@cohesivesystems/processes`. Its `ProcessNode` and `ProcessAwaitClause`
+discriminated unions are generated from the persisted CLR union metadata, while its runtime construct catalogs are
+derived from those same union cases. `@cohesivesystems/relations` remains the frontend owner of shared portable
+`Cohesive.Model` contracts such as `Expr`, `TypeRef`, and `ValueContract`; the Process package imports and reexports
+those types instead of creating another semantic model.
+
 ### Identity
 
 Identity describes who or what acts, within which scope, and with which attributable authority.

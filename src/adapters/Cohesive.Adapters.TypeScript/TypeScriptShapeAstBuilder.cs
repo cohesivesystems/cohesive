@@ -14,6 +14,7 @@ public sealed class TypeScriptShapeAstBuilder
 {
     readonly ShapeGraph graph;
     readonly ImmutableArray<TypeScriptExternalTypeModule> externalTypeModules;
+    readonly ImmutableDictionary<TypeId, TypeScriptUnionDiscriminatorCatalog> unionDiscriminatorCatalogs;
     readonly Dictionary<TypeId, string> typeNameById = [];
     readonly HashSet<TypeId> suppressedNamedTypes = [];
 
@@ -22,11 +23,14 @@ public sealed class TypeScriptShapeAstBuilder
     /// </summary>
     public TypeScriptShapeAstBuilder(
         ShapeGraph graph,
-        ImmutableArray<TypeScriptExternalTypeModule> externalTypeModules = default)
+        ImmutableArray<TypeScriptExternalTypeModule> externalTypeModules = default,
+        ImmutableArray<TypeScriptUnionDiscriminatorCatalog> unionDiscriminatorCatalogs = default)
     {
         this.graph = graph ?? throw new ArgumentNullException(nameof(graph));
         this.externalTypeModules = externalTypeModules.IsDefault ? [] : externalTypeModules;
         PrepareTypeNames();
+        this.unionDiscriminatorCatalogs = PrepareUnionDiscriminatorCatalogs(
+            unionDiscriminatorCatalogs.IsDefault ? [] : unionDiscriminatorCatalogs);
     }
 
     /// <summary>
@@ -45,6 +49,11 @@ public sealed class TypeScriptShapeAstBuilder
                 continue;
 
             statements.Add(TranslateNamedType(namedType));
+            if (namedType is TypeDefinition.Union union
+                && unionDiscriminatorCatalogs.TryGetValue(union.Id, out var catalog))
+            {
+                statements.Add(BuildUnionDiscriminatorCatalog(union, catalog));
+            }
             if (namedType is TypeDefinition.Enum @enum)
             {
                 statements.Add(BuildEnumValueMap(@enum));
@@ -61,6 +70,63 @@ public sealed class TypeScriptShapeAstBuilder
         }
 
         return new TsDocument(statements.ToImmutable());
+    }
+
+    ImmutableDictionary<TypeId, TypeScriptUnionDiscriminatorCatalog> PrepareUnionDiscriminatorCatalogs(
+        ImmutableArray<TypeScriptUnionDiscriminatorCatalog> catalogs)
+    {
+        if (catalogs.IsDefaultOrEmpty)
+            return ImmutableDictionary<TypeId, TypeScriptUnionDiscriminatorCatalog>.Empty;
+
+        Dictionary<string, TypeDefinition.Union> unionsByName = new(StringComparer.Ordinal);
+        for (var i = 0; i < graph.NamedTypes.Length; i++)
+        {
+            if (graph.NamedTypes[i] is not TypeDefinition.Union union)
+                continue;
+
+            var typeName = ResolveDefinitionName(union.Id);
+            if (!unionsByName.TryAdd(typeName, union))
+            {
+                throw new InvalidOperationException(
+                    $"Generated TypeScript union name '{typeName}' is ambiguous and cannot own a discriminator catalog.");
+            }
+        }
+
+        Dictionary<TypeId, TypeScriptUnionDiscriminatorCatalog> byType = [];
+        HashSet<string> exportNames = new(StringComparer.Ordinal);
+        for (var i = 0; i < catalogs.Length; i++)
+        {
+            var catalog = catalogs[i] ?? throw new InvalidOperationException(
+                "A TypeScript union discriminator catalog declaration cannot be null.");
+            if (string.IsNullOrWhiteSpace(catalog.UnionTypeName))
+                throw new InvalidOperationException("A TypeScript union discriminator catalog requires a union type name.");
+            if (string.IsNullOrWhiteSpace(catalog.ExportName))
+                throw new InvalidOperationException("A TypeScript union discriminator catalog requires an export name.");
+            if (!unionsByName.TryGetValue(catalog.UnionTypeName, out var union))
+            {
+                throw new InvalidOperationException(
+                    $"TypeScript union discriminator catalog '{catalog.ExportName}' references unknown closed union " +
+                    $"'{catalog.UnionTypeName}'.");
+            }
+            if (IsExternalType(union.Id))
+            {
+                throw new InvalidOperationException(
+                    $"TypeScript union discriminator catalog '{catalog.ExportName}' cannot be emitted for external union " +
+                    $"'{catalog.UnionTypeName}'.");
+            }
+            if (!exportNames.Add(catalog.ExportName))
+            {
+                throw new InvalidOperationException(
+                    $"TypeScript union discriminator catalog export '{catalog.ExportName}' is declared more than once.");
+            }
+            if (!byType.TryAdd(union.Id, catalog))
+            {
+                throw new InvalidOperationException(
+                    $"TypeScript union '{catalog.UnionTypeName}' declares more than one discriminator catalog.");
+            }
+        }
+
+        return byType.ToImmutableDictionary();
     }
 
     Dictionary<string, SortedSet<string>> CollectExternalTypeNamesByImportPath()
@@ -537,6 +603,39 @@ public sealed class TypeScriptShapeAstBuilder
         return members.Count == 1
             ? members[0]
             : new TsUnionType(members.ToImmutable());
+    }
+
+    TsStatement BuildUnionDiscriminatorCatalog(
+        TypeDefinition.Union union,
+        TypeScriptUnionDiscriminatorCatalog catalog)
+    {
+        var values = union.Cases
+            .OrderBy(static unionCase => unionCase.DiscriminatorValue, StringComparer.Ordinal)
+            .Select(unionCase => BuildDiscriminatorLiteralExpression(
+                union.Discriminator.Type,
+                unionCase.DiscriminatorValue))
+            .ToImmutableArray();
+        var typeName = ResolveDefinitionName(union.Id);
+        var discriminatorName = System.Text.Json.JsonSerializer.Serialize(union.Discriminator.FieldName);
+        return new TsConstDeclaration(
+            name: catalog.ExportName,
+            initializer: new TsArrayLiteralExpression(values),
+            satisfiesType: new TsRawType($"readonly {typeName}[{discriminatorName}][]"),
+            asConst: true);
+    }
+
+    static TsExpression BuildDiscriminatorLiteralExpression(PrimitiveType primitiveType, string value)
+    {
+        if ((primitiveType == PrimitiveType.Int32 || primitiveType == PrimitiveType.Int64)
+            && long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numeric))
+        {
+            return new TsNumberLiteralExpression(numeric);
+        }
+
+        if (primitiveType == PrimitiveType.Bool && bool.TryParse(value, out var boolean))
+            return new TsBooleanLiteralExpression(boolean);
+
+        return new TsStringLiteralExpression(value);
     }
 
     TsTypeNode TranslateUnionCase(TypeDefinition.Union union, UnionCase unionCase)
