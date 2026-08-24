@@ -529,9 +529,15 @@ public sealed record ExecutionDefinitionCompatibilityDeclaration
     }
 }
 
-/// <summary>Stable diagnostic codes emitted while checking execution-definition compatibility.</summary>
+/// <summary>Stable diagnostic codes emitted while reading, cataloging, and validating execution definitions.</summary>
 public static class ExecutionDefinitionDiagnosticCodes
 {
+    /// <summary>A definition-catalog input is null and cannot establish canonical definition evidence.</summary>
+    public const string CatalogDocumentInvalid = "execution.definition.catalog.document.invalid";
+
+    /// <summary>More than one catalog document occupies the same definition identity and semantic revision.</summary>
+    public const string CatalogRevisionDuplicate = "execution.definition.catalog.revision.duplicate";
+
     /// <summary>The supplied execution-definition JSON is empty.</summary>
     public const string JsonEmpty = "execution.definition.json.empty";
 
