@@ -8,6 +8,9 @@ import type {
 } from './module'
 import {
   type ProcessTask,
+  createProcessTaskLifecycle,
+  processTaskLifecycleDiagnosticCodes,
+  type ProcessTaskLifecycleDeclaration,
   type ProcessTaskMetadata,
   type ProcessTaskSelector,
   type ProcessTaskStartRegistration,
@@ -52,6 +55,7 @@ export interface ProjectProcessTaskStartRegistrationOptions {
   readonly detailsHref?: string | null
   readonly failureMessage?: string | null
   readonly invalidateQueryKeys?: readonly (readonly unknown[])[]
+  readonly lifecycle?: ProcessTaskLifecycleDeclaration | null
   readonly metadata?: ProcessTaskMetadata
   readonly processTypeLabel?: string | null
   readonly processTypeTone?: string | null
@@ -145,6 +149,7 @@ export function projectProcessTaskStartRegistration({
   detailsHref,
   failureMessage,
   invalidateQueryKeys,
+  lifecycle,
   metadata,
   processTypeLabel,
   processTypeTone,
@@ -173,6 +178,14 @@ export function projectProcessTaskStartRegistration({
     detailsHref: detailsHref ?? projectActionResultHref({ action, createHref, result }),
     failureMessage,
     invalidateQueryKeys: invalidateQueryKeys ?? actionInvalidateQueryKeys,
+    lifecycle: createProcessTaskLifecycle(lifecycle ?? {
+      diagnosticCodes: [processTaskLifecycleDiagnosticCodes.optimisticStart],
+      isActive: true,
+      isFailure: false,
+      isProgressing: true,
+      isTerminal: false,
+      tone: 'info',
+    }),
     metadata: {
       ...selectorMetadata,
       ...readConventionalProcessTaskMetadata(result),

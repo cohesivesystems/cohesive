@@ -1,8 +1,52 @@
 export type ProcessTaskType = string
-export type ProcessLifecycleStatus = 'pending' | 'running' | 'waiting' | 'success' | 'error' | 'paused'
 export type ProcessTaskMetadataSelector = Partial<{
   readonly [K in keyof ProcessTaskMetadata]: ProcessTaskMetadata[K]
 }>
+
+/**
+ * Stable diagnostic identifiers emitted while projecting declared Process
+ * lifecycle evidence into a presentation task.
+ *
+ * These codes describe the completeness and internal consistency of evidence;
+ * they are not a parallel catalog of canonical Process statuses.
+ */
+export const processTaskLifecycleDiagnosticCodes = {
+  activeAndTerminal: 'process.task.lifecycle.active-and-terminal',
+  failureWhileNonTerminal: 'process.task.lifecycle.failure-while-non-terminal',
+  incomplete: 'process.task.lifecycle.incomplete',
+  notDisclosed: 'process.task.lifecycle.not-disclosed',
+  optimisticStart: 'process.task.lifecycle.optimistic-start',
+  progressingWhileInactive: 'process.task.lifecycle.progressing-while-inactive',
+  terminalAndProgressing: 'process.task.lifecycle.terminal-and-progressing',
+} as const
+
+/**
+ * Runtime- or backend-declared lifecycle evidence used by generic Process task
+ * presentation. Null means that the authority did not establish the fact.
+ */
+export interface ProcessTaskLifecycleDeclaration {
+  readonly diagnosticCodes?: readonly string[] | null
+  readonly isActive?: boolean | null
+  readonly isFailure?: boolean | null
+  readonly isProgressing?: boolean | null
+  readonly isTerminal?: boolean | null
+  readonly tone?: string | null
+}
+
+/**
+ * Normalized lifecycle evidence retained on a Process task.
+ *
+ * Presentation runtimes consume these declared facts without interpreting
+ * status strings, timestamps, labels, failure text, or target-specific enums.
+ */
+export interface ProcessTaskLifecycle {
+  readonly diagnosticCodes: readonly string[]
+  readonly isActive: boolean | null
+  readonly isFailure: boolean | null
+  readonly isProgressing: boolean | null
+  readonly isTerminal: boolean | null
+  readonly tone: string | null
+}
 
 export interface ProcessTaskMetadata {
   readonly correlationId?: string | null
@@ -21,7 +65,7 @@ export interface ProcessTask {
   readonly title: string
   readonly status: string
   readonly statusLabel: string
-  readonly lifecycleStatus: ProcessLifecycleStatus
+  readonly lifecycle: ProcessTaskLifecycle
   readonly startedAtUtc?: string | null
   readonly updatedAtUtc?: string | null
   readonly completedAtUtc?: string | null
@@ -51,6 +95,7 @@ export interface ProcessTaskStartRegistration {
   readonly detailsHref?: string | null
   readonly failureMessage?: string | null
   readonly invalidateQueryKeys?: readonly (readonly unknown[])[]
+  readonly lifecycle: ProcessTaskLifecycle
   readonly metadata?: ProcessTaskMetadata
   readonly processId: string
   readonly processName?: string | null
@@ -80,7 +125,18 @@ export interface ProcessTaskToast {
 }
 
 export function isProcessTaskTerminal(task: ProcessTask) {
-  return isTerminalProcessStatus(task.status, task.completedAtUtc)
+  return task.lifecycle.isTerminal === true &&
+    task.lifecycle.isActive === false &&
+    task.lifecycle.isProgressing === false
+}
+
+/**
+ * Returns whether a task may still be active according to declared lifecycle
+ * evidence. Unknown evidence remains potentially active so an active-only
+ * admission check cannot accidentally admit a duplicate Process start.
+ */
+export function isProcessTaskPotentiallyActive(task: ProcessTask) {
+  return !isProcessTaskTerminal(task)
 }
 
 export function findProcessTask(
@@ -101,7 +157,7 @@ export function matchesProcessTaskSelector(
   task: ProcessTask,
   selector: ProcessTaskSelector,
 ) {
-  if (selector.activeOnly && isProcessTaskTerminal(task)) {
+  if (selector.activeOnly && !isProcessTaskPotentiallyActive(task)) {
     return false
   }
 
@@ -112,16 +168,62 @@ export function matchesProcessTaskSelector(
   return matchesProcessTaskMetadataSelector(task.metadata, selector.metadata)
 }
 
-export function isTerminalProcessStatus(status: string, completedAtUtc?: string | null) {
-  if (['Completed', 'Failed', 'Cancelled', 'Canceled', 'Terminated'].includes(status)) {
-    return true
+/**
+ * Normalizes target-declared lifecycle evidence and records incomplete or
+ * contradictory facts without changing their meaning.
+ */
+export function createProcessTaskLifecycle(
+  declaration?: ProcessTaskLifecycleDeclaration | null,
+): ProcessTaskLifecycle {
+  if (!declaration) {
+    return {
+      diagnosticCodes: [processTaskLifecycleDiagnosticCodes.notDisclosed],
+      isActive: null,
+      isFailure: null,
+      isProgressing: null,
+      isTerminal: null,
+      tone: null,
+    }
   }
 
-  if (['Pending', 'Running', 'Waiting', 'Suspended'].includes(status)) {
-    return false
+  const lifecycle: Omit<ProcessTaskLifecycle, 'diagnosticCodes'> = {
+    isActive: declaration.isActive ?? null,
+    isFailure: declaration.isFailure ?? null,
+    isProgressing: declaration.isProgressing ?? null,
+    isTerminal: declaration.isTerminal ?? null,
+    tone: declaration.tone ?? null,
+  }
+  const diagnosticCodes = new Set(declaration.diagnosticCodes ?? [])
+
+  if (
+    lifecycle.isActive === null ||
+    lifecycle.isFailure === null ||
+    lifecycle.isProgressing === null ||
+    lifecycle.isTerminal === null
+  ) {
+    diagnosticCodes.add(processTaskLifecycleDiagnosticCodes.incomplete)
   }
 
-  return Boolean(completedAtUtc)
+  if (lifecycle.isActive === true && lifecycle.isTerminal === true) {
+    diagnosticCodes.add(processTaskLifecycleDiagnosticCodes.activeAndTerminal)
+  }
+
+  if (lifecycle.isFailure === true && lifecycle.isTerminal === false) {
+    diagnosticCodes.add(processTaskLifecycleDiagnosticCodes.failureWhileNonTerminal)
+  }
+
+  if (lifecycle.isProgressing === true && lifecycle.isActive === false) {
+    diagnosticCodes.add(processTaskLifecycleDiagnosticCodes.progressingWhileInactive)
+  }
+
+  if (lifecycle.isProgressing === true && lifecycle.isTerminal === true) {
+    diagnosticCodes.add(processTaskLifecycleDiagnosticCodes.terminalAndProgressing)
+  }
+
+  return {
+    ...lifecycle,
+    diagnosticCodes: Array.from(diagnosticCodes),
+  }
 }
 
 function matchesProcessTaskMetadataSelector(
