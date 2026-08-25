@@ -24,3 +24,20 @@ Package boundaries should preserve the semantic model:
   and tokens.
 - `@cohesivesystems/presentation-monaco` contains framework-neutral Monaco projection
   model helpers.
+
+## Process task lifecycle evidence
+
+Generic Process task presentation consumes an explicit lifecycle projection
+declared by the runtime or product backend. The projection independently states
+whether a task is active, progressing, terminal, or failed and retains
+diagnostic codes for missing or contradictory evidence. Presentation packages
+must not reconstruct those facts from target-specific status names, completion
+timestamps, display tones, labels, or failure messages.
+
+Unknown or contradictory lifecycle evidence remains potentially active for
+admission and task selection. A task is conclusively terminal only when the
+authority declares it terminal, inactive, and not progressing. This
+intentionally favors preventing duplicate Process starts over assuming that an
+unclassified task is terminal. A successful local start may use the shared
+provisional-start projection, but the first polled authoritative projection
+replaces it as one unit.

@@ -190,10 +190,10 @@ function resolveProcessTaskNoticeClassName({
 }) {
   const projectedTone = statusField
     ? resolvePresentationFieldValueTone(statusField, task.status)
-    : null
+    : task.lifecycle.tone
   const toneClassName = projectedTone
     ? designSystem.classNames.statusNotice.tone({ tone: projectedTone })
-    : getNoticeToneClass(task)
+    : designSystem.classNames.statusNotice.tone({ tone: 'info' })
 
   return cn('rounded-lg border px-4 py-3 text-sm', toneClassName)
 }
@@ -265,7 +265,7 @@ function ProjectedProcessTaskStatusIcon({
   readonly statusField?: FieldPresentationDefinition | null
   readonly task: ProcessTask
 }) {
-  const className = task.lifecycleStatus === 'pending' || task.lifecycleStatus === 'running'
+  const className = task.lifecycle.isProgressing === true
     ? 'mt-0.5 size-4 shrink-0 animate-spin'
     : 'mt-0.5 size-4 shrink-0'
 
@@ -280,8 +280,9 @@ function ProjectedProcessTaskStatusIcon({
 
   return renderProcessStatusIcon({
     className,
+    isProgressing: task.lifecycle.isProgressing,
     module,
-    status: task.lifecycleStatus,
+    tone: task.lifecycle.tone,
   })
 }
 
@@ -479,21 +480,6 @@ function resolveProcessTaskNoticeActionVariant(
   }
 
   return 'outline'
-}
-
-function getNoticeToneClass(task: ProcessTask) {
-  switch (task.lifecycleStatus) {
-    case 'success':
-      return 'border-teal-300/50 bg-teal-50 text-teal-800'
-    case 'error':
-      return 'border-red-300/60 bg-red-50 text-red-800'
-    case 'waiting':
-    case 'paused':
-      return 'border-amber-300/50 bg-amber-50 text-amber-900'
-    case 'pending':
-    case 'running':
-      return 'border-sky-300/50 bg-sky-50 text-sky-800'
-  }
 }
 
 function cn(...values: readonly (false | null | string | undefined)[]) {

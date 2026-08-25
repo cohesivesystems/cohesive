@@ -66,16 +66,16 @@ export function renderProcessIcon({
 
 export function renderProcessStatusIcon({
   className = 'size-4 shrink-0',
+  isProgressing,
   module,
-  status,
   tone,
 }: {
   readonly className?: string
+  readonly isProgressing?: boolean | null
   readonly module?: PresentationIconModuleProjection | null
-  readonly status?: ProcessTask['lifecycleStatus'] | string | null
   readonly tone?: ProcessStatusTone | string | null
 }): ReactNode {
-  const icon = resolveProcessStatusIconId({ status, tone })
+  const icon = resolveProcessStatusIconId({ isProgressing, tone })
   return renderProcessIcon({
     className: `${className} ${resolveProcessStatusIconToneClass(icon)}`,
     fallbackIcon: resolveProcessStatusFallbackIcon(icon),
@@ -127,33 +127,35 @@ export function renderProcessToastToneIcon({
 }
 
 export function resolveProcessStatusIconId({
-  status,
+  isProgressing,
   tone,
 }: {
-  readonly status?: ProcessTask['lifecycleStatus'] | string | null
+  readonly isProgressing?: boolean | null
   readonly tone?: ProcessStatusTone | string | null
 }) {
-  if (tone === 'success' || status === 'success') {
+  if (tone === 'success') {
     return processIconIds.statusSuccess
   }
 
-  if (tone === 'danger' || tone === 'error' || status === 'error') {
+  if (tone === 'danger' || tone === 'error') {
     return processIconIds.statusError
   }
 
   if (
-    tone === 'warning' ||
-    status === 'paused' ||
-    status === 'waiting'
+    tone === 'warning'
   ) {
     return processIconIds.statusWarning
   }
 
-  if (tone === 'info') {
+  if (isProgressing === true) {
+    return processIconIds.statusRunning
+  }
+
+  if (tone === 'info' || tone === 'default' || tone === 'muted') {
     return processIconIds.statusInfo
   }
 
-  return processIconIds.statusRunning
+  return processIconIds.statusInfo
 }
 
 export function resolveProcessToastToneIconId(tone: ProcessToastTone) {
@@ -175,7 +177,10 @@ export function resolveProcessTaskNoticeIconSubjects(
 ): readonly PresentationIconDiagnosticSubject[] {
   const statusIcon = statusField
     ? resolvePresentationFieldValueIcon(statusField, task.status)
-    : resolveProcessStatusIconId({ status: task.lifecycleStatus })
+    : resolveProcessStatusIconId({
+      isProgressing: task.lifecycle.isProgressing,
+      tone: task.lifecycle.tone,
+    })
   const subjects: PresentationIconDiagnosticSubject[] = [
     ...(statusIcon ? [{
       details: {
