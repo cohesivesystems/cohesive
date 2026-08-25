@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Cohesive.Api\Cohesive.Api.csproj" />
+    <ProjectReference Include="..\Cohesive.Api.Execution\Cohesive.Api.Execution.csproj" />
     <ProjectReference Include="..\Cohesive.Processes\Cohesive.Processes.csproj" />
   </ItemGroup>
 

@@ -7,9 +7,9 @@ Package boundaries should preserve the semantic model:
 
 - `@cohesivesystems/presentation-contracts` exports generated TypeScript contracts for
   `Cohesive.Presentation`.
-- `@cohesivesystems/processes` exports generated canonical Process definitions, execution status and trace
-  contracts, closed node/clause unions, and runtime discriminator inventories. Shared portable model contracts come from
-  `@cohesivesystems/relations` rather than being regenerated.
+- `@cohesivesystems/processes` exports generated canonical Process definitions, inspect results, execution status,
+  explanation and trace contracts, closed node/clause unions, and runtime discriminator inventories. Shared portable
+  model contracts come from `@cohesivesystems/relations` rather than being regenerated.
 - `@cohesivesystems/processes-presentation` projects an exact canonical Process document into a deterministic,
   immutable semantic graph and joins exact status/trace evidence into a separate immutable runtime overlay. It owns
   no layout or renderer state and retains canonical identities, references, source evidence, disclosure state, and

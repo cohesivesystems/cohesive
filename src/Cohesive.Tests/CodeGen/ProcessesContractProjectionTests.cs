@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Cohesive.Adapters.TypeScript;
 using Cohesive.CodeGen;
 using Cohesive.CodeGen.Cli;
+using Cohesive.Api.Execution;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Processes.Compilation;
@@ -25,6 +26,10 @@ public sealed class ProcessesContractProjectionTests
             shape.Id.Value.EndsWith(nameof(ExecutionDefinitionDocument), StringComparison.Ordinal));
         Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(ExecutionStatus), StringComparison.Ordinal));
+        Assert.Contains(graph.Shapes, shape =>
+            shape.Id.Value.EndsWith(nameof(ExecutionControlResult), StringComparison.Ordinal));
+        Assert.Contains(graph.Shapes, shape =>
+            shape.Id.Value.EndsWith(nameof(ExecutionExplainArtifact), StringComparison.Ordinal));
         Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(ProcessExecutionTraceArtifact), StringComparison.Ordinal));
 
@@ -87,6 +92,9 @@ public sealed class ProcessesContractProjectionTests
             StringComparison.Ordinal);
         Assert.Contains("export interface ExecutionDefinitionDocument", text, StringComparison.Ordinal);
         Assert.Contains("export interface ExecutionStatus", text, StringComparison.Ordinal);
+        Assert.Contains("export interface ExecutionControlResult", text, StringComparison.Ordinal);
+        Assert.Contains("export interface ExecutionExplainArtifact", text, StringComparison.Ordinal);
+        Assert.Contains("runtimeStatus?: ExecutionStatus | null;", text, StringComparison.Ordinal);
         Assert.Contains("export interface ExecutionRuntimeStatusDetails", text, StringComparison.Ordinal);
         Assert.Contains("export interface ExecutionTokenStatus", text, StringComparison.Ordinal);
         Assert.Contains("export interface ExecutionWaitStatus", text, StringComparison.Ordinal);

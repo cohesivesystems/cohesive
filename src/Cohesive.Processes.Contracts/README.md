@@ -1,14 +1,18 @@
 # Cohesive.Processes.Contracts
 
-Code-generation roots for the canonical Process definition and its persisted execution-definition envelope.
+Code-generation roots for canonical Process definitions and portable execution-observation documents.
 
 ## Use When
 
 - You need generated frontend contracts for exact canonical Process documents.
+- You need the exact wire contracts returned by Process inspect, explanation, or retained-trace endpoints.
 - You need the closed `ProcessNode` and `ProcessAwaitClause` unions with runtime discriminator inventories.
 - You are building Process inspection, visualization, or authoring tooling without recreating Process IR in a UI.
 
-The CLR `ProcessDefinition`, `ProcessNode`, and `ProcessAwaitClause` declarations remain the semantic authority.
+The CLR `ProcessDefinition`, `ProcessNode`, `ProcessAwaitClause`, execution status, control result, explanation, and
+trace declarations remain semantic authority. `ExecutionControlResult`, `ExecutionExplainArtifact`,
+`ExecutionStatus`, and `ProcessExecutionTraceArtifact` are generated from those declarations rather than recreated
+by individual products.
 The persisted `JsonDerivedType` metadata owns each closed-union inventory. This assembly only roots those types for
 generation; it defines no parallel DTOs, node kinds, or execution behavior.
 
@@ -39,6 +43,10 @@ the .NET execution-definition serializer and validator.
 
 Types owned by `Cohesive.Model`, including `ValueContract`, `Expr`, and `TypeRef`, are imported from
 `@cohesivesystems/relations`. The Process package does not duplicate that shared portable semantic model.
+
+ASP.NET Process observation endpoints serialize these contracts with the same strict canonical JSON conventions used
+for generation: lower-camel properties, scalar value objects, string enums, and a closed unknown-field policy. Host
+JSON naming settings do not redefine that wire contract.
 
 ## Related Packages
 
