@@ -29,7 +29,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "Renderer-neutral semantic graph projection for canonical Cohesive Processes.",
+  "description": "Renderer-neutral semantic graph and runtime evidence projection for canonical Cohesive Processes.",
   "keywords": [
     "cohesive",
     "processes",

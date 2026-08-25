@@ -18,6 +18,14 @@ import {
   type ProcessRequestOutcomeBranch,
   type ValueContract,
 } from '@cohesivesystems/processes'
+import {
+  cloneWireValue,
+  deepFreeze,
+  isRecord,
+  type DeepReadonly,
+} from './process-presentation-values'
+
+export type { DeepReadonly } from './process-presentation-values'
 
 export const canonicalProcessPresentationCompatibility = Object.freeze({
   definitionKind: 'process',
@@ -148,15 +156,6 @@ export interface ProcessPresentationProjectionResult {
   readonly diagnostics: readonly ProcessPresentationDiagnostic[]
   readonly graph: ProcessPresentationGraph | null
 }
-
-export type DeepReadonly<T> =
-  T extends (...args: never[]) => unknown
-    ? T
-    : T extends readonly (infer TItem)[]
-      ? readonly DeepReadonly<TItem>[]
-      : T extends object
-        ? { readonly [TKey in keyof T]: DeepReadonly<T[TKey]> }
-        : T
 
 interface MutableElementDetails {
   definitionReferences: ProcessPresentationDefinitionEvidence[]
@@ -1492,10 +1491,6 @@ function isCanonicalProcessAwaitClauseKind(value: string): value is CanonicalPro
   return (canonicalProcessAwaitClauseKinds as readonly string[]).includes(value)
 }
 
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null
 }
@@ -1516,43 +1511,4 @@ function formatPath(path: readonly string[]) {
   return path.length === 0
     ? '/'
     : `/${path.map((segment) => segment.replaceAll('~', '~0').replaceAll('/', '~1')).join('/')}`
-}
-
-function cloneWireValue<T>(value: T): DeepReadonly<T> {
-  return cloneWireValueCore(value, new WeakMap()) as DeepReadonly<T>
-}
-
-function cloneWireValueCore(value: unknown, seen: WeakMap<object, unknown>): unknown {
-  if (typeof value !== 'object' || value === null) {
-    return value
-  }
-  const existing = seen.get(value)
-  if (existing !== undefined) {
-    return existing
-  }
-  if (Array.isArray(value)) {
-    const clone: unknown[] = []
-    seen.set(value, clone)
-    for (const item of value) {
-      clone.push(cloneWireValueCore(item, seen))
-    }
-    return Object.freeze(clone)
-  }
-
-  const clone: Record<string, unknown> = {}
-  seen.set(value, clone)
-  for (const [key, item] of Object.entries(value)) {
-    clone[key] = cloneWireValueCore(item, seen)
-  }
-  return Object.freeze(clone)
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) {
-    return value
-  }
-  for (const nested of Object.values(value)) {
-    deepFreeze(nested)
-  }
-  return Object.freeze(value)
 }

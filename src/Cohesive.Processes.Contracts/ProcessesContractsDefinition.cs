@@ -10,8 +10,8 @@ namespace Cohesive.Processes.Contracts;
 public static class ProcessesContractsDefinition
 {
     /// <summary>
-    /// API definition used only to expose the canonical Process payload and its persisted execution envelope to
-    /// contract code generation.
+    /// API definition used only to expose the canonical Process payload, portable execution status, and retained
+    /// trace evidence to contract code generation.
     /// </summary>
     [ApiDefinition]
     public static ApiDefinition Definition { get; } = ApiDefinition.From(
@@ -26,6 +26,12 @@ public static class ProcessesContractsDefinition
             .Action("ExecutionDefinitionDocument")
             .Route("GET", "/processes/contracts/execution-definition-document")
             .Returns<ExecutionDefinitionDocument>()
+            .Build(),
+        CohesiveApi
+            .Define("ProcessesContracts")
+            .Action("ExecutionStatus")
+            .Route("GET", "/processes/contracts/execution-status")
+            .Returns<ExecutionStatus>()
             .Build(),
         CohesiveApi
             .Define("ProcessesContracts")

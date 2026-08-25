@@ -290,10 +290,11 @@ derived from those same union cases. `@cohesivesystems/relations` remains the fr
 those types instead of creating another semantic model.
 
 Operator tooling can consume `@cohesivesystems/processes-presentation` for a pure projection from one admitted
-canonical Process document to a semantic graph. The package retains canonical identities and evidence and accounts
-for every generated construct kind, but deliberately excludes layout, ReactFlow, application navigation, and
-product-specific presentation policy. Those remain interpretations of the derived graph rather than additions to
-Process authority.
+canonical Process document to a semantic graph, then join exact generated status and trace evidence into a separate
+runtime overlay. The package retains canonical identities, disclosure and lineage evidence, accounts for every
+generated construct kind or unmatched runtime reference, and never derives completion from absence. It deliberately
+excludes layout, ReactFlow, polling, application navigation, and product-specific presentation policy. Those remain
+interpretations of the derived graph and overlay rather than additions to Process authority.
 
 ### Identity
 
