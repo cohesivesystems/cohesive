@@ -1,6 +1,7 @@
 using Cohesive.Api;
 using Cohesive.Api.Execution;
 using Cohesive.Execution;
+using Cohesive.Model.Serialization;
 using Cohesive.Processes.Runtime;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -119,11 +120,15 @@ public static partial class ProcessExecutionReadApiEndpointRouteBuilderExtension
 
             EnsureStatusAffinity(status, processInstanceId);
             var success = GetHttpResult(operation, ApiResultKind.Success);
-            return Results.Json(
-                new ExecutionControlResult(ProcessControlDecisionDisposition.Inspected, status),
-                options: null,
-                contentType: success.Http!.ContentType ?? "application/json",
-                statusCode: success.Http.StatusCode);
+            var result = new ExecutionControlResult(
+                ProcessControlDecisionDisposition.Inspected,
+                status);
+            return new CanonicalProcessExecutionJsonResult(
+                StrictDocumentJson.GetCanonicalBytes(
+                    result,
+                    StrictDocumentJson.CreateOptions()),
+                success.Http!.StatusCode,
+                success.Http.ContentType ?? "application/json");
         };
 
     static void EnsureStatusAffinity(

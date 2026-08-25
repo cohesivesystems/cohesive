@@ -4,6 +4,7 @@ using Cohesive.Adapters.AspNet.Processes;
 using Cohesive.Api;
 using Cohesive.Api.Execution;
 using Cohesive.Execution;
+using Cohesive.Model.Serialization;
 using Cohesive.Processes.Runtime;
 using Cohesive.Tests.ExecutionKernel;
 using Microsoft.AspNetCore.Authorization;
@@ -33,6 +34,11 @@ public sealed class ProcessExecutionInspectApiEndpointRouteBuilderExtensionsTest
         ProcessInstanceId resolvedInstance = default;
         var catalog = ExecutionControlApiCatalog.Create();
         var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.ConfigureHttpJsonOptions(static options =>
+        {
+            options.SerializerOptions.PropertyNamingPolicy = null;
+            options.SerializerOptions.DictionaryKeyPolicy = null;
+        });
         builder.Services.AddSingleton(operationContext);
         builder.Services.AddSingleton<IProcessExecutionRepository>(repository);
         await using var app = builder.Build();
@@ -58,13 +64,30 @@ public sealed class ProcessExecutionInspectApiEndpointRouteBuilderExtensionsTest
         Assert.Equal(StatusCodes.Status200OK, response.StatusCode);
         Assert.Equal("application/json", response.ContentType);
         Assert.DoesNotContain("physical/private", Encoding.UTF8.GetString(response.Body), StringComparison.Ordinal);
-        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var jsonOptions = StrictDocumentJson.CreateOptions();
+        var expected = new ExecutionControlResult(
+            ProcessControlDecisionDisposition.Inspected,
+            status);
+        Assert.Equal(
+            StrictDocumentJson.GetCanonicalBytes(expected, jsonOptions),
+            response.Body);
+        using var document = JsonDocument.Parse(response.Body);
+        Assert.Equal("Inspected", document.RootElement.GetProperty("disposition").GetString());
+        Assert.False(document.RootElement.TryGetProperty("Disposition", out _));
+        var statusDocument = document.RootElement.GetProperty("status");
+        Assert.Equal(
+            ExecutionStatus.CurrentSchemaVersion.Value,
+            statusDocument.GetProperty("schemaVersion").GetString());
+        Assert.Equal(
+            status.ProcessInstanceId.Value,
+            statusDocument.GetProperty("processInstanceId").GetString());
+        Assert.Equal(status.ControlMode.ToString(), statusDocument.GetProperty("controlMode").GetString());
         var result = JsonSerializer.Deserialize<ExecutionControlResult>(response.Body, jsonOptions);
         Assert.NotNull(result);
         Assert.Equal(ProcessControlDecisionDisposition.Inspected, result.Disposition);
         Assert.Equal(
-            JsonSerializer.Serialize(status, jsonOptions),
-            JsonSerializer.Serialize(result.Status, jsonOptions));
+            StrictDocumentJson.GetCanonicalBytes(status, jsonOptions),
+            StrictDocumentJson.GetCanonicalBytes(result.Status, jsonOptions));
         Assert.Null(result.Receipt);
         Assert.Empty(result.DiagnosticCodes);
         Assert.Same(operationContext, resolvedContext);

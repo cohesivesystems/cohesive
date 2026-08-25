@@ -1,4 +1,5 @@
 using Cohesive.Api;
+using Cohesive.Api.Execution;
 using Cohesive.Execution;
 using Cohesive.Processes.IR;
 using Cohesive.Processes.Runtime;
@@ -10,8 +11,8 @@ namespace Cohesive.Processes.Contracts;
 public static class ProcessesContractsDefinition
 {
     /// <summary>
-    /// API definition used only to expose the canonical Process payload, portable execution status, and retained
-    /// trace evidence to contract code generation.
+    /// API definition used only to expose the canonical Process payload and portable observation evidence to
+    /// contract code generation.
     /// </summary>
     [ApiDefinition]
     public static ApiDefinition Definition { get; } = ApiDefinition.From(
@@ -32,6 +33,18 @@ public static class ProcessesContractsDefinition
             .Action("ExecutionStatus")
             .Route("GET", "/processes/contracts/execution-status")
             .Returns<ExecutionStatus>()
+            .Build(),
+        CohesiveApi
+            .Define("ProcessesContracts")
+            .Action("ExecutionControlResult")
+            .Route("GET", "/processes/contracts/execution-control-result")
+            .Returns<ExecutionControlResult>()
+            .Build(),
+        CohesiveApi
+            .Define("ProcessesContracts")
+            .Action("ExecutionExplainArtifact")
+            .Route("GET", "/processes/contracts/execution-explain-artifact")
+            .Returns<ExecutionExplainArtifact>()
             .Build(),
         CohesiveApi
             .Define("ProcessesContracts")

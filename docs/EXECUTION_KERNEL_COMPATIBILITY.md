@@ -519,8 +519,9 @@ guessing at runtime construction semantics.
 than the application-authoring default. Every frontend returns only the canonical execution-definition document and
 validation result. Direct IR, generated C#, and advanced builder definitions normalize to the same fingerprint.
 
-`Cohesive.Processes.Contracts` roots the exact execution envelope and typed Process payload for code generation.
-The generated `@cohesivesystems/processes` package preserves the closed node and AwaitMatch-clause unions, stable
+`Cohesive.Processes.Contracts` roots the exact execution envelope, typed Process payload, and portable inspect,
+status, explanation, and retained-trace observation contracts for code generation. The generated
+`@cohesivesystems/processes` package preserves the closed node and AwaitMatch-clause unions, stable
 identities, edges, policies, child references, interaction contracts, and source-map structures. Runtime construct
 catalogs are projected from the union cases themselves and are checked against the reflection-derived compiler
 inventory, so a newly declared construct cannot disappear from frontend conformance merely because no fixture used
