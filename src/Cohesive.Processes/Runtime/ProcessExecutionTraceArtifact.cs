@@ -31,7 +31,7 @@ public sealed record ProcessExecutionTraceArtifact
 {
     /// <summary>Current portable Process trace-artifact schema.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
-        new("cohesive-process-execution-traces/v1");
+        new("cohesive-process-execution-traces/v2");
 
     /// <summary>Creates one portable Process trace artifact.</summary>
     /// <param name="schemaVersion">Exact Process trace-artifact schema.</param>

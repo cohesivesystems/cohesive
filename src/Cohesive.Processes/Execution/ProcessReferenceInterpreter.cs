@@ -655,7 +655,8 @@ public static partial class ProcessReferenceInterpreter
                     ProcessTraceEventKind.ChildCancellationSettled,
                     traceToken,
                     child.Node,
-                    detail: closure.Outcome.ToString());
+                    detail: closure.Outcome.ToString(),
+                    processOccurrence: ChildOccurrence(child));
             }
             return null;
         }
@@ -726,7 +727,7 @@ public static partial class ProcessReferenceInterpreter
                 occurrence: 0,
                 progressIdentity: null,
                 node.Process);
-            children.Add(new(
+            var child = new ProcessChildState(
                 registration,
                 token.Id,
                 token.Id,
@@ -738,9 +739,20 @@ public static partial class ProcessReferenceInterpreter
                 ProcessChildPurpose.Compensation,
                 ProcessChildCancellationPolicy.Propagate,
                 ProcessChildDisposition.Active,
-                emissionId));
-            AddTrace(ProcessTraceEventKind.ChildRegistered, token, node.Id, detail: registration);
-            AddTrace(ProcessTraceEventKind.CancellationFinalizerStarted, token, node.Id, detail: registration);
+                emissionId);
+            children.Add(child);
+            AddTrace(
+                ProcessTraceEventKind.ChildRegistered,
+                token,
+                node.Id,
+                detail: registration,
+                processOccurrence: ChildOccurrence(child));
+            AddTrace(
+                ProcessTraceEventKind.CancellationFinalizerStarted,
+                token,
+                node.Id,
+                detail: registration,
+                processOccurrence: ChildOccurrence(child));
             cancellationFinalization = new(
                 finalization.Intent,
                 ProcessCancellationFinalizationPhase.FinalizerActive,
@@ -1264,7 +1276,8 @@ public static partial class ProcessReferenceInterpreter
                     node.Id,
                     branch.Id,
                     reply.Context.EmissionId,
-                    "request-reply");
+                    "request-reply",
+                    requestOutcome: reply.Outcome.Id);
                 Resume(token, branch.Continuation, reply.Outcome.Value);
                 DispositionOtherRequestResults(
                     token.Id,
@@ -1324,7 +1337,9 @@ public static partial class ProcessReferenceInterpreter
                     token,
                     node.Id,
                     emission: reply.Context.EmissionId,
-                    detail: acknowledged ? "completed" : "failed");
+                    detail: acknowledged ? "completed" : "failed",
+                    processOccurrence: ChildOccurrence(child),
+                    requestOutcome: reply.Outcome.Id);
                 if (!acknowledged)
                 {
                     SetCancellationFinalizationFailure(
@@ -1354,7 +1369,8 @@ public static partial class ProcessReferenceInterpreter
                         token,
                         node.Id,
                         emission: reply.Context.EmissionId,
-                        detail: "acknowledged");
+                        detail: "acknowledged",
+                        requestOutcome: reply.Outcome.Id);
                     AddTrace(ProcessTraceEventKind.TerminalReached, token, node.Id, detail: "Cancelled");
                 }
                 DispositionOtherRequestResults(
@@ -1422,7 +1438,8 @@ public static partial class ProcessReferenceInterpreter
                     token,
                     node.Id,
                     emission: reply.Context.EmissionId,
-                    detail: "partition-request-reply");
+                    detail: "partition-request-reply",
+                    requestOutcome: reply.Outcome.Id);
                 DispositionOtherRequestResults(
                     token.Id,
                     outstanding.Emission,
@@ -1475,7 +1492,9 @@ public static partial class ProcessReferenceInterpreter
                 token,
                 node,
                 emission: reply.Context.EmissionId,
-                detail: completed ? "completed" : "failed");
+                detail: completed ? "completed" : "failed",
+                processOccurrence: ChildOccurrence(child),
+                requestOutcome: reply.Outcome.Id);
         }
 
         void ResumeRecurrence(ProcessWaitState wait, ProcessTokenState token)
@@ -1821,7 +1840,7 @@ public static partial class ProcessReferenceInterpreter
                     ownerToken: token.Id,
                     occurrence,
                     progressIdentity: null);
-                children.Add(new(
+                var child = new ProcessChildState(
                     registration,
                     token.Id,
                     token.Id,
@@ -1833,8 +1852,14 @@ public static partial class ProcessReferenceInterpreter
                     semantics.ChildPurpose,
                     semantics.ChildCancellation,
                     ProcessChildDisposition.Active,
-                    emissionId));
-                AddTrace(ProcessTraceEventKind.ChildRegistered, token, node.Id, detail: registration);
+                    emissionId);
+                children.Add(child);
+                AddTrace(
+                    ProcessTraceEventKind.ChildRegistered,
+                    token,
+                    node.Id,
+                    detail: registration,
+                    processOccurrence: ChildOccurrence(child));
             }
 
             EmitRequest(token, node.Id, semantics.Contract, payload, emissionId, childTarget);
@@ -1966,7 +1991,7 @@ public static partial class ProcessReferenceInterpreter
                     node.Id,
                     occurrence,
                     progressIdentity);
-                children.Add(new(
+                var child = new ProcessChildState(
                     childRegistration,
                     token.Id,
                     childToken,
@@ -1983,29 +2008,37 @@ public static partial class ProcessReferenceInterpreter
                         node.Process),
                     ProcessChildPurpose.Work,
                     node.Cancellation,
-                    ProcessChildDisposition.Pending));
+                    ProcessChildDisposition.Pending);
+                children.Add(child);
                 work.Add(new(progressIdentity, capacityIdentity, partition, childRegistration));
                 AddTrace(
                     ProcessTraceEventKind.ChildRegistered,
                     token,
                     node.Id,
-                    detail: childRegistration);
+                    detail: childRegistration,
+                    processOccurrence: ChildOccurrence(child));
             }
 
-            partitions.Add(new(
+            var partitionState = new ProcessPartitionState(
                 registration,
                 token.Id,
                 node.Id,
                 occurrence,
                 work.MoveToImmutable(),
-                resolved: false));
+                resolved: false);
+            partitions.Add(partitionState);
             var batchWait = RegisterWait(token, node.Id, ProcessWaitKind.PartitionBatch, timers: []);
             AddTrace(
                 ProcessTraceEventKind.WaitRegistered,
                 token,
                 node.Id,
                 detail: batchWait.RegistrationId.Value);
-            AddTrace(ProcessTraceEventKind.PartitionBatchChanged, token, node.Id, detail: registration);
+            AddTrace(
+                ProcessTraceEventKind.PartitionBatchChanged,
+                token,
+                node.Id,
+                detail: registration,
+                processOccurrence: PartitionOccurrence(partitionState));
             StartPartitionChildren(GetPartition(registration), node);
             Cut(node.Id);
         }
@@ -2092,12 +2125,14 @@ public static partial class ProcessReferenceInterpreter
                 && candidate.Token == partition.Owner
                 && candidate.Node == partition.Node);
             DeactivateWait(wait);
-            ReplacePartition(partition with { Resolved = true });
+            var resolvedPartition = partition with { Resolved = true };
+            ReplacePartition(resolvedPartition);
             AddTrace(
                 ProcessTraceEventKind.PartitionBatchChanged,
                 owner,
                 node.Id,
-                detail: successful ? "completed" : "failed");
+                detail: successful ? "completed" : "failed",
+                processOccurrence: PartitionOccurrence(resolvedPartition));
             Resume(owner, successful ? node.Completed : node.Failed, output: null);
         }
 
@@ -2221,7 +2256,8 @@ public static partial class ProcessReferenceInterpreter
                     ProcessTraceEventKind.PartitionBatchChanged,
                     owner,
                     node.Id,
-                    detail: $"started:{prepared.Count}");
+                    detail: $"started:{prepared.Count}",
+                    processOccurrence: PartitionOccurrence(partition));
                 return true;
             }
             return false;
@@ -2293,13 +2329,14 @@ public static partial class ProcessReferenceInterpreter
                 return;
             }
 
-            ReplaceRecurrence(recurrence with
+            var advancedRecurrence = recurrence with
             {
                 RepeatCount = repeatCount,
                 UnchangedProgressCount = retainedUnchanged,
                 LastProgress = progress,
                 CurrentState = nextState
-            });
+            };
+            ReplaceRecurrence(advancedRecurrence);
             var waitingToken = node.StateOutput is null
                 ? token
                 : Unbind(advancedToken, node.StateOutput.Binding);
@@ -2313,7 +2350,8 @@ public static partial class ProcessReferenceInterpreter
                 ProcessTraceEventKind.RecurrenceAdvanced,
                 token,
                 node.Id,
-                detail: $"repeat:{repeatCount};unchanged:{retainedUnchanged}");
+                detail: $"repeat:{repeatCount};unchanged:{retainedUnchanged}",
+                processOccurrence: RecurrenceOccurrence(advancedRecurrence));
             Cut(node.Id);
         }
 
@@ -3730,7 +3768,8 @@ public static partial class ProcessReferenceInterpreter
                 detail: $"{detail}:{receipt.Disposition}",
                 inputDisposition: receipt.Disposition,
                 inputReason: receipt.Reason,
-                waitRegistrationId: receipt.WaitRegistrationId);
+                waitRegistrationId: receipt.WaitRegistrationId,
+                requestOutcome: input.Envelope is ReplyEnvelope reply ? reply.Outcome.Id : null);
         }
 
         void Cut(ExecutionNodeId node)
@@ -3800,7 +3839,8 @@ public static partial class ProcessReferenceInterpreter
                     ProcessTraceEventKind.ChildCancelledBeforeStart,
                     traceToken,
                     child.Node,
-                    detail: child.RegistrationId);
+                    detail: child.RegistrationId,
+                    processOccurrence: ChildOccurrence(child));
                 return;
             }
             if (child.Disposition != ProcessChildDisposition.Active)
@@ -3822,7 +3862,8 @@ public static partial class ProcessReferenceInterpreter
                     : ProcessTraceEventKind.ChildCancellationRequested,
                 traceToken,
                 child.Node,
-                detail: child.RegistrationId);
+                detail: child.RegistrationId,
+                processOccurrence: ChildOccurrence(child));
 
             var childToken = tokens.FirstOrDefault(candidate => candidate.Id == child.Token);
             if (childToken is not null
@@ -4054,7 +4095,9 @@ public static partial class ProcessReferenceInterpreter
             long? operationOccurrence = null,
             ProcessInputAdmissionDisposition? inputDisposition = null,
             ProcessInputAdmissionReason? inputReason = null,
-            ProcessWaitRegistrationId? waitRegistrationId = null)
+            ProcessWaitRegistrationId? waitRegistrationId = null,
+            ProcessTraceOccurrenceEvidence? processOccurrence = null,
+            RequestTerminalOutcomeId? requestOutcome = null)
         {
             var location = nodeIndexes.TryGetValue(node, out var index) ? $"/nodes/{index}" : null;
             trace.Add(new(
@@ -4075,8 +4118,36 @@ public static partial class ProcessReferenceInterpreter
                 operationOccurrence,
                 inputDisposition,
                 inputReason,
-                waitRegistrationId));
+                waitRegistrationId,
+                processOccurrence,
+                requestOutcome));
         }
+
+        static ProcessTraceOccurrenceEvidence ChildOccurrence(ProcessChildState child) => new(
+            disclosure: ExecutionTraceEvidenceDisclosure.Disclosed,
+            kind: ProcessTraceOccurrenceKind.Child,
+            registrationId: child.RegistrationId,
+            ownerToken: child.Owner,
+            occurrence: child.Occurrence,
+            progressIdentity: child.ProgressIdentity,
+            definition: child.Process,
+            continuation: child.Continuation);
+
+        static ProcessTraceOccurrenceEvidence PartitionOccurrence(ProcessPartitionState partition) => new(
+            disclosure: ExecutionTraceEvidenceDisclosure.Disclosed,
+            kind: ProcessTraceOccurrenceKind.Partition,
+            registrationId: partition.RegistrationId,
+            ownerToken: partition.Owner,
+            occurrence: partition.Occurrence);
+
+        static ProcessTraceOccurrenceEvidence RecurrenceOccurrence(ProcessRecurrenceState recurrence) => new(
+            disclosure: ExecutionTraceEvidenceDisclosure.Disclosed,
+            kind: ProcessTraceOccurrenceKind.Recurrence,
+            registrationId: recurrence.RegistrationId,
+            ownerToken: recurrence.Token,
+            occurrence: recurrence.Occurrence,
+            repeatCount: recurrence.RepeatCount,
+            unchangedProgressCount: recurrence.UnchangedProgressCount);
 
         DocumentValidationDiagnostic Diagnostic(
             string code,

@@ -294,7 +294,14 @@ orchestration result. The result carrier preserves activation order and crosses 
 therefore reproduces the same artifacts without acquiring a second trace model. A projection diagnostic fails the
 orchestration instead of omitting the activation. These traces are deliberately not copied into custom status.
 Scheduler history describes physical orchestration execution and cannot reconstruct semantic traces that predate
-this retention boundary.
+this retention boundary. Normalized trace schema v2 preserves replay-stable typed occurrence evidence already owned
+by the reference interpreter: child registrations include exact child definition and continuation, partitioned
+children include payload-safe authored progress identity, and partition and recurrence registrations retain their
+exact occurrence coordinates. Explicit disclosure distinguishes unknown, unavailable, redacted, and unsupported
+evidence. Request Reply traces retain their authored terminal outcome and canonical correlation evidence. Durable
+Task stores and replays these canonical fields; it does not rederive them from Scheduler history or Process payloads.
+The Storage checkpoint schema advances to v6 because committed activation receipts retain the corresponding
+authoritative block trace; recovery from an older checkpoint therefore requires an explicit migration.
 
 Current standalone-client monitoring also implements the provider-neutral `IProcessExecutionTraceRepository`.
 It reads a terminal `DurableTaskSequentialProcessResult` internally, validates it against retained start and custom

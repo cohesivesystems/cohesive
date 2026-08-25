@@ -41,7 +41,7 @@ public static class ExecutionTraceFingerprinter
     public const string Algorithm = "sha256";
 
     /// <summary>Canonical normalized-trace profile identifier.</summary>
-    public const string Canonicalization = "cohesive-execution-trace/v1-c14n/v1";
+    public const string Canonicalization = "cohesive-execution-trace/v2-c14n/v1";
 
     /// <summary>Computes the semantic fingerprint of one normalized execution trace.</summary>
     /// <remarks>

@@ -27,6 +27,201 @@ public static class ExecutionTraceDiagnosticCodes
     public const string CommitEvidenceInvalid = "execution.trace.commitEvidenceInvalid";
 }
 
+/// <summary>Availability of one payload-safe trace-evidence facet.</summary>
+public enum ExecutionTraceEvidenceDisclosure
+{
+    /// <summary>The producer supports the facet but has no authoritative observation for this occurrence.</summary>
+    Unknown = 0,
+
+    /// <summary>The producer disclosed complete authoritative evidence for the facet.</summary>
+    Disclosed = 1,
+
+    /// <summary>The producer has authoritative evidence but policy intentionally withheld it.</summary>
+    Redacted = 2,
+
+    /// <summary>The producer expected the evidence, but it could not be acquired or retained.</summary>
+    Unavailable = 3,
+
+    /// <summary>The producing interpreter cannot observe this evidence facet.</summary>
+    Unsupported = 4
+}
+
+/// <summary>Semantic kind of one replay-stable Process occurrence.</summary>
+public enum ProcessTraceOccurrenceKind
+{
+    /// <summary>No occurrence kind was supplied; invalid for occurrence evidence.</summary>
+    Unspecified = 0,
+
+    /// <summary>One exact child Process invocation.</summary>
+    Child = 1,
+
+    /// <summary>One bounded partition coordinator occurrence.</summary>
+    Partition = 2,
+
+    /// <summary>One explicit recurrence occurrence.</summary>
+    Recurrence = 3
+}
+
+/// <summary>Payload-safe replay-stable identity and lineage for one Process occurrence.</summary>
+/// <remarks>
+/// Disclosed child evidence retains the exact child definition and continuation. A partitioned child may also
+/// retain its authored progress identity, which identifies the item without retaining the partition payload.
+/// Partition and recurrence evidence retain their opaque reference-interpreter registrations and progress counts.
+/// Non-disclosed evidence retains only its semantic kind and explicit disclosure reason.
+/// </remarks>
+public sealed record ProcessTraceOccurrenceEvidence
+{
+    /// <summary>Creates one Process occurrence-evidence value.</summary>
+    /// <param name="disclosure">Whether authoritative occurrence evidence is disclosed.</param>
+    /// <param name="kind">Child, partition, or recurrence occurrence kind.</param>
+    /// <param name="registrationId">Replay-stable opaque occurrence registration when disclosed.</param>
+    /// <param name="ownerToken">Parent coordination token, or recurrence token, when disclosed.</param>
+    /// <param name="occurrence">Zero-based occurrence in the owning token history when disclosed.</param>
+    /// <param name="progressIdentity">Payload-safe partition progress identity for a partitioned child.</param>
+    /// <param name="definition">Exact child Process definition for disclosed child evidence.</param>
+    /// <param name="continuation">Exact child Process continuation for disclosed child evidence.</param>
+    /// <param name="repeatCount">Number of admitted repeats for disclosed recurrence evidence.</param>
+    /// <param name="unchangedProgressCount">
+    /// Consecutive unchanged-progress repeats for disclosed recurrence evidence.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="disclosure"/> or <paramref name="kind"/> is unsupported; a count is negative; or unchanged
+    /// progress exceeds the repeat count.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// Disclosed evidence is incomplete or contradicts its occurrence kind, or non-disclosed evidence carries
+    /// occurrence details.
+    /// </exception>
+    [JsonConstructor]
+    public ProcessTraceOccurrenceEvidence(
+        ExecutionTraceEvidenceDisclosure disclosure,
+        ProcessTraceOccurrenceKind kind,
+        string? registrationId = null,
+        TokenId? ownerToken = null,
+        long? occurrence = null,
+        string? progressIdentity = null,
+        ExecutionDefinitionReference? definition = null,
+        ProcessContinuationIdentity? continuation = null,
+        int? repeatCount = null,
+        int? unchangedProgressCount = null)
+    {
+        if (!Enum.IsDefined(disclosure))
+            throw new ArgumentOutOfRangeException(nameof(disclosure), disclosure, "Unsupported trace disclosure.");
+        if (!Enum.IsDefined(kind) || kind == ProcessTraceOccurrenceKind.Unspecified)
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, "A Process occurrence kind must be explicit.");
+        if (occurrence < 0)
+            throw new ArgumentOutOfRangeException(nameof(occurrence), occurrence, "An occurrence cannot be negative.");
+        if (repeatCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(repeatCount), repeatCount, "A repeat count cannot be negative.");
+        if (unchangedProgressCount < 0 || unchangedProgressCount > repeatCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(unchangedProgressCount),
+                unchangedProgressCount,
+                "An unchanged-progress count must be nonnegative and cannot exceed the repeat count.");
+        }
+
+        var hasDisclosedIdentity = !string.IsNullOrWhiteSpace(registrationId)
+            && ownerToken is { } owner && !string.IsNullOrWhiteSpace(owner.Value)
+            && occurrence is not null;
+        if (disclosure != ExecutionTraceEvidenceDisclosure.Disclosed)
+        {
+            if (registrationId is not null
+                || ownerToken is not null
+                || occurrence is not null
+                || progressIdentity is not null
+                || definition is not null
+                || continuation is not null
+                || repeatCount is not null
+                || unchangedProgressCount is not null)
+            {
+                throw new ArgumentException(
+                    "Non-disclosed Process occurrence evidence cannot carry occurrence details.",
+                    nameof(disclosure));
+            }
+        }
+        else if (!hasDisclosedIdentity)
+        {
+            throw new ArgumentException(
+                "Disclosed Process occurrence evidence requires registration, owner-token, and occurrence identities.",
+                nameof(registrationId));
+        }
+        else
+        {
+            if (progressIdentity is not null && string.IsNullOrWhiteSpace(progressIdentity))
+            {
+                throw new ArgumentException(
+                    "A present partition progress identity cannot be empty or white-space.",
+                    nameof(progressIdentity));
+            }
+
+            var isChild = kind == ProcessTraceOccurrenceKind.Child;
+            if (isChild != (definition is not null) || isChild != (continuation is not null))
+            {
+                throw new ArgumentException(
+                    "Only disclosed child evidence requires an exact related definition and continuation.",
+                    nameof(definition));
+            }
+            if (kind != ProcessTraceOccurrenceKind.Child && progressIdentity is not null)
+            {
+                throw new ArgumentException(
+                    "Only a disclosed partitioned child can carry a progress identity.",
+                    nameof(progressIdentity));
+            }
+
+            var isRecurrence = kind == ProcessTraceOccurrenceKind.Recurrence;
+            if (isRecurrence != (repeatCount is not null) || isRecurrence != (unchangedProgressCount is not null))
+            {
+                throw new ArgumentException(
+                    "Only disclosed recurrence evidence requires repeat and unchanged-progress counts.",
+                    nameof(repeatCount));
+            }
+        }
+
+        Disclosure = disclosure;
+        Kind = kind;
+        RegistrationId = registrationId;
+        OwnerToken = ownerToken;
+        Occurrence = occurrence;
+        ProgressIdentity = progressIdentity;
+        Definition = definition;
+        Continuation = continuation;
+        RepeatCount = repeatCount;
+        UnchangedProgressCount = unchangedProgressCount;
+    }
+
+    /// <summary>Whether authoritative occurrence evidence is disclosed.</summary>
+    public ExecutionTraceEvidenceDisclosure Disclosure { get; }
+
+    /// <summary>Child, partition, or recurrence occurrence kind.</summary>
+    public ProcessTraceOccurrenceKind Kind { get; }
+
+    /// <summary>Replay-stable opaque occurrence registration when disclosed.</summary>
+    public string? RegistrationId { get; }
+
+    /// <summary>Parent coordination token, or recurrence token, when disclosed.</summary>
+    public TokenId? OwnerToken { get; }
+
+    /// <summary>Zero-based occurrence in the owning token history when disclosed.</summary>
+    [JsonConverter(typeof(StringEncodedInt64JsonConverter))]
+    public long? Occurrence { get; }
+
+    /// <summary>Payload-safe partition progress identity for a disclosed partitioned child.</summary>
+    public string? ProgressIdentity { get; }
+
+    /// <summary>Exact related child Process definition when disclosed.</summary>
+    public ExecutionDefinitionReference? Definition { get; }
+
+    /// <summary>Exact related child Process instance and attempt when disclosed.</summary>
+    public ProcessContinuationIdentity? Continuation { get; }
+
+    /// <summary>Number of admitted repeats for disclosed recurrence evidence.</summary>
+    public int? RepeatCount { get; }
+
+    /// <summary>Consecutive unchanged-progress repeats for disclosed recurrence evidence.</summary>
+    public int? UnchangedProgressCount { get; }
+}
+
 /// <summary>One payload-safe event in normalized semantic execution order.</summary>
 /// <remarks>
 /// The event retains identities and decision evidence already present in an authoritative block trace. It never
@@ -54,6 +249,8 @@ public sealed record NormalizedExecutionTraceEvent
     /// <param name="inputDisposition">Block-owned Process input disposition name when present.</param>
     /// <param name="inputReason">Block-owned Process input-reason name when present.</param>
     /// <param name="waitRegistrationId">Exact Process wait occurrence when present.</param>
+    /// <param name="processOccurrence">Typed child, partition, or recurrence lineage evidence when applicable.</param>
+    /// <param name="requestOutcome">Exact terminal Request outcome identity when a Reply participated.</param>
     /// <param name="detail">Stable non-sensitive detail retained by the authoritative block trace.</param>
     /// <param name="sourceReferences">Producer source references in deterministic ordinal order.</param>
     /// <exception cref="ArgumentException">An identity, kind, path, or source reference is invalid.</exception>
@@ -80,6 +277,8 @@ public sealed record NormalizedExecutionTraceEvent
         string? inputDisposition = null,
         string? inputReason = null,
         ProcessWaitRegistrationId? waitRegistrationId = null,
+        ProcessTraceOccurrenceEvidence? processOccurrence = null,
+        RequestTerminalOutcomeId? requestOutcome = null,
         string? detail = null,
         ImmutableArray<string> sourceReferences = default)
     {
@@ -96,6 +295,7 @@ public sealed record NormalizedExecutionTraceEvent
         RequireOptionalIdentity(emissionFingerprint?.Value, nameof(emissionFingerprint));
         RequireOptionalIdentity(relatedNode?.Value, nameof(relatedNode));
         RequireOptionalIdentity(waitRegistrationId?.Value, nameof(waitRegistrationId));
+        RequireOptionalIdentity(requestOutcome?.Value, nameof(requestOutcome));
         if (semanticPath is { Segments.IsDefaultOrEmpty: true })
             throw new ArgumentException("A normalized semantic path cannot be empty.", nameof(semanticPath));
         if (operationOccurrence < 0)
@@ -131,6 +331,8 @@ public sealed record NormalizedExecutionTraceEvent
         InputDisposition = inputDisposition.TrimmedEmptyOrWhiteSpaceAs();
         InputReason = inputReason.TrimmedEmptyOrWhiteSpaceAs();
         WaitRegistrationId = waitRegistrationId;
+        ProcessOccurrence = processOccurrence;
+        RequestOutcome = requestOutcome;
         Detail = detail.TrimmedEmptyOrWhiteSpaceAs();
         SourceReferences = NormalizeSourceReferences(sourceReferences);
     }
@@ -190,6 +392,12 @@ public sealed record NormalizedExecutionTraceEvent
     /// <summary>Exact Process wait occurrence when present.</summary>
     public ProcessWaitRegistrationId? WaitRegistrationId { get; }
 
+    /// <summary>Typed child, partition, or recurrence lineage evidence when applicable.</summary>
+    public ProcessTraceOccurrenceEvidence? ProcessOccurrence { get; }
+
+    /// <summary>Exact terminal Request outcome identity when a Reply participated.</summary>
+    public RequestTerminalOutcomeId? RequestOutcome { get; }
+
     /// <summary>Stable non-sensitive detail retained by the authoritative block trace.</summary>
     public string? Detail { get; }
 
@@ -222,7 +430,7 @@ public sealed record NormalizedExecutionTrace
 {
     /// <summary>Current normalized execution-trace schema.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
-        new("cohesive-execution-trace/v1");
+        new("cohesive-execution-trace/v2");
 
     /// <summary>Creates one normalized execution trace.</summary>
     /// <param name="schemaVersion">Exact normalized-trace schema.</param>

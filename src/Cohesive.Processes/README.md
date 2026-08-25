@@ -390,7 +390,15 @@ portable `ProcessExecutionTraceArtifact`, whose explicit missing-prefix count pr
 mistaken for complete coverage. `ProcessExecutionTraceJsonSerializer` emits and verifies its strict canonical wire.
 Neither the artifact nor its JSON contains the physical repository key. The availability envelope and collection
 artifact do not replace `NormalizedExecutionTrace`; they describe acquisition state and coverage of those shared
-per-activation authorities.
+per-activation authorities. Trace schema v2 carries typed `ProcessTraceOccurrenceEvidence` for child, partition, and
+recurrence events instead of requiring consumers to interpret `Detail`. Disclosed child evidence pins the exact
+related definition and continuation; partitioned children retain only the authored progress identity, never their
+input payload. Unknown, unavailable, redacted, and unsupported occurrence evidence remain distinct from successful
+absence. Terminal Request evidence retains the selected outcome identity alongside branch and canonical envelope
+correlation evidence. These fields participate in the semantic trace fingerprint and are preserved unchanged by the
+reference and Durable Task interpretations. Because committed activation receipts retain the authoritative block
+trace that produces these fields, the physical durable-checkpoint envelope advances to v6 as part of the same wire
+change; older checkpoints require an explicit migration rather than silently acquiring missing lineage.
 
 `IProcessExecutionRepository` is the provider-neutral boundary for current safe status acquisition. Application and
 API reads use its logical address formed by a server-resolved `InteractionAuthorityScope` and canonical

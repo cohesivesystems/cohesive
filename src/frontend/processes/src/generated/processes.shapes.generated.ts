@@ -265,11 +265,31 @@ export const processRecoveryPolicyLabels: Record<ProcessRecoveryPolicy, string> 
   RestartAttempt: 'RestartAttempt',
 };
 
+export type ExecutionIrSchemaVersion = string;
+
+export interface ExecutionDefinitionReference {
+  definitionId: ExecutionDefinitionId;
+  revisionId: ExecutionRevisionId;
+  fingerprint: ExecutionDefinitionFingerprint;
+}
+
+export type ProcessInstanceId = string;
+
+export interface NormalizedExecutionTrace {
+  schemaVersion: ExecutionIrSchemaVersion;
+  kind: ExecutionDefinitionKind;
+  definition: ExecutionDefinitionReference;
+  continuation?: ProcessContinuationIdentity | null;
+  activation: ActivationId;
+  disposition: string;
+  safePointNode?: ExecutionNodeId | null;
+  durableCommitSequence?: string | null;
+  events: NormalizedExecutionTraceEvent[];
+}
+
 export type ExecutionDefinitionId = string;
 
 export type ExecutionRevisionId = string;
-
-export type ExecutionIrSchemaVersion = string;
 
 export interface ExecutionDefinitionFingerprint {
   algorithm: string;
@@ -296,12 +316,6 @@ export interface PortableValue {
   state: PortableValueState;
   value?: unknown | null;
   failure?: DocumentValidationDiagnostic | null;
-}
-
-export interface ExecutionDefinitionReference {
-  definitionId: ExecutionDefinitionId;
-  revisionId: ExecutionRevisionId;
-  fingerprint: ExecutionDefinitionFingerprint;
 }
 
 export interface ProcessContinuation {
@@ -565,6 +579,38 @@ export interface ProcessRecurrencePolicy {
   maximumUnchangedProgressOccurrences: number;
 }
 
+export interface ProcessContinuationIdentity {
+  processInstanceId: ProcessInstanceId;
+  processAttemptId: ProcessAttemptId;
+}
+
+export type ActivationId = string;
+
+export interface NormalizedExecutionTraceEvent {
+  sequence: number;
+  kind: string;
+  node: ExecutionNodeId;
+  token?: TokenId | null;
+  branchOrClause?: ExecutionNodeId | null;
+  emission?: EmissionId | null;
+  correlation?: InteractionCorrelationId | null;
+  causation?: EmissionId | null;
+  idempotencyKey?: InteractionIdempotencyKey | null;
+  emissionFingerprint?: InteractionEnvelopeContentFingerprint | null;
+  relatedDefinition?: ExecutionDefinitionReference | null;
+  relatedNode?: ExecutionNodeId | null;
+  semanticPath?: FieldPath | null;
+  changed?: boolean | null;
+  operationOccurrence?: string | null;
+  inputDisposition?: string | null;
+  inputReason?: string | null;
+  waitRegistrationId?: ProcessWaitRegistrationId | null;
+  processOccurrence?: ProcessTraceOccurrenceEvidence | null;
+  requestOutcome?: RequestTerminalOutcomeId | null;
+  detail?: string | null;
+  sourceReferences: string[];
+}
+
 export interface ExecutionProducerProvenance {
   producer: string;
   version?: string | null;
@@ -695,9 +741,70 @@ export interface ProcessRequestObligationBinding {
   binding: RequestObligationBindingId;
 }
 
+export type ProcessAttemptId = string;
+
+export type TokenId = string;
+
+export type EmissionId = string;
+
+export type InteractionCorrelationId = string;
+
+export type InteractionIdempotencyKey = string;
+
+export type InteractionEnvelopeContentFingerprint = string;
+
+export type ProcessWaitRegistrationId = string;
+
+export interface ProcessTraceOccurrenceEvidence {
+  disclosure: ExecutionTraceEvidenceDisclosure;
+  kind: ProcessTraceOccurrenceKind;
+  registrationId?: string | null;
+  ownerToken?: TokenId | null;
+  occurrence?: string | null;
+  progressIdentity?: string | null;
+  definition?: ExecutionDefinitionReference | null;
+  continuation?: ProcessContinuationIdentity | null;
+  repeatCount?: number | null;
+  unchangedProgressCount?: number | null;
+}
+
 export interface ExecutionSemanticPath {
   segments: string[];
 }
+
+export type ExecutionTraceEvidenceDisclosure = 'Unknown' | 'Disclosed' | 'Redacted' | 'Unavailable' | 'Unsupported';
+
+export const executionTraceEvidenceDisclosures = {
+  unknown: 'Unknown',
+  disclosed: 'Disclosed',
+  redacted: 'Redacted',
+  unavailable: 'Unavailable',
+  unsupported: 'Unsupported',
+} as const satisfies Record<string, ExecutionTraceEvidenceDisclosure>;
+
+export const executionTraceEvidenceDisclosureLabels: Record<ExecutionTraceEvidenceDisclosure, string> = {
+  Unknown: 'Unknown',
+  Disclosed: 'Disclosed',
+  Redacted: 'Redacted',
+  Unavailable: 'Unavailable',
+  Unsupported: 'Unsupported',
+};
+
+export type ProcessTraceOccurrenceKind = 'Unspecified' | 'Child' | 'Partition' | 'Recurrence';
+
+export const processTraceOccurrenceKinds = {
+  unspecified: 'Unspecified',
+  child: 'Child',
+  partition: 'Partition',
+  recurrence: 'Recurrence',
+} as const satisfies Record<string, ProcessTraceOccurrenceKind>;
+
+export const processTraceOccurrenceKindLabels: Record<ProcessTraceOccurrenceKind, string> = {
+  Unspecified: 'Unspecified',
+  Child: 'Child',
+  Partition: 'Partition',
+  Recurrence: 'Recurrence',
+};
 
 export interface ExecutionDefinitionDocument {
   kind: ExecutionDefinitionKind;
@@ -712,4 +819,12 @@ export interface ProcessDefinition {
   entry: ExecutionNodeId;
   nodes: ProcessNode[];
   recoveryPolicy: ProcessRecoveryPolicy;
+}
+
+export interface ProcessExecutionTraceArtifact {
+  schemaVersion: ExecutionIrSchemaVersion;
+  definition: ExecutionDefinitionReference;
+  processInstanceId: ProcessInstanceId;
+  missingTracePrefixCount: number;
+  traces: NormalizedExecutionTrace[];
 }
