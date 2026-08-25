@@ -24,6 +24,87 @@ export interface ExecutionDefinitionExtension {
   value: PortableValue;
 }
 
+export type ExecutionIrSchemaVersion = string;
+
+export interface ExecutionDefinitionReference {
+  definitionId: ExecutionDefinitionId;
+  revisionId: ExecutionRevisionId;
+  fingerprint: ExecutionDefinitionFingerprint;
+}
+
+export type ProcessInstanceId = string;
+
+export type ProcessControlRevision = string;
+
+export type ProcessControlMode = 'Unspecified' | 'Running' | 'PauseRequested' | 'Paused' | 'RestartRequested' | 'CancellationRequested' | 'Cancelled' | 'Terminated' | 'Cancelling' | 'CancellationFailed';
+
+export const processControlModes = {
+  unspecified: 'Unspecified',
+  running: 'Running',
+  pauseRequested: 'PauseRequested',
+  paused: 'Paused',
+  restartRequested: 'RestartRequested',
+  cancellationRequested: 'CancellationRequested',
+  cancelled: 'Cancelled',
+  terminated: 'Terminated',
+  cancelling: 'Cancelling',
+  cancellationFailed: 'CancellationFailed',
+} as const satisfies Record<string, ProcessControlMode>;
+
+export const processControlModeLabels: Record<ProcessControlMode, string> = {
+  Unspecified: 'Unspecified',
+  Running: 'Running',
+  PauseRequested: 'PauseRequested',
+  Paused: 'Paused',
+  RestartRequested: 'RestartRequested',
+  CancellationRequested: 'CancellationRequested',
+  Cancelled: 'Cancelled',
+  Terminated: 'Terminated',
+  Cancelling: 'Cancelling',
+  CancellationFailed: 'CancellationFailed',
+};
+
+export interface ExecutionAttemptStatus {
+  attemptId: ProcessAttemptId;
+  startedAtUtc: string;
+  endedAtUtc?: string | null;
+  disposition: ExecutionAttemptDisposition;
+  phase: ProcessControlExecutionPhase;
+  completedActivationCount: string;
+  lastSafePointId?: ProcessSafePointId | null;
+  lastSafePointNode?: ExecutionNodeId | null;
+}
+
+export type ProcessAttemptId = string;
+
+export interface ExecutionActivationStatus {
+  activationId: ActivationId;
+  attemptId: ProcessAttemptId;
+  startedUnderRevision: ProcessControlRevision;
+  startedAtUtc: string;
+}
+
+export interface ExecutionRuntimeStatusDetails {
+  tokensDisclosure: ExecutionStatusDisclosure;
+  tokens: ExecutionTokenStatus[];
+  waitsDisclosure: ExecutionStatusDisclosure;
+  waits: ExecutionWaitStatus[];
+  progressDisclosure: ExecutionStatusDisclosure;
+  progress?: ExecutionProgressStatus | null;
+  demandDisclosure: ExecutionStatusDisclosure;
+  demand?: ExecutionDemandStatus | null;
+  capacityDisclosure: ExecutionStatusDisclosure;
+  capacity?: ExecutionCapacityStatus | null;
+  health: ExecutionHealthStatus;
+  extensions: ExecutionRuntimeStatusExtension[];
+}
+
+export interface ExecutionTerminalOutcome {
+  kind: ExecutionTerminalOutcomeKind;
+  occurredAtUtc?: string | null;
+  detail?: ExecutionStatusValue | null;
+}
+
 export type ExecutionNodeId = string;
 
 export type ProcessNode = {
@@ -265,16 +346,6 @@ export const processRecoveryPolicyLabels: Record<ProcessRecoveryPolicy, string> 
   RestartAttempt: 'RestartAttempt',
 };
 
-export type ExecutionIrSchemaVersion = string;
-
-export interface ExecutionDefinitionReference {
-  definitionId: ExecutionDefinitionId;
-  revisionId: ExecutionRevisionId;
-  fingerprint: ExecutionDefinitionFingerprint;
-}
-
-export type ProcessInstanceId = string;
-
 export interface NormalizedExecutionTrace {
   schemaVersion: ExecutionIrSchemaVersion;
   kind: ExecutionDefinitionKind;
@@ -316,6 +387,140 @@ export interface PortableValue {
   state: PortableValueState;
   value?: unknown | null;
   failure?: DocumentValidationDiagnostic | null;
+}
+
+export type ExecutionAttemptDisposition = 'Unspecified' | 'Current' | 'Abandoned' | 'Completed' | 'Failed' | 'Cancelled' | 'Terminated';
+
+export const executionAttemptDispositions = {
+  unspecified: 'Unspecified',
+  current: 'Current',
+  abandoned: 'Abandoned',
+  completed: 'Completed',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+  terminated: 'Terminated',
+} as const satisfies Record<string, ExecutionAttemptDisposition>;
+
+export const executionAttemptDispositionLabels: Record<ExecutionAttemptDisposition, string> = {
+  Unspecified: 'Unspecified',
+  Current: 'Current',
+  Abandoned: 'Abandoned',
+  Completed: 'Completed',
+  Failed: 'Failed',
+  Cancelled: 'Cancelled',
+  Terminated: 'Terminated',
+};
+
+export type ProcessControlExecutionPhase = 'Unspecified' | 'Ready' | 'InActivation' | 'AtSafePoint' | 'Stopped';
+
+export const processControlExecutionPhases = {
+  unspecified: 'Unspecified',
+  ready: 'Ready',
+  inActivation: 'InActivation',
+  atSafePoint: 'AtSafePoint',
+  stopped: 'Stopped',
+} as const satisfies Record<string, ProcessControlExecutionPhase>;
+
+export const processControlExecutionPhaseLabels: Record<ProcessControlExecutionPhase, string> = {
+  Unspecified: 'Unspecified',
+  Ready: 'Ready',
+  InActivation: 'InActivation',
+  AtSafePoint: 'AtSafePoint',
+  Stopped: 'Stopped',
+};
+
+export type ProcessSafePointId = string;
+
+export type ActivationId = string;
+
+export type ExecutionStatusDisclosure = 'Unknown' | 'Disclosed' | 'Redacted';
+
+export const executionStatusDisclosures = {
+  unknown: 'Unknown',
+  disclosed: 'Disclosed',
+  redacted: 'Redacted',
+} as const satisfies Record<string, ExecutionStatusDisclosure>;
+
+export const executionStatusDisclosureLabels: Record<ExecutionStatusDisclosure, string> = {
+  Unknown: 'Unknown',
+  Disclosed: 'Disclosed',
+  Redacted: 'Redacted',
+};
+
+export interface ExecutionTokenStatus {
+  tokenId: TokenId;
+  node: ExecutionNodeId;
+  disposition: ExecutionTokenDisposition;
+}
+
+export interface ExecutionWaitStatus {
+  tokenId: TokenId;
+  node: ExecutionNodeId;
+  waitingSinceUtc: string;
+  deadlineUtc?: string | null;
+}
+
+export interface ExecutionProgressStatus {
+  completed: string;
+  total?: string | null;
+  unit: string;
+}
+
+export interface ExecutionDemandStatus {
+  ready: string;
+  delayed: string;
+}
+
+export interface ExecutionCapacityStatus {
+  active: string;
+  limit: string;
+}
+
+export type ExecutionHealthStatus = 'Unknown' | 'Healthy' | 'Degraded' | 'Unhealthy';
+
+export const executionHealthStatuses = {
+  unknown: 'Unknown',
+  healthy: 'Healthy',
+  degraded: 'Degraded',
+  unhealthy: 'Unhealthy',
+} as const satisfies Record<string, ExecutionHealthStatus>;
+
+export const executionHealthStatusLabels: Record<ExecutionHealthStatus, string> = {
+  Unknown: 'Unknown',
+  Healthy: 'Healthy',
+  Degraded: 'Degraded',
+  Unhealthy: 'Unhealthy',
+};
+
+export interface ExecutionRuntimeStatusExtension {
+  id: ExecutionExtensionId;
+  schemaVersion: ExecutionExtensionSchemaVersion;
+  value: ExecutionStatusValue;
+  provenance: ExecutionProvenance;
+}
+
+export type ExecutionTerminalOutcomeKind = 'None' | 'Completed' | 'Failed' | 'Cancelled' | 'Terminated';
+
+export const executionTerminalOutcomeKinds = {
+  none: 'None',
+  completed: 'Completed',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+  terminated: 'Terminated',
+} as const satisfies Record<string, ExecutionTerminalOutcomeKind>;
+
+export const executionTerminalOutcomeKindLabels: Record<ExecutionTerminalOutcomeKind, string> = {
+  None: 'None',
+  Completed: 'Completed',
+  Failed: 'Failed',
+  Cancelled: 'Cancelled',
+  Terminated: 'Terminated',
+};
+
+export interface ExecutionStatusValue {
+  contract: ValueContract;
+  disclosure: ExecutionStatusDisclosure;
+  value?: PortableValue | null;
 }
 
 export interface ProcessContinuation {
@@ -584,8 +789,6 @@ export interface ProcessContinuationIdentity {
   processAttemptId: ProcessAttemptId;
 }
 
-export type ActivationId = string;
-
 export interface NormalizedExecutionTraceEvent {
   sequence: number;
   kind: string;
@@ -640,6 +843,32 @@ export const portableValueStateLabels: Record<PortableValueState, string> = {
   Unknown: 'Unknown',
   Failed: 'Failed',
   Concrete: 'Concrete',
+};
+
+export type TokenId = string;
+
+export type ExecutionTokenDisposition = 'Unspecified' | 'Ready' | 'Active' | 'Waiting' | 'Completed' | 'Failed' | 'Cancelled' | 'Pending';
+
+export const executionTokenDispositions = {
+  unspecified: 'Unspecified',
+  ready: 'Ready',
+  active: 'Active',
+  waiting: 'Waiting',
+  completed: 'Completed',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+  pending: 'Pending',
+} as const satisfies Record<string, ExecutionTokenDisposition>;
+
+export const executionTokenDispositionLabels: Record<ExecutionTokenDisposition, string> = {
+  Unspecified: 'Unspecified',
+  Ready: 'Ready',
+  Active: 'Active',
+  Waiting: 'Waiting',
+  Completed: 'Completed',
+  Failed: 'Failed',
+  Cancelled: 'Cancelled',
+  Pending: 'Pending',
 };
 
 export type RequestTerminalOutcomeId = string;
@@ -741,10 +970,6 @@ export interface ProcessRequestObligationBinding {
   binding: RequestObligationBindingId;
 }
 
-export type ProcessAttemptId = string;
-
-export type TokenId = string;
-
 export type EmissionId = string;
 
 export type InteractionCorrelationId = string;
@@ -811,6 +1036,21 @@ export interface ExecutionDefinitionDocument {
   metadata: ExecutionDefinitionMetadata;
   definition: unknown;
   extensions: ExecutionDefinitionExtension[];
+}
+
+export interface ExecutionStatus {
+  schemaVersion: ExecutionIrSchemaVersion;
+  definition: ExecutionDefinitionReference;
+  processInstanceId: ProcessInstanceId;
+  controlRevision: ProcessControlRevision;
+  controlMode: ProcessControlMode;
+  attempts: ExecutionAttemptStatus[];
+  currentAttemptId: ProcessAttemptId;
+  activeActivation?: ExecutionActivationStatus | null;
+  runtime: ExecutionRuntimeStatusDetails;
+  terminalOutcome: ExecutionTerminalOutcome;
+  createdAtUtc: string;
+  updatedAtUtc: string;
 }
 
 export interface ProcessDefinition {

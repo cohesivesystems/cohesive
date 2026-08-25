@@ -24,6 +24,8 @@ public sealed class ProcessesContractProjectionTests
         Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(ExecutionDefinitionDocument), StringComparison.Ordinal));
         Assert.Contains(graph.Shapes, shape =>
+            shape.Id.Value.EndsWith(nameof(ExecutionStatus), StringComparison.Ordinal));
+        Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(ProcessExecutionTraceArtifact), StringComparison.Ordinal));
 
         var processNodes = AssertUnion(graph, nameof(ProcessNode), ProcessWireNames.NodeDiscriminator);
@@ -84,6 +86,10 @@ public sealed class ProcessesContractProjectionTests
             text,
             StringComparison.Ordinal);
         Assert.Contains("export interface ExecutionDefinitionDocument", text, StringComparison.Ordinal);
+        Assert.Contains("export interface ExecutionStatus", text, StringComparison.Ordinal);
+        Assert.Contains("export interface ExecutionRuntimeStatusDetails", text, StringComparison.Ordinal);
+        Assert.Contains("export interface ExecutionTokenStatus", text, StringComparison.Ordinal);
+        Assert.Contains("export interface ExecutionWaitStatus", text, StringComparison.Ordinal);
         Assert.Contains("export interface ProcessExecutionTraceArtifact", text, StringComparison.Ordinal);
         Assert.Contains("export interface NormalizedExecutionTraceEvent", text, StringComparison.Ordinal);
         Assert.Contains("processOccurrence?: ProcessTraceOccurrenceEvidence | null;", text, StringComparison.Ordinal);

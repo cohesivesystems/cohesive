@@ -535,6 +535,13 @@ remain attached to derived details. Unknown or malformed constructs stay visible
 projection is immutable and deterministic, but it is not another serialized authority: ReactFlow/layout state,
 navigation, styling, and product policy remain consumer concerns.
 
+The same package can join that graph with generated canonical `ExecutionStatus` and
+`ProcessExecutionTraceArtifact` contracts. Exact definition fingerprints, Process instance, attempt lineage, and
+schema compatibility are fail-closed. Tokens, waits, branch/clause events, Request outcomes, and higher-order
+occurrences attach only to exact graph identities; unmatched references, disclosure gaps, missing trace prefix, and
+an unavailable optional trace artifact remain explicit diagnostics. Global status facets stay global when their
+canonical contract names no graph node, and no missing event is interpreted as completion.
+
 ## Compatibility and retired surfaces
 
 ### Flat transitions

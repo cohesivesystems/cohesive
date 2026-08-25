@@ -14,6 +14,30 @@ The projector copies and freezes retained wire evidence. Canonical construct ide
 layout coordinates—form semantic graph keys. ReactFlow nodes, layout, viewport state, DOM selectors, navigation,
 styling, and product policy belong to downstream consumers such as Ari.
 
+## Runtime Evidence Overlay
+
+`projectCanonicalProcessRuntime` joins an existing `ProcessPresentationGraph` with one exact canonical
+`ExecutionStatus` and an optional `ProcessExecutionTraceArtifact`. The generated contracts in
+`@cohesivesystems/processes` remain authoritative. The overlay is an immutable, renderer-neutral index over that
+evidence; it does not introduce a second status, trace, lifecycle, or lineage model.
+
+The join fails closed when graph projection version, status/trace schema, definition identity and fingerprint,
+Process instance, or attempt lineage are incompatible. Compatible evidence is handled totally:
+
+- tokens and waits attach only to exact canonical Process-node identities;
+- trace events attach to their exact node and, when disclosed, exact owned branch/clause, Request outcome, and
+  definition-reference elements;
+- child, partition, and recurrence evidence remains on the canonical trace event, including exact continuation and
+  payload-safe occurrence identities supplied by the runtime;
+- terminal outcome, active activation, progress, demand, capacity, health, and extensions remain global when their
+  canonical contracts do not name a graph element;
+- unknown, redacted, unavailable, unsupported, retained-prefix loss, and every unmatched reference produce stable
+  structured diagnostics. Missing evidence never implies completion.
+
+Overlay and evidence identities use semantic Process, attempt, activation, token, and canonical element identities;
+they do not depend on graph layout or renderer state. Inputs are copied and deeply frozen, output arrays use ordinal
+ordering, and equal inputs produce deeply equal output.
+
 ## Compatibility and Failure Behavior
 
 `canonicalProcessPresentationCompatibility` declares the exact Process definition kind and execution-document
