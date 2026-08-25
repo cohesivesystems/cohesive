@@ -71,6 +71,38 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
         Assert.Equal(
             ["shard-a", "shard-b", "shard-c"],
             Assert.Single(first.State.Partitions).Work.Select(static work => work.ProgressIdentity));
+        var firstTrace = Assert.IsType<NormalizedExecutionTrace>(
+            ProcessExecutionTraceProjector.Project(first).Trace);
+        var replayTrace = Assert.IsType<NormalizedExecutionTrace>(
+            ProcessExecutionTraceProjector.Project(replay).Trace);
+        Assert.Equal(
+            ExecutionTraceFingerprinter.ComputeSemantic(firstTrace),
+            ExecutionTraceFingerprinter.ComputeSemantic(replayTrace));
+        var childRegistrations = firstTrace.Events
+            .Where(static item => item.Kind == "childRegistered")
+            .Select(static item => Assert.IsType<ProcessTraceOccurrenceEvidence>(item.ProcessOccurrence))
+            .ToArray();
+        Assert.Equal(3, childRegistrations.Length);
+        Assert.All(childRegistrations, occurrence =>
+        {
+            Assert.Equal(ExecutionTraceEvidenceDisclosure.Disclosed, occurrence.Disclosure);
+            Assert.Equal(ProcessTraceOccurrenceKind.Child, occurrence.Kind);
+            var childState = first.State.Children.Single(candidate =>
+                candidate.RegistrationId == occurrence.RegistrationId);
+            Assert.Equal(childState.Owner, occurrence.OwnerToken);
+            Assert.Equal(childState.Occurrence, occurrence.Occurrence);
+            Assert.Equal(childState.ProgressIdentity, occurrence.ProgressIdentity);
+            Assert.Equal(childState.Process, occurrence.Definition);
+            Assert.Equal(childState.Continuation, occurrence.Continuation);
+        });
+        Assert.All(
+            firstTrace.Events.Where(static item => item.Kind == "partitionBatchChanged"),
+            item =>
+            {
+                var occurrence = Assert.IsType<ProcessTraceOccurrenceEvidence>(item.ProcessOccurrence);
+                Assert.Equal(ProcessTraceOccurrenceKind.Partition, occurrence.Kind);
+                Assert.Equal(Assert.Single(first.State.Partitions).RegistrationId, occurrence.RegistrationId);
+            });
         var retainedPartition = Assert.Single(first.State.Partitions);
         var firstWork = retainedPartition.Work[0];
         var missingPartitionValue = firstWork with
@@ -814,6 +846,95 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
         Assert.Equal(
             ProcessChildDisposition.Completed,
             Assert.Single(joined.Decision!.State.Children).Disposition);
+        var joinedTrace = Assert.IsType<NormalizedExecutionTrace>(
+            ProcessExecutionTraceProjector.Project(joined.Decision).Trace);
+        var childResolved = Assert.Single(joinedTrace.Events, static item => item.Kind == "childResolved");
+        var childOccurrence = Assert.IsType<ProcessTraceOccurrenceEvidence>(childResolved.ProcessOccurrence);
+        var joinedChild = Assert.Single(joined.Decision.State.Children);
+        Assert.Equal(joinedChild.Process, childOccurrence.Definition);
+        Assert.Equal(joinedChild.Continuation, childOccurrence.Continuation);
+        Assert.Equal(ChildOutcomeMapping.Completed, childResolved.RequestOutcome);
+        var requestResolved = Assert.Single(
+            joinedTrace.Events,
+            static item => item.Kind == "waitResolved" && item.Detail == "request-reply");
+        Assert.Equal(ChildOutcomeMapping.Completed, requestResolved.RequestOutcome);
+        Assert.NotNull(requestResolved.BranchOrClause);
+        Assert.NotNull(requestResolved.Emission);
+        Assert.NotNull(requestResolved.Correlation);
+        Assert.Equal(request.Context.EmissionId, requestResolved.Causation);
+
+        var decision = joined.Decision;
+        var rawChildIndex = Enumerable.Range(0, decision.Evidence.Trace.Length).Single(index =>
+            decision.Evidence.Trace[index].Kind == ProcessTraceEventKind.ChildResolved);
+        var rawChild = decision.Evidence.Trace[rawChildIndex];
+        var rawOccurrence = Assert.IsType<ProcessTraceOccurrenceEvidence>(rawChild.ProcessOccurrence);
+        var forgedOccurrence = new ProcessTraceOccurrenceEvidence(
+            disclosure: rawOccurrence.Disclosure,
+            kind: rawOccurrence.Kind,
+            registrationId: rawOccurrence.RegistrationId,
+            ownerToken: rawOccurrence.OwnerToken,
+            occurrence: rawOccurrence.Occurrence,
+            progressIdentity: rawOccurrence.ProgressIdentity,
+            definition: rawOccurrence.Definition,
+            continuation: new(new("process-instance/forged"), new("process-attempt/forged")));
+        var envelopes = decision.Emissions
+            .Concat(decision.InputAdmissions.Select(static admission => admission.Input.Envelope))
+            .ToArray();
+        var forgedLineage = ProcessExecutionTraceProjector.ProjectCommitted(
+            decision.Evidence with
+            {
+                Trace = decision.Evidence.Trace.SetItem(
+                    rawChildIndex,
+                    rawChild with { ProcessOccurrence = forgedOccurrence })
+            },
+            decision.Disposition,
+            durableCommitSequence: 1,
+            expectedDefinition: decision.State.Definition,
+            expectedContinuation: decision.State.Continuation,
+            envelopes: envelopes);
+        var forgedOutcome = ProcessExecutionTraceProjector.ProjectCommitted(
+            decision.Evidence with
+            {
+                Trace = decision.Evidence.Trace.SetItem(
+                    rawChildIndex,
+                    rawChild with { RequestOutcome = new("forged") })
+            },
+            decision.Disposition,
+            durableCommitSequence: 1,
+            expectedDefinition: decision.State.Definition,
+            expectedContinuation: decision.State.Continuation,
+            envelopes: envelopes);
+        var explicitlyUnsupported = ProcessExecutionTraceProjector.ProjectCommitted(
+            decision.Evidence with
+            {
+                Trace = decision.Evidence.Trace.SetItem(
+                    rawChildIndex,
+                    rawChild with
+                    {
+                        ProcessOccurrence = new(
+                            ExecutionTraceEvidenceDisclosure.Unsupported,
+                            ProcessTraceOccurrenceKind.Child)
+                    })
+            },
+            decision.Disposition,
+            durableCommitSequence: 1,
+            expectedDefinition: decision.State.Definition,
+            expectedContinuation: decision.State.Continuation,
+            envelopes: envelopes);
+        Assert.False(forgedLineage.IsSuccessful);
+        Assert.False(forgedOutcome.IsSuccessful);
+        Assert.All(
+            forgedLineage.Validation.Diagnostics.Concat(forgedOutcome.Validation.Diagnostics),
+            static diagnostic => Assert.Equal(
+                ExecutionTraceDiagnosticCodes.EmissionEvidenceMismatch,
+                diagnostic.Code));
+        Assert.True(explicitlyUnsupported.IsSuccessful);
+        Assert.Equal(
+            ExecutionTraceEvidenceDisclosure.Unsupported,
+            Assert.IsType<ProcessTraceOccurrenceEvidence>(
+                Assert.Single(
+                    Assert.IsType<NormalizedExecutionTrace>(explicitlyUnsupported.Trace).Events,
+                    static item => item.Kind == "childResolved").ProcessOccurrence).Disclosure);
     }
 
     [Fact]
@@ -1750,6 +1871,20 @@ public sealed class ProcessHigherOrderReferenceInterpreterTests
         Assert.Equal(
             RecurrenceEvidence(first.State),
             RecurrenceEvidence(firstReplay.State));
+        var recurrenceTrace = Assert.IsType<NormalizedExecutionTrace>(
+            ProcessExecutionTraceProjector.Project(first).Trace);
+        var recurrenceEvent = Assert.Single(
+            recurrenceTrace.Events,
+            static item => item.Kind == "recurrenceAdvanced");
+        var recurrenceOccurrence = Assert.IsType<ProcessTraceOccurrenceEvidence>(
+            recurrenceEvent.ProcessOccurrence);
+        var retainedRecurrence = Assert.Single(first.State.Recurrences);
+        Assert.Equal(ProcessTraceOccurrenceKind.Recurrence, recurrenceOccurrence.Kind);
+        Assert.Equal(retainedRecurrence.RegistrationId, recurrenceOccurrence.RegistrationId);
+        Assert.Equal(retainedRecurrence.Token, recurrenceOccurrence.OwnerToken);
+        Assert.Equal(retainedRecurrence.Occurrence, recurrenceOccurrence.Occurrence);
+        Assert.Equal(retainedRecurrence.RepeatCount, recurrenceOccurrence.RepeatCount);
+        Assert.Equal(retainedRecurrence.UnchangedProgressCount, recurrenceOccurrence.UnchangedProgressCount);
         var activeRecurrence = Assert.Single(first.State.Recurrences);
         var impossibleCounts = NewRecurrence(
             activeRecurrence.RegistrationId,

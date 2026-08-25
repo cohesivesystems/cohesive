@@ -8,6 +8,7 @@ using Cohesive.Model;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Contracts;
 using Cohesive.Processes.IR;
+using Cohesive.Processes.Runtime;
 
 namespace Cohesive.Tests.CodeGen;
 
@@ -22,6 +23,8 @@ public sealed class ProcessesContractProjectionTests
             shape.Id.Value.EndsWith(nameof(ProcessDefinition), StringComparison.Ordinal));
         Assert.Contains(graph.Shapes, shape =>
             shape.Id.Value.EndsWith(nameof(ExecutionDefinitionDocument), StringComparison.Ordinal));
+        Assert.Contains(graph.Shapes, shape =>
+            shape.Id.Value.EndsWith(nameof(ProcessExecutionTraceArtifact), StringComparison.Ordinal));
 
         var processNodes = AssertUnion(graph, nameof(ProcessNode), ProcessWireNames.NodeDiscriminator);
         var awaitClauses = AssertUnion(
@@ -81,6 +84,16 @@ public sealed class ProcessesContractProjectionTests
             text,
             StringComparison.Ordinal);
         Assert.Contains("export interface ExecutionDefinitionDocument", text, StringComparison.Ordinal);
+        Assert.Contains("export interface ProcessExecutionTraceArtifact", text, StringComparison.Ordinal);
+        Assert.Contains("export interface NormalizedExecutionTraceEvent", text, StringComparison.Ordinal);
+        Assert.Contains("processOccurrence?: ProcessTraceOccurrenceEvidence | null;", text, StringComparison.Ordinal);
+        Assert.Contains("requestOutcome?: RequestTerminalOutcomeId | null;", text, StringComparison.Ordinal);
+        Assert.Contains("export interface ProcessTraceOccurrenceEvidence", text, StringComparison.Ordinal);
+        Assert.Contains("continuation?: ProcessContinuationIdentity | null;", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "export type ExecutionTraceEvidenceDisclosure = 'Unknown' | 'Disclosed' | 'Redacted' | 'Unavailable' | 'Unsupported';",
+            text,
+            StringComparison.Ordinal);
         Assert.Contains("definition: unknown;", text, StringComparison.Ordinal);
         Assert.Contains("sourceMap: ExecutionSourceMap;", text, StringComparison.Ordinal);
         Assert.Contains("import type {", text, StringComparison.Ordinal);

@@ -146,6 +146,8 @@ public static class ProcessExecutionTraceProjector
                     ? ConventionName(inputReason)
                     : null,
                 waitRegistrationId: item.WaitRegistrationId,
+                processOccurrence: item.ProcessOccurrence,
+                requestOutcome: item.RequestOutcome,
                 detail: item.Detail,
                 sourceReferences: item.SourceReferences));
         }
@@ -254,11 +256,64 @@ public static class ProcessExecutionTraceProjector
                 continue;
             }
 
+            var requiredOccurrenceKind = RequiredOccurrenceKind(item.Kind);
+            if ((requiredOccurrenceKind is null) != (item.ProcessOccurrence is null)
+                || requiredOccurrenceKind is { } requiredKind
+                && item.ProcessOccurrence?.Kind != requiredKind
+                || item.RequestOutcome is { } requestOutcome
+                && (string.IsNullOrWhiteSpace(requestOutcome.Value) || item.Emission is null)
+                || item.Kind == ProcessTraceEventKind.ChildResolved && item.RequestOutcome is null)
+            {
+                diagnostics.Add(Error(
+                    ExecutionTraceDiagnosticCodes.EventInvalid,
+                    $"Process trace event {index} has incomplete or contradictory occurrence evidence.",
+                    $"/trace/{index}/processOccurrence",
+                    item.Node.Value,
+                    sourceReference));
+                continue;
+            }
+
             var envelopeRequired = item.Kind is ProcessTraceEventKind.InteractionEmitted
                 or ProcessTraceEventKind.InputAdmitted;
             InteractionEnvelope? envelope = null;
             var hasEnvelope = item.Emission is { } emission
                 && envelopes.TryGetValue(emission, out envelope);
+            if (item.RequestOutcome is { } exactRequestOutcome
+                && (!hasEnvelope
+                    || envelope is not ReplyEnvelope reply
+                    || reply.Outcome.Id != exactRequestOutcome))
+            {
+                diagnostics.Add(Error(
+                    ExecutionTraceDiagnosticCodes.EmissionEvidenceMismatch,
+                    $"Process trace event {index} has contradictory terminal Request outcome evidence.",
+                    $"/trace/{index}/requestOutcome",
+                    item.Node.Value,
+                    sourceReference));
+                continue;
+            }
+            if (item.Kind == ProcessTraceEventKind.ChildResolved
+                && item.ProcessOccurrence is
+                {
+                    Disclosure: ExecutionTraceEvidenceDisclosure.Disclosed,
+                    Definition: { } childDefinition,
+                    Continuation: { } childContinuation
+                }
+                && (!hasEnvelope
+                    || envelope is not ReplyEnvelope
+                    {
+                        Context.Origin: ProcessInteractionOrigin childOrigin
+                    }
+                    || childOrigin.Definition != childDefinition
+                    || childOrigin.Continuation != childContinuation))
+            {
+                diagnostics.Add(Error(
+                    ExecutionTraceDiagnosticCodes.EmissionEvidenceMismatch,
+                    $"Process trace event {index} has contradictory child Reply lineage evidence.",
+                    $"/trace/{index}/processOccurrence",
+                    item.Node.Value,
+                    sourceReference));
+                continue;
+            }
             if (envelopeRequired
                 && !hasEnvelope)
             {
@@ -284,6 +339,20 @@ public static class ProcessExecutionTraceProjector
             }
         }
     }
+
+    static ProcessTraceOccurrenceKind? RequiredOccurrenceKind(ProcessTraceEventKind kind) => kind switch
+    {
+        ProcessTraceEventKind.ChildRegistered
+            or ProcessTraceEventKind.ChildResolved
+            or ProcessTraceEventKind.ChildCancellationRequested
+            or ProcessTraceEventKind.ChildDetached
+            or ProcessTraceEventKind.ChildCancelledBeforeStart
+            or ProcessTraceEventKind.ChildCancellationSettled
+            or ProcessTraceEventKind.CancellationFinalizerStarted => ProcessTraceOccurrenceKind.Child,
+        ProcessTraceEventKind.PartitionBatchChanged => ProcessTraceOccurrenceKind.Partition,
+        ProcessTraceEventKind.RecurrenceAdvanced => ProcessTraceOccurrenceKind.Recurrence,
+        _ => null
+    };
 
     static string FirstSourceReference(ProcessExecutionEvidence evidence) =>
         evidence.Trace.SelectMany(static item => item?.SourceReferences ?? [])

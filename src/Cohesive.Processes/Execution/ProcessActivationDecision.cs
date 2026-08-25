@@ -136,6 +136,8 @@ public enum ProcessTraceEventKind
 /// <param name="WaitRegistrationId">
 /// Exact wait occurrence named by an input disposition, when one participated in the decision.
 /// </param>
+/// <param name="ProcessOccurrence">Typed payload-safe child, partition, or recurrence occurrence evidence.</param>
+/// <param name="RequestOutcome">Exact terminal Request outcome identity when a Reply participated.</param>
 public sealed record ProcessTraceEvent(
     int Sequence,
     ProcessTraceEventKind Kind,
@@ -152,7 +154,9 @@ public sealed record ProcessTraceEvent(
     long? OperationOccurrence = null,
     ProcessInputAdmissionDisposition? InputDisposition = null,
     ProcessInputAdmissionReason? InputReason = null,
-    ProcessWaitRegistrationId? WaitRegistrationId = null);
+    ProcessWaitRegistrationId? WaitRegistrationId = null,
+    ProcessTraceOccurrenceEvidence? ProcessOccurrence = null,
+    RequestTerminalOutcomeId? RequestOutcome = null);
 
 /// <summary>Attributable deterministic evidence returned by one finite Process activation.</summary>
 /// <param name="Definition">Exact Process definition identity, revision, and fingerprint.</param>

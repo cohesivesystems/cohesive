@@ -152,6 +152,11 @@ a canonical artifact. Application-facing reads use trusted authority scope plus 
 keys remain an engine-administration address and never enter the result artifact. Available
 `ProcessExecutionTraceArtifact` values are versioned, contain an explicit missing-prefix count, and serialize through
 `ProcessExecutionTraceJsonSerializer`; only zero missing-prefix coverage proves a complete activation inventory.
+Normalized trace schema v2 exposes typed payload-safe child, partition, and recurrence occurrence evidence. Use its
+disclosure state rather than interpreting missing fields or parsing `Detail`; a disclosed child names the exact child
+definition, instance, and attempt, while a partitioned child may name only its authored stable progress identity.
+Request Reply events retain the exact terminal outcome plus existing branch, emission, correlation, and causation
+identities. All of this evidence participates in deterministic trace fingerprinting.
 
 Use `IProcessExecutionExplainRepository` to compose retained runtime observations into the existing canonical
 `ExecutionExplainArtifact`. The repository may return a partial artifact for pending or active execution, but it must

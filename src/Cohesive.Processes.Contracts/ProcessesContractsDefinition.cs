@@ -1,6 +1,7 @@
 using Cohesive.Api;
 using Cohesive.Execution;
 using Cohesive.Processes.IR;
+using Cohesive.Processes.Runtime;
 using CohesiveApi = Cohesive.Api.Api;
 
 namespace Cohesive.Processes.Contracts;
@@ -25,6 +26,12 @@ public static class ProcessesContractsDefinition
             .Action("ExecutionDefinitionDocument")
             .Route("GET", "/processes/contracts/execution-definition-document")
             .Returns<ExecutionDefinitionDocument>()
+            .Build(),
+        CohesiveApi
+            .Define("ProcessesContracts")
+            .Action("ProcessExecutionTraceArtifact")
+            .Route("GET", "/processes/contracts/execution-trace-artifact")
+            .Returns<ProcessExecutionTraceArtifact>()
             .Build()
     );
 }
