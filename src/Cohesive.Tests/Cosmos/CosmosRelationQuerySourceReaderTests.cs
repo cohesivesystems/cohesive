@@ -132,7 +132,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
         var cosmosPolicy = new CosmosRelationQuerySourcePolicy(
             partitionSourceSelector: "partitionKey",
             logicalPartition: RelationQueryLogicalPartitionIdentity.WholeSource,
-            CosmosRelationQueryCrossPartitionPolicy.AllowBoundedQueries,
+            fixedPartitionKey: new("tenant-a"),
             readConsistencyLevel: ConsistencyLevel.Strong);
         var cosmosSource = new RelationQuerySourceInstance(
             new("source/tests/entity-source-view/cosmos/v1"),
@@ -165,13 +165,15 @@ public sealed class CosmosRelationQuerySourceReaderTests
             persistedObservationType: entityShape.Id);
         var cosmosCatalog = new EntityRelationQuerySourceCatalog([cosmosRegistration]);
         var sourceBinding = Assert.Single(cosmosCatalog.Resolve(plan).Bindings);
+        Assert.Equal(
+            cosmosReader.Descriptor.PartitionBinding!.SourceSelector,
+            Assert.IsType<RelationQueryPartitionBinding>(sourceBinding.Partition).SourceSelector);
         List<JsonElement> providerRows = [];
         foreach (var snapshot in snapshots)
         {
             Dictionary<string, object?> row = new(StringComparer.Ordinal)
             {
-                ["_identity"] = snapshot.Entity.EntityId.Value,
-                ["_partition"] = "tenant-a"
+                ["_identity"] = snapshot.Entity.EntityId.Value
             };
             for (var index = 0; index < sourceBinding.Fields.Length; index++)
             {

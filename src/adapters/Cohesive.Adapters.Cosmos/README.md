@@ -571,6 +571,9 @@ document resides in that logical partition; the reader does not verify the asser
 and an incorrect key can make authoritative absence evidence unsound. Likewise, `partitionSourceSelector` is a
 caller-declared property-only path to one scalar partition coordinate and is used for cross-partition conflict
 evidence without being compared with the container definition. V1 does not model hierarchical partition-key tuples.
+When a fixed key is present, the Cosmos reader descriptor retains the exact `partitionSourceSelector`, and the
+Storage catalog projects that same selector into each canonical placement binding. The physical executor validates
+the agreement before I/O; callers do not maintain a separate placement-side partition mapping.
 Explicitly allow bounded cross-partition queries or provide a fixed partition. Source registration rejects the
 otherwise unusable combination of cross-partition prohibition and no fixed scope because the reader itself rejects
 that policy before I/O.
