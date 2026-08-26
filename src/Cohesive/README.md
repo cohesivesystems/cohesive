@@ -43,6 +43,30 @@ nullability, cardinality, and field types. `ObservationValue` remains the sole f
 field/path lookup are immutable projections over that value. Canonical JSON and its typed SHA-256 fingerprint include
 the canonical-format profile, qualified shape identity, and value.
 
+Core observations can be interpreted directly as CLR values with a cached convention-based plan:
+
+```csharp
+Shipment shipment = observation.Materialize<Shipment>();
+```
+
+For explicit semantic mappings, compile and reuse an immutable materializer:
+
+```csharp
+var materializer = ObservationMaterializer
+    .For<Shipment>(new GraphShapeId(graph, shipmentShapeId))
+    .Map("shipment_id", shipment => shipment.Id)
+    .WithMissingFieldBehavior(ObservationMissingFieldBehavior.Throw)
+    .Compile();
+
+Shipment shipment = materializer.Materialize(observation);
+```
+
+`WithClrShapeMetadata` accepts the immutable `ClrShapeGraphBuildResult` that authored a graph, so implicit mappings
+use the exact effective field identities selected by its metadata providers. Serializer options are cloned and
+frozen during compilation. Compiled plans therefore retain qualified shape and mapping policy without a mutable
+ambient configuration object. Reflection metadata is cached by CLR type, while default compiled plans are cached by
+CLR target type and complete `QualifiedShapeId`; neither cache depends on a Relations layout or local shape id alone.
+
 `Cohesive.Relations.Model.Observation` remains the indexed physical representation during the staged migration tracked
 by ARI-503 and ARI-504. It is not the semantic authority for identity-free observations.
 
