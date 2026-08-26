@@ -417,15 +417,18 @@ public sealed class RelationQueryTelemetryTests
                 LoadCustomerRelationFixture.RelationshipCatalogDocument)
             .Supply(
             [
-                new Observation(
-                    LoadCustomerRelationFixture.LoadShapeLocalId,
+                new RelationQuerySuppliedRoot(
                     $"load/{privatePayload}",
+                    LoadCustomerRelationFixture.LoadShapeId,
                     new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
                     {
                         [LoadCustomerRelationFixture.LoadIdFieldName] =
                             ObservationValue.FromString($"load/{privatePayload}"),
                         [LoadCustomerRelationFixture.LoadCustomerIdFieldName] =
-                            ObservationValue.FromString($"customer/{privatePayload}")
+                            ObservationValue.FromString($"customer/{privatePayload}"),
+                        [LoadCustomerRelationFixture.LoadStatusFieldName] = ObservationValue.FromString("Open"),
+                        [LoadCustomerRelationFixture.LoadAmountFieldName] = ObservationValue.FromDecimal(0m),
+                        [LoadCustomerRelationFixture.LoadActiveFieldName] = ObservationValue.FromBool(true)
                     })
             ],
             evidenceReference: $"evidence/private/{privatePayload}")

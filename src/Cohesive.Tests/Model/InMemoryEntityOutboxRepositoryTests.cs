@@ -1,6 +1,5 @@
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
-using Cohesive.Relations.Model;
 using Cohesive.Storage;
 
 namespace Cohesive.Tests.Model;
@@ -21,7 +20,7 @@ public sealed class InMemoryEntityOutboxRepositoryTests
             options: EntityReadOptions.Full);
 
         Assert.NotNull(snapshot);
-        Assert.Equal("alpha", snapshot.Entity.GetField(nameof(SampleObservation.Name)).GetString());
+        Assert.Equal("alpha", snapshot.Entity.Observation.GetField(nameof(SampleObservation.Name)).GetString());
         Assert.Equal("tenant-a", snapshot.PartitionKey);
     }
 
@@ -65,7 +64,7 @@ public sealed class InMemoryEntityOutboxRepositoryTests
 
         await repository.Upsert(
             tenantAContext,
-            new(state.Observation));
+            new(state.Snapshot));
 
         Assert.Null(await repository.TryGet(tenantBContext, id: "shared-id", options: EntityReadOptions.Full));
         var snapshot = await repository.TryGet(tenantAContext, id: "shared-id", options: EntityReadOptions.Full);
@@ -83,13 +82,11 @@ public sealed class InMemoryEntityOutboxRepositoryTests
             PartitionKey = "tenant-a",
             Name = "alpha"
         });
-        var initial = await repository.Upsert(OperationContext.Create(), new(initialState.Observation));
-        var candidate = new Observation(
-            initial.Entity.ShapeId,
-            initial.Entity.Id,
-            initial.Entity.Fields.ToDictionary(static field => field.Key, static field => field.Value, StringComparer.Ordinal),
-            version: initial.Entity.Version + 1,
-            lineage: initial.Entity.Lineage);
+        var initial = await repository.Upsert(OperationContext.Create(), new(initialState.Snapshot));
+        var candidate = SampleObservation.Instance.Definition.CreateState(
+            initial.Entity.EntityId.Value,
+            initial.Entity.Observation.Fields,
+            version: initial.Entity.Version + 1).Snapshot;
         var envelope = Envelope("emission/1", "generated", candidate);
         var commit = new EntityOutboxCommit(
             new(candidate, initial.ConcurrencyToken),
@@ -100,7 +97,7 @@ public sealed class InMemoryEntityOutboxRepositoryTests
             commit);
         var replay = await repository.UpsertWithOutbox(OperationContext.Create(), commit);
 
-        Assert.Equal("obs-1", result.Entity.Entity.Id);
+        Assert.Equal("obs-1", result.Entity.Entity.EntityId.Value);
         Assert.Equal("tenant-a", result.Entity.PartitionKey);
         Assert.Equal(result.Entity.ConcurrencyToken, replay.Entity.ConcurrencyToken);
         Assert.Single(result.Envelopes);
@@ -118,13 +115,11 @@ public sealed class InMemoryEntityOutboxRepositoryTests
             PartitionKey = "tenant-a",
             Name = "alpha"
         });
-        var initial = await repository.Upsert(OperationContext.Create(), new(initialState.Observation));
-        var candidate = new Observation(
-            initial.Entity.ShapeId,
-            initial.Entity.Id,
-            initial.Entity.Fields,
-            version: initial.Entity.Version + 1,
-            lineage: initial.Entity.Lineage);
+        var initial = await repository.Upsert(OperationContext.Create(), new(initialState.Snapshot));
+        var candidate = SampleObservation.Instance.Definition.CreateState(
+            initial.Entity.EntityId.Value,
+            initial.Entity.Observation.Fields,
+            version: initial.Entity.Version + 1).Snapshot;
         await repository.UpsertWithOutbox(
             OperationContext.Create(),
             new(new(candidate, initial.ConcurrencyToken), [Envelope("emission/1", "first", candidate)]));
@@ -135,9 +130,9 @@ public sealed class InMemoryEntityOutboxRepositoryTests
 
         Assert.Contains("different canonical content", error.Message, StringComparison.Ordinal);
         Assert.Single(repository.OutboxEnvelopes);
-        var retained = await repository.TryGet(OperationContext.Create(), id: candidate.Id, options: EntityReadOptions.Full);
+        var retained = await repository.TryGet(OperationContext.Create(), id: candidate.EntityId.Value, options: EntityReadOptions.Full);
         Assert.NotNull(retained);
-        Assert.True(retained.Entity.HasSameContent(candidate));
+        Assert.Equal(candidate, retained.Entity);
     }
 
     [Fact]
@@ -148,7 +143,7 @@ public sealed class InMemoryEntityOutboxRepositoryTests
             Id = "obs-1",
             PartitionKey = "tenant-a",
             Name = "alpha"
-        }).Observation;
+        }).Snapshot;
 
         var error = Assert.Throws<ArgumentException>(() => new EntityOutboxCommit(
             new(candidate),
@@ -167,20 +162,16 @@ public sealed class InMemoryEntityOutboxRepositoryTests
             PartitionKey = "tenant-a",
             Name = "alpha"
         });
-        var initial = await repository.Upsert(OperationContext.Create(), new(state.Observation));
-        var concurrent = new Observation(
-            initial.Entity.ShapeId,
-            initial.Entity.Id,
-            initial.Entity.Fields,
-            version: initial.Entity.Version + 1,
-            lineage: initial.Entity.Lineage);
+        var initial = await repository.Upsert(OperationContext.Create(), new(state.Snapshot));
+        var concurrent = SampleObservation.Instance.Definition.CreateState(
+            initial.Entity.EntityId.Value,
+            initial.Entity.Observation.Fields,
+            version: initial.Entity.Version + 1).Snapshot;
         await repository.Upsert(OperationContext.Create(), new(concurrent, initial.ConcurrencyToken));
-        var staleCandidate = new Observation(
-            initial.Entity.ShapeId,
-            initial.Entity.Id,
-            initial.Entity.Fields,
-            version: initial.Entity.Version + 1,
-            lineage: initial.Entity.Lineage);
+        var staleCandidate = SampleObservation.Instance.Definition.CreateState(
+            initial.Entity.EntityId.Value,
+            initial.Entity.Observation.Fields,
+            version: initial.Entity.Version + 1).Snapshot;
 
         await Assert.ThrowsAsync<ObservationConcurrencyConflictException>(() => repository.UpsertWithOutbox(
             OperationContext.Create(),
@@ -191,14 +182,14 @@ public sealed class InMemoryEntityOutboxRepositoryTests
         Assert.Empty(repository.OutboxEnvelopes);
     }
 
-    static DomainEventEnvelope Envelope(string emissionId, string payload, Observation entity) => new(
+    static DomainEventEnvelope Envelope(string emissionId, string payload, EntityObservationSnapshot entity) => new(
         InteractionEnvelope.CurrentSchemaVersion,
         new(
             new(emissionId),
             new TransitionInteractionOrigin(
                 Definition("transition/sample"),
                 new("emit/sample"),
-                new(new(entity.ShapeId.Value), new(entity.Id)),
+                new(new(entity.Observation.ShapeId.ShapeId.Value), entity.EntityId),
                 new("outcome/sample")),
             new("correlation/sample"),
             causationId: null,

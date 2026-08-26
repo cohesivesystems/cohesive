@@ -210,13 +210,14 @@ public sealed class EntityRelationQuerySourceCatalogTests
             canonicalShape.Constraints,
             canonicalShape.Annotations,
             role: ShapeRoles.Entity);
+        var definition = CreateEntityDefinition(sourceShape.Id, entityShape);
         var repository = new InMemoryEntityOutboxRepository(
-            new EntityDefinition(new(entityShape.Id.Value), entityShape),
+            definition,
             static _ => "tenant-a",
             [
-                VersionedSnapshot(entityShape.Id, "load-c", version: 3),
-                VersionedSnapshot(entityShape.Id, "load-a", version: 1),
-                VersionedSnapshot(entityShape.Id, "load-b", version: 2)
+                VersionedSnapshot(definition, "load-c", version: 3),
+                VersionedSnapshot(definition, "load-a", version: 1),
+                VersionedSnapshot(definition, "load-b", version: 2)
             ]);
         var registration = EntityRelationQuerySourceRegistration.InMemory(
             sourceShape.Id,
@@ -275,14 +276,15 @@ public sealed class EntityRelationQuerySourceCatalogTests
             canonicalEntityShape.Constraints,
             canonicalEntityShape.Annotations,
             role: ShapeRoles.Entity);
+        var definition = CreateEntityDefinition(entityShape.Id, repositoryEntityShape);
         var repository = new InMemoryEntityOutboxRepository(
-            new EntityDefinition(new(repositoryEntityShape.Id.Value), repositoryEntityShape),
+            definition,
             partitionKeyFieldName: "tenantId",
             seedSnapshots:
             [
-                StoredLoadSnapshot(repositoryEntityShape.Id, "load-c", "Charlie", version: 3),
-                StoredLoadSnapshot(repositoryEntityShape.Id, "load-a", "Alpha", version: 1),
-                StoredLoadSnapshot(repositoryEntityShape.Id, "load-b", "Beta", version: 2)
+                StoredLoadSnapshot(definition, "load-c", "Charlie", version: 3),
+                StoredLoadSnapshot(definition, "load-a", "Alpha", version: 1),
+                StoredLoadSnapshot(definition, "load-b", "Beta", version: 2)
             ]);
         var registration = EntityRelationQuerySourceRegistration.InMemory(
             viewShape.Id,
@@ -327,12 +329,12 @@ public sealed class EntityRelationQuerySourceCatalogTests
             fixture.LoadShape,
             [
                 Snapshot(
-                    fixture.LoadShape.Id.ShapeId,
+                    fixture.LoadShape,
                     "load-b",
                     ("id", ObservationValue.FromString("load-b")),
                     ("customerId", ObservationValue.FromString("customer-b"))),
                 Snapshot(
-                    fixture.LoadShape.Id.ShapeId,
+                    fixture.LoadShape,
                     "load-a",
                     ("id", ObservationValue.FromString("load-a")),
                     ("customerId", ObservationValue.FromString("customer-a")))
@@ -341,12 +343,12 @@ public sealed class EntityRelationQuerySourceCatalogTests
             fixture.CustomerShape,
             [
                 Snapshot(
-                    fixture.CustomerShape.Id.ShapeId,
+                    fixture.CustomerShape,
                     "customer-b",
                     ("id", ObservationValue.FromString("customer-b")),
                     ("name", ObservationValue.FromString("Beta Customer"))),
                 Snapshot(
-                    fixture.CustomerShape.Id.ShapeId,
+                    fixture.CustomerShape,
                     "customer-a",
                     ("id", ObservationValue.FromString("customer-a")),
                     ("name", ObservationValue.FromString("Alpha Customer")))
@@ -462,17 +464,16 @@ public sealed class EntityRelationQuerySourceCatalogTests
             canonicalShape.Constraints,
             canonicalShape.Annotations,
             role: ShapeRoles.Entity);
-        var definition = new EntityDefinition(new(entityShape.Id.Value), entityShape);
+        var definition = CreateEntityDefinition(fixture.SourceShape.Id, entityShape);
         var snapshots = values.Select(value => new EntitySnapshot(
-            new(
-                entityShape.Id,
+            definition.CreateState(
                 value.Id,
                 new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
                 {
                     ["id"] = ObservationValue.FromString(value.Id),
                     ["name"] = ObservationValue.FromString(value.Name),
                     ["tenantId"] = ObservationValue.FromString(value.TenantId)
-                }),
+                }).Snapshot,
             value.TenantId,
             new($"seed/{value.Id}"))).ToArray();
         var repository = new InMemoryEntityOutboxRepository(
@@ -498,8 +499,9 @@ public sealed class EntityRelationQuerySourceCatalogTests
             canonicalShape.Constraints,
             canonicalShape.Annotations,
             role: ShapeRoles.Entity);
+        var definition = CreateEntityDefinition(sourceShape.Id, entityShape);
         var repository = new InMemoryEntityOutboxRepository(
-            new EntityDefinition(new(entityShape.Id.Value), entityShape),
+            definition,
             static _ => "partition",
             snapshots);
         return EntityRelationQuerySourceRegistration.InMemory(
@@ -508,33 +510,42 @@ public sealed class EntityRelationQuerySourceCatalogTests
             RelationQueryLogicalPartitionIdentity.WholeSource);
     }
 
-    static EntitySnapshot Snapshot(
-        ShapeId shape,
+    static EntitySnapshot Snapshot<T>(
+        RelationQueryClrShape<T> shape,
         string id,
-        params (string Name, ObservationValue Value)[] fields) => new(
-        new(
-            shape,
+        params (string Name, ObservationValue Value)[] fields)
+        where T : notnull
+    {
+        var canonicalShape = shape.Document.Graph.GetShape(shape.Id);
+        var entityShape = new Shape(
+            canonicalShape.Id,
+            canonicalShape.Fields,
+            canonicalShape.Constraints,
+            canonicalShape.Annotations,
+            role: ShapeRoles.Entity);
+        var definition = CreateEntityDefinition(shape.Id, entityShape);
+        return new(
+        definition.CreateState(
             id,
-            fields.ToDictionary(static field => field.Name, static field => field.Value, StringComparer.Ordinal)),
+            fields.ToDictionary(static field => field.Name, static field => field.Value, StringComparer.Ordinal)).Snapshot,
         "partition",
         new($"seed/{id}"));
+    }
 
-    static EntitySnapshot VersionedSnapshot(ShapeId shape, string id, long version) => new(
-        new(
-            shape,
+    static EntitySnapshot VersionedSnapshot(EntityDefinition definition, string id, long version) => new(
+        definition.CreateState(
             id,
             new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
             {
                 ["id"] = ObservationValue.FromString(id),
                 ["sourceEntityVersion"] = ObservationValue.FromInt64(999)
             },
-            version),
+            version).Snapshot,
         "tenant-a",
         new($"seed/{id}"));
 
-    static EntitySnapshot StoredLoadSnapshot(ShapeId shape, string id, string name, long version) => new(
-        new(
-            shape,
+    static EntitySnapshot StoredLoadSnapshot(EntityDefinition definition, string id, string name, long version) => new(
+        definition.CreateState(
             id,
             new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
             {
@@ -542,9 +553,17 @@ public sealed class EntityRelationQuerySourceCatalogTests
                 ["name"] = ObservationValue.FromString(name),
                 ["tenantId"] = ObservationValue.FromString("tenant-a")
             },
-            version),
+            version).Snapshot,
         "tenant-a",
         new($"seed/{id}"));
+
+    static EntityDefinition CreateEntityDefinition(QualifiedShapeId shape, Shape entityShape)
+    {
+        ShapeGraph graph = new(shape.GraphId, [entityShape]);
+        return new(
+            new(entityShape.Id.Value),
+            new EntityShapeGraphBinding(shape, Cohesive.Model.Serialization.ShapeGraphDocument.FromGraph(graph)));
+    }
 
     static string SourceViewPayloadSelector(FieldPath semanticPath)
     {

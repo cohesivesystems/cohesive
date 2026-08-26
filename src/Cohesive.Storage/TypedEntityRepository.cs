@@ -1,4 +1,3 @@
-using Cohesive.Relations.Mapping;
 using Cohesive.Transitions.Model;
 
 namespace Cohesive.Storage;
@@ -6,15 +5,13 @@ namespace Cohesive.Storage;
 /// <summary>Represents a typed entity repository.</summary>
 public sealed class TypedEntityRepository<TEntity>(
     IEntityRepository repository,
-    Action<ObjectObservationMapperBuilder<TEntity>>? configureObjectMapper = null,
-    ShapeMappingContext? mappingContext = null
+    Func<TEntity, string>? selectEntityId = null,
+    Func<TEntity, long>? selectVersion = null,
+    Action<ObservationMaterializerBuilder<TEntity>>? configureMaterializer = null
     ) : IEntityRepository<TEntity>, IEntityTransitionOperationRepository where TEntity : notnull
 {
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => repository.EntityDefinition;
-
-    /// <summary>Gets the mapping context.</summary>
-    public ShapeMappingContext MappingContext { get; } = mappingContext ?? repository.MappingContext;
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => repository.EntityType;
@@ -32,7 +29,7 @@ public sealed class TypedEntityRepository<TEntity>(
         repository.TryGetEntity<TEntity>(context,
             id,
             options,
-            mappingContext: MappingContext);
+            configureMaterializer);
 
     /// <summary>Upserts the value.</summary>
     public Task<EntitySnapshot> Upsert(OperationContext context, EntityWriteRequest write) =>
@@ -43,8 +40,8 @@ public sealed class TypedEntityRepository<TEntity>(
         repository.Upsert(context,
             entity,
             expectedConcurrencyToken,
-            configureObjectMapper,
-            MappingContext);
+            selectEntityId,
+            selectVersion);
 
     /// <summary>Looks up one exact Process Transition operation receipt.</summary>
     /// <param name="context">Operation context and cancellation.</param>
@@ -82,9 +79,6 @@ public sealed class TypedEntityOutboxRepository<TEntity>(
 {
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => repository.EntityDefinition;
-
-    /// <summary>Gets the mapping context.</summary>
-    public ShapeMappingContext MappingContext => repository.MappingContext;
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => repository.EntityType;

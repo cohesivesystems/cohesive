@@ -56,7 +56,8 @@ The directory preserves the security-relevant lookup contract:
   detected instead of selecting an arbitrary row.
 - Default membership lookup receives visible candidate scope ids as a typed array parameter and performs canonical
   collection membership before its uniqueness check.
-- Returned canonical observations are mapped to the existing Identity record types through `ShapeMappingContext`.
+- Returned canonical observations are materialized into the existing Identity record types through the immutable
+  core `ObservationMaterializer<T>` convention.
 
 ## Fail-Closed Evaluation
 

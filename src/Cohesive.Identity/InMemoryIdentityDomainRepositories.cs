@@ -1,5 +1,4 @@
 using Cohesive.Relations.Acquisition;
-using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Physical;
 using Cohesive.Storage;
 
@@ -23,7 +22,6 @@ public sealed record InMemoryIdentityDomainRepositories(
     /// <summary>
     /// Creates a repository-backed identity directory over these in-memory repositories.
     /// </summary>
-    /// <param name="mappingContext">Optional mapping context used to materialize identity records.</param>
     /// <param name="physicalPlanningPolicy">
     /// Optional bounded canonical planning policy; <see langword="null"/> uses deterministic in-memory defaults.
     /// </param>
@@ -33,7 +31,6 @@ public sealed record InMemoryIdentityDomainRepositories(
     /// A repository does not represent its expected graph-qualified Identity shape.
     /// </exception>
     public IIdentityDirectory CreateDirectory(
-        ShapeMappingContext? mappingContext = null,
         RelationQueryPhysicalPlanningPolicy? physicalPlanningPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(Scopes);
@@ -55,8 +52,7 @@ public sealed record InMemoryIdentityDomainRepositories(
                 RelationQueryLogicalPartitionIdentity.WholeSource)
         ]);
         return new EntityRepositoryIdentityDirectory(
-            sources.CreateEvaluator(physicalPlanningPolicy ?? DefaultPhysicalPlanningPolicy),
-            mappingContext ?? Scopes.MappingContext);
+            sources.CreateEvaluator(physicalPlanningPolicy ?? DefaultPhysicalPlanningPolicy));
     }
 
     static RelationQueryPhysicalPlanningPolicy CreateDefaultPhysicalPlanningPolicy()
@@ -85,19 +81,16 @@ public static class InMemoryIdentityDomainRepositoryFactory
     /// Creates seeded in-memory repositories for the identity domain.
     /// </summary>
     /// <param name="directory">In-memory identity records to seed.</param>
-    /// <param name="mappingContext">Optional mapping context used by the repositories.</param>
     /// <returns>Seeded in-memory identity repositories.</returns>
     public static InMemoryIdentityDomainRepositories Create(
-        InMemoryIdentityDirectory directory,
-        ShapeMappingContext? mappingContext = null
+        InMemoryIdentityDirectory directory
         )
     {
         ArgumentNullException.ThrowIfNull(directory);
         return Create(
             scopes: directory.Scopes,
             principals: directory.Principals,
-            memberships: directory.Memberships,
-            mappingContext: mappingContext
+            memberships: directory.Memberships
             );
     }
 
@@ -107,13 +100,11 @@ public static class InMemoryIdentityDomainRepositoryFactory
     /// <param name="scopes">Scope records to seed.</param>
     /// <param name="principals">Principal account records to seed.</param>
     /// <param name="memberships">Scope membership records to seed.</param>
-    /// <param name="mappingContext">Optional mapping context used by the repositories.</param>
     /// <returns>Seeded in-memory identity repositories.</returns>
     public static InMemoryIdentityDomainRepositories Create(
         IEnumerable<IdentityScopeRecord> scopes,
         IEnumerable<PrincipalAccountRecord> principals,
-        IEnumerable<ScopeMembershipRecord> memberships,
-        ShapeMappingContext? mappingContext = null
+        IEnumerable<ScopeMembershipRecord> memberships
         )
     {
         ArgumentNullException.ThrowIfNull(scopes);
@@ -124,20 +115,17 @@ public static class InMemoryIdentityDomainRepositoryFactory
             Scopes: new InMemoryEntityOutboxRepository(
                 IdentityDomainModel.Scope.Definition,
                 seedData: scopes.Select(ToIdentityScopeSeed),
-                partitionKeyFieldName: nameof(IdentityScopeRecord.Kind),
-                mappingContext: mappingContext
+                partitionKeyFieldName: nameof(IdentityScopeRecord.Kind)
                 ),
             PrincipalAccounts: new InMemoryEntityOutboxRepository(
                 IdentityDomainModel.PrincipalAccount.Definition,
                 seedData: principals.Select(ToPrincipalAccountSeed),
-                partitionKeyFieldName: nameof(PrincipalAccountRecord.Id),
-                mappingContext: mappingContext
+                partitionKeyFieldName: nameof(PrincipalAccountRecord.Id)
                 ),
             ScopeMemberships: new InMemoryEntityOutboxRepository(
                 IdentityDomainModel.ScopeMembership.Definition,
                 seedData: memberships.Select(ToScopeMembershipSeed),
-                partitionKeyFieldName: nameof(ScopeMembershipRecord.PrincipalId),
-                mappingContext: mappingContext
+                partitionKeyFieldName: nameof(ScopeMembershipRecord.PrincipalId)
                 )
             );
     }

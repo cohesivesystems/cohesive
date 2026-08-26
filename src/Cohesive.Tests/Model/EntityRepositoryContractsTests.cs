@@ -114,10 +114,10 @@ public sealed class EntityRepositoryContractsTests
         var error = Assert.Throws<ArgumentOutOfRangeException>(() => repository.CreateOutboxDocuments(
             OperationContext.Create(),
             new EntityOutboxCommit(
-                new(state.Observation with
-                {
-                    Version = CosmosEntityOutboxRepository.MaximumExactObservationVersion + 1
-                }),
+                new(new EntityObservationSnapshot(
+                    state.EntityId,
+                    CosmosEntityOutboxRepository.MaximumExactObservationVersion + 1,
+                    state.Observation)),
                 []),
             partitionKey: "tenant-a"));
 
@@ -167,7 +167,7 @@ public sealed class EntityRepositoryContractsTests
                 new TransitionInteractionOrigin(
                     Reference(eventDocument),
                     new("emit/event"),
-                    new(new(state.Observation.ShapeId.Value), new(state.Observation.Id)),
+                    new(new(state.Observation.ShapeId.ShapeId.Value), state.EntityId),
                     new("outcome/applied")),
                 new("correlation/cosmos/1"),
                 causationId: null,
@@ -191,7 +191,7 @@ public sealed class EntityRepositoryContractsTests
         Assert.Equal(CosmosObservationOutboxRepositoryOptions.DefaultEntityDocumentKind, repository.EntityDocumentKind);
         var document = Assert.Single(repository.CreateOutboxDocuments(
             OperationContext.Create(),
-            new EntityOutboxCommit(new(state.Observation), [envelope]),
+            new EntityOutboxCommit(new(state.Snapshot), [envelope]),
             partitionKey: "tenant-a"));
         var serializer = new CosmosSystemTextJsonSerializer();
 
@@ -209,7 +209,7 @@ public sealed class EntityRepositoryContractsTests
                 contracts));
         Assert.Contains("does not match", error.Message, StringComparison.Ordinal);
         Assert.Equal(eventDocument.Metadata.DefinitionId.Value, document.StreamName);
-        Assert.Equal(state.Observation.ShapeId.Value, document.SubjectType);
+        Assert.Equal(state.Observation.ShapeId.ShapeId.Value, document.SubjectType);
         Assert.Equal("payload", document.Observation?["value"].GetString());
     }
 

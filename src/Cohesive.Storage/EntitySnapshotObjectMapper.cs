@@ -1,6 +1,4 @@
 using System.Collections.Concurrent;
-using Cohesive.Relations.Mapping;
-using Cohesive.Relations.Model;
 
 namespace Cohesive.Storage;
 
@@ -10,13 +8,11 @@ namespace Cohesive.Storage;
 public sealed class EntitySnapshotObjectMapper<TProjection, TResult>(
     EntityReadOptions readOptions,
     Func<TProjection, EntitySnapshot, TResult> map,
-    Action<ObservationObjectMapperBuilder<TProjection>>? configureProjection = null,
-    ShapeMappingContext? mappingContext = null
+    Action<ObservationMaterializerBuilder<TProjection>>? configureProjection = null
     )
 {
     readonly Func<TProjection, EntitySnapshot, TResult> map = Guard.RequireNotNull(map);
-    readonly ShapeMappingContext mappingContext = mappingContext ?? ShapeMappingContext.Default;
-    readonly ConcurrentDictionary<LayoutKey, ObservationObjectMapper<TProjection>> projectionMappers = [];
+    readonly ConcurrentDictionary<QualifiedShapeId, ObservationMaterializer<TProjection>> projectionMappers = [];
 
     /// <summary>
     /// Read options that describe the entity fields needed to map this contract.
@@ -29,21 +25,20 @@ public sealed class EntitySnapshotObjectMapper<TProjection, TResult>(
     public TResult Map(EntitySnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        var projection = GetProjectionMapper(snapshot.Entity.Layout).Map(snapshot.Entity);
+        var projection = GetProjectionMapper(snapshot.Entity.Observation.ShapeId)
+            .Materialize(snapshot.Entity.Observation);
         return map(projection, snapshot);
     }
 
-    ObservationObjectMapper<TProjection> GetProjectionMapper(ObservationLayout layout)
+    ObservationMaterializer<TProjection> GetProjectionMapper(QualifiedShapeId shape)
     {
-        ArgumentNullException.ThrowIfNull(layout);
-        var key = new LayoutKey(layout.Schema.Value, BuildFieldSignature(layout));
-        if (projectionMappers.TryGetValue(key, out var mapper))
+        if (projectionMappers.TryGetValue(shape, out var mapper))
             return mapper;
 
-        var builder = mappingContext.ForObservationObject<TProjection>(layout);
+        var builder = ObservationMaterializer.For<TProjection>(shape);
         configureProjection?.Invoke(builder);
-        mapper = builder.Build();
-        return projectionMappers.GetOrAdd(key, mapper);
+        mapper = builder.Compile();
+        return projectionMappers.GetOrAdd(shape, mapper);
     }
 
     static EntityReadOptions RequireProjectedReadOptions(EntityReadOptions readOptions)
@@ -55,10 +50,6 @@ public sealed class EntitySnapshotObjectMapper<TProjection, TResult>(
         return readOptions;
     }
 
-    static string BuildFieldSignature(ObservationLayout layout) =>
-        string.Join('\u001f', layout.FieldNames);
-
-    readonly record struct LayoutKey(string SchemaId, string FieldSignature);
 }
 
 /// <summary>
@@ -72,8 +63,7 @@ public static class EntitySnapshotObjectMapper
     public static EntitySnapshotObjectMapper<TProjection, TResult> Create<TProjection, TResult>(
         EntityReadOptions readOptions,
         Func<TProjection, EntitySnapshot, TResult> map,
-        Action<ObservationObjectMapperBuilder<TProjection>>? configureProjection = null,
-        ShapeMappingContext? mappingContext = null
+        Action<ObservationMaterializerBuilder<TProjection>>? configureProjection = null
         ) =>
-        new(readOptions, map, configureProjection, mappingContext);
+        new(readOptions, map, configureProjection);
 }

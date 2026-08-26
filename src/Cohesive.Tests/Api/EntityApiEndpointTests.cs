@@ -264,7 +264,7 @@ public sealed class EntityApiEndpointTests
         Assert.Empty(repository.OutboxEnvelopes);
         var retained = await repository.TryGet(OperationContext.Create(), id: "note-1", options: EntityReadOptions.Full);
         Assert.NotNull(retained);
-        Assert.Equal("before", retained.Entity.GetField(nameof(NoteState.Text)).GetString());
+        Assert.Equal("before", retained.Entity.Observation.GetField(nameof(NoteState.Text)).GetString());
     }
 
     [Fact]
@@ -301,7 +301,7 @@ public sealed class EntityApiEndpointTests
         var entity = NoteEntity.Instance;
         var partitionKeyPolicy = new EntityPartitionKeyPolicy(
             description: "tenant field and request tenant item",
-            writePartitionKeyResolver: static (_, observation) => observation.GetField(nameof(NoteState.Tenant)).GetRequiredString(),
+            writePartitionKeyResolver: static (_, snapshot) => snapshot.Observation.GetField(nameof(NoteState.Tenant)).GetRequiredString(),
             pointReadPartitionKeyResolver: static (context, _) =>
                 context.TryGetItem<string>(TenantPartitionContextKey, out var tenant) ? tenant : null
             );
@@ -310,10 +310,10 @@ public sealed class EntityApiEndpointTests
 
         await repository.Upsert(OperationContext.Create(), new(entity.Definition.CreateState(
             entityId: "note-1",
-            new NoteState("note-1", "tenant-a", "alpha tenant", now)).Observation));
+            new NoteState("note-1", "tenant-a", "alpha tenant", now)).Snapshot));
         await repository.Upsert(OperationContext.Create(), new(entity.Definition.CreateState(
             entityId: "note-1",
-            new NoteState("note-1", "tenant-b", "beta tenant", now)).Observation));
+            new NoteState("note-1", "tenant-b", "beta tenant", now)).Snapshot));
 
         var app = CreateApp(
             entity,
@@ -339,7 +339,7 @@ public sealed class EntityApiEndpointTests
         var entity = NoteEntity.Instance;
         var partitionKeyPolicy = new EntityPartitionKeyPolicy(
             description: "tenant field and request tenant item",
-            writePartitionKeyResolver: static (_, observation) => observation.GetField(nameof(NoteState.Tenant)).GetRequiredString(),
+            writePartitionKeyResolver: static (_, snapshot) => snapshot.Observation.GetField(nameof(NoteState.Tenant)).GetRequiredString(),
             pointReadPartitionKeyResolver: static (context, _) =>
                 context.TryGetItem<string>(TenantPartitionContextKey, out var tenant) ? tenant : null
             );
@@ -349,10 +349,10 @@ public sealed class EntityApiEndpointTests
 
         await repository.Upsert(OperationContext.Create(), new(entity.Definition.CreateState(
             entityId: "note-1",
-            new NoteState("note-1", "tenant-a", "alpha tenant", now)).Observation));
+            new NoteState("note-1", "tenant-a", "alpha tenant", now)).Snapshot));
         await repository.Upsert(OperationContext.Create(), new(entity.Definition.CreateState(
             entityId: "note-1",
-            new NoteState("note-1", "tenant-b", "beta tenant", now)).Observation));
+            new NoteState("note-1", "tenant-b", "beta tenant", now)).Snapshot));
 
         var app = CreateApp(
             entity,
@@ -616,10 +616,10 @@ public sealed class EntityApiEndpointTests
             .Build();
 
     static NoteResource ToResource(EntitySnapshot snapshot) => new(
-        Id: snapshot.Entity.GetField(nameof(NoteState.Id)).GetString() ?? throw new InvalidOperationException("Note id is required."),
-        Tenant: snapshot.Entity.GetField(nameof(NoteState.Tenant)).GetString() ?? throw new InvalidOperationException("Note tenant is required."),
-        Text: snapshot.Entity.GetField(nameof(NoteState.Text)).GetString() ?? throw new InvalidOperationException("Note text is required."),
-        UpdatedAtUtc: snapshot.Entity.GetField(nameof(NoteState.UpdatedAtUtc)).GetDateTimeOffset());
+        Id: snapshot.Entity.Observation.GetField(nameof(NoteState.Id)).GetString() ?? throw new InvalidOperationException("Note id is required."),
+        Tenant: snapshot.Entity.Observation.GetField(nameof(NoteState.Tenant)).GetString() ?? throw new InvalidOperationException("Note tenant is required."),
+        Text: snapshot.Entity.Observation.GetField(nameof(NoteState.Text)).GetString() ?? throw new InvalidOperationException("Note text is required."),
+        UpdatedAtUtc: snapshot.Entity.Observation.GetField(nameof(NoteState.UpdatedAtUtc)).GetDateTimeOffset());
 
     static JsonElement ReadJson(string json) => JsonDocument.Parse(json).RootElement.Clone();
 

@@ -1,23 +1,87 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.IR;
-using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
+using CoreObservation = Cohesive.Model.Observation;
 
 namespace Cohesive.Relations.Authoring;
 
 /// <summary>
-/// Directly supplied root observations for one relation evaluation.
+/// Portable directly supplied root evidence for one relation evaluation.
+/// </summary>
+/// <remarks>
+/// Stable source identity is acquisition evidence rather than part of the identity-free semantic observation.
+/// The enclosing evaluation validates <see cref="Fields"/> against <see cref="Shape"/> using its exact persisted
+/// shape-graph snapshot before the evidence can be executed.
+/// </remarks>
+public sealed record RelationQuerySuppliedRoot
+{
+    /// <summary>Creates portable directly supplied root evidence.</summary>
+    /// <param name="identity">Stable source identity for the supplied root.</param>
+    /// <param name="shape">Exact graph-qualified semantic shape.</param>
+    /// <param name="fields">Complete field values keyed by canonical semantic identity.</param>
+    /// <exception cref="ArgumentException">The identity or qualified shape is invalid.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="fields"/> is <see langword="null"/>.</exception>
+    [JsonConstructor]
+    public RelationQuerySuppliedRoot(
+        string identity,
+        QualifiedShapeId shape,
+        IReadOnlyDictionary<string, ObservationValue> fields)
+    {
+        Identity = Guard.RequireNotNullOrWhiteSpace(identity);
+        if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
+            throw new ArgumentException("Supplied root evidence requires a graph-qualified shape.", nameof(shape));
+        ArgumentNullException.ThrowIfNull(fields);
+
+        Shape = shape;
+        Fields = fields.ToImmutableSortedDictionary(StringComparer.Ordinal);
+    }
+
+    /// <summary>Stable source identity for this supplied root.</summary>
+    [JsonPropertyName("id")]
+    public string Identity { get; }
+
+    /// <summary>Exact graph-qualified semantic shape.</summary>
+    public QualifiedShapeId Shape { get; }
+
+    /// <summary>Complete field values keyed by canonical semantic identity.</summary>
+    public IReadOnlyDictionary<string, ObservationValue> Fields { get; }
+
+    /// <summary>Creates supplied-root evidence from a validated identity-free observation.</summary>
+    /// <param name="identity">Stable source identity for the supplied root.</param>
+    /// <param name="observation">Validated identity-free semantic observation.</param>
+    /// <returns>Portable root evidence retaining the observation's exact qualified shape and values.</returns>
+    public static RelationQuerySuppliedRoot FromObservation(string identity, CoreObservation observation)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        return new(identity, observation.ShapeId, observation.Fields);
+    }
+
+    internal CoreObservation ToObservation(GraphShapeId shape)
+    {
+        if (Shape != shape.QualifiedId)
+        {
+            throw new ArgumentException(
+                $"Supplied root '{Identity}' has shape '{Shape}', expected '{shape.QualifiedId}'.");
+        }
+
+        return CoreObservation.Create(shape, Fields);
+    }
+}
+
+/// <summary>
+/// Directly supplied root evidence for one relation evaluation.
 /// </summary>
 public sealed record RelationQuerySuppliedRootSet
 {
     /// <summary>Creates normalized directly supplied root evidence.</summary>
-    /// <param name="observations">Identity-bearing root observations.</param>
+    /// <param name="observations">Portable identity-bearing root evidence.</param>
     /// <param name="logicalPartition">Provider-neutral logical partition containing every supplied root.</param>
     /// <param name="completeness">Whether omission from the supplied set is authoritative.</param>
     /// <param name="evidenceReference">Optional opaque provenance reference.</param>
@@ -29,7 +93,7 @@ public sealed record RelationQuerySuppliedRootSet
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="completeness"/> is unsupported.</exception>
     [JsonConstructor]
     public RelationQuerySuppliedRootSet(
-        ImmutableArray<Observation> observations,
+        ImmutableArray<RelationQuerySuppliedRoot> observations,
         RelationQueryLogicalPartitionIdentity logicalPartition,
         RelationQueryEvidenceCompleteness completeness,
         string? evidenceReference)
@@ -37,7 +101,7 @@ public sealed record RelationQuerySuppliedRootSet
         var normalized = observations.IsDefault ? [] : observations;
         if (normalized.Any(static observation => observation is null))
             throw new ArgumentException("Supplied roots cannot contain null observations.", nameof(observations));
-        if (normalized.GroupBy(static observation => observation.Id, StringComparer.Ordinal)
+        if (normalized.GroupBy(static observation => observation.Identity, StringComparer.Ordinal)
             .Any(static group => group.Count() > 1))
         {
             throw new ArgumentException("Supplied roots cannot repeat an observation identity.", nameof(observations));
@@ -47,14 +111,14 @@ public sealed record RelationQuerySuppliedRootSet
         if (evidenceReference is not null)
             ArgumentException.ThrowIfNullOrWhiteSpace(evidenceReference);
 
-        Observations = [.. normalized.OrderBy(static observation => observation.Id, StringComparer.Ordinal)];
+        Observations = [.. normalized.OrderBy(static observation => observation.Identity, StringComparer.Ordinal)];
         LogicalPartition = Guard.RequireNotNull(logicalPartition);
         Completeness = completeness;
         EvidenceReference = evidenceReference;
     }
 
-    /// <summary>Identity-bearing root observations in deterministic identity order.</summary>
-    public ImmutableArray<Observation> Observations { get; }
+    /// <summary>Portable root evidence in deterministic identity order.</summary>
+    public ImmutableArray<RelationQuerySuppliedRoot> Observations { get; }
 
     /// <summary>Provider-neutral logical partition containing every supplied root.</summary>
     public RelationQueryLogicalPartitionIdentity LogicalPartition { get; }
@@ -78,7 +142,7 @@ public sealed record RelationQuerySuppliedRootSet
 public sealed class RelationQueryEvaluation
 {
     /// <summary>Current portable canonical evaluation schema version.</summary>
-    public const string CurrentSchemaVersion = "relation-query-evaluation/v2";
+    public const string CurrentSchemaVersion = "relation-query-evaluation/v3";
 
     internal RelationQueryEvaluation(
         RelationQueryCompilationRequest compilation,
@@ -272,12 +336,27 @@ public sealed class RelationQueryEvaluation
             .ToArray();
         if (sources.Length != 1)
             throw new ArgumentException("A supplied-root relation must declare exactly one root source.", nameof(SuppliedRoots));
-        if (SuppliedRoots.Observations.Any(observation => observation.ShapeId != sources[0].Shape.ShapeId))
+        if (SuppliedRoots.Observations.Any(observation => observation.Shape != sources[0].Shape))
         {
             throw new ArgumentException(
-                $"Every supplied root must have shape '{sources[0].Shape.ShapeId.Value}'.",
+                $"Every supplied root must have shape '{sources[0].Shape}'.",
                 nameof(SuppliedRoots));
         }
+
+        var shape = ResolveGraphShape(sources[0].Shape);
+        foreach (var observation in SuppliedRoots.Observations)
+            _ = observation.ToObservation(shape);
+    }
+
+    GraphShapeId ResolveGraphShape(QualifiedShapeId shape)
+    {
+        var graph = Compilation.ShapeDocuments
+            .Select(static document => document.Graph)
+            .SingleOrDefault(candidate => candidate.Id == shape.GraphId)
+            ?? throw new ArgumentException(
+                $"Supplied root shape '{shape}' requires its exact graph snapshot.",
+                nameof(SuppliedRoots));
+        return new(graph, shape.ShapeId);
     }
 
     internal static void ValidatePlanDefinition(
@@ -580,7 +659,7 @@ public sealed class RelationQueryEvaluationBuilder
     /// The evaluated definition is a query or roots were already supplied.
     /// </exception>
     public RelationQueryEvaluationBuilder Supply(
-        IEnumerable<Observation> observations,
+        IEnumerable<RelationQuerySuppliedRoot> observations,
         RelationQueryEvidenceCompleteness completeness = RelationQueryEvidenceCompleteness.Complete,
         string? evidenceReference = null,
         RelationQueryLogicalPartitionIdentity? logicalPartition = null)
@@ -597,33 +676,82 @@ public sealed class RelationQueryEvaluationBuilder
         var normalized = observations.ToImmutableArray();
         if (normalized.Any(static observation => observation is null))
             throw new ArgumentException("Supplied roots cannot contain null observations.", nameof(observations));
-        if (normalized.Any(observation => observation.ShapeId != rootShape.ShapeId))
+        if (normalized.Any(observation => observation.Shape != rootShape))
         {
             throw new ArgumentException(
-                $"Every supplied root must have shape '{rootShape.ShapeId.Value}'.",
+                $"Every supplied root must have shape '{rootShape}'.",
                 nameof(observations));
         }
-        if (normalized.GroupBy(static observation => observation.Id, StringComparer.Ordinal)
+        if (normalized.GroupBy(static observation => observation.Identity, StringComparer.Ordinal)
             .Any(static group => group.Count() > 1))
         {
             throw new ArgumentException("Supplied roots cannot repeat an observation identity.", nameof(observations));
         }
 
         suppliedRoots = new(
-            [.. normalized.OrderBy(static observation => observation.Id, StringComparer.Ordinal)],
+            [.. normalized.OrderBy(static observation => observation.Identity, StringComparer.Ordinal)],
             logicalPartition ?? RelationQueryLogicalPartitionIdentity.WholeSource,
             completeness,
             evidenceReference);
         return this;
     }
 
-    /// <summary>Maps CLR values through the shared object-observation mapping context and supplies them as roots.</summary>
+    /// <summary>Supplies validated identity-free observations as roots.</summary>
+    /// <param name="observations">Validated semantic root observations.</param>
+    /// <param name="selectIdentity">Selects each root's stable source identity.</param>
+    /// <param name="completeness">Whether omission from the supplied set is authoritative.</param>
+    /// <param name="evidenceReference">Optional opaque provenance reference.</param>
+    /// <param name="logicalPartition">Provider-neutral logical partition containing every supplied root.</param>
+    /// <returns>This builder for continued evaluation authoring.</returns>
+    public RelationQueryEvaluationBuilder Supply(
+        IEnumerable<CoreObservation> observations,
+        Func<CoreObservation, string> selectIdentity,
+        RelationQueryEvidenceCompleteness completeness = RelationQueryEvidenceCompleteness.Complete,
+        string? evidenceReference = null,
+        RelationQueryLogicalPartitionIdentity? logicalPartition = null)
+    {
+        ArgumentNullException.ThrowIfNull(observations);
+        ArgumentNullException.ThrowIfNull(selectIdentity);
+        return Supply(
+            observations.Select(observation =>
+            {
+                ArgumentNullException.ThrowIfNull(observation);
+                return RelationQuerySuppliedRoot.FromObservation(selectIdentity(observation), observation);
+            }),
+            completeness,
+            evidenceReference,
+            logicalPartition);
+    }
+
+    /// <summary>Supplies versioned entity observations as relation roots.</summary>
+    /// <param name="snapshots">Entity snapshots whose identity and semantic observation become supplied evidence.</param>
+    /// <param name="completeness">Whether omission from the supplied set is authoritative.</param>
+    /// <param name="evidenceReference">Optional opaque provenance reference.</param>
+    /// <param name="logicalPartition">Provider-neutral logical partition containing every supplied root.</param>
+    /// <returns>This builder for continued evaluation authoring.</returns>
+    /// <remarks>Entity versions remain entity-state semantics and are intentionally not copied into relation roots.</remarks>
+    public RelationQueryEvaluationBuilder Supply(
+        IEnumerable<EntityObservationSnapshot> snapshots,
+        RelationQueryEvidenceCompleteness completeness = RelationQueryEvidenceCompleteness.Complete,
+        string? evidenceReference = null,
+        RelationQueryLogicalPartitionIdentity? logicalPartition = null)
+    {
+        ArgumentNullException.ThrowIfNull(snapshots);
+        return Supply(
+            snapshots.Select(snapshot =>
+            {
+                ArgumentNullException.ThrowIfNull(snapshot);
+                return RelationQuerySuppliedRoot.FromObservation(snapshot.EntityId.Value, snapshot.Observation);
+            }),
+            completeness,
+            evidenceReference,
+            logicalPartition);
+    }
+
+    /// <summary>Projects CLR values through the core observation model and supplies them as roots.</summary>
     /// <typeparam name="T">CLR root type.</typeparam>
     /// <param name="values">CLR roots to map.</param>
     /// <param name="selectIdentity">Selects each root's stable semantic identity.</param>
-    /// <param name="mappingContext">
-    /// Cached mapping context, or <see langword="null"/> to use <see cref="ShapeMappingContext.Default"/>.
-    /// </param>
     /// <param name="completeness">Whether omission from the supplied set is authoritative.</param>
     /// <param name="evidenceReference">Optional opaque provenance reference.</param>
     /// <param name="logicalPartition">
@@ -647,7 +775,6 @@ public sealed class RelationQueryEvaluationBuilder
     public RelationQueryEvaluationBuilder Supply<T>(
         IEnumerable<T> values,
         Func<T, string> selectIdentity,
-        ShapeMappingContext? mappingContext = null,
         RelationQueryEvidenceCompleteness completeness = RelationQueryEvidenceCompleteness.Complete,
         string? evidenceReference = null,
         RelationQueryLogicalPartitionIdentity? logicalPartition = null)
@@ -656,17 +783,17 @@ public sealed class RelationQueryEvaluationBuilder
         ArgumentNullException.ThrowIfNull(values);
         ArgumentNullException.ThrowIfNull(selectIdentity);
         var rootShape = RequireRelationRootShape();
-        var context = mappingContext ?? ShapeMappingContext.Default;
-        List<Observation> observations = [];
+        var shape = ResolveGraphShape(rootShape);
+        List<RelationQuerySuppliedRoot> observations = [];
         foreach (var value in values)
         {
             ArgumentNullException.ThrowIfNull(value);
             var identity = selectIdentity(value);
             ArgumentException.ThrowIfNullOrWhiteSpace(identity);
-            observations.Add(context.Map(
-                value,
-                rootShape.ShapeId,
-                new ObjectObservationMetadata { Id = identity }));
+            var observation = CoreObservation.Create(
+                shape,
+                ObservationValue.FromJsonNode(JsonSerializer.SerializeToNode(value, value.GetType())));
+            observations.Add(RelationQuerySuppliedRoot.FromObservation(identity, observation));
         }
 
         return Supply(observations, completeness, evidenceReference, logicalPartition);
@@ -803,6 +930,16 @@ public sealed class RelationQueryEvaluationBuilder
             ? roots[0].Shape
             : throw new InvalidOperationException(
                 $"Relation '{relation.Id.Value}' does not have exactly one source for root binding '{relation.RootBinding.Value}'.");
+    }
+
+    GraphShapeId ResolveGraphShape(QualifiedShapeId shape)
+    {
+        var graph = shapeDocuments
+            .Select(static document => document.Graph)
+            .SingleOrDefault(candidate => candidate.Id == shape.GraphId)
+            ?? throw new InvalidOperationException(
+                $"Relation root shape '{shape}' requires its exact graph snapshot.");
+        return new(graph, shape.ShapeId);
     }
 
     RelationQueryEvaluationBuilder AddResultDemand(QueryResultDemand demand)

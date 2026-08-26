@@ -299,7 +299,7 @@ public sealed class GenericRepositorySeedDataService
         return new(
             Type: type,
             Repository: repository,
-            Write: new(state.Observation, expectedConcurrencyToken),
+            Write: new(state.Snapshot, expectedConcurrencyToken),
             ExistingReadOptions: CreateExistingReadOptions(item.PartitionKey)
             );
     }
@@ -320,7 +320,7 @@ public sealed class GenericRepositorySeedDataService
         return new(
             Type: type,
             Repository: repository,
-            Write: new(state.Observation, item.ExpectedConcurrencyToken),
+            Write: new(state.Snapshot, item.ExpectedConcurrencyToken),
             ExistingReadOptions: CreateExistingReadOptions(item.PartitionKey)
             );
     }

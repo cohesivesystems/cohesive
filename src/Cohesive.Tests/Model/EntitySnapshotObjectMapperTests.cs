@@ -1,4 +1,3 @@
-using Cohesive.Relations.Model;
 using Cohesive.Storage;
 
 namespace Cohesive.Tests.Model;
@@ -6,7 +5,7 @@ namespace Cohesive.Tests.Model;
 public sealed class EntitySnapshotObjectMapperTests
 {
     [Fact]
-    public void Map_UsesObservationObjectMapperForActualSnapshotLayout()
+    public void Map_UsesCoreMaterializerForActualSnapshotShape()
     {
         var mapper = EntitySnapshotObjectMapper.Create<NoteProjection, NoteResource>(
             readOptions: EntityReadOptions.ForFields(nameof(NoteProjection.Id), nameof(NoteProjection.Name)),
@@ -58,10 +57,21 @@ public sealed class EntitySnapshotObjectMapperTests
         Assert.Contains("non-empty field projection", error.Message);
     }
 
-    static EntitySnapshot CreateSnapshot(string id, IReadOnlyDictionary<string, ObservationValue> fields) => new(
-        Entity: new(new("shape.note"), id, fields, version: 7),
-        PartitionKey: "tenant-a",
-        ConcurrencyToken: new("etag-1"));
+    static EntitySnapshot CreateSnapshot(string id, IReadOnlyDictionary<string, ObservationValue> fields)
+    {
+        Shape shape = new(
+            new("shape.note"),
+            [
+                new(new(nameof(NoteProjection.Id)), new ScalarTypeRef(ScalarTypeKind.String)),
+                new(new(nameof(NoteProjection.Name)), new ScalarTypeRef(ScalarTypeKind.String))
+            ]);
+        ShapeGraph graph = new(new("tests/note-projection/v1"), [shape]);
+        var observation = Cohesive.Model.Observation.Create(new(graph, shape.Id), fields);
+        return new(
+            Entity: new(new(id), version: 7, observation),
+            PartitionKey: "tenant-a",
+            ConcurrencyToken: new("etag-1"));
+    }
 
     sealed record NoteProjection(string Id, string Name);
 

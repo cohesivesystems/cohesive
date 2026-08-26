@@ -47,10 +47,9 @@ Relations occurrence without reconstructing a dictionary. The interface is not a
 implementations must be validated at their construction boundary, and consumers requiring validation or portable JSON
 must project to core `Observation`.
 
-The legacy `Cohesive.Relations.Model.Observation` and its local-shape mapper remain source-compatible until ARI-504.
-The mapper now delegates constructor selection, field conversion, serializer policy, and missing-field behavior to the
-core materializer. Its private compatibility graph identity scopes an otherwise unqualified local shape only inside
-that adapter; it is never persisted or presented as semantic graph evidence.
+ARI-504 removed the legacy local-shape row and mapper. Supplied roots now retain stable source identity beside exact
+qualified shape and portable fields; evaluation validates those fields against the persisted compilation graph before
+execution. Entity versions remain on `EntityObservationSnapshot` and are not copied into relation roots.
 
 ## Invariants
 
@@ -64,8 +63,8 @@ that adapter; it is never persisted or presented as semantic graph evidence.
 
 ## Performance and verification
 
-The indexed path retains direct ordinal reads, dense buffers, and packed presence masks. The warm DTO benchmark's
-legacy observation mapper now exercises the shared core compiler over the indexed reader adapter, while
+The indexed path retains direct ordinal reads, dense buffers, and packed presence masks. The warm DTO benchmark
+compares the shared core compiler over semantic observations and the indexed reader adapter, while
 `IndexedObservationOccurrenceTests` cover direct materialization and ordinal access. Relations semantic, executor,
 hydration, query, mapping, portable serialization, and benchmark-project builds remain regression gates.
 
@@ -86,5 +85,5 @@ retained so later materializer or indexed-reader changes can compare the same se
 
 Relations has a named physical occurrence without making layout an application-domain concept. New code can move
 between validated semantic values and indexed execution explicitly, and one compiled CLR plan governs both paths.
-ARI-504 remains responsible for migrating Storage, Transitions, Identity, adapters, APIs, fixtures, and supplied-root
-authoring away from the legacy row, after which its compatibility graph and mapper surface can be removed.
+Storage, Transitions, Identity, adapters, APIs, fixtures, and supplied-root authoring now use their explicit core
+snapshot, acquisition, or occurrence contracts.

@@ -1,6 +1,7 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Columns;
 using BenchmarkDotNet.Configs;
+using Cohesive.Model;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.TestFixtures;
@@ -16,8 +17,8 @@ public class RelationDtoEndToEndBenchmarks
 {
     RelationDtoFixtureScenario<LoadSummaryDto> simple = null!;
     RelationDtoFixtureScenario<LoadSearchDto> joined = null!;
-    ObservationObjectMapper<LoadSummaryDto> simpleObservationMapper = null!;
-    ObservationObjectMapper<LoadSearchDto> joinedObservationMapper = null!;
+    ObservationMaterializer<LoadSummaryDto> simpleMaterializer = null!;
+    ObservationMaterializer<LoadSearchDto> joinedMaterializer = null!;
     CompiledRelationDtoMapper<LoadSummaryDto> simpleCompiledMapper = null!;
     CompiledRelationDtoMapper<LoadSearchDto> joinedCompiledMapper = null!;
 
@@ -31,12 +32,12 @@ public class RelationDtoEndToEndBenchmarks
     {
         simple = RelationDtoBenchmarkFixture.CreateSimpleScenario(RowCount);
         joined = RelationDtoBenchmarkFixture.CreateJoinedScenario(RowCount);
-        simpleObservationMapper = ObservationObjectMapper
-            .For<LoadSummaryDto>(simple.Observations[0].Layout)
-            .Build();
-        joinedObservationMapper = ObservationObjectMapper
-            .For<LoadSearchDto>(joined.Observations[0].Layout)
-            .Build();
+        simpleMaterializer = ObservationMaterializer
+            .For<LoadSummaryDto>(simple.Observations[0].ShapeId)
+            .Compile();
+        joinedMaterializer = ObservationMaterializer
+            .For<LoadSearchDto>(joined.Observations[0].ShapeId)
+            .Compile();
         simpleCompiledMapper = RelationDtoBenchmarkSupport.CompileMapper<LoadSummaryDto>(simple.Plan);
         joinedCompiledMapper = RelationDtoBenchmarkSupport.CompileMapper<LoadSearchDto>(joined.Plan);
     }
@@ -52,17 +53,17 @@ public class RelationDtoEndToEndBenchmarks
         return RelationDtoBenchmarkSupport.MapSimpleHandwritten(execution);
     }
 
-    /// <summary>Canonical single-source interpretation followed by the existing observation mapper.</summary>
+    /// <summary>Canonical single-source interpretation followed by core observation materialization.</summary>
     /// <returns>Materialized DTOs.</returns>
     [Benchmark]
     [BenchmarkCategory("EndToEnd", "Simple")]
-    public LoadSummaryDto[] ExistingObservationMapperSimple()
+    public LoadSummaryDto[] CoreObservationMaterializerSimple()
     {
         var execution = RelationQueryInMemoryInterpreter.Default.Execute(
             new(simple.Plan, simple.Evidence));
         return RelationDtoBenchmarkSupport.MapObservations(
-            RelationDtoBenchmarkSupport.ToObservations(execution),
-            simpleObservationMapper);
+            RelationDtoBenchmarkSupport.ToObservations(simple.Plan, execution),
+            simpleMaterializer);
     }
 
     /// <summary>Canonical single-source interpretation followed by the compiled relation mapper.</summary>
@@ -87,17 +88,17 @@ public class RelationDtoEndToEndBenchmarks
         return RelationDtoBenchmarkSupport.MapJoinedHandwritten(execution);
     }
 
-    /// <summary>Canonical joined interpretation followed by the existing observation mapper.</summary>
+    /// <summary>Canonical joined interpretation followed by core observation materialization.</summary>
     /// <returns>Materialized DTOs.</returns>
     [Benchmark]
     [BenchmarkCategory("EndToEnd", "Joined")]
-    public LoadSearchDto[] ExistingObservationMapperJoined()
+    public LoadSearchDto[] CoreObservationMaterializerJoined()
     {
         var execution = RelationQueryInMemoryInterpreter.Default.Execute(
             new(joined.Plan, joined.Evidence));
         return RelationDtoBenchmarkSupport.MapObservations(
-            RelationDtoBenchmarkSupport.ToObservations(execution),
-            joinedObservationMapper);
+            RelationDtoBenchmarkSupport.ToObservations(joined.Plan, execution),
+            joinedMaterializer);
     }
 
     /// <summary>Canonical joined interpretation followed by the compiled relation mapper.</summary>

@@ -3,7 +3,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Authoring;
-using Cohesive.Relations.Model;
 
 namespace Cohesive.Relations.Serialization;
 
@@ -69,41 +68,6 @@ public static class RelationQueryEvaluationJsonSerializer
     internal static JsonSerializerOptions CreateOptions(bool indented = false)
     {
         var options = RelationQueryJsonSerializer.CreateOptions(indented);
-        options.Converters.Insert(0, new PortableObservationJsonConverter());
         return options;
-    }
-
-    sealed class PortableObservationJsonConverter : JsonConverter<Observation>
-    {
-        public override Observation Read(
-            ref Utf8JsonReader reader,
-            Type typeToConvert,
-            JsonSerializerOptions options)
-        {
-            var value = JsonSerializer.Deserialize<PortableObservation>(ref reader, options)
-                ?? throw new JsonException("A supplied root observation cannot be null.");
-            return new(value.ShapeId, value.Id, value.Fields, value.Version, value.Lineage);
-        }
-
-        public override void Write(
-            Utf8JsonWriter writer,
-            Observation value,
-            JsonSerializerOptions options)
-        {
-            ArgumentNullException.ThrowIfNull(writer);
-            ArgumentNullException.ThrowIfNull(value);
-            var fields = value.Fields.ToImmutableSortedDictionary(StringComparer.Ordinal);
-            JsonSerializer.Serialize(
-                writer,
-                new PortableObservation(value.ShapeId, value.Id, fields, value.Version, value.Lineage),
-                options);
-        }
-
-        sealed record PortableObservation(
-            ShapeId ShapeId,
-            string Id,
-            IReadOnlyDictionary<string, ObservationValue> Fields,
-            long Version,
-            ObservationLineage? Lineage);
     }
 }

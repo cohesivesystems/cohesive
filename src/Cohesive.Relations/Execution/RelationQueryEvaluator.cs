@@ -653,19 +653,19 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
     }
 
     static RelationQuerySourceReadObservation CreateSourceObservation(
-        Observation observation,
+        RelationQuerySuppliedRoot observation,
         QualifiedShapeId shape,
         ImmutableArray<RelationQuerySourceReadField> fields)
     {
-        if (observation.ShapeId != shape.ShapeId)
+        if (observation.Shape != shape)
         {
             throw new InvalidOperationException(
-                $"Supplied root '{observation.Id}' has shape '{observation.ShapeId.Value}', expected '{shape.ShapeId.Value}'.");
+                $"Supplied root '{observation.Identity}' has shape '{observation.Shape}', expected '{shape}'.");
         }
 
         var value = ObservationValue.FromObject(observation.Fields);
         return new(
-            observation.Id,
+            observation.Identity,
             shape,
             [.. fields.Select(field => CreateFieldResult(value, field))]);
     }

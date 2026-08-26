@@ -56,9 +56,9 @@ parallel metadata precedence algorithm.
 - **Replace the Relations mapper immediately.** Rejected for this increment because indexed path migration requires
   the identity-bearing snapshot and boundary work tracked by ARI-502 through ARI-504.
 
-## Compatibility and removal condition
+## Compatibility outcome
 
-`Cohesive.Relations.Mapping.ObservationObjectMapper` and its legacy missing-field policy remain available while the
-indexed physical observation is still used by Relations consumers. They are a staged compatibility path, not a
-second semantic authority. ARI-503 and ARI-504 must migrate those consumers and can remove or reduce the duplicated
-physical-path mapping implementation once no supported caller requires it.
+ARI-504 migrated Relations, Transitions, Storage, Identity, adapters, APIs, fixtures, and benchmarks to the core
+materializer. The mutable `ShapeMappingContext`, legacy observation/object mappers, and their separate missing-field
+policy were removed. Indexed execution implements `IObservationFieldReader`, so both semantic and indexed reads use
+one compiled materialization contract.

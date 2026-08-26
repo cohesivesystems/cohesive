@@ -90,7 +90,8 @@ graph-qualified shape. Allocation-sensitive execution may interpret that value a
 dense slots, packed presence bits, and derived-field lineage. Its factories validate against the core semantics and
 its `ToObservation` projection is lossless. The same core `ObservationMaterializer<T>` can read it directly through
 `IObservationFieldReader`; neither layout nor buffer becomes a core dependency. The older
-`Cohesive.Relations.Model.Observation` is a local-shape compatibility bridge scheduled for removal by ARI-504.
+identity-bearing Relations row has been removed; stable source identity and entity version now enter through their
+explicit acquisition and snapshot contracts.
 
 A logical source declares that values of a particular shape are available. It does not prescribe where they live or how they must be acquired.
 
@@ -741,7 +742,7 @@ The complete executable version is in `RelationQueryStructuralAuthoringExampleTe
 determines whether the request evaluates a rooted correspondence or independently acquires query inputs; there is no
 second kind enum or parallel execution model. The request carries the exact `RelationQueryCompilationRequest`,
 parameter evidence, optional supplied roots, output demand, and optional compiled-plan attribution.
-The normalized request is a portable `relation-query-evaluation/v2` document with a deterministic fingerprint over
+The normalized request is a portable `relation-query-evaluation/v3` document with a deterministic fingerprint over
 the complete compilation snapshots, demand and its origin, evaluation identity, parameter and root evidence,
 provenance references, and optional plan attribution. Use `RelationQueryEvaluationJsonSerializer` for strict
 round trips and `HasSameSemantics` when a host must compare independently reconstructed requests.
@@ -759,9 +760,11 @@ var evaluation = author.Evaluate(
     .Build();
 ```
 
-`Supply` accepts existing `Observation` values or maps CLR values through the shared `ShapeMappingContext` cache.
-Omitted roots mean no root evidence was supplied. `Supply([])` is intentionally different: it is an explicitly known
-empty root set, with complete or partial evidence selected by the caller.
+`Supply` accepts validated core `Observation` values with an identity selector, `EntityObservationSnapshot` values,
+portable `RelationQuerySuppliedRoot` evidence, or CLR values projected and validated through the exact root graph.
+It does not copy entity versions or relation lineage into root evidence. Omitted roots mean no root evidence was
+supplied. An explicitly typed empty root collection is intentionally different: it is a known empty root set, with
+complete or partial evidence selected by the caller.
 
 Hosts depend on one boundary:
 

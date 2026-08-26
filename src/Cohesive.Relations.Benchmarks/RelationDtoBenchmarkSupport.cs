@@ -9,7 +9,7 @@ using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.TestFixtures;
 using Microsoft.Extensions.Logging.Abstractions;
-using Observation = Cohesive.Relations.Model.Observation;
+using Observation = Cohesive.Model.Observation;
 
 namespace Cohesive.Relations.Benchmarks;
 
@@ -63,11 +63,11 @@ static class RelationDtoBenchmarkSupport
 
     public static TOutput[] MapObservations<TOutput>(
         ImmutableArray<Observation> observations,
-        IObservationObjectMapper<TOutput> mapper)
+        ObservationMaterializer<TOutput> materializer)
     {
         var outputs = new TOutput[observations.Length];
         for (var i = 0; i < observations.Length; i++)
-            outputs[i] = mapper.Map(observations[i]);
+            outputs[i] = materializer.Materialize(observations[i]);
         return outputs;
     }
 
@@ -93,20 +93,19 @@ static class RelationDtoBenchmarkSupport
         var observations = ImmutableArray.CreateBuilder<IndexedObservationOccurrence>(scenario.Observations.Length);
         for (var index = 0; index < scenario.Observations.Length; index++)
         {
-            var legacy = scenario.Observations[index];
-            var semantic = Cohesive.Model.Observation.Create(
-                shape,
-                ObservationValue.FromObject(legacy.Fields));
+            var semantic = scenario.Observations[index];
+            var layout = ObservationLayout.Create(
+                shape.ShapeId,
+                semantic.Fields.Keys.Order(StringComparer.Ordinal));
             observations.Add(IndexedObservationOccurrence.FromObservation(
                 shape,
                 new(
                     new($"benchmark-output/{index}"),
                     new("benchmark-output"),
                     shape.QualifiedId,
-                    legacy.Id),
+                    $"benchmark-output/{index}"),
                 semantic,
-                legacy.Layout,
-                legacy.Lineage));
+                layout));
         }
 
         return observations.MoveToImmutable();
@@ -123,19 +122,18 @@ static class RelationDtoBenchmarkSupport
         return outputs;
     }
 
-    public static ImmutableArray<Observation> ToObservations(RelationQueryExecutionResult execution)
+    public static ImmutableArray<Observation> ToObservations(
+        CompiledRelationQueryPlan plan,
+        RelationQueryExecutionResult execution)
     {
         var rows = RelationRows(execution);
         var observations = ImmutableArray.CreateBuilder<Observation>(rows.Length);
         foreach (var row in rows)
         {
-            observations.Add(new(
-                row.Shape.ShapeId,
-                row.Identity?.GetRequiredString()
-                    ?? row.Root?.ObservationIdentity
-                    ?? row.Root?.Id.Value
-                    ?? throw new InvalidOperationException("A benchmark output row requires an identity."),
-                ObjectFields(row)));
+            var graph = plan.Provenance.ShapeDocuments
+                .Single(document => document.Graph.Id == row.Shape.GraphId)
+                .Graph;
+            observations.Add(Observation.Create(new(graph, row.Shape.ShapeId), ObjectFields(row)));
         }
         return observations.MoveToImmutable();
     }

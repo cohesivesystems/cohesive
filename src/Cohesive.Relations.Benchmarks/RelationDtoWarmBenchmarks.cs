@@ -20,8 +20,6 @@ public class RelationDtoWarmBenchmarks
 {
     RelationDtoFixtureScenario<LoadSummaryDto> simple = null!;
     RelationDtoFixtureScenario<LoadSearchDto> joined = null!;
-    ObservationObjectMapper<LoadSummaryDto> simpleObservationMapper = null!;
-    ObservationObjectMapper<LoadSearchDto> joinedObservationMapper = null!;
     ImmutableArray<IndexedObservationOccurrence> simpleIndexedOccurrences;
     ImmutableArray<IndexedObservationOccurrence> joinedIndexedOccurrences;
     ObservationMaterializer<LoadSummaryDto> simpleCoreMaterializer = null!;
@@ -44,12 +42,6 @@ public class RelationDtoWarmBenchmarks
     {
         simple = RelationDtoBenchmarkFixture.CreateSimpleScenario(RowCount);
         joined = RelationDtoBenchmarkFixture.CreateJoinedScenario(RowCount);
-        simpleObservationMapper = ObservationObjectMapper
-            .For<LoadSummaryDto>(simple.Observations[0].Layout)
-            .Build();
-        joinedObservationMapper = ObservationObjectMapper
-            .For<LoadSearchDto>(joined.Observations[0].Layout)
-            .Build();
         simpleIndexedOccurrences = RelationDtoBenchmarkSupport.ToIndexedOccurrences(simple);
         joinedIndexedOccurrences = RelationDtoBenchmarkSupport.ToIndexedOccurrences(joined);
         simpleCoreMaterializer = ObservationMaterializer
@@ -60,11 +52,11 @@ public class RelationDtoWarmBenchmarks
             .Compile();
         ValidateOutput(
             RelationDtoBenchmarkSupport.MaterializeIndexed(simpleIndexedOccurrences, simpleCoreMaterializer),
-            RelationDtoBenchmarkSupport.MapObservations(simple.Observations, simpleObservationMapper),
+            RelationDtoBenchmarkSupport.MapObservations(simple.Observations, simpleCoreMaterializer),
             "shared core indexed simple");
         ValidateOutput(
             RelationDtoBenchmarkSupport.MaterializeIndexed(joinedIndexedOccurrences, joinedCoreMaterializer),
-            RelationDtoBenchmarkSupport.MapObservations(joined.Observations, joinedObservationMapper),
+            RelationDtoBenchmarkSupport.MapObservations(joined.Observations, joinedCoreMaterializer),
             "shared core indexed joined");
         simpleCompiledMapper = RelationDtoBenchmarkSupport.CompileMapper<LoadSummaryDto>(simple.Plan);
         joinedCompiledMapper = RelationDtoBenchmarkSupport.CompileMapper<LoadSearchDto>(joined.Plan);
@@ -106,12 +98,12 @@ public class RelationDtoWarmBenchmarks
     public RelationDtoMappingResult<LoadSummaryDto> CompiledCanonicalSimple() =>
         simpleCompiledMapper.Map(simple.Execution);
 
-    /// <summary>Existing observation-object mapper for the single-source output.</summary>
+    /// <summary>Shared core materializer reading validated semantic observations.</summary>
     /// <returns>Materialized DTOs.</returns>
     [Benchmark]
     [BenchmarkCategory("Warm", "Simple")]
-    public LoadSummaryDto[] ExistingObservationMapperSimple() =>
-        RelationDtoBenchmarkSupport.MapObservations(simple.Observations, simpleObservationMapper);
+    public LoadSummaryDto[] SharedCoreSemanticSimple() =>
+        RelationDtoBenchmarkSupport.MapObservations(simple.Observations, simpleCoreMaterializer);
 
     /// <summary>Shared core materializer reading the explicit indexed occurrence representation.</summary>
     /// <returns>Materialized DTOs.</returns>
@@ -150,12 +142,12 @@ public class RelationDtoWarmBenchmarks
     public RelationDtoMappingResult<LoadSearchDto> CompiledCanonicalJoined() =>
         joinedCompiledMapper.Map(joined.Execution);
 
-    /// <summary>Existing observation-object mapper for the joined output.</summary>
+    /// <summary>Shared core materializer reading validated joined semantic observations.</summary>
     /// <returns>Materialized DTOs.</returns>
     [Benchmark]
     [BenchmarkCategory("Warm", "Joined")]
-    public LoadSearchDto[] ExistingObservationMapperJoined() =>
-        RelationDtoBenchmarkSupport.MapObservations(joined.Observations, joinedObservationMapper);
+    public LoadSearchDto[] SharedCoreSemanticJoined() =>
+        RelationDtoBenchmarkSupport.MapObservations(joined.Observations, joinedCoreMaterializer);
 
     /// <summary>Shared core materializer reading explicit joined indexed occurrences.</summary>
     /// <returns>Materialized DTOs.</returns>

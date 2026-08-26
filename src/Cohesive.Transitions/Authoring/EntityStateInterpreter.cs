@@ -74,6 +74,25 @@ internal sealed class EntityStateInterpreter
         return mutableState.ToEntityState(state.Version);
     }
 
+    internal IReadOnlyDictionary<string, ObservationValue> NormalizeStateValues(
+        string entityId,
+        IReadOnlyDictionary<string, ObservationValue> values)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(entityId);
+        ArgumentNullException.ThrowIfNull(values);
+
+        if (computedFields.Count == 0)
+            return values;
+
+        var mutableState = CreateMutableState(entityId, values);
+        var context = new EvaluationContext(
+            EntityId: entityId,
+            FieldByIdentity: fieldByIdentity,
+            State: mutableState);
+        ApplyComputedFields(entityId: entityId, context: context);
+        return mutableState.ToValues();
+    }
+
     MutableStateBuffer CreateMutableState(string entityId, EntityState state)
     {
         return new(
@@ -83,6 +102,18 @@ internal sealed class EntityStateInterpreter
             fieldsByOrdinal: fieldsByOrdinal,
             ordinalByFieldName: ordinalByFieldName
             );
+    }
+
+    MutableStateBuffer CreateMutableState(
+        string entityId,
+        IReadOnlyDictionary<string, ObservationValue> values)
+    {
+        return new(
+            entityId: entityId,
+            entityDefinition: entityDefinition,
+            values: values,
+            fieldsByOrdinal: fieldsByOrdinal,
+            ordinalByFieldName: ordinalByFieldName);
     }
 
     void EnsureRequiredFieldPresence(string entityId, MutableStateBuffer stateByFieldName)
@@ -315,7 +346,7 @@ internal sealed class EntityStateInterpreter
 
         readonly string entityId;
         readonly EntityDefinition entityDefinition;
-        readonly EntityStateLineage lineage;
+        readonly EntityStateLineage? lineage;
         readonly IReadOnlyList<FieldDefinition> fieldsByOrdinal;
         readonly IReadOnlyDictionary<string, int> ordinalByFieldName;
         readonly ObservationValue[] originalByOrdinal;
@@ -330,11 +361,44 @@ internal sealed class EntityStateInterpreter
             IReadOnlyList<FieldDefinition> fieldsByOrdinal,
             IReadOnlyDictionary<string, int> ordinalByFieldName
             )
+            : this(
+                entityId,
+                entityDefinition,
+                state.Fields,
+                fieldsByOrdinal,
+                ordinalByFieldName,
+                state.Lineage)
         {
-            ArgumentNullException.ThrowIfNull(state);
+        }
+
+        public MutableStateBuffer(
+            string entityId,
+            EntityDefinition entityDefinition,
+            IReadOnlyDictionary<string, ObservationValue> values,
+            IReadOnlyList<FieldDefinition> fieldsByOrdinal,
+            IReadOnlyDictionary<string, int> ordinalByFieldName)
+            : this(
+                entityId,
+                entityDefinition,
+                values,
+                fieldsByOrdinal,
+                ordinalByFieldName,
+                lineage: null)
+        {
+        }
+
+        MutableStateBuffer(
+            string entityId,
+            EntityDefinition entityDefinition,
+            IReadOnlyDictionary<string, ObservationValue> values,
+            IReadOnlyList<FieldDefinition> fieldsByOrdinal,
+            IReadOnlyDictionary<string, int> ordinalByFieldName,
+            EntityStateLineage? lineage)
+        {
+            ArgumentNullException.ThrowIfNull(values);
             this.entityId = Guard.RequireNotNullOrWhiteSpace(entityId);
             this.entityDefinition = Guard.RequireNotNull(entityDefinition);
-            lineage = state.Lineage;
+            this.lineage = lineage;
             this.fieldsByOrdinal = Guard.RequireNotNull(fieldsByOrdinal);
             this.ordinalByFieldName = Guard.RequireNotNull(ordinalByFieldName);
 
@@ -344,7 +408,7 @@ internal sealed class EntityStateInterpreter
             dirtyByOrdinal = new ObservationValue[count];
             hasDirtyByOrdinal = new bool[count];
 
-            foreach (var (name, value) in state.Fields)
+            foreach (var (name, value) in values)
             {
                 if (!this.ordinalByFieldName.TryGetValue(name, out var ordinal))
                 {
@@ -388,10 +452,18 @@ internal sealed class EntityStateInterpreter
 
         public EntityState ToEntityState(long version)
         {
+            var values = ToValues();
+            return lineage is null
+                ? entityDefinition.CreateState(entityId, values, version)
+                : entityDefinition.CreateState(entityId, values, version, lineage);
+        }
+
+        public IReadOnlyDictionary<string, ObservationValue> ToValues()
+        {
             Dictionary<string, ObservationValue> values = new(StringComparer.Ordinal);
             for (var i = 0; i < fieldsByOrdinal.Count; i++)
                 values[fieldsByOrdinal[i].Name.Value] = GetObservationValue(i);
-            return entityDefinition.CreateState(entityId, values, version, lineage);
+            return values;
         }
 
         ObservationValue GetObservationValue(int ordinal)

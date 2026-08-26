@@ -14,11 +14,11 @@ namespace Cohesive.Storage;
 /// </remarks>
 public sealed class EntityRelationQuerySourceRegistration
 {
-    /// <summary>Conventional selector for <see cref="Cohesive.Relations.Model.Observation.Id"/>.</summary>
+    /// <summary>Conventional selector for <see cref="EntityObservationSnapshot.EntityId"/>.</summary>
     public const string ObservationIdentitySourceSelector =
         RelationQueryPlacementBuilder.FrameworkIdentitySourceSelector;
 
-    /// <summary>Conventional in-memory selector for <see cref="Cohesive.Relations.Model.Observation.Version"/>.</summary>
+    /// <summary>Conventional in-memory selector for <see cref="EntityObservationSnapshot.Version"/>.</summary>
     public const string ObservationVersionSourceSelector = "$version";
 
     /// <summary>Creates one immutable entity-backed canonical source registration.</summary>
@@ -166,7 +166,7 @@ public sealed class EntityRelationQuerySourceRegistration
     /// Explicit relationship-reference selector policy, or <see langword="null"/> for semantic paths.
     /// </param>
     /// <param name="observationVersionSemanticPath">
-    /// Optional canonical field path projected from <see cref="Cohesive.Relations.Model.Observation.Version"/>.
+    /// Optional canonical field path projected from <see cref="EntityObservationSnapshot.Version"/>.
     /// </param>
     /// <param name="persistedObservationType">
     /// Exact graph-qualified entity observation retained by <paramref name="repository"/>, or

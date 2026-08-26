@@ -71,7 +71,7 @@ public sealed class RelationQueryEvaluationSerializationTests
         var roots = Assert.IsType<RelationQuerySuppliedRootSet>(restored.SuppliedRoots);
         Assert.Equal("change-feed/17", roots.EvidenceReference);
         var root = Assert.Single(roots.Observations);
-        Assert.Equal("load-1", root.Id);
+        Assert.Equal("load-1", root.Identity);
         Assert.Equal(
             ObservationValue.FromString("customer-1"),
             root.Fields[LoadCustomerRelationFixture.LoadCustomerIdFieldName]);
@@ -138,13 +138,16 @@ public sealed class RelationQueryEvaluationSerializationTests
                 LoadCustomerRelationFixture.RelationshipCatalogDocument)
             .Supply(
             [
-                new Observation(
-                    LoadCustomerRelationFixture.LoadShapeLocalId,
+                new RelationQuerySuppliedRoot(
                     "load-1",
+                    LoadCustomerRelationFixture.LoadShapeId,
                     new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
                     {
                         [LoadCustomerRelationFixture.LoadIdFieldName] = ObservationValue.FromString("load-1"),
-                        [LoadCustomerRelationFixture.LoadCustomerIdFieldName] = ObservationValue.FromString(customerId)
+                        [LoadCustomerRelationFixture.LoadCustomerIdFieldName] = ObservationValue.FromString(customerId),
+                        [LoadCustomerRelationFixture.LoadStatusFieldName] = ObservationValue.FromString("Open"),
+                        [LoadCustomerRelationFixture.LoadAmountFieldName] = ObservationValue.FromDecimal(0m),
+                        [LoadCustomerRelationFixture.LoadActiveFieldName] = ObservationValue.FromBool(true)
                     })
             ],
             evidenceReference: evidenceReference)

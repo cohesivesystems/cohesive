@@ -37,8 +37,8 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
         Assert.NotNull(firstSnapshot);
         Assert.Equal(firstSnapshot, replayedSnapshot);
         Assert.Equal(0, firstSnapshot.Entity.Version);
-        Assert.Equal("tenant/acme", firstSnapshot.Entity.GetField(nameof(CustomerEntity.Tenant)).GetString());
-        Assert.Equal("pending", firstSnapshot.Entity.GetField(nameof(CustomerEntity.Status)).GetString());
+        Assert.Equal("tenant/acme", firstSnapshot.Entity.Observation.GetField(nameof(CustomerEntity.Tenant)).GetString());
+        Assert.Equal("pending", firstSnapshot.Entity.Observation.GetField(nameof(CustomerEntity.Status)).GetString());
 
         var retained = await fixture.Repository.TryGetTransitionOperation(
             fixture.Context,
@@ -178,7 +178,7 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
 
         Assert.False(result.IsSuccessful);
         Assert.Equal(EntityTransitionOperationDiagnosticCodes.SubjectStateConflict, result.Failure?.Code);
-        Assert.Equal("racing-winner", retained!.Entity.GetField(nameof(CustomerEntity.Status)).GetString());
+        Assert.Equal("racing-winner", retained!.Entity.Observation.GetField(nameof(CustomerEntity.Status)).GetString());
         Assert.Equal(EntityTransitionOperationDisposition.NotFound, (
             await fixture.Repository.TryGetTransitionOperation(fixture.Context, fixture.Request)).Disposition);
     }
@@ -344,7 +344,7 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
         Assert.True(committed.IsSuccessful);
         Assert.False(conflict.IsSuccessful);
         Assert.Equal(EntityTransitionOperationDiagnosticCodes.IdentityConflict, conflict.Failure?.Code);
-        Assert.Equal("pending", retained!.Entity.GetField(nameof(CustomerEntity.Status)).GetString());
+        Assert.Equal("pending", retained!.Entity.Observation.GetField(nameof(CustomerEntity.Status)).GetString());
     }
 
     [Fact]
@@ -502,7 +502,7 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
             var seeded = CustomerEntity.Instance.CreateState(
                 SubjectId,
                 new CustomerState(SubjectId, "tenant/acme", status));
-            _ = await Repository.Upsert(Context, new(seeded.Observation));
+            _ = await Repository.Upsert(Context, new(seeded.Snapshot));
         }
 
         internal static async Task<Fixture> CreateAsync(
@@ -526,7 +526,7 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
                 var seeded = CustomerEntity.Instance.CreateState(
                     "customer/1",
                     new CustomerState("customer/1", "tenant/acme", "retained"));
-                _ = await repository.Upsert(context, new(seeded.Observation));
+                _ = await repository.Upsert(context, new(seeded.Snapshot));
             }
 
             var eventDocument = InteractionContractDocuments.Create(

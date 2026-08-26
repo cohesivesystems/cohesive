@@ -181,6 +181,17 @@ public sealed class Observation : IEquatable<Observation>, IObservationFieldRead
     public bool TryGetField(string fieldIdentity, out ObservationValue field) =>
         value.TryGetProperty(fieldIdentity, out field);
 
+    /// <summary>Attempts to get a top-level field by its semantic definition.</summary>
+    /// <param name="field">Semantic field definition.</param>
+    /// <param name="value">Field value when present; otherwise the default value.</param>
+    /// <returns><see langword="true"/> when the field is present; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="field"/> is <see langword="null"/>.</exception>
+    public bool TryGetField(FieldDefinition field, out ObservationValue value)
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        return TryGetField(field.Name.Value, out value);
+    }
+
     /// <summary>Gets the value at an object-field path.</summary>
     /// <param name="path">Non-empty path containing field segments.</param>
     /// <returns>The immutable value at the path.</returns>

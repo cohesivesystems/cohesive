@@ -1,7 +1,5 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
-using Cohesive.Relations.Mapping;
-using Cohesive.Relations.Model;
 using Cohesive.Transitions.Model;
 
 namespace Cohesive.Storage;
@@ -15,11 +13,6 @@ public interface IEntityRepository
     /// Semantic entity definition handled by the repository.
     /// </summary>
     EntityDefinition EntityDefinition { get; }
-
-    /// <summary>
-    /// Shared shape-mapping configuration used for typed materialization and object writes.
-    /// </summary>
-    ShapeMappingContext MappingContext { get; }
 
     /// <summary>
     /// Logical observation/entity type handled by the repository.
@@ -129,7 +122,7 @@ public interface IEntityOutboxRepository<TEntity> : IEntityRepository<TEntity>, 
 /// Persisted observation snapshot.
 /// </summary>
 public sealed record EntitySnapshot(
-    Observation Entity,
+    EntityObservationSnapshot Entity,
     string PartitionKey,
     EntityConcurrencyToken ConcurrencyToken,
     IReadOnlySet<string>? LoadedFields = null
@@ -139,7 +132,7 @@ public sealed record EntitySnapshot(
 /// Observation write request.
 /// </summary>
 public sealed record EntityWriteRequest(
-    Observation Entity,
+    EntityObservationSnapshot Entity,
     EntityConcurrencyToken? ExpectedConcurrencyToken = null
 );
 
@@ -308,7 +301,7 @@ public sealed record EntityOutboxCommit
             throw new ArgumentException("Entity outbox envelopes must be initialized.", nameof(envelopes));
 
         HashSet<EmissionId>? identities = envelopes.Length > 1 ? [] : null;
-        var entityType = new EntityTypeName(write.Entity.ShapeId.Value);
+        var entityType = new EntityTypeName(write.Entity.Observation.ShapeId.ShapeId.Value);
         ExecutionDefinitionReference? transition = null;
         ExecutionNodeId? outcome = null;
         foreach (var envelope in envelopes)
@@ -329,7 +322,7 @@ public sealed record EntityOutboxCommit
                     "The entity outbox is authoritative only for envelopes emitted by a direct Transition.",
                     nameof(envelopes));
             if (origin.Entity.EntityType != entityType
-                || !string.Equals(origin.Entity.EntityId.Value, write.Entity.Id, StringComparison.Ordinal))
+                || origin.Entity.EntityId != write.Entity.EntityId)
                 throw new ArgumentException(
                     "Every entity outbox envelope must identify the exact candidate entity as its Transition subject.",
                     nameof(envelopes));

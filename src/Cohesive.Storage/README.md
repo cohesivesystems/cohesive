@@ -163,7 +163,7 @@ var outcome = await evaluator.EvaluateAsync(evaluation, cancellationToken);
 ```
 
 When `observationVersionSemanticPath` is configured, that semantic field is projected from the repository
-snapshot's `Observation.Version`; a same-named payload field cannot become a competing authority. The convention is
+snapshot's `EntityObservationSnapshot.Version`; a same-named payload field cannot become a competing authority. The convention is
 part of the derived source identity.
 
 A query may instead consume a derived snapshot view while the repository entity remains the semantic authority.

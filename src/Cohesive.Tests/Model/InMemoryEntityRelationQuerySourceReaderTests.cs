@@ -12,7 +12,8 @@ namespace Cohesive.Tests.Model;
 public sealed class InMemoryEntityRelationQuerySourceReaderTests
 {
     static readonly GraphId Graph = new("tests/in-memory-entity-reader/v1");
-    static readonly QualifiedShapeId Shape = new(Graph, SampleEntity.Instance.Definition.Shape.Id);
+    static readonly EntityDefinition SampleDefinition = CreateSampleDefinition();
+    static readonly QualifiedShapeId Shape = SampleDefinition.StateShape.QualifiedId;
     static readonly FieldPath NamePath = FieldPath.FromField("Name");
     static readonly FieldPath CustomerIdsPath = FieldPath.FromField("CustomerIds");
     static readonly FieldPath VersionPath = FieldPath.FromField("SourceEntityVersion");
@@ -58,7 +59,7 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
         Assert.Throws<ArgumentException>(() => EntityRelationQuerySourceRegistration.InMemory(
             Shape,
             new InMemoryEntityOutboxRepository(
-                SampleEntity.Instance.Definition,
+                SampleDefinition,
                 partitionKeyFieldName: "PartitionKey"),
             RelationQueryLogicalPartitionIdentity.WholeSource,
             identitySourceSelector: EntityRelationQuerySourceRegistration.ObservationVersionSourceSelector,
@@ -411,7 +412,7 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
         FieldPath? observationVersionSemanticPath = null)
     {
         var repository = new InMemoryEntityOutboxRepository(
-            SampleEntity.Instance.Definition,
+            SampleDefinition,
             partitionKeyFieldName: "PartitionKey",
             seedSnapshots: snapshots);
         var registration = EntityRelationQuerySourceRegistration.InMemory(
@@ -448,11 +449,10 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
         string id,
         long version,
         params (string Name, ObservationValue Value)[] fields) => new(
-        new(
-            SampleEntity.Instance.Definition.Shape.Id,
+        SampleDefinition.CreateState(
             id,
             fields.ToDictionary(static field => field.Name, static field => field.Value, StringComparer.Ordinal),
-            version),
+            version).Snapshot,
         "tenant-a",
         new($"seed/tenant-a/{id}"));
 
@@ -461,10 +461,9 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
         IEnumerable<(string Name, ObservationValue Value)> fields,
         string partitionKey,
         IReadOnlySet<string>? loadedFields) => new(
-        new(
-            SampleEntity.Instance.Definition.Shape.Id,
+        SampleDefinition.CreateState(
             id,
-            fields.ToDictionary(static field => field.Name, static field => field.Value, StringComparer.Ordinal)),
+            fields.ToDictionary(static field => field.Name, static field => field.Value, StringComparer.Ordinal)).Snapshot,
         partitionKey,
         new($"seed/{partitionKey}/{id}"),
         loadedFields);
@@ -473,23 +472,32 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
         EntityRelationQuerySourceRegistration Registration,
         InMemoryEntityRelationQuerySourceReader Reader);
 
-    sealed class SampleEntity : Entity<SampleEntity>
+    static EntityDefinition CreateSampleDefinition()
     {
-        public SampleEntity()
-            : base(nameof(SampleEntity))
-        {
-            PartitionKey = WriteOnceField<string>(nameof(PartitionKey));
-            Name = WriteOnceField<string>(nameof(Name));
-            CustomerIds = WriteOnceField<string[]>(nameof(CustomerIds));
-            SourceEntityVersion = WriteOnceField<long>(nameof(SourceEntityVersion));
-        }
+        var stringType = new ScalarTypeRef(ScalarTypeKind.String);
+        Shape shape = new(
+            new("SampleEntity"),
+            [
+                Optional("PartitionKey", stringType),
+                Optional("Name", stringType),
+                Optional("CustomerIds", new JsonTypeRef(JsonTypeKind.Any)),
+                Optional("SourceEntityVersion", new ScalarTypeRef(ScalarTypeKind.Int64)),
+                Optional("Other", new JsonTypeRef(JsonTypeKind.Any)),
+                Optional("PhysicalName", new JsonTypeRef(JsonTypeKind.Any)),
+                Optional("PhysicalCustomerIds", new JsonTypeRef(JsonTypeKind.Any))
+            ],
+            role: ShapeRoles.Entity);
+        ShapeGraph graph = new(Graph, [shape]);
+        return new(
+            new("SampleEntity"),
+            new EntityShapeGraphBinding(
+                new(Graph, shape.Id),
+                Cohesive.Model.Serialization.ShapeGraphDocument.FromGraph(graph)));
 
-        public Field<string> PartitionKey { get; }
-
-        public Field<string> Name { get; }
-
-        public Field<string[]> CustomerIds { get; }
-
-        public Field<long> SourceEntityVersion { get; }
+        static FieldDefinition Optional(string name, TypeRef type) => new(
+            new(name),
+            type,
+            presence: FieldPresence.Optional,
+            nullability: FieldNullability.Nullable);
     }
 }

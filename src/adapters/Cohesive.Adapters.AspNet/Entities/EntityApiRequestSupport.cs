@@ -36,7 +36,7 @@ static class EntityApiRequestSupport
         ImmutableArray<InteractionEnvelope> envelopes = default
         )
     {
-        var write = new EntityWriteRequest(context.NewState.Observation, expectedConcurrencyToken);
+        var write = new EntityWriteRequest(context.NewState.Snapshot, expectedConcurrencyToken);
         if (!envelopes.IsDefaultOrEmpty)
         {
             var outboxRepository = options.OutboxRepositoryResolver(context.HttpContext.RequestServices, options.Entity);

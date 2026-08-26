@@ -238,7 +238,7 @@ Current portable and adapter contracts expose their schema versions through cons
 - `relationship-catalog/v1`
 - `relation-query/v1`
 - `relation-draft/v1`
-- `relation-query-evaluation/v2`
+- `relation-query-evaluation/v3`
 - `relation-query-source-placement/v3`
 - `relation-query-physical-plan/v1`
 - `relation-query-explain/v1`
@@ -273,9 +273,13 @@ Migration rules:
 4. Regenerate non-current adapter bindings, bound-realization reports, and native artifacts together.
 5. Reauthor `relation-query-evaluation/v1` supplied-root documents as v2 with an explicit provider-neutral logical
    partition identity; use `RelationQueryLogicalPartitionIdentity.WholeSource` only for genuinely unpartitioned data.
-6. Treat `RelationQueryEvaluationOutcome` and physical execution results as in-process composites, not durable wire
+6. Reauthor `relation-query-evaluation/v2` supplied roots as v3. Version 3 replaces the legacy local shape,
+   observation version, and lineage envelope with a stable source identity, the exact qualified shape identity, and
+   immutable field evidence. Resolve and validate that shape through the evaluation's persisted compilation graph;
+   do not relabel a v2 document or infer a graph from its local shape id.
+7. Treat `RelationQueryEvaluationOutcome` and physical execution results as in-process composites, not durable wire
    contracts.
-7. Treat persisted executable SQL artifacts as trusted code. PostgreSQL rehydration is intentionally named
+8. Treat persisted executable SQL artifacts as trusted code. PostgreSQL rehydration is intentionally named
    `DeserializeTrusted`; fingerprints detect inconsistency but are not cryptographic signatures.
 
 Source-placement v3 adds optional semantic identity-path evidence independently from the adapter-interpreted physical

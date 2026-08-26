@@ -289,7 +289,7 @@ public sealed class MotionDqDurableProcessConformanceTests
             EntityReadOptions.Full));
         Assert.Equal(
             MotionDqCaseMilestone.FullApplicationSubmitted.ToString(),
-            finalCase.Entity.GetField(nameof(MotionDqOnboardingCaseEntity.Milestone))
+            finalCase.Entity.Observation.GetField(nameof(MotionDqOnboardingCaseEntity.Milestone))
                 .GetRequiredString());
         Assert.Equal(initial.Entity.Version + 2, finalCase.Entity.Version);
     }
@@ -2100,14 +2100,13 @@ public sealed class MotionDqDurableProcessConformanceTests
             RequiredField(caseStates[ObservationValue.FromString(caseId)], nameof(MotionDqOnboardingCaseEntity.Milestone))
                 .GetRequiredString());
 
-        internal Observation CaseObservation(string caseId)
+        internal EntityObservationSnapshot CaseObservation(string caseId)
         {
             var state = caseStates[ObservationValue.FromString(caseId)];
-            return new(
-                MotionDqOnboardingCaseEntity.Instance.Definition.Shape.Id,
+            return MotionDqOnboardingCaseEntity.Instance.Definition.CreateState(
                 caseId,
                 state.Fields!,
-                version: 1);
+                version: 1).Snapshot;
         }
 
         internal MotionDqRequirementStatus RequirementStatus(MotionDqCaseRequirementReference requirement) =>

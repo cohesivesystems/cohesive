@@ -1,6 +1,5 @@
 using System.Linq.Expressions;
 using System.Reflection;
-using Cohesive.Relations.Mapping;
 using Cohesive.Transitions.Model;
 
 namespace Cohesive.Transitions.Authoring;
@@ -61,16 +60,14 @@ public sealed class EntitySnapshot<TEntity>(TEntity entity, EntityState state) w
         ResolveField(field).Require(State, message);
 
     /// <summary>
-    /// Materializes the bound state into a CLR shape using the shared shape mapper.
+    /// Materializes the bound state through the deterministic core plan.
     /// </summary>
-    public T Populate<T>(ShapeMappingContext? mappingContext = null) =>
-        State.Populate<T>(mappingContext);
+    public T Populate<T>() => State.Populate<T>();
 
     /// <summary>
-    /// Materializes the bound state into a CLR shape using an explicitly configured mapper.
+    /// Materializes the bound state through an explicitly configured core plan.
     /// </summary>
-    public T Populate<T>(Action<ObservationObjectMapperBuilder<T>> configure, ShapeMappingContext? mappingContext = null) => 
-        State.Populate(configure, mappingContext);
+    public T Populate<T>(Action<ObservationMaterializerBuilder<T>> configure) => State.Populate(configure);
 
     Field<TValue> ResolveField<TValue>(Expression<Func<TEntity, Field<TValue>>> field)
     {
