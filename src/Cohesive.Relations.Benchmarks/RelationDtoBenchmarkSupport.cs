@@ -8,6 +8,7 @@ using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.TestFixtures;
 using Microsoft.Extensions.Logging.Abstractions;
+using Observation = Cohesive.Relations.Model.Observation;
 
 namespace Cohesive.Relations.Benchmarks;
 

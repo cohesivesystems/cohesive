@@ -5,6 +5,7 @@ using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
+using Observation = Cohesive.Relations.Model.Observation;
 
 namespace Cohesive.Identity;
 

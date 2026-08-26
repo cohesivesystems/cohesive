@@ -30,6 +30,22 @@ var graph = new ClrShapeGraphBuilder()
     .Build(new("shipping"));
 ```
 
+### Identity-free observations
+
+`Cohesive.Model.Observation` is the canonical statement of what was observed: one immutable, concrete object value
+validated against an exact graph-qualified shape. It deliberately carries no entity or occurrence identity, source
+version, lineage, storage placement, relation field layout, ordinal buffer, or presence bitmap. Those concerns belong
+to explicit snapshot, occurrence, storage, and physical-query interpretations.
+
+Normal construction requires the `ShapeGraph` that resolves the shape and any named types. It rejects unresolved
+shape evidence, non-object roots, undefined or non-finite nested values, unknown or missing fields, and incompatible
+nullability, cardinality, and field types. `ObservationValue` remains the sole field-value authority; `Fields` and
+field/path lookup are immutable projections over that value. Canonical JSON and its typed SHA-256 fingerprint include
+the canonical-format profile, qualified shape identity, and value.
+
+`Cohesive.Relations.Model.Observation` remains the indexed physical representation during the staged migration tracked
+by ARI-503 and ARI-504. It is not the semantic authority for identity-free observations.
+
 ### Typed portable JSON values
 
 Use `PortableJsonValueAttribute` when a CLR type's semantic representation is one JSON value and a separate JSON

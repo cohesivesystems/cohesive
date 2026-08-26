@@ -8,6 +8,7 @@ using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
 using IRRelationDefinition = Cohesive.Relations.IR.RelationDefinition;
+using Observation = Cohesive.Relations.Model.Observation;
 
 namespace Cohesive.Relations.TestFixtures;
 
