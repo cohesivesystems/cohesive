@@ -6,5 +6,5 @@ global using Cohesive.Relations.Mapping;
 global using Cohesive.Relations.Model;
 global using Cohesive.Relations.Serialization;
 global using Cohesive.Relations.TestFixtures;
-// Temporary physical-observation default until ARI-503 migrates Relations to the core semantic observation.
+// Legacy local-shape compatibility alias; ARI-504 migrates remaining callers to core/physical observation types.
 global using Observation = Cohesive.Relations.Model.Observation;

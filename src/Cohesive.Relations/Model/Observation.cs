@@ -4,9 +4,13 @@ using Cohesive.Relations.Mapping;
 
 namespace Cohesive.Relations.Model;
 
-/// <summary>
-/// Shape observation payload keyed by canonical field names.
-/// </summary>
+/// <summary>Legacy local-shape indexed row retained for downstream compatibility.</summary>
+/// <remarks>
+/// This type predates the identity-free core observation and combines physical layout, stable source identity,
+/// version, and lineage. New Relations execution code should use
+/// <see cref="Cohesive.Relations.Physical.IndexedObservationOccurrence"/> for physical occurrences and
+/// <see cref="Cohesive.Model.Observation"/> for semantic values. ARI-504 owns migration and removal of this bridge.
+/// </remarks>
 public sealed record Observation
 {
     readonly ObservationBuffer buffer;

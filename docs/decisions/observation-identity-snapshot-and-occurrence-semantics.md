@@ -24,7 +24,7 @@ into the core value.
 
 | Existing concept | Actual invariant | Decision |
 | --- | --- | --- |
-| `Cohesive.Relations.Model.Observation` | Indexed physical shaped row with stable source identity, source version, and optional derived field lineage | Compatibility representation until ARI-503 adapts or renames it as a physical occurrence |
+| `Cohesive.Relations.Model.Observation` | Indexed physical shaped row with stable source identity, source version, and optional derived field lineage | Compatibility representation until ARI-504 migrates downstream consumers; ARI-503 introduced the explicit physical occurrence |
 | `RelationQuerySourceReadObservation` | Stable source-row identity plus graph-qualified shape and partial field outcomes | Source-acquisition evidence; not a versioned entity snapshot |
 | `RelationQueryObservationOccurrence` | Identity unique within one evaluation, binding participation, qualified shape, and optional stable source identity | Existing canonical relation-evaluation occurrence; no version belongs here |
 | `Cohesive.Storage.EntitySnapshot` | Repository result containing a legacy row, partition, concurrency token, and loaded-field completeness | Storage interpretation that will compose the core entity snapshot during ARI-504 |
@@ -58,7 +58,8 @@ occurrence representation.
 - New entity-state APIs can require `EntityObservationSnapshot` without weakening identity or version invariants.
 - Relation evaluation continues using its existing occurrence identity, which cannot be confused with `EntityId`.
 - Storage concurrency and placement remain adapter concerns around the semantic snapshot.
-- ARI-503 must adapt the indexed Relations representation and attach lineage to the derived occurrence it describes.
+- ARI-503 introduced `IndexedObservationOccurrence`, which composes indexed storage and lineage with the existing
+  relation occurrence and projects losslessly to core observations.
 - ARI-504 must migrate Transitions, Storage, Identity, APIs, adapters, and fixtures, then remove the legacy
   identity/version authority from the Relations row.
 

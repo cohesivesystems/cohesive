@@ -81,6 +81,53 @@ public sealed class CoreObservationMaterializationTests
     }
 
     [Fact]
+    public void Compile_FromQualifiedIdentitySupportsPhysicalReadersAndFieldIdentityConventions()
+    {
+        Shape definition = new(
+            new("customer"),
+            [
+                new(new("customer_name"), new ScalarTypeRef(ScalarTypeKind.String)),
+                new(new("order_count"), new ScalarTypeRef(ScalarTypeKind.Int64))
+            ]);
+        ShapeGraph graph = new(new("customer-materialization-v1"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var observation = CoreObservation.Create(
+            shape,
+            Fields(
+                ("customer_name", ObservationValue.FromString("Ada")),
+                ("order_count", ObservationValue.FromInt64(3))));
+        var materializer = ObservationMaterializer
+            .For<ImmutableCustomer>(shape.QualifiedId)
+            .WithImplicitFieldIdentityConvention(property => property.Name switch
+            {
+                nameof(ImmutableCustomer.Name) => "customer_name",
+                nameof(ImmutableCustomer.OrderCount) => "order_count",
+                _ => property.Name
+            })
+            .Compile();
+
+        var result = materializer.Materialize((IObservationFieldReader)observation);
+
+        Assert.Equal(new ImmutableCustomer("Ada", 3), result);
+    }
+
+    [Fact]
+    public void Compile_RejectsDefaultQualifiedIdentityAndEmptyFieldIdentityConvention()
+    {
+        var defaultIdentityFailure = Assert.Throws<ArgumentException>(() =>
+            ObservationMaterializer.For<ImmutableCustomer>(default(QualifiedShapeId)));
+        var shape = ShapeFor<ImmutableCustomer>(BuildMetadata<ImmutableCustomer>("customer-materialization-v1"));
+        var conventionFailure = Assert.Throws<InvalidOperationException>(() =>
+            ObservationMaterializer
+                .For<ImmutableCustomer>(shape.QualifiedId)
+                .WithImplicitFieldIdentityConvention(static _ => " ")
+                .Compile());
+
+        Assert.Equal("shapeId", defaultIdentityFailure.ParamName);
+        Assert.Contains("empty identity", conventionFailure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void WithClrShapeMetadata_UsesEffectiveSystemTextJsonFieldIdentities()
     {
         var serializerOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)

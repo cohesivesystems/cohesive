@@ -49,7 +49,7 @@ public sealed record ObservationFingerprint
 /// placement, and runtime layout belong to explicit surrounding interpretations. The retained
 /// <see cref="ObservationValue"/> is immutable and is the sole field-value authority.
 /// </remarks>
-public sealed class Observation : IEquatable<Observation>
+public sealed class Observation : IEquatable<Observation>, IObservationFieldReader
 {
     readonly ObservationValue value;
 

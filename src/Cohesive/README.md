@@ -67,8 +67,13 @@ frozen during compilation. Compiled plans therefore retain qualified shape and m
 ambient configuration object. Reflection metadata is cached by CLR type, while default compiled plans are cached by
 CLR target type and complete `QualifiedShapeId`; neither cache depends on a Relations layout or local shape id alone.
 
-`Cohesive.Relations.Model.Observation` remains the indexed physical representation during the staged migration tracked
-by ARI-503 and ARI-504. It is not the semantic authority for identity-free observations.
+Physical interpreters can implement `IObservationFieldReader` so the same compiled plan reads their validated storage
+directly. The reader is deliberately smaller than `Observation`: it exposes exact qualified shape evidence and
+top-level field access, but does not become a validation, serialization, identity, or provenance authority.
+
+`Cohesive.Relations.Physical.IndexedObservationOccurrence` is the explicit indexed relation interpretation.
+`Cohesive.Relations.Model.Observation` remains only as a local-shape compatibility bridge until ARI-504 and is not the
+semantic authority for identity-free observations.
 
 When entity identity and entity-state version apply, compose the value explicitly:
 

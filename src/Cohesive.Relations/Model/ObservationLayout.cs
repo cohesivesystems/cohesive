@@ -16,8 +16,6 @@ public sealed class ObservationLayout
     {
         Schema = schema;
         this.fieldNames = Guard.RequireNotNull(fieldNames);
-        if (this.fieldNames.Count == 0)
-            throw new ArgumentException("Observation layout must define at least one field.", nameof(fieldNames));
 
         ordinalByFieldName = new(this.fieldNames.Count, StringComparer.Ordinal);
         for (var i = 0; i < this.fieldNames.Count; i++)

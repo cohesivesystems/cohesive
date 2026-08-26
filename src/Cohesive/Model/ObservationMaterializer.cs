@@ -33,9 +33,9 @@ public enum ObservationMissingFieldBehavior
 /// </remarks>
 public sealed class ObservationMaterializer<T>
 {
-    readonly Func<Observation, T> materialize;
+    readonly Func<IObservationFieldReader, T> materialize;
 
-    internal ObservationMaterializer(QualifiedShapeId shapeId, Func<Observation, T> materialize)
+    internal ObservationMaterializer(QualifiedShapeId shapeId, Func<IObservationFieldReader, T> materialize)
     {
         ShapeId = shapeId;
         this.materialize = Guard.RequireNotNull(materialize);
@@ -55,13 +55,31 @@ public sealed class ObservationMaterializer<T>
     public T Materialize(Observation observation)
     {
         ArgumentNullException.ThrowIfNull(observation);
-        if (observation.ShapeId != ShapeId)
+        return Materialize((IObservationFieldReader)observation);
+    }
+
+    /// <summary>Materializes a CLR value directly from a physical reader governed by <see cref="ShapeId"/>.</summary>
+    /// <param name="reader">Validated physical interpretation of identity-free observation fields.</param>
+    /// <returns>The materialized CLR value.</returns>
+    /// <remarks>
+    /// The reader is trusted to preserve validated core observation semantics. This method verifies exact qualified
+    /// shape identity but does not revalidate the complete value tree.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="reader"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The reader has another qualified shape, a required mapped field is absent, conversion fails, or a converter
+    /// returns null for a non-nullable target member.
+    /// </exception>
+    public T Materialize(IObservationFieldReader reader)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        if (reader.ShapeId != ShapeId)
         {
             throw new InvalidOperationException(
-                $"Materializer shape '{ShapeId}' does not match observation shape '{observation.ShapeId}'.");
+                $"Materializer shape '{ShapeId}' does not match observation shape '{reader.ShapeId}'.");
         }
 
-        return materialize(observation);
+        return materialize(reader);
     }
 }
 
@@ -77,6 +95,23 @@ public static class ObservationMaterializer
     {
         ArgumentNullException.ThrowIfNull(shape.Graph);
         return new(shape.QualifiedId);
+    }
+
+    /// <summary>Creates a configurable materializer builder from an already resolved qualified shape identity.</summary>
+    /// <typeparam name="T">CLR target type.</typeparam>
+    /// <param name="shapeId">Exact graph-qualified shape accepted by the compiled materializer.</param>
+    /// <returns>A builder using deterministic CLR property-name conventions.</returns>
+    /// <remarks>
+    /// Use this overload when a compiler or physical interpreter has already resolved and validated shape evidence.
+    /// The materializer binds that identity but does not require or retain a mutable graph object.
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="shapeId"/> is default.</exception>
+    public static ObservationMaterializerBuilder<T> For<T>(QualifiedShapeId shapeId)
+    {
+        if (string.IsNullOrWhiteSpace(shapeId.GraphId.Value) || string.IsNullOrWhiteSpace(shapeId.ShapeId.Value))
+            throw new ArgumentException("A materializer requires a graph-qualified shape identity.", nameof(shapeId));
+
+        return new(shapeId);
     }
 
     /// <summary>
@@ -98,6 +133,25 @@ public static class ObservationMaterializer
         ArgumentNullException.ThrowIfNull(observation);
         return DefaultObservationMaterializerCache<T>.Get(observation.ShapeId);
     }
+
+    /// <summary>
+    /// Gets the cached default materializer for a target CLR type and a physical observation reader's exact shape.
+    /// </summary>
+    /// <typeparam name="T">CLR target type.</typeparam>
+    /// <param name="reader">Physical reader providing qualified shape evidence.</param>
+    /// <returns>
+    /// A process-wide reusable materializer using CLR property names, web JSON conversion with string enums, and
+    /// optional-member defaults.
+    /// </returns>
+    /// <remarks>
+    /// The reader is an execution interpretation; this operation does not make it a semantic observation authority.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="reader"/> is <see langword="null"/>.</exception>
+    public static ObservationMaterializer<T> GetDefault<T>(IObservationFieldReader reader)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        return DefaultObservationMaterializerCache<T>.Get(reader.ShapeId);
+    }
 }
 
 /// <summary>Builds an immutable compiled observation-to-CLR materializer.</summary>
@@ -111,6 +165,7 @@ public sealed class ObservationMaterializerBuilder<T>
     ObservationMissingFieldBehavior missingFieldBehavior =
         ObservationMissingFieldBehavior.UseDefaultForOptionalMembers;
     ClrShapeGraphBuildResult? clrShapeMetadata;
+    Func<PropertyInfo, string> implicitFieldIdentity = static property => property.Name;
 
     internal ObservationMaterializerBuilder(QualifiedShapeId shapeId) => this.shapeId = shapeId;
 
@@ -147,6 +202,44 @@ public sealed class ObservationMaterializerBuilder<T>
         ArgumentException.ThrowIfNullOrWhiteSpace(fieldIdentity);
         ArgumentNullException.ThrowIfNull(target);
         mappings.Add(new(ResolveTargetProperty(target), fieldIdentity, convert));
+        return this;
+    }
+
+    /// <summary>Maps every readable target property using a caller-supplied semantic field-identity convention.</summary>
+    /// <param name="resolveFieldIdentity">Resolves one non-empty canonical field identity per readable property.</param>
+    /// <returns>This builder for continued configuration.</returns>
+    /// <remarks>
+    /// These mappings are explicit and therefore take precedence over CLR shape metadata or the implicit convention.
+    /// Use <see cref="WithImplicitFieldIdentityConvention"/> when only unmapped properties should use a convention.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="resolveFieldIdentity"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">A resolved field identity is empty or white-space.</exception>
+    public ObservationMaterializerBuilder<T> MapAll(Func<PropertyInfo, string> resolveFieldIdentity)
+    {
+        ArgumentNullException.ThrowIfNull(resolveFieldIdentity);
+        foreach (var property in ObservationMaterializerTypeCache<T>.ReadableProperties)
+        {
+            var fieldIdentity = resolveFieldIdentity(property);
+            ArgumentException.ThrowIfNullOrWhiteSpace(fieldIdentity);
+            mappings.Add(new(property, fieldIdentity, Converter: null));
+        }
+
+        return this;
+    }
+
+    /// <summary>Sets the field-identity convention used for readable properties without explicit mappings.</summary>
+    /// <param name="resolveFieldIdentity">Resolves one non-empty canonical field identity per readable property.</param>
+    /// <returns>This builder for continued configuration.</returns>
+    /// <remarks>Effective CLR shape metadata, when supplied, takes precedence over this fallback convention.</remarks>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="resolveFieldIdentity"/> is <see langword="null"/>.
+    /// </exception>
+    public ObservationMaterializerBuilder<T> WithImplicitFieldIdentityConvention(
+        Func<PropertyInfo, string> resolveFieldIdentity)
+    {
+        implicitFieldIdentity = Guard.RequireNotNull(resolveFieldIdentity);
         return this;
     }
 
@@ -290,7 +383,16 @@ public sealed class ObservationMaterializerBuilder<T>
     string ResolveImplicitFieldIdentity(PropertyInfo property)
     {
         if (clrShapeMetadata is null)
-            return property.Name;
+        {
+            var fieldIdentity = implicitFieldIdentity(property);
+            if (string.IsNullOrWhiteSpace(fieldIdentity))
+            {
+                throw new InvalidOperationException(
+                    $"Field-identity convention returned an empty identity for property '{property.Name}' on '{typeof(T).Name}'.");
+            }
+
+            return fieldIdentity;
+        }
 
         var path = clrShapeMetadata.ResolveMemberPath(typeof(T), [property]);
         return path.Segments[0].Segment!;
@@ -326,13 +428,13 @@ public sealed class ObservationMaterializerBuilder<T>
         return maximumArityCandidates[0];
     }
 
-    Func<Observation, T> CompileMaterializer(
+    Func<IObservationFieldReader, T> CompileMaterializer(
         ConstructorInfo? constructor,
         IReadOnlyDictionary<string, PropertyMapping> byProperty,
         IReadOnlyList<PropertyMapping> effectiveMappings,
         JsonSerializerOptions frozenSerializerOptions)
     {
-        var observation = Expression.Parameter(typeof(Observation), "observation");
+        var observation = Expression.Parameter(typeof(IObservationFieldReader), "observation");
         var options = Expression.Constant(frozenSerializerOptions);
         var constructorParameters = constructor?.GetParameters() ?? [];
         var constructorArguments = constructorParameters
@@ -381,7 +483,7 @@ public sealed class ObservationMaterializerBuilder<T>
         Expression body = additionalBindings.Length == 0
             ? creation
             : Expression.MemberInit(creation, additionalBindings);
-        return Expression.Lambda<Func<Observation, T>>(body, observation).Compile();
+        return Expression.Lambda<Func<IObservationFieldReader, T>>(body, observation).Compile();
     }
 
     MethodCallExpression BuildReadExpression(
@@ -401,7 +503,7 @@ public sealed class ObservationMaterializerBuilder<T>
     }
 
     static TValue ReadMappedValue<TValue>(
-        Observation observation,
+        IObservationFieldReader observation,
         Delegate? converter,
         JsonSerializerOptions serializerOptions,
         string fieldIdentity,
@@ -455,7 +557,7 @@ public sealed class ObservationMaterializerBuilder<T>
         !targetType.IsValueType || Nullable.GetUnderlyingType(targetType) is not null;
 
     static TValue ResolveMissingValue<TValue>(
-        Observation observation,
+        IObservationFieldReader observation,
         string fieldIdentity,
         MissingFieldResolution resolution) =>
         resolution.Kind switch

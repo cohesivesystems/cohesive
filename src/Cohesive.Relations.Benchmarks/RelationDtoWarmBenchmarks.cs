@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using AutoMapper;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Columns;
@@ -5,6 +6,7 @@ using BenchmarkDotNet.Configs;
 using Cohesive.Model;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.Mapping;
+using Cohesive.Relations.Physical;
 using Cohesive.Relations.TestFixtures;
 
 namespace Cohesive.Relations.Benchmarks;
@@ -20,6 +22,10 @@ public class RelationDtoWarmBenchmarks
     RelationDtoFixtureScenario<LoadSearchDto> joined = null!;
     ObservationObjectMapper<LoadSummaryDto> simpleObservationMapper = null!;
     ObservationObjectMapper<LoadSearchDto> joinedObservationMapper = null!;
+    ImmutableArray<IndexedObservationOccurrence> simpleIndexedOccurrences;
+    ImmutableArray<IndexedObservationOccurrence> joinedIndexedOccurrences;
+    ObservationMaterializer<LoadSummaryDto> simpleCoreMaterializer = null!;
+    ObservationMaterializer<LoadSearchDto> joinedCoreMaterializer = null!;
     CompiledRelationDtoMapper<LoadSummaryDto> simpleCompiledMapper = null!;
     CompiledRelationDtoMapper<LoadSearchDto> joinedCompiledMapper = null!;
     Func<ObservationValue, LoadSummaryDto> simpleKernel = null!;
@@ -44,6 +50,22 @@ public class RelationDtoWarmBenchmarks
         joinedObservationMapper = ObservationObjectMapper
             .For<LoadSearchDto>(joined.Observations[0].Layout)
             .Build();
+        simpleIndexedOccurrences = RelationDtoBenchmarkSupport.ToIndexedOccurrences(simple);
+        joinedIndexedOccurrences = RelationDtoBenchmarkSupport.ToIndexedOccurrences(joined);
+        simpleCoreMaterializer = ObservationMaterializer
+            .For<LoadSummaryDto>(simpleIndexedOccurrences[0].ShapeId)
+            .Compile();
+        joinedCoreMaterializer = ObservationMaterializer
+            .For<LoadSearchDto>(joinedIndexedOccurrences[0].ShapeId)
+            .Compile();
+        ValidateOutput(
+            RelationDtoBenchmarkSupport.MaterializeIndexed(simpleIndexedOccurrences, simpleCoreMaterializer),
+            RelationDtoBenchmarkSupport.MapObservations(simple.Observations, simpleObservationMapper),
+            "shared core indexed simple");
+        ValidateOutput(
+            RelationDtoBenchmarkSupport.MaterializeIndexed(joinedIndexedOccurrences, joinedCoreMaterializer),
+            RelationDtoBenchmarkSupport.MapObservations(joined.Observations, joinedObservationMapper),
+            "shared core indexed joined");
         simpleCompiledMapper = RelationDtoBenchmarkSupport.CompileMapper<LoadSummaryDto>(simple.Plan);
         joinedCompiledMapper = RelationDtoBenchmarkSupport.CompileMapper<LoadSearchDto>(joined.Plan);
         simpleKernel = simpleCompiledMapper.MaterializationKernel;
@@ -53,11 +75,11 @@ public class RelationDtoWarmBenchmarks
 
         var autoMapperConfiguration = RelationDtoBenchmarkSupport.ConfigureAutoMapper();
         autoMapper = autoMapperConfiguration.CreateMapper();
-        ValidateAutoMapper(
+        ValidateOutput(
             autoMapper.Map<LoadSummaryDto[]>(simpleCanonicalRows),
             RelationDtoBenchmarkSupport.MapSimpleHandwritten(simple.Execution),
             "simple");
-        ValidateAutoMapper(
+        ValidateOutput(
             autoMapper.Map<LoadSearchDto[]>(joinedCanonicalRows),
             RelationDtoBenchmarkSupport.MapJoinedHandwritten(joined.Execution),
             "joined");
@@ -90,6 +112,13 @@ public class RelationDtoWarmBenchmarks
     [BenchmarkCategory("Warm", "Simple")]
     public LoadSummaryDto[] ExistingObservationMapperSimple() =>
         RelationDtoBenchmarkSupport.MapObservations(simple.Observations, simpleObservationMapper);
+
+    /// <summary>Shared core materializer reading the explicit indexed occurrence representation.</summary>
+    /// <returns>Materialized DTOs.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Warm", "Simple")]
+    public LoadSummaryDto[] SharedCoreIndexedSimple() =>
+        RelationDtoBenchmarkSupport.MaterializeIndexed(simpleIndexedOccurrences, simpleCoreMaterializer);
 
     /// <summary>
     /// Preconfigured AutoMapper member plan from the same canonical output-row representation.
@@ -128,6 +157,13 @@ public class RelationDtoWarmBenchmarks
     public LoadSearchDto[] ExistingObservationMapperJoined() =>
         RelationDtoBenchmarkSupport.MapObservations(joined.Observations, joinedObservationMapper);
 
+    /// <summary>Shared core materializer reading explicit joined indexed occurrences.</summary>
+    /// <returns>Materialized DTOs.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Warm", "Joined")]
+    public LoadSearchDto[] SharedCoreIndexedJoined() =>
+        RelationDtoBenchmarkSupport.MaterializeIndexed(joinedIndexedOccurrences, joinedCoreMaterializer);
+
     /// <summary>
     /// Preconfigured AutoMapper member plan from the same canonical joined output-row representation.
     /// </summary>
@@ -137,7 +173,7 @@ public class RelationDtoWarmBenchmarks
     public LoadSearchDto[] AutoMapperCanonicalRowsJoined() =>
         autoMapper.Map<LoadSearchDto[]>(joinedCanonicalRows);
 
-    static void ValidateAutoMapper<TOutput>(
+    static void ValidateOutput<TOutput>(
         IReadOnlyList<TOutput> actual,
         IReadOnlyList<TOutput> expected,
         string scenario)
@@ -149,6 +185,6 @@ public class RelationDtoWarmBenchmarks
         }
 
         throw new InvalidOperationException(
-            $"The preconfigured AutoMapper {scenario} output does not match the canonical fixture.");
+            $"The {scenario} output does not match the canonical fixture.");
     }
 }

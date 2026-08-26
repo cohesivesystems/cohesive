@@ -6,6 +6,7 @@ using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Physical;
 using Cohesive.Relations.TestFixtures;
 using Microsoft.Extensions.Logging.Abstractions;
 using Observation = Cohesive.Relations.Model.Observation;
@@ -68,6 +69,47 @@ static class RelationDtoBenchmarkSupport
         for (var i = 0; i < observations.Length; i++)
             outputs[i] = mapper.Map(observations[i]);
         return outputs;
+    }
+
+    public static TOutput[] MaterializeIndexed<TOutput>(
+        ImmutableArray<IndexedObservationOccurrence> observations,
+        ObservationMaterializer<TOutput> materializer)
+    {
+        var outputs = new TOutput[observations.Length];
+        for (var i = 0; i < observations.Length; i++)
+            outputs[i] = observations[i].Materialize(materializer);
+        return outputs;
+    }
+
+    public static ImmutableArray<IndexedObservationOccurrence> ToIndexedOccurrences<TOutput>(
+        RelationDtoFixtureScenario<TOutput> scenario)
+    {
+        var relation = scenario.Execution.Relation
+            ?? throw new InvalidOperationException("The benchmark expected a relation-terminal result.");
+        var graph = scenario.Plan.Provenance.ShapeDocuments
+            .Single(document => document.Graph.Id == relation.Shape.GraphId)
+            .Graph;
+        var shape = new GraphShapeId(graph, relation.Shape.ShapeId);
+        var observations = ImmutableArray.CreateBuilder<IndexedObservationOccurrence>(scenario.Observations.Length);
+        for (var index = 0; index < scenario.Observations.Length; index++)
+        {
+            var legacy = scenario.Observations[index];
+            var semantic = Cohesive.Model.Observation.Create(
+                shape,
+                ObservationValue.FromObject(legacy.Fields));
+            observations.Add(IndexedObservationOccurrence.FromObservation(
+                shape,
+                new(
+                    new($"benchmark-output/{index}"),
+                    new("benchmark-output"),
+                    shape.QualifiedId,
+                    legacy.Id),
+                semantic,
+                legacy.Layout,
+                legacy.Lineage));
+        }
+
+        return observations.MoveToImmutable();
     }
 
     public static TOutput[] MapKernel<TOutput>(
