@@ -28,6 +28,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Api.Execution` | Optional execution-control API catalog, safe result projections, and in-memory reference integration. |
 | `Cohesive.Storage` | Entity repository, durable Process state, materialization, Control, and storage adapter contracts. |
 | `Cohesive.AI` | Inference, training, text, vector, ontology, and model registry contracts. |
+| `Cohesive.Simulation` | Provider-neutral deterministic generator IR, addressable entropy, replay evidence, and core-observation POCO generation. |
 | `Cohesive.Identity` | Identity context and scope resolution helpers. |
 | `Cohesive.Host` | CLI, host, and runtime binding helpers. |
 | `Cohesive.CodeGen.Cli` | Build-facing code generation for shapes, APIs, OpenAPI, GraphQL, and TypeScript artifacts. |
