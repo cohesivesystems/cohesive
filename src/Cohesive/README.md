@@ -70,6 +70,21 @@ CLR target type and complete `QualifiedShapeId`; neither cache depends on a Rela
 `Cohesive.Relations.Model.Observation` remains the indexed physical representation during the staged migration tracked
 by ARI-503 and ARI-504. It is not the semantic authority for identity-free observations.
 
+When entity identity and entity-state version apply, compose the value explicitly:
+
+```csharp
+var snapshot = new EntityObservationSnapshot(
+    new EntityId("shipment-42"),
+    version: 3,
+    observation);
+```
+
+`EntityObservationSnapshot` contains no storage partition, concurrency token, loaded-field completeness, relation
+binding, relation occurrence identity, or derivation lineage. Relation evaluation uses its own evaluation-scoped
+occurrence identity because the same source observation can participate through multiple bindings. The ownership and
+temporary compatibility paths are recorded in the
+[observation identity decision](../../docs/decisions/observation-identity-snapshot-and-occurrence-semantics.md).
+
 ### Typed portable JSON values
 
 Use `PortableJsonValueAttribute` when a CLR type's semantic representation is one JSON value and a separate JSON

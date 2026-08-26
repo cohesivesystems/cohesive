@@ -125,6 +125,7 @@ tests, and eventually a repository-wide maturity matrix.
 | [Typed Request outcome projection](decisions/typed-request-outcome-projection.md) | Implemented | Canonical Request authority, exhaustive source-only C# cases, typed Effect lowering, and native-union migration boundary |
 | [Typed durable Request handlers](decisions/typed-durable-request-handlers.md) | Implemented | Exact-reference adapter routing, typed handler projection, explicit target capabilities, and reconciliation evidence |
 | [Identity-free observation materialization](decisions/identity-free-observation-materialization.md) | Implemented | Qualified-shape plan identity, immutable CLR metadata policy, compiled materialization, and indexed-mapper migration boundary |
+| [Observation identity, snapshot, and occurrence semantics](decisions/observation-identity-snapshot-and-occurrence-semantics.md) | Implemented | Entity snapshot identity/version, relation occurrence identity, lineage ownership, and compatibility migration |
 
 ## Package documentation
 
