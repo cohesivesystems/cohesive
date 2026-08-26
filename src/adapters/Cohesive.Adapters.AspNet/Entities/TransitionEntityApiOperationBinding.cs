@@ -8,6 +8,7 @@ using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Execution;
 using Cohesive.Transitions.Model;
 using Microsoft.AspNetCore.Http;
+using Observation = Cohesive.Relations.Model.Observation;
 
 namespace Cohesive.Adapters.AspNet.Entities;
 

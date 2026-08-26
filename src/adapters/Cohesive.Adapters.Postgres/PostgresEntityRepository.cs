@@ -7,6 +7,7 @@ using Cohesive.Relations.Model;
 using Cohesive.Storage;
 using Cohesive.Transitions.Model;
 using Npgsql;
+using Observation = Cohesive.Relations.Model.Observation;
 
 namespace Cohesive.Adapters.Postgres;
 
