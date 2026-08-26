@@ -172,6 +172,7 @@ The reusable toolchain is developed primarily through the `Cohesive.*` libraries
 - `src/Cohesive.Processes`: multistep workflows that can involve entity transitions, queries, waits, or arbitrary effects.
 - `src/Cohesive.Presentation`: a UI/presentation layer language that is compiled/projected onto concrete UI rendering systems like React/Blazor/Angular, etc.
 - `src/Cohesive.AI`: semantic AI, inference, training, vectors, numerics, and text-oriented components.
+- `src/Cohesive.Simulation`: provider-neutral deterministic generation and simulation semantics over core shaped observations.
 - `src/Cohesive.Api`: API declaration language that can generate OpenAPI/GraphQL/gRPC/etc.
 - `src/Cohesive.Api.Execution`: optional execution-control API composition over generic API and canonical execution contracts.
 - `src/Cohesive.Storage`: generic storage abstractions.
