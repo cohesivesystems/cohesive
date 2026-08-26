@@ -10,9 +10,10 @@ exercise the same semantic definitions, runtime evidence, and CLR DTO contracts.
 
 ## Benchmark groups
 
-- **Warm kernel:** hand-written materialization, the existing `ObservationObjectMapper<T>` baseline,
-  a preconfigured AutoMapper 16.2.0 canonical-row baseline, the generated construction kernel without
-  result bookkeeping, and the full compiled canonical mapper.
+- **Warm kernel:** hand-written materialization, the legacy-compatible `ObservationObjectMapper<T>` baseline backed by
+  the core compiled materializer over indexed reads, the explicit `IndexedObservationOccurrence` path, a
+  preconfigured AutoMapper 16.2.0 canonical-row baseline, the generated construction kernel without result
+  bookkeeping, and the full compiled canonical mapper.
 - **Compilation:** a cold compiler instance, a cached repeat compilation, and fresh AutoMapper
   configuration validation plus eager mapping-plan compilation.
 - **End to end:** canonical in-memory interpretation followed by typed materialization.

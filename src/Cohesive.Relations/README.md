@@ -84,6 +84,14 @@ Examples include:
 - Equipment data returned by an API.
 - Previously materialized search documents.
 
+The semantic value authority is `Cohesive.Model.Observation`: an immutable identity-free value governed by an exact
+graph-qualified shape. Allocation-sensitive execution may interpret that value as an
+`IndexedObservationOccurrence`, which composes the existing evaluation-scoped occurrence with an ordinal layout,
+dense slots, packed presence bits, and derived-field lineage. Its factories validate against the core semantics and
+its `ToObservation` projection is lossless. The same core `ObservationMaterializer<T>` can read it directly through
+`IObservationFieldReader`; neither layout nor buffer becomes a core dependency. The older
+`Cohesive.Relations.Model.Observation` is a local-shape compatibility bridge scheduled for removal by ARI-504.
+
 A logical source declares that values of a particular shape are available. It does not prescribe where they live or how they must be acquired.
 
 ### Relationships
