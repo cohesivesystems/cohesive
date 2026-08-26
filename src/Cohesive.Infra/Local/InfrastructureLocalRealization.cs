@@ -16,7 +16,7 @@ public sealed record InfrastructureLocalRealizationFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Current canonicalization profile.</summary>
-    public const string CurrentCanonicalization = "cohesive-infra-local-realization/v1-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-infra-local-realization/v2-c14n/v1";
 
     /// <summary>Creates local-realization fingerprint metadata.</summary>
     /// <param name="algorithm">Digest algorithm.</param>
@@ -50,7 +50,7 @@ public sealed record InfrastructureLocalRealizationFingerprint
 public sealed record InfrastructureLocalRealizationDocument
 {
     /// <summary>Current portable document schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-infra-local-realization/v1";
+    public const string CurrentSchemaVersion = "cohesive-infra-local-realization/v2";
 
     /// <summary>Creates or restores an exact local realization document.</summary>
     /// <param name="schemaVersion">Exact document schema.</param>
@@ -149,8 +149,12 @@ public static class InfrastructureLocalRealizationCompiler
     {
         /// <summary>The fenced physical realization is incomplete.</summary>
         public const string PhysicalRealizationIncomplete = "infra.local.realization.incomplete";
-        /// <summary>A service is not backed by the exact lifecycle realization.</summary>
+        /// <summary>A service is not backed by the exact lifecycle binding or workload placement.</summary>
         public const string ServiceBindingMismatch = "infra.local.service.bindingMismatch";
+        /// <summary>A service names no workload or resource in the exact definition.</summary>
+        public const string ServiceNodeUnknown = "infra.local.service.nodeUnknown";
+        /// <summary>A service construction source is incompatible with its logical node family.</summary>
+        public const string ServiceSourceMismatch = "infra.local.service.sourceMismatch";
         /// <summary>A container image is not pinned to a non-latest tag or digest.</summary>
         public const string ImageNotPinned = "infra.local.service.imageNotPinned";
         /// <summary>A referenced effective setting has no resolved value.</summary>
@@ -226,6 +230,8 @@ public static class InfrastructureLocalRealizationCompiler
         var serviceIds = topology.Services.Select(static service => service.PhysicalResource).ToHashSet();
         var volumeIds = topology.Volumes.Select(static volume => volume.Id).ToHashSet();
         var fileIds = topology.Files.Select(static file => file.Id).ToHashSet();
+        var definition = realization.CapabilityClosure.Definition.Definition;
+        var diagnosticSources = DiagnosticSources(realization, environment);
         Dictionary<int, string> hostPorts = [];
 
         foreach (var file in topology.Files)
@@ -236,20 +242,125 @@ public static class InfrastructureLocalRealizationCompiler
 
         foreach (var service in topology.Services)
         {
-            var lifecycle = realization.Lifecycle.Bindings.FirstOrDefault(binding =>
-                binding.Resource == service.Resource
-                && binding.PhysicalResource == service.PhysicalResource
-                && binding.Authority == environment.Authority
-                && binding.Disposition == InfrastructureLifecycleDisposition.Managed);
-            if (lifecycle is null)
+            var isResource = definition.Resources.Any(resource => resource.Id == service.Node);
+            var isWorkload = definition.Workloads.Any(workload => workload.Id == service.Node);
+            if (!isResource && !isWorkload)
             {
-                Add(diagnostics, DiagnosticCodes.ServiceBindingMismatch,
-                    $"Service '{service.PhysicalResource.Value}' is not a managed binding for logical resource '{service.Resource.Value}' under authority '{environment.Authority.Value}'.",
-                    $"/topology/services/{service.PhysicalResource.Value}", service.PhysicalResource.Value);
+                Add(
+                    diagnostics,
+                    DiagnosticCodes.ServiceNodeUnknown,
+                    $"Service '{service.PhysicalResource.Value}' names unknown logical node '{service.Node.Value}'.",
+                    $"/topology/services/{service.PhysicalResource.Value}/node",
+                    service.Node.Value,
+                    sourceReferences: diagnosticSources,
+                    resolutionOptions:
+                    [
+                        "Declare the node in the exact infrastructure definition.",
+                        "Correct the local service node to an existing workload or resource identity."
+                    ],
+                    expected: "a workload or resource identity from the exact definition",
+                    observed: service.Node.Value);
+            }
+            else if (isResource)
+            {
+                var lifecycle = realization.Lifecycle.Bindings.FirstOrDefault(binding =>
+                    binding.Resource == service.Node
+                    && binding.PhysicalResource == service.PhysicalResource
+                    && binding.Authority == environment.Authority
+                    && binding.Disposition == InfrastructureLifecycleDisposition.Managed);
+                if (lifecycle is null)
+                {
+                    Add(
+                        diagnostics,
+                        DiagnosticCodes.ServiceBindingMismatch,
+                        $"Service '{service.PhysicalResource.Value}' is not a managed lifecycle binding for logical resource '{service.Node.Value}' under authority '{environment.Authority.Value}'.",
+                        $"/topology/services/{service.PhysicalResource.Value}",
+                        service.PhysicalResource.Value,
+                        sourceReferences: diagnosticSources,
+                        resolutionOptions:
+                        [
+                            "Bind the logical resource to this physical service under the selected lifecycle authority.",
+                            "Correct the service identity or select the environment profile that owns its lifecycle."
+                        ],
+                        expected: $"managed lifecycle binding {service.Node.Value} -> {service.PhysicalResource.Value} under {environment.Authority.Value}",
+                        observed: "no exact managed lifecycle binding");
+                }
+
+                if (service.Source is InfrastructureLocalProjectSource)
+                {
+                    Add(
+                        diagnostics,
+                        DiagnosticCodes.ServiceSourceMismatch,
+                        $"Logical resource '{service.Node.Value}' cannot use a repository-project construction source.",
+                        $"/topology/services/{service.PhysicalResource.Value}/source",
+                        service.Node.Value,
+                        sourceReferences: diagnosticSources,
+                        resolutionOptions:
+                        [
+                            "Use a pinned container source for the logical resource.",
+                            "Correct the logical node to a workload with an exact workload placement."
+                        ],
+                        expected: "project sources are attached only to workload nodes",
+                        observed: $"resource node {service.Node.Value}");
+                }
+            }
+            else
+            {
+                var placement = realization.WorkloadPlacements.FirstOrDefault(candidate =>
+                    candidate.Workload == service.Node
+                    && candidate.PhysicalResource == service.PhysicalResource);
+                if (placement is null)
+                {
+                    Add(
+                        diagnostics,
+                        DiagnosticCodes.ServiceBindingMismatch,
+                        $"Service '{service.PhysicalResource.Value}' is not the selected physical placement for logical workload '{service.Node.Value}'.",
+                        $"/topology/services/{service.PhysicalResource.Value}",
+                        service.PhysicalResource.Value,
+                        sourceReferences: diagnosticSources,
+                        resolutionOptions:
+                        [
+                            "Select this physical service as the workload placement in the exact realization.",
+                            "Correct the service to the physical resource selected by the realization."
+                        ],
+                        expected: $"workload placement {service.Node.Value} -> {service.PhysicalResource.Value}",
+                        observed: "no exact workload placement");
+                }
             }
 
-            if (!IsPinnedImage(service.Image))
-                Add(diagnostics, DiagnosticCodes.ImageNotPinned, $"Service image '{service.Image}' is not pinned.", $"/topology/services/{service.PhysicalResource.Value}/image", service.PhysicalResource.Value);
+            if (service.Source is InfrastructureLocalContainerSource container && !IsPinnedImage(container.Image))
+                Add(diagnostics, DiagnosticCodes.ImageNotPinned, $"Service image '{container.Image}' is not pinned.", $"/topology/services/{service.PhysicalResource.Value}/source/image", service.PhysicalResource.Value);
+            if (service.Source is InfrastructureLocalProjectSource)
+            {
+                List<string> containerOnlyFeatures = [];
+                if (!service.Command.IsEmpty)
+                    containerOnlyFeatures.Add("command");
+                if (!service.Mounts.IsEmpty)
+                    containerOnlyFeatures.Add("volume mounts");
+                if (!service.FileMounts.IsEmpty)
+                    containerOnlyFeatures.Add("generated-file mounts");
+                if (service.StopGracePeriod.HasValue)
+                    containerOnlyFeatures.Add("container stop grace period");
+                if (service.Health?.Probes.Any(static probe => probe is InfrastructureLocalCommandHealthProbe) == true)
+                    containerOnlyFeatures.Add("in-service command health probes");
+                if (containerOnlyFeatures.Count > 0)
+                {
+                    Add(
+                        diagnostics,
+                        DiagnosticCodes.ServiceSourceMismatch,
+                        $"Repository-project service '{service.PhysicalResource.Value}' uses container-only semantics: {string.Join(", ", containerOnlyFeatures)}.",
+                        $"/topology/services/{service.PhysicalResource.Value}",
+                        service.PhysicalResource.Value,
+                        sourceReferences: diagnosticSources,
+                        resolutionOptions:
+                        [
+                            "Remove the container-only settings from the repository-project service.",
+                            "Use a pinned container source when those settings are required."
+                        ],
+                        expected: "project-compatible environment, endpoint, HTTP health, and readiness semantics",
+                        observed: string.Join(", ", containerOnlyFeatures));
+                }
+            }
 
             foreach (var variable in service.Environment)
             {
@@ -321,7 +432,21 @@ public static class InfrastructureLocalRealizationCompiler
                 if (!serviceIds.Contains(dependency))
                     Add(diagnostics, DiagnosticCodes.ReferenceUnknown, $"Ready dependency '{dependency.Value}' is not a service.", $"/topology/services/{service.PhysicalResource.Value}/readyDependencies", dependency.Value);
                 else if (topology.Services.Single(candidate => candidate.PhysicalResource == dependency).Health is null)
-                    Add(diagnostics, DiagnosticCodes.DependencyHealthMissing, $"Ready dependency '{dependency.Value}' has no health policy.", $"/topology/services/{service.PhysicalResource.Value}/readyDependencies", dependency.Value);
+                    Add(
+                        diagnostics,
+                        DiagnosticCodes.DependencyHealthMissing,
+                        $"Ready dependency '{dependency.Value}' has no health policy.",
+                        $"/topology/services/{service.PhysicalResource.Value}/readyDependencies",
+                        dependency.Value,
+                        relatedLocations: [$"/topology/services/{dependency.Value}/health"],
+                        sourceReferences: diagnosticSources,
+                        resolutionOptions:
+                        [
+                            "Declare a health policy that establishes dependency readiness.",
+                            "Remove the ready dependency if start ordering, rather than readiness, is intended."
+                        ],
+                        expected: $"health policy for ready dependency {dependency.Value}",
+                        observed: "no health policy");
             }
 
             foreach (var probe in service.Health?.Probes.OfType<InfrastructureLocalHttpHealthProbe>() ?? [])
@@ -464,11 +589,33 @@ public static class InfrastructureLocalRealizationCompiler
         string code,
         string message,
         string location,
-        string subject) => diagnostics.Add(new(
+        string subject,
+        ImmutableArray<string> relatedLocations = default,
+        ImmutableArray<string> sourceReferences = default,
+        ImmutableArray<string> resolutionOptions = default,
+        string? expected = null,
+        string? observed = null) => diagnostics.Add(new(
             Code: code,
             Severity: DiagnosticSeverity.Error,
             Message: message,
             Location: location,
             SchemaLocation: subject,
-            Evidence: new(stage: Stage, subject: subject)));
+            Evidence: new(
+                stage: Stage,
+                subject: subject,
+                relatedLocations: relatedLocations,
+                sourceReferences: sourceReferences,
+                resolutionOptions: resolutionOptions,
+                expected: expected,
+                observed: observed)));
+
+    static ImmutableArray<string> DiagnosticSources(
+        InfrastructureRealization realization,
+        InfrastructureLocalEnvironmentProfile environment) =>
+    [
+        InfrastructureDiagnosticReferences.Definition(realization.CapabilityClosure.Definition),
+        InfrastructureDiagnosticReferences.CapabilityProfileReference(realization.CapabilityClosure.Profile),
+        $"infrastructure-realization:{realization.Fingerprint.Algorithm}:{realization.Fingerprint.Canonicalization}:{realization.Fingerprint.Value}",
+        $"local-environment-profile:{environment.Id.Value}"
+    ];
 }

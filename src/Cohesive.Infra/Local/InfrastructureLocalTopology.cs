@@ -607,10 +607,70 @@ public sealed record InfrastructureLocalHealthPolicy
     public TimeSpan? StartPeriod { get; }
 }
 
-/// <summary>One exact container-backed service in a local topology.</summary>
+/// <summary>Closed construction source for one executable local service.</summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
+[JsonDerivedType(typeof(InfrastructureLocalContainerSource), "container")]
+[JsonDerivedType(typeof(InfrastructureLocalProjectSource), "project")]
+public abstract record InfrastructureLocalServiceSource;
+
+/// <summary>A local service constructed from one pinned container image.</summary>
+public sealed record InfrastructureLocalContainerSource : InfrastructureLocalServiceSource
+{
+    /// <summary>Creates a container construction source.</summary>
+    /// <param name="image">Pinned container image reference.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="image"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="image"/> is empty or white-space.</exception>
+    [JsonConstructor]
+    public InfrastructureLocalContainerSource(string image) =>
+        Image = Guard.RequireNotNullOrWhiteSpace(image);
+
+    /// <summary>Pinned container image reference.</summary>
+    public string Image { get; }
+}
+
+/// <summary>A local service constructed from one repository project.</summary>
+public sealed record InfrastructureLocalProjectSource : InfrastructureLocalServiceSource
+{
+    /// <summary>Creates a repository-project construction source.</summary>
+    /// <param name="projectPath">Repository-relative project path.</param>
+    /// <param name="launchProfile">Optional project launch-profile name.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="projectPath"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="projectPath"/> is empty or white-space, is absolute, escapes the repository, or does not name a project file;
+    /// or <paramref name="launchProfile"/> is empty or white-space.
+    /// </exception>
+    [JsonConstructor]
+    public InfrastructureLocalProjectSource(string projectPath, string? launchProfile = null)
+    {
+        ProjectPath = Guard.RequireNotNullOrWhiteSpace(projectPath).Replace('\\', '/');
+        var pathSegments = ProjectPath.Split('/');
+        var isWindowsAbsolute = ProjectPath.Length >= 3
+            && char.IsAsciiLetter(ProjectPath[0])
+            && ProjectPath[1] == ':'
+            && ProjectPath[2] == '/';
+        if (Path.IsPathRooted(ProjectPath)
+            || isWindowsAbsolute
+            || pathSegments.Any(static segment => segment.Length == 0 || segment is "." or "..")
+            || !ProjectPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("A local project source must be a repository-relative .csproj path that does not escape the repository.", nameof(projectPath));
+        }
+        if (launchProfile is not null && string.IsNullOrWhiteSpace(launchProfile))
+            throw new ArgumentException("A local project launch profile cannot be empty or white-space.", nameof(launchProfile));
+        LaunchProfile = launchProfile;
+    }
+
+    /// <summary>Normalized repository-relative project path.</summary>
+    public string ProjectPath { get; }
+
+    /// <summary>Optional project launch-profile name.</summary>
+    public string? LaunchProfile { get; }
+}
+
+/// <summary>One exact executable service in a local topology.</summary>
 public sealed record InfrastructureLocalService
 {
-    /// <summary>Creates a local service.</summary>
+    /// <summary>Creates a container-backed local service.</summary>
     /// <param name="resource">Canonical logical resource represented by the service.</param>
     /// <param name="physicalResource">Exact physical identity from the fenced realization.</param>
     /// <param name="image">Pinned container image reference.</param>
@@ -624,7 +684,6 @@ public sealed record InfrastructureLocalService
     /// <param name="stopGracePeriod">Grace period before forced termination.</param>
     /// <exception cref="ArgumentException">An identity is default or a collection is malformed.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="stopGracePeriod"/> is negative.</exception>
-    [JsonConstructor]
     public InfrastructureLocalService(
         InfrastructureNodeId resource,
         InfrastructurePhysicalResourceId physicalResource,
@@ -637,17 +696,59 @@ public sealed record InfrastructureLocalService
         InfrastructureLocalHealthPolicy? health = null,
         ImmutableArray<InfrastructurePhysicalResourceId> readyDependencies = default,
         TimeSpan? stopGracePeriod = null)
+        : this(
+            node: resource,
+            physicalResource: physicalResource,
+            source: new InfrastructureLocalContainerSource(image),
+            command: command,
+            environment: environment,
+            endpoints: endpoints,
+            mounts: mounts,
+            fileMounts: fileMounts,
+            health: health,
+            readyDependencies: readyDependencies,
+            stopGracePeriod: stopGracePeriod)
     {
-        if (string.IsNullOrWhiteSpace(resource.Value))
-            throw new ArgumentException("A local service requires a logical resource.", nameof(resource));
+    }
+
+    /// <summary>Creates a local service.</summary>
+    /// <param name="node">Canonical logical workload or resource represented by the service.</param>
+    /// <param name="physicalResource">Exact physical identity from the fenced realization.</param>
+    /// <param name="source">Closed construction source for the executable service.</param>
+    /// <param name="command">Optional command argument vector.</param>
+    /// <param name="environment">Environment-variable bindings.</param>
+    /// <param name="endpoints">Service endpoints.</param>
+    /// <param name="mounts">Volume mounts.</param>
+    /// <param name="fileMounts">Generated-file mounts.</param>
+    /// <param name="health">Complete health and readiness policy.</param>
+    /// <param name="readyDependencies">Services that must become ready first.</param>
+    /// <param name="stopGracePeriod">Grace period before forced termination.</param>
+    /// <exception cref="ArgumentException">An identity is default or a collection is malformed.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="stopGracePeriod"/> is negative.</exception>
+    [JsonConstructor]
+    public InfrastructureLocalService(
+        InfrastructureNodeId node,
+        InfrastructurePhysicalResourceId physicalResource,
+        InfrastructureLocalServiceSource source,
+        ImmutableArray<string> command = default,
+        ImmutableArray<InfrastructureLocalEnvironmentVariable> environment = default,
+        ImmutableArray<InfrastructureLocalEndpoint> endpoints = default,
+        ImmutableArray<InfrastructureLocalVolumeMount> mounts = default,
+        ImmutableArray<InfrastructureLocalFileMount> fileMounts = default,
+        InfrastructureLocalHealthPolicy? health = null,
+        ImmutableArray<InfrastructurePhysicalResourceId> readyDependencies = default,
+        TimeSpan? stopGracePeriod = null)
+    {
+        if (string.IsNullOrWhiteSpace(node.Value))
+            throw new ArgumentException("A local service requires a logical node.", nameof(node));
         if (string.IsNullOrWhiteSpace(physicalResource.Value))
             throw new ArgumentException("A local service requires a physical resource.", nameof(physicalResource));
         if (stopGracePeriod.HasValue && stopGracePeriod.Value < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(stopGracePeriod), stopGracePeriod, "Stop grace period cannot be negative.");
 
-        Resource = resource;
+        Node = node;
         PhysicalResource = physicalResource;
-        Image = Guard.RequireNotNullOrWhiteSpace(image);
+        Source = Guard.RequireNotNull(source);
         Command = InfrastructureLocalCollections.Strings(command, nameof(command));
         Environment = InfrastructureLocalCollections.Normalize(environment, static item => item.Name, nameof(environment));
         Endpoints = InfrastructureLocalCollections.Normalize(endpoints, static item => item.Id.Value, nameof(endpoints));
@@ -658,14 +759,14 @@ public sealed record InfrastructureLocalService
         StopGracePeriod = stopGracePeriod;
     }
 
-    /// <summary>Canonical logical resource represented by the service.</summary>
-    public InfrastructureNodeId Resource { get; }
+    /// <summary>Canonical logical workload or resource represented by the service.</summary>
+    public InfrastructureNodeId Node { get; }
 
     /// <summary>Exact physical identity from the fenced realization.</summary>
     public InfrastructurePhysicalResourceId PhysicalResource { get; }
 
-    /// <summary>Pinned container image reference.</summary>
-    public string Image { get; }
+    /// <summary>Closed construction source for the executable service.</summary>
+    public InfrastructureLocalServiceSource Source { get; }
 
     /// <summary>Optional command argument vector.</summary>
     public ImmutableArray<string> Command { get; }

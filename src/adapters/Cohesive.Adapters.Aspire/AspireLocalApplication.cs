@@ -17,7 +17,7 @@ namespace Cohesive.Adapters.Aspire;
 public sealed record AspireLocalApplicationOptions
 {
     /// <summary>Creates runtime application policy.</summary>
-    /// <param name="operationWorkingDirectory">Absolute directory used to resolve repository-relative host operations.</param>
+    /// <param name="operationWorkingDirectory">Absolute repository directory used to resolve project sources and host operations.</param>
     /// <param name="resolveSecret">Runtime resolver for external secret identities.</param>
     /// <param name="operationEnvironment">Additional environment variables supplied only to host operations.</param>
     /// <exception cref="ArgumentException"><paramref name="operationWorkingDirectory"/> is not absolute, or an operation environment name or value is invalid.</exception>
@@ -39,7 +39,7 @@ public sealed record AspireLocalApplicationOptions
             : operationEnvironment.ToImmutableDictionary(StringComparer.Ordinal);
     }
 
-    /// <summary>Absolute directory used to resolve repository-relative host operations.</summary>
+    /// <summary>Absolute repository directory used to resolve project sources and host operations.</summary>
     public string OperationWorkingDirectory { get; }
 
     /// <summary>Runtime resolver for external secret identities.</summary>
@@ -53,32 +53,32 @@ public sealed record AspireLocalApplicationOptions
 public sealed record AspireInfraIdentityAnnotation : IResourceAnnotation
 {
     /// <summary>Creates an Infra identity annotation.</summary>
-    /// <param name="logicalResource">Canonical logical resource, when the resource is a projected service.</param>
+    /// <param name="logicalNode">Canonical logical workload or resource, when the resource is a projected service.</param>
     /// <param name="physicalResource">Canonical physical resource, when the resource is a projected service.</param>
     /// <param name="localRealization">Exact local realization fingerprint.</param>
     /// <param name="projection">Exact Aspire projection fingerprint.</param>
     /// <exception cref="ArgumentException">A supplied canonical identity is default.</exception>
     /// <exception cref="ArgumentNullException">A fingerprint is <see langword="null"/>.</exception>
     public AspireInfraIdentityAnnotation(
-        InfrastructureNodeId? logicalResource,
+        InfrastructureNodeId? logicalNode,
         InfrastructurePhysicalResourceId? physicalResource,
         InfrastructureLocalRealizationFingerprint localRealization,
         AspireLocalProjectionFingerprint projection)
     {
-        if (logicalResource is { } logical && string.IsNullOrWhiteSpace(logical.Value))
-            throw new ArgumentException("An Aspire Infra annotation logical resource cannot be default.", nameof(logicalResource));
+        if (logicalNode is { } logical && string.IsNullOrWhiteSpace(logical.Value))
+            throw new ArgumentException("An Aspire Infra annotation logical node cannot be default.", nameof(logicalNode));
         if (physicalResource is { } physical && string.IsNullOrWhiteSpace(physical.Value))
             throw new ArgumentException("An Aspire Infra annotation physical resource cannot be default.", nameof(physicalResource));
-        if (logicalResource.HasValue != physicalResource.HasValue)
+        if (logicalNode.HasValue != physicalResource.HasValue)
             throw new ArgumentException("Aspire Infra annotations require both logical and physical identity or neither.", nameof(physicalResource));
-        LogicalResource = logicalResource;
+        LogicalNode = logicalNode;
         PhysicalResource = physicalResource;
         LocalRealization = Guard.RequireNotNull(localRealization);
         Projection = Guard.RequireNotNull(projection);
     }
 
-    /// <summary>Canonical logical resource, when the resource is a projected service.</summary>
-    public InfrastructureNodeId? LogicalResource { get; }
+    /// <summary>Canonical logical workload or resource, when the resource is a projected service.</summary>
+    public InfrastructureNodeId? LogicalNode { get; }
 
     /// <summary>Canonical physical resource, when the resource is a projected service.</summary>
     public InfrastructurePhysicalResourceId? PhysicalResource { get; }
@@ -100,7 +100,7 @@ public sealed record AspireLocalApplication
     /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
     public AspireLocalApplication(
         AspireLocalProjectionDocument projection,
-        ImmutableDictionary<InfrastructurePhysicalResourceId, IResourceBuilder<ContainerResource>> services,
+        ImmutableDictionary<InfrastructurePhysicalResourceId, IResourceBuilder<IResource>> services,
         IResourceBuilder<AspireLocalOperationsResource> controlResource)
     {
         Projection = Guard.RequireNotNull(projection);
@@ -112,7 +112,7 @@ public sealed record AspireLocalApplication
     public AspireLocalProjectionDocument Projection { get; }
 
     /// <summary>Projected service resource builders by canonical physical identity.</summary>
-    public ImmutableDictionary<InfrastructurePhysicalResourceId, IResourceBuilder<ContainerResource>> Services { get; }
+    public ImmutableDictionary<InfrastructurePhysicalResourceId, IResourceBuilder<IResource>> Services { get; }
 
     /// <summary>Resource exposing retained operation commands.</summary>
     public IResourceBuilder<AspireLocalOperationsResource> ControlResource { get; }
@@ -157,47 +157,88 @@ public static class AspireLocalApplicationBuilderExtensions
                 : "false";
 
         var secretParameters = AddSecretParameters(builder, projection, options);
-        ImmutableDictionary<InfrastructurePhysicalResourceId, IResourceBuilder<ContainerResource>>.Builder services =
-            ImmutableDictionary.CreateBuilder<InfrastructurePhysicalResourceId, IResourceBuilder<ContainerResource>>();
+        ImmutableDictionary<InfrastructurePhysicalResourceId, IResourceBuilder<IResource>>.Builder services =
+            ImmutableDictionary.CreateBuilder<InfrastructurePhysicalResourceId, IResourceBuilder<IResource>>();
+        Dictionary<InfrastructurePhysicalResourceId, IResourceBuilder<ContainerResource>> containers = [];
+        Dictionary<InfrastructurePhysicalResourceId, IResourceBuilder<ProjectResource>> projects = [];
         foreach (var item in projection.Services)
         {
-            var resource = builder.AddContainer(name: item.ResourceName, image: item.Service.Image)
-                .WithAnnotation(new AspireInfraIdentityAnnotation(
-                    logicalResource: item.Service.Resource,
+            var annotation = new AspireInfraIdentityAnnotation(
+                    logicalNode: item.Service.Node,
                     physicalResource: item.Service.PhysicalResource,
                     localRealization: projection.LocalRealization,
-                    projection: projection.Fingerprint));
-            services.Add(item.Service.PhysicalResource, resource);
-        }
-
-        foreach (var item in projection.Services)
-        {
-            var resource = services[item.Service.PhysicalResource];
-            if (!item.Service.Command.IsEmpty)
-                resource.WithArgs([.. item.Service.Command]);
-            AddEndpoints(resource, item, projection);
-            AddEnvironment(resource, item, projection, services, secretParameters);
-            AddVolumes(resource, item, projection);
-            AddFiles(resource, item, projection);
-            if (item.Service.StopGracePeriod is { } stopGracePeriod)
+                    projection: projection.Fingerprint);
+            switch (item.Service.Source)
             {
-                resource.WithContainerRuntimeArgs(
-                    "--stop-timeout",
-                    stopGracePeriod.TotalSeconds.ToString("0", CultureInfo.InvariantCulture));
+                case InfrastructureLocalContainerSource container:
+                    var containerResource = builder.AddContainer(name: item.ResourceName, image: container.Image)
+                        .WithAnnotation(annotation);
+                    containers.Add(item.Service.PhysicalResource, containerResource);
+                    services.Add(item.Service.PhysicalResource, containerResource);
+                    break;
+                case InfrastructureLocalProjectSource project:
+                    var projectResource = builder.AddProject(
+                            name: item.ResourceName,
+                            projectPath: Path.GetFullPath(project.ProjectPath, options.OperationWorkingDirectory),
+                            launchProfileName: project.LaunchProfile)
+                        .WithAnnotation(annotation);
+                    projects.Add(item.Service.PhysicalResource, projectResource);
+                    services.Add(item.Service.PhysicalResource, projectResource);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unsupported local service source '{item.Service.Source.GetType().Name}' passed validated Aspire compilation.");
             }
         }
 
         foreach (var item in projection.Services)
         {
-            var resource = services[item.Service.PhysicalResource];
-            AddHealth(builder, resource, item, projection);
-            foreach (var dependency in item.Service.ReadyDependencies)
-                resource.WaitFor(services[dependency]);
+            switch (item.Service.Source)
+            {
+                case InfrastructureLocalContainerSource:
+                    var container = containers[item.Service.PhysicalResource];
+                    if (!item.Service.Command.IsEmpty)
+                        container.WithArgs([.. item.Service.Command]);
+                    AddEndpoints(container, item, projection);
+                    AddEnvironment(container, item, projection, services, secretParameters);
+                    AddVolumes(container, item, projection);
+                    AddFiles(container, item, projection);
+                    if (item.Service.StopGracePeriod is { } stopGracePeriod)
+                    {
+                        container.WithContainerRuntimeArgs(
+                            "--stop-timeout",
+                            stopGracePeriod.TotalSeconds.ToString("0", CultureInfo.InvariantCulture));
+                    }
+                    break;
+                case InfrastructureLocalProjectSource:
+                    var project = projects[item.Service.PhysicalResource];
+                    AddEndpoints(project, item, projection);
+                    AddEnvironment(project, item, projection, services, secretParameters);
+                    break;
+            }
+        }
+
+        foreach (var item in projection.Services)
+        {
+            switch (item.Service.Source)
+            {
+                case InfrastructureLocalContainerSource:
+                    var container = containers[item.Service.PhysicalResource];
+                    AddHealth(builder, container, item, projection);
+                    foreach (var dependency in item.Service.ReadyDependencies)
+                        container.WaitFor(services[dependency]);
+                    break;
+                case InfrastructureLocalProjectSource:
+                    var project = projects[item.Service.PhysicalResource];
+                    AddHealth(builder, project, item, projection);
+                    foreach (var dependency in item.Service.ReadyDependencies)
+                        project.WaitFor(services[dependency]);
+                    break;
+            }
         }
 
         var control = builder.AddResource(new AspireLocalOperationsResource(projection.ControlResourceName))
             .WithAnnotation(new AspireInfraIdentityAnnotation(
-                logicalResource: null,
+                logicalNode: null,
                 physicalResource: null,
                 localRealization: projection.LocalRealization,
                 projection: projection.Fingerprint));
@@ -230,10 +271,11 @@ public static class AspireLocalApplicationBuilderExtensions
         return parameters;
     }
 
-    static void AddEndpoints(
-        IResourceBuilder<ContainerResource> resource,
+    static void AddEndpoints<TResource>(
+        IResourceBuilder<TResource> resource,
         AspireServiceProjection service,
         AspireLocalProjectionDocument projection)
+        where TResource : IResourceWithEndpoints
     {
         foreach (var endpoint in projection.Endpoints.Where(item => item.PhysicalResource == service.Service.PhysicalResource))
         {
@@ -254,12 +296,13 @@ public static class AspireLocalApplicationBuilderExtensions
         }
     }
 
-    static void AddEnvironment(
-        IResourceBuilder<ContainerResource> resource,
+    static void AddEnvironment<TResource>(
+        IResourceBuilder<TResource> resource,
         AspireServiceProjection service,
         AspireLocalProjectionDocument projection,
-        IReadOnlyDictionary<InfrastructurePhysicalResourceId, IResourceBuilder<ContainerResource>> services,
+        IReadOnlyDictionary<InfrastructurePhysicalResourceId, IResourceBuilder<IResource>> services,
         IReadOnlyDictionary<string, IResourceBuilder<ParameterResource>> secretParameters)
+        where TResource : IResourceWithEnvironment
     {
         foreach (var variable in service.Service.Environment)
         {
@@ -270,7 +313,9 @@ public static class AspireLocalApplicationBuilderExtensions
                     break;
                 case InfrastructureLocalEndpointValue endpointValue
                     when endpointValue.Address == InfrastructureLocalEndpointAddress.ServiceNetwork:
-                    var endpointReference = services[endpointValue.Service].GetEndpoint(name: endpointValue.Endpoint.Value);
+                    var endpointReference = new EndpointReference(
+                        (IResourceWithEndpoints)services[endpointValue.Service].Resource,
+                        endpointValue.Endpoint.Value);
                     if (endpointValue.Format == InfrastructureLocalEndpointValueFormat.Uri)
                         resource.WithEnvironment(name: variable.Name, endpointReference: endpointReference);
                     else
@@ -332,11 +377,12 @@ public static class AspireLocalApplicationBuilderExtensions
         }
     }
 
-    static void AddHealth(
+    static void AddHealth<TResource>(
         IDistributedApplicationBuilder builder,
-        IResourceBuilder<ContainerResource> resource,
+        IResourceBuilder<TResource> resource,
         AspireServiceProjection service,
         AspireLocalProjectionDocument projection)
+        where TResource : IResourceWithEndpoints
     {
         foreach (var probe in service.Service.Health?.Probes ?? [])
         {

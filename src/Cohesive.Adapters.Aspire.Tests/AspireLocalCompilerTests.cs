@@ -4,8 +4,10 @@ using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Cohesive.Adapters.Aspire;
 using Cohesive.Adapters.DockerCompose;
+using Cohesive.Infra;
 using Cohesive.Infra.Configuration;
 using Cohesive.Infra.Local;
+using Cohesive.Infra.Realization;
 using Cohesive.MaterializationHarness.Model;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -111,11 +113,12 @@ public sealed class AspireLocalCompilerTests
         {
             var composeService = composeServices[service.PhysicalResource];
             var aspireService = aspireServices[service.PhysicalResource];
-            Assert.Equal(service.Resource, composeService.Resource);
-            Assert.Equal(service.Resource, aspireService.Service.Resource);
+            Assert.Equal(service.Node, composeService.Resource);
+            Assert.Equal(service.Node, aspireService.Service.Node);
             Assert.Same(service, aspireService.Service);
             Assert.Equal(composeService.ServiceName, aspireService.ResourceName);
-            Assert.Contains($"{composeService.ServiceName}:\n    image: '{service.Image}'", compose.Yaml, StringComparison.Ordinal);
+            var container = Assert.IsType<InfrastructureLocalContainerSource>(service.Source);
+            Assert.Contains($"{composeService.ServiceName}:\n    image: '{container.Image}'", compose.Yaml, StringComparison.Ordinal);
         }
 
         var composeEndpoints = compose.Manifest.Endpoints.ToDictionary(static item => (item.PhysicalResource, item.Endpoint));
@@ -274,9 +277,10 @@ public sealed class AspireLocalCompilerTests
         {
             var resource = applied.Services[service.Service.PhysicalResource].Resource;
             Assert.True(resource.TryGetContainerImageName(out var image));
-            Assert.Equal(service.Service.Image, image);
+            var container = Assert.IsType<InfrastructureLocalContainerSource>(service.Service.Source);
+            Assert.Equal(container.Image, image);
             var identity = Assert.Single(resource.Annotations.OfType<AspireInfraIdentityAnnotation>());
-            Assert.Equal(service.Service.Resource, identity.LogicalResource);
+            Assert.Equal(service.Service.Node, identity.LogicalNode);
             Assert.Equal(service.Service.PhysicalResource, identity.PhysicalResource);
             Assert.Equal(projection.Fingerprint, identity.Projection);
             Assert.Equal(service.Service.Endpoints.Length, resource.Annotations.OfType<EndpointAnnotation>().Count());
@@ -290,6 +294,40 @@ public sealed class AspireLocalCompilerTests
         Assert.Equal(
             projection.Operations.SelectMany(static item => item.RequiredResources).Distinct(StringComparer.Ordinal).Count(),
             applied.ControlResource.Resource.Annotations.OfType<WaitAnnotation>().Count());
+    }
+
+    [Fact]
+    public void Aspire_constructs_repository_projects_while_compose_fails_closed()
+    {
+        var source = ProjectWorkloadSource();
+        var aspire = AspireLocalCompiler.Compile(source);
+        var compose = DockerComposeCompiler.Compile(source);
+
+        Assert.True(aspire.IsSuccess, string.Join(Environment.NewLine, aspire.Diagnostics.Select(static item => item.Message)));
+        Assert.False(compose.IsSuccess);
+        Assert.Contains(compose.Diagnostics, diagnostic =>
+            diagnostic.Code == DockerComposeCompiler.DiagnosticCodes.ServiceSourceUnsupported);
+        Assert.Contains(aspire.Projection!.Decisions, decision =>
+            decision.Concern == "local/service-construction/repository-project"
+            && decision.Kind == CapabilityRealizationKind.Native);
+
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        {
+            Args = [],
+            AssemblyName = typeof(AspireLocalCompilerTests).Assembly.GetName().Name,
+            ProjectDirectory = FindRepositoryRoot(),
+            DisableDashboard = true
+        });
+        var applied = builder.AddCohesiveLocalInfrastructure(
+            projection: aspire.Projection,
+            options: new AspireLocalApplicationOptions(
+                operationWorkingDirectory: FindRepositoryRoot(),
+                resolveSecret: static _ => null));
+
+        var project = Assert.IsType<ProjectResource>(applied.Services[new("local/ari-training-api")].Resource);
+        var sourceAnnotation = Assert.Single(project.Annotations.OfType<AspireInfraIdentityAnnotation>());
+        Assert.Equal(new InfrastructureNodeId("workload/ari-training-api"), sourceAnnotation.LogicalNode);
+        Assert.IsType<InfrastructureLocalProjectSource>(aspire.Projection!.Services[0].Service.Source);
     }
 
     [Fact]
@@ -330,6 +368,60 @@ public sealed class AspireLocalCompilerTests
                 rationale: "Stable Aspire has no command health probe, so the test selects explicit TCP readiness.",
                 sourceReferences: ["ARI-467", "test/aspire-command-health"])
         ]);
+
+    static InfrastructureLocalRealizationDocument ProjectWorkloadSource()
+    {
+        InfrastructureNodeId workload = new("workload/ari-training-api");
+        InfrastructurePhysicalResourceId physical = new("local/ari-training-api");
+        var definition = InfrastructureDefinitionDocument.FromDefinition(new(
+            id: new("ari-training-project-application-test"),
+            revision: new("v1"),
+            workloads: [new(workload)]));
+        InfrastructureCapabilityVariantId variant = new("aspire-local");
+        var profile = new InfrastructureCapabilityProfile(
+            schemaVersion: InfrastructureCapabilityProfile.CurrentSchemaVersion,
+            id: new("tests/ari-training/aspire-local/v1"),
+            target: new("aspire"),
+            supportedDefinitionSchemaVersions: [InfrastructureDefinitionDocument.CurrentSchemaVersion],
+            variants: [new(variant)]);
+        var closure = InfrastructureCapabilityCompiler.Compile(definition, profile, variant);
+        var realization = InfrastructureRealizationCompiler.Compile(
+            closure,
+            new InfrastructureLifecyclePlan(definition),
+            workloadPlacements:
+            [
+                new(
+                    workload: workload,
+                    physicalResource: physical,
+                    interpreter: new("aspire"),
+                    sourceReferences: ["scenario-derived-from:ari:origin/main@0e790b8/src/Ari.Testing.AppHost/Program.cs"])
+            ]);
+        InfrastructureConfigurationSubject subject = new("environment/ari-training");
+        InfrastructureSettingId projectName = new("project-name");
+        var environment = new InfrastructureLocalEnvironmentProfile(
+            id: new("tests/ari-training/aspire-local/v1"),
+            authority: new("local/ari-training"),
+            configurationSubject: subject,
+            projectNameSetting: projectName,
+            dataLifetime: InfrastructureLocalDataLifetime.Ephemeral,
+            isolation: InfrastructureLocalEnvironmentIsolation.Shared);
+        var topology = InfrastructureLocal.Define(local => local.ProjectService(
+            workload: workload,
+            physicalResource: physical,
+            projectPath: "src/Cohesive.Infra.Tests/Cohesive.Infra.Tests.csproj"));
+        var configuration = new InfrastructureConventionProfile(
+            id: new("ari-training/aspire-local/test/v1"),
+            candidates:
+            [
+                new(
+                    subject: subject,
+                    setting: projectName,
+                    value: "ari-training-local",
+                    origin: EffectiveConfigurationOrigin.ScopedProfile,
+                    authority: "ari-training/aspire-local/test/v1")
+            ]);
+        return InfrastructureLocalRealizationCompiler.Compile(realization, environment, topology, [configuration]);
+    }
 
     static string FindRepositoryRoot()
     {

@@ -199,8 +199,9 @@ variable, or arbitrary host executable dependency may survive in canonical IR.
 
 `InfrastructureLocalRealizationDocument` is the shared input boundary for local lifecycle adapters. It fences a
 target-neutral local construction topology to one exact `InfrastructureRealizationReference`, a versioned environment
-policy, and the existing four-tier `InfrastructureConventionResolution`. The topology describes pinned container
-services, endpoint exposure and UI roles, external secret references, generated non-secret configuration files,
+policy, and the existing four-tier `InfrastructureConventionResolution`. The topology describes executable services
+constructed from either pinned container images or repository-relative .NET projects, endpoint exposure and UI roles,
+external secret references, generated non-secret configuration files,
 volumes, readiness dependencies, complete health policies with probe timing, graceful termination, and application-owned
 harness operations.
 
@@ -211,12 +212,15 @@ additionally name the exact lifecycle authority it may mutate. Configuration val
 attributable to explicit declarations, scoped profiles, adapter conventions, or framework defaults. Secret payloads
 are never effective configuration values in the local IR.
 
-The local compiler validates the construction topology before an adapter performs I/O: services must match managed
-physical bindings in the exact realization, images must be pinned, referenced settings/endpoints/volumes/files/services
-must exist, loopback ports must be valid and unique, readiness must be acyclic, likely secret environment values must
-be external references, and destructive operations must remain inside the selected lifecycle authority. Failures are
-portable `DocumentValidationDiagnostic` values. A successful local document is still not an executable deployment
-plan or receipt; Compose and Aspire compilers must fingerprint their own artifacts against this document.
+The local compiler validates the construction topology before an adapter performs I/O: resource services must match
+managed lifecycle bindings, workload services must match exact workload placements, repository projects may attach
+only to workloads, images must be pinned, referenced settings/endpoints/volumes/files/services must exist, loopback
+ports must be valid and unique, readiness must be acyclic and backed by dependency health, likely secret environment
+values must be external references, and destructive operations must remain inside the selected lifecycle authority.
+Capability mismatches are portable `DocumentValidationDiagnostic` values with exact source references, expected and
+observed states, related locations, and actionable resolution paths. A successful local document is still not an
+executable deployment plan or receipt; Compose and Aspire compilers must fingerprint their own artifacts against this
+document.
 
 The freight materialization harness owns the first canonical fixture in
 `eng/materialization-harness/model/FreightMaterializationInfrastructure.cs`. It declares PostgreSQL, Cosmos and its Data
@@ -394,7 +398,7 @@ stop, artifact publication, preview, apply, refresh, and destroy remain distinct
 must require an explicit environment/target and cannot proceed while error diagnostics or unaccepted residual
 obligations remain.
 
-The first Aspire-backed local path should derive an AppHost projection, then delegate process/container lifecycle,
+The Aspire-backed local path derives an AppHost projection, then delegates project/container lifecycle,
 networking, readiness, logs, telemetry, and dashboard behavior to Aspire and DCP. Cohesive bindings project to Aspire
 references; readiness obligations project separately to wait/health relationships; lifecycle ownership projects
 separately again. The integration should consume Aspire's machine-readable run and observation surfaces rather than
@@ -407,10 +411,10 @@ state. Pulumi execution should use Automation API and preserve engine events, UR
 receipts and observations. Backend versions and supported operations belong in lifecycle capability manifests so
 preview or evolving backend commands cannot be assumed merely because a tool is installed.
 
-## Deferred lifecycle adapters
+## Lifecycle adapters
 
-V1 ends at the semantic core described above. The integrations below are planned as separate
-`Cohesive.Adapters.*` packages; none is implemented, referenced, or transitively required by this package.
+Integrations remain separate `Cohesive.Adapters.*` packages and are never referenced or transitively required by this
+semantic core. Terraform and Pulumi remain planned; the first local Aspire and Docker Compose interpretations exist.
 
 ### Terraform
 
@@ -429,11 +433,13 @@ package.
 
 ### Aspire
 
-A later Aspire hosting integration will project exact local realizations to Aspire resources, references, endpoints,
-parameters, waits, and manifest expressions. `WithReference`-style discovery and configuration should be derived from
-canonical Infra bindings. The first integration will use Aspire AppHost and DCP as local/development orchestration,
-not production semantic authority, and an emulator projection must state its differences from production. No Aspire
-dependency belongs in this core package. Its session adapter should prefer Aspire's machine-readable run and
+A current Aspire hosting integration projects exact local realizations to container and repository-project resources,
+endpoints, parameters, waits, health checks, and operation commands. Repository-project sources are retained in the
+canonical local IR and fenced to exact workload placements; Docker Compose fails closed on them because it cannot
+preserve that construction choice. `WithReference`-style discovery and configuration should continue to be derived
+from canonical Infra bindings. Aspire AppHost and DCP are local/development orchestration, not production semantic
+authority, and an emulator projection must state its differences from production. No Aspire dependency belongs in
+this core package. A session adapter should prefer Aspire's machine-readable run and
 observation surfaces—currently `aspire run --detach --format Json`, `aspire describe --follow --format Json`,
 `aspire wait`, and `aspire stop`—and use isolated sessions for parallel worktrees and tests. Aspire command and
 manifest support must be pinned and declared as backend capability because publication and deployment surfaces may

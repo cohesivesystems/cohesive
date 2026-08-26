@@ -267,7 +267,7 @@ public sealed record DockerComposeArtifactManifest
     public const string CurrentSchemaVersion = "cohesive-docker-compose-manifest/v2";
 
     /// <summary>Current deterministic compiler identity.</summary>
-    public const string CurrentCompiler = "cohesive.adapters.docker-compose/v2";
+    public const string CurrentCompiler = "cohesive.adapters.docker-compose/v3";
 
     /// <summary>Creates a Compose artifact manifest.</summary>
     /// <param name="schemaVersion">Exact manifest schema.</param>
