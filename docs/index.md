@@ -124,6 +124,7 @@ tests, and eventually a repository-wide maturity matrix.
 | [Reconciliable training submissions](decisions/reconciliable-training-submissions.md) | Implemented | Stable logical submission identity, exact request binding, provider reconciliation, and conflict semantics |
 | [Typed Request outcome projection](decisions/typed-request-outcome-projection.md) | Implemented | Canonical Request authority, exhaustive source-only C# cases, typed Effect lowering, and native-union migration boundary |
 | [Typed durable Request handlers](decisions/typed-durable-request-handlers.md) | Implemented | Exact-reference adapter routing, typed handler projection, explicit target capabilities, and reconciliation evidence |
+| [Identity-free observation materialization](decisions/identity-free-observation-materialization.md) | Implemented | Qualified-shape plan identity, immutable CLR metadata policy, compiled materialization, and indexed-mapper migration boundary |
 
 ## Package documentation
 

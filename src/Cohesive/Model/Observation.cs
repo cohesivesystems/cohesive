@@ -207,6 +207,23 @@ public sealed class Observation : IEquatable<Observation>
         return value.TryGetField(path, out field);
     }
 
+    /// <summary>
+    /// Materializes this observation using the cached deterministic default plan for <typeparamref name="T"/> and
+    /// this observation's exact qualified shape.
+    /// </summary>
+    /// <typeparam name="T">CLR target type.</typeparam>
+    /// <returns>The materialized CLR value.</returns>
+    /// <remarks>
+    /// The default plan maps semantic field identities to CLR property names, uses web JSON conversion with string
+    /// enums, and permits defaults for optional members. Use <see cref="ObservationMaterializer.For{T}(GraphShapeId)"/>
+    /// when mappings, metadata, conversion, or missing-field policy must be configured explicitly.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// A target constructor cannot be selected, a mapped property is not settable, a required field is absent, or
+    /// conversion fails.
+    /// </exception>
+    public T Materialize<T>() => ObservationMaterializer.GetDefault<T>(this).Materialize(this);
+
     /// <summary>Serializes the qualified shape and value to canonical portable JSON.</summary>
     /// <returns>Canonical JSON whose object properties are ordered ordinally.</returns>
     /// <exception cref="InvalidOperationException">A retained value has no canonical portable JSON encoding.</exception>
