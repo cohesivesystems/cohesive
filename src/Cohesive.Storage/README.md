@@ -182,6 +182,10 @@ filters, joins, output shaping, aggregation, and paging. Query source roots are 
 relation roots remain invocation inputs and must be supplied by the evaluation.
 
 Every reader and supplied root in one evaluation declares the same provider-neutral logical partition before I/O.
+When a reader descriptor declares exact fixed physical-partition evidence, the catalog projects that descriptor's
+selector into every plan-affine placement binding for the source. The reader descriptor remains the authority; the
+partition selector is not configured a second time on the Storage registration. The physical executor then verifies
+that the reader and placement retain the same fixed scope before any provider I/O.
 Materialization source scopes retain that identity separately from adapter-defined feed partitions. Because logical
 partition evidence is now fingerprint-significant, Channel projections use `materialization-channel-scope:v2` and
 `materialization-channel-settlement:v2`; persisted v1 identities must not be mixed with v2 progress.

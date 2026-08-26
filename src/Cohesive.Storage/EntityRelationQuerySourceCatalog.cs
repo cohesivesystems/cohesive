@@ -210,6 +210,9 @@ public sealed class EntityRelationQuerySourceCatalog
         FieldPath? relationshipReference,
         ICollection<RelationQueryArtifactAuthoringDiagnostic> diagnostics)
     {
+        if (registration.Reader.Descriptor.PartitionBinding is { } partition)
+            binding.Partition(partition.SourceSelector);
+
         if (registration.IdentitySemanticPath is { } identityPath)
             binding.Identity(identityPath, registration.IdentitySourceSelector);
         else
