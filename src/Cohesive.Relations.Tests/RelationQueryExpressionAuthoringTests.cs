@@ -549,7 +549,7 @@ public sealed class RelationQueryExpressionAuthoringTests
                 [new Load { Id = "load-42", CustomerId = "customer-7", EquipmentId = "equipment-3" }],
                 static load => load.Id)
             .Build();
-        Assert.Equal("load-42", Assert.Single(relationEvaluation.SuppliedRoots!.Observations).Id);
+        Assert.Equal("load-42", Assert.Single(relationEvaluation.SuppliedRoots!.Observations).Identity);
         Assert.DoesNotContain(
             EnumerateObjectGraph(query.Definition),
             static value => value is Expression or MemberInfo or Type or Delegate);

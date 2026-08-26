@@ -142,7 +142,7 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IEntityRelationQue
     /// <inheritdoc />
     public RelationQuerySourceReaderDescriptor Descriptor { get; }
 
-    /// <summary>Stable physical selector interpreted as <see cref="Observation.Id"/>.</summary>
+    /// <summary>Stable physical selector interpreted as <see cref="EntityObservationSnapshot.EntityId"/>.</summary>
     public string IdentitySourceSelector { get; }
 
     /// <summary>Semantic field projected from authoritative observation-version metadata, when configured.</summary>
@@ -176,15 +176,15 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IEntityRelationQue
             foreach (var snapshot in snapshots)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (snapshot.Entity.ShapeId != PersistedObservationType.ShapeId)
+                if (snapshot.Entity.Observation.ShapeId.ShapeId != PersistedObservationType.ShapeId)
                     return ValueTask.FromResult(Failed(request, "repository-shape-mismatch", version));
-                if (!identities.Add(snapshot.Entity.Id))
+                if (!identities.Add(snapshot.Entity.EntityId.Value))
                     return ValueTask.FromResult(Failed(request, "duplicate-observation-identity", version));
             }
 
             Array.Sort(
                 snapshots,
-                static (left, right) => string.CompareOrdinal(left.Entity.Id, right.Entity.Id));
+                static (left, right) => string.CompareOrdinal(left.Entity.EntityId.Value, right.Entity.EntityId.Value));
             cancellationToken.ThrowIfCancellationRequested();
             var result = request.Constraint switch
             {
@@ -251,7 +251,7 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IEntityRelationQue
         foreach (var snapshot in snapshots)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (identities.Contains(snapshot.Entity.Id))
+            if (identities.Contains(snapshot.Entity.EntityId.Value))
                 selected.Add(snapshot);
         }
 
@@ -296,7 +296,7 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IEntityRelationQue
             ObservationValue reference;
             try
             {
-                if (!snapshot.Entity.TryGetField(relationshipSourcePath, out reference)
+                if (!snapshot.Entity.Observation.TryGetField(relationshipSourcePath, out reference)
                     || reference.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)
                 {
                     continue;
@@ -363,7 +363,7 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IEntityRelationQue
                 cancellationToken.ThrowIfCancellationRequested();
                 fields.Add(ProjectField(request, snapshot, field, version));
             }
-            rows.Add(new(snapshot.Entity.Id, request.Shape, fields.MoveToImmutable()));
+            rows.Add(new(snapshot.Entity.EntityId.Value, request.Shape, fields.MoveToImmutable()));
         }
         return rows.MoveToImmutable();
     }
@@ -408,7 +408,7 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IEntityRelationQue
         ObservationValue value;
         try
         {
-            if (!snapshot.Entity.TryGetField(sourcePath, out value)
+            if (!snapshot.Entity.Observation.TryGetField(sourcePath, out value)
                 || value.Kind == ObservationValueKind.Undefined)
             {
                 return new(

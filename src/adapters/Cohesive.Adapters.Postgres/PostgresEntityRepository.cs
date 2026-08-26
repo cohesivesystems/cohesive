@@ -2,12 +2,9 @@ using System.Collections.Immutable;
 using System.Globalization;
 using Cohesive.Execution;
 using Cohesive.Model;
-using Cohesive.Relations.Mapping;
-using Cohesive.Relations.Model;
 using Cohesive.Storage;
 using Cohesive.Transitions.Model;
 using Npgsql;
-using Observation = Cohesive.Relations.Model.Observation;
 
 namespace Cohesive.Adapters.Postgres;
 
@@ -140,7 +137,6 @@ public sealed class PostgresEntityRepository : IEntityRepository
     /// <param name="entityDefinition">Canonical entity definition used to validate every read and write.</param>
     /// <param name="runtime">Exact attested Npgsql runtime that owns database access.</param>
     /// <param name="mapping">Explicit table, column, identity, partition, version, and batch mapping.</param>
-    /// <param name="mappingContext">Optional object/observation mapping context.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">
     /// The mapping does not bind every semantic field exactly once, contains an extra field, uses an incompatible
@@ -149,13 +145,11 @@ public sealed class PostgresEntityRepository : IEntityRepository
     public PostgresEntityRepository(
         EntityDefinition entityDefinition,
         PostgresNpgsqlRuntimeBinding runtime,
-        PostgresEntityRepositoryMapping mapping,
-        ShapeMappingContext? mappingContext = null)
+        PostgresEntityRepositoryMapping mapping)
     {
         EntityDefinition = Guard.RequireNotNull(entityDefinition);
         this.runtime = Guard.RequireNotNull(runtime);
         this.mapping = Guard.RequireNotNull(mapping);
-        MappingContext = mappingContext ?? ShapeMappingContext.Default;
         ValidateMapping(entityDefinition, mapping);
         sql = PostgresEntityRepositorySql.Create(mapping);
         BatchCapabilities = new(
@@ -167,9 +161,6 @@ public sealed class PostgresEntityRepository : IEntityRepository
 
     /// <inheritdoc />
     public EntityDefinition EntityDefinition { get; }
-
-    /// <inheritdoc />
-    public ShapeMappingContext MappingContext { get; }
 
     /// <inheritdoc />
     public string EntityType => EntityDefinition.Shape.Id.Value;
@@ -299,7 +290,7 @@ public sealed class PostgresEntityRepository : IEntityRepository
         if (token is not uint transactionId)
         {
             throw new ObservationConcurrencyConflictException(
-                $"Observation '{EntityType}:{write.Entity.Id}' failed optimistic concurrency validation.");
+                $"Observation '{EntityType}:{write.Entity.EntityId.Value}' failed optimistic concurrency validation.");
         }
 
         return new(
@@ -343,7 +334,7 @@ public sealed class PostgresEntityRepository : IEntityRepository
             if (sql.FieldIndexByBinding.TryGetValue(bindingName, out var fieldIndex))
             {
                 var binding = mapping.Fields[fieldIndex];
-                var observed = write.Entity.GetField(binding.FieldName);
+                var observed = write.Entity.Observation.GetField(binding.FieldName);
                 command.Parameters.Add(new NpgsqlParameter
                 {
                     NpgsqlDbType = PostgresRelationQueryScalarCatalog.ToNpgsqlDbType(binding.ScalarType, array: false),
@@ -391,7 +382,8 @@ public sealed class PostgresEntityRepository : IEntityRepository
             .ToString(CultureInfo.InvariantCulture);
         var identity = fields[mapping.IdentityField].GetRequiredString();
         var partition = fields[mapping.PartitionField].GetRequiredString();
-        var complete = new Observation(EntityDefinition.Shape.Id, identity, fields, version);
+        var observation = Observation.Create(EntityDefinition.StateShape, fields);
+        EntityObservationSnapshot complete = new(new(identity), version, observation);
         return CreateValidatedReadSnapshot(
             complete: complete,
             partition: partition,
@@ -400,47 +392,37 @@ public sealed class PostgresEntityRepository : IEntityRepository
     }
 
     internal EntitySnapshot CreateValidatedReadSnapshot(
-        Observation complete,
+        EntityObservationSnapshot complete,
         string partition,
         EntityConcurrencyToken concurrencyToken,
         IReadOnlySet<string>? selectedFields)
     {
         ArgumentNullException.ThrowIfNull(complete);
-        EntityDefinition.ValidateObservation(complete);
+        _ = EntityDefinition.CreateState(complete);
 
         if (selectedFields is null)
             return new(complete, partition, concurrencyToken);
 
-        Dictionary<string, ObservationValue> projected = new(selectedFields.Count, StringComparer.Ordinal);
-        foreach (var field in selectedFields)
-        {
-            if (complete.TryGetField(field, out var value))
-                projected.Add(field, value);
-        }
-        return new(
-            new(EntityDefinition.Shape.Id, complete.Id, projected, complete.Version),
-            partition,
-            concurrencyToken,
-            selectedFields);
+        return new(complete, partition, concurrencyToken, selectedFields);
     }
 
     void ValidateWrite(EntityWriteRequest write)
     {
         ArgumentNullException.ThrowIfNull(write);
         ArgumentNullException.ThrowIfNull(write.Entity);
-        EntityDefinition.ValidateObservation(write.Entity);
-        var identity = write.Entity.GetField(mapping.IdentityField).GetRequiredString();
-        if (!string.Equals(identity, write.Entity.Id, StringComparison.Ordinal))
+        _ = EntityDefinition.CreateState(write.Entity);
+        var identity = write.Entity.Observation.GetField(mapping.IdentityField).GetRequiredString();
+        if (!string.Equals(identity, write.Entity.EntityId.Value, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"Observation '{EntityType}:{write.Entity.Id}' identity field '{mapping.IdentityField}' contains '{identity}'.");
+                $"Observation '{EntityType}:{write.Entity.EntityId.Value}' identity field '{mapping.IdentityField}' contains '{identity}'.");
         }
         _ = GetPartitionKey(write.Entity);
     }
 
-    string GetPartitionKey(Observation observation)
+    string GetPartitionKey(EntityObservationSnapshot observation)
     {
-        var partition = observation.GetField(mapping.PartitionField).GetRequiredString();
+        var partition = observation.Observation.GetField(mapping.PartitionField).GetRequiredString();
         return Guard.RequireNotNullOrWhiteSpace(partition);
     }
 

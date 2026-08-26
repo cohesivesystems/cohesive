@@ -184,9 +184,9 @@ public sealed record EntityTransitionOperationCommit
         }
         if (!string.Equals(
                 request.Subject.EntityType.Value,
-                write.Entity.ShapeId.Value,
+                write.Entity.Observation.ShapeId.ShapeId.Value,
                 StringComparison.Ordinal)
-            || !string.Equals(request.Subject.EntityId.Value, write.Entity.Id, StringComparison.Ordinal))
+            || request.Subject.EntityId != write.Entity.EntityId)
         {
             throw new ArgumentException(
                 "The candidate entity state must address the exact Transition operation subject.",
@@ -340,7 +340,7 @@ public sealed record EntityTransitionOperationReceipt
     {
         Commit = commit ?? throw new ArgumentNullException(nameof(commit));
         Entity = entity ?? throw new ArgumentNullException(nameof(entity));
-        if (!entity.Entity.HasSameContent(commit.Write.Entity))
+        if (entity.Entity != commit.Write.Entity)
         {
             throw new ArgumentException(
                 "A Transition operation receipt must retain the exact committed candidate entity state.",

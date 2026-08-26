@@ -609,8 +609,8 @@ public abstract class Entity
     {
         ArgumentNullException.ThrowIfNull(state);
         EnsureDefinitionInitialized();
-        if (state.Observation.ShapeId != sharedModel.Definition.Shape.Id)
-            throw new SemanticRuleViolationException($"State for entity '{state.EntityId.Value}' has shape '{state.Observation.ShapeId.Value}' but entity definition '{entityName.Value}' expects '{sharedModel.Definition.Shape.Id.Value}'.");
+        if (state.Observation.ShapeId != sharedModel.Definition.StateShape.QualifiedId)
+            throw new SemanticRuleViolationException($"State for entity '{state.EntityId.Value}' has shape '{state.Observation.ShapeId}' but entity definition '{entityName.Value}' expects '{sharedModel.Definition.StateShape.QualifiedId}'.");
         sharedModel.Runtime.ValidateState(entityId: state.EntityId.Value, state: state);
         ValidateAuthoredFieldRules(state);
     }

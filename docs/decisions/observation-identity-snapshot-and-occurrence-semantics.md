@@ -24,14 +24,14 @@ into the core value.
 
 | Existing concept | Actual invariant | Decision |
 | --- | --- | --- |
-| `Cohesive.Relations.Model.Observation` | Indexed physical shaped row with stable source identity, source version, and optional derived field lineage | Compatibility representation until ARI-504 migrates downstream consumers; ARI-503 introduced the explicit physical occurrence |
+| Former identity-bearing Relations row | Indexed physical shaped row with stable source identity, source version, and optional derived field lineage | Removed by ARI-504 after its responsibilities moved to explicit contracts |
 | `RelationQuerySourceReadObservation` | Stable source-row identity plus graph-qualified shape and partial field outcomes | Source-acquisition evidence; not a versioned entity snapshot |
 | `RelationQueryObservationOccurrence` | Identity unique within one evaluation, binding participation, qualified shape, and optional stable source identity | Existing canonical relation-evaluation occurrence; no version belongs here |
-| `Cohesive.Storage.EntitySnapshot` | Repository result containing a legacy row, partition, concurrency token, and loaded-field completeness | Storage interpretation that will compose the core entity snapshot during ARI-504 |
-| `Transitions.Model.EntityState` | Identified and versioned entity state backed by the legacy Relations row | Semantic consumer to migrate to the core entity snapshot during ARI-504 |
+| `Cohesive.Storage.EntitySnapshot` | Repository result containing a core entity snapshot, partition, concurrency token, and loaded-field completeness | Storage interpretation around `EntityObservationSnapshot` |
+| `Transitions.Model.EntityState` | Identified and versioned entity state backed by the core entity snapshot | Semantic wrapper around `EntityObservationSnapshot` plus Transition lineage |
 | `Transitions.Authoring.EntitySnapshot<TEntity>` | Typed authoring view over `EntityState` | Ergonomic view, not another snapshot authority |
 | Process node “occurrence” counters | Position in token or operation history | Unrelated execution identity; no observation abstraction applies |
-| Identity directory temporary observations | Adapter rows created to invoke the Relations CLR mapper | Compatibility use only; no distinct Identity-domain observation semantics |
+| Identity directory query results | Canonical relation output rows materialized into Identity records | Core materializer consumer; no distinct Identity-domain observation semantics |
 
 ## Decision
 
@@ -49,9 +49,7 @@ No generic `IdentifiedObservation`, nullable identity union, or new core occurre
 version. One stable source row can participate through multiple bindings and therefore produce multiple occurrences.
 
 Relations field lineage describes how a derived relation result was produced. It belongs to that derived physical
-occurrence or its derivation evidence, not to the identity-free value or an entity snapshot. The lineage remains on
-the legacy Relations observation only as a staged compatibility path until ARI-503 moves it with the physical
-occurrence representation.
+occurrence or its derivation evidence, not to the identity-free value or an entity snapshot.
 
 ## Consequences and migration
 
@@ -60,9 +58,5 @@ occurrence representation.
 - Storage concurrency and placement remain adapter concerns around the semantic snapshot.
 - ARI-503 introduced `IndexedObservationOccurrence`, which composes indexed storage and lineage with the existing
   relation occurrence and projects losslessly to core observations.
-- ARI-504 must migrate Transitions, Storage, Identity, APIs, adapters, and fixtures, then remove the legacy
-  identity/version authority from the Relations row.
-
-The existing Relations, Storage, and Transitions APIs remain available until those dependency-ordered migrations.
-They are compatibility paths with ARI-503 and ARI-504 as their concrete removal condition, not parallel semantic
-authorities.
+- ARI-504 migrated Transitions, Storage, Identity, APIs, adapters, fixtures, and supplied-root authoring and removed
+  the legacy identity/version authority from Relations.

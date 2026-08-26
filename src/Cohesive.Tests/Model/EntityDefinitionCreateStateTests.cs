@@ -1,24 +1,48 @@
-using Cohesive.Relations.Model;
-
 namespace Cohesive.Tests.Model;
 
 public sealed class EntityDefinitionCreateStateTests
 {
     [Fact]
+    public void InlineStateShapeIdentity_IsDeterministicAndChangesWithShapeSemantics()
+    {
+        var first = new EntityDefinition(new("Customer"), EntityShape("Customer", ScalarTypeKind.String));
+        var equivalent = new EntityDefinition(new("Customer"), EntityShape("Customer", ScalarTypeKind.String));
+        var changed = new EntityDefinition(new("Customer"), EntityShape("Customer", ScalarTypeKind.Int64));
+
+        Assert.Equal(first.StateShape.QualifiedId, equivalent.StateShape.QualifiedId);
+        Assert.NotEqual(first.StateShape.QualifiedId, changed.StateShape.QualifiedId);
+        Assert.Equal(first.Shape.Id, first.StateShape.ShapeId);
+    }
+
+    [Fact]
+    public void GraphBackedStateShape_RetainsDeclaredGraphRevision()
+    {
+        var shape = EntityShape("Customer", ScalarTypeKind.String);
+        ShapeGraph graph = new(new("customer-domain/v7"), [shape]);
+        var definition = new EntityDefinition(
+            new("Customer"),
+            new EntityShapeGraphBinding(
+                new(graph.Id, shape.Id),
+                Cohesive.Model.Serialization.ShapeGraphDocument.FromGraph(graph)));
+
+        Assert.Equal(new QualifiedShapeId(graph.Id, shape.Id), definition.StateShape.QualifiedId);
+        Assert.Same(graph, definition.StateShape.Graph);
+    }
+
+    [Fact]
     public void CreateState_FromObservation_PreservesObservationInstance()
     {
         var entity = new CustomerEntity();
-        var observation = new Observation(
-            shapeId: entity.Definition.Shape.Id,
-            id: "customer-1",
-            fields: new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        var observation = Cohesive.Model.Observation.Create(
+            entity.Definition.StateShape,
+            new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
             {
                 [nameof(CustomerEntity.Id)] = ObservationValue.FromString("customer-1"),
                 [nameof(CustomerEntity.Name)] = ObservationValue.FromString("Acme Freight")
-            },
-            version: 7);
+            });
+        EntityObservationSnapshot snapshot = new(new("customer-1"), version: 7, observation);
 
-        var state = entity.Definition.CreateState(observation);
+        var state = entity.Definition.CreateState(snapshot);
 
         Assert.Same(observation, state.Observation);
         Assert.Equal("customer-1", state.EntityId.Value);
@@ -29,47 +53,31 @@ public sealed class EntityDefinitionCreateStateTests
     public void ValidateObservation_AcceptsACompleteValidObservationWithoutConstructingState()
     {
         var entity = new CustomerEntity();
-        var observation = new Observation(
-            shapeId: entity.Definition.Shape.Id,
-            id: "customer-1",
-            fields: new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+        var observation = Cohesive.Model.Observation.Create(
+            entity.Definition.StateShape,
+            new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
             {
                 [nameof(CustomerEntity.Id)] = ObservationValue.FromString("customer-1"),
                 [nameof(CustomerEntity.Name)] = ObservationValue.FromString("Acme Freight")
-            },
-            version: 7);
+            });
 
         entity.Definition.ValidateObservation(observation);
     }
 
     [Fact]
-    public void CreateState_FromObservation_RejectsValuedUnknownFieldWithoutMaterializingState()
+    public void CoreObservation_RejectsValuedUnknownFieldBeforeEntityStateConstruction()
     {
         var entity = new CustomerEntity();
-        var layout = new ObservationLayout(
-            schema: entity.Definition.Shape.Id,
-            fieldNames:
-            [
-                nameof(CustomerEntity.Id),
-                nameof(CustomerEntity.Name),
-                "Unexpected"
-            ]);
-        var values = new[]
-        {
-            ObservationValue.FromString("customer-1"),
-            ObservationValue.FromString("Acme Freight"),
-            ObservationValue.FromString("value")
-        };
-        var hasValues = new[] { true, true, true };
-        var observation = new Observation(layout, id: "customer-1", values, hasValues);
+        var error = Assert.Throws<ArgumentException>(() => Cohesive.Model.Observation.Create(
+            entity.Definition.StateShape,
+            new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+            {
+                [nameof(CustomerEntity.Id)] = ObservationValue.FromString("customer-1"),
+                [nameof(CustomerEntity.Name)] = ObservationValue.FromString("Acme Freight"),
+                ["Unexpected"] = ObservationValue.FromString("value")
+            }));
 
-        var validationError = Assert.Throws<SemanticRuleViolationException>(() =>
-            entity.Definition.ValidateObservation(observation));
-        var stateError = Assert.Throws<SemanticRuleViolationException>(() =>
-            entity.Definition.CreateState(observation));
-
-        Assert.Equal(validationError.Message, stateError.Message);
-        Assert.Contains("unknown field 'Unexpected'", validationError.Message, StringComparison.Ordinal);
+        Assert.Contains("unknown field 'Unexpected'", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     sealed class CustomerEntity : Entity<CustomerEntity>
@@ -84,4 +92,9 @@ public sealed class EntityDefinitionCreateStateTests
 
         public Field<string> Name { get; }
     }
+
+    static Shape EntityShape(string id, ScalarTypeKind valueKind) => new(
+        new(id),
+        [new(new("Value"), new ScalarTypeRef(valueKind))],
+        role: ShapeRoles.Entity);
 }

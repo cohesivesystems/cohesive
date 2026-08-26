@@ -63,7 +63,7 @@ public sealed class EntityTransitionOperationRepositoryTests
         Assert.Empty(fixture.Repository.OutboxEnvelopes);
         Assert.Equal(
             "approved",
-            receipt.Entity.Entity.GetField(nameof(CustomerEntity.Status)).GetString());
+            receipt.Entity.Entity.Observation.GetField(nameof(CustomerEntity.Status)).GetString());
     }
 
     [Fact]
@@ -344,10 +344,10 @@ public sealed class EntityTransitionOperationRepositoryTests
             var initialState = CustomerEntity.Instance.CreateState(
                 "customer/1",
                 new CustomerState("customer/1", "tenant/acme", "pending"));
-            var initial = await repository.Upsert(context, new(initialState.Observation));
+            var initial = await repository.Upsert(context, new(initialState.Snapshot));
             var subject = new InteractionEntityReference(
                 new(repository.EntityType),
-                new(initial.Entity.Id));
+                new(initial.Entity.EntityId.Value));
             var operation = new ProcessOperationOccurrence(
                 new(new("process-instance/customer-approval"), new("process-attempt/1")),
                 new("process-activation/1"),
@@ -363,14 +363,12 @@ public sealed class EntityTransitionOperationRepositoryTests
                 subject,
                 ProcessDurabilityTestFixture.StringValue("input/approve"));
             var candidateValue = TransitionStateProjector.Apply(
-                ObservationValue.FromObject(initial.Entity.Fields),
+                ObservationValue.FromObject(initial.Entity.Observation.Fields),
                 decision);
-            var candidate = new Observation(
-                initial.Entity.ShapeId,
-                initial.Entity.Id,
+            var candidate = definition.CreateState(
+                initial.Entity.EntityId.Value,
                 candidateValue.Fields!,
-                version: initial.Entity.Version + 1,
-                initial.Entity.Lineage);
+                version: initial.Entity.Version + 1).Snapshot;
             var commit = CreateCommit(
                 request,
                 candidate,
@@ -385,14 +383,12 @@ public sealed class EntityTransitionOperationRepositoryTests
             EntityConcurrencyToken? expectedConcurrencyToken = null)
         {
             var candidateValue = TransitionStateProjector.Apply(
-                ObservationValue.FromObject(Initial.Entity.Fields),
+                ObservationValue.FromObject(Initial.Entity.Observation.Fields),
                 Decision);
-            var candidate = new Observation(
-                Initial.Entity.ShapeId,
-                Initial.Entity.Id,
+            var candidate = Repository.EntityDefinition.CreateState(
+                Initial.Entity.EntityId.Value,
                 candidateValue.Fields!,
-                version: Initial.Entity.Version + 1,
-                Initial.Entity.Lineage);
+                version: Initial.Entity.Version + 1).Snapshot;
             return CreateCommit(
                 Request,
                 candidate,
@@ -403,7 +399,7 @@ public sealed class EntityTransitionOperationRepositoryTests
 
         static EntityTransitionOperationCommit CreateCommit(
             EntityTransitionOperationRequest request,
-            Observation candidate,
+            EntityObservationSnapshot candidate,
             EntityConcurrencyToken expectedConcurrencyToken,
             TransitionDecision decision,
             string resultValue)
@@ -452,7 +448,7 @@ public sealed class EntityTransitionOperationRepositoryTests
                 decision.Evidence);
         }
 
-        static TransitionDecision Decide(ActivationId activation, Observation current)
+        static TransitionDecision Decide(ActivationId activation, EntityObservationSnapshot current)
         {
             var definition = new CanonicalTransitionDefinition(
                 ProcessDurabilityTestFixture.StringContract,
@@ -493,7 +489,7 @@ public sealed class EntityTransitionOperationRepositoryTests
                 plan,
                 activation,
                 ProcessDurabilityTestFixture.StringValue("input/approve"),
-                PortableValue.Concrete(StateContract, ObservationValue.FromObject(current.Fields)));
+                PortableValue.Concrete(StateContract, ObservationValue.FromObject(current.Observation.Fields)));
         }
     }
 
@@ -519,8 +515,6 @@ public sealed class EntityTransitionOperationRepositoryTests
     sealed class NonAtomicRepository(IEntityRepository inner) : IEntityRepository
     {
         public EntityDefinition EntityDefinition => inner.EntityDefinition;
-
-        public ShapeMappingContext MappingContext => inner.MappingContext;
 
         public Task<EntitySnapshot?> TryGet(
             OperationContext context,

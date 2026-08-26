@@ -90,7 +90,7 @@ public sealed class RelationQueryExecutionRequest
 }
 
 /// <summary>One shaped output row produced by canonical relation/query interpretation.</summary>
-public sealed record RelationQueryOutputRow
+public sealed record RelationQueryOutputRow : IObservationFieldReader
 {
     /// <summary>Creates one shaped, provenance-attributed execution row.</summary>
     /// <param name="shape">Graph-qualified semantic shape of <paramref name="value"/>.</param>
@@ -184,6 +184,14 @@ public sealed record RelationQueryOutputRow
 
     /// <summary>Unresolved requirement gaps that still affect this row under the selected policy.</summary>
     public ImmutableArray<RelationRequirementGapId> UnresolvedGaps { get; }
+
+    QualifiedShapeId IObservationFieldReader.ShapeId => Shape;
+
+    bool IObservationFieldReader.TryGetField(string fieldIdentity, out ObservationValue field)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fieldIdentity);
+        return Value.TryGetProperty(fieldIdentity, out field);
+    }
 
     /// <summary>
     /// Whether every row-attributed requirement-gap impact was resolved or dispositioned. Global partial

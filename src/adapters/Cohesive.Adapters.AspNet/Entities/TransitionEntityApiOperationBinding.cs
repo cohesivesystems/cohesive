@@ -2,13 +2,11 @@ using System.Collections.Immutable;
 using Cohesive.Api;
 using Cohesive.Execution;
 using Cohesive.Model;
-using Cohesive.Relations.Model;
 using Cohesive.Storage;
 using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Execution;
 using Cohesive.Transitions.Model;
 using Microsoft.AspNetCore.Http;
-using Observation = Cohesive.Relations.Model.Observation;
 
 namespace Cohesive.Adapters.AspNet.Entities;
 
@@ -179,13 +177,10 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
         var projected = TransitionStateProjector.Apply(
             ObservationValue.FromObject(state.Fields),
             decision);
-        var observation = new Observation(
-            shapeId: snapshot.Entity.ShapeId,
-            id: snapshot.Entity.Id,
-            fields: projected.Fields!,
-            version: snapshot.Entity.Version + 1,
-            lineage: snapshot.Entity.Lineage);
-        return options.Entity.CreateState(observation);
+        return options.Entity.CreateState(
+            snapshot.Entity.EntityId.Value,
+            projected.Fields!,
+            snapshot.Entity.Version + 1);
     }
 
     static PortableValue ToPortableValue(object? value, ValueContract contract, bool isSupplied)

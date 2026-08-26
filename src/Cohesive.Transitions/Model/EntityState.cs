@@ -1,47 +1,47 @@
-using Cohesive.Relations.Mapping;
-using Cohesive.Relations.Model;
-
 namespace Cohesive.Transitions.Model;
 
 /// <summary>
-/// Immutable entity state backed by an observation carrying identity, version, and field values.
+/// Immutable entity state backed by one explicit identity-bearing semantic snapshot.
 /// </summary>
 public sealed class EntityState
 {
     readonly EntityStateLineage lineage;
 
     /// <summary>
-    /// Creates a state snapshot from an observation.
+    /// Creates a state from an identified, versioned semantic snapshot.
     /// </summary>
-    public EntityState(Observation observation)
-        : this(observation, new())
+    public EntityState(EntityObservationSnapshot snapshot)
+        : this(snapshot, new())
     {
     }
 
     internal EntityState(
-        Observation observation,
+        EntityObservationSnapshot snapshot,
         EntityStateLineage lineage
         )
     {
-        Observation = Guard.RequireNotNull(observation);
+        Snapshot = Guard.RequireNotNull(snapshot);
         this.lineage = Guard.RequireNotNull(lineage);
         this.lineage.Current = this;
     }
 
     /// <summary>
-    /// Observation carrying identity, version, and field values by canonical field name.
+    /// Identified and versioned semantic state.
     /// </summary>
-    public Observation Observation { get; }
+    public EntityObservationSnapshot Snapshot { get; }
+
+    /// <summary>Identity-free semantic value carried by <see cref="Snapshot"/>.</summary>
+    public Observation Observation => Snapshot.Observation;
 
     /// <summary>
-    /// Entity identity carried by the underlying observation.
+    /// Entity identity carried by the snapshot.
     /// </summary>
-    public EntityId EntityId => new(Observation.Id);
+    public EntityId EntityId => Snapshot.EntityId;
 
     /// <summary>
-    /// State version carried by the underlying observation.
+    /// State version carried by the snapshot.
     /// </summary>
-    public long Version => Observation.Version;
+    public long Version => Snapshot.Version;
 
     /// <summary>
     /// Field values keyed by declared field name.
@@ -49,16 +49,20 @@ public sealed class EntityState
     public IReadOnlyDictionary<string, ObservationValue> Fields => Observation.Fields;
 
     /// <summary>
-    /// Materializes the underlying observation into a CLR shape using the shared shape mapper.
+    /// Materializes the underlying observation through the deterministic core plan.
     /// </summary>
-    public T Populate<T>(ShapeMappingContext? mappingContext = null)
-        => Observation.Map<T>(mappingContext);
+    public T Populate<T>() => Observation.Materialize<T>();
 
     /// <summary>
-    /// Materializes the underlying observation into a CLR shape using an explicitly configured mapper.
+    /// Materializes the underlying observation through an explicitly configured core plan.
     /// </summary>
-    public T Populate<T>(Action<ObservationObjectMapperBuilder<T>> configure, ShapeMappingContext? mappingContext = null)
-        => Observation.Map(configure, mappingContext);
+    public T Populate<T>(Action<ObservationMaterializerBuilder<T>> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        var builder = ObservationMaterializer.For<T>(Observation.ShapeId);
+        configure(builder);
+        return builder.Compile().Materialize(Observation);
+    }
 
     internal EntityStateLineage Lineage => lineage;
 

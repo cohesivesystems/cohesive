@@ -88,7 +88,7 @@ public sealed record RepositorySeedWrite(
     /// <summary>
     /// Entity id carried by the write request.
     /// </summary>
-    public string Id => Write.Entity.Id;
+    public string Id => Write.Entity.EntityId.Value;
 }
 
 /// <summary>
@@ -218,11 +218,11 @@ public sealed class RepositorySeedWriter
         ArgumentNullException.ThrowIfNull(write.Write);
         ArgumentNullException.ThrowIfNull(write.Write.Entity);
 
-        if (write.Write.Entity.ShapeId != write.Repository.EntityDefinition.Shape.Id)
+        if (write.Write.Entity.Observation.ShapeId != write.Repository.EntityDefinition.StateShape.QualifiedId)
         {
             throw new RepositorySeedException(
-                $"Seed write '{write.Type}:{write.Write.Entity.Id}' targets shape '{write.Write.Entity.ShapeId.Value}', " +
-                $"but repository '{write.Repository.EntityDefinition.Name.Value}' handles shape '{write.Repository.EntityDefinition.Shape.Id.Value}'.");
+                $"Seed write '{write.Type}:{write.Write.Entity.EntityId.Value}' targets shape '{write.Write.Entity.Observation.ShapeId}', " +
+                $"but repository '{write.Repository.EntityDefinition.Name.Value}' handles shape '{write.Repository.EntityDefinition.StateShape.QualifiedId}'.");
         }
 
         return write;

@@ -72,8 +72,7 @@ directly. The reader is deliberately smaller than `Observation`: it exposes exac
 top-level field access, but does not become a validation, serialization, identity, or provenance authority.
 
 `Cohesive.Relations.Physical.IndexedObservationOccurrence` is the explicit indexed relation interpretation.
-`Cohesive.Relations.Model.Observation` remains only as a local-shape compatibility bridge until ARI-504 and is not the
-semantic authority for identity-free observations.
+Relations does not define another observation value or CLR-mapping authority.
 
 When entity identity and entity-state version apply, compose the value explicitly:
 

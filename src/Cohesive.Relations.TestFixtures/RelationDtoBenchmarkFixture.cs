@@ -8,7 +8,7 @@ using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
 using IRRelationDefinition = Cohesive.Relations.IR.RelationDefinition;
-using Observation = Cohesive.Relations.Model.Observation;
+using Observation = Cohesive.Model.Observation;
 
 namespace Cohesive.Relations.TestFixtures;
 
@@ -154,7 +154,7 @@ public static class RelationDtoBenchmarkFixture
             SimplePlan,
             evidence,
             execution,
-            ToObservations(execution),
+            ToObservations(SimplePlan, execution),
             [.. rows.Select(static row => new LoadSummaryDto(row.LoadId, row.Status, row.Amount))]);
     }
 
@@ -179,7 +179,7 @@ public static class RelationDtoBenchmarkFixture
             JoinedPlan,
             evidence,
             execution,
-            ToObservations(execution),
+            ToObservations(JoinedPlan, execution),
             [.. rows.Select(static row => new LoadSearchDto(
                 row.LoadId,
                 row.CustomerId,
@@ -380,7 +380,9 @@ public static class RelationDtoBenchmarkFixture
         RelationQueryRuntimeEvidence evidence) =>
         RelationQueryInMemoryInterpreter.Default.Execute(new(plan, evidence));
 
-    static ImmutableArray<Observation> ToObservations(RelationQueryExecutionResult execution)
+    static ImmutableArray<Observation> ToObservations(
+        CompiledRelationQueryPlan plan,
+        RelationQueryExecutionResult execution)
     {
         var relation = execution.Relation;
         if (relation is null)
@@ -388,16 +390,18 @@ public static class RelationDtoBenchmarkFixture
         var observations = ImmutableArray.CreateBuilder<Observation>(relation.Rows.Length);
         foreach (var row in relation.Rows)
         {
-            observations.Add(new(
-                row.Shape.ShapeId,
-                row.Identity?.GetRequiredString()
-                    ?? row.Root?.ObservationIdentity
-                    ?? row.Root?.Id.Value
-                    ?? throw new InvalidOperationException("A fixture output row requires an identity."),
+            if (!row.IsComplete)
+                continue;
+
+            var graph = plan.Provenance.ShapeDocuments
+                .Single(document => document.Graph.Id == row.Shape.GraphId)
+                .Graph;
+            observations.Add(Observation.Create(
+                new(graph, row.Shape.ShapeId),
                 row.Value.Fields
                     ?? throw new InvalidOperationException("A fixture output row requires an object value.")));
         }
-        return observations.MoveToImmutable();
+        return observations.ToImmutable();
     }
 
     static CompiledRelationQueryPlan Compile(RelationQueryDocument document)

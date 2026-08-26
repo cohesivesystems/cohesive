@@ -1,5 +1,3 @@
-using Cohesive.Relations.Model;
-
 namespace Cohesive.Storage;
 
 /// <summary>
@@ -12,7 +10,7 @@ namespace Cohesive.Storage;
 /// </remarks>
 public sealed class EntityPartitionKeyPolicy
 {
-    readonly Func<OperationContext, Observation, string> writePartitionKeyResolver;
+    readonly Func<OperationContext, EntityObservationSnapshot, string> writePartitionKeyResolver;
     readonly Func<OperationContext, string, string?>? pointReadPartitionKeyResolver;
 
     /// <summary>
@@ -23,7 +21,7 @@ public sealed class EntityPartitionKeyPolicy
     /// <param name="pointReadPartitionKeyResolver">Optional resolver used for exact point-read placement.</param>
     public EntityPartitionKeyPolicy(
         string description,
-        Func<OperationContext, Observation, string> writePartitionKeyResolver,
+        Func<OperationContext, EntityObservationSnapshot, string> writePartitionKeyResolver,
         Func<OperationContext, string, string?>? pointReadPartitionKeyResolver = null
         )
     {
@@ -42,7 +40,7 @@ public sealed class EntityPartitionKeyPolicy
     /// </summary>
     public static EntityPartitionKeyPolicy ObservationId { get; } = new(
         description: "observation id",
-        writePartitionKeyResolver: static (_, observation) => observation.Id,
+        writePartitionKeyResolver: static (_, snapshot) => snapshot.EntityId.Value,
         pointReadPartitionKeyResolver: static (_, id) => id
         );
 
@@ -54,15 +52,15 @@ public sealed class EntityPartitionKeyPolicy
         var normalizedFieldName = Guard.RequireNotNullOrWhiteSpace(fieldName);
         return new(
             description: $"field '{normalizedFieldName}'",
-            writePartitionKeyResolver: (_, observation) => observation.GetField(normalizedFieldName).GetRequiredString()
+            writePartitionKeyResolver: (_, snapshot) => snapshot.Observation.GetField(normalizedFieldName).GetRequiredString()
             );
     }
 
     /// <summary>
-    /// Creates a policy from a legacy observation-only write selector.
+    /// Creates a policy from an entity-snapshot write selector.
     /// </summary>
     public static EntityPartitionKeyPolicy FromObservation(
-        Func<Observation, string> partitionKeySelector,
+        Func<EntityObservationSnapshot, string> partitionKeySelector,
         string description = "the configured partition-key selector",
         Func<string, string?>? pointReadPartitionKeySelector = null
         )
@@ -78,7 +76,7 @@ public sealed class EntityPartitionKeyPolicy
     /// <summary>
     /// Resolves a non-empty partition key for writing one observation.
     /// </summary>
-    public string ResolveWritePartitionKey(OperationContext context, Observation observation)
+    public string ResolveWritePartitionKey(OperationContext context, EntityObservationSnapshot observation)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(observation);

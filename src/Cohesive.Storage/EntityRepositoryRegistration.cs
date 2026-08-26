@@ -1,4 +1,3 @@
-using Cohesive.Relations.Mapping;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.Physical;
@@ -87,8 +86,9 @@ public static class EntityRepositoryRegistration
         /// </summary>
         public void RegisterEntityRepository<TEntity>(
             Func<IServiceProvider, EntityDefinition, IEntityRepository> repositoryFactory,
-            Action<ObjectObservationMapperBuilder<TEntity>>? configureObjectMapper = null,
-            ShapeMappingContext? mappingContext = null)
+            Func<TEntity, string>? selectEntityId = null,
+            Func<TEntity, long>? selectVersion = null,
+            Action<ObservationMaterializerBuilder<TEntity>>? configureMaterializer = null)
             where TEntity : notnull
         {
             ArgumentNullException.ThrowIfNull(repositoryFactory);
@@ -100,7 +100,12 @@ public static class EntityRepositoryRegistration
                 entity,
                 repositoryFactory: (sp, _) => repositoryFactory(sp, entity),
                 additionalKeys: [typeKey]);
-            RegisterTypedRepositories(services, typeKey, configureObjectMapper, mappingContext);
+            RegisterTypedRepositories(
+                services,
+                typeKey,
+                selectEntityId,
+                selectVersion,
+                configureMaterializer);
         }
 
         /// <summary>
@@ -218,14 +223,16 @@ public static class EntityRepositoryRegistration
     static void RegisterTypedRepositories<TEntity>(
         IServiceCollection services,
         object serviceKey,
-        Action<ObjectObservationMapperBuilder<TEntity>>? configureObjectMapper,
-        ShapeMappingContext? mappingContext)
+        Func<TEntity, string>? selectEntityId,
+        Func<TEntity, long>? selectVersion,
+        Action<ObservationMaterializerBuilder<TEntity>>? configureMaterializer)
         where TEntity : notnull
     {
         services.AddSingleton<IEntityRepository<TEntity>>(sp => new TypedEntityRepository<TEntity>(
             repository: sp.GetRequiredKeyedService<IEntityRepository>(serviceKey),
-            configureObjectMapper: configureObjectMapper,
-            mappingContext: mappingContext
+            selectEntityId: selectEntityId,
+            selectVersion: selectVersion,
+            configureMaterializer: configureMaterializer
             ));
         services.AddSingleton<IEntityOutboxRepository<TEntity>>(sp => new TypedEntityOutboxRepository<TEntity>(
             repository: sp.GetRequiredService<IEntityRepository<TEntity>>(),

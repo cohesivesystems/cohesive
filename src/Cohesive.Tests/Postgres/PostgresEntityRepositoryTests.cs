@@ -99,18 +99,21 @@ public sealed class PostgresEntityRepositoryTests
     }
 
     [Fact]
-    public async Task WriteRejectsSchemaInvalidObservationBeforeDatabaseAccess()
+    public void CoreObservationRejectsSchemaInvalidStateBeforeRepositoryAccess()
     {
         var entity = OrderEntity();
-        using var dataSource = DataSource();
-        var repository = new PostgresEntityRepository(entity, Runtime(dataSource), OrderMapping());
-        var invalid = InvalidObservation(entity, "order-invalid");
+        var valid = Write(entity, id: "order-invalid", tenant: "tenant-a").Entity;
+        var fields = valid.Observation.Fields.ToDictionary(
+            static item => item.Key,
+            static item => item.Value,
+            StringComparer.Ordinal);
+        fields.Add("unexpected", ObservationValue.FromString("invalid"));
 
-        var error = await Assert.ThrowsAsync<SemanticRuleViolationException>(() => repository.Upsert(
-            context: OperationContext.Create(),
-            write: new(invalid)));
+        var error = Assert.Throws<ArgumentException>(() => Cohesive.Model.Observation.Create(
+            entity.StateShape,
+            fields));
 
-        Assert.Contains("unknown field 'unexpected'", error.Message, StringComparison.Ordinal);
+        Assert.Contains("unknown field 'unexpected'", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -119,7 +122,7 @@ public sealed class PostgresEntityRepositoryTests
         var entity = OrderEntity();
         using var dataSource = DataSource();
         var repository = new PostgresEntityRepository(entity, Runtime(dataSource), OrderMapping());
-        var invalid = InvalidObservation(entity, "order-invalid");
+        var invalid = ForeignSnapshot(entity, "order-invalid");
 
         var error = Assert.Throws<SemanticRuleViolationException>(() => repository.CreateValidatedReadSnapshot(
             complete: invalid,
@@ -127,11 +130,11 @@ public sealed class PostgresEntityRepositoryTests
             concurrencyToken: new("7"),
             selectedFields: new HashSet<string>(["id"], StringComparer.Ordinal)));
 
-        Assert.Contains("unknown field 'unexpected'", error.Message, StringComparison.Ordinal);
+        Assert.Contains("does not match", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ReadValidatesCompleteObservationThenRetainsPartialSnapshotSemantics()
+    public void ReadValidatesCompleteObservationAndRetainsSelectionAsStorageMetadata()
     {
         var entity = OrderEntity();
         using var dataSource = DataSource();
@@ -146,25 +149,19 @@ public sealed class PostgresEntityRepositoryTests
             selectedFields: selectedFields);
 
         Assert.Equal(selectedFields, snapshot.LoadedFields);
-        Assert.Equal(2, snapshot.Entity.Layout.Count);
-        Assert.Equal("order-1", snapshot.Entity.GetField("id").GetRequiredString());
-        Assert.Equal("ORD-order-1", snapshot.Entity.GetField("orderNumber").GetRequiredString());
-        Assert.False(snapshot.Entity.TryGetField("tenantId", out _));
+        Assert.Equal("order-1", snapshot.Entity.Observation.GetField("id").GetRequiredString());
+        Assert.Equal("ORD-order-1", snapshot.Entity.Observation.GetField("orderNumber").GetRequiredString());
+        Assert.True(snapshot.Entity.Observation.TryGetField("tenantId", out _));
     }
 
-    static Observation InvalidObservation(EntityDefinition entity, string id)
+    static EntityObservationSnapshot ForeignSnapshot(EntityDefinition entity, string id)
     {
         var valid = Write(entity, id: id, tenant: "tenant-a").Entity;
-        Dictionary<string, ObservationValue> fields = valid.Fields.ToDictionary(
-            static item => item.Key,
-            static item => item.Value,
-            StringComparer.Ordinal);
-        fields.Add("unexpected", ObservationValue.FromString("invalid"));
-        return new(
-            shapeId: entity.Shape.Id,
-            id: id,
-            fields: fields,
-            version: valid.Version);
+        ShapeGraph graph = new(new("tests/foreign-order-state/v1"), [entity.Shape]);
+        var observation = Cohesive.Model.Observation.Create(
+            new(graph, entity.Shape.Id),
+            valid.Observation.Fields);
+        return new(valid.EntityId, valid.Version, observation);
     }
 
     static EntityWriteRequest Write(EntityDefinition entity, string id, string tenant) => new(
@@ -179,7 +176,7 @@ public sealed class PostgresEntityRepositoryTests
                 EquipmentClass = "DryVan",
                 CreatedAt = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
             },
-            version: 1).Observation);
+            version: 1).Snapshot);
 
     static EntityDefinition OrderEntity()
     {

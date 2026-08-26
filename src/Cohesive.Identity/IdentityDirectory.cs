@@ -3,9 +3,6 @@ using Cohesive.Model;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
-using Cohesive.Relations.Mapping;
-using Cohesive.Relations.Model;
-using Observation = Cohesive.Relations.Model.Observation;
 
 namespace Cohesive.Identity;
 
@@ -126,15 +123,12 @@ public sealed class IdentityDirectoryEvaluationException : InvalidOperationExcep
 /// Identity directory backed by canonical relation/query evaluation over registered entity sources.
 /// </summary>
 /// <param name="evaluator">Canonical evaluator configured with the Identity entity sources.</param>
-/// <param name="mappingContext">Optional mapping context used to materialize identity records.</param>
 /// <exception cref="ArgumentNullException"><paramref name="evaluator"/> is <see langword="null"/>.</exception>
 public sealed class EntityRepositoryIdentityDirectory(
-    IRelationQueryEvaluator evaluator,
-    ShapeMappingContext? mappingContext = null
+    IRelationQueryEvaluator evaluator
     ) : IIdentityDirectory
 {
     readonly IRelationQueryEvaluator evaluator = evaluator ?? throw new ArgumentNullException(nameof(evaluator));
-    readonly ShapeMappingContext mappingContext = mappingContext ?? ShapeMappingContext.Default;
 
     /// <inheritdoc />
     public async ValueTask<PrincipalAccountRecord?> FindPrincipalAsync(
@@ -397,11 +391,9 @@ public sealed class EntityRepositoryIdentityDirectory(
                         "An Identity entity result row requires a string identity and an object field payload.");
                 }
 
-                var observation = new Observation(
-                    row.Shape.ShapeId,
-                    identity,
-                    row.Value.Fields);
-                records.Add(observation.Map<TRecord>(mappingContext));
+                records.Add(ObservationMaterializer
+                    .GetDefault<TRecord>(row)
+                    .Materialize(row));
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException

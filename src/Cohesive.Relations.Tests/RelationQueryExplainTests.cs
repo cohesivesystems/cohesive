@@ -269,13 +269,16 @@ public sealed class RelationQueryExplainTests
                 LoadCustomerRelationFixture.RelationshipCatalogDocument)
             .Supply(
             [
-                new Observation(
-                    LoadCustomerRelationFixture.LoadShapeLocalId,
+                new RelationQuerySuppliedRoot(
                     "load-secret",
+                    LoadCustomerRelationFixture.LoadShapeId,
                     new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
                     {
                         [LoadCustomerRelationFixture.LoadIdFieldName] = ObservationValue.FromString("load-secret"),
-                        [LoadCustomerRelationFixture.LoadCustomerIdFieldName] = ObservationValue.FromString("customer-secret")
+                        [LoadCustomerRelationFixture.LoadCustomerIdFieldName] = ObservationValue.FromString("customer-secret"),
+                        [LoadCustomerRelationFixture.LoadStatusFieldName] = ObservationValue.FromString("Open"),
+                        [LoadCustomerRelationFixture.LoadAmountFieldName] = ObservationValue.FromDecimal(0m),
+                        [LoadCustomerRelationFixture.LoadActiveFieldName] = ObservationValue.FromBool(true)
                     })
             ],
             evidenceReference: "evidence-secret")

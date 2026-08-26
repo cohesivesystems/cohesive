@@ -630,7 +630,7 @@ public sealed class FreightOrderHarnessModelTests
         {
             var identity = selectIdentity(value);
             return new EntitySnapshot(
-                definition.CreateState(entityId: identity, stateObject: value).Observation,
+                definition.CreateState(entityId: identity, stateObject: value).Snapshot,
                 PartitionKey: "tenant-a",
                 ConcurrencyToken: new($"tests/freight-order-harness/{identity}"));
         }).ToImmutableArray();

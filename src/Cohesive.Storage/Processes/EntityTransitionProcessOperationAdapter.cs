@@ -1,6 +1,5 @@
 using Cohesive.Execution;
 using Cohesive.Processes.Execution;
-using Cohesive.Relations.Model;
 using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Execution;
 using Cohesive.Transitions.IR;
@@ -258,7 +257,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
                 invocation.Input,
                 PortableValue.Concrete(
                     binding.Plan.Definition.Observation,
-                    ObservationValue.FromObject(snapshot!.Entity.Fields)));
+                    ObservationValue.FromObject(snapshot!.Entity.Observation.Fields)));
         if (decision.Kind is not (TransitionDecisionKind.Applied
             or TransitionDecisionKind.NoChange
             or TransitionDecisionKind.AdmissionRejected
@@ -311,36 +310,39 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
         }
         else
         {
-            baseState = ObservationValue.FromObject(snapshot!.Entity.Fields);
+            baseState = ObservationValue.FromObject(snapshot!.Entity.Observation.Fields);
         }
 
         var projected = TransitionStateProjector.Apply(
             baseState,
             decision);
-        var candidate = new Observation(
-            createsSubject ? new(binding.Repository.EntityType) : snapshot!.Entity.ShapeId,
-            subject.EntityId.Value,
-            projected.Fields!,
-            createsSubject
-                ? 0
-                : decision.Kind == TransitionDecisionKind.Applied
-                    ? checked(snapshot!.Entity.Version + 1)
-                    : snapshot!.Entity.Version,
-            createsSubject ? null : snapshot!.Entity.Lineage);
-        if (createsSubject)
+        var candidateVersion = createsSubject
+            ? 0
+            : decision.Kind == TransitionDecisionKind.Applied
+                ? checked(snapshot!.Entity.Version + 1)
+                : snapshot!.Entity.Version;
+        EntityState candidateState;
+        try
         {
-            try
-            {
-                binding.Repository.EntityDefinition.ValidateState(new(candidate));
-            }
-            catch (SemanticRuleViolationException exception)
-            {
-                return Failure(
-                    ProcessTransitionOperationAdapterDiagnosticCodes.SubjectInitializationInvalid,
-                    exception.Message,
-                    "/decision/evidence/initialObservation");
-            }
+            candidateState = binding.Repository.EntityDefinition.CreateState(
+                subject.EntityId.Value,
+                projected.Fields!,
+                candidateVersion);
+            if (createsSubject)
+                binding.Repository.EntityDefinition.ValidateState(candidateState);
         }
+        catch (SemanticRuleViolationException exception)
+        {
+            return Failure(
+                createsSubject
+                    ? ProcessTransitionOperationAdapterDiagnosticCodes.SubjectInitializationInvalid
+                    : ProcessTransitionOperationAdapterDiagnosticCodes.DecisionNotCommittable,
+                exception.Message,
+                createsSubject
+                    ? "/decision/evidence/initialObservation"
+                    : "/decision/candidateObservation");
+        }
+        var candidate = candidateState.Snapshot;
 
         var commit = new EntityTransitionOperationCommit(
             request,

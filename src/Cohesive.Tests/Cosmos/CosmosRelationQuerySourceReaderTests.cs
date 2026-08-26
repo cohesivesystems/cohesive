@@ -102,14 +102,17 @@ public sealed class CosmosRelationQuerySourceReaderTests
             canonicalEntityShape.Constraints,
             canonicalEntityShape.Annotations,
             role: ShapeRoles.Entity);
+        var entityDefinition = new EntityDefinition(
+            new(repositoryShape.Id.Value),
+            new EntityShapeGraphBinding(entityShape.Id, entityShape.Document));
         EntitySnapshot[] snapshots =
         [
-            ConformanceSnapshot(repositoryShape.Id, "load-c", "Charlie", version: 3),
-            ConformanceSnapshot(repositoryShape.Id, "load-a", "Alpha", version: 1),
-            ConformanceSnapshot(repositoryShape.Id, "load-b", "Beta", version: 2)
+            ConformanceSnapshot(entityDefinition, "load-c", "Charlie", version: 3),
+            ConformanceSnapshot(entityDefinition, "load-a", "Alpha", version: 1),
+            ConformanceSnapshot(entityDefinition, "load-b", "Beta", version: 2)
         ];
         var repository = new InMemoryEntityOutboxRepository(
-            new EntityDefinition(new(repositoryShape.Id.Value), repositoryShape),
+            entityDefinition,
             partitionKeyFieldName: "tenantId",
             seedSnapshots: snapshots);
         var inMemoryRegistration = EntityRelationQuerySourceRegistration.InMemory(
@@ -167,7 +170,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
         {
             Dictionary<string, object?> row = new(StringComparer.Ordinal)
             {
-                ["_identity"] = snapshot.Entity.Id,
+                ["_identity"] = snapshot.Entity.EntityId.Value,
                 ["_partition"] = "tenant-a"
             };
             for (var index = 0; index < sourceBinding.Fields.Length; index++)
@@ -175,8 +178,8 @@ public sealed class CosmosRelationQuerySourceReaderTests
                 var field = sourceBinding.Fields[index];
                 row[$"_field{index}"] = field.SemanticPath.ToString() switch
                 {
-                    "source.id" => snapshot.Entity.Id,
-                    "source.name" => snapshot.Entity.Fields["name"].String,
+                    "source.id" => snapshot.Entity.EntityId.Value,
+                    "source.name" => snapshot.Entity.Observation.Fields["name"].String,
                     "sourceEntityVersion" => snapshot.Entity.Version,
                     var path => throw new InvalidOperationException($"Unexpected conformance field '{path}'.")
                 };
@@ -1368,9 +1371,8 @@ public sealed class CosmosRelationQuerySourceReaderTests
         maximumReferenceKeysPerObservation: 100,
         maximumConcurrency: 4);
 
-    static EntitySnapshot ConformanceSnapshot(ShapeId shape, string id, string name, long version) => new(
-        new(
-            shape,
+    static EntitySnapshot ConformanceSnapshot(EntityDefinition entity, string id, string name, long version) => new(
+        entity.CreateState(
             id,
             new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
             {
@@ -1378,7 +1380,7 @@ public sealed class CosmosRelationQuerySourceReaderTests
                 ["name"] = ObservationValue.FromString(name),
                 ["tenantId"] = ObservationValue.FromString("tenant-a")
             },
-            version),
+            version).Snapshot,
         "tenant-a",
         new($"seed/{id}"));
 

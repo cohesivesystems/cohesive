@@ -1,7 +1,5 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
-using Cohesive.Relations.Mapping;
-using Cohesive.Relations.Model;
 using Cohesive.Storage.Processes;
 using Cohesive.Transitions.Model;
 
@@ -29,13 +27,11 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     public InMemoryEntityOutboxRepository(
         EntityDefinition entityDefinition,
         string partitionKeyFieldName,
-        IEnumerable<EntitySnapshot>? seedSnapshots = null,
-        ShapeMappingContext? mappingContext = null
+        IEnumerable<EntitySnapshot>? seedSnapshots = null
         ) : this(
             entityDefinition,
             EntityPartitionKeyPolicy.FromField(partitionKeyFieldName),
-            seedSnapshots,
-            mappingContext)
+            seedSnapshots)
     {
     }
 
@@ -43,14 +39,11 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     public InMemoryEntityOutboxRepository(
         EntityDefinition entityDefinition,
         EntityPartitionKeyPolicy partitionKeyPolicy,
-        IEnumerable<EntitySnapshot>? seedSnapshots = null,
-        ShapeMappingContext? mappingContext = null
+        IEnumerable<EntitySnapshot>? seedSnapshots = null
         )
     {
         this.entityDefinition = Guard.RequireNotNull(entityDefinition);
         this.partitionKeyPolicy = Guard.RequireNotNull(partitionKeyPolicy);
-        MappingContext = mappingContext ?? ShapeMappingContext.Default;
-
         if (seedSnapshots is null)
             return;
 
@@ -62,9 +55,8 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         EntityDefinition entityDefinition,
         EntityPartitionKeyPolicy partitionKeyPolicy,
         Action<EntityTransitionOperationCommitPhase> transitionOperationCommitBoundary,
-        IEnumerable<EntitySnapshot>? seedSnapshots = null,
-        ShapeMappingContext? mappingContext = null)
-        : this(entityDefinition, partitionKeyPolicy, seedSnapshots, mappingContext)
+        IEnumerable<EntitySnapshot>? seedSnapshots = null)
+        : this(entityDefinition, partitionKeyPolicy, seedSnapshots)
     {
         this.transitionOperationCommitBoundary =
             transitionOperationCommitBoundary ?? throw new ArgumentNullException(nameof(transitionOperationCommitBoundary));
@@ -73,14 +65,12 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     /// <summary>Initializes a new instance of the in memory entity outbox repository type.</summary>
     public InMemoryEntityOutboxRepository(
         EntityDefinition entityDefinition,
-        Func<Observation, string> partitionKeySelector,
-        IEnumerable<EntitySnapshot>? seedSnapshots = null,
-        ShapeMappingContext? mappingContext = null
+        Func<EntityObservationSnapshot, string> partitionKeySelector,
+        IEnumerable<EntitySnapshot>? seedSnapshots = null
         ) : this(
             entityDefinition,
             EntityPartitionKeyPolicy.FromObservation(partitionKeySelector),
-            seedSnapshots,
-            mappingContext)
+            seedSnapshots)
     {
     }
 
@@ -89,9 +79,8 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         EntityDefinition entityDefinition,
         IEnumerable<object>? seedData,
         string partitionKeyFieldName,
-        string idFieldName = "Id",
-        ShapeMappingContext? mappingContext = null)
-        : this(entityDefinition, partitionKeyFieldName, mappingContext: mappingContext)
+        string idFieldName = "Id")
+        : this(entityDefinition, partitionKeyFieldName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(idFieldName);
 
@@ -104,9 +93,6 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
 
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => entityDefinition;
-
-    /// <summary>Gets the mapping context.</summary>
-    public ShapeMappingContext MappingContext { get; }
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => entityDefinition.Shape.Id.Value;
@@ -223,8 +209,8 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         }
 
         var partitionKey = GetPartitionKey(context, commit.Write.Entity);
-        if (!snapshotsByKey.TryGetValue(CreateKey(commit.Write.Entity.Id, partitionKey), out var snapshot)
-            || !snapshot.Entity.HasSameContent(commit.Write.Entity))
+        if (!snapshotsByKey.TryGetValue(CreateKey(commit.Write.Entity.EntityId.Value, partitionKey), out var snapshot)
+            || snapshot.Entity != commit.Write.Entity)
         {
             throw new InvalidOperationException(
                 "The entity outbox emissions are retained, but the candidate entity differs from their atomic commit.");
@@ -345,20 +331,20 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
             else
             {
                 var partitionKey = GetPartitionKey(context, commit.Write.Entity);
-                var key = CreateKey(commit.Write.Entity.Id, partitionKey);
+                var key = CreateKey(commit.Write.Entity.EntityId.Value, partitionKey);
                 var expected = commit.Write.ExpectedConcurrencyToken.GetValueOrDefault();
                 if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
-                    && partitionKeysByObservationId.ContainsKey(commit.Write.Entity.Id))
+                    && partitionKeysByObservationId.ContainsKey(commit.Write.Entity.EntityId.Value))
                 {
                     result = EntityTransitionOperationRepositoryExtensions.SubjectStateConflict(
-                        $"Entity '{EntityType}:{commit.Write.Entity.Id}' must be absent for this Transition operation.");
+                        $"Entity '{EntityType}:{commit.Write.Entity.EntityId.Value}' must be absent for this Transition operation.");
                 }
                 else if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustExist
                     && (!snapshotsByKey.TryGetValue(key, out var current)
                         || current.ConcurrencyToken != expected))
                 {
                     result = EntityTransitionOperationRepositoryExtensions.ConcurrencyConflict(
-                        $"Entity '{EntityType}:{commit.Write.Entity.Id}' no longer matches concurrency fence "
+                        $"Entity '{EntityType}:{commit.Write.Entity.EntityId.Value}' no longer matches concurrency fence "
                         + $"'{expected.Value}'.");
                 }
                 else
@@ -374,7 +360,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
                     {
                         creationTransitionOperationReceiptsBySubject.Add(commit.Request.Subject.EntityId.Value, receipt);
                     }
-                    TrackObservation(snapshot.Entity.Id, partitionKey);
+                    TrackObservation(snapshot.Entity.EntityId.Value, partitionKey);
                     result = EntityTransitionOperationResult.Committed(receipt);
                 }
             }
@@ -392,12 +378,12 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     EntitySnapshot UpsertUnderLock(OperationContext context, EntityWriteRequest write)
     {
         var partitionKey = GetPartitionKey(context, write.Entity);
-        var key = CreateKey(write.Entity.Id, partitionKey);
+        var key = CreateKey(write.Entity.EntityId.Value, partitionKey);
         if (write.ExpectedConcurrencyToken is { } expected
             && (!snapshotsByKey.TryGetValue(key, out var current) || current.ConcurrencyToken != expected))
         {
             throw new ObservationConcurrencyConflictException(
-                $"Observation '{EntityType}:{write.Entity.Id}' failed optimistic concurrency validation.");
+                $"Observation '{EntityType}:{write.Entity.EntityId.Value}' failed optimistic concurrency validation.");
         }
 
         var snapshot = new EntitySnapshot(
@@ -405,7 +391,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
             PartitionKey: partitionKey,
             ConcurrencyToken: new(CreateConcurrencyToken()));
         snapshotsByKey[key] = snapshot;
-        TrackObservation(snapshot.Entity.Id, partitionKey);
+        TrackObservation(snapshot.Entity.EntityId.Value, partitionKey);
         return snapshot;
     }
 
@@ -437,7 +423,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         {
             return request;
         }
-        return retained.Entity.Entity.HasSameContent(commit.Write.Entity)
+        return retained.Entity.Entity == commit.Write.Entity
                && retained.Commit.DecisionKind == commit.DecisionKind
                && retained.Commit.Result.Value == commit.Result.Value
             ? request
@@ -486,8 +472,8 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
 
         lock (gate)
         {
-            snapshotsByKey[CreateKey(snapshot.Entity.Id, snapshot.PartitionKey)] = snapshot;
-            TrackObservation(snapshot.Entity.Id, snapshot.PartitionKey);
+            snapshotsByKey[CreateKey(snapshot.Entity.EntityId.Value, snapshot.PartitionKey)] = snapshot;
+            TrackObservation(snapshot.Entity.EntityId.Value, snapshot.PartitionKey);
         }
     }
 
@@ -509,22 +495,22 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
             throw new InvalidOperationException($"Seed data for '{EntityType}' resolved an empty '{idFieldName}' field.");
 
         var state = entityDefinition.CreateState(id, seed);
-        var partitionKey = GetPartitionKey(OperationContext.Create(), state.Observation);
+        var partitionKey = GetPartitionKey(OperationContext.Create(), state.Snapshot);
 
         return new(
-            Entity: state.Observation,
+            Entity: state.Snapshot,
             PartitionKey: partitionKey,
             ConcurrencyToken: new(CreateConcurrencyToken())
             );
     }
 
-    void EnsureEntityType(Observation observation)
+    void EnsureEntityType(EntityObservationSnapshot snapshot)
     {
-        ArgumentNullException.ThrowIfNull(observation);
-        if (!string.Equals(observation.ShapeId.Value, EntityType, StringComparison.Ordinal))
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.Observation.ShapeId != entityDefinition.StateShape.QualifiedId)
         {
             throw new InvalidOperationException(
-                $"Repository for '{EntityType}' cannot persist observation '{observation.ShapeId.Value}:{observation.Id}'.");
+                $"Repository for '{EntityType}' cannot persist entity snapshot '{snapshot.EntityId.Value}' with shape '{snapshot.Observation.ShapeId}'. Expected '{entityDefinition.StateShape.QualifiedId}'.");
         }
     }
 
@@ -533,13 +519,13 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         if (read?.ExpectedVersion is { } expectedVersion && snapshot.Entity.Version != expectedVersion)
         {
             throw new ObservationConcurrencyConflictException(
-                $"Observation '{EntityType}:{snapshot.Entity.Id}' expected version '{expectedVersion}' but found '{snapshot.Entity.Version}'.");
+                $"Observation '{EntityType}:{snapshot.Entity.EntityId.Value}' expected version '{expectedVersion}' but found '{snapshot.Entity.Version}'.");
         }
 
         if (read?.ExpectedConcurrencyToken is { } expectedConcurrencyToken && snapshot.ConcurrencyToken != expectedConcurrencyToken)
         {
             throw new ObservationConcurrencyConflictException(
-                $"Observation '{EntityType}:{snapshot.Entity.Id}' expected concurrency token '{expectedConcurrencyToken.Value}' but found '{snapshot.ConcurrencyToken.Value}'.");
+                $"Observation '{EntityType}:{snapshot.Entity.EntityId.Value}' expected concurrency token '{expectedConcurrencyToken.Value}' but found '{snapshot.ConcurrencyToken.Value}'.");
         }
     }
 
@@ -548,28 +534,12 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         if (fields is null || fields.Count == 0)
             return snapshot;
 
-        Dictionary<string, ObservationValue> projected = new(StringComparer.Ordinal);
-        foreach (var field in fields)
-        {
-            if (snapshot.Entity.TryGetField(field, out var value))
-                projected[field] = value;
-        }
-
-        return new(
-            Entity: new(
-                shapeId: snapshot.Entity.ShapeId,
-                id: snapshot.Entity.Id,
-                fields: projected,
-                version: snapshot.Entity.Version,
-                lineage: snapshot.Entity.Lineage),
-            PartitionKey: snapshot.PartitionKey,
-            ConcurrencyToken: snapshot.ConcurrencyToken,
-            LoadedFields: fields);
+        return snapshot with { LoadedFields = fields };
     }
 
     string CreateConcurrencyToken() => $"mem:{Interlocked.Increment(ref nextConcurrencyVersion)}";
 
-    string GetPartitionKey(OperationContext context, Observation observation)
+    string GetPartitionKey(OperationContext context, EntityObservationSnapshot observation)
     {
         try
         {
@@ -578,7 +548,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         catch (ArgumentException ex)
         {
             throw new InvalidOperationException(
-                $"Observation '{EntityType}:{observation.Id}' did not resolve a partition key from {partitionKeyPolicy.Description}.",
+                $"Observation '{EntityType}:{observation.EntityId.Value}' did not resolve a partition key from {partitionKeyPolicy.Description}.",
                 ex);
         }
     }

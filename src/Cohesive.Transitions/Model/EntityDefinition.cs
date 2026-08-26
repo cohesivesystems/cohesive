@@ -1,8 +1,8 @@
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
-using Cohesive.Relations.Model;
 
 namespace Cohesive.Transitions.Model;
 
@@ -12,6 +12,7 @@ namespace Cohesive.Transitions.Model;
 public sealed record EntityDefinition
 {
     static readonly ConditionalWeakTable<EntityDefinition, StateValidationPlan> StateValidationPlanByEntityDefinition = [];
+    readonly Lazy<GraphShapeId> stateShape;
 
     /// <summary>
     /// Creates a semantic entity definition.
@@ -57,6 +58,7 @@ public sealed record EntityDefinition
         }
         Invariants = invariants.IsDefault ? [] : invariants;
         ShapeGraph = shapeGraph;
+        stateShape = new(() => ResolveStateShape(Shape, ShapeGraph), isThreadSafe: true);
     }
 
     /// <summary>
@@ -131,6 +133,16 @@ public sealed record EntityDefinition
     /// Exact graph-qualified snapshot used to resolve named entity-state types, or null for an inline declaration.
     /// </summary>
     public EntityShapeGraphBinding? ShapeGraph { get; init; }
+
+    /// <summary>
+    /// Exact graph-qualified shape governing runtime entity-state observations.
+    /// </summary>
+    /// <remarks>
+    /// Graph-backed definitions retain their declared graph revision. Genuinely inline definitions use a
+    /// content-derived graph identity so different shape semantics cannot collapse to the same local shape id.
+    /// </remarks>
+    [JsonIgnore]
+    public GraphShapeId StateShape => stateShape.Value;
 
     /// <summary>
     /// Owned field definitions.
@@ -229,21 +241,22 @@ public sealed record EntityDefinition
         CreateState(entityId: Guid.NewGuid().ToString("N"), stateObject: stateObject, version: version);
 
     /// <summary>
-    /// Creates an entity state from an observation after validating its shape and field values.
+    /// Creates an entity state from an identity-bearing snapshot after validating its shape and field values.
     /// </summary>
-    /// <param name="observation">The canonical observation to validate and wrap.</param>
-    /// <returns>An immutable entity state backed by <paramref name="observation"/>.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="observation"/> is <see langword="null"/>.</exception>
+    /// <param name="snapshot">The canonical entity snapshot to validate and wrap.</param>
+    /// <returns>An immutable entity state backed by <paramref name="snapshot"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="snapshot"/> is <see langword="null"/>.</exception>
     /// <exception cref="SemanticRuleViolationException">
     /// The observation shape, fields, or values do not satisfy this entity definition.
     /// </exception>
     /// <exception cref="EntityShapeGraphValidationException">
     /// This entity definition does not have a valid inline or graph-backed state schema.
     /// </exception>
-    public EntityState CreateState(Observation observation)
+    public EntityState CreateState(EntityObservationSnapshot snapshot)
     {
-        ValidateObservation(observation);
-        return new(observation);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ValidateObservation(snapshot.Observation);
+        return new(snapshot);
     }
 
     /// <summary>
@@ -261,8 +274,8 @@ public sealed record EntityDefinition
     {
         ArgumentNullException.ThrowIfNull(observation);
 
-        if (observation.ShapeId != Shape.Id)
-            throw new SemanticRuleViolationException($"Observation shape '{observation.ShapeId.Value}' does not match entity '{Name.Value}' shape '{Shape.Id.Value}'.");
+        if (observation.ShapeId != StateShape.QualifiedId)
+            throw new SemanticRuleViolationException($"Observation shape '{observation.ShapeId}' does not match entity '{Name.Value}' shape '{StateShape.QualifiedId}'.");
 
         var validationPlan = StateValidationPlanByEntityDefinition.GetValue(
             key: this,
@@ -282,7 +295,8 @@ public sealed record EntityDefinition
     public void ValidateState(EntityState state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        var validated = CreateState(state.Observation);
+        ValidateObservation(state.Observation);
+        var validated = CreateState(state.Snapshot);
         new EntityStateInterpreter(this).ValidateState(state.EntityId.Value, validated);
     }
 
@@ -319,12 +333,8 @@ public sealed record EntityDefinition
         ArgumentNullException.ThrowIfNull(observation);
         ArgumentNullException.ThrowIfNull(validationPlan);
 
-        for (var ordinal = 0; ordinal < observation.Layout.Count; ordinal++)
+        foreach (var (fieldName, value) in observation.Fields)
         {
-            if (!observation.TryGetField(ordinal, out var value))
-                continue;
-
-            var fieldName = observation.Layout.FieldNames[ordinal];
             if (!validationPlan.FieldByName.TryGetValue(fieldName, out var field))
                 throw new SemanticRuleViolationException($"Observation for entity type '{Name.Value}' contains unknown field '{fieldName}'.");
 
@@ -385,13 +395,38 @@ public sealed record EntityDefinition
 
     EntityState BuildEntityState(EntityId entityId, IReadOnlyDictionary<string, ObservationValue> valuesByName, long version, EntityStateLineage? lineage = null)
     {
-        var observation = new Observation(
-            shapeId: Shape.Id,
-            id: entityId.Value,
-            fields: new Dictionary<string, ObservationValue>(valuesByName, StringComparer.Ordinal),
-            version: version
-            );
-        return lineage is null ? new(observation) : new(observation, lineage);
+        Observation observation;
+        try
+        {
+            var completeValues = new EntityStateInterpreter(this).NormalizeStateValues(
+                entityId.Value,
+                valuesByName);
+            observation = Observation.Create(
+                StateShape,
+                completeValues);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new SemanticRuleViolationException(
+                $"State for entity type '{Name.Value}' does not satisfy qualified shape '{StateShape.QualifiedId}': {exception.Message}");
+        }
+
+        EntityObservationSnapshot snapshot = new(entityId, version, observation);
+        return lineage is null ? new(snapshot) : new(snapshot, lineage);
+    }
+
+    static GraphShapeId ResolveStateShape(Shape shape, EntityShapeGraphBinding? binding)
+    {
+        if (binding is not null)
+            return new(binding.Document.Graph, binding.Shape.ShapeId);
+
+        var options = StrictDocumentJson.CreateOptions();
+        var canonicalShape = StrictDocumentJson.GetCanonicalBytes(shape, options);
+        var fingerprint = Convert.ToHexStringLower(SHA256.HashData(canonicalShape));
+        ShapeGraph graph = new(
+            new($"cohesive.transitions/inline-entity-shape/sha256/{fingerprint}"),
+            [shape]);
+        return new(graph, shape.Id);
     }
 
     sealed class StateValidationPlan(

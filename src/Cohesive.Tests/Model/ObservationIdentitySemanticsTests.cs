@@ -1,7 +1,7 @@
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Physical;
 using CoreObservation = Cohesive.Model.Observation;
-using PhysicalObservation = Cohesive.Relations.Model.Observation;
 
 namespace Cohesive.Tests.Model;
 
@@ -62,7 +62,7 @@ public sealed class ObservationIdentitySemanticsTests
     }
 
     [Fact]
-    public void DerivedLineage_RemainsOnTheLegacyRelationsOccurrenceCompatibilityPath()
+    public void DerivedLineage_BelongsToTheIndexedRelationOccurrence()
     {
         ObservationLineage lineage = new(
         [
@@ -77,18 +77,27 @@ public sealed class ObservationIdentitySemanticsTests
                         reason: "Projected from the contributing customer occurrence")
                 ])
         ]);
-        PhysicalObservation derivedPhysicalOccurrence = new(
-            shapeId: new("customer-display"),
-            id: "evaluation/customer-display/0",
-            fields: Fields(("display_name", ObservationValue.FromString("Ada"))),
-            version: 0,
-            lineage);
+        Shape shape = new(
+            new("customer-display"),
+            [new(new("display_name"), new ScalarTypeRef(ScalarTypeKind.String))]);
+        ShapeGraph graph = new(new("customer-display-v1"), [shape]);
+        var semantic = CoreObservation.Create(
+            new(graph, shape.Id),
+            Fields(("display_name", ObservationValue.FromString("Ada"))));
+        IndexedObservationOccurrence derivedPhysicalOccurrence =
+            IndexedObservationOccurrence.FromObservation(
+                new(
+                    new("evaluation/customer-display/0"),
+                    new("customer-display"),
+                    semantic.ShapeId),
+                semantic,
+                lineage);
         var entitySnapshot = new EntityObservationSnapshot(
             new("customer-1"),
             version: 3,
             Observe("entity-state-v1", "Ada"));
 
-        Assert.Same(lineage, derivedPhysicalOccurrence.Lineage);
+        Assert.Equivalent(lineage, derivedPhysicalOccurrence.Lineage, strict: true);
         Assert.Null(typeof(EntityObservationSnapshot).GetProperty("Lineage"));
         Assert.Null(typeof(CoreObservation).GetProperty("Lineage"));
     }

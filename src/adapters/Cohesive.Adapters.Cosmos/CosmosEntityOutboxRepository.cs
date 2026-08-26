@@ -3,8 +3,6 @@ using System.Text;
 using System.Text.Json;
 using Cohesive.Execution;
 using Cohesive.Model;
-using Cohesive.Relations.Mapping;
-using Cohesive.Relations.Model;
 using Cohesive.Storage;
 using Cohesive.Transitions.Model;
 using Microsoft.Azure.Cosmos;
@@ -25,7 +23,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
     readonly string observationType;
     readonly Container container;
     readonly EntityPartitionKeyPolicy partitionKeyPolicy;
-    readonly Func<Observation, string> itemIdSelector;
+    readonly Func<EntityObservationSnapshot, string> itemIdSelector;
     readonly CosmosObservationOutboxRepositoryOptions options;
 
     /// <summary>
@@ -42,7 +40,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
     /// </param>
     /// <param name="itemIdSelector">Observation-to-item-id selector, or <see langword="null"/> for the default.</param>
     /// <param name="options">Repository persistence options, or <see langword="null"/> for conventions.</param>
-    /// <param name="mappingContext">Object/observation mapping context, or <see langword="null"/> for the default.</param>
     /// <param name="partitionKeyPolicy">
     /// Explicit read/write partition policy. It is mutually exclusive with either legacy partition selector.
     /// </param>
@@ -56,11 +53,10 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
     public CosmosEntityOutboxRepository(
         EntityDefinition entityDefinition,
         Container container,
-        Func<Observation, string>? partitionKeySelector = null,
+        Func<EntityObservationSnapshot, string>? partitionKeySelector = null,
         Func<string, string?>? pointReadPartitionKeySelector = null,
-        Func<Observation, string>? itemIdSelector = null,
+        Func<EntityObservationSnapshot, string>? itemIdSelector = null,
         CosmosObservationOutboxRepositoryOptions? options = null,
-        ShapeMappingContext? mappingContext = null,
         EntityPartitionKeyPolicy? partitionKeyPolicy = null
         )
     {
@@ -73,7 +69,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
             pointReadPartitionKeySelector);
         this.itemIdSelector = itemIdSelector ?? DefaultItemIdSelector;
         this.options = CosmosObservationOutboxRepositoryOptions.RequireValid(options ?? new());
-        MappingContext = mappingContext ?? ShapeMappingContext.Default;
     }
 
     /// <summary>
@@ -89,9 +84,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
 
     /// <inheritdoc />
     public EntityDefinition EntityDefinition => entityDefinition;
-
-    /// <inheritdoc />
-    public ShapeMappingContext MappingContext { get; }
 
     /// <inheritdoc />
     public string EntityType => observationType;
@@ -111,7 +103,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
         ValidateReadPreconditions(observationType, id, document, readOptions);
 
         return new(
-            Entity: ProjectObservation(document, readOptions?.Fields),
+            Entity: BuildObservation(document),
             PartitionKey: document.PartitionKey,
             ConcurrencyToken: new(Guard.RequireNotNullOrWhiteSpace(document.ETag)),
             LoadedFields: readOptions?.Fields
@@ -151,14 +143,14 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
         catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.PreconditionFailed)
         {
             throw new ObservationConcurrencyConflictException(
-                $"Observation '{observationType}:{write.Entity.Id}' failed optimistic concurrency validation.",
+                $"Observation '{observationType}:{write.Entity.EntityId.Value}' failed optimistic concurrency validation.",
                 ex
                 );
         }
         catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
             throw new InvalidOperationException(
-                $"Observation '{observationType}:{write.Entity.Id}' was not found in partition '{partitionKey}' with token='{write.ExpectedConcurrencyToken}'.",
+                $"Observation '{observationType}:{write.Entity.EntityId.Value}' was not found in partition '{partitionKey}' with token='{write.ExpectedConcurrencyToken}'.",
                 ex
                 );
         }
@@ -206,18 +198,18 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
             }
 
             if (response.StatusCode == HttpStatusCode.PreconditionFailed)
-                throw new ObservationConcurrencyConflictException($"Observation '{observationType}:{commit.Write.Entity.Id}' failed optimistic concurrency validation inside transactional batch.");
+                throw new ObservationConcurrencyConflictException($"Observation '{observationType}:{commit.Write.Entity.EntityId.Value}' failed optimistic concurrency validation inside transactional batch.");
 
-            throw new InvalidOperationException($"Transactional Cosmos observation commit for '{observationType}:{commit.Write.Entity.Id}' failed with status '{response.StatusCode}'.");
+            throw new InvalidOperationException($"Transactional Cosmos observation commit for '{observationType}:{commit.Write.Entity.EntityId.Value}' failed with status '{response.StatusCode}'.");
         }
 
         var snapshot = await TryGet(
                 context,
-                id: commit.Write.Entity.Id,
+                id: commit.Write.Entity.EntityId.Value,
                 readOptions: EntityReadOptions.Full.WithPartitionKey(partitionKey))
             .ConfigureAwait(false);
         if (snapshot is null)
-            throw new InvalidOperationException($"Transactional Cosmos observation commit for '{observationType}:{commit.Write.Entity.Id}' succeeded, but the entity could not be reloaded.");
+            throw new InvalidOperationException($"Transactional Cosmos observation commit for '{observationType}:{commit.Write.Entity.EntityId.Value}' succeeded, but the entity could not be reloaded.");
 
         return new(snapshot, commit.Envelopes);
     }
@@ -258,11 +250,11 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
         return total;
     }
 
-    static string DefaultItemIdSelector(Observation observation) => observation.Id;
+    static string DefaultItemIdSelector(EntityObservationSnapshot snapshot) => snapshot.EntityId.Value;
 
     static EntityPartitionKeyPolicy ResolvePartitionKeyPolicy(
         EntityPartitionKeyPolicy? partitionKeyPolicy,
-        Func<Observation, string>? partitionKeySelector,
+        Func<EntityObservationSnapshot, string>? partitionKeySelector,
         Func<string, string?>? pointReadPartitionKeySelector
         )
     {
@@ -280,7 +272,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
                 ? EntityPartitionKeyPolicy.ObservationId
                 : new(
                     description: "observation id",
-                    writePartitionKeyResolver: static (_, observation) => observation.Id,
+                    writePartitionKeyResolver: static (_, snapshot) => snapshot.EntityId.Value,
                     pointReadPartitionKeyResolver: (_, id) => pointReadPartitionKeySelector(id)
                     );
         }
@@ -291,14 +283,14 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
             );
     }
 
-    void EnsureEntityType(Observation observation)
+    void EnsureEntityType(EntityObservationSnapshot snapshot)
     {
-        ArgumentNullException.ThrowIfNull(observation);
-        if (!string.Equals(observation.ShapeId.Value, observationType, StringComparison.Ordinal))
-            throw new SemanticRuleViolationException($"Repository for '{observationType}' cannot persist observation '{observation.ShapeId.Value}:{observation.Id}'.");
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.Observation.ShapeId != entityDefinition.StateShape.QualifiedId)
+            throw new SemanticRuleViolationException($"Repository for '{observationType}' cannot persist snapshot '{snapshot.EntityId.Value}' with shape '{snapshot.Observation.ShapeId}'.");
     }
 
-    string GetPartitionKey(OperationContext context, Observation observation)
+    string GetPartitionKey(OperationContext context, EntityObservationSnapshot observation)
     {
         try
         {
@@ -307,7 +299,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
         catch (ArgumentException ex)
         {
             throw new InvalidOperationException(
-                $"Observation '{observationType}:{observation.Id}' did not resolve a partition key from {partitionKeyPolicy.Description}.",
+                $"Observation '{observationType}:{observation.EntityId.Value}' did not resolve a partition key from {partitionKeyPolicy.Description}.",
                 ex);
         }
     }
@@ -356,23 +348,19 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
         return matches[0];
     }
 
-    static EntitySnapshot CreateSnapshot(CosmosObservationContainerDocument document, string partitionKey) => new(
+    EntitySnapshot CreateSnapshot(CosmosObservationContainerDocument document, string partitionKey) => new(
         Entity: BuildObservation(document),
         PartitionKey: partitionKey,
         ConcurrencyToken: new(Guard.RequireNotNullOrWhiteSpace(document.ETag))
         );
 
-    static Observation BuildObservation(CosmosObservationContainerDocument document)
+    EntityObservationSnapshot BuildObservation(CosmosObservationContainerDocument document)
     {
         if (document.Observation is null)
             throw new InvalidOperationException($"Cosmos document '{document.Id}' does not contain a serialized observation body.");
 
-        return new(
-            shapeId: new(document.ObservationType),
-            id: document.ObservationId,
-            fields: document.Observation,
-            version: document.ObservationVersion
-            );
+        var observation = Observation.Create(entityDefinition.StateShape, document.Observation);
+        return new(new(document.ObservationId), document.ObservationVersion, observation);
     }
 
     internal static void ValidateReadPreconditions(
@@ -398,28 +386,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
         }
     }
 
-    static Observation ProjectObservation(CosmosObservationContainerDocument document, IReadOnlySet<string>? fields)
-    {
-        var observation = BuildObservation(document);
-        if (fields is null)
-            return observation;
-
-        Dictionary<string, ObservationValue> projected = new(StringComparer.Ordinal);
-        foreach (var field in fields)
-        {
-            if (observation.Fields.TryGetValue(field, out var value))
-                projected[field] = value;
-        }
-
-        return new(
-            shapeId: observation.ShapeId,
-            id: observation.Id,
-            fields: projected,
-            version: observation.Version
-            );
-    }
-
-    CosmosObservationContainerDocument CreateEntityDocument(OperationContext context, Observation observation, string partitionKey)
+    CosmosObservationContainerDocument CreateEntityDocument(OperationContext context, EntityObservationSnapshot observation, string partitionKey)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(observation);
@@ -429,10 +396,10 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
             Id: itemIdSelector(observation),
             PartitionKey: partitionKey,
             DocumentKind: options.EntityDocumentKind,
-            ObservationType: observation.ShapeId.Value,
-            ObservationId: observation.Id,
+            ObservationType: observation.Observation.ShapeId.ShapeId.Value,
+            ObservationId: observation.EntityId.Value,
             ObservationVersion: observation.Version,
-            Observation: observation.Fields as Dictionary<string, ObservationValue> ?? new Dictionary<string, ObservationValue>(observation.Fields, StringComparer.Ordinal),
+            Observation: observation.Observation.Fields as Dictionary<string, ObservationValue> ?? new Dictionary<string, ObservationValue>(observation.Observation.Fields, StringComparer.Ordinal),
             StreamName: null,
             SubjectType: null,
             SubjectId: null,
@@ -551,10 +518,10 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository
 
         var snapshot = await TryGet(
                 context,
-                id: commit.Write.Entity.Id,
+                id: commit.Write.Entity.EntityId.Value,
                 readOptions: EntityReadOptions.Full.WithPartitionKey(partitionKey))
             .ConfigureAwait(false);
-        if (snapshot is null || !snapshot.Entity.HasSameContent(commit.Write.Entity))
+        if (snapshot is null || snapshot.Entity != commit.Write.Entity)
         {
             throw new InvalidOperationException(
                 "The Cosmos outbox emissions are retained, but the candidate entity differs from their atomic commit.");

@@ -59,8 +59,8 @@ public sealed class RelationQueryEvaluatorTests
             evaluation.Compilation.RelationshipCatalogDocument);
         var supplied = Assert.IsType<RelationQuerySuppliedRootSet>(evaluation.SuppliedRoots);
         var observation = Assert.Single(supplied.Observations);
-        Assert.Equal(LoadCustomerRelationFixture.LoadShapeLocalId, observation.ShapeId);
-        Assert.Equal("load-1", observation.Id);
+        Assert.Equal(LoadCustomerRelationFixture.LoadShapeId, observation.Shape);
+        Assert.Equal("load-1", observation.Identity);
         Assert.Equal(ObservationValue.FromString("customer-1"), observation.Fields["CustomerId"]);
         Assert.Equal(RelationQueryEvidenceCompleteness.Complete, supplied.Completeness);
         Assert.Equal("tests/load-snapshot", supplied.EvidenceReference);
@@ -73,7 +73,7 @@ public sealed class RelationQueryEvaluatorTests
                 new("tests/empty-roots"),
                 LoadCustomerRelationFixture.ShapeGraphDocuments,
                 LoadCustomerRelationFixture.RelationshipCatalogDocument)
-            .Supply([])
+            .Supply(Array.Empty<RelationQuerySuppliedRoot>())
             .Build();
         Assert.NotNull(empty.SuppliedRoots);
         Assert.Empty(empty.SuppliedRoots.Observations);
@@ -513,13 +513,16 @@ public sealed class RelationQueryEvaluatorTests
                 LoadCustomerRelationFixture.RelationshipCatalogDocument)
             .Supply(
             [
-                new Observation(
-                    LoadCustomerRelationFixture.LoadShapeLocalId,
+                new RelationQuerySuppliedRoot(
                     "load-1",
+                    LoadCustomerRelationFixture.LoadShapeId,
                     new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
                     {
                         [LoadCustomerRelationFixture.LoadIdFieldName] = ObservationValue.FromString("load-1"),
-                        [LoadCustomerRelationFixture.LoadCustomerIdFieldName] = ObservationValue.FromString(customerId)
+                        [LoadCustomerRelationFixture.LoadCustomerIdFieldName] = ObservationValue.FromString(customerId),
+                        [LoadCustomerRelationFixture.LoadStatusFieldName] = ObservationValue.FromString("Open"),
+                        [LoadCustomerRelationFixture.LoadAmountFieldName] = ObservationValue.FromDecimal(0m),
+                        [LoadCustomerRelationFixture.LoadActiveFieldName] = ObservationValue.FromBool(true)
                     })
             ],
             evidenceReference: "tests/root")
@@ -689,7 +692,13 @@ public sealed class RelationQueryEvaluatorTests
         (LoadCustomerRelationFixture.CustomerNamePath, ObservationValue.FromString(name)),
         (LoadCustomerRelationFixture.CustomerTypePath, ObservationValue.FromString(type)));
 
-    sealed record LoadRoot(string Id, string CustomerId);
+    sealed record LoadRoot(
+        string Id,
+        string CustomerId,
+        string Status = "Open",
+        decimal Amount = 0m,
+        bool Active = true,
+        string? Notes = null);
 
     sealed class FloatScoreInput
     {

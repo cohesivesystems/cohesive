@@ -2,7 +2,7 @@ using System.Collections.Immutable;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
-using Cohesive.Relations.Model;
+using Observation = Cohesive.Model.Observation;
 
 namespace Cohesive.Relations.TestFixtures;
 
@@ -14,7 +14,10 @@ public sealed class RelationDtoFixtureScenario<TOutput>
     /// <param name="plan">Canonical compiled relation plan.</param>
     /// <param name="evidence">Runtime evidence interpreted for the scenario.</param>
     /// <param name="execution">Canonical interpretation of <paramref name="evidence"/>.</param>
-    /// <param name="observations">Observation-shaped equivalents used by the existing mapper baseline.</param>
+    /// <param name="observations">
+    /// Validated identity-free semantic equivalents of complete canonical output rows. Incomplete or suppressed
+    /// rows remain available only through <paramref name="execution"/> because they are not complete observations.
+    /// </param>
     /// <param name="expected">Expected CLR outputs for successful scenarios.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="plan"/>, <paramref name="evidence"/>, or <paramref name="execution"/> is
@@ -43,7 +46,7 @@ public sealed class RelationDtoFixtureScenario<TOutput>
     /// <summary>Canonical interpretation result consumed by relation-aware mappers.</summary>
     public RelationQueryExecutionResult Execution { get; }
 
-    /// <summary>Equivalent observation inputs consumed by the existing observation-object mapper.</summary>
+    /// <summary>Validated identity-free semantic equivalents of complete canonical output rows.</summary>
     public ImmutableArray<Observation> Observations { get; }
 
     /// <summary>Expected CLR outputs for a successful scenario.</summary>
