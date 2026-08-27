@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Cosmos;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
@@ -9,11 +10,73 @@ using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Execution;
 using Cohesive.Transitions.IR;
+using Microsoft.Azure.Cosmos;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
 public sealed class EntityTransitionProcessOperationAdapterCreationTests
 {
+    [CosmosEntityTransitionCreationFact]
+    public async Task CosmosRepository_CreationIndexReplaysOriginalReceiptForReplacementAttempt()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("COSMOS_ENTITY_TRANSITION_OPERATION_CONNECTION_STRING")
+            ?? throw new InvalidOperationException("The Cosmos connection string disappeared after discovery.");
+        var fixture = await Fixture.CreateAsync();
+        var databaseId = $"cohesive-entity-transition-creation-tests-{Guid.NewGuid():N}";
+        using var client = new CosmosClient(connectionString, new CosmosClientOptions
+        {
+            ConnectionMode = ConnectionMode.Gateway,
+            Serializer = new CosmosSystemTextJsonSerializer(),
+            HttpClientFactory = static () => new HttpClient(new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback =
+                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            })
+        });
+        var database = (await client.CreateDatabaseAsync(databaseId)).Database;
+        try
+        {
+            var container = (await database.CreateContainerAsync(
+                new ContainerProperties("entities", "/partitionKey"))).Container;
+            var partitionKeyPolicy = new EntityPartitionKeyPolicy(
+                "customer tenant",
+                static (_, entity) => entity.GetField(nameof(CustomerEntity.Tenant)).GetRequiredString(),
+                static (_, _) => "tenant/acme");
+            var repository = new CosmosEntityOutboxRepository(
+                fixture.Repository.EntityDefinition,
+                container,
+                partitionKeyPolicy: partitionKeyPolicy);
+            var adapter = new EntityTransitionProcessOperationAdapter(invocation =>
+                invocation.Definition == fixture.Plan.DefinitionReference
+                    ? new(fixture.Plan, repository, fixture.InteractionCatalog)
+                    : null);
+
+            var committed = await adapter.ExecuteAsync(fixture.Context, fixture.Invocation);
+            var replacement = fixture.ReplacementInvocation();
+            var replayed = await adapter.ExecuteAsync(fixture.Context, replacement);
+            var creationReplay = await repository.TryGetCreationTransitionOperation(
+                fixture.Context,
+                fixture.RequestFor(replacement));
+            var current = await repository.TryGet(
+                fixture.Context,
+                fixture.SubjectId,
+                EntityReadOptions.Full.WithPartitionKey("tenant/acme"));
+
+            Assert.True(committed.IsSuccessful);
+            Assert.Equal(
+                committed.Emissions.Select(static envelope => InteractionEnvelopeJsonSerializer.Serialize(envelope)),
+                replayed.Emissions.Select(static envelope => InteractionEnvelopeJsonSerializer.Serialize(envelope)));
+            Assert.Equal(EntityTransitionOperationDisposition.Replayed, creationReplay.Disposition);
+            Assert.Equal(fixture.Request.Operation, creationReplay.Receipt?.Request.Operation);
+            Assert.Equal(0, current?.Entity.Version);
+            Assert.Equal(creationReplay.Receipt?.Entity.ConcurrencyToken, current?.ConcurrencyToken);
+        }
+        finally
+        {
+            await database.DeleteAsync();
+        }
+    }
+
     [Fact]
     public async Task CreateOnAbsent_CommitsInitialStateReceiptAndEmission_ThenExactRetryReplays()
     {
@@ -650,6 +713,18 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
     }
 
     sealed record CustomerState(string Id, string Tenant, string Status);
+
+    sealed class CosmosEntityTransitionCreationFactAttribute : FactAttribute
+    {
+        public CosmosEntityTransitionCreationFactAttribute()
+        {
+            if (string.IsNullOrWhiteSpace(
+                    Environment.GetEnvironmentVariable("COSMOS_ENTITY_TRANSITION_OPERATION_CONNECTION_STRING")))
+            {
+                Skip = "Set COSMOS_ENTITY_TRANSITION_OPERATION_CONNECTION_STRING to run the Cosmos Transition creation integration test.";
+            }
+        }
+    }
 
     sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {

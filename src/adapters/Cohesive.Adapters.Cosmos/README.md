@@ -23,6 +23,37 @@ dotnet add package Cohesive.Adapters.Cosmos
 - You want Cosmos-backed vector storage or process outbox persistence.
 - You need a durable target-deduplicating inbox for canonical domain-event publication.
 
+## Atomic Process Transition Receipts
+
+`CosmosEntityOutboxRepository` implements `IEntityTransitionOperationRepository` for Process-invoked entity
+Transitions. An update commits the replacement entity document and exact operation receipt in one Cosmos
+transactional batch. A subject-creating Transition additionally commits a subject-scoped creation index in that
+same batch, so a replacement Process attempt can replay the original creation without applying it twice.
+
+Receipt lookup requires the configured `EntityPartitionKeyPolicy` to resolve the subject's exact point-read
+partition from the `OperationContext` and entity id. The repository fails with structured capability evidence when
+that placement cannot be resolved; it never substitutes a cross-partition scan for atomic subject authority.
+
+Cosmos `_etag` remains the provider compare-and-swap mechanism. The entity document also retains an opaque
+application concurrency token selected before the batch. That token is returned through `EntitySnapshot` and
+copied into the atomic receipt, which lets a replay after restart recover the exact post-commit entity snapshot
+without pretending that the receipt document's `_etag` is entity concurrency evidence. Existing documents without
+the field continue to use their `_etag`; their next successful write adopts the application token.
+
+`CosmosObservationOutboxRepositoryOptions.TransitionOperationReceiptDocumentKind` controls the receipt/index
+discriminator and must be distinct from the entity and outbox discriminators. Receipt documents are derived
+storage evidence; canonical Transition definitions, entity observations, and Process operation identities remain
+their respective semantic authorities.
+
+The opt-in emulator regression creates and removes an isolated database and proves atomic update plus exact replay
+after repository restart:
+
+```bash
+COSMOS_ENTITY_TRANSITION_OPERATION_CONNECTION_STRING='AccountEndpoint=https://localhost:8081/;AccountKey=...;' \
+  dotnet test src/Cohesive.Tests/Cohesive.Tests.csproj \
+  --filter FullyQualifiedName~CosmosRepository_AtomicallyCommitsAndReplaysTransitionReceiptAfterRestart
+```
+
 ## Canonical Domain-Event Inbox
 
 `CosmosDomainEventInbox` is both an `IDomainEventPublisher` and an addressable `IDomainEventInbox`. It retains the

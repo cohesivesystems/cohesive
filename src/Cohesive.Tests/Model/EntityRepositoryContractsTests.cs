@@ -59,7 +59,9 @@ public sealed class EntityRepositoryContractsTests
                 document: document,
                 read: new EntityReadOptions(expectedConcurrencyToken: new("etag-expected"))));
 
-        Assert.Contains("expected ETag 'etag-expected' but found 'etag-actual'", error.Message);
+        Assert.Contains(
+            "expected concurrency token 'etag-expected' but found 'etag-actual'",
+            error.Message);
     }
 
     [Fact]
@@ -75,6 +77,30 @@ public sealed class EntityRepositoryContractsTests
             id: "obs-1",
             document: document,
             read: new EntityReadOptions(expectedConcurrencyToken: new("etag-7")));
+    }
+
+    [Fact]
+    public void CosmosEntityOutboxRepository_ApplicationConcurrencyTokenSupersedesProviderEtag()
+    {
+        var document = CreateDocument(
+            observationId: "obs-1",
+            version: 7,
+            etag: "etag-7") with
+        {
+            EntityConcurrencyToken = "entity-token-7"
+        };
+
+        CosmosEntityOutboxRepository.ValidateReadPreconditions(
+            entityType: "Sample",
+            id: "obs-1",
+            document: document,
+            read: new EntityReadOptions(expectedConcurrencyToken: new("entity-token-7")));
+        Assert.Throws<ObservationConcurrencyConflictException>(() =>
+            CosmosEntityOutboxRepository.ValidateReadPreconditions(
+                entityType: "Sample",
+                id: "obs-1",
+                document: document,
+                read: new EntityReadOptions(expectedConcurrencyToken: new("etag-7"))));
     }
 
     [Theory]
@@ -137,11 +163,19 @@ public sealed class EntityRepositoryContractsTests
                 EntityDocumentKind = "document",
                 OutboxDocumentKind = "document"
             }));
+        Assert.Throws<ArgumentException>(() =>
+            CosmosObservationOutboxRepositoryOptions.RequireValid(new()
+            {
+                EntityDocumentKind = "entity",
+                OutboxDocumentKind = "outbox",
+                TransitionOperationReceiptDocumentKind = "entity"
+            }));
 
         var options = new CosmosObservationOutboxRepositoryOptions
         {
             EntityDocumentKind = "entity-v2",
-            OutboxDocumentKind = "outbox-v2"
+            OutboxDocumentKind = "outbox-v2",
+            TransitionOperationReceiptDocumentKind = "transition-receipt-v2"
         };
         Assert.Same(options, CosmosObservationOutboxRepositoryOptions.RequireValid(options));
     }
