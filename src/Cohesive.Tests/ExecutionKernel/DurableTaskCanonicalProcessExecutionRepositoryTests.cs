@@ -231,6 +231,94 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
     }
 
     [Fact]
+    public async Task GetValuesAsync_RequiresLogicalAuthorityAndReturnsExactCanonicalValuesWithoutWeakeningStatusReads()
+    {
+        const string PrivateInput = "private-input-value-read";
+        const string PrivateOutput = "private-output-value-read";
+        var completed = await CreateCompletedFixtureAsync(
+            "process/repository-values-available",
+            PrivateInput,
+            PrivateOutput);
+        var metadata = Metadata(
+            completed.Fixture,
+            completed.Fixture.WaitingStatus,
+            OrchestrationRuntimeStatus.Completed,
+            serializedOutput: completed.Fixture.Converter.Serialize(completed.Result));
+        var client = new FakeDurableTaskClient([metadata]);
+        var repository = new DurableTaskProcessExecutionRepository(client);
+
+        var read = await repository.GetValuesAsync(
+            OperationContext.Create(),
+            completed.Fixture.Scope,
+            completed.Fixture.LogicalInstanceId);
+
+        Assert.Equal(ProcessExecutionValueReadState.Available, read.State);
+        var values = Assert.IsType<ProcessExecutionValues>(read.Values);
+        Assert.Equal(completed.Result.State.Definition, values.Definition);
+        Assert.Equal(completed.Fixture.LogicalInstanceId, values.ProcessInstanceId);
+        Assert.Equal(PrivateInput, Assert.IsType<PortableValue>(values.Input).Value?.Deserialize<string>());
+        var terminal = Assert.IsType<ExecutionTerminalOutcome>(values.TerminalOutcome);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Completed, terminal.Kind);
+        Assert.Equal(
+            PrivateOutput,
+            Assert.IsType<PortableValue>(terminal.Detail?.Value).Value?.Deserialize<string>());
+        Assert.Equal(completed.Fixture.PhysicalInstanceId, client.LastGetInstanceId);
+
+        var status = await repository.GetAsync(
+            OperationContext.Create(),
+            completed.Fixture.Scope,
+            completed.Fixture.LogicalInstanceId);
+        Assert.NotNull(status);
+        Assert.Null(status.Parameters);
+        Assert.Null(status.Output);
+
+        var foreign = await repository.GetValuesAsync(
+            OperationContext.Create(),
+            new(completed.Fixture.Scope.Authority, "tenant/foreign"),
+            completed.Fixture.LogicalInstanceId);
+        Assert.Equal(ProcessExecutionValueReadState.NotFound, foreign.State);
+        Assert.Null(foreign.Values);
+    }
+
+    [Fact]
+    public async Task GetValuesAsync_DistinguishesActiveAndTerminalArtifactUnavailable()
+    {
+        var fixture = CreateFixture();
+        var activeRepository = new DurableTaskProcessExecutionRepository(new FakeDurableTaskClient([
+            Metadata(fixture, fixture.WaitingStatus, OrchestrationRuntimeStatus.Running)
+        ]));
+
+        var active = await activeRepository.GetValuesAsync(
+            OperationContext.Create(),
+            fixture.Scope,
+            fixture.LogicalInstanceId);
+
+        Assert.Equal(ProcessExecutionValueReadState.InProgress, active.State);
+        Assert.NotNull(active.Values);
+        Assert.Equal(fixture.Start.Receipt.Request.Input, active.Values.Input);
+        Assert.Null(active.Values.TerminalOutcome);
+
+        var terminalStatus = Terminal(
+            fixture.WaitingStatus,
+            ExecutionTerminalOutcomeKind.Completed,
+            ExecutionAttemptDisposition.Completed,
+            ProcessControlMode.Running);
+        var unavailableRepository = new DurableTaskProcessExecutionRepository(new FakeDurableTaskClient([
+            Metadata(fixture, terminalStatus, OrchestrationRuntimeStatus.Completed)
+        ]));
+
+        var unavailable = await unavailableRepository.GetValuesAsync(
+            OperationContext.Create(),
+            fixture.Scope,
+            fixture.LogicalInstanceId);
+
+        Assert.Equal(ProcessExecutionValueReadState.TerminalArtifactUnavailable, unavailable.State);
+        Assert.NotNull(unavailable.Values);
+        Assert.Equal(fixture.Start.Receipt.Request.Input, unavailable.Values.Input);
+        Assert.Null(unavailable.Values.TerminalOutcome);
+    }
+
+    [Fact]
     public async Task GetTracesAsync_ReportsLegacyPrefixAndUsesExactLogicalIdentityLookup()
     {
         var completed = await CreateCompletedFixtureAsync(
