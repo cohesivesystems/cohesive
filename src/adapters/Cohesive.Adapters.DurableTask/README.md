@@ -122,6 +122,14 @@ activation-evidence entries without a trace; only a zero missing-prefix count is
 available after a canonical terminal result exists—this boundary does not stream live event traces or enlarge custom
 status.
 
+Applications that have established a trusted authority scope can opt in separately through
+`IProcessExecutionValueRepository`. That read returns the exact `PortableValue` from the retained start receipt and,
+when available, the canonical terminal outcome from `DurableTaskSequentialProcessResult`. It distinguishes active,
+available, and terminal-without-artifact states and validates the same physical/start/status/result affinity as safe
+monitoring. These potentially sensitive values never enter `ProcessExecutionRecord`; application policy owns any
+subsequent disclosure or product-specific operator projection. The migration-only Core reader does not implement
+this boundary.
+
 `DurableTaskProcessExecutionExplainRepository` composes that same current repository with the immutable exact plan
 catalog. It returns the shared `ExecutionExplainArtifact`, never a Scheduler-specific diagnostics DTO. Static
 compilation evidence comes from the already compiled canonical plan; realization evidence is projected one-to-one

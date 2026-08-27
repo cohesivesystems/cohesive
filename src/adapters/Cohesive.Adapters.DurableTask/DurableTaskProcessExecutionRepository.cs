@@ -20,7 +20,8 @@ namespace Cohesive.Adapters.DurableTask;
 /// </remarks>
 public sealed class DurableTaskProcessExecutionRepository :
     IProcessExecutionRepository,
-    IProcessExecutionTraceRepository
+    IProcessExecutionTraceRepository,
+    IProcessExecutionValueRepository
 {
     const int DefaultPageSize = 100;
     const int MaxPageSize = 1000;
@@ -121,6 +122,32 @@ public sealed class DurableTaskProcessExecutionRepository :
         }
 
         return GetCurrentTracesAsync(context, processId);
+    }
+
+    /// <inheritdoc />
+    public ValueTask<ProcessExecutionValueReadResult> GetValuesAsync(
+        OperationContext context,
+        InteractionAuthorityScope authorityScope,
+        ProcessInstanceId processInstanceId)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(authorityScope);
+        context.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(processInstanceId.Value))
+        {
+            throw new ArgumentException(
+                "A logical Process value read requires an initialized instance identity.",
+                nameof(processInstanceId));
+        }
+        if (currentClient is null)
+        {
+            throw new NotSupportedException(
+                "Canonical Process value retrieval is unavailable on the migration-only Durable Task Core repository.");
+        }
+
+        return GetCurrentValuesAsync(
+            context,
+            DurableTaskProcessExecutionIdentity.GetPhysicalInstanceId(authorityScope, processInstanceId));
     }
 
     /// <summary>Reads retained canonical traces by trusted authority scope and logical Process identity.</summary>
@@ -235,6 +262,59 @@ public sealed class DurableTaskProcessExecutionRepository :
             result.State.Continuation.ProcessInstanceId,
             missingTracePrefixCount,
             result.Traces));
+    }
+
+    async ValueTask<ProcessExecutionValueReadResult> GetCurrentValuesAsync(
+        OperationContext context,
+        string processId)
+    {
+        var metadata = await currentClient!.GetInstanceAsync(
+            processId,
+            getInputsAndOutputs: true,
+            context.CancellationToken).ConfigureAwait(false);
+        if (metadata is null || !IsCurrentProcess(metadata))
+        {
+            return ProcessExecutionValueReadResult.NotFound();
+        }
+
+        var execution = MapCurrent(metadata);
+        var start = ReadCurrentStart(metadata);
+        var values = new ProcessExecutionValues(
+            execution.Definition
+            ?? throw InvalidCurrentEvidence(metadata, "has no exact definition affinity after validating its start receipt"),
+            execution.LogicalProcessInstanceId
+            ?? throw InvalidCurrentEvidence(metadata, "has no logical identity after validating its start receipt"),
+            start.Receipt.Request.Input);
+        if (!DurableTaskProcessStatus.IsTerminal(metadata.RuntimeStatus))
+        {
+            if (!string.IsNullOrWhiteSpace(metadata.SerializedOutput))
+            {
+                throw InvalidCurrentEvidence(
+                    metadata,
+                    "contains a terminal canonical result while its task-hub execution is not terminal");
+            }
+            return ProcessExecutionValueReadResult.InProgress(values);
+        }
+        if (string.IsNullOrWhiteSpace(metadata.SerializedOutput))
+        {
+            return ProcessExecutionValueReadResult.TerminalArtifactUnavailable(values);
+        }
+        if (metadata.RuntimeStatus != ModernOrchestrationStatus.Completed)
+        {
+            throw InvalidCurrentEvidence(
+                metadata,
+                "contains a canonical result artifact even though the task-hub execution did not complete normally");
+        }
+
+        var result = ReadCurrentResult(metadata);
+        var runtimeStatus = execution.RuntimeStatus
+            ?? throw InvalidCurrentEvidence(metadata, "has a canonical result but no canonical terminal custom status");
+        ValidateResultAffinity(metadata, result, runtimeStatus);
+        return ProcessExecutionValueReadResult.Available(new(
+            values.Definition,
+            values.ProcessInstanceId,
+            values.Input,
+            result.State.Terminal));
     }
 
     async ValueTask<ProcessExecutionQueryResult> QueryCurrentAsync(
