@@ -150,7 +150,7 @@ public static class DockerComposeCompiler
             decisions: Decisions(source),
             maximumLifetime: source.Environment.MaximumLifetime);
         return new(
-            artifact: new DockerComposeArtifact(yaml, manifest),
+            artifact: new(yaml: yaml, manifest),
             diagnostics: [.. diagnostics]);
     }
 
@@ -237,7 +237,8 @@ public static class DockerComposeCompiler
         IReadOnlyDictionary<InfrastructurePhysicalResourceId, string> serviceNames,
         IReadOnlyDictionary<InfrastructureLocalVolumeId, string> volumeNames,
         IReadOnlyDictionary<InfrastructureLocalFileId, string> configNames,
-        ICollection<DocumentValidationDiagnostic> diagnostics)
+        ICollection<DocumentValidationDiagnostic> diagnostics
+        )
     {
         StringBuilder yaml = new();
         var projectName = Effective(
@@ -388,7 +389,7 @@ public static class DockerComposeCompiler
             {
                 var containerPort = endpoint.ContainerPort.Resolve(source.Configuration);
                 var serviceAddress = $"{endpoint.Scheme}://{serviceNames[service.PhysicalResource]}:{containerPort.ToString(CultureInfo.InvariantCulture)}";
-                string? hostAddress = endpoint.HostPort is null
+                var hostAddress = endpoint.HostPort is null
                     ? null
                     : $"{endpoint.Scheme}://localhost:{Effective(endpoint.HostPort.Subject, endpoint.HostPort.Setting, effective).Value}";
                 yield return new(

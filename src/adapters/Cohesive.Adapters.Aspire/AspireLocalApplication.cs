@@ -27,7 +27,7 @@ public sealed record AspireLocalApplicationOptions
         Func<string, string?> resolveSecret,
         IReadOnlyDictionary<string, string>? operationEnvironment = null)
     {
-        Guard.RequireNotNullOrWhiteSpace(operationWorkingDirectory);
+        operationWorkingDirectory = Guard.RequireNotNullOrWhiteSpace(operationWorkingDirectory);
         if (!Path.IsPathFullyQualified(operationWorkingDirectory))
             throw new ArgumentException("The Aspire operation working directory must be absolute.", nameof(operationWorkingDirectory));
         if (operationEnvironment?.Any(static variable => string.IsNullOrWhiteSpace(variable.Key) || variable.Value is null) == true)
@@ -157,8 +157,7 @@ public static class AspireLocalApplicationBuilderExtensions
                 : "false";
 
         var secretParameters = AddSecretParameters(builder, projection, options);
-        ImmutableDictionary<InfrastructurePhysicalResourceId, IResourceBuilder<IResource>>.Builder services =
-            ImmutableDictionary.CreateBuilder<InfrastructurePhysicalResourceId, IResourceBuilder<IResource>>();
+        var services = ImmutableDictionary.CreateBuilder<InfrastructurePhysicalResourceId, IResourceBuilder<IResource>>();
         Dictionary<InfrastructurePhysicalResourceId, IResourceBuilder<ContainerResource>> containers = [];
         Dictionary<InfrastructurePhysicalResourceId, IResourceBuilder<ProjectResource>> projects = [];
         foreach (var item in projection.Services)
@@ -500,7 +499,7 @@ public static class AspireLocalApplicationBuilderExtensions
 
     static async Task<string> ReadBoundedAsync(StreamReader reader)
     {
-        char[] buffer = new char[4096];
+        var buffer = new char[4096];
         StringBuilder output = new(capacity: buffer.Length);
         var truncated = false;
         int count;
@@ -539,7 +538,7 @@ public static class AspireLocalApplicationBuilderExtensions
                 var value = await endpoint.GetValueAsync(cancellationToken).ConfigureAwait(false);
                 if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
                     return HealthCheckResult.Unhealthy($"Endpoint '{value}' is not an absolute URI.");
-                using CancellationTokenSource timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeoutSource.CancelAfter(timeout);
                 using TcpClient client = new();
                 await client.ConnectAsync(uri.Host, uri.Port, timeoutSource.Token).ConfigureAwait(false);

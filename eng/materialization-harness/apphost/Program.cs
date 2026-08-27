@@ -14,7 +14,7 @@ if (args.Contains("--projection", StringComparer.Ordinal) && !projectionOnly)
 
 var repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
 var profileName = Environment.GetEnvironmentVariable("COHESIVE_HARNESS_ASPIRE_PROFILE") ?? "interactive";
-InfrastructureLocalEnvironmentProfile environment = profileName switch
+var environment = profileName switch
 {
     "interactive" => FreightMaterializationInfrastructure.InteractiveProfile,
     "isolated" => FreightMaterializationInfrastructure.IsolatedTestProfile,
@@ -61,7 +61,8 @@ Directory.CreateDirectory(runtimeRoot);
 File.WriteAllText(
     path: Path.Combine(runtimeRoot, "aspire.manifest.json"),
     contents: projection.ToJson() + "\n",
-    encoding: new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    encoding: new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
+    );
 
 var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
 {
@@ -72,7 +73,7 @@ var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOpt
 });
 builder.AddCohesiveLocalInfrastructure(
     projection: projection,
-    options: new AspireLocalApplicationOptions(
+    options: new(
         operationWorkingDirectory: repositoryRoot,
         resolveSecret: Environment.GetEnvironmentVariable,
         operationEnvironment: new Dictionary<string, string>(StringComparer.Ordinal)
