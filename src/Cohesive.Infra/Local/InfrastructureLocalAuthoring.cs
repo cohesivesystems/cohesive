@@ -68,9 +68,52 @@ public sealed class InfrastructureLocalBuilder
         InfrastructureNodeId resource,
         InfrastructurePhysicalResourceId physicalResource,
         string image,
+        Action<InfrastructureLocalServiceBuilder>? configure = null) =>
+        ContainerService(
+            node: resource,
+            physicalResource: physicalResource,
+            image: image,
+            configure: configure);
+
+    /// <summary>Adds a pinned-container workload or resource service.</summary>
+    /// <param name="node">Canonical logical workload or resource.</param>
+    /// <param name="physicalResource">Exact physical resource identity.</param>
+    /// <param name="image">Pinned container image.</param>
+    /// <param name="configure">Optional service configuration.</param>
+    /// <returns>This builder.</returns>
+    public InfrastructureLocalBuilder ContainerService(
+        InfrastructureNodeId node,
+        InfrastructurePhysicalResourceId physicalResource,
+        string image,
         Action<InfrastructureLocalServiceBuilder>? configure = null)
     {
-        InfrastructureLocalServiceBuilder builder = new(resource, physicalResource, image);
+        InfrastructureLocalServiceBuilder builder = new(
+            node: node,
+            physicalResource: physicalResource,
+            source: new InfrastructureLocalContainerSource(image));
+        configure?.Invoke(builder);
+        services.Add(builder.Build());
+        return this;
+    }
+
+    /// <summary>Adds a repository-project-backed workload service.</summary>
+    /// <param name="workload">Canonical logical workload.</param>
+    /// <param name="physicalResource">Exact workload placement identity.</param>
+    /// <param name="projectPath">Repository-relative project path.</param>
+    /// <param name="launchProfile">Optional project launch-profile name.</param>
+    /// <param name="configure">Optional service configuration.</param>
+    /// <returns>This builder.</returns>
+    public InfrastructureLocalBuilder ProjectService(
+        InfrastructureNodeId workload,
+        InfrastructurePhysicalResourceId physicalResource,
+        string projectPath,
+        string? launchProfile = null,
+        Action<InfrastructureLocalServiceBuilder>? configure = null)
+    {
+        InfrastructureLocalServiceBuilder builder = new(
+            node: workload,
+            physicalResource: physicalResource,
+            source: new InfrastructureLocalProjectSource(projectPath, launchProfile));
         configure?.Invoke(builder);
         services.Add(builder.Build());
         return this;
@@ -120,9 +163,9 @@ public sealed class InfrastructureLocalBuilder
 /// <summary>Mutable producer for one immutable <see cref="InfrastructureLocalService"/>.</summary>
 public sealed class InfrastructureLocalServiceBuilder
 {
-    readonly InfrastructureNodeId resource;
+    readonly InfrastructureNodeId node;
     readonly InfrastructurePhysicalResourceId physicalResource;
-    readonly string image;
+    readonly InfrastructureLocalServiceSource source;
     readonly List<string> command = [];
     readonly List<InfrastructureLocalEnvironmentVariable> environment = [];
     readonly List<InfrastructureLocalEndpoint> endpoints = [];
@@ -134,13 +177,13 @@ public sealed class InfrastructureLocalServiceBuilder
     (TimeSpan Interval, TimeSpan Timeout, int Retries, TimeSpan? StartPeriod)? healthTiming;
 
     internal InfrastructureLocalServiceBuilder(
-        InfrastructureNodeId resource,
+        InfrastructureNodeId node,
         InfrastructurePhysicalResourceId physicalResource,
-        string image)
+        InfrastructureLocalServiceSource source)
     {
-        this.resource = resource;
+        this.node = node;
         this.physicalResource = physicalResource;
-        this.image = image;
+        this.source = source;
     }
 
     /// <summary>Appends an exact container command argument.</summary>
@@ -291,9 +334,9 @@ public sealed class InfrastructureLocalServiceBuilder
                 startPeriod: timing.StartPeriod)
             : null;
         return new(
-            resource: resource,
+            node: node,
             physicalResource: physicalResource,
-            image: image,
+            source: source,
             command: [.. command],
             environment: [.. environment],
             endpoints: [.. endpoints],

@@ -177,6 +177,133 @@ public sealed class InfrastructureLocalRealizationTests
                     retries: 30))));
     }
 
+    [Fact]
+    public void Repository_project_workload_uses_exact_placement_and_round_trips()
+    {
+        var realization = WorkloadRealization();
+        var directProjectTopology = new InfrastructureLocalTopology(
+            services:
+            [
+                new(
+                    node: new("workload/api"),
+                    physicalResource: new("physical/api"),
+                    source: new InfrastructureLocalProjectSource("src/Ari.Training.Api/Ari.Training.Api.csproj", "https"))
+            ]);
+        var fluentProjectTopology = InfrastructureLocal.Define(local => local.ProjectService(
+            workload: new("workload/api"),
+            physicalResource: new("physical/api"),
+            projectPath: "src/Ari.Training.Api/Ari.Training.Api.csproj",
+            launchProfile: "https"));
+        var projectConfiguration = Configuration((ProjectName, "ari-local"));
+        var directProject = InfrastructureLocalRealizationCompiler.Compile(
+            realization,
+            Environment(InfrastructureLocalDataLifetime.Persistent),
+            directProjectTopology,
+            [projectConfiguration]);
+        var fluentProject = InfrastructureLocalRealizationCompiler.Compile(
+            realization,
+            Environment(InfrastructureLocalDataLifetime.Persistent),
+            fluentProjectTopology,
+            [projectConfiguration]);
+
+        Assert.True(directProject.IsValid);
+        Assert.Equal(directProject.Fingerprint, fluentProject.Fingerprint);
+
+        var topology = InfrastructureLocal.Define(local => local
+            .Service(new("resource/scheduler"), new("physical/scheduler"), "mcr.microsoft.com/dts/dts-emulator@sha256:abc", scheduler => scheduler
+                .Endpoint(
+                    id: new("dashboard"),
+                    scheme: "http",
+                    containerPort: 8082,
+                    exposure: InfrastructureLocalEndpointExposure.HostLoopback,
+                    role: InfrastructureLocalEndpointRole.Management,
+                    hostPort: new(Subject, new("scheduler-port")))
+                .HttpHealth(new("dashboard"), "/")
+                .HealthTiming(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2), retries: 30))
+            .ProjectService(
+                workload: new("workload/api"),
+                physicalResource: new("physical/api"),
+                projectPath: "src/Ari.Training.Api/Ari.Training.Api.csproj",
+                launchProfile: "https",
+                configure: api => api
+                    .Endpoint(
+                        id: new("https"),
+                        scheme: "https",
+                        containerPort: 7443,
+                        exposure: InfrastructureLocalEndpointExposure.HostLoopback,
+                        role: InfrastructureLocalEndpointRole.Data,
+                        hostPort: new(Subject, new("api-port")))
+                    .HttpHealth(new("https"), "/health")
+                    .HealthTiming(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2), retries: 30)
+                    .DependsOn(new("physical/scheduler"))));
+        var configuration = Configuration(
+            (ProjectName, "ari-local"),
+            (new("scheduler-port"), "8082"),
+            (new("api-port"), "7443"));
+
+        var document = InfrastructureLocalRealizationCompiler.Compile(
+            realization,
+            Environment(InfrastructureLocalDataLifetime.Persistent),
+            topology,
+            [configuration]);
+        var roundTrip = JsonSerializer.Deserialize<InfrastructureLocalRealizationDocument>(
+            JsonSerializer.Serialize(document, JsonOptions),
+            JsonOptions);
+
+        Assert.True(document.IsValid);
+        var project = Assert.IsType<InfrastructureLocalProjectSource>(document.Topology.Services.Single(service => service.Node == new InfrastructureNodeId("workload/api")).Source);
+        Assert.Equal("src/Ari.Training.Api/Ari.Training.Api.csproj", project.ProjectPath);
+        Assert.Equal("https", project.LaunchProfile);
+        Assert.Equal(document.Fingerprint, roundTrip?.Fingerprint);
+    }
+
+    [Fact]
+    public void Workload_placement_source_and_dependency_mismatches_are_structured_diagnostics()
+    {
+        var realization = WorkloadRealization();
+        var topology = new InfrastructureLocalTopology(
+            services:
+            [
+                new(
+                    node: new("resource/scheduler"),
+                    physicalResource: new("physical/scheduler"),
+                    source: new InfrastructureLocalProjectSource("src/Scheduler/Scheduler.csproj")),
+                new(
+                    node: new("workload/api"),
+                    physicalResource: new("physical/not-api"),
+                    source: new InfrastructureLocalProjectSource("src/Ari.Training.Api/Ari.Training.Api.csproj"),
+                    readyDependencies: [new("physical/scheduler")])
+            ]);
+
+        var document = InfrastructureLocalRealizationCompiler.Compile(
+            realization,
+            Environment(InfrastructureLocalDataLifetime.Persistent),
+            topology,
+            [Configuration((ProjectName, "ari-local"))]);
+
+        Assert.Contains(document.Diagnostics, diagnostic => diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.ServiceBindingMismatch);
+        Assert.Contains(document.Diagnostics, diagnostic => diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.ServiceSourceMismatch);
+        Assert.Contains(document.Diagnostics, diagnostic => diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.DependencyHealthMissing);
+        Assert.All(document.Diagnostics, diagnostic =>
+        {
+            Assert.Equal("infrastructure-local-realization", diagnostic.Evidence?.Stage);
+            Assert.NotEmpty(diagnostic.Evidence!.SourceReferences);
+            Assert.NotEmpty(diagnostic.Evidence.ResolutionOptions);
+            Assert.NotNull(diagnostic.Evidence.Expected);
+            Assert.NotNull(diagnostic.Evidence.Observed);
+        });
+    }
+
+    [Fact]
+    public void Repository_project_source_must_remain_inside_the_repository()
+    {
+        Assert.Throws<ArgumentException>(() => new InfrastructureLocalProjectSource("../Ari.Api/Ari.Api.csproj"));
+        Assert.Throws<ArgumentException>(() => new InfrastructureLocalProjectSource("/src/Ari.Api/Ari.Api.csproj"));
+        Assert.Throws<ArgumentException>(() => new InfrastructureLocalProjectSource("C:\\src\\Ari.Api\\Ari.Api.csproj"));
+        Assert.Throws<ArgumentException>(() => new InfrastructureLocalProjectSource("./src/Ari.Api/Ari.Api.csproj"));
+        Assert.Throws<ArgumentException>(() => new InfrastructureLocalProjectSource("src/Ari.Api/Program.cs"));
+    }
+
     static InfrastructureLocalTopology DirectTopology() => new(
         services: [DirectPostgres("postgres:17.10-alpine3.24")],
         volumes: [new(new("postgres-data"))],
@@ -272,5 +399,44 @@ public sealed class InfrastructureLocalRealizationTests
                     disposition: InfrastructureLifecycleDisposition.Managed))
             ]);
         return InfrastructureRealizationCompiler.Compile(closure, lifecycle);
+    }
+
+    static InfrastructureRealization WorkloadRealization()
+    {
+        var definition = InfrastructureDefinitionDocument.FromDefinition(new(
+            id: new("local-workload-tests"),
+            revision: new("v1"),
+            workloads: [new(new("workload/api"))],
+            resources: [new(new("resource/scheduler"), InfrastructureResourceLifecycle.Ephemeral)]));
+        InfrastructureCapabilityVariantId variant = new("local");
+        var profile = new InfrastructureCapabilityProfile(
+            schemaVersion: InfrastructureCapabilityProfile.CurrentSchemaVersion,
+            id: new("profiles/local-workload-tests/v1"),
+            target: new("local-orchestration"),
+            supportedDefinitionSchemaVersions: [InfrastructureDefinitionDocument.CurrentSchemaVersion],
+            variants: [new(variant)]);
+        var closure = InfrastructureCapabilityCompiler.Compile(definition, profile, variant);
+        var lifecycle = new InfrastructureLifecyclePlan(
+            definition: definition,
+            bindings:
+            [
+                new(
+                    resource: new("resource/scheduler"),
+                    physicalResource: new("physical/scheduler"),
+                    interpreter: new("local-orchestration"),
+                    authority: Authority,
+                    disposition: InfrastructureLifecycleDisposition.Managed)
+            ]);
+        return InfrastructureRealizationCompiler.Compile(
+            closure,
+            lifecycle,
+            workloadPlacements:
+            [
+                new(
+                    workload: new("workload/api"),
+                    physicalResource: new("physical/api"),
+                    interpreter: new("local-orchestration"),
+                    sourceReferences: ["fixture:local-workload-tests/v1"])
+            ]);
     }
 }

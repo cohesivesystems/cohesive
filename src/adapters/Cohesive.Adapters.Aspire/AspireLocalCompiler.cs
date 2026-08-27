@@ -211,6 +211,15 @@ public static class AspireLocalCompiler
                 boundaries: [],
                 sourceReferences: [sourceReference, TargetReference])
         ];
+        if (source.Topology.Services.Any(static service => service.Source is InfrastructureLocalProjectSource))
+        {
+            decisions.Add(Decision(
+                concern: "local/service-construction/repository-project",
+                kind: CapabilityRealizationKind.Native,
+                rationale: "Repository-relative .NET project sources become Aspire project resources, resolve from the explicit runtime repository directory, and retain exact Infra workload and physical-placement identity.",
+                boundaries: [],
+                sourceReferences: [sourceReference, TargetReference]));
+        }
         decisions.AddRange(acceptedOverrides.Select(item => Decision(
             concern: $"local/health/command/{item.PhysicalResource.Value}/{item.Executable}",
             kind: CapabilityRealizationKind.Override,

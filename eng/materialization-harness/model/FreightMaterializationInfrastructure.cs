@@ -259,8 +259,7 @@ public static class FreightMaterializationInfrastructure
     /// <param name="readEnvironmentVariable">Optional environment lookup; defaults to <see cref="Environment.GetEnvironmentVariable(string)"/>.</param>
     /// <returns>Explicit configuration candidates for every harness runtime setting.</returns>
     /// <exception cref="ArgumentException">A required environment variable is absent, empty, or white-space.</exception>
-    public static InfrastructureConventionProfile CreateRuntimeConfiguration(
-        Func<string, string?>? readEnvironmentVariable = null)
+    public static InfrastructureConventionProfile CreateRuntimeConfiguration(Func<string, string?>? readEnvironmentVariable = null)
     {
         const string authority = "materialization-harness/runtime-environment/v1";
         readEnvironmentVariable ??= Environment.GetEnvironmentVariable;
