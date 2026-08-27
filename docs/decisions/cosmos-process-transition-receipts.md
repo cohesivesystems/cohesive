@@ -7,6 +7,12 @@
 Transition operation receipt in a Cosmos transactional batch. Creation Transitions also commit a subject-scoped
 index that points to the exact occurrence receipt.
 
+The receipt stores the complete canonical commit as Brotli-compressed, base64-encoded adapter
+evidence. Compression is a physical representation only: the canonical commit and its Cohesive fingerprint remain
+the semantic authority. Reads accept the original uncompressed `transitionCommit` representation for compatibility,
+but new writes use the versioned compressed representation. Decompression is bounded to 16 MiB and canonical JSON
+is reprojected byte-for-byte before fingerprint and subject verification.
+
 The repository uses two concurrency values with distinct ownership:
 
 - Cosmos `_etag` is provider-owned compare-and-swap evidence used only at the adapter boundary.
@@ -24,6 +30,8 @@ opaque token, and then fences the transactional write with the current `_etag`.
 - A retained occurrence replays only when its canonical request or commit fingerprint matches.
 - A retained creation index replays only the same authority-scoped creation intent.
 - Receipt restoration recomputes and verifies request, intent, commit, subject, and entity-version evidence.
+- Compressed receipt restoration is bounded, rejects ambiguous or unknown encodings, and proves byte-for-byte
+  canonical JSON before semantic verification.
 - Receipt lookup requires exact point-read partition placement. Missing placement fails closed as insufficient
   capability.
 - Canonical envelopes retained in the receipt remain Process-outbox handoff evidence; the Cosmos entity outbox does
@@ -38,6 +46,7 @@ would conflate two physical authorities and violate the receipt snapshot invaria
 
 ## Validation
 
-The emulator regression proves first commit, repository restart, exact receipt restoration, canonical outcome and
-envelope recovery, entity-state equality, and equality of committed, replayed, and current entity concurrency
-tokens. Existing repository contract tests cover legacy `_etag` fallback and discriminator validation.
+The emulator regression proves first commit, compressed receipt persistence, repository restart, exact compressed
+receipt restoration, legacy uncompressed receipt compatibility, canonical outcome and envelope recovery,
+entity-state equality, and equality of committed, replayed, and current entity concurrency tokens. Existing
+repository contract tests cover legacy `_etag` fallback and discriminator validation.

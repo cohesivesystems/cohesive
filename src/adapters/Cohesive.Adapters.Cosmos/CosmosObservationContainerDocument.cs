@@ -60,6 +60,12 @@ sealed record CosmosObservationContainerDocument(
     [property: JsonPropertyName("transitionCommit")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     JsonElement? TransitionCommit = null,
+    [property: JsonPropertyName("transitionCommitEncoding")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? TransitionCommitEncoding = null,
+    [property: JsonPropertyName("transitionCommitPayload")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? TransitionCommitPayload = null,
     [property: JsonPropertyName("transitionOperationReceiptId")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? TransitionOperationReceiptId = null,
