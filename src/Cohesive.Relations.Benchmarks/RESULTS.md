@@ -1,7 +1,14 @@
-# Cohesive.Relations Benchmark Results
+# Cohesive Benchmark Results
 
 ## Conclusions
 
+- The allocation-light observation validator reduces successful validation from 6.27–20.23 KB to 0 B and from
+  1.85–2.78 μs to 262–282 ns across the flat, nested-object, and array-heavy DefaultJob scenarios. Creating an
+  `Observation` from an already-owned immutable value allocates only the retained 112 B object.
+- Warm representative-state materialization is approximately 1.02 μs and 4.22 KB through a compiled plan. The
+  default materializer cache adds approximately 24 ns and no additional steady-state allocation.
+- Canonical serialization is approximately 0.86 μs and allocates 6.64 KB for UTF-8 or 7.23 KB for a string. These
+  results are descriptive optimization baselines, not regression thresholds.
 - In the ARI-145 1,024-row DefaultJob verification run, the generated kernel is approximately 1.74×
   handwritten for the simple DTO and 1.54× for the joined DTO. It allocates exactly the same bytes as
   handwritten mapping.
@@ -21,6 +28,149 @@
   end-to-end profiles.
 
 ## History
+
+### 2026-08-27 (observation lifecycle DefaultJob verification)
+
+- Base commit: `53e2801`
+- Branch: `codex/observation-performance-benchmarks`
+- Worktree: dirty; includes the uncommitted benchmark and validator implementation
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+- Environment overrides: `DOTNET_CLI_HOME=/tmp/codex-dotnet-observation`,
+  `DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1`
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --filter "*ObservationCreationBenchmarks*" "*ObservationProjectionBenchmarks*"
+```
+
+Creation and successful validation:
+
+| Operation | Shape | Mean | Op/s | Allocated |
+|---|---|---:|---:|---:|
+| Create from immutable value | 16 flat scalars | 382.5 ns | 2,614,236 | 112 B |
+| Create from mutable fields | 16 flat scalars | 593.8 ns | 1,683,943 | 2,112 B |
+| Validate | 16 flat scalars | 261.5 ns | 3,823,693 | 0 B |
+| Create from immutable value | 16-field nested object | 295.1 ns | 3,388,856 | 112 B |
+| Create from mutable fields | 16-field nested object | 351.0 ns | 2,849,224 | 712 B |
+| Validate | 16-field nested object | 266.4 ns | 3,753,642 | 0 B |
+| Create from immutable value | 64-element array | 321.2 ns | 3,113,563 | 112 B |
+| Create from mutable fields | 64-element array | 500.4 ns | 1,998,548 | 712 B |
+| Validate | 64-element array | 281.8 ns | 3,548,276 | 0 B |
+
+Deterministic failure diagnostics:
+
+| Shape | Mean | Op/s | Allocated |
+|---|---:|---:|---:|
+| 16 flat scalars | 1.938 μs | 516,108 | 2,632 B |
+| 16-field nested object | 1.346 μs | 742,955 | 3,200 B |
+| 64-element array | 1.368 μs | 731,233 | 1,232 B |
+
+Warm projections of a seven-field state containing nested address and array values:
+
+| Operation | Mean | Op/s | Allocated |
+|---|---:|---:|---:|
+| Compiled CLR materializer | 1.017 μs | 983,666 | 4.22 KB |
+| Default cached CLR materializer | 1.040 μs | 961,399 | 4.22 KB |
+| Canonical UTF-8 JSON | 863.5 ns | 1,158,108 | 6.64 KB |
+| Canonical JSON string | 860.3 ns | 1,162,446 | 7.23 KB |
+
+All 16 benchmarks completed successfully in 4 minutes 45 seconds. Process-priority elevation was unavailable on the
+host, but BenchmarkDotNet reported no critical validation errors. The DefaultJob confirms that successful validation
+is allocation-free and that the 112 B immutable-creation allocation is solely the retained `Observation`; CLR
+materialization and JSON serialization are now the largest measured steady-state allocation surfaces.
+
+### 2026-08-26 (allocation-light observation validation)
+
+- Base commit: `c3a295613ee79164bb9376d2a5d4d56ae49853e7`
+- Branch: `codex/observation-performance-benchmarks`
+- Worktree: dirty; includes the uncommitted benchmark and validator implementation
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+- Environment overrides: `DOTNET_CLI_HOME=/tmp/codex-dotnet-observation`,
+  `DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1`
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*ObservationCreationBenchmarks*"
+```
+
+Successful creation and validation:
+
+| Operation | Shape | Before | After | Before allocation | After allocation |
+|---|---|---:|---:|---:|---:|
+| Create from immutable value | 16 flat scalars | 1.925 μs | 375.8 ns | 6.38 KB | 112 B |
+| Validate | 16 flat scalars | 1.851 μs | 252.1 ns | 6.27 KB | 0 B |
+| Create from immutable value | 16-field nested object | 2.729 μs | 289.4 ns | 9.20 KB | 112 B |
+| Validate | 16-field nested object | 2.694 μs | 251.6 ns | 9.09 KB | 0 B |
+| Create from immutable value | 64-element array | 2.923 μs | 301.0 ns | 20.34 KB | 112 B |
+| Validate | 64-element array | 2.775 μs | 269.2 ns | 20.23 KB | 0 B |
+
+Caller-owned mutable-field creation retains its required defensive snapshot and now allocates 2,112 B for the flat
+case or 712 B for the nested-object and array-heavy cases. Invalid-value diagnostics remain independently measured;
+this intermediate ShortRun reported 792–1,024 B because path and message construction is deferred until validation
+fails. The final DefaultJob above supersedes those diagnostic allocation measurements after expanded deterministic
+diagnostic coverage.
+
+These are ShortRun comparisons from the same worktree and machine. A stable DefaultJob run should be used before
+setting regression thresholds.
+
+### 2026-08-26 (observation lifecycle initial baseline)
+
+- Base commit: `c3a295613ee79164bb9376d2a5d4d56ae49853e7`
+- Branch: `codex/observation-performance-benchmarks`
+- Worktree: dirty; includes the uncommitted observation benchmark implementation
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+- Environment overrides: `DOTNET_CLI_HOME=/tmp/codex-dotnet-observation`,
+  `DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1`
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*ObservationCreationBenchmarks*" "*ObservationProjectionBenchmarks*"
+```
+
+Creation and validation:
+
+| Operation | Shape | Mean | Op/s | Allocated |
+|---|---|---:|---:|---:|
+| Create from immutable value | 16 flat scalars | 1.925 μs | 519,553 | 6.38 KB |
+| Create from mutable fields | 16 flat scalars | 1.780 μs | 561,876 | 8.23 KB |
+| Validate | 16 flat scalars | 1.851 μs | 540,208 | 6.27 KB |
+| Create from immutable value | 16-field nested object | 2.729 μs | 366,447 | 9.20 KB |
+| Create from mutable fields | 16-field nested object | 2.882 μs | 346,924 | 9.69 KB |
+| Validate | 16-field nested object | 2.694 μs | 371,177 | 9.09 KB |
+| Create from immutable value | 64-element array | 2.923 μs | 342,120 | 20.34 KB |
+| Create from mutable fields | 64-element array | 2.928 μs | 341,576 | 20.84 KB |
+| Validate | 64-element array | 2.775 μs | 360,347 | 20.23 KB |
+
+Warm projections of a seven-field state containing nested address and array values:
+
+| Operation | Mean | Op/s | Allocated |
+|---|---:|---:|---:|
+| Compiled CLR materializer | 1.050 μs | 952,430 | 4.22 KB |
+| Default cached CLR materializer | 1.083 μs | 923,671 | 4.22 KB |
+| Canonical UTF-8 JSON | 932.0 ns | 1,072,988 | 6.64 KB |
+| Canonical JSON string | 927.6 ns | 1,078,068 | 7.23 KB |
+
+ShortRun uses three measurement iterations and has wide confidence intervals for some cases. The results establish
+the initial order of magnitude and allocation surface; optimization comparisons should use the same fixtures and a
+reviewed DefaultJob run on stable hardware. The mutable-field timing being nominally lower than immutable creation in
+the flat case is measurement noise; its additional 1.85 KB snapshot allocation is the meaningful distinction.
 
 ### 2026-07-19 (ARI-145)
 

@@ -1,6 +1,7 @@
-# Cohesive.Relations Benchmarks
+# Cohesive performance benchmarks
 
-This project establishes descriptive performance baselines for canonical relation compilation,
+This project establishes descriptive performance baselines for canonical observation creation,
+validation, CLR materialization, and JSON serialization as well as relation compilation,
 physical planning and execution, diagnostics, and relation-to-CLR DTO materialization. It is
 intentionally separate from the xUnit projects: benchmarks are executable measurement programs,
 not correctness gates.
@@ -10,6 +11,10 @@ exercise the same semantic definitions, runtime evidence, and CLR DTO contracts.
 
 ## Benchmark groups
 
+- **Observation creation and validation:** already-owned immutable values, caller-owned field snapshots,
+  successful validation, and diagnostic production across flat-scalar, nested-object, and array-heavy values.
+- **Observation projections:** warm compiled and default-cached CLR materialization plus canonical UTF-8 and string
+  JSON serialization for representative application state.
 - **Warm kernel:** hand-written materialization, the shared core materializer over validated semantic observations,
   the same materializer over the explicit `IndexedObservationOccurrence` path, a
   preconfigured AutoMapper 16.2.0 canonical-row baseline, the generated construction kernel without result
@@ -77,7 +82,7 @@ it is not a performance result:
 dotnet run \
   --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
   -c Release --no-build -- \
-  --job Dry --filter "*Relation*"
+  --job Dry --filter "*"
 ```
 
 Run a quicker representative measurement:
@@ -86,7 +91,7 @@ Run a quicker representative measurement:
 dotnet run \
   --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
   -c Release --no-build -- \
-  --job Short --filter "*Relation*"
+  --job Short --filter "*Observation*"
 ```
 
 Run the default measurement jobs:
@@ -95,20 +100,20 @@ Run the default measurement jobs:
 dotnet run \
   --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
   -c Release --no-build -- \
-  --filter "*Relation*"
+  --filter "*Observation*"
 ```
 
-The broad `*Relation*` filter intentionally discovers DTO materialization, diagnostic-scale, physical-planning, and
-physical-execution benchmark groups. Use a class-name filter such as `*RelationDtoWarmBenchmarks*` when measuring one
+The broad `*` filter discovers every benchmark group. Use `*Observation*` for the observation lifecycle or a
+class-name filter such as `*ObservationCreationBenchmarks*` or `*RelationDtoWarmBenchmarks*` when measuring one
 concern in isolation.
 
 ## GitHub Actions
 
 The automatic pull-request workflow does not execute BenchmarkDotNet. To run the benchmarks on demand, open
-**Actions**, select **relation-benchmarks**, and choose **Run workflow**. The workflow accepts:
+**Actions**, select **cohesive-benchmarks**, and choose **Run workflow**. The workflow accepts:
 
 - A `Dry`, `Short`, or `Default` BenchmarkDotNet job. `Dry` is the default discovery and invocation smoke check.
-- A BenchmarkDotNet filter, defaulting to `*Relation*`.
+- A BenchmarkDotNet filter, defaulting to `*` so newly added lifecycle benchmarks participate in discovery checks.
 
 The workflow uploads `BenchmarkDotNet.Artifacts` for 14 days, including artifacts produced before a failed run. GitHub
 hosted runners are appropriate for discovery and coarse on-demand comparisons, but their shared and variable hardware
