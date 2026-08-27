@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -19,6 +20,9 @@ namespace Cohesive.Adapters.Cosmos;
 /// </summary>
 public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEntityTransitionOperationRepository
 {
+    internal const string TransitionCommitBrotliEncoding = "br+base64/canonical-json;v=1";
+    internal const int MaximumTransitionCommitCanonicalBytes = 16 * 1024 * 1024;
+
     /// <summary>
     /// Largest observation version this repository can persist while retaining exact Cosmos SQL numeric semantics.
     /// </summary>
@@ -759,7 +763,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
         string partitionKey)
     {
         var canonical = StrictDocumentJson.GetCanonicalBytes(commit, TransitionReceiptJsonOptions);
-        using var document = JsonDocument.Parse(canonical);
         return new(
             Id: CreateTransitionOperationReceiptId(commit.Request),
             PartitionKey: partitionKey,
@@ -777,7 +780,8 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
             TransitionRequestFingerprint: commit.Request.Fingerprint.Value,
             TransitionIntentFingerprint: commit.Request.IntentFingerprint.Value,
             TransitionCommitFingerprint: commit.Fingerprint.Value,
-            TransitionCommit: document.RootElement.Clone());
+            TransitionCommitEncoding: TransitionCommitBrotliEncoding,
+            TransitionCommitPayload: CompressTransitionCommit(canonical));
     }
 
     CosmosObservationContainerDocument CreateTransitionCreationReceiptIndexDocument(
@@ -858,10 +862,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
         if (document is null)
             return null;
         ValidateTransitionReceiptDocument(document, requireCommit: true);
-        var commit = document.TransitionCommit!.Value.Deserialize<EntityTransitionOperationCommit>(
-            TransitionReceiptJsonOptions)
-            ?? throw new InvalidOperationException(
-                $"Cosmos Transition operation receipt '{document.Id}' deserialized to null.");
+        var commit = DeserializeTransitionCommit(document);
         if (!string.Equals(commit.Request.Fingerprint.Value, document.TransitionRequestFingerprint, StringComparison.Ordinal)
             || !string.Equals(commit.Request.IntentFingerprint.Value, document.TransitionIntentFingerprint, StringComparison.Ordinal)
             || !string.Equals(commit.Fingerprint.Value, document.TransitionCommitFingerprint, StringComparison.Ordinal)
@@ -945,7 +946,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
             || string.IsNullOrWhiteSpace(document.SubjectId)
             || document.OccurredAtUtc is not { Offset: var offset }
             || offset != TimeSpan.Zero
-            || requireCommit && document.TransitionCommit is null
+            || requireCommit && !HasValidTransitionCommitEvidence(document)
             || !requireCommit && string.IsNullOrWhiteSpace(document.TransitionOperationReceiptId))
         {
             throw new InvalidOperationException(
@@ -989,6 +990,89 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
     {
         var canonical = StrictDocumentJson.GetCanonicalBytes(value, TransitionReceiptJsonOptions);
         return Convert.ToHexString(SHA256.HashData(canonical)).ToLowerInvariant();
+    }
+
+    static bool HasValidTransitionCommitEvidence(CosmosObservationContainerDocument document)
+    {
+        var hasLegacyCommit = document.TransitionCommit is not null;
+        var hasCompressedCommit = string.Equals(
+                document.TransitionCommitEncoding,
+                TransitionCommitBrotliEncoding,
+                StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(document.TransitionCommitPayload);
+        return hasLegacyCommit != hasCompressedCommit
+            && (hasLegacyCommit
+                ? document.TransitionCommitEncoding is null && document.TransitionCommitPayload is null
+                : document.TransitionCommit is null);
+    }
+
+    static EntityTransitionOperationCommit DeserializeTransitionCommit(
+        CosmosObservationContainerDocument document)
+    {
+        if (document.TransitionCommit is { } legacy)
+        {
+            return legacy.Deserialize<EntityTransitionOperationCommit>(TransitionReceiptJsonOptions)
+                ?? throw new InvalidOperationException(
+                    $"Cosmos Transition operation receipt '{document.Id}' deserialized to null.");
+        }
+
+        try
+        {
+            var canonical = DecompressTransitionCommit(
+                Convert.FromBase64String(Guard.RequireNotNullOrWhiteSpace(document.TransitionCommitPayload)));
+            var commit = JsonSerializer.Deserialize<EntityTransitionOperationCommit>(
+                    canonical,
+                    TransitionReceiptJsonOptions)
+                ?? throw new InvalidOperationException(
+                    $"Cosmos Transition operation receipt '{document.Id}' deserialized to null.");
+            if (!canonical.AsSpan().SequenceEqual(
+                    StrictDocumentJson.GetCanonicalBytes(commit, TransitionReceiptJsonOptions)))
+            {
+                throw new InvalidOperationException(
+                    $"Cosmos Transition operation receipt '{document.Id}' does not contain canonical commit JSON.");
+            }
+            return commit;
+        }
+        catch (Exception exception) when (exception is FormatException or InvalidDataException or JsonException)
+        {
+            throw new InvalidOperationException(
+                $"Cosmos Transition operation receipt '{document.Id}' has invalid compressed canonical commit evidence.",
+                exception);
+        }
+    }
+
+    static string CompressTransitionCommit(ReadOnlySpan<byte> canonical)
+    {
+        if (canonical.Length > MaximumTransitionCommitCanonicalBytes)
+        {
+            throw new InvalidOperationException(
+                $"Canonical Transition commit exceeds {MaximumTransitionCommitCanonicalBytes} bytes.");
+        }
+        using MemoryStream output = new();
+        using (BrotliStream compressor = new(output, CompressionLevel.SmallestSize, leaveOpen: true))
+            compressor.Write(canonical);
+        return Convert.ToBase64String(output.GetBuffer(), 0, checked((int)output.Length));
+    }
+
+    static byte[] DecompressTransitionCommit(ReadOnlySpan<byte> compressed)
+    {
+        using MemoryStream input = new(compressed.ToArray(), writable: false);
+        using BrotliStream decompressor = new(input, CompressionMode.Decompress);
+        using MemoryStream output = new();
+        var buffer = new byte[81920];
+        while (true)
+        {
+            var read = decompressor.Read(buffer);
+            if (read == 0)
+                break;
+            if (output.Length + read > MaximumTransitionCommitCanonicalBytes)
+            {
+                throw new InvalidDataException(
+                    $"Decompressed Transition commit exceeds {MaximumTransitionCommitCanonicalBytes} bytes.");
+            }
+            output.Write(buffer, 0, read);
+        }
+        return output.ToArray();
     }
 
     static EntityTransitionOperationResult IdentityConflict(string message, string location) =>
