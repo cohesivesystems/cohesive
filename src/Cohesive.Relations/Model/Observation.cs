@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Mapping;
 
 namespace Cohesive.Relations.Model;
@@ -9,12 +10,12 @@ namespace Cohesive.Relations.Model;
 /// </summary>
 public sealed record Observation
 {
+    static readonly JsonSerializerOptions LineageJsonOptions = StrictDocumentJson.CreateOptions();
     readonly ObservationBuffer buffer;
 
     /// <summary>
     /// Creates an observation instance.
     /// </summary>
-    [JsonConstructor]
     public Observation(
         ShapeId shapeId,
         string id,
@@ -26,6 +27,31 @@ public sealed record Observation
         ArgumentNullException.ThrowIfNull(fields);
         
         var layout = ObservationLayout.Create(shapeId, fields.Keys);
+        Layout = layout;
+        ShapeId = layout.Schema;
+        Id = Guard.RequireNotNullOrWhiteSpace(id);
+        buffer = BuildBuffer(layout, fields);
+        Version = version;
+        Lineage = lineage ?? ObservationLineage.Empty;
+    }
+
+    /// <summary>
+    /// Restores an observation from its complete JSON representation while retaining the authoritative ordinal layout.
+    /// </summary>
+    [JsonConstructor]
+    public Observation(
+        ShapeId shapeId,
+        string id,
+        IReadOnlyDictionary<string, ObservationValue> fields,
+        long version,
+        ObservationLineage? lineage,
+        ObservationLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(fields);
+        ArgumentNullException.ThrowIfNull(layout);
+        if (layout.Schema != shapeId)
+            throw new ArgumentException($"Observation layout '{layout.Schema}' does not match shape '{shapeId}'.", nameof(layout));
+
         Layout = layout;
         ShapeId = layout.Schema;
         Id = Guard.RequireNotNullOrWhiteSpace(id);
@@ -146,7 +172,7 @@ public sealed record Observation
             || ShapeId != other.ShapeId
             || !string.Equals(Id, other.Id, StringComparison.Ordinal)
             || Version != other.Version
-            || Lineage != other.Lineage
+            || !HasSameLineage(Lineage, other.Lineage)
             || Fields.Count != other.Fields.Count)
         {
             return false;
@@ -160,6 +186,11 @@ public sealed record Observation
 
         return true;
     }
+
+    static bool HasSameLineage(ObservationLineage left, ObservationLineage right) =>
+        StrictDocumentJson.GetCanonicalBytes(left, LineageJsonOptions)
+            .AsSpan()
+            .SequenceEqual(StrictDocumentJson.GetCanonicalBytes(right, LineageJsonOptions));
 
     /// <summary>
     /// Materializes this observation into a CLR shape using the shared shape mapper.

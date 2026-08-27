@@ -1,7 +1,44 @@
+using System.Text.Json;
+using Cohesive.Model.Serialization;
+
 namespace Cohesive.Relations.Tests;
 
 public sealed class ObservationShapeValidationTests
 {
+    [Fact]
+    public void StrictJsonRoundTrip_PreservesLayoutAndFieldAssociation()
+    {
+        var layout = new ObservationLayout(
+            new("shape.order"),
+            ["Id", "Tenant", "Status"]);
+        var lineage = new ObservationLineage([
+            new(
+                "Status",
+                [new("node/status", [FieldPath.Parse("source.Status")], Expr.Field("source.Status"), "mapped")])
+        ]);
+        var observation = new Observation(
+            layout,
+            "order/1",
+            [
+                ObservationValue.FromString("order/1"),
+                ObservationValue.FromString("tenant/acme"),
+                ObservationValue.FromString("pending")
+            ],
+            [true, true, true],
+            lineage: lineage);
+        var options = StrictDocumentJson.CreateOptions();
+
+        var json = StrictDocumentJson.GetCanonicalBytes(observation, options);
+        var restored = JsonSerializer.Deserialize<Observation>(json, options);
+
+        Assert.NotNull(restored);
+        Assert.True(observation.HasSameContent(restored));
+        Assert.Equal(layout.FieldNames, restored.Layout.FieldNames);
+        Assert.Equal("tenant/acme", restored.GetField("Tenant").GetRequiredString());
+        Assert.Equal("pending", restored.GetField("Status").GetRequiredString());
+        Assert.Equal(json, StrictDocumentJson.GetCanonicalBytes(restored, options));
+    }
+
     [Fact]
     public void Observation_SupportsArraySegmentBackedBuffer()
     {

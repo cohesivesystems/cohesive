@@ -75,7 +75,7 @@ public sealed class EntityTransitionOperationRepositoryTests
                     InteractionEnvelopeJsonSerializer.Serialize(envelope)),
                 replayed.Receipt?.Result.Emissions.Select(static envelope =>
                     InteractionEnvelopeJsonSerializer.Serialize(envelope)));
-            Assert.Equal(commit.Write.Entity, current?.Entity);
+            Assert.True(commit.Write.Entity.HasSameContent(current?.Entity));
             Assert.Equal(committed.Receipt?.Entity.ConcurrencyToken, current?.ConcurrencyToken);
             Assert.Equal(replayed.Receipt?.Entity.ConcurrencyToken, current?.ConcurrencyToken);
         }
