@@ -339,13 +339,16 @@ ExecutionApiDispatchResult dispatched = await executionApi.DispatchAsync(
     trustedInvocation);
 ```
 
-The activation projection owns application or transport correlation, delivery, causation, and ordering policy; the
-adapter always replaces its authority scope and provenance with trusted invocation evidence. The reference API
-adapter does not use its local Process registry when an authoritative Start or lifecycle dispatcher is supplied.
+The activation projection owns application or transport correlation, delivery, causation, and ordering policy. The
+adapter replaces its authority scope with trusted invocation evidence and, after exact plan resolution, projects
+emission provenance from the canonical Process document. Command provenance remains the trusted API invocation
+provenance retained by the start receipt. The reference API adapter does not use its local Process registry when an
+authoritative Start or lifecycle dispatcher is supplied.
 
 `trustedInvocation` must grant the canonical Process-start authorization requirement. Admission replaces caller
-authority, issuance, and provenance with that trusted evidence, resolves the exact definition fingerprint from the
-immutable worker catalog, and validates the typed input before it mutates durable registry state. The canonical
+command authority, issuance, and provenance with that trusted evidence, resolves the exact definition fingerprint
+from the immutable worker catalog, assigns the plan's document provenance to Process emissions, and validates the
+typed input before it mutates durable registry state. The canonical
 `ProcessStartReferenceEvaluator` remains the authority for accepted, replayed, command-identity conflict,
 idempotency conflict, and instance-conflict decisions.
 
