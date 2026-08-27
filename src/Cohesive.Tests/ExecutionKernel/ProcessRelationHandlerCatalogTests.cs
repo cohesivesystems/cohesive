@@ -165,6 +165,32 @@ public sealed class ProcessRelationHandlerCatalogTests
     }
 
     [Fact]
+    public async Task TypedHandler_DecodesJsonStringEnumFromItsExactWireMemberContract()
+    {
+        var query = WireEnumInputQuery();
+        WireEnumQueryInput? received = null;
+        var catalog = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.Create(
+                query,
+                (context, evaluation, input) =>
+                {
+                    received = input;
+                    return ValueTask.FromResult(new QueryResult(input.Id, input.Disposition.ToString()));
+                })
+        ]);
+
+        var result = await catalog.EvaluateAsync(
+            OperationContext.Create(),
+            Evaluation(
+                query.Reference,
+                query.InputContract,
+                new WireEnumQueryInput("source/enum", WireDisposition.PartnerOverlay)));
+
+        Assert.True(result.IsSuccessful, result.Failure?.Message);
+        Assert.Equal(WireDisposition.PartnerOverlay, received?.Disposition);
+    }
+
+    [Fact]
     public async Task Catalog_RoutesHostedQueriesAndAuthoredRelationsByExactCanonicalReference()
     {
         var query = Query();
@@ -523,6 +549,14 @@ public sealed class ProcessRelationHandlerCatalogTests
             new QueryConfiguration("enum", "exact"),
             Provenance());
 
+    static HostedQuery<WireEnumQueryInput, QueryResult> WireEnumInputQuery() =>
+        HostedQuery<WireEnumQueryInput, QueryResult>.Create(
+            new("query/tests/json-string-enum-input"),
+            new("1"),
+            new("tests.json-string-enum-input", "1"),
+            new QueryConfiguration("enum", "exact"),
+            Provenance());
+
     internal static ProcessRelationEvaluation Evaluation(
         HostedQuery<QueryInput, QueryResult> query,
         QueryInput input) => Evaluation(query.Reference, query.InputContract, input);
@@ -581,6 +615,8 @@ public sealed class ProcessRelationHandlerCatalogTests
     public sealed record PortableDocumentQueryResult(string Id, PortableHandlerDocument Document);
 
     public sealed record WireEnumQueryResult(string Id, WireDisposition Disposition);
+
+    public sealed record WireEnumQueryInput(string Id, WireDisposition Disposition);
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public enum WireDisposition

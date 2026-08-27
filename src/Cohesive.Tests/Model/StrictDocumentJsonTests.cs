@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Tests.Model;
@@ -72,9 +73,58 @@ public sealed class StrictDocumentJsonTests
         Assert.False(string.IsNullOrWhiteSpace(error.Message));
     }
 
+    [Fact]
+    public void TypedObjectApi_RoundTripsDeclaredJsonStringEnumWireMembers()
+    {
+        var document = new WireEnumDocument(WireDisposition.PartnerOverlay);
+        var options = StrictDocumentJson.CreateOptions();
+
+        var canonical = StrictDocumentJson.GetCanonicalBytes(document, options);
+
+        Assert.Equal("""{"disposition":"partner-overlay"}""", Encoding.UTF8.GetString(canonical));
+        Assert.True(
+            StrictDocumentJson.TryReadCanonicalObject<WireEnumDocument>(
+                Encoding.UTF8.GetString(canonical),
+                options,
+                "wire enum document",
+                out var restored,
+                out var error),
+            error.Message);
+        Assert.Equal(WireDisposition.PartnerOverlay, restored?.Disposition);
+    }
+
+    [Theory]
+    [InlineData("""{"disposition":"PartnerOverlay"}""")]
+    [InlineData("""{"disposition":"PARTNER-OVERLAY"}""")]
+    [InlineData("""{"disposition":1}""")]
+    public void TypedObjectApi_RejectsNonCanonicalJsonStringEnumRepresentations(string json)
+    {
+        var success = StrictDocumentJson.TryReadCanonicalObject<WireEnumDocument>(
+            json,
+            StrictDocumentJson.CreateOptions(),
+            "wire enum document",
+            out _,
+            out var error);
+
+        Assert.False(success);
+        Assert.False(string.IsNullOrWhiteSpace(error.Message));
+    }
+
     sealed record TestDocument(
         string Name,
         int[] Slots,
         decimal BatchSize,
         string? Description);
+
+    sealed record WireEnumDocument(WireDisposition Disposition);
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    enum WireDisposition
+    {
+        [JsonStringEnumMemberName("standard")]
+        Standard,
+
+        [JsonStringEnumMemberName("partner-overlay")]
+        PartnerOverlay
+    }
 }
