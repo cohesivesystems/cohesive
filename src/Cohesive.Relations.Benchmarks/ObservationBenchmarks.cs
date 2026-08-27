@@ -98,18 +98,45 @@ public class ObservationProjectionBenchmarks
         observation = fixture.Observation;
         materializer = fixture.Materializer;
 
+        var handwritten = MaterializeHandwritten();
         var compiled = materializer.Materialize(observation);
         var cachedDefault = observation.Materialize<ObservationBenchmarkState>();
-        if (!MatchesExpected(compiled, fixture.Expected)
+        if (!MatchesExpected(handwritten, fixture.Expected)
+            || !MatchesExpected(compiled, fixture.Expected)
             || !MatchesExpected(cachedDefault, fixture.Expected))
         {
             throw new InvalidOperationException("Observation benchmark materialization produced an unexpected value.");
         }
     }
 
-    /// <summary>Materializes state through a precompiled reusable materializer.</summary>
+    /// <summary>Materializes state with direct handwritten reads as the destination-allocation lower bound.</summary>
     /// <returns>The materialized CLR state.</returns>
     [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Observation", "ClrMaterialization")]
+    public ObservationBenchmarkState MaterializeHandwritten()
+    {
+        var fields = observation.Fields;
+        var address = fields["Address"].Fields!;
+        var observedTags = fields["Tags"].EnumerateArray();
+        var tags = new string[observedTags.Length];
+        for (var index = 0; index < tags.Length; index++)
+        {
+            tags[index] = observedTags[index].GetString()!;
+        }
+
+        return new(
+            fields["Id"].GetString()!,
+            fields["Version"].GetInt64(),
+            fields["Name"].GetString()!,
+            fields["Enabled"].GetBoolean(),
+            fields["Balance"].GetDecimal(),
+            new(address["City"].GetString()!, address["PostalCode"].GetString()!),
+            tags);
+    }
+
+    /// <summary>Materializes state through a precompiled reusable materializer.</summary>
+    /// <returns>The materialized CLR state.</returns>
+    [Benchmark]
     [BenchmarkCategory("Observation", "ClrMaterialization")]
     public ObservationBenchmarkState MaterializeWithCompiledPlan() =>
         materializer.Materialize(observation);

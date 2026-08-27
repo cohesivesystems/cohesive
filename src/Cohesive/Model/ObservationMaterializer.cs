@@ -156,7 +156,11 @@ public static class ObservationMaterializer
 
 /// <summary>Builds an immutable compiled observation-to-CLR materializer.</summary>
 /// <typeparam name="T">CLR target type.</typeparam>
-/// <remarks>This builder is mutable and is intended for single-threaded authoring before <see cref="Compile"/>.</remarks>
+/// <remarks>
+/// This builder is mutable and is intended for single-threaded authoring before <see cref="Compile"/>. The framework
+/// default serializer contract compiles canonical scalar, array, and immutable constructor-object reads directly.
+/// Customized or unsupported JSON contracts retain the serializer compatibility path.
+/// </remarks>
 public sealed class ObservationMaterializerBuilder<T>
 {
     readonly QualifiedShapeId shapeId;
@@ -187,8 +191,8 @@ public sealed class ObservationMaterializerBuilder<T>
     /// <param name="fieldIdentity">Canonical top-level semantic field identity.</param>
     /// <param name="target">Direct target property selector, such as <c>value =&gt; value.Name</c>.</param>
     /// <param name="convert">
-    /// Optional field converter. When omitted, the immutable observation value is deserialized using the effective
-    /// serializer options.
+    /// Optional field converter. When omitted, the immutable observation value is interpreted using the effective
+    /// serializer contract. The framework default may use an equivalent direct conversion for canonical values.
     /// </param>
     /// <returns>This builder for continued configuration.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="fieldIdentity"/> or <paramref name="target"/> is null.</exception>
@@ -317,8 +321,16 @@ public sealed class ObservationMaterializerBuilder<T>
             static mapping => mapping.Property.Name,
             StringComparer.OrdinalIgnoreCase);
         var constructor = SelectConstructor(byProperty);
+        var useDefaultValueConverters = ReferenceEquals(
+            serializerOptions,
+            ObservationMaterializerDefaults.SerializerOptions);
         var frozenSerializerOptions = ObservationMaterializerDefaults.Snapshot(serializerOptions);
-        var compiled = CompileMaterializer(constructor, byProperty, effectiveMappings, frozenSerializerOptions);
+        var compiled = CompileMaterializer(
+            constructor,
+            byProperty,
+            effectiveMappings,
+            frozenSerializerOptions,
+            useDefaultValueConverters);
         return new(shapeId, compiled);
     }
 
@@ -432,7 +444,8 @@ public sealed class ObservationMaterializerBuilder<T>
         ConstructorInfo? constructor,
         IReadOnlyDictionary<string, PropertyMapping> byProperty,
         IReadOnlyList<PropertyMapping> effectiveMappings,
-        JsonSerializerOptions frozenSerializerOptions)
+        JsonSerializerOptions frozenSerializerOptions,
+        bool useDefaultValueConverters)
     {
         var observation = Expression.Parameter(typeof(IObservationFieldReader), "observation");
         var options = Expression.Constant(frozenSerializerOptions);
@@ -446,6 +459,7 @@ public sealed class ObservationMaterializerBuilder<T>
                     mapping,
                     parameter.ParameterType,
                     options,
+                    useDefaultValueConverters,
                     ResolveMissingField(
                         parameter.ParameterType,
                         parameter.HasDefaultValue,
@@ -476,6 +490,7 @@ public sealed class ObservationMaterializerBuilder<T>
                         mapping,
                         mapping.Property.PropertyType,
                         options,
+                        useDefaultValueConverters,
                         ResolveMissingField(mapping.Property.PropertyType)));
             })
             .ToArray();
@@ -491,12 +506,19 @@ public sealed class ObservationMaterializerBuilder<T>
         PropertyMapping mapping,
         Type targetType,
         ConstantExpression serializerOptions,
+        bool useDefaultValueConverters,
         MissingFieldResolution missingFieldResolution)
     {
+        var converter = mapping.Converter;
+        if (converter is null && useDefaultValueConverters)
+        {
+            converter = DefaultObservationValueConverterCache.Get(targetType);
+        }
+
         return Expression.Call(
             ObservationMaterializerTypeCache<T>.ReadMappedValueMethod.MakeGenericMethod(targetType),
             observation,
-            Expression.Constant(mapping.Converter, typeof(Delegate)),
+            Expression.Constant(converter, typeof(Delegate)),
             serializerOptions,
             Expression.Constant(mapping.FieldIdentity),
             Expression.Constant(missingFieldResolution));
