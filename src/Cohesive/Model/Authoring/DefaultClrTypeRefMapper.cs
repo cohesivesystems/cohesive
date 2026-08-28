@@ -186,42 +186,29 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 
     static TypeRef MapEnum(Type enumType)
     {
-        var converterAttribute = enumType.GetCustomAttribute<JsonConverterAttribute>(inherit: true);
-        var converter = converterAttribute?.ConverterType;
-        if (converterAttribute is not null
-            && (converter is null || !IsStandardStringEnumConverter(converter)))
-        {
-            return Opaque(
+        if (!SerializedEnumMemberCatalog.TryCreate(
                 enumType,
-                TypeInferenceDiagnosticReasons.UnsupportedEnumConverter,
-                $"Enum JSON converter '{converter?.FullName ?? converterAttribute.GetType().FullName}' does not expose a statically inferable closed wire-member catalog.");
+                out var catalog,
+                out var failure,
+                out var unsupportedConverter))
+        {
+            return failure switch
+            {
+                SerializedEnumMemberCatalogFailure.UnsupportedConverter => Opaque(
+                    enumType,
+                    TypeInferenceDiagnosticReasons.UnsupportedEnumConverter,
+                    $"Enum JSON converter '{unsupportedConverter?.FullName ?? typeof(JsonConverterAttribute).FullName}' does not expose a statically inferable closed wire-member catalog."),
+                SerializedEnumMemberCatalogFailure.AmbiguousWireMember => Opaque(
+                    enumType,
+                    TypeInferenceDiagnosticReasons.AmbiguousSerializedEnumMember,
+                    "The CLR enum maps more than one member to the same canonical JSON string."),
+                _ => throw new InvalidOperationException(
+                    $"Enum '{enumType}' failed serialized-member discovery without a diagnostic reason.")
+            };
         }
 
-        var useJsonMemberNames = converterAttribute is not null;
-        var members = Enum.GetNames(enumType)
-            .Select(name => useJsonMemberNames
-                ? enumType.GetField(name, BindingFlags.Public | BindingFlags.Static)?
-                      .GetCustomAttribute<JsonStringEnumMemberNameAttribute>(inherit: false)?.Name ?? name
-                : name)
-            .ToArray();
-        if (members.Distinct(StringComparer.Ordinal).Count() != members.Length)
-        {
-            return Opaque(
-                enumType,
-                TypeInferenceDiagnosticReasons.AmbiguousSerializedEnumMember,
-                "The CLR enum maps more than one member to the same canonical JSON string.");
-        }
-
-        return new EnumTypeRef(name: enumType.Name, members: [.. members]);
+        return new EnumTypeRef(name: enumType.Name, members: [.. catalog!.WireMembers]);
     }
-
-    static bool IsStandardStringEnumConverter(Type converter) =>
-        converter == typeof(JsonStringEnumConverter)
-        || converter.IsGenericType
-        && string.Equals(
-            converter.GetGenericTypeDefinition().FullName,
-            "System.Text.Json.Serialization.JsonStringEnumConverter`1",
-            StringComparison.Ordinal);
 
     /// <summary>Returns the deterministic JSON field identity of a reflected member.</summary>
     /// <remarks>
