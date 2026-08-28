@@ -182,6 +182,64 @@ public sealed class CoreObservationMaterializationTests
     }
 
     [Fact]
+    public void DefaultMaterializers_AllocateOnlyTheDestinationObjectGraphForNestedState()
+    {
+        var observation = ProjectionObservation();
+        var materializer = ObservationMaterializer.For<ProjectionState>(
+            new GraphShapeId(observation.Graph, observation.Shape.Id)).Compile();
+        Func<ProjectionState> handwritten = () => MaterializeProjectionHandwritten(observation.Observation);
+        Func<ProjectionState> compiled = () => materializer.Materialize(observation.Observation);
+        Func<ProjectionState> cachedDefault = () => observation.Observation.Materialize<ProjectionState>();
+
+        var handwrittenAllocated = MeasureAllocations(handwritten, out var handwrittenResult);
+        var compiledAllocated = MeasureAllocations(compiled, out var compiledResult);
+        var cachedDefaultAllocated = MeasureAllocations(cachedDefault, out var cachedDefaultResult);
+
+        AssertProjection(handwrittenResult);
+        AssertProjection(compiledResult);
+        AssertProjection(cachedDefaultResult);
+        Assert.True(handwrittenAllocated > 0);
+        Assert.Equal(handwrittenAllocated, compiledAllocated);
+        Assert.Equal(handwrittenAllocated, cachedDefaultAllocated);
+    }
+
+    [Fact]
+    public void DefaultPlan_CustomNestedJsonContractUsesJsonCompatibilityPath()
+    {
+        Shape definition = new(
+            new("custom-contract-state"),
+            [new(new("Code"), new ScalarTypeRef(ScalarTypeKind.String))]);
+        ShapeGraph graph = new(new("custom-contract-state-v1"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var observation = CoreObservation.Create(
+            shape,
+            Fields(("Code", ObservationValue.FromString("x12"))));
+
+        var result = ObservationMaterializer
+            .For<CustomContractState>(shape)
+            .Compile()
+            .Materialize(observation);
+
+        Assert.Equal(new CustomCode("converted:x12"), result.Code);
+    }
+
+    [Fact]
+    public void DefaultPlan_DoesNotApplyBooleanStringCoercionBeyondJsonContract()
+    {
+        Shape definition = new(
+            new("string-boolean-state"),
+            [new(new("Enabled"), new ScalarTypeRef(ScalarTypeKind.String))]);
+        ShapeGraph graph = new(new("string-boolean-state-v1"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var observation = CoreObservation.Create(
+            shape,
+            Fields(("Enabled", ObservationValue.FromString("true"))));
+        var materializer = ObservationMaterializer.For<StringBooleanState>(shape).Compile();
+
+        Assert.Throws<JsonException>(() => materializer.Materialize(observation));
+    }
+
+    [Fact]
     public void MissingFields_RespectOptionalExplicitDefaultThrowAndAllMemberPolicies()
     {
         var optionalShape = OptionalShape<OptionalCustomer>("optional-customer-v1");
@@ -289,6 +347,103 @@ public sealed class CoreObservationMaterializationTests
             static field => field.Value,
             StringComparer.Ordinal);
 
+    static ProjectionObservationFixture ProjectionObservation()
+    {
+        Shape definition = new(
+            new("projection-state"),
+            [
+                new(new("Id"), new ScalarTypeRef(ScalarTypeKind.String)),
+                new(new("Version"), new ScalarTypeRef(ScalarTypeKind.Int64)),
+                new(new("Name"), new ScalarTypeRef(ScalarTypeKind.String)),
+                new(new("Enabled"), new ScalarTypeRef(ScalarTypeKind.Bool)),
+                new(new("Balance"), new ScalarTypeRef(ScalarTypeKind.Decimal)),
+                new(
+                    new("Address"),
+                    new ObjectTypeRef(
+                    [
+                        new("City", new ScalarTypeRef(ScalarTypeKind.String)),
+                        new("PostalCode", new ScalarTypeRef(ScalarTypeKind.String))
+                    ])),
+                new(
+                    new("Tags"),
+                    new ScalarTypeRef(ScalarTypeKind.String),
+                    cardinality: FieldCardinality.Many)
+            ]);
+        ShapeGraph graph = new(new("projection-state-v1"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var observation = CoreObservation.Create(
+            shape,
+            Fields(
+                ("Id", ObservationValue.FromString("state-42")),
+                ("Version", ObservationValue.FromInt64(17)),
+                ("Name", ObservationValue.FromString("Primary account")),
+                ("Enabled", ObservationValue.FromBool(true)),
+                ("Balance", ObservationValue.FromDecimal(1250.75m)),
+                ("Address", ObservationValue.FromObject(Fields(
+                    ("City", ObservationValue.FromString("Seattle")),
+                    ("PostalCode", ObservationValue.FromString("98101"))))),
+                ("Tags", ObservationValue.FromArray(
+                [
+                    ObservationValue.FromString("priority"),
+                    ObservationValue.FromString("west")
+                ]))));
+        return new(graph, definition, observation);
+    }
+
+    static ProjectionState MaterializeProjectionHandwritten(CoreObservation observation)
+    {
+        var fields = observation.Fields;
+        var address = fields["Address"].Fields!;
+        var observedTags = fields["Tags"].EnumerateArray();
+        var tags = new string[observedTags.Length];
+        for (var index = 0; index < tags.Length; index++)
+        {
+            tags[index] = observedTags[index].GetString()!;
+        }
+
+        return new(
+            fields["Id"].GetString()!,
+            fields["Version"].GetInt64(),
+            fields["Name"].GetString()!,
+            fields["Enabled"].GetBoolean(),
+            fields["Balance"].GetDecimal(),
+            new(address["City"].GetString()!, address["PostalCode"].GetString()!),
+            tags);
+    }
+
+    static long MeasureAllocations<T>(Func<T> operation, out T result)
+    {
+        const int WarmupIterations = 100;
+        const int MeasurementIterations = 1_000;
+        result = default!;
+        for (var iteration = 0; iteration < WarmupIterations; iteration++)
+        {
+            result = operation();
+        }
+
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (var iteration = 0; iteration < MeasurementIterations; iteration++)
+        {
+            result = operation();
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        GC.KeepAlive(result);
+        return allocated;
+    }
+
+    static void AssertProjection(ProjectionState state)
+    {
+        Assert.Equal("state-42", state.Id);
+        Assert.Equal(17, state.Version);
+        Assert.Equal("Primary account", state.Name);
+        Assert.True(state.Enabled);
+        Assert.Equal(1250.75m, state.Balance);
+        Assert.Equal(new ProjectionAddress("Seattle", "98101"), state.Address);
+        Assert.Equal(["priority", "west"], state.Tags);
+    }
+
     sealed record ImmutableCustomer(string Name, int OrderCount);
 
     sealed record JsonNamedCustomer(
@@ -298,6 +453,44 @@ public sealed class CoreObservationMaterializationTests
     sealed record OtherCustomer(string Name, int OrderCount);
 
     sealed record OptionalCustomer(string Name, string? Note, int Count = 7);
+
+    sealed record ProjectionState(
+        string Id,
+        long Version,
+        string Name,
+        bool Enabled,
+        decimal Balance,
+        ProjectionAddress Address,
+        string[] Tags);
+
+    sealed record ProjectionAddress(string City, string PostalCode);
+
+    sealed record ProjectionObservationFixture(
+        ShapeGraph Graph,
+        Shape Shape,
+        CoreObservation Observation);
+
+    sealed record CustomContractState(CustomCode Code);
+
+    sealed record StringBooleanState(bool Enabled);
+
+    [JsonConverter(typeof(CustomCodeJsonConverter))]
+    sealed record CustomCode(string Value);
+
+    sealed class CustomCodeJsonConverter : JsonConverter<CustomCode>
+    {
+        public override CustomCode Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options) =>
+            new($"converted:{reader.GetString()}");
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            CustomCode value,
+            JsonSerializerOptions options) =>
+            writer.WriteStringValue(value.Value);
+    }
 
     sealed class MutableCustomer
     {

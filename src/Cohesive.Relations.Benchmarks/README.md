@@ -13,8 +13,8 @@ exercise the same semantic definitions, runtime evidence, and CLR DTO contracts.
 
 - **Observation creation and validation:** already-owned immutable values, caller-owned field snapshots,
   successful validation, and diagnostic production across flat-scalar, nested-object, and array-heavy values.
-- **Observation projections:** warm compiled and default-cached CLR materialization plus canonical UTF-8 and string
-  JSON serialization for representative application state.
+- **Observation projections:** a handwritten destination-allocation lower bound, warm compiled and default-cached CLR
+  materialization, plus canonical UTF-8 and string JSON serialization for representative application state.
 - **Warm kernel:** hand-written materialization, the shared core materializer over validated semantic observations,
   the same materializer over the explicit `IndexedObservationOccurrence` path, a
   preconfigured AutoMapper 16.2.0 canonical-row baseline, the generated construction kernel without result

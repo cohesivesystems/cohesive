@@ -5,8 +5,10 @@
 - The allocation-light observation validator reduces successful validation from 6.27–20.23 KB to 0 B and from
   1.85–2.78 μs to 262–282 ns across the flat, nested-object, and array-heavy DefaultJob scenarios. Creating an
   `Observation` from an already-owned immutable value allocates only the retained 112 B object.
-- Warm representative-state materialization is approximately 1.02 μs and 4.22 KB through a compiled plan. The
-  default materializer cache adds approximately 24 ns and no additional steady-state allocation.
+- Direct canonical conversion reduces warm representative-state materialization from 1.017 μs and 4.22 KB to
+  157.9 ns and 152 B through a compiled plan. That is approximately 6.44× faster, eliminates 4,168 B per operation,
+  and matches the handwritten destination-object allocation floor. The default cache adds approximately 29 ns and
+  no steady-state allocation.
 - Canonical serialization is approximately 0.86 μs and allocates 6.64 KB for UTF-8 or 7.23 KB for a string. These
   results are descriptive optimization baselines, not regression thresholds.
 - In the ARI-145 1,024-row DefaultJob verification run, the generated kernel is approximately 1.74×
@@ -28,6 +30,43 @@
   end-to-end profiles.
 
 ## History
+
+### 2026-08-27 (allocation-floor observation CLR materialization)
+
+- Base commit: `445f324bd82b61a75a82c40af08060f3d83cc0b7`
+- Branch: `codex/observation-materializer-performance`
+- Worktree: dirty; includes the uncommitted direct-conversion, tests, and benchmark-baseline implementation
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+- Environment overrides: `DOTNET_CLI_HOME=/tmp/codex-dotnet-materializer`,
+  `DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1`
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --filter "*ObservationProjectionBenchmarks.Materialize*"
+```
+
+Warm projections of a seven-field state containing nested address and array values:
+
+| Operation | Previous mean | Current mean | Speedup | Previous allocation | Current allocation |
+|---|---:|---:|---:|---:|---:|
+| Handwritten destination lower bound | — | 114.2 ns | — | — | 152 B |
+| Compiled CLR materializer | 1.017 μs | 157.9 ns | 6.44× | 4.22 KB | 152 B |
+| Default cached CLR materializer | 1.040 μs | 187.2 ns | 5.55× | 4.22 KB | 152 B |
+
+The compiled plan is 1.38× the handwritten mean, or approximately 43.8 ns of abstraction overhead. Both
+materializer paths allocate exactly the same 152 B as handwritten construction: the state record, nested address,
+and two-element string array. The optimization removes per-field JSON text, UTF-8, reader, and serializer
+materialization while retaining the JSON compatibility path for explicit serializer options, custom JSON contracts,
+and unsupported target types.
+
+All three benchmarks completed successfully in 1 minute 11 seconds. Process-priority elevation was unavailable on
+the host, but BenchmarkDotNet reported no critical validation errors. Previous results are from the immediately
+preceding DefaultJob on the same machine and runtime.
 
 ### 2026-08-27 (observation lifecycle DefaultJob verification)
 
