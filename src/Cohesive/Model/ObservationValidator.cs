@@ -98,8 +98,8 @@ public static class ObservationValidator
     /// <paramref name="shape"/> is default or <paramref name="layout"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// The layout belongs to another shape, contains an unknown field, the value or bitmap length is invalid, or
-    /// the bitmap contains presence bits outside the layout.
+    /// The layout belongs to another shape, the value or bitmap length is invalid, or the bitmap contains presence
+    /// bits outside the layout.
     /// </exception>
     public static bool TryValidateAgainstShape(
         GraphShapeId shape,
@@ -133,15 +133,6 @@ public static class ObservationValidator
         RequireNoPresenceOutsideLayout(hasValueBitMask, layout.Count);
 
         var definition = shape.Graph.GetShape(shape.ShapeId);
-        foreach (var fieldIdentity in layout.FieldIdentities)
-        {
-            if (!definition.TryGetField(fieldIdentity, out _))
-            {
-                throw new ArgumentException(
-                    $"Observation layout for shape '{shape.QualifiedId}' contains unknown field '{fieldIdentity}'.",
-                    nameof(layout));
-            }
-        }
 
         NoDiagnostics noDiagnostics = default;
         if (TryValidateOrdinalFields(
@@ -686,19 +677,7 @@ public static class ObservationValidator
                     (int)unionType.Discriminator.Type));
         }
 
-        TypeRef? matchingType = null;
-        foreach (var unionCase in unionType.Cases)
-        {
-            if (!MatchesPrimitiveLiteral(
-                    unionType.Discriminator.Type,
-                    discriminatorValue,
-                    unionCase.DiscriminatorValue))
-            {
-                continue;
-            }
-            matchingType = unionCase.Type;
-            break;
-        }
+        var matchingType = TryResolveUnionCase(unionType, discriminatorValue);
 
         if (matchingType is null)
         {
@@ -708,6 +687,24 @@ public static class ObservationValidator
         }
 
         return TryMatchTypeCore(matchingType, value, graph, maxDepth, ref diagnostics);
+    }
+
+    internal static TypeRef? TryResolveUnionCase(
+        TypeDefinition.Union unionType,
+        in ObservationValue discriminatorValue)
+    {
+        foreach (var unionCase in unionType.Cases)
+        {
+            if (MatchesPrimitiveLiteral(
+                    unionType.Discriminator.Type,
+                    discriminatorValue,
+                    unionCase.DiscriminatorValue))
+            {
+                return unionCase.Type;
+            }
+        }
+
+        return null;
     }
 
     static bool TryMatchQuantity<TDiagnostics>(

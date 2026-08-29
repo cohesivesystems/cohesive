@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Collections.ObjectModel;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Diagnostics;
@@ -72,9 +73,8 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
     /// <param name="lineage">Optional derived-field lineage for this occurrence.</param>
     /// <returns>An immutable indexed occurrence.</returns>
     /// <remarks>
-    /// This convenience overload creates one layout. When materializing multiple occurrences of the same shape,
-    /// create one <see cref="ObservationLayout"/> and pass it to the explicit-layout overload so the layout and its
-    /// name index are shared across every row and compiled plan.
+    /// This convenience overload resolves the graph-cached declaration-order layout. Pass an explicit layout when
+    /// the physical field order is caller-defined or when the same layout must also bind a compiled plan.
     /// </remarks>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="shape"/> is default, or <paramref name="occurrence"/> or <paramref name="observation"/> is
@@ -113,8 +113,7 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
     /// <paramref name="layout"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// Qualified identities conflict, the layout contains a foreign field, or a present observation field is absent
-    /// from the layout.
+    /// Qualified identities conflict or a present observation field is absent from the layout.
     /// </exception>
     public static IndexedObservationOccurrence FromObservation(
         GraphShapeId shape,
@@ -132,7 +131,6 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
                 nameof(observation));
         }
 
-        ValidateLayoutFields(shape, layout);
         return FromObservationCore(occurrence, observation, layout, lineage);
     }
 
@@ -233,6 +231,102 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
                 nameof(valuesByOrdinal));
         }
 
+        return new(
+            occurrence,
+            layout,
+            effectiveBuffer,
+            SnapshotLineage(lineage, layout, effectiveBuffer));
+    }
+
+    /// <summary>
+    /// Reads and validates one plain JSON object directly into the shape's shared declaration-order layout.
+    /// </summary>
+    /// <param name="shape">Exact graph and shape governing the JSON object.</param>
+    /// <param name="occurrence">Evaluation-scoped occurrence descriptor.</param>
+    /// <param name="utf8Json">Complete UTF-8 JSON object representing the occurrence fields.</param>
+    /// <param name="lineage">Optional derived-field lineage for this occurrence.</param>
+    /// <returns>An immutable indexed occurrence backed directly by the newly parsed ordinal storage.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="shape"/> is default or <paramref name="occurrence"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// The occurrence belongs to another shape or the parsed fields do not satisfy the governing shape.
+    /// </exception>
+    /// <exception cref="JsonException">
+    /// <paramref name="utf8Json"/> is empty, malformed, has trailing content, is not a JSON object, or contains an
+    /// unknown or duplicate root property.
+    /// </exception>
+    public static IndexedObservationOccurrence FromJson(
+        GraphShapeId shape,
+        RelationQueryObservationOccurrence occurrence,
+        ReadOnlySpan<byte> utf8Json,
+        ObservationLineage? lineage = null) =>
+        FromJson(shape, occurrence, ObservationLayout.Create(shape), utf8Json, lineage);
+
+    /// <summary>Reads and validates one plain JSON object directly into an explicit ordinal layout.</summary>
+    /// <param name="shape">Exact graph and shape governing the JSON object.</param>
+    /// <param name="occurrence">Evaluation-scoped occurrence descriptor.</param>
+    /// <param name="layout">Physical layout receiving the parsed fields.</param>
+    /// <param name="utf8Json">Complete UTF-8 JSON object representing the occurrence fields.</param>
+    /// <param name="lineage">Optional derived-field lineage for this occurrence.</param>
+    /// <returns>An immutable indexed occurrence backed directly by the newly parsed ordinal storage.</returns>
+    /// <remarks>
+    /// The parser allocates each value and presence buffer once and transfers their ownership to the result. It does
+    /// not construct a root field dictionary, <see cref="JsonDocument"/>, or an intermediate semantic observation.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="shape"/> is default, or <paramref name="occurrence"/> or <paramref name="layout"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// Qualified identities conflict or the parsed fields do not satisfy the governing shape.
+    /// </exception>
+    /// <exception cref="JsonException">
+    /// <paramref name="utf8Json"/> is empty, malformed, has trailing content, is not a JSON object, or contains an
+    /// unknown or duplicate root property.
+    /// </exception>
+    public static IndexedObservationOccurrence FromJson(
+        GraphShapeId shape,
+        RelationQueryObservationOccurrence occurrence,
+        ObservationLayout layout,
+        ReadOnlySpan<byte> utf8Json,
+        ObservationLineage? lineage = null)
+    {
+        ArgumentNullException.ThrowIfNull(shape.Graph);
+        ArgumentNullException.ThrowIfNull(occurrence);
+        ArgumentNullException.ThrowIfNull(layout);
+        if (occurrence.Shape != shape.QualifiedId)
+        {
+            throw new ArgumentException(
+                $"Occurrence shape '{occurrence.Shape}' does not match supplied shape '{shape.QualifiedId}'.",
+                nameof(occurrence));
+        }
+
+        var values = new ObservationValue[layout.Count];
+        var presence = new ulong[ObservationBuffer.RequiredWordCount(layout.Count)];
+        var reader = new Utf8JsonReader(utf8Json);
+        if (!reader.Read())
+            throw new JsonException("The JSON observation is empty.");
+        if (!ObservationJsonReader.TryReadShape(
+                ref reader,
+                shape,
+                layout,
+                values,
+                presence,
+                out var validationError))
+        {
+            throw new ArgumentException(
+                $"JSON observation does not adhere to shape '{shape.QualifiedId}': {validationError}",
+                nameof(utf8Json));
+        }
+        var trailing = utf8Json[checked((int)reader.BytesConsumed)..];
+        foreach (var character in trailing)
+        {
+            if (character is not (0x20 or 0x09 or 0x0A or 0x0D))
+                throw new JsonException("The JSON observation contains trailing content.");
+        }
+
+        ObservationBuffer effectiveBuffer = new(values, presence, layout.Count);
         return new(
             occurrence,
             layout,
@@ -356,22 +450,6 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
             throw new ArgumentException(
                 $"Physical layout shape '{layout.ShapeId}' does not match occurrence shape '{shape}'.",
                 nameof(layout));
-        }
-    }
-
-    static void ValidateLayoutFields(GraphShapeId shape, ObservationLayout layout)
-    {
-        ArgumentNullException.ThrowIfNull(layout);
-        RequireLayoutShape(layout, shape.QualifiedId);
-        var definition = shape.Graph.GetShape(shape.ShapeId);
-        foreach (var fieldIdentity in layout.FieldIdentities)
-        {
-            if (!definition.TryGetField(fieldIdentity, out _))
-            {
-                throw new ArgumentException(
-                    $"Physical layout for shape '{shape.QualifiedId}' contains unknown field '{fieldIdentity}'.",
-                    nameof(layout));
-            }
         }
     }
 

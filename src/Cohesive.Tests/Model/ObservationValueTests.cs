@@ -498,6 +498,23 @@ public sealed class ObservationValueTests
     }
 
     [Fact]
+    public void JsonConverter_StreamingReaderPreservesNestedNumbersAndJsonKinds()
+    {
+        const decimal expected = 12345678901234567890.123456789m;
+
+        var observed = JsonSerializer.Deserialize<ObservationValue>(
+            """
+            {"precise":12345678901234567890.123456789,"small":1e-29,"items":[1,true,null,{"name":"Ada"}]}
+            """);
+
+        Assert.Equal(expected, observed.GetProperty("precise").Decimal);
+        Assert.Equal(ObservationValueKind.Double, observed.GetProperty("small").Kind);
+        Assert.Equal(1e-29d, observed.GetProperty("small").Double);
+        Assert.Equal(ObservationValueKind.Array, observed.GetProperty("items").Kind);
+        Assert.Equal("Ada", observed.GetProperty("items").EnumerateArray()[3].GetProperty("name").GetString());
+    }
+
+    [Fact]
     public void FromJsonNode_PreservesTypedDoubleAndDecimalCarriers()
     {
         var floatingPoint = ObservationValue.FromJsonNode(JsonValue.Create(0.1d));

@@ -17,6 +17,10 @@
 - Direct sixteen-field ordinal validation takes 211.1 ns and 0 B versus 726.3 ns and 3,968 B after dictionary
   projection. Complete immutable indexed hydration takes 289.8 ns and 1,424 B. Direct canonical JSON from the
   indexed buffer takes 360.5 ns and 0 B, 45.0% less time than the equivalent 655.0 ns dictionary-backed write.
+- Streaming JSON-to-value hydration of sixteen flat scalars takes 916.5 ns and 2,496 B, 17.4% less time and 360 B
+  less allocation than the former `JsonDocument` path. Shape-bound JSON-to-indexed hydration takes 897.0 ns and
+  1,424 B, versus 1.813 μs and 4,448 B through `JsonDocument`, semantic observation construction, and ordinal
+  projection: 50.5% less time and 68.0% less allocation.
 - Canonical observation serialization now takes 658.3 ns and 344 B for returned UTF-8 or 688.2 ns and 632 B for a
   returned string. Reusable caller-owned output takes 643.2 ns with 0 B of steady-state allocation. Compared with the
   previous 0.86 μs implementation, returned UTF-8 is 1.31× faster and eliminates 6,456 B; returned strings are 1.25×
@@ -41,6 +45,50 @@
   end-to-end profiles.
 
 ## History
+
+### 2026-08-29 (streaming and shape-bound observation JSON hydration)
+
+- Base commit: `4d36894bb9d01e9cbdf51d9792880f679c480f5e`
+- Branch: `codex/observation-ordinal-access`
+- Worktree: dirty; includes the streaming reader, direct indexed hydration, tests, and benchmark coverage
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build --no-restore -- \
+  --job Short \
+  --filter "*ObservationJsonHydrationBenchmarks*"
+```
+
+Sixteen flat `Int64` fields parsed from a prebuilt UTF-8 JSON payload:
+
+| Operation | Mean | Allocated | Relative time | Relative allocation |
+|---|---:|---:|---:|---:|
+| `JsonDocument` to untyped `ObservationValue` | 1.110 μs | 2,856 B | 1.00× | 1.00× |
+| Streaming reader to untyped `ObservationValue` | 916.5 ns | 2,496 B | 0.83× | 0.87× |
+| `JsonDocument` → semantic observation → indexed occurrence | 1.813 μs | 4,448 B | 1.00× | 1.00× |
+| Shape-bound streaming reader → indexed occurrence | 897.0 ns | 1,424 B | 0.49× | 0.32× |
+
+The general converter no longer constructs a transient JSON DOM. Its reader pre-counts object properties and array
+items using a copied `Utf8JsonReader`, then transfers ownership of exact-capacity storage into the immutable value.
+That second token scan is cheaper than immutable-builder growth and copying for this payload while reducing retained
+allocation.
+
+The shape-bound path hashes unescaped root property-name UTF-8 against the shared layout, restores typed primitives,
+fills the retained value and presence arrays directly, and delegates semantic acceptance to the existing ordinal
+validator. It therefore includes parse, schema restoration, validation, and immutable occurrence construction while
+allocating exactly the same 1,424 B as construction from already-populated sixteen-field ordinal buffers. The former
+end-to-end path additionally paid for the JSON DOM, root dictionary-backed value, semantic observation, and ordinal
+projection. Immutable layout membership and field-definition validity are established once by the layout's private
+construction boundary rather than re-walked for every parsed occurrence.
+
+These are ShortRun measurements with three measurement iterations. Process-priority elevation was unavailable on the
+host, but BenchmarkDotNet reported no critical validation errors. Allocation regression tests independently guard the
+direct indexed path.
 
 ### 2026-08-29 (shared observation layouts and ordinal-bound CLR materialization)
 

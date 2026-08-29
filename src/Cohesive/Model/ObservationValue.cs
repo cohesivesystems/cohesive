@@ -49,6 +49,20 @@ public readonly struct ObservationValue(
         Array = array;
     }
 
+    ObservationValue(byte[] ownedBytes)
+        : this(ObservationValueKind.Bytes)
+    {
+        Bytes = ownedBytes;
+    }
+
+    ObservationValue(Dictionary<string, ObservationValue> ownedFields)
+        : this(ObservationValueKind.Object)
+    {
+        Fields = ownedFields.Count == 0
+            ? EmptyObjectValues
+            : new OwnedObservationFields(ownedFields);
+    }
+
     /// <summary>
     /// Value shape kind.
     /// </summary>
@@ -355,6 +369,8 @@ public readonly struct ObservationValue(
     public static ObservationValue FromBytes(ReadOnlyMemory<byte> value) =>
         new(ObservationValueKind.Bytes, bytes: value);
 
+    internal static ObservationValue FromOwnedBytes(byte[] value) => new(value);
+
     /// <summary>
     /// Creates an object observation value, snapshotting mutable properties when necessary.
     /// </summary>
@@ -369,6 +385,8 @@ public readonly struct ObservationValue(
         ArgumentNullException.ThrowIfNull(values);
         return new(ObservationValueKind.Object, fields: values);
     }
+
+    internal static ObservationValue FromOwnedObject(Dictionary<string, ObservationValue> values) => new(values);
 
     /// <summary>
     /// Creates an array observation value and copies the provided items.
@@ -1608,7 +1626,7 @@ public readonly struct ObservationValue(
         return values.MoveToImmutable();
     }
 
-    static bool TryParseExactJsonDecimal(ReadOnlySpan<char> text, out decimal result)
+    internal static bool TryParseExactJsonDecimal(ReadOnlySpan<char> text, out decimal result)
     {
         var index = 0;
         var negative = false;

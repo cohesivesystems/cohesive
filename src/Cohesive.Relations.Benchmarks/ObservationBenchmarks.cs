@@ -1,10 +1,13 @@
 using System.Buffers;
 using System.Collections.Immutable;
 using System.Collections.ObjectModel;
+using System.Text;
+using System.Text.Json;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Columns;
 using BenchmarkDotNet.Configs;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Physical;
@@ -418,6 +421,100 @@ public class ObservationOrdinalIngestionBenchmarks
             layout,
             valuesByOrdinal,
             presence);
+}
+
+/// <summary>Plain UTF-8 JSON hydration for a representative sixteen-scalar state object.</summary>
+[Config(typeof(RelationBenchmarkConfig))]
+[MemoryDiagnoser]
+[CategoriesColumn]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+public class ObservationJsonHydrationBenchmarks
+{
+    byte[] json = null!;
+    GraphShapeId shape;
+    ObservationLayout layout = null!;
+    RelationQueryObservationOccurrence occurrence = null!;
+
+    /// <summary>Builds the shared shape, layout, occurrence, and UTF-8 payload outside measurement.</summary>
+    [GlobalSetup]
+    public void Setup()
+    {
+        const int FieldCount = 16;
+        var definitions = ImmutableArray.CreateBuilder<FieldDefinition>(FieldCount);
+        for (var ordinal = 0; ordinal < FieldCount; ordinal++)
+        {
+            definitions.Add(new(
+                new($"field_{ordinal:D2}"),
+                new ScalarTypeRef(ScalarTypeKind.Int64)));
+        }
+
+        Shape definition = new(new("json-hydration-state"), definitions.MoveToImmutable());
+        ShapeGraph graph = new(new("observation-json-hydration-v1"), [definition]);
+        shape = new(graph, definition.Id);
+        layout = ObservationLayout.Create(shape);
+        occurrence = new(
+            new("json-hydration/0"),
+            new("json-hydration"),
+            shape.QualifiedId,
+            "json-hydration/0");
+        json = Encoding.UTF8.GetBytes(
+            "{" + string.Join(",", Enumerable.Range(0, FieldCount)
+                .Select(static ordinal => $"\"field_{ordinal:D2}\":{ordinal}")) + "}");
+
+        var legacy = ReadViaJsonDocument();
+        var streaming = ReadStreamingValue();
+        var projected = HydrateIndexedViaObservation();
+        var indexed = HydrateIndexedOccurrence();
+        if (!ObservationValue.DeepEquals(legacy, streaming)
+            || !projected.TryGetField(15, out var projectedLast)
+            || projectedLast.Int64 != 15
+            || !indexed.TryGetField(15, out var last)
+            || last.Int64 != 15)
+        {
+            throw new InvalidOperationException("Observation JSON hydration benchmark fixture is invalid.");
+        }
+    }
+
+    /// <summary>Reads through the former transient JSON document representation.</summary>
+    /// <returns>The untyped observation value tree.</returns>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Observation", "JsonValueHydration")]
+    public ObservationValue ReadViaJsonDocument()
+    {
+        using var document = JsonDocument.Parse(json);
+        return ObservationValue.FromJsonElement(document.RootElement);
+    }
+
+    /// <summary>Reads the untyped observation value tree directly from the streaming JSON reader.</summary>
+    /// <returns>The untyped observation value tree.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "JsonValueHydration")]
+    public ObservationValue ReadStreamingValue()
+    {
+        var reader = new Utf8JsonReader(json);
+        if (!reader.Read())
+            throw new JsonException("Benchmark JSON is empty.");
+        return ObservationJsonReader.ReadValue(ref reader);
+    }
+
+    /// <summary>Reads through a JSON document and semantic observation before building ordinal storage.</summary>
+    /// <returns>The immutable indexed occurrence.</returns>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Observation", "JsonIndexedHydration")]
+    public IndexedObservationOccurrence HydrateIndexedViaObservation()
+    {
+        using var document = JsonDocument.Parse(json);
+        var value = ObservationValue.FromJsonElement(document.RootElement);
+        var observation = CoreObservation.Create(shape, value);
+        return IndexedObservationOccurrence.FromObservation(shape, occurrence, observation, layout);
+    }
+
+    /// <summary>Reads, restores shaped values, and validates directly into retained ordinal storage.</summary>
+    /// <returns>The immutable indexed occurrence.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "JsonIndexedHydration")]
+    public IndexedObservationOccurrence HydrateIndexedOccurrence() =>
+        IndexedObservationOccurrence.FromJson(shape, occurrence, layout, json);
 }
 
 /// <summary>Warm CLR materialization for a representative state object containing sixteen flat scalar fields.</summary>

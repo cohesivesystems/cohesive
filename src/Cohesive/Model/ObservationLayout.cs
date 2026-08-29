@@ -21,15 +21,22 @@ public sealed class ObservationLayout
         canonicalLayoutsByGraph = new();
 
     readonly ImmutableArray<string> fieldIdentities;
+    readonly ImmutableArray<FieldDefinition> fieldDefinitions;
     readonly Dictionary<string, int> ordinalByFieldIdentity;
+    readonly Dictionary<ulong, int> ordinalByJsonNameHash;
     readonly ImmutableArray<int> canonicalJsonOrdinals;
     readonly ImmutableArray<JsonEncodedText> jsonPropertyNamesByOrdinal;
 
-    ObservationLayout(QualifiedShapeId shapeId, ImmutableArray<string> fieldIdentities)
+    ObservationLayout(
+        QualifiedShapeId shapeId,
+        ImmutableArray<string> fieldIdentities,
+        ImmutableArray<FieldDefinition> fieldDefinitions)
     {
         ShapeId = shapeId;
         this.fieldIdentities = fieldIdentities;
+        this.fieldDefinitions = fieldDefinitions;
         ordinalByFieldIdentity = new(fieldIdentities.Length, StringComparer.Ordinal);
+        ordinalByJsonNameHash = new(fieldIdentities.Length);
         var canonicalOrdinals = new int[fieldIdentities.Length];
         var jsonPropertyNames = ImmutableArray.CreateBuilder<JsonEncodedText>(fieldIdentities.Length);
         for (var ordinal = 0; ordinal < fieldIdentities.Length; ordinal++)
@@ -43,8 +50,13 @@ public sealed class ObservationLayout
             }
 
             canonicalOrdinals[ordinal] = ordinal;
-            jsonPropertyNames.Add(
-                JsonEncodedText.Encode(fieldIdentity, JavaScriptEncoder.UnsafeRelaxedJsonEscaping));
+            var jsonPropertyName = JsonEncodedText.Encode(
+                fieldIdentity,
+                JavaScriptEncoder.UnsafeRelaxedJsonEscaping);
+            jsonPropertyNames.Add(jsonPropertyName);
+            var hash = GetUtf8Hash(jsonPropertyName.EncodedUtf8Bytes);
+            if (!ordinalByJsonNameHash.TryAdd(hash, ordinal))
+                ordinalByJsonNameHash[hash] = -1;
         }
 
         Array.Sort(
@@ -66,6 +78,31 @@ public sealed class ObservationLayout
     internal ReadOnlySpan<int> CanonicalJsonOrdinals => canonicalJsonOrdinals.AsSpan();
 
     internal JsonEncodedText GetJsonPropertyName(int ordinal) => jsonPropertyNamesByOrdinal[ordinal];
+
+    internal FieldDefinition GetFieldDefinition(int ordinal) => fieldDefinitions[ordinal];
+
+    internal bool TryGetJsonOrdinal(ref Utf8JsonReader reader, out int ordinal)
+    {
+        if (!reader.HasValueSequence && !reader.ValueIsEscaped)
+        {
+            var hash = GetUtf8Hash(reader.ValueSpan);
+            if (ordinalByJsonNameHash.TryGetValue(hash, out ordinal)
+                && ordinal >= 0
+                && reader.ValueTextEquals(fieldIdentities[ordinal]))
+            {
+                return true;
+            }
+        }
+
+        for (ordinal = 0; ordinal < fieldIdentities.Length; ordinal++)
+        {
+            if (reader.ValueTextEquals(fieldIdentities[ordinal]))
+                return true;
+        }
+
+        ordinal = default;
+        return false;
+    }
 
     /// <summary>Gets the ordinal assigned to a canonical field identity.</summary>
     /// <param name="fieldIdentity">Canonical top-level field identity.</param>
@@ -116,10 +153,14 @@ public sealed class ObservationLayout
     {
         var definition = shape.Graph.GetShape(shape.ShapeId);
         var identities = ImmutableArray.CreateBuilder<string>(definition.Fields.Length);
+        var fields = ImmutableArray.CreateBuilder<FieldDefinition>(definition.Fields.Length);
         foreach (var field in definition.Fields)
+        {
             identities.Add(field.Name.Value);
+            fields.Add(field);
+        }
 
-        return new(shape.QualifiedId, identities.MoveToImmutable());
+        return new(shape.QualifiedId, identities.MoveToImmutable(), fields.MoveToImmutable());
     }
 
     /// <summary>Creates a caller-ordered layout for an exact graph-scoped shape.</summary>
@@ -139,14 +180,18 @@ public sealed class ObservationLayout
         ArgumentNullException.ThrowIfNull(shape.Graph);
         ArgumentNullException.ThrowIfNull(fieldIdentities);
         var definition = shape.Graph.GetShape(shape.ShapeId);
-        var identities = fieldIdentities.TryGetNonEnumeratedCount(out var count)
+        var hasCount = fieldIdentities.TryGetNonEnumeratedCount(out var count);
+        var identities = hasCount
             ? ImmutableArray.CreateBuilder<string>(count)
             : ImmutableArray.CreateBuilder<string>();
+        var fields = hasCount
+            ? ImmutableArray.CreateBuilder<FieldDefinition>(count)
+            : ImmutableArray.CreateBuilder<FieldDefinition>();
 
         foreach (var fieldIdentity in fieldIdentities)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(fieldIdentity);
-            if (!definition.TryGetField(fieldIdentity, out _))
+            if (!definition.TryGetField(fieldIdentity, out var field))
             {
                 throw new ArgumentException(
                     $"Layout for shape '{shape.QualifiedId}' contains unknown field '{fieldIdentity}'.",
@@ -154,9 +199,25 @@ public sealed class ObservationLayout
             }
 
             identities.Add(fieldIdentity);
+            fields.Add(field);
         }
 
-        return new(shape.QualifiedId, identities.ToImmutable());
+        return new(shape.QualifiedId, identities.ToImmutable(), fields.ToImmutable());
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static ulong GetUtf8Hash(ReadOnlySpan<byte> value)
+    {
+        const ulong OffsetBasis = 14695981039346656037UL;
+        const ulong Prime = 1099511628211UL;
+        var hash = OffsetBasis;
+        foreach (var character in value)
+        {
+            hash ^= character;
+            hash = unchecked(hash * Prime);
+        }
+
+        return hash;
     }
 
     /// <inheritdoc />

@@ -19,10 +19,7 @@ public sealed class ObservationValueJsonConverter(ObservationBytesJsonEncoding b
 
     /// <inheritdoc />
     public override ObservationValue Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-    {
-        using var document = JsonDocument.ParseValue(ref reader);
-        return ObservationValue.FromJsonElement(document.RootElement);
-    }
+        => ObservationJsonReader.ReadValue(ref reader);
 
     /// <inheritdoc />
     public override void Write(Utf8JsonWriter writer, ObservationValue value, JsonSerializerOptions options)

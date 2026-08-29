@@ -1,5 +1,7 @@
 using System.Buffers;
 using System.Collections.Immutable;
+using System.Text;
+using System.Text.Json;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Physical;
 using CoreObservation = Cohesive.Model.Observation;
@@ -125,6 +127,150 @@ public sealed class IndexedObservationOccurrenceTests
 
         Assert.NotNull(last);
         Assert.InRange(allocatedPerOccurrence, 1_400, 1_600);
+    }
+
+    [Fact]
+    public void FromJson_ReadsDirectlyIntoLayoutAndRestoresShapedPrimitives()
+    {
+        Shape definition = new(
+            new("event"),
+            [
+                new(new("name"), new ScalarTypeRef(ScalarTypeKind.String)),
+                new(new("day"), new ScalarTypeRef(ScalarTypeKind.Date)),
+                new(new("at"), new ScalarTypeRef(ScalarTypeKind.Instant)),
+                new(new("payload"), new ScalarTypeRef(ScalarTypeKind.Bytes)),
+                new(
+                    new("scores"),
+                    new ScalarTypeRef(ScalarTypeKind.Decimal),
+                    cardinality: FieldCardinality.Many),
+                new(
+                    new("details"),
+                    new ObjectTypeRef(
+                    [
+                        new("effective", new ScalarTypeRef(ScalarTypeKind.Date))
+                    ]))
+            ]);
+        ShapeGraph graph = new(new("event-graph/v1"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var layout = ObservationLayout.Create(
+            shape,
+            ["payload", "details", "scores", "at", "day", "name"]);
+        var occurrence = Occurrence(shape, "occurrence/event-1", "event-1");
+        var json = """
+            {"details":{"effective":"2026-08-30"},"name":"release","payload":"AQID","day":"2026-08-29","scores":[1,2.5],"at":"2026-08-29T18:30:00Z"}
+            """u8;
+
+        var indexed = IndexedObservationOccurrence.FromJson(shape, occurrence, layout, json);
+
+        Assert.Same(layout, indexed.Layout);
+        Assert.Equal("release", indexed.GetRequiredField("name").GetString());
+        Assert.Equal(new DateOnly(2026, 8, 29), indexed.GetRequiredField("day").GetDateOnly());
+        Assert.True(indexed.GetRequiredField("at").TryGetInstant(out _));
+        Assert.Equal(new byte[] { 1, 2, 3 }, indexed.GetRequiredField("payload").GetBytes().ToArray());
+        Assert.Equal(2.5m, indexed.GetRequiredField("scores").EnumerateArray()[1].GetDecimal());
+        Assert.Equal(
+            new DateOnly(2026, 8, 30),
+            indexed.GetRequiredField("details").GetProperty("effective").GetDateOnly());
+    }
+
+    [Fact]
+    public void FromJson_UsesUnionDiscriminatorSemanticsBeforeReadingTypedCase()
+    {
+        TypeId payloadTypeId = new("event-payload");
+        ObjectTypeRef datedPayload = new(
+        [
+            new("kind", new ScalarTypeRef(ScalarTypeKind.String)),
+            new("when", new ScalarTypeRef(ScalarTypeKind.Date))
+        ]);
+        TypeDefinition.Union payloadType = new(
+            payloadTypeId,
+            new("kind"),
+            [new("dated", datedPayload)]);
+        Shape definition = new(
+            new("event"),
+            [new(new("payload"), new NamedTypeRef(payloadTypeId))]);
+        ShapeGraph graph = new(
+            new("union-event-graph/v1"),
+            [definition],
+            namedTypes: [payloadType]);
+        GraphShapeId shape = new(graph, definition.Id);
+
+        var indexed = IndexedObservationOccurrence.FromJson(
+            shape,
+            Occurrence(shape, "occurrence/event-1", "event-1"),
+            "{\"payload\":{\"when\":\"2026-08-29\",\"KIND\":\"dated\"}}"u8);
+
+        Assert.Equal(
+            new DateOnly(2026, 8, 29),
+            indexed.GetRequiredField("payload").GetProperty("when").GetDateOnly());
+    }
+
+    [Fact]
+    public void FromJson_RejectsInvalidShapeDuplicateUnknownAndTrailingContent()
+    {
+        var shape = CustomerShape("customer-graph/v1");
+        var occurrence = Occurrence(shape, "occurrence/customer-1", "customer-1");
+        var layout = ObservationLayout.Create(shape);
+
+        var missing = Assert.Throws<ArgumentException>(() =>
+            IndexedObservationOccurrence.FromJson(shape, occurrence, layout, "{}"u8));
+        var duplicate = Assert.Throws<JsonException>(() =>
+            IndexedObservationOccurrence.FromJson(
+                shape,
+                occurrence,
+                layout,
+                "{\"name\":\"Ada\",\"name\":\"Grace\",\"count\":3}"u8));
+        var unknown = Assert.Throws<JsonException>(() =>
+            IndexedObservationOccurrence.FromJson(
+                shape,
+                occurrence,
+                layout,
+                "{\"name\":\"Ada\",\"count\":3,\"other\":true}"u8));
+        var trailing = Assert.ThrowsAny<JsonException>(() =>
+            IndexedObservationOccurrence.FromJson(
+                shape,
+                occurrence,
+                layout,
+                "{\"name\":\"Ada\",\"count\":3}{}"u8));
+
+        Assert.Contains("required field 'name'", missing.Message, StringComparison.Ordinal);
+        Assert.Contains("more than once", duplicate.Message, StringComparison.Ordinal);
+        Assert.Contains("other", unknown.Message, StringComparison.Ordinal);
+        Assert.Contains("trailing content", trailing.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromJson_FlatOrdinalHydrationAvoidsRootDictionaryAllocations()
+    {
+        const int FieldCount = 16;
+        const int Iterations = 1_000;
+        var definitions = Enumerable.Range(0, FieldCount)
+            .Select(static ordinal => new FieldDefinition(
+                new($"field_{ordinal:D2}"),
+                new ScalarTypeRef(ScalarTypeKind.Int64)))
+            .ToImmutableArray();
+        Shape definition = new(new("json-state"), definitions);
+        ShapeGraph graph = new(new("json-state-v1"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var layout = ObservationLayout.Create(shape);
+        var occurrence = Occurrence(shape, "occurrence/json-state-1", "json-state-1");
+        var json = Encoding.UTF8.GetBytes(
+            "{" + string.Join(",", Enumerable.Range(0, FieldCount)
+                .Select(static ordinal => $"\"field_{ordinal:D2}\":{ordinal}")) + "}");
+
+        for (var iteration = 0; iteration < 100; iteration++)
+            _ = IndexedObservationOccurrence.FromJson(shape, occurrence, layout, json);
+
+        IndexedObservationOccurrence? last = null;
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (var iteration = 0; iteration < Iterations; iteration++)
+            last = IndexedObservationOccurrence.FromJson(shape, occurrence, layout, json);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        var allocatedPerOccurrence = allocated / Iterations;
+
+        Assert.NotNull(last);
+        Assert.Equal(15, last.GetRequiredField("field_15").GetInt32());
+        Assert.InRange(allocatedPerOccurrence, 1_300, 1_700);
     }
 
     [Fact]
