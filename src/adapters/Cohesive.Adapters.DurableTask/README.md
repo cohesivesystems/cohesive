@@ -80,6 +80,20 @@ IProcessExecutionRepository historicalRepository = new DurableTaskProcessExecuti
     taskHubName: "orders");
 ```
 
+Applications using dependency injection can register the current repository once and project its execution, value,
+trace, and explanation capabilities without maintaining parallel aliases:
+
+```csharp
+services.AddCohesiveDurableTaskProcessExecutionRepository(serviceProvider => new(
+        serviceProvider.GetRequiredService<DurableTaskClient>(),
+        taskHubName: "orders"))
+    .AddExecutionExplainRepository(_ => deployedPlanCatalog);
+```
+
+An application that needs a policy-bearing execution view can call `DecorateExecutionRepository<TRepository>`.
+The decorator changes only the application-facing `IProcessExecutionRepository`; the underlying Durable Task
+repository remains the sole canonical value and trace authority.
+
 The primary constructor queries the same standalone `DurableTaskClient` used to schedule canonical Process
 orchestrations. Exact lookup accepts the physical task-hub ID returned by `ScheduleCohesiveProcessAsync`; the
 `ProcessExecutionRecord.ProcessId` remains that authority-scoped physical identity. Its exact `Definition` is
