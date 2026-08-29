@@ -14,6 +14,9 @@
   scalar fields across repeated ShortRuns. Both ordinal paths remain at the destination-only allocation floor. Raw
   ordinal field access is about 2.3–3.2× faster than semantic or indexed name lookup across the measured 4-, 16-,
   and 64-field cases.
+- Direct sixteen-field ordinal validation takes 211.1 ns and 0 B versus 726.3 ns and 3,968 B after dictionary
+  projection. Complete immutable indexed hydration takes 289.8 ns and 1,424 B. Direct canonical JSON from the
+  indexed buffer takes 360.5 ns and 0 B, 45.0% less time than the equivalent 655.0 ns dictionary-backed write.
 - Canonical observation serialization now takes 658.3 ns and 344 B for returned UTF-8 or 688.2 ns and 632 B for a
   returned string. Reusable caller-owned output takes 643.2 ns with 0 B of steady-state allocation. Compared with the
   previous 0.86 μs implementation, returned UTF-8 is 1.31× faster and eliminates 6,456 B; returned strings are 1.25×
@@ -70,6 +73,13 @@ dotnet run \
   -c Release --no-build --no-restore -- \
   --job Short \
   --filter "*ObservationMaterializerCompilationBenchmarks*"
+
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build --no-restore -- \
+  --job Short \
+  --filter "*ObservationOrdinalIngestionBenchmarks*" \
+           "*ObservationProjectionBenchmarks.Write*CanonicalJsonToCallerOwnedBuffer"
 ```
 
 Repeated top-level scalar reads, with no allocation in any path:
@@ -106,6 +116,23 @@ measured 3.834 ms and 18.99 KB. Compiling both the name fallback and ordinal-spe
 while the larger expression tree increased its transient allocation from 35.5 KB. This is a one-time cold cost for a
 reusable cached plan, not per-observation overhead, but remains a visible tradeoff to monitor if plans become
 short-lived.
+
+Direct validation and hydration from a sixteen-field reverse-ordered physical layout:
+
+| Operation | Mean | Allocated | Relative to projected validation |
+|---|---:|---:|---:|
+| Dictionary projection plus canonical validation | 726.3 ns | 3,968 B | 1.00× |
+| Direct ordinal-buffer validation | 211.1 ns | 0 B | 0.29× |
+| Complete immutable indexed hydration | 289.8 ns | 1,424 B | — |
+
+The indexed hydration allocation is the retained sixteen-element `ObservationValue` snapshot, presence snapshot,
+and occurrence. It no longer creates transient field dictionaries or a discarded semantic `Observation` merely to
+validate the physical values.
+
+Canonical serialization of the representative mixed seven-field state into reusable caller-owned output measured
+655.0 ns and 0 B from the dictionary-backed `Observation`, versus 360.5 ns and 0 B directly from the indexed buffer.
+The shared layout caches canonical top-level field order and encoded property names once; nested object and array
+values continue through the same canonical value writer used by semantic observations.
 
 These are ShortRun measurements with three measurement iterations. Process-priority elevation was unavailable on the
 host, but BenchmarkDotNet reported no critical validation errors. The deterministic allocation tests separately

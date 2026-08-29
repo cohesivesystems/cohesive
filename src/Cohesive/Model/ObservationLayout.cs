@@ -1,4 +1,8 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 
 namespace Cohesive.Model;
 
@@ -13,14 +17,21 @@ namespace Cohesive.Model;
 /// </remarks>
 public sealed class ObservationLayout
 {
+    static readonly ConditionalWeakTable<ShapeGraph, ConcurrentDictionary<ShapeId, ObservationLayout>>
+        canonicalLayoutsByGraph = new();
+
     readonly ImmutableArray<string> fieldIdentities;
     readonly Dictionary<string, int> ordinalByFieldIdentity;
+    readonly ImmutableArray<int> canonicalJsonOrdinals;
+    readonly ImmutableArray<JsonEncodedText> jsonPropertyNamesByOrdinal;
 
     ObservationLayout(QualifiedShapeId shapeId, ImmutableArray<string> fieldIdentities)
     {
         ShapeId = shapeId;
         this.fieldIdentities = fieldIdentities;
         ordinalByFieldIdentity = new(fieldIdentities.Length, StringComparer.Ordinal);
+        var canonicalOrdinals = new int[fieldIdentities.Length];
+        var jsonPropertyNames = ImmutableArray.CreateBuilder<JsonEncodedText>(fieldIdentities.Length);
         for (var ordinal = 0; ordinal < fieldIdentities.Length; ordinal++)
         {
             var fieldIdentity = fieldIdentities[ordinal];
@@ -30,7 +41,17 @@ public sealed class ObservationLayout
                     $"Layout for shape '{shapeId}' contains duplicate field identity '{fieldIdentity}'.",
                     nameof(fieldIdentities));
             }
+
+            canonicalOrdinals[ordinal] = ordinal;
+            jsonPropertyNames.Add(
+                JsonEncodedText.Encode(fieldIdentity, JavaScriptEncoder.UnsafeRelaxedJsonEscaping));
         }
+
+        Array.Sort(
+            canonicalOrdinals,
+            (left, right) => StringComparer.Ordinal.Compare(fieldIdentities[left], fieldIdentities[right]));
+        canonicalJsonOrdinals = ImmutableArray.Create(canonicalOrdinals);
+        jsonPropertyNamesByOrdinal = jsonPropertyNames.MoveToImmutable();
     }
 
     /// <summary>Gets the exact graph-qualified shape interpreted by this layout.</summary>
@@ -41,6 +62,10 @@ public sealed class ObservationLayout
 
     /// <summary>Gets the number of field ordinals in this layout.</summary>
     public int Count => fieldIdentities.Length;
+
+    internal ReadOnlySpan<int> CanonicalJsonOrdinals => canonicalJsonOrdinals.AsSpan();
+
+    internal JsonEncodedText GetJsonPropertyName(int ordinal) => jsonPropertyNamesByOrdinal[ordinal];
 
     /// <summary>Gets the ordinal assigned to a canonical field identity.</summary>
     /// <param name="fieldIdentity">Canonical top-level field identity.</param>
@@ -71,13 +96,24 @@ public sealed class ObservationLayout
         return ordinalByFieldIdentity.TryGetValue(fieldIdentity, out ordinal);
     }
 
-    /// <summary>Creates the canonical declaration-order layout for an exact graph-scoped shape.</summary>
+    /// <summary>Gets the shared canonical declaration-order layout for an exact graph-scoped shape.</summary>
     /// <param name="shape">Exact graph and shape whose fields define the layout.</param>
-    /// <returns>An immutable layout containing every shape field in declaration order.</returns>
+    /// <returns>
+    /// The graph-cached immutable layout containing every shape field in declaration order. Repeated calls for the
+    /// same graph instance and shape return the same layout instance.
+    /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="shape"/> is default.</exception>
     public static ObservationLayout Create(GraphShapeId shape)
     {
         ArgumentNullException.ThrowIfNull(shape.Graph);
+        var layouts = canonicalLayoutsByGraph.GetValue(
+            shape.Graph,
+            static _ => new ConcurrentDictionary<ShapeId, ObservationLayout>());
+        return layouts.GetOrAdd(shape.ShapeId, _ => CreateCanonical(shape));
+    }
+
+    static ObservationLayout CreateCanonical(GraphShapeId shape)
+    {
         var definition = shape.Graph.GetShape(shape.ShapeId);
         var identities = ImmutableArray.CreateBuilder<string>(definition.Fields.Length);
         foreach (var field in definition.Fields)

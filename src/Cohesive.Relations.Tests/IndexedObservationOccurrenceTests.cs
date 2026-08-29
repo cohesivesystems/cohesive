@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Collections.Immutable;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Physical;
 using CoreObservation = Cohesive.Model.Observation;
@@ -6,6 +8,19 @@ namespace Cohesive.Relations.Tests;
 
 public sealed class IndexedObservationOccurrenceTests
 {
+    [Fact]
+    public void CanonicalLayout_IsSharedForTheExactGraphShape()
+    {
+        var shape = CustomerShape("customer-graph/v1");
+
+        var first = ObservationLayout.Create(shape);
+        var second = ObservationLayout.Create(shape);
+        var explicitlyOrdered = ObservationLayout.Create(shape, first.FieldIdentities);
+
+        Assert.Same(first, second);
+        Assert.NotSame(first, explicitlyOrdered);
+    }
+
     [Fact]
     public void FromObservation_PreservesQualifiedShapeFieldsOccurrenceAndLineage()
     {
@@ -76,6 +91,81 @@ public sealed class IndexedObservationOccurrenceTests
                 ("name", ObservationValue.FromString("Ada")),
                 ("count", ObservationValue.FromInt64(3))),
             indexed.ToObservation(shape.Graph));
+    }
+
+    [Fact]
+    public void Create_OrdinalBuffers_DoesNotReconstructDictionaryState()
+    {
+        const int FieldCount = 16;
+        const int Iterations = 1_000;
+        var definitions = Enumerable.Range(0, FieldCount)
+            .Select(static ordinal => new FieldDefinition(
+                new($"field_{ordinal:D2}"),
+                new ScalarTypeRef(ScalarTypeKind.Int64)))
+            .ToImmutableArray();
+        Shape definition = new(new("ordinal-state"), definitions);
+        ShapeGraph graph = new(new("ordinal-state-v1"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var layout = ObservationLayout.Create(shape);
+        var values = Enumerable.Range(0, FieldCount)
+            .Select(static value => ObservationValue.FromInt64(value))
+            .ToArray();
+        ulong[] presence = [ushort.MaxValue];
+        var occurrence = Occurrence(shape, "occurrence/ordinal-1", "ordinal-1");
+
+        for (var iteration = 0; iteration < 100; iteration++)
+            _ = IndexedObservationOccurrence.Create(shape, occurrence, layout, values, presence);
+
+        IndexedObservationOccurrence? last = null;
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (var iteration = 0; iteration < Iterations; iteration++)
+            last = IndexedObservationOccurrence.Create(shape, occurrence, layout, values, presence);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        var allocatedPerOccurrence = allocated / Iterations;
+
+        Assert.NotNull(last);
+        Assert.InRange(allocatedPerOccurrence, 1_400, 1_600);
+    }
+
+    [Fact]
+    public void WriteCanonicalJson_WritesOrdinalStorageWithoutSteadyStateAllocation()
+    {
+        const int Iterations = 1_000;
+        var shape = CustomerShape("customer-graph/v1");
+        var semantic = Observe(
+            shape,
+            ("name", ObservationValue.FromString("Ada")),
+            ("count", ObservationValue.FromInt64(3)),
+            ("note", ObservationValue.Null));
+        var indexed = IndexedObservationOccurrence.FromObservation(
+            shape,
+            Occurrence(shape, "occurrence/customer-1", "customer-1"),
+            semantic,
+            ObservationLayout.Create(shape, ["note", "alias", "count", "name"]));
+        var expected = semantic.ToCanonicalJsonUtf8();
+        var output = new ArrayBufferWriter<byte>(expected.Length + 16);
+
+        indexed.WriteCanonicalJson(output);
+
+        Assert.True(expected.AsSpan().SequenceEqual(output.WrittenSpan));
+        Assert.Throws<ArgumentNullException>(() => indexed.WriteCanonicalJson(null!));
+
+        for (var iteration = 0; iteration < 100; iteration++)
+        {
+            output.Clear();
+            indexed.WriteCanonicalJson(output);
+        }
+
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (var iteration = 0; iteration < Iterations; iteration++)
+        {
+            output.Clear();
+            indexed.WriteCanonicalJson(output);
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Assert.Equal(expected.Length, output.WrittenCount);
+        Assert.Equal(0, allocated);
     }
 
     [Fact]

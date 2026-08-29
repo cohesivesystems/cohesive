@@ -1,6 +1,8 @@
+using System.Buffers;
 using System.Collections.ObjectModel;
 using System.Runtime.CompilerServices;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Model;
 using CoreObservation = Cohesive.Model.Observation;
@@ -214,13 +216,22 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
         }
 
         RequireLayoutShape(layout, shape.QualifiedId);
-        ValidateLayoutFields(shape, layout);
 
         var valuesSnapshot = valuesByOrdinal.ToArray();
         var presenceSnapshot = hasValueBitMask.ToArray();
         var effectiveBuffer = new ObservationBuffer(valuesSnapshot, presenceSnapshot, layout.Count);
         RequireNoPresenceOutsideLayout(effectiveBuffer);
-        _ = CoreObservation.Create(shape, BuildFields(layout, effectiveBuffer));
+        if (!ObservationValidator.TryValidateAgainstShape(
+                shape,
+                layout,
+                valuesSnapshot,
+                presenceSnapshot,
+                out var validationError))
+        {
+            throw new ArgumentException(
+                $"Physical observation does not adhere to shape '{shape.QualifiedId}': {validationError}",
+                nameof(valuesByOrdinal));
+        }
 
         return new(
             occurrence,
@@ -269,6 +280,17 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
     /// </exception>
     public CoreObservation ToObservation(ShapeGraph graph) =>
         CoreObservation.Create(graph, ShapeId, ObservationValue.FromObject(Fields));
+
+    /// <summary>Writes this physical occurrence directly as canonical portable UTF-8 observation JSON.</summary>
+    /// <param name="output">Caller-owned destination that receives the complete canonical representation.</param>
+    /// <remarks>
+    /// The ordinal buffer is serialized directly in the layout's cached canonical field order. The operation does
+    /// not construct <see cref="Fields"/> or project through <see cref="ToObservation"/>.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="output"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">A retained value has no canonical portable JSON encoding.</exception>
+    public void WriteCanonicalJson(IBufferWriter<byte> output) =>
+        CanonicalJsonWriter.WriteCanonicalObservation(output, this);
 
     /// <summary>Materializes a CLR value using a shared compiled core plan directly over indexed reads.</summary>
     /// <typeparam name="T">CLR target type.</typeparam>

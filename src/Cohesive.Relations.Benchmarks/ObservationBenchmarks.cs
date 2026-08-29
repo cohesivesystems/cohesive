@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Immutable;
+using System.Collections.ObjectModel;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Columns;
 using BenchmarkDotNet.Configs;
@@ -120,6 +121,8 @@ public class ObservationProjectionBenchmarks
         var expectedCanonicalJson = observation.ToCanonicalJsonUtf8();
         canonicalJsonOutput = new(initialCapacity: expectedCanonicalJson.Length);
         observation.WriteCanonicalJson(canonicalJsonOutput);
+        canonicalJsonOutput.Clear();
+        indexedObservation.WriteCanonicalJson(canonicalJsonOutput);
 
         var handwritten = MaterializeHandwritten();
         var compiled = materializer.Materialize(observation);
@@ -210,6 +213,17 @@ public class ObservationProjectionBenchmarks
     {
         canonicalJsonOutput.Clear();
         observation.WriteCanonicalJson(canonicalJsonOutput);
+        return canonicalJsonOutput.WrittenCount;
+    }
+
+    /// <summary>Writes canonical UTF-8 directly from ordinal storage into reusable caller-owned storage.</summary>
+    /// <returns>The number of canonical UTF-8 bytes written.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "JsonSerialization")]
+    public int WriteIndexedCanonicalJsonToCallerOwnedBuffer()
+    {
+        canonicalJsonOutput.Clear();
+        indexedObservation.WriteCanonicalJson(canonicalJsonOutput);
         return canonicalJsonOutput.WrittenCount;
     }
 
@@ -311,6 +325,99 @@ public class ObservationFieldAccessBenchmarks
         }
         return sum;
     }
+}
+
+/// <summary>Validation and immutable ingestion of ordinal-aligned observation state.</summary>
+[Config(typeof(RelationBenchmarkConfig))]
+[MemoryDiagnoser]
+[CategoriesColumn]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+public class ObservationOrdinalIngestionBenchmarks
+{
+    GraphShapeId shape;
+    ObservationLayout layout = null!;
+    ObservationValue[] valuesByOrdinal = null!;
+    ulong[] presence = null!;
+    RelationQueryObservationOccurrence occurrence = null!;
+
+    /// <summary>Builds a sixteen-field sparse-layout fixture and warms all ingestion paths.</summary>
+    [GlobalSetup]
+    public void Setup()
+    {
+        const int FieldCount = 16;
+        var definitions = ImmutableArray.CreateBuilder<FieldDefinition>(FieldCount);
+        var fieldNames = new string[FieldCount];
+        for (var ordinal = 0; ordinal < FieldCount; ordinal++)
+        {
+            var fieldIdentity = $"field_{ordinal:D2}";
+            fieldNames[FieldCount - ordinal - 1] = fieldIdentity;
+            definitions.Add(new(new(fieldIdentity), new ScalarTypeRef(ScalarTypeKind.Int64)));
+        }
+
+        Shape definition = new(new("ordinal-ingestion-state"), definitions.MoveToImmutable());
+        ShapeGraph graph = new(new("observation-ordinal-ingestion-v1"), [definition]);
+        shape = new(graph, definition.Id);
+        layout = ObservationLayout.Create(shape, fieldNames);
+        valuesByOrdinal = new ObservationValue[FieldCount];
+        presence = new ulong[ObservationBuffer.RequiredWordCount(FieldCount)];
+        for (var ordinal = 0; ordinal < FieldCount; ordinal++)
+        {
+            valuesByOrdinal[ordinal] = ObservationValue.FromInt64(ordinal);
+            ObservationBuffer.SetHasValue(presence, ordinal);
+        }
+        occurrence = new(
+            new("ordinal-ingestion/0"),
+            new("ordinal-ingestion"),
+            shape.QualifiedId,
+            "ordinal-ingestion/0");
+
+        _ = ValidateAfterDictionaryProjection();
+        if (!ValidateOrdinalBuffers())
+            throw new InvalidOperationException("Ordinal validation benchmark fixture is invalid.");
+        _ = CreateIndexedOccurrence();
+    }
+
+    /// <summary>Reconstructs dictionary state before applying canonical semantic validation.</summary>
+    /// <returns>The validated semantic observation allocated by the projection path.</returns>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Observation", "OrdinalValidation")]
+    public CoreObservation ValidateAfterDictionaryProjection()
+    {
+        Dictionary<string, ObservationValue> fields = new(layout.Count, StringComparer.Ordinal);
+        for (var ordinal = 0; ordinal < layout.Count; ordinal++)
+        {
+            if ((presence[ordinal >> 6] & (1UL << (ordinal & 63))) != 0)
+                fields.Add(layout.FieldIdentities[ordinal], valuesByOrdinal[ordinal]);
+        }
+
+        return CoreObservation.Create(
+            shape,
+            new ReadOnlyDictionary<string, ObservationValue>(fields));
+    }
+
+    /// <summary>Validates the ordinal buffers without constructing dictionary-backed state.</summary>
+    /// <returns><see langword="true"/> when the representative buffers remain valid.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "OrdinalValidation")]
+    public bool ValidateOrdinalBuffers() =>
+        ObservationValidator.TryValidateAgainstShape(
+            shape,
+            layout,
+            valuesByOrdinal,
+            presence,
+            out _);
+
+    /// <summary>Snapshots and validates one immutable indexed occurrence from ordinal buffers.</summary>
+    /// <returns>The immutable indexed occurrence.</returns>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Observation", "OrdinalHydration")]
+    public IndexedObservationOccurrence CreateIndexedOccurrence() =>
+        IndexedObservationOccurrence.Create(
+            shape,
+            occurrence,
+            layout,
+            valuesByOrdinal,
+            presence);
 }
 
 /// <summary>Warm CLR materialization for a representative state object containing sixteen flat scalar fields.</summary>
