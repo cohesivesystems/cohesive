@@ -115,6 +115,54 @@ public readonly record struct CanonicalJsonArrayPath
 /// </summary>
 public static class CanonicalJsonWriter
 {
+    static ReadOnlySpan<byte> ObservationFormatPropertyToken => "{\"format\":"u8;
+    static ReadOnlySpan<byte> ObservationGraphIdPropertyToken => ",\"graphId\":"u8;
+    static ReadOnlySpan<byte> ObservationShapeIdPropertyToken => ",\"shapeId\":"u8;
+    static ReadOnlySpan<byte> ObservationValuePropertyToken => ",\"value\":"u8;
+
+    internal static void WriteCanonicalObservation(
+        IBufferWriter<byte> output,
+        Observation observation)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(observation);
+        var writer = CanonicalObservationJsonWriterPool.Rent(output);
+        var completed = false;
+        try
+        {
+            writer.WriteStartObject();
+            writer.WriteString(GetObservationPropertyName(ObservationFormatPropertyToken), Observation.CanonicalFormat);
+            writer.WriteString(
+                GetObservationPropertyName(ObservationGraphIdPropertyToken),
+                observation.ShapeId.GraphId.Value);
+            writer.WriteString(
+                GetObservationPropertyName(ObservationShapeIdPropertyToken),
+                observation.ShapeId.ShapeId.Value);
+            writer.WritePropertyName(GetObservationPropertyName(ObservationValuePropertyToken));
+            WriteCanonicalObservationValue(writer, observation.Value);
+            writer.WriteEndObject();
+            writer.Flush();
+            completed = true;
+        }
+        finally
+        {
+            if (completed)
+                CanonicalObservationJsonWriterPool.Return(writer);
+        }
+    }
+
+    static ReadOnlySpan<byte> GetObservationPropertyName(ReadOnlySpan<byte> token) => token[2..^2];
+
+    internal static void WriteCanonicalObservationStreaming(
+        IBufferWriter<byte> output,
+        Observation observation)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(observation);
+        new CanonicalObservationUtf8Writer(output, ObservationBytesJsonEncoding.Base64String)
+            .WriteObservation(observation);
+    }
+
     /// <summary>Writes a JSON node using canonical object and configured set-like collection ordering.</summary>
     /// <param name="node">JSON value to canonicalize.</param>
     /// <param name="options">Serializer options used when writing scalar JSON values.</param>
@@ -529,9 +577,7 @@ public static class CanonicalJsonWriter
                 }
                 if (Math.TryGetCanonicalDecimalFromDouble(normalizedDouble, out var exactDecimal))
                 {
-                    writer.WriteRawValue(
-                        exactDecimal.ToString("G29", CultureInfo.InvariantCulture),
-                        skipInputValidation: true);
+                    WriteCanonicalDecimal(writer, exactDecimal);
                 }
                 else
                 {
@@ -539,9 +585,7 @@ public static class CanonicalJsonWriter
                 }
                 return;
             case ObservationValueKind.Decimal:
-                writer.WriteRawValue(
-                    value.Decimal.ToString("G29", CultureInfo.InvariantCulture),
-                    skipInputValidation: true);
+                WriteCanonicalDecimal(writer, value.Decimal);
                 return;
             case ObservationValueKind.Bool:
                 writer.WriteBooleanValue(value.Bool);
@@ -572,15 +616,19 @@ public static class CanonicalJsonWriter
                 return;
             case ObservationValueKind.Object:
                 writer.WriteStartObject();
-                if (value.Fields is not null)
+                var ordered = RentOrderedObservationProperties(value.Fields, out var propertyCount);
+                try
                 {
-                    foreach (var (property, child) in value.Fields.OrderBy(
-                                 static property => property.Key,
-                                 StringComparer.Ordinal))
+                    for (var index = 0; index < propertyCount; index++)
                     {
+                        var (property, child) = ordered![index];
                         writer.WritePropertyName(property);
                         WriteCanonicalObservationValue(writer, child, bytesEncoding);
                     }
+                }
+                finally
+                {
+                    ReturnOrderedObservationProperties(ordered, propertyCount);
                 }
                 writer.WriteEndObject();
                 return;
@@ -597,6 +645,78 @@ public static class CanonicalJsonWriter
                 throw new InvalidOperationException(
                     $"Observation value kind '{value.Kind}' does not have a canonical portable JSON encoding.");
         }
+    }
+
+    static void WriteCanonicalDecimal(Utf8JsonWriter writer, decimal value)
+    {
+        Span<char> formatted = stackalloc char[32];
+        if (!value.TryFormat(
+                formatted,
+                out var written,
+                "G29",
+                CultureInfo.InvariantCulture))
+        {
+            throw new InvalidOperationException("A Decimal value could not be canonically formatted.");
+        }
+
+        writer.WriteRawValue(formatted[..written], skipInputValidation: true);
+    }
+
+    static KeyValuePair<string, ObservationValue>[]? RentOrderedObservationProperties(
+        IReadOnlyDictionary<string, ObservationValue>? properties,
+        out int count)
+    {
+        count = 0;
+        if (properties is null || properties.Count == 0)
+            return null;
+
+        var ordered = ArrayPool<KeyValuePair<string, ObservationValue>>.Shared.Rent(properties.Count);
+        try
+        {
+            switch (properties)
+            {
+                case ImmutableDictionary<string, ObservationValue> immutable:
+                    foreach (var property in immutable)
+                        ordered[count++] = property;
+                    break;
+                case ImmutableSortedDictionary<string, ObservationValue> sorted:
+                    foreach (var property in sorted)
+                        ordered[count++] = property;
+                    break;
+                case Dictionary<string, ObservationValue> dictionary:
+                    foreach (var property in dictionary)
+                        ordered[count++] = property;
+                    break;
+                case OwnedObservationFields owned:
+                    foreach (var property in owned)
+                        ordered[count++] = property;
+                    break;
+                default:
+                    foreach (var property in properties)
+                        ordered[count++] = property;
+                    break;
+            }
+
+            ordered.AsSpan(0, count).Sort(
+                static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
+            return ordered;
+        }
+        catch
+        {
+            ReturnOrderedObservationProperties(ordered, count);
+            throw;
+        }
+    }
+
+    static void ReturnOrderedObservationProperties(
+        KeyValuePair<string, ObservationValue>[]? properties,
+        int count)
+    {
+        if (properties is null)
+            return;
+
+        properties.AsSpan(0, count).Clear();
+        ArrayPool<KeyValuePair<string, ObservationValue>>.Shared.Return(properties);
     }
 
     /// <summary>Streams one observation value as canonical portable UTF-8 JSON without token-sized buffering.</summary>
@@ -657,6 +777,54 @@ public static class CanonicalJsonWriter
         new CanonicalObservationUtf8Writer(output, bytesEncoding).Write(value, enclosingDepth);
     }
 
+    static class CanonicalObservationJsonWriterPool
+    {
+        static readonly JsonWriterOptions Options = new()
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            Indented = false
+        };
+
+        [ThreadStatic]
+        static Utf8JsonWriter? cachedWriter;
+
+        internal static Utf8JsonWriter Rent(IBufferWriter<byte> output)
+        {
+            var writer = cachedWriter;
+            cachedWriter = null;
+            if (writer is null)
+                return new(output, Options);
+
+            writer.Reset(output);
+            return writer;
+        }
+
+        internal static void Return(Utf8JsonWriter writer)
+        {
+            writer.Reset(DetachedBufferWriter.Instance);
+            if (cachedWriter is null)
+            {
+                cachedWriter = writer;
+                return;
+            }
+
+            writer.Dispose();
+        }
+    }
+
+    sealed class DetachedBufferWriter : IBufferWriter<byte>
+    {
+        internal static DetachedBufferWriter Instance { get; } = new();
+
+        public void Advance(int count) => throw new InvalidOperationException("A detached JSON writer cannot advance output.");
+
+        public Memory<byte> GetMemory(int sizeHint = 0) =>
+            throw new InvalidOperationException("A detached JSON writer cannot request output.");
+
+        public Span<byte> GetSpan(int sizeHint = 0) =>
+            throw new InvalidOperationException("A detached JSON writer cannot request output.");
+    }
+
     readonly struct CanonicalObservationUtf8Writer(
         IBufferWriter<byte> output,
         ObservationBytesJsonEncoding bytesEncoding)
@@ -664,6 +832,19 @@ public static class CanonicalJsonWriter
         const int MaximumChunkBytes = 4 * 1024;
         internal const int MaximumDepth = 1_000;
         static readonly JavaScriptEncoder Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+
+        internal void WriteObservation(Observation observation)
+        {
+            WriteRaw(ObservationFormatPropertyToken);
+            WriteString(Observation.CanonicalFormat);
+            WriteRaw(ObservationGraphIdPropertyToken);
+            WriteString(observation.ShapeId.GraphId.Value);
+            WriteRaw(ObservationShapeIdPropertyToken);
+            WriteString(observation.ShapeId.ShapeId.Value);
+            WriteRaw(ObservationValuePropertyToken);
+            Write(observation.Value, enclosingDepth: 1);
+            WriteRaw("}"u8);
+        }
 
         internal void Write(ObservationValue value, int enclosingDepth)
         {
@@ -673,7 +854,8 @@ public static class CanonicalJsonWriter
                 return;
             }
 
-            Stack<ContainerFrame> containers = new();
+            ContainerFrame[]? containers = null;
+            var containerCount = 0;
             var current = value;
             var currentDepth = enclosingDepth;
             try
@@ -684,44 +866,44 @@ public static class CanonicalJsonWriter
                     switch (current.Kind)
                     {
                         case ObservationValueKind.Object:
-                        {
-                            RequireContainerDepth(currentDepth);
-                            WriteRaw("{"u8);
-                            var frame = ContainerFrame.ForObject(current.Fields, checked(currentDepth + 1));
-                            if (frame.TryMoveNext(out var property, out var child))
                             {
-                                containers.Push(frame);
-                                WriteString(property!);
-                                WriteRaw(":"u8);
-                                current = child;
-                                currentDepth = frame.ChildDepth;
-                                descended = true;
+                                RequireContainerDepth(currentDepth);
+                                WriteRaw("{"u8);
+                                var frame = ContainerFrame.ForObject(current.Fields, checked(currentDepth + 1));
+                                if (frame.TryMoveNext(out var property, out var child))
+                                {
+                                    Push(ref containers, ref containerCount, frame);
+                                    WriteString(property!);
+                                    WriteRaw(":"u8);
+                                    current = child;
+                                    currentDepth = frame.ChildDepth;
+                                    descended = true;
+                                }
+                                else
+                                {
+                                    frame.Dispose();
+                                    WriteRaw("}"u8);
+                                }
+                                break;
                             }
-                            else
-                            {
-                                frame.Dispose();
-                                WriteRaw("}"u8);
-                            }
-                            break;
-                        }
                         case ObservationValueKind.Array:
-                        {
-                            RequireContainerDepth(currentDepth);
-                            WriteRaw("["u8);
-                            var frame = ContainerFrame.ForArray(current.Array, checked(currentDepth + 1));
-                            if (frame.TryMoveNext(out _, out var child))
                             {
-                                containers.Push(frame);
-                                current = child;
-                                currentDepth = frame.ChildDepth;
-                                descended = true;
+                                RequireContainerDepth(currentDepth);
+                                WriteRaw("["u8);
+                                var frame = ContainerFrame.ForArray(current.Array, checked(currentDepth + 1));
+                                if (frame.TryMoveNext(out _, out var child))
+                                {
+                                    Push(ref containers, ref containerCount, frame);
+                                    current = child;
+                                    currentDepth = frame.ChildDepth;
+                                    descended = true;
+                                }
+                                else
+                                {
+                                    WriteRaw("]"u8);
+                                }
+                                break;
                             }
-                            else
-                            {
-                                WriteRaw("]"u8);
-                            }
-                            break;
-                        }
                         default:
                             WriteScalar(current);
                             break;
@@ -732,8 +914,9 @@ public static class CanonicalJsonWriter
                         continue;
                     }
 
-                    while (containers.TryPeek(out var parent))
+                    while (containerCount > 0)
                     {
+                        ref var parent = ref containers![containerCount - 1];
                         if (parent.TryMoveNext(out var property, out var child))
                         {
                             WriteRaw(","u8);
@@ -748,9 +931,11 @@ public static class CanonicalJsonWriter
                             break;
                         }
 
-                        _ = containers.Pop();
+                        var isObject = parent.IsObject;
                         parent.Dispose();
-                        WriteRaw(parent.IsObject ? "}"u8 : "]"u8);
+                        parent = default;
+                        containerCount--;
+                        WriteRaw(isObject ? "}"u8 : "]"u8);
                     }
 
                     if (!descended)
@@ -761,9 +946,14 @@ public static class CanonicalJsonWriter
             }
             finally
             {
-                while (containers.TryPop(out var frame))
+                if (containers is not null)
                 {
-                    frame.Dispose();
+                    for (var index = 0; index < containerCount; index++)
+                    {
+                        containers[index].Dispose();
+                        containers[index] = default;
+                    }
+                    ArrayPool<ContainerFrame>.Shared.Return(containers);
                 }
             }
         }
@@ -777,33 +967,33 @@ public static class CanonicalJsonWriter
                     WriteRaw("null"u8);
                     return;
                 case ObservationValueKind.Int64:
-                {
-                    Span<byte> formatted = stackalloc byte[32];
-                    if (!Utf8Formatter.TryFormat(value.Int64, formatted, out var written))
-                        throw new InvalidOperationException("An Int64 value could not be canonically formatted.");
-                    WriteRaw(formatted[..written]);
-                    return;
-                }
-                case ObservationValueKind.Double:
-                {
-                    var normalized = value.Double == 0d ? 0d : value.Double;
-                    if (!double.IsFinite(normalized))
                     {
-                        throw new InvalidOperationException(
-                            "A non-finite Double has no canonical portable JSON encoding.");
-                    }
-                    if (Math.TryGetCanonicalDecimalFromDouble(normalized, out var exactDecimal))
-                    {
-                        WriteDecimal(exactDecimal);
+                        Span<byte> formatted = stackalloc byte[32];
+                        if (!Utf8Formatter.TryFormat(value.Int64, formatted, out var written))
+                            throw new InvalidOperationException("An Int64 value could not be canonically formatted.");
+                        WriteRaw(formatted[..written]);
                         return;
                     }
+                case ObservationValueKind.Double:
+                    {
+                        var normalized = value.Double == 0d ? 0d : value.Double;
+                        if (!double.IsFinite(normalized))
+                        {
+                            throw new InvalidOperationException(
+                                "A non-finite Double has no canonical portable JSON encoding.");
+                        }
+                        if (Math.TryGetCanonicalDecimalFromDouble(normalized, out var exactDecimal))
+                        {
+                            WriteDecimal(exactDecimal);
+                            return;
+                        }
 
-                    Span<byte> formatted = stackalloc byte[32];
-                    if (!Utf8Formatter.TryFormat(normalized, formatted, out var written))
-                        throw new InvalidOperationException("A Double value could not be canonically formatted.");
-                    WriteRaw(formatted[..written]);
-                    return;
-                }
+                        Span<byte> formatted = stackalloc byte[32];
+                        if (!Utf8Formatter.TryFormat(normalized, formatted, out var written))
+                            throw new InvalidOperationException("A Double value could not be canonically formatted.");
+                        WriteRaw(formatted[..written]);
+                        return;
+                    }
                 case ObservationValueKind.Decimal:
                     WriteDecimal(value.Decimal);
                     return;
@@ -828,22 +1018,26 @@ public static class CanonicalJsonWriter
             }
         }
 
-        sealed class ContainerFrame : IDisposable
+        struct ContainerFrame
         {
-            readonly ImmutableArray<ObservationValue> items;
-            readonly IEnumerator<KeyValuePair<string, ObservationValue>>? properties;
+            ImmutableArray<ObservationValue> items;
+            KeyValuePair<string, ObservationValue>[]? properties;
+            int propertyCount;
             int nextItemIndex;
 
             ContainerFrame(
                 bool isObject,
                 int childDepth,
                 ImmutableArray<ObservationValue> items,
-                IEnumerator<KeyValuePair<string, ObservationValue>>? properties)
+                KeyValuePair<string, ObservationValue>[]? properties,
+                int propertyCount)
             {
                 IsObject = isObject;
                 ChildDepth = childDepth;
                 this.items = items;
                 this.properties = properties;
+                this.propertyCount = propertyCount;
+                nextItemIndex = 0;
             }
 
             internal bool IsObject { get; }
@@ -851,27 +1045,45 @@ public static class CanonicalJsonWriter
             internal int ChildDepth { get; }
 
             internal static ContainerFrame ForArray(ImmutableArray<ObservationValue> items, int childDepth) =>
-                new(isObject: false, childDepth, items.IsDefault ? [] : items, properties: null);
+                new(
+                    isObject: false,
+                    childDepth,
+                    items.IsDefault ? [] : items,
+                    properties: null,
+                    propertyCount: 0);
 
             internal static ContainerFrame ForObject(
                 IReadOnlyDictionary<string, ObservationValue>? properties,
-                int childDepth) =>
-                new(
+                int childDepth)
+            {
+                var ordered = RentOrderedObservationProperties(properties, out var count);
+                if (ordered is null)
+                {
+                    return new(
+                        isObject: true,
+                        childDepth,
+                        items: [],
+                        properties: null,
+                        propertyCount: 0);
+                }
+
+                return new(
                     isObject: true,
                     childDepth,
                     items: [],
-                    properties?
-                        .OrderBy(static property => property.Key, StringComparer.Ordinal)
-                        .GetEnumerator());
+                    properties: ordered,
+                    propertyCount: count);
+            }
 
             internal bool TryMoveNext(out string? property, out ObservationValue value)
             {
                 if (IsObject)
                 {
-                    if (properties is not null && properties.MoveNext())
+                    if (nextItemIndex < propertyCount)
                     {
-                        property = properties.Current.Key;
-                        value = properties.Current.Value;
+                        var current = properties![nextItemIndex++];
+                        property = current.Key;
+                        value = current.Value;
                         return true;
                     }
 
@@ -891,7 +1103,43 @@ public static class CanonicalJsonWriter
                 return true;
             }
 
-            public void Dispose() => properties?.Dispose();
+            internal void Dispose()
+            {
+                if (properties is null)
+                    return;
+
+                ReturnOrderedObservationProperties(properties, propertyCount);
+                properties = null;
+                propertyCount = 0;
+                items = [];
+                nextItemIndex = 0;
+            }
+        }
+
+        static void Push(
+            ref ContainerFrame[]? containers,
+            ref int containerCount,
+            ContainerFrame frame)
+        {
+            try
+            {
+                containers ??= ArrayPool<ContainerFrame>.Shared.Rent(minimumLength: 8);
+                if (containerCount == containers.Length)
+                {
+                    var replacement = ArrayPool<ContainerFrame>.Shared.Rent(checked(containerCount * 2));
+                    containers.AsSpan(0, containerCount).CopyTo(replacement);
+                    containers.AsSpan(0, containerCount).Clear();
+                    ArrayPool<ContainerFrame>.Shared.Return(containers);
+                    containers = replacement;
+                }
+
+                containers[containerCount++] = frame;
+            }
+            catch
+            {
+                frame.Dispose();
+                throw;
+            }
         }
 
         static void RequireContainerDepth(int enclosingDepth)

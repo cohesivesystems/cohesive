@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Immutable;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Columns;
@@ -89,6 +90,7 @@ public class ObservationProjectionBenchmarks
 {
     CoreObservation observation = null!;
     ObservationMaterializer<ObservationBenchmarkState> materializer = null!;
+    ArrayBufferWriter<byte> canonicalJsonOutput = null!;
 
     /// <summary>Creates and validates a representative state value and warms both materializer paths.</summary>
     [GlobalSetup]
@@ -97,15 +99,19 @@ public class ObservationProjectionBenchmarks
         var fixture = ObservationProjectionFixture.Create();
         observation = fixture.Observation;
         materializer = fixture.Materializer;
+        var expectedCanonicalJson = observation.ToCanonicalJsonUtf8();
+        canonicalJsonOutput = new(initialCapacity: expectedCanonicalJson.Length);
+        observation.WriteCanonicalJson(canonicalJsonOutput);
 
         var handwritten = MaterializeHandwritten();
         var compiled = materializer.Materialize(observation);
         var cachedDefault = observation.Materialize<ObservationBenchmarkState>();
         if (!MatchesExpected(handwritten, fixture.Expected)
             || !MatchesExpected(compiled, fixture.Expected)
-            || !MatchesExpected(cachedDefault, fixture.Expected))
+            || !MatchesExpected(cachedDefault, fixture.Expected)
+            || !canonicalJsonOutput.WrittenSpan.SequenceEqual(expectedCanonicalJson))
         {
-            throw new InvalidOperationException("Observation benchmark materialization produced an unexpected value.");
+            throw new InvalidOperationException("Observation benchmark projection produced an unexpected value.");
         }
     }
 
@@ -160,6 +166,23 @@ public class ObservationProjectionBenchmarks
     [BenchmarkCategory("Observation", "JsonSerialization")]
     public string ToCanonicalJsonString() => observation.ToCanonicalJson();
 
+    /// <summary>Writes canonical portable UTF-8 into reusable caller-owned storage.</summary>
+    /// <returns>The number of canonical UTF-8 bytes written.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "JsonSerialization")]
+    public int WriteCanonicalJsonToCallerOwnedBuffer()
+    {
+        canonicalJsonOutput.Clear();
+        observation.WriteCanonicalJson(canonicalJsonOutput);
+        return canonicalJsonOutput.WrittenCount;
+    }
+
+    /// <summary>Computes the canonical observation fingerprint without materializing the JSON payload.</summary>
+    /// <returns>The versioned canonical fingerprint.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "JsonFingerprint")]
+    public ObservationFingerprint ComputeCanonicalFingerprint() => observation.ComputeFingerprint();
+
     static bool MatchesExpected(
         ObservationBenchmarkState actual,
         ObservationBenchmarkState expected) =>
@@ -170,6 +193,31 @@ public class ObservationProjectionBenchmarks
         && actual.Balance == expected.Balance
         && actual.Address == expected.Address
         && actual.Tags.SequenceEqual(expected.Tags, StringComparer.Ordinal);
+}
+
+/// <summary>Fresh observation-to-CLR plan compilation after process-wide CLR metadata caches are warm.</summary>
+[Config(typeof(RelationBenchmarkConfig))]
+[MemoryDiagnoser]
+[CategoriesColumn]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+public class ObservationMaterializerCompilationBenchmarks
+{
+    QualifiedShapeId shapeId;
+
+    /// <summary>Warms process-wide CLR target metadata before measuring independently created plans.</summary>
+    [GlobalSetup]
+    public void Setup()
+    {
+        shapeId = ObservationProjectionFixture.Create().Observation.ShapeId;
+        _ = CompileFreshPlan();
+    }
+
+    /// <summary>Creates and compiles a new conventional materializer plan.</summary>
+    /// <returns>A newly compiled immutable materializer.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "ClrMaterializerCompilation")]
+    public ObservationMaterializer<ObservationBenchmarkState> CompileFreshPlan() =>
+        ObservationMaterializer.For<ObservationBenchmarkState>(shapeId).Compile();
 }
 
 /// <summary>A representative CLR projection of canonical application state.</summary>
