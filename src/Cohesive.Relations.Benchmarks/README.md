@@ -13,6 +13,8 @@ exercise the same semantic definitions, runtime evidence, and CLR DTO contracts.
 
 - **Observation creation and validation:** already-owned immutable values, caller-owned field snapshots,
   successful validation, and diagnostic production across flat-scalar, nested-object, and array-heavy values.
+- **Observation physical ingestion:** direct ordinal validation, caller-owned snapshot construction, single-owner
+  builder transfer, and shape-bound JSON hydration into retained indexed storage.
 - **Observation projections:** a handwritten destination-allocation lower bound, warm compiled and default-cached CLR
   materialization, plus canonical UTF-8 and string JSON serialization for representative application state.
 - **Warm kernel:** hand-written materialization, the shared core materializer over validated semantic observations,

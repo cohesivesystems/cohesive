@@ -96,6 +96,73 @@ public sealed class IndexedObservationOccurrenceTests
     }
 
     [Fact]
+    public void CreateBuilder_TransfersOwnedOrdinalStorageAndConsumesSuccessfulBuilder()
+    {
+        var shape = CustomerShape("customer-graph/v1");
+        var occurrence = Occurrence(shape, "occurrence/customer-1", "customer-1");
+        var layout = ObservationLayout.Create(shape, ["count", "note", "name"]);
+        var builder = IndexedObservationOccurrence.CreateBuilder(shape, occurrence, layout);
+
+        builder.SetField(0, ObservationValue.FromInt64(3));
+        builder.SetField("name", ObservationValue.FromString("Grace"));
+        builder.SetField("name", ObservationValue.FromString("Ada"));
+        var indexed = builder.Build();
+
+        Assert.Same(layout, builder.Layout);
+        Assert.Same(layout, indexed.Layout);
+        Assert.Equal("Ada", indexed.GetRequiredField("name").GetString());
+        Assert.Equal(3, indexed.GetRequiredField(0).GetInt32());
+        Assert.False(indexed.TryGetField("note", out _));
+        Assert.Throws<InvalidOperationException>(() =>
+            builder.SetField("note", ObservationValue.Null));
+        Assert.Throws<InvalidOperationException>(() => builder.Build());
+    }
+
+    [Fact]
+    public void CreateBuilder_FailedValidationCanBeCompletedAndRetried()
+    {
+        var shape = CustomerShape("customer-graph/v1");
+        var builder = IndexedObservationOccurrence.CreateBuilder(
+            shape,
+            Occurrence(shape, "occurrence/customer-1", "customer-1"),
+            ObservationLayout.Create(shape));
+        builder.SetField("name", ObservationValue.FromString("Ada"));
+
+        var failure = Assert.Throws<InvalidOperationException>(() => builder.Build());
+
+        Assert.Contains("required field 'count'", failure.Message, StringComparison.Ordinal);
+        builder.SetField("count", ObservationValue.FromInt64(3));
+        var indexed = builder.Build();
+        Assert.Equal(3, indexed.GetRequiredField("count").GetInt32());
+    }
+
+    [Theory]
+    [InlineData(64)]
+    [InlineData(65)]
+    public void CreateBuilder_HandlesInlineAndExternalPresenceBoundary(int fieldCount)
+    {
+        var definitions = Enumerable.Range(0, fieldCount)
+            .Select(static ordinal => new FieldDefinition(
+                new($"field_{ordinal:D2}"),
+                new ScalarTypeRef(ScalarTypeKind.Int64)))
+            .ToImmutableArray();
+        Shape definition = new(new("large-ordinal-state"), definitions);
+        ShapeGraph graph = new(new("large-ordinal-state-v1"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var builder = IndexedObservationOccurrence.CreateBuilder(
+            shape,
+            Occurrence(shape, "occurrence/large-1", "large-1"),
+            ObservationLayout.Create(shape));
+        for (var ordinal = 0; ordinal < fieldCount; ordinal++)
+            builder.SetField(ordinal, ObservationValue.FromInt64(ordinal));
+
+        var indexed = builder.Build();
+
+        Assert.Equal(0, indexed.GetRequiredField(0).GetInt32());
+        Assert.Equal(fieldCount - 1, indexed.GetRequiredField(fieldCount - 1).GetInt32());
+    }
+
+    [Fact]
     public void Create_OrdinalBuffers_DoesNotReconstructDictionaryState()
     {
         const int FieldCount = 16;
@@ -126,7 +193,7 @@ public sealed class IndexedObservationOccurrenceTests
         var allocatedPerOccurrence = allocated / Iterations;
 
         Assert.NotNull(last);
-        Assert.InRange(allocatedPerOccurrence, 600, 700);
+        Assert.InRange(allocatedPerOccurrence, 600, 620);
     }
 
     [Fact]
@@ -270,7 +337,7 @@ public sealed class IndexedObservationOccurrenceTests
 
         Assert.NotNull(last);
         Assert.Equal(15, last.GetRequiredField("field_15").GetInt32());
-        Assert.InRange(allocatedPerOccurrence, 600, 700);
+        Assert.InRange(allocatedPerOccurrence, 600, 620);
     }
 
     [Fact]
@@ -354,7 +421,7 @@ public sealed class IndexedObservationOccurrenceTests
 
         Assert.Contains("unknown field 'foreign'", foreignLayoutFailure.Message, StringComparison.Ordinal);
         Assert.Contains("does not adhere", invalidValueFailure.Message, StringComparison.Ordinal);
-        Assert.Contains("outside the observation layout", presenceFailure.Message, StringComparison.Ordinal);
+        Assert.Contains("outside the layout", presenceFailure.Message, StringComparison.Ordinal);
         Assert.Contains("absent from the physical occurrence", lineageFailure.Message, StringComparison.Ordinal);
     }
 
@@ -419,8 +486,6 @@ public sealed class IndexedObservationOccurrenceTests
             semantic);
 
         Assert.Equal(0, indexed.Layout.Count);
-        Assert.Empty(indexed.ValuesByOrdinal.ToArray());
-        Assert.Empty(indexed.HasValueBitMask.ToArray());
         Assert.Equal(semantic, indexed.ToObservation(graph));
     }
 

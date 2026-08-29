@@ -3,128 +3,124 @@ using System.Runtime.CompilerServices;
 namespace Cohesive.Relations.Model;
 
 /// <summary>
-/// Ordinal-aligned observation value storage backed by read-only memory and packed presence bits.
+/// Owned ordinal-aligned observation values with inline presence storage for layouts of at most 64 fields.
 /// </summary>
-public readonly struct ObservationBuffer
+internal readonly struct ObservationBuffer
 {
-    readonly ReadOnlyMemory<ObservationValue> valuesByOrdinal;
-    readonly ReadOnlyMemory<ulong> hasValueBitMask;
+    readonly ObservationValue[] valuesByOrdinal;
+    readonly ulong inlinePresence;
+    readonly ulong[]? presenceWords;
 
-    /// <summary>
-    /// Creates a buffer from ordinal-aligned values and packed presence bits.
-    /// </summary>
-    public ObservationBuffer(
-        ReadOnlyMemory<ObservationValue> valuesByOrdinal,
-        ReadOnlyMemory<ulong> hasValueBitMask,
-        int fieldCount
-        )
+    /// <summary>Creates a buffer by taking ownership of storage produced inside the physical interpretation.</summary>
+    /// <param name="ownedValuesByOrdinal">Exclusively owned value slots that will not be mutated after construction.</param>
+    /// <param name="inlinePresence">Packed presence bits when the field count is at most 64.</param>
+    /// <param name="ownedPresenceWords">
+    /// Exclusively owned packed presence words for layouts larger than 64 fields; otherwise <see langword="null"/>.
+    /// </param>
+    internal ObservationBuffer(
+        ObservationValue[] ownedValuesByOrdinal,
+        ulong inlinePresence,
+        ulong[]? ownedPresenceWords)
     {
-        if (fieldCount < 0)
-            throw new ArgumentOutOfRangeException(nameof(fieldCount));
+        ArgumentNullException.ThrowIfNull(ownedValuesByOrdinal);
 
-        if (valuesByOrdinal.Length != fieldCount)
-            throw new ArgumentException("Values length must match field count.", nameof(valuesByOrdinal));
-
+        var fieldCount = ownedValuesByOrdinal.Length;
         var requiredWords = RequiredWordCount(fieldCount);
-        if (hasValueBitMask.Length != requiredWords)
-            throw new ArgumentException("Bitmask length does not match field count.", nameof(hasValueBitMask));
+        if (requiredWords <= 1)
+        {
+            if (ownedPresenceWords is not null)
+            {
+                throw new ArgumentException(
+                    "Inline observation presence must not supply external presence words.",
+                    nameof(ownedPresenceWords));
+            }
+        }
+        else if (ownedPresenceWords?.Length != requiredWords)
+        {
+            throw new ArgumentException(
+                "Observation presence word length does not match the field count.",
+                nameof(ownedPresenceWords));
+        }
 
-        this.valuesByOrdinal = valuesByOrdinal;
-        this.hasValueBitMask = hasValueBitMask;
-        FieldCount = fieldCount;
+        RequireNoPresenceOutsideFieldCount(
+            fieldCount,
+            requiredWords <= 1 ? inlinePresence : ownedPresenceWords![^1]);
+        valuesByOrdinal = ownedValuesByOrdinal;
+        this.inlinePresence = requiredWords <= 1 ? inlinePresence : 0;
+        presenceWords = ownedPresenceWords;
     }
 
-    /// <summary>
-    /// Number of ordinals represented by this buffer.
-    /// </summary>
-    public int FieldCount { get; }
-
-    /// <summary>
-    /// Ordinal-aligned values.
-    /// </summary>
-    public ReadOnlyMemory<ObservationValue> ValuesByOrdinal => valuesByOrdinal;
-
-    /// <summary>
-    /// Packed value-presence bit mask.
-    /// </summary>
-    public ReadOnlyMemory<ulong> HasValueBitMask => hasValueBitMask;
-
-    /// <summary>
-    /// Returns true if an ordinal has a materialized value.
-    /// </summary>
+    /// <summary>Returns true if an ordinal has a materialized value.</summary>
+    /// <param name="ordinal">Zero-based field ordinal.</param>
+    /// <returns><see langword="true"/> when the ordinal is valid and present; otherwise <see langword="false"/>.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool HasValue(int ordinal)
+    internal bool HasValue(int ordinal)
     {
-        if ((uint)ordinal >= (uint)FieldCount)
+        if ((uint)ordinal >= (uint)valuesByOrdinal.Length)
             return false;
 
         var word = ordinal >> 6;
-        var bit = ordinal & 63;
-        return (hasValueBitMask.Span[word] & (1UL << bit)) != 0;
+        var bits = presenceWords is null ? inlinePresence : presenceWords[word];
+        return (bits & (1UL << (ordinal & 63))) != 0;
     }
 
-    /// <summary>
-    /// Returns the value for an ordinal.
-    /// </summary>
+    /// <summary>Returns the value for an ordinal.</summary>
+    /// <param name="ordinal">Zero-based field ordinal.</param>
+    /// <returns>The retained value slot.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="ordinal"/> is outside the buffer.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ObservationValue GetValue(int ordinal)
+    internal ObservationValue GetValue(int ordinal)
     {
-        if ((uint)ordinal >= (uint)FieldCount)
+        if ((uint)ordinal >= (uint)valuesByOrdinal.Length)
             throw new ArgumentOutOfRangeException(nameof(ordinal));
 
-        return valuesByOrdinal.Span[ordinal];
+        return valuesByOrdinal[ordinal];
     }
 
-    /// <summary>
-    /// Creates a packed buffer from dense value and boolean-presence arrays.
-    /// </summary>
-    public static ObservationBuffer FromDense(ObservationValue[] valuesByOrdinal, bool[] hasValueByOrdinal)
+    /// <summary>Allocates external presence storage only when more than one 64-bit word is required.</summary>
+    /// <param name="fieldCount">Number of represented ordinals.</param>
+    /// <returns>External presence words for large layouts; otherwise <see langword="null"/>.</returns>
+    internal static ulong[]? CreatePresenceWords(int fieldCount) =>
+        fieldCount > 64 ? new ulong[RequiredWordCount(fieldCount)] : null;
+
+    /// <summary>Marks an ordinal present in inline or external owned storage.</summary>
+    /// <param name="inlinePresence">Inline presence word for layouts of at most 64 fields.</param>
+    /// <param name="presenceWords">External presence words for larger layouts.</param>
+    /// <param name="fieldCount">Number of represented ordinals.</param>
+    /// <param name="ordinal">Ordinal to mark present.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="ordinal"/> is outside the field count.</exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void SetHasValue(
+        ref ulong inlinePresence,
+        ulong[]? presenceWords,
+        int fieldCount,
+        int ordinal)
     {
-        ArgumentNullException.ThrowIfNull(valuesByOrdinal);
-        ArgumentNullException.ThrowIfNull(hasValueByOrdinal);
-        return FromDense(valuesByOrdinal.AsMemory(), hasValueByOrdinal.AsMemory());
+        if ((uint)ordinal >= (uint)fieldCount)
+            throw new ArgumentOutOfRangeException(nameof(ordinal));
+
+        if (presenceWords is null)
+            inlinePresence |= 1UL << ordinal;
+        else
+            presenceWords[ordinal >> 6] |= 1UL << (ordinal & 63);
     }
 
-    /// <summary>
-    /// Creates a packed buffer from dense value and boolean-presence memory blocks.
-    /// </summary>
-    /// <exception cref="ArgumentException"></exception>
-    public static ObservationBuffer FromDense(
-        ReadOnlyMemory<ObservationValue> valuesByOrdinal,
-        ReadOnlyMemory<bool> hasValueByOrdinal)
-    {
-        if (valuesByOrdinal.Length != hasValueByOrdinal.Length)
-            throw new ArgumentException("Values and presence lengths must match.");
-
-        var fieldCount = valuesByOrdinal.Length;
-        var bitMask = new ulong[RequiredWordCount(fieldCount)];
-        var hasValue = hasValueByOrdinal.Span;
-        for (var i = 0; i < hasValue.Length; i++)
-        {
-            if (hasValue[i])
-                SetHasValue(bitMask, i);
-        }
-
-        return new(valuesByOrdinal, bitMask, fieldCount);
-    }
-
-    /// <summary>
-    /// Calculates the required number of 64-bit words to store a bit per field ordinal.
-    /// </summary>
-    public static int RequiredWordCount(int fieldCount)
+    /// <summary>Calculates the required number of 64-bit words to store one presence bit per field.</summary>
+    /// <param name="fieldCount">Number of represented fields.</param>
+    /// <returns>Number of packed presence words.</returns>
+    internal static int RequiredWordCount(int fieldCount)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(fieldCount);
-        if (fieldCount == 0)
-            return 0;
-
-        return ((fieldCount - 1) >> 6) + 1;
+        return fieldCount == 0 ? 0 : ((fieldCount - 1) >> 6) + 1;
     }
 
-    /// <summary>
-    /// Marks an ordinal as present in a mutable bit mask.
-    /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException"></exception>
-    public static void SetHasValue(Span<ulong> hasValueBitMask, int ordinal)
+    /// <summary>Marks an ordinal as present in a caller-owned mutable bit mask.</summary>
+    /// <param name="hasValueBitMask">Packed presence words to update.</param>
+    /// <param name="ordinal">Ordinal to mark present.</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="ordinal"/> is negative or cannot be represented by <paramref name="hasValueBitMask"/>.
+    /// </exception>
+    internal static void SetHasValue(Span<ulong> hasValueBitMask, int ordinal)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(ordinal);
 
@@ -132,7 +128,23 @@ public readonly struct ObservationBuffer
         if ((uint)word >= (uint)hasValueBitMask.Length)
             throw new ArgumentOutOfRangeException(nameof(ordinal));
 
-        var bit = ordinal & 63;
-        hasValueBitMask[word] |= 1UL << bit;
+        hasValueBitMask[word] |= 1UL << (ordinal & 63);
+    }
+
+    static void RequireNoPresenceOutsideFieldCount(int fieldCount, ulong finalWord)
+    {
+        var remainder = fieldCount & 63;
+        if (fieldCount == 0)
+        {
+            if (finalWord != 0)
+                throw new ArgumentException("An empty observation buffer cannot contain presence bits.");
+            return;
+        }
+        if (remainder == 0)
+            return;
+
+        var allowed = (1UL << remainder) - 1UL;
+        if ((finalWord & ~allowed) != 0)
+            throw new ArgumentException("Observation presence contains bits outside the field count.");
     }
 }
