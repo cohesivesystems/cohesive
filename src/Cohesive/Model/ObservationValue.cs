@@ -215,7 +215,7 @@ public readonly struct ObservationValue(
         Dictionary<string, ObservationValue> snapshot = new(fields.Count, StringComparer.Ordinal);
         foreach (var (name, value) in fields)
             snapshot.Add(name, value);
-        return new ReadOnlyDictionary<string, ObservationValue>(snapshot);
+        return new OwnedObservationFields(snapshot);
     }
 
     static ImmutableArray<ObservationValue> SnapshotArray(ObservationValue[]? array) => array switch
@@ -459,7 +459,7 @@ public readonly struct ObservationValue(
             JsonArray arr => FromImmutableArray(ReadJsonArray(arr)),
             _ => throw new NotSupportedException($"Unknown JsonNode type '{node.GetType().Name}'.")
         };
-        
+
         static IImmutableDictionary<string, ObservationValue> ReadJsonObject(JsonObject obj)
         {
             var values = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
@@ -467,7 +467,7 @@ public readonly struct ObservationValue(
                 values[key] = FromJsonNode(value);
             return values.ToImmutable();
         }
-        
+
         static ImmutableArray<ObservationValue> ReadJsonArray(JsonArray arr)
         {
             var values = ImmutableArray.CreateBuilder<ObservationValue>(arr.Count);
@@ -513,7 +513,7 @@ public readonly struct ObservationValue(
 
         if (TryProjectKnownScalar(value, out var scalar))
             return scalar;
-        
+
         return value switch
         {
             IDictionary dictionary => FromDictionary(dictionary, ref visited),
@@ -546,13 +546,13 @@ public readonly struct ObservationValue(
         var observed = value is IDictionary dictionary
             ? FromDictionary(dictionary, ref visited)
             : FromClrObjectProperties(value, ref visited);
-        
+
         if (observed.Kind == ObservationValueKind.Object && observed.Fields is not null)
             return observed;
 
         throw new InvalidOperationException($"CLR input type '{value.GetType().FullName}' cannot be projected as an object property bag.");
     }
-    
+
     /// <summary>
     /// Projects a known non-primitive CLR object into field values keyed by canonical field names.
     /// </summary>
@@ -562,7 +562,7 @@ public readonly struct ObservationValue(
         var observed = value is ObservationValue observationValue ? observationValue : FromClrPropertyBag(value, options);
         if (observed.Kind != ObservationValueKind.Object || observed.Fields is null)
             throw new InvalidOperationException($"Value of CLR type '{value.GetType().FullName}' did not project to an object-shaped observation value.");
-        
+
         return observed.Fields;
     }
 
@@ -1119,7 +1119,7 @@ public readonly struct ObservationValue(
     /// <returns></returns>
     /// <exception cref="InvalidOperationException">The value kind cannot be read as a string, or the string is null.</exception>
     public string GetRequiredString() => GetString() ?? throw new InvalidOperationException("The string value is null.");
-    
+
     /// <summary>
     /// Attempts to read the value as <see cref="DateTimeOffset"/>.
     /// </summary>
@@ -1405,7 +1405,7 @@ public readonly struct ObservationValue(
     /// </summary>
     /// <exception cref="JsonException"></exception>
     /// <exception cref="NotSupportedException"></exception>
-    public T? Deserialize<T>(JsonSerializerOptions? options = null, ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Throw) => 
+    public T? Deserialize<T>(JsonSerializerOptions? options = null, ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Throw) =>
         JsonSerializer.Deserialize<T>(GetRawText(bytesEncoding), options);
 
     /// <summary>
@@ -1420,7 +1420,7 @@ public readonly struct ObservationValue(
         ArgumentNullException.ThrowIfNull(writer);
         WriteValue(writer, this, bytesEncoding);
         return;
-        
+
         static void WriteValue(Utf8JsonWriter writer, ObservationValue value, ObservationBytesJsonEncoding bytesEncoding)
         {
             switch (value.Kind)
@@ -1591,7 +1591,7 @@ public readonly struct ObservationValue(
             return true;
         }
     }
-    
+
     static IImmutableDictionary<string, ObservationValue> ReadObject(JsonElement element)
     {
         var values = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
@@ -1975,4 +1975,65 @@ public enum ObservationBytesJsonEncoding
     Throw = 0,
     /// <summary>Represents the base64 string option.</summary>
     Base64String = 1
+}
+
+sealed class OwnedObservationFields(Dictionary<string, ObservationValue> fields)
+    : IReadOnlyDictionary<string, ObservationValue>, IDictionary<string, ObservationValue>
+{
+    public int Count => fields.Count;
+
+    public IEnumerable<string> Keys => fields.Keys;
+
+    public IEnumerable<ObservationValue> Values => fields.Values;
+
+    public ObservationValue this[string key] => fields[key];
+
+    ObservationValue IDictionary<string, ObservationValue>.this[string key]
+    {
+        get => fields[key];
+        set => throw new NotSupportedException("Observation fields are read-only.");
+    }
+
+    ICollection<string> IDictionary<string, ObservationValue>.Keys => fields.Keys;
+
+    ICollection<ObservationValue> IDictionary<string, ObservationValue>.Values => fields.Values;
+
+    bool ICollection<KeyValuePair<string, ObservationValue>>.IsReadOnly => true;
+
+    public bool ContainsKey(string key) => fields.ContainsKey(key);
+
+    public bool TryGetValue(string key, out ObservationValue value) => fields.TryGetValue(key, out value);
+
+    void IDictionary<string, ObservationValue>.Add(string key, ObservationValue value) =>
+        throw new NotSupportedException("Observation fields are read-only.");
+
+    bool IDictionary<string, ObservationValue>.Remove(string key) =>
+        throw new NotSupportedException("Observation fields are read-only.");
+
+    void ICollection<KeyValuePair<string, ObservationValue>>.Add(
+        KeyValuePair<string, ObservationValue> item) =>
+        throw new NotSupportedException("Observation fields are read-only.");
+
+    void ICollection<KeyValuePair<string, ObservationValue>>.Clear() =>
+        throw new NotSupportedException("Observation fields are read-only.");
+
+    bool ICollection<KeyValuePair<string, ObservationValue>>.Contains(
+        KeyValuePair<string, ObservationValue> item) =>
+        ((ICollection<KeyValuePair<string, ObservationValue>>)fields).Contains(item);
+
+    void ICollection<KeyValuePair<string, ObservationValue>>.CopyTo(
+        KeyValuePair<string, ObservationValue>[] array,
+        int arrayIndex) =>
+        ((ICollection<KeyValuePair<string, ObservationValue>>)fields).CopyTo(array, arrayIndex);
+
+    bool ICollection<KeyValuePair<string, ObservationValue>>.Remove(
+        KeyValuePair<string, ObservationValue> item) =>
+        throw new NotSupportedException("Observation fields are read-only.");
+
+    public Dictionary<string, ObservationValue>.Enumerator GetEnumerator() => fields.GetEnumerator();
+
+    IEnumerator<KeyValuePair<string, ObservationValue>>
+        IEnumerable<KeyValuePair<string, ObservationValue>>.GetEnumerator() => fields.GetEnumerator();
+
+    IEnumerator IEnumerable.GetEnumerator() => fields.GetEnumerator();
 }

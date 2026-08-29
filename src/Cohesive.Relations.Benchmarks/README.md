@@ -104,8 +104,10 @@ dotnet run \
 ```
 
 The broad `*` filter discovers every benchmark group. Use `*Observation*` for the observation lifecycle or a
-class-name filter such as `*ObservationCreationBenchmarks*` or `*RelationDtoWarmBenchmarks*` when measuring one
-concern in isolation.
+class-name filter such as `*ObservationCreationBenchmarks*`, `*ObservationProjectionBenchmarks*`,
+`*ObservationMaterializerCompilationBenchmarks*`, or `*RelationDtoWarmBenchmarks*` when measuring one concern in
+isolation. The projection benchmarks independently track returned UTF-8, returned strings, reusable caller-owned
+JSON buffers, streamed fingerprints, and warm CLR materialization so allocation and CPU tradeoffs remain visible.
 
 ## GitHub Actions
 

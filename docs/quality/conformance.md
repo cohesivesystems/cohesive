@@ -4,7 +4,7 @@ status: accepted
 authority: cohesive.conformance
 owners: [cohesive-core]
 applies_to: [cohesive, adapters, interpreters]
-last_verified: 2026-08-03
+last_verified: 2026-08-28
 supersedes: []
 ---
 
@@ -148,6 +148,14 @@ diagnostics, provenance, and explain decisions.
 
 When exact equality is inappropriate, the semantic model must define the comparison: tolerance,
 partial order, allowed result set, observational equivalence, or declared nondeterminism.
+
+Durable canonical serialization requires a differential suite whenever more than one writer, serializer, or
+streaming strategy realizes the same format. All strategies must consume the same fixtures, and those fixtures must
+exhaust the semantic value-kind catalog so a newly added kind cannot silently remain unsupported. Verification must
+include exact byte equality for property ordering, scalar normalization, escaping, binary encoding, and nested
+structures; generated combinations and bounded-large tokens should supplement explicit boundary cases. Rejection
+behavior must agree on the failure class for values or policies outside the canonical domain. A performance-specific
+writer is a separate physical realization, not a separate authority for the wire format.
 
 ### 6. End-to-end golden verticals
 

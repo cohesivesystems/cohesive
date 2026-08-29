@@ -4,7 +4,7 @@ status: draft
 authority: cohesive.code-quality
 owners: [cohesive-core]
 applies_to: [cohesive]
-last_verified: 2026-08-11
+last_verified: 2026-08-28
 supersedes: []
 ---
 
@@ -140,6 +140,44 @@ Performance work must identify the semantic fixture, workload, environment, rele
 dimensions, and before-and-after result. An optimization that changes observable meaning is a
 semantic change, not merely a faster implementation. See [Conformance](conformance.md#performance-conformance)
 for benchmark and evidence requirements.
+
+### Foundational runtime paths
+
+Operations over foundational runtime values are presumptively performance-sensitive when their expected use
+multiplies by state instances, fields, rows, events, transitions, or serialization boundaries. Construction,
+successful validation, field access, equality, hashing, canonicalization, fingerprinting, and materialization of
+core semantic values belong to this category unless a narrower lifecycle is explicit. Contributors must not wait
+for a production incident to classify these operations as hot.
+
+A new or materially changed foundational operation must:
+
+- state its expected invocation multiplicity, ownership model, and retained result;
+- establish representative flat, nested, collection-heavy, and bounded-large-input workloads as applicable;
+- measure warm latency and managed allocation, separating cold compilation or cache population;
+- distinguish unavoidable retained-result allocation from temporary working allocation;
+- avoid general-purpose serialization round trips, uncached reflection, diagnostic construction, and intermediate
+  materialization on the successful common path unless measurements justify them; and
+- preserve an executable allocation or bounded-memory regression test for deterministic resource claims, with
+  BenchmarkDotNet evidence for timing-sensitive claims.
+
+Failure diagnostics may allocate when they are not the common path, but validation must not construct paths,
+messages, collections, or exceptions speculatively before failure is known. CI tests should enforce stable
+allocation or boundedness invariants; timing thresholds should remain in controlled benchmark jobs unless the
+environment can support a reliable budget.
+
+### Parallel semantic implementations
+
+Two physical implementations of one semantic operation may be appropriate when they satisfy materially different
+operating contracts, such as contiguous high-throughput output versus payload-bounded streaming. The semantic
+contract still has one authority. Parallel implementations must identify their distinct operating constraints,
+centralize shared constants and closed-set mappings, and consume the same semantic fixtures.
+
+When the result is a durable or fingerprinted representation, every implementation must participate in a
+differential conformance suite. The suite must cover every semantic kind, ordering and normalization rules,
+escaping and numeric boundaries, nested structures, failure policies, and generated combinations. Adding a new
+semantic kind must fail fixture-coverage verification until the kind is represented. Exact canonical formats
+require byte equality, not merely equivalent parsed values. Keep parallel implementations visibly associated and
+document why consolidation would violate a measured operating contract.
 
 ## Metrics are sensors, not objectives
 

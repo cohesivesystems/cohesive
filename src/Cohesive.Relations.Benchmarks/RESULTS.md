@@ -9,8 +9,11 @@
   157.9 ns and 152 B through a compiled plan. That is approximately 6.44× faster, eliminates 4,168 B per operation,
   and matches the handwritten destination-object allocation floor. The default cache adds approximately 29 ns and
   no steady-state allocation.
-- Canonical serialization is approximately 0.86 μs and allocates 6.64 KB for UTF-8 or 7.23 KB for a string. These
-  results are descriptive optimization baselines, not regression thresholds.
+- Canonical observation serialization now takes 658.3 ns and 344 B for returned UTF-8 or 688.2 ns and 632 B for a
+  returned string. Reusable caller-owned output takes 643.2 ns with 0 B of steady-state allocation. Compared with the
+  previous 0.86 μs implementation, returned UTF-8 is 1.31× faster and eliminates 6,456 B; returned strings are 1.25×
+  faster and eliminate 6,768 B. SHA-256 fingerprinting takes 3.406 μs while streaming bounded JSON chunks and
+  retaining a fixed 360 B of managed allocation without materializing the JSON payload.
 - In the ARI-145 1,024-row DefaultJob verification run, the generated kernel is approximately 1.74×
   handwritten for the simple DTO and 1.54× for the joined DTO. It allocates exactly the same bytes as
   handwritten mapping.
@@ -30,6 +33,68 @@
   end-to-end profiles.
 
 ## History
+
+### 2026-08-28 (pooled canonical observation JSON and streaming fingerprints)
+
+- Base commit: `2d3c37ac3eeba259d06b7c69874e81ff72f994f1`
+- Branch: `codex/observation-json-performance`
+- Worktree: dirty; includes the uncommitted pooled JSON writer, fingerprint sink, tests, and benchmark coverage
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+- Environment overrides: `DOTNET_CLI_HOME=/tmp/codex-dotnet-json`,
+  `DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1`
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --filter "*ObservationProjectionBenchmarks.ToCanonicalJson*" \
+           "*ObservationProjectionBenchmarks.WriteCanonicalJson*" \
+           "*ObservationProjectionBenchmarks.ComputeCanonicalFingerprint*"
+
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --filter "*ObservationProjectionBenchmarks.ComputeCanonicalFingerprint*"
+
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --filter "*ObservationMaterializerCompilationBenchmarks*"
+
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --filter "*ObservationProjectionBenchmarks.WriteCanonicalJsonToCallerOwnedBuffer*"
+```
+
+Canonical projection of the representative seven-field state containing a nested address and string array:
+
+| Operation | Previous mean | Current mean | Speedup | Previous allocation | Current allocation |
+|---|---:|---:|---:|---:|---:|
+| Returned canonical UTF-8 | 863.5 ns | 658.3 ns | 1.31× | 6,800 B | 344 B |
+| Returned canonical string | 860.3 ns | 688.2 ns | 1.25× | 7,400 B | 632 B |
+| Reusable caller-owned UTF-8 output | — | 643.2 ns | — | — | 0 B |
+| Bounded streamed SHA-256 fingerprint | — | 3.406 μs | — | payload-sized | 360 B |
+
+The returned forms now allocate only their required result plus the small pooled-buffer owner. Caller-owned output
+reuses both destination storage and a thread-local `Utf8JsonWriter`, while the writer is detached from caller storage
+before it is cached. Fingerprinting streams bounded chunks of canonical bytes into incremental SHA-256 storage, so
+its temporary memory and managed allocation remain constant as payload size grows.
+
+After centralizing the canonical envelope tokens and adding differential writer conformance, the caller-owned path
+was rerun independently at 643.2 ns and 0 B, confirming that the shared format authority introduced no regression.
+
+Fresh conventional CLR materializer-plan compilation after process-wide CLR metadata caches are warm measured
+3.777 ms and 18.75 KB. This is a descriptive lifecycle baseline distinct from the 157.9 ns / 152 B warm materializer
+execution path.
+
+All five DefaultJob benchmarks completed successfully across the recorded runs. Process-priority elevation was
+unavailable on the host, but BenchmarkDotNet reported no critical validation errors. The JSON measurements came from
+the 1 minute 25 second combined run; only the fingerprint implementation changed afterward. Its final bounded rerun
+completed in 47 seconds, and the compilation run completed in 21 seconds.
 
 ### 2026-08-27 (allocation-floor observation CLR materialization)
 

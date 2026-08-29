@@ -1,7 +1,17 @@
+using System.Buffers;
+using System.Security.Cryptography;
+using System.Text;
 using CoreObservation = Cohesive.Model.Observation;
 
 namespace Cohesive.Tests.Model;
 
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class CoreObservationPerformanceTestCollection
+{
+    public const string Name = "Core observation performance";
+}
+
+[Collection(CoreObservationPerformanceTestCollection.Name)]
 public sealed class CoreObservationTests
 {
     [Fact]
@@ -203,6 +213,65 @@ public sealed class CoreObservationTests
     }
 
     [Fact]
+    public void WriteCanonicalJson_AppendsEquivalentUtf8WithoutAllocatingAfterWarmup()
+    {
+        const int Iterations = 1_000;
+        var observation = CoreObservation.Create(Shape(CreateGraph()), ValidFields());
+        var expected = observation.ToCanonicalJsonUtf8();
+        var output = new ArrayBufferWriter<byte>(expected.Length + 16);
+        ReadOnlySpan<byte> prefix = "prefix:"u8;
+        prefix.CopyTo(output.GetSpan(prefix.Length));
+        output.Advance(prefix.Length);
+
+        observation.WriteCanonicalJson(output);
+
+        Assert.True(expected.AsSpan().SequenceEqual(output.WrittenSpan[prefix.Length..]));
+        Assert.Throws<ArgumentNullException>(() => observation.WriteCanonicalJson(null!));
+
+        for (var iteration = 0; iteration < 100; iteration++)
+        {
+            output.Clear();
+            observation.WriteCanonicalJson(output);
+        }
+
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (var iteration = 0; iteration < Iterations; iteration++)
+        {
+            output.Clear();
+            observation.WriteCanonicalJson(output);
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Assert.Equal(expected.Length, output.WrittenCount);
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void ComputeFingerprint_HashesCanonicalStreamWithPayloadIndependentAllocations()
+    {
+        Shape definition = new(
+            new("payload"),
+            [new(new("value"), new ScalarTypeRef(ScalarTypeKind.String))]);
+        ShapeGraph graph = new(new("payload-fingerprint-v1"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var small = CoreObservation.Create(
+            shape,
+            Fields(("value", ObservationValue.FromString("small"))));
+        var large = CoreObservation.Create(
+            shape,
+            Fields(("value", ObservationValue.FromString(new string('<', 100_000)))));
+        var expectedDigest = Convert.ToHexStringLower(SHA256.HashData(small.ToCanonicalJsonUtf8()));
+        Func<ObservationFingerprint> fingerprintSmall = small.ComputeFingerprint;
+        Func<ObservationFingerprint> fingerprintLarge = large.ComputeFingerprint;
+
+        var smallAllocated = MeasureAllocations(fingerprintSmall, iterations: 100, out var smallFingerprint);
+        var largeAllocated = MeasureAllocations(fingerprintLarge, iterations: 100, out _);
+
+        Assert.Equal(expectedDigest, smallFingerprint.Value);
+        Assert.InRange(largeAllocated - smallAllocated, -512, 512);
+    }
+
+    [Fact]
     public void Equality_DistinguishesQualifiedShapeButNormalizesEqualNumbers()
     {
         Shape numeric = new(
@@ -302,4 +371,19 @@ public sealed class CoreObservationTests
             static field => field.Name,
             static field => field.Value,
             StringComparer.Ordinal);
+
+    static long MeasureAllocations<T>(Func<T> operation, int iterations, out T result)
+    {
+        result = default!;
+        for (var iteration = 0; iteration < 20; iteration++)
+            result = operation();
+
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (var iteration = 0; iteration < iterations; iteration++)
+            result = operation();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        GC.KeepAlive(result);
+        return allocated;
+    }
 }
