@@ -126,7 +126,7 @@ public sealed class IndexedObservationOccurrenceTests
         var allocatedPerOccurrence = allocated / Iterations;
 
         Assert.NotNull(last);
-        Assert.InRange(allocatedPerOccurrence, 1_400, 1_600);
+        Assert.InRange(allocatedPerOccurrence, 600, 700);
     }
 
     [Fact]
@@ -270,7 +270,7 @@ public sealed class IndexedObservationOccurrenceTests
 
         Assert.NotNull(last);
         Assert.Equal(15, last.GetRequiredField("field_15").GetInt32());
-        Assert.InRange(allocatedPerOccurrence, 1_300, 1_700);
+        Assert.InRange(allocatedPerOccurrence, 600, 700);
     }
 
     [Fact]

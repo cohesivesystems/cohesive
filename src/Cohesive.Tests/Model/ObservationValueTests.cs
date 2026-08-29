@@ -14,6 +14,16 @@ namespace Cohesive.Tests.Model;
 public sealed class ObservationValueTests
 {
     [Fact]
+    public void PhysicalSize_RemainsCompactForDenseStateStorage()
+    {
+        var size = Unsafe.SizeOf<ObservationValue>();
+
+        Assert.True(
+            size <= 32,
+            $"ObservationValue grew to {size} bytes; dense state buffers depend on a compact value representation.");
+    }
+
+    [Fact]
     public void FromObject_DictionaryWithNonStringKeys_Throws()
     {
         IDictionary values = new Dictionary<int, string> { [1] = "x" };
