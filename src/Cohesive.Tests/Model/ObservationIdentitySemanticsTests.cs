@@ -81,11 +81,13 @@ public sealed class ObservationIdentitySemanticsTests
             new("customer-display"),
             [new(new("display_name"), new ScalarTypeRef(ScalarTypeKind.String))]);
         ShapeGraph graph = new(new("customer-display-v1"), [shape]);
+        GraphShapeId graphShape = new(graph, shape.Id);
         var semantic = CoreObservation.Create(
-            new(graph, shape.Id),
+            graphShape,
             Fields(("display_name", ObservationValue.FromString("Ada"))));
         IndexedObservationOccurrence derivedPhysicalOccurrence =
             IndexedObservationOccurrence.FromObservation(
+                graphShape,
                 new(
                     new("evaluation/customer-display/0"),
                     new("customer-display"),

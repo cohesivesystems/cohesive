@@ -9,6 +9,11 @@
   157.9 ns and 152 B through a compiled plan. That is approximately 6.44× faster, eliminates 4,168 B per operation,
   and matches the handwritten destination-object allocation floor. The default cache adds approximately 29 ns and
   no steady-state allocation.
+- Prebinding a compiled materializer to a shared immutable top-level observation layout reduced indexed CLR
+  materialization by 7.0–14.2% for the representative mixed seven-field state and by 10.8–17.4% for sixteen flat
+  scalar fields across repeated ShortRuns. Both ordinal paths remain at the destination-only allocation floor. Raw
+  ordinal field access is about 2.3–3.2× faster than semantic or indexed name lookup across the measured 4-, 16-,
+  and 64-field cases.
 - Canonical observation serialization now takes 658.3 ns and 344 B for returned UTF-8 or 688.2 ns and 632 B for a
   returned string. Reusable caller-owned output takes 643.2 ns with 0 B of steady-state allocation. Compared with the
   previous 0.86 μs implementation, returned UTF-8 is 1.31× faster and eliminates 6,456 B; returned strings are 1.25×
@@ -33,6 +38,78 @@
   end-to-end profiles.
 
 ## History
+
+### 2026-08-29 (shared observation layouts and ordinal-bound CLR materialization)
+
+- Base commit: `1cc12abe2ebcd677484f11bbf7c02e4644ddde39`
+- Branch: `codex/observation-ordinal-access`
+- Worktree: dirty; includes the uncommitted shared-layout, ordinal materializer, tests, and benchmark coverage
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+- Environment overrides: `DOTNET_CLI_HOME=/tmp/codex-dotnet-ordinal-bench`,
+  `DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1`
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build --no-restore -- \
+  --job Short \
+  --filter "*ObservationFieldAccessBenchmarks*"
+
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build --no-restore -- \
+  --job Short \
+  --filter "*ObservationProjectionBenchmarks.Materialize*" \
+           "*ObservationFlatScalarMaterializationBenchmarks*"
+
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build --no-restore -- \
+  --job Short \
+  --filter "*ObservationMaterializerCompilationBenchmarks*"
+```
+
+Repeated top-level scalar reads, with no allocation in any path:
+
+| Fields | Semantic name | Indexed name | Indexed ordinal | Ordinal vs semantic | Ordinal vs indexed name |
+|---:|---:|---:|---:|---:|---:|
+| 4 | 21.61 ns | 18.25 ns | 7.71 ns | 2.80× faster | 2.37× faster |
+| 16 | 100.86 ns | 73.95 ns | 32.18 ns | 3.13× faster | 2.30× faster |
+| 64 | 436.46 ns | 317.62 ns | 134.84 ns | 3.24× faster | 2.36× faster |
+
+Warm CLR materialization through indexed occurrences:
+
+| State | Handwritten | Name-bound plan | Ordinal-bound plan | Ordinal improvement | Allocated |
+|---|---:|---:|---:|---:|---:|
+| Mixed seven-field state with nested object and array | 132.4 ns | 170.3 ns | 158.4 ns | 7.0% | 152 B |
+| Sixteen flat `Int64` scalar fields | 118.5 ns | 347.8 ns | 287.2 ns | 17.4% | 144 B |
+
+After the ordinal read was emitted directly into the compiled expression tree and its reflection-only forwarding
+helper was removed, a focused same-process ShortRun measured 167.2 ns versus 143.4 ns for the mixed state (14.2%)
+and 264.0 ns versus 235.6 ns for the flat state (10.8%). Both retained the same 152 B and 144 B destination-only
+allocations. The spread between ShortRuns is why the conclusion reports ranges rather than treating either run as a
+stable timing threshold.
+
+The immutable layout is retained and shared across indexed occurrences. Ordinal-bound materializers select their fast
+path with one exact-layout reference comparison; semantic observations and readers using another layout retain the
+name-based compatibility path. Conversion, missing-field policy, and serializer behavior remain centralized, so the
+two execution paths do not create parallel serialization authorities. Ordinal addressing is intentionally limited to
+top-level fields. Nested `ObservationValue` objects remain canonical dictionary-backed semantic values until a
+representative nested-path benchmark demonstrates that another physical interpretation is worthwhile.
+
+In the final focused ShortRun, fresh conventional plan compilation after process-wide metadata caches were warm
+measured 3.834 ms and 18.99 KB. Compiling both the name fallback and ordinal-specialized plan measured 6.463 ms and
+54.63 KB. Emitting the ordinal read directly into the expression tree reduced its earlier 10.694 ms compilation mean,
+while the larger expression tree increased its transient allocation from 35.5 KB. This is a one-time cold cost for a
+reusable cached plan, not per-observation overhead, but remains a visible tradeoff to monitor if plans become
+short-lived.
+
+These are ShortRun measurements with three measurement iterations. Process-priority elevation was unavailable on the
+host, but BenchmarkDotNet reported no critical validation errors. The deterministic allocation tests separately
+verify that ordinal materialization allocates only the destination object graph.
 
 ### 2026-08-28 (pooled canonical observation JSON and streaming fingerprints)
 

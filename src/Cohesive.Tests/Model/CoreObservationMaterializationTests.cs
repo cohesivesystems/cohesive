@@ -112,6 +112,66 @@ public sealed class CoreObservationMaterializationTests
     }
 
     [Fact]
+    public void Compile_WithLayoutUsesPreboundOrdinalsAndRetainsNameFallback()
+    {
+        Shape definition = new(
+            new("customer"),
+            [
+                new(new("customer_name"), new ScalarTypeRef(ScalarTypeKind.String)),
+                new(new("order_count"), new ScalarTypeRef(ScalarTypeKind.Int64))
+            ]);
+        ShapeGraph graph = new(new("customer-materialization-v1"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var layout = ObservationLayout.Create(shape, ["order_count", "customer_name"]);
+        var values = Fields(
+            ("customer_name", ObservationValue.FromString("ada")),
+            ("order_count", ObservationValue.FromInt64(3)));
+        var ordinalReader = new TrackingOrdinalReader(layout, values, throwOnNameRead: true);
+        var equivalentLayout = ObservationLayout.Create(shape, ["order_count", "customer_name"]);
+        var fallbackReader = new TrackingOrdinalReader(equivalentLayout, values, throwOnNameRead: false);
+        var materializer = ObservationMaterializer
+            .For<ImmutableCustomer>(shape)
+            .Map(
+                "customer_name",
+                customer => customer.Name,
+                value => value.GetString()!.ToUpperInvariant())
+            .WithImplicitFieldIdentityConvention(property => property.Name switch
+            {
+                nameof(ImmutableCustomer.Name) => "customer_name",
+                nameof(ImmutableCustomer.OrderCount) => "order_count",
+                _ => property.Name
+            })
+            .Compile(layout);
+
+        var ordinalResult = materializer.Materialize(ordinalReader);
+        var fallbackResult = materializer.Materialize(fallbackReader);
+
+        Assert.Equal(new ImmutableCustomer("ADA", 3), ordinalResult);
+        Assert.Same(layout, materializer.OrdinalLayout);
+        Assert.Equal(2, ordinalReader.OrdinalReadCount);
+        Assert.Equal(0, ordinalReader.NameReadCount);
+        Assert.Equal(new ImmutableCustomer("ADA", 3), fallbackResult);
+        Assert.Equal(0, fallbackReader.OrdinalReadCount);
+        Assert.Equal(2, fallbackReader.NameReadCount);
+    }
+
+    [Fact]
+    public void Compile_WithLayoutRejectsAnotherShapeAndMissingMappedFields()
+    {
+        var shape = ShapeFor<ImmutableCustomer>(BuildMetadata<ImmutableCustomer>("customer-materialization-v1"));
+        var incompleteLayout = ObservationLayout.Create(shape, [nameof(ImmutableCustomer.Name)]);
+        var anotherShape = ShapeFor<ImmutableCustomer>(BuildMetadata<ImmutableCustomer>("customer-materialization-v2"));
+        var anotherLayout = ObservationLayout.Create(anotherShape);
+        var builder = ObservationMaterializer.For<ImmutableCustomer>(shape);
+
+        var missingFailure = Assert.Throws<InvalidOperationException>(() => builder.Compile(incompleteLayout));
+        var shapeFailure = Assert.Throws<ArgumentException>(() => builder.Compile(anotherLayout));
+
+        Assert.Contains(nameof(ImmutableCustomer.OrderCount), missingFailure.Message, StringComparison.Ordinal);
+        Assert.Equal("layout", shapeFailure.ParamName);
+    }
+
+    [Fact]
     public void Compile_RejectsDefaultQualifiedIdentityAndEmptyFieldIdentityConvention()
     {
         var defaultIdentityFailure = Assert.Throws<ArgumentException>(() =>
@@ -185,21 +245,31 @@ public sealed class CoreObservationMaterializationTests
     public void DefaultMaterializers_AllocateOnlyTheDestinationObjectGraphForNestedState()
     {
         var observation = ProjectionObservation();
-        var materializer = ObservationMaterializer.For<ProjectionState>(
-            new GraphShapeId(observation.Graph, observation.Shape.Id)).Compile();
+        GraphShapeId shape = new(observation.Graph, observation.Shape.Id);
+        var materializer = ObservationMaterializer.For<ProjectionState>(shape).Compile();
+        var layout = ObservationLayout.Create(shape);
+        var ordinalReader = new TrackingOrdinalReader(
+            layout,
+            observation.Observation.Fields,
+            throwOnNameRead: true);
+        var ordinalMaterializer = ObservationMaterializer.For<ProjectionState>(shape).Compile(layout);
         Func<ProjectionState> handwritten = () => MaterializeProjectionHandwritten(observation.Observation);
         Func<ProjectionState> compiled = () => materializer.Materialize(observation.Observation);
+        Func<ProjectionState> ordinal = () => ordinalMaterializer.Materialize(ordinalReader);
         Func<ProjectionState> cachedDefault = () => observation.Observation.Materialize<ProjectionState>();
 
         var handwrittenAllocated = MeasureAllocations(handwritten, out var handwrittenResult);
         var compiledAllocated = MeasureAllocations(compiled, out var compiledResult);
+        var ordinalAllocated = MeasureAllocations(ordinal, out var ordinalResult);
         var cachedDefaultAllocated = MeasureAllocations(cachedDefault, out var cachedDefaultResult);
 
         AssertProjection(handwrittenResult);
         AssertProjection(compiledResult);
+        AssertProjection(ordinalResult);
         AssertProjection(cachedDefaultResult);
         Assert.True(handwrittenAllocated > 0);
         Assert.Equal(handwrittenAllocated, compiledAllocated);
+        Assert.Equal(handwrittenAllocated, ordinalAllocated);
         Assert.Equal(handwrittenAllocated, cachedDefaultAllocated);
     }
 
@@ -214,13 +284,17 @@ public sealed class CoreObservationMaterializationTests
         var observation = CoreObservation.Create(
             shape,
             Fields(("Code", ObservationValue.FromString("x12"))));
-
-        var result = ObservationMaterializer
+        var layout = ObservationLayout.Create(shape);
+        var ordinalReader = new TrackingOrdinalReader(layout, observation.Fields, throwOnNameRead: true);
+        var materializer = ObservationMaterializer
             .For<CustomContractState>(shape)
-            .Compile()
-            .Materialize(observation);
+            .Compile(layout);
+
+        var result = materializer.Materialize(observation);
+        var ordinalResult = materializer.Materialize(ordinalReader);
 
         Assert.Equal(new CustomCode("converted:x12"), result.Code);
+        Assert.Equal(result, ordinalResult);
     }
 
     [Fact]
@@ -247,19 +321,36 @@ public sealed class CoreObservationMaterializationTests
             optionalShape,
             Fields((nameof(OptionalCustomer.Name), ObservationValue.FromString("Ada"))));
         var defaultMaterializer = ObservationMaterializer.For<OptionalCustomer>(optionalShape).Compile();
+        var optionalLayout = ObservationLayout.Create(optionalShape);
+        var optionalOrdinalReader = new TrackingOrdinalReader(
+            optionalLayout,
+            optionalObservation.Fields,
+            throwOnNameRead: true);
+        var ordinalDefaultMaterializer = ObservationMaterializer
+            .For<OptionalCustomer>(optionalShape)
+            .Compile(optionalLayout);
         var throwingMaterializer = ObservationMaterializer
             .For<OptionalCustomer>(optionalShape)
             .WithMissingFieldBehavior(ObservationMissingFieldBehavior.Throw)
             .Compile();
+        var ordinalThrowingMaterializer = ObservationMaterializer
+            .For<OptionalCustomer>(optionalShape)
+            .WithMissingFieldBehavior(ObservationMissingFieldBehavior.Throw)
+            .Compile(optionalLayout);
 
         var defaultResult = defaultMaterializer.Materialize(optionalObservation);
+        var ordinalDefaultResult = ordinalDefaultMaterializer.Materialize(optionalOrdinalReader);
         var missingFailure = Assert.Throws<InvalidOperationException>(
             () => throwingMaterializer.Materialize(optionalObservation));
+        var ordinalMissingFailure = Assert.Throws<InvalidOperationException>(
+            () => ordinalThrowingMaterializer.Materialize(optionalOrdinalReader));
 
         Assert.Equal("Ada", defaultResult.Name);
         Assert.Null(defaultResult.Note);
         Assert.Equal(7, defaultResult.Count);
+        Assert.Equal(defaultResult, ordinalDefaultResult);
         Assert.Contains("missing required field", missingFailure.Message, StringComparison.Ordinal);
+        Assert.Equal(missingFailure.Message, ordinalMissingFailure.Message);
 
         var allMembersShape = OptionalShape<MutableRequiredDefaultCustomer>("all-default-customer-v1");
         var allMembersObservation = CoreObservation.Create(
@@ -469,6 +560,62 @@ public sealed class CoreObservationMaterializationTests
         ShapeGraph Graph,
         Shape Shape,
         CoreObservation Observation);
+
+    sealed class TrackingOrdinalReader : IOrdinalObservationFieldReader
+    {
+        readonly IReadOnlyDictionary<string, ObservationValue> fields;
+        readonly ObservationValue[] valuesByOrdinal;
+        readonly bool[] presentByOrdinal;
+        readonly bool throwOnNameRead;
+
+        public TrackingOrdinalReader(
+            ObservationLayout layout,
+            IReadOnlyDictionary<string, ObservationValue> fields,
+            bool throwOnNameRead)
+        {
+            Layout = layout;
+            this.fields = fields;
+            this.throwOnNameRead = throwOnNameRead;
+            valuesByOrdinal = new ObservationValue[layout.Count];
+            presentByOrdinal = new bool[layout.Count];
+            foreach (var (fieldIdentity, value) in fields)
+            {
+                var ordinal = layout.GetOrdinal(fieldIdentity);
+                valuesByOrdinal[ordinal] = value;
+                presentByOrdinal[ordinal] = true;
+            }
+        }
+
+        public QualifiedShapeId ShapeId => Layout.ShapeId;
+
+        public ObservationLayout Layout { get; }
+
+        public int NameReadCount { get; private set; }
+
+        public int OrdinalReadCount { get; private set; }
+
+        public bool TryGetField(string fieldIdentity, out ObservationValue field)
+        {
+            NameReadCount++;
+            if (throwOnNameRead)
+                throw new InvalidOperationException("The exact-layout reader must use ordinal access.");
+
+            return fields.TryGetValue(fieldIdentity, out field);
+        }
+
+        public bool TryGetField(int ordinal, out ObservationValue field)
+        {
+            OrdinalReadCount++;
+            if ((uint)ordinal >= (uint)valuesByOrdinal.Length || !presentByOrdinal[ordinal])
+            {
+                field = default;
+                return false;
+            }
+
+            field = valuesByOrdinal[ordinal];
+            return true;
+        }
+    }
 
     sealed record CustomContractState(CustomCode Code);
 

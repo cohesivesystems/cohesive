@@ -1,0 +1,128 @@
+using System.Collections.Immutable;
+
+namespace Cohesive.Model;
+
+/// <summary>
+/// Immutable top-level field layout for physical observation interpretations and compiled execution plans.
+/// </summary>
+/// <remarks>
+/// A layout assigns stable zero-based ordinals to canonical field identities for one exact graph-qualified shape.
+/// It is an execution artifact, not another semantic authority: the governing <see cref="Shape"/> remains the
+/// source of field meaning, and <see cref="Observation"/> remains the portable validated value representation.
+/// Layout instances are safe to share across occurrences, readers, materializers, and concurrent operations.
+/// </remarks>
+public sealed class ObservationLayout
+{
+    readonly ImmutableArray<string> fieldIdentities;
+    readonly Dictionary<string, int> ordinalByFieldIdentity;
+
+    ObservationLayout(QualifiedShapeId shapeId, ImmutableArray<string> fieldIdentities)
+    {
+        ShapeId = shapeId;
+        this.fieldIdentities = fieldIdentities;
+        ordinalByFieldIdentity = new(fieldIdentities.Length, StringComparer.Ordinal);
+        for (var ordinal = 0; ordinal < fieldIdentities.Length; ordinal++)
+        {
+            var fieldIdentity = fieldIdentities[ordinal];
+            if (!ordinalByFieldIdentity.TryAdd(fieldIdentity, ordinal))
+            {
+                throw new ArgumentException(
+                    $"Layout for shape '{shapeId}' contains duplicate field identity '{fieldIdentity}'.",
+                    nameof(fieldIdentities));
+            }
+        }
+    }
+
+    /// <summary>Gets the exact graph-qualified shape interpreted by this layout.</summary>
+    public QualifiedShapeId ShapeId { get; }
+
+    /// <summary>Gets the immutable canonical field identities in ordinal order.</summary>
+    public ImmutableArray<string> FieldIdentities => fieldIdentities;
+
+    /// <summary>Gets the number of field ordinals in this layout.</summary>
+    public int Count => fieldIdentities.Length;
+
+    /// <summary>Gets the ordinal assigned to a canonical field identity.</summary>
+    /// <param name="fieldIdentity">Canonical top-level field identity.</param>
+    /// <returns>The zero-based ordinal assigned to <paramref name="fieldIdentity"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="fieldIdentity"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="fieldIdentity"/> is empty or white-space.</exception>
+    /// <exception cref="KeyNotFoundException">
+    /// <paramref name="fieldIdentity"/> is not part of this layout.
+    /// </exception>
+    public int GetOrdinal(string fieldIdentity)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fieldIdentity);
+        return ordinalByFieldIdentity.TryGetValue(fieldIdentity, out var ordinal)
+            ? ordinal
+            : throw new KeyNotFoundException(
+                $"Field '{fieldIdentity}' is not part of layout '{ShapeId}'.");
+    }
+
+    /// <summary>Attempts to resolve the ordinal assigned to a canonical field identity.</summary>
+    /// <param name="fieldIdentity">Canonical top-level field identity.</param>
+    /// <param name="ordinal">Assigned zero-based ordinal when found; otherwise the default value.</param>
+    /// <returns><see langword="true"/> when the field belongs to this layout; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="fieldIdentity"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="fieldIdentity"/> is empty or white-space.</exception>
+    public bool TryGetOrdinal(string fieldIdentity, out int ordinal)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fieldIdentity);
+        return ordinalByFieldIdentity.TryGetValue(fieldIdentity, out ordinal);
+    }
+
+    /// <summary>Creates the canonical declaration-order layout for an exact graph-scoped shape.</summary>
+    /// <param name="shape">Exact graph and shape whose fields define the layout.</param>
+    /// <returns>An immutable layout containing every shape field in declaration order.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="shape"/> is default.</exception>
+    public static ObservationLayout Create(GraphShapeId shape)
+    {
+        ArgumentNullException.ThrowIfNull(shape.Graph);
+        var definition = shape.Graph.GetShape(shape.ShapeId);
+        var identities = ImmutableArray.CreateBuilder<string>(definition.Fields.Length);
+        foreach (var field in definition.Fields)
+            identities.Add(field.Name.Value);
+
+        return new(shape.QualifiedId, identities.MoveToImmutable());
+    }
+
+    /// <summary>Creates a caller-ordered layout for an exact graph-scoped shape.</summary>
+    /// <param name="shape">Exact graph and shape whose fields may appear in the layout.</param>
+    /// <param name="fieldIdentities">Canonical top-level field identities in desired ordinal order.</param>
+    /// <returns>An immutable layout containing the requested fields in the requested order.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="shape"/> is default or <paramref name="fieldIdentities"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// A field identity is empty, duplicated, or absent from the governing shape.
+    /// </exception>
+    public static ObservationLayout Create(
+        GraphShapeId shape,
+        IEnumerable<string> fieldIdentities)
+    {
+        ArgumentNullException.ThrowIfNull(shape.Graph);
+        ArgumentNullException.ThrowIfNull(fieldIdentities);
+        var definition = shape.Graph.GetShape(shape.ShapeId);
+        var identities = fieldIdentities.TryGetNonEnumeratedCount(out var count)
+            ? ImmutableArray.CreateBuilder<string>(count)
+            : ImmutableArray.CreateBuilder<string>();
+
+        foreach (var fieldIdentity in fieldIdentities)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(fieldIdentity);
+            if (!definition.TryGetField(fieldIdentity, out _))
+            {
+                throw new ArgumentException(
+                    $"Layout for shape '{shape.QualifiedId}' contains unknown field '{fieldIdentity}'.",
+                    nameof(fieldIdentities));
+            }
+
+            identities.Add(fieldIdentity);
+        }
+
+        return new(shape.QualifiedId, identities.ToImmutable());
+    }
+
+    /// <inheritdoc />
+    public override string ToString() => $"{ShapeId} [{string.Join(", ", fieldIdentities)}]";
+}

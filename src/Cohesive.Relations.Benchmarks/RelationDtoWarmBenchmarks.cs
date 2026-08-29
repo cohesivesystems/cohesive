@@ -46,10 +46,10 @@ public class RelationDtoWarmBenchmarks
         joinedIndexedOccurrences = RelationDtoBenchmarkSupport.ToIndexedOccurrences(joined);
         simpleCoreMaterializer = ObservationMaterializer
             .For<LoadSummaryDto>(simpleIndexedOccurrences[0].ShapeId)
-            .Compile();
+            .Compile(simpleIndexedOccurrences[0].Layout);
         joinedCoreMaterializer = ObservationMaterializer
             .For<LoadSearchDto>(joinedIndexedOccurrences[0].ShapeId)
-            .Compile();
+            .Compile(joinedIndexedOccurrences[0].Layout);
         ValidateOutput(
             RelationDtoBenchmarkSupport.MaterializeIndexed(simpleIndexedOccurrences, simpleCoreMaterializer),
             RelationDtoBenchmarkSupport.MapObservations(simple.Observations, simpleCoreMaterializer),

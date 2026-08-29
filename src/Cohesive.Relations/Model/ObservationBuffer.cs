@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Cohesive.Relations.Model;
 
 /// <summary>
@@ -50,6 +52,7 @@ public readonly struct ObservationBuffer
     /// <summary>
     /// Returns true if an ordinal has a materialized value.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool HasValue(int ordinal)
     {
         if ((uint)ordinal >= (uint)FieldCount)
@@ -63,6 +66,7 @@ public readonly struct ObservationBuffer
     /// <summary>
     /// Returns the value for an ordinal.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ObservationValue GetValue(int ordinal)
     {
         if ((uint)ordinal >= (uint)FieldCount)

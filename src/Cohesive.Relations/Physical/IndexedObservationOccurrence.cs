@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Runtime.CompilerServices;
+using Cohesive.Model;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Model;
 using CoreObservation = Cohesive.Model.Observation;
@@ -15,11 +17,12 @@ namespace Cohesive.Relations.Physical;
 /// bits, and derived-field lineage. It does not introduce entity identity or source-version semantics.
 /// </para>
 /// <para>
-/// Public factories snapshot caller-owned layout and buffer inputs and validate them against the exact supplied
-/// graph. The resulting instance is immutable and safe to reuse across concurrent reads.
+/// Public factories retain the supplied immutable layout, snapshot caller-owned mutable buffer inputs, and validate
+/// them against the exact supplied graph. The resulting instance is immutable and safe to reuse across concurrent
+/// reads.
 /// </para>
 /// </remarks>
-public sealed class IndexedObservationOccurrence : IObservationFieldReader
+public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReader
 {
     readonly ObservationBuffer buffer;
     IReadOnlyDictionary<string, ObservationValue>? fields;
@@ -57,30 +60,43 @@ public sealed class IndexedObservationOccurrence : IObservationFieldReader
     /// <summary>Gets present fields keyed by canonical semantic identity.</summary>
     public IReadOnlyDictionary<string, ObservationValue> Fields => fields ??= BuildFields(Layout, buffer);
 
-    /// <summary>Creates an indexed occurrence from a validated identity-free observation.</summary>
+    /// <summary>
+    /// Creates an indexed occurrence from a validated identity-free observation using the shape's declaration-order
+    /// layout.
+    /// </summary>
+    /// <param name="shape">Exact graph and shape governing the observation and generated layout.</param>
     /// <param name="occurrence">Evaluation-scoped occurrence descriptor.</param>
     /// <param name="observation">Validated semantic observation to interpret physically.</param>
     /// <param name="lineage">Optional derived-field lineage for this occurrence.</param>
     /// <returns>An immutable indexed occurrence.</returns>
+    /// <remarks>
+    /// This convenience overload creates one layout. When materializing multiple occurrences of the same shape,
+    /// create one <see cref="ObservationLayout"/> and pass it to the explicit-layout overload so the layout and its
+    /// name index are shared across every row and compiled plan.
+    /// </remarks>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="occurrence"/> or <paramref name="observation"/> is <see langword="null"/>.
+    /// <paramref name="shape"/> is default, or <paramref name="occurrence"/> or <paramref name="observation"/> is
+    /// <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// The occurrence and observation have different qualified shapes.
+    /// The shape, occurrence, and observation have different qualified identities.
     /// </exception>
     public static IndexedObservationOccurrence FromObservation(
+        GraphShapeId shape,
         RelationQueryObservationOccurrence occurrence,
         CoreObservation observation,
         ObservationLineage? lineage = null)
     {
+        ArgumentNullException.ThrowIfNull(shape.Graph);
         ArgumentNullException.ThrowIfNull(observation);
-        return FromObservationCore(
-            occurrence,
-            observation,
-            new(
-                observation.ShapeId.ShapeId,
-                [.. observation.Fields.Keys.Order(StringComparer.Ordinal)]),
-            lineage);
+        if (observation.ShapeId != shape.QualifiedId)
+        {
+            throw new ArgumentException(
+                $"Observation shape '{observation.ShapeId}' does not match supplied shape '{shape.QualifiedId}'.",
+                nameof(observation));
+        }
+
+        return FromObservationCore(occurrence, observation, ObservationLayout.Create(shape), lineage);
     }
 
     /// <summary>Creates an indexed occurrence using a validated semantic observation and an explicit layout.</summary>
@@ -133,14 +149,14 @@ public sealed class IndexedObservationOccurrence : IObservationFieldReader
                 nameof(observation));
         }
 
-        var effectiveLayout = SnapshotLayout(layout);
-        RequireLayoutShape(effectiveLayout, occurrence.Shape);
+        ArgumentNullException.ThrowIfNull(layout);
+        RequireLayoutShape(layout, occurrence.Shape);
 
-        var values = new ObservationValue[effectiveLayout.Count];
-        var presence = new ulong[ObservationBuffer.RequiredWordCount(effectiveLayout.Count)];
+        var values = new ObservationValue[layout.Count];
+        var presence = new ulong[ObservationBuffer.RequiredWordCount(layout.Count)];
         foreach (var (fieldIdentity, value) in observation.Fields)
         {
-            if (!effectiveLayout.TryGetOrdinal(fieldIdentity, out var ordinal))
+            if (!layout.TryGetOrdinal(fieldIdentity, out var ordinal))
             {
                 throw new ArgumentException(
                     $"Physical layout for shape '{occurrence.Shape}' omits present field '{fieldIdentity}'.",
@@ -151,12 +167,12 @@ public sealed class IndexedObservationOccurrence : IObservationFieldReader
             ObservationBuffer.SetHasValue(presence, ordinal);
         }
 
-        ObservationBuffer effectiveBuffer = new(values, presence, effectiveLayout.Count);
+        ObservationBuffer effectiveBuffer = new(values, presence, layout.Count);
         return new(
             occurrence,
-            effectiveLayout,
+            layout,
             effectiveBuffer,
-            SnapshotLineage(lineage, effectiveLayout, effectiveBuffer));
+            SnapshotLineage(lineage, layout, effectiveBuffer));
     }
 
     /// <summary>Creates and validates an indexed occurrence from ordinal-aligned physical buffers.</summary>
@@ -167,7 +183,10 @@ public sealed class IndexedObservationOccurrence : IObservationFieldReader
     /// <param name="hasValueBitMask">Packed presence bits for the supplied value slots.</param>
     /// <param name="lineage">Optional derived-field lineage for this occurrence.</param>
     /// <returns>An immutable, validated indexed occurrence.</returns>
-    /// <remarks>All mutable caller-owned collections and buffers are snapshotted before this method returns.</remarks>
+    /// <remarks>
+    /// The immutable <paramref name="layout"/> is retained and may be shared across rows. Mutable caller-owned value
+    /// and presence buffers are snapshotted before this method returns.
+    /// </remarks>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="shape"/> is default, or <paramref name="occurrence"/> or <paramref name="layout"/> is
     /// <see langword="null"/>.
@@ -194,24 +213,24 @@ public sealed class IndexedObservationOccurrence : IObservationFieldReader
                 nameof(occurrence));
         }
 
-        var effectiveLayout = SnapshotLayout(layout);
-        RequireLayoutShape(effectiveLayout, shape.QualifiedId);
-        ValidateLayoutFields(shape, effectiveLayout);
+        RequireLayoutShape(layout, shape.QualifiedId);
+        ValidateLayoutFields(shape, layout);
 
         var valuesSnapshot = valuesByOrdinal.ToArray();
         var presenceSnapshot = hasValueBitMask.ToArray();
-        var effectiveBuffer = new ObservationBuffer(valuesSnapshot, presenceSnapshot, effectiveLayout.Count);
+        var effectiveBuffer = new ObservationBuffer(valuesSnapshot, presenceSnapshot, layout.Count);
         RequireNoPresenceOutsideLayout(effectiveBuffer);
-        _ = CoreObservation.Create(shape, BuildFields(effectiveLayout, effectiveBuffer));
+        _ = CoreObservation.Create(shape, BuildFields(layout, effectiveBuffer));
 
         return new(
             occurrence,
-            effectiveLayout,
+            layout,
             effectiveBuffer,
-            SnapshotLineage(lineage, effectiveLayout, effectiveBuffer));
+            SnapshotLineage(lineage, layout, effectiveBuffer));
     }
 
     /// <inheritdoc />
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetField(string fieldIdentity, out ObservationValue field)
     {
         if (!Layout.TryGetOrdinal(fieldIdentity, out var ordinal) || !buffer.HasValue(ordinal))
@@ -228,6 +247,7 @@ public sealed class IndexedObservationOccurrence : IObservationFieldReader
     /// <param name="ordinal">Zero-based layout ordinal.</param>
     /// <param name="field">Field value when present; otherwise the default value.</param>
     /// <returns><see langword="true"/> when the ordinal is valid and present; otherwise <see langword="false"/>.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetField(int ordinal, out ObservationValue field)
     {
         if (!buffer.HasValue(ordinal))
@@ -263,9 +283,6 @@ public sealed class IndexedObservationOccurrence : IObservationFieldReader
         ArgumentNullException.ThrowIfNull(materializer);
         return materializer.Materialize(this);
     }
-
-    static ObservationLayout SnapshotLayout(ObservationLayout layout) =>
-        new(layout.Schema, [.. layout.FieldNames]);
 
     static ObservationLineage SnapshotLineage(
         ObservationLineage? lineage,
@@ -312,10 +329,10 @@ public sealed class IndexedObservationOccurrence : IObservationFieldReader
 
     static void RequireLayoutShape(ObservationLayout layout, QualifiedShapeId shape)
     {
-        if (layout.Schema != shape.ShapeId)
+        if (layout.ShapeId != shape)
         {
             throw new ArgumentException(
-                $"Physical layout shape '{layout.Schema.Value}' does not match occurrence shape '{shape}'.",
+                $"Physical layout shape '{layout.ShapeId}' does not match occurrence shape '{shape}'.",
                 nameof(layout));
         }
     }
@@ -325,7 +342,7 @@ public sealed class IndexedObservationOccurrence : IObservationFieldReader
         ArgumentNullException.ThrowIfNull(layout);
         RequireLayoutShape(layout, shape.QualifiedId);
         var definition = shape.Graph.GetShape(shape.ShapeId);
-        foreach (var fieldIdentity in layout.FieldNames)
+        foreach (var fieldIdentity in layout.FieldIdentities)
         {
             if (!definition.TryGetField(fieldIdentity, out _))
             {
@@ -359,7 +376,7 @@ public sealed class IndexedObservationOccurrence : IObservationFieldReader
         for (var ordinal = 0; ordinal < layout.Count; ordinal++)
         {
             if (buffer.HasValue(ordinal))
-                result.Add(layout.FieldNames[ordinal], buffer.GetValue(ordinal));
+                result.Add(layout.FieldIdentities[ordinal], buffer.GetValue(ordinal));
         }
 
         return new ReadOnlyDictionary<string, ObservationValue>(result);

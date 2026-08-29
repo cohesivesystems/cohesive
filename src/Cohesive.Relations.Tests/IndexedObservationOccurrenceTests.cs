@@ -16,7 +16,7 @@ public sealed class IndexedObservationOccurrenceTests
             ("count", ObservationValue.FromInt64(3)),
             ("note", ObservationValue.Null));
         var occurrence = Occurrence(shape, "occurrence/customer-1", "customer-1");
-        var layout = new ObservationLayout(shape.ShapeId, ["count", "alias", "note", "name"]);
+        var layout = ObservationLayout.Create(shape, ["count", "alias", "note", "name"]);
         List<FieldLineage> lineageFields = [new("name", [])];
         var lineage = new ObservationLineage(lineageFields);
 
@@ -29,6 +29,7 @@ public sealed class IndexedObservationOccurrenceTests
         lineageFields.Clear();
 
         Assert.Same(occurrence, indexed.Occurrence);
+        Assert.Same(layout, indexed.Layout);
         Assert.Equal(shape.QualifiedId, indexed.ShapeId);
         Assert.Equal("Ada", indexed.GetRequiredField("name").GetString());
         Assert.Equal(3, indexed.GetRequiredField(0).GetInt32());
@@ -44,7 +45,7 @@ public sealed class IndexedObservationOccurrenceTests
         var shape = CustomerShape("customer-graph/v1");
         var occurrence = Occurrence(shape, "occurrence/customer-1", "customer-1");
         var fieldNames = new[] { "name", "count", "note" };
-        var layout = new ObservationLayout(shape.ShapeId, fieldNames);
+        var layout = ObservationLayout.Create(shape, fieldNames);
         var values = new[]
         {
             ObservationValue.FromString("Ada"),
@@ -65,7 +66,8 @@ public sealed class IndexedObservationOccurrenceTests
         values[0] = ObservationValue.FromString("Grace");
         presence[0] = 0;
 
-        Assert.Equal("name", indexed.Layout.FieldNames[0]);
+        Assert.Equal("name", indexed.Layout.FieldIdentities[0]);
+        Assert.Same(layout, indexed.Layout);
         Assert.Equal("Ada", indexed.GetRequiredField("name").GetString());
         Assert.Equal(3, indexed.GetRequiredField("count").GetInt32());
         Assert.Equal(
@@ -86,21 +88,21 @@ public sealed class IndexedObservationOccurrenceTests
             IndexedObservationOccurrence.Create(
                 shape,
                 occurrence,
-                new(shape.ShapeId, ["name", "foreign"]),
+                ObservationLayout.Create(shape, ["name", "foreign"]),
                 new[] { ObservationValue.FromString("Ada"), default },
                 new ulong[] { 1UL }));
         var invalidValueFailure = Assert.Throws<ArgumentException>(() =>
             IndexedObservationOccurrence.Create(
                 shape,
                 occurrence,
-                new(shape.ShapeId, ["name"]),
+                ObservationLayout.Create(shape, ["name"]),
                 new[] { ObservationValue.FromInt64(7) },
                 new ulong[] { 1UL }));
         var presenceFailure = Assert.Throws<ArgumentException>(() =>
             IndexedObservationOccurrence.Create(
                 shape,
                 occurrence,
-                new(shape.ShapeId, ["name"]),
+                ObservationLayout.Create(shape, ["name"]),
                 new[] { ObservationValue.FromString("Ada") },
                 new ulong[] { 3UL }));
         var lineageFailure = Assert.Throws<ArgumentException>(() =>
@@ -111,7 +113,7 @@ public sealed class IndexedObservationOccurrenceTests
                     shape,
                     ("name", ObservationValue.FromString("Ada")),
                     ("count", ObservationValue.FromInt64(3))),
-                new(shape.ShapeId, ["name", "count", "note"]),
+                ObservationLayout.Create(shape, ["name", "count", "note"]),
                 new([new FieldLineage("note", [])])));
 
         Assert.Contains("unknown field 'foreign'", foreignLayoutFailure.Message, StringComparison.Ordinal);
@@ -124,17 +126,20 @@ public sealed class IndexedObservationOccurrenceTests
     public void Materialize_ExecutesSharedCorePlanDirectlyAgainstIndexedAccess()
     {
         var shape = CustomerShape("customer-graph/v1");
+        var layout = ObservationLayout.Create(shape);
         var indexed = IndexedObservationOccurrence.FromObservation(
+            shape,
             Occurrence(shape, "occurrence/customer-1", "customer-1"),
             Observe(
                 shape,
                 ("name", ObservationValue.FromString("Ada")),
-                ("count", ObservationValue.FromInt64(3))));
+                ("count", ObservationValue.FromInt64(3))),
+            layout);
         var materializer = ObservationMaterializer
             .For<Customer>(shape)
             .Map("name", customer => customer.Name)
             .Map("count", customer => customer.Count)
-            .Compile();
+            .Compile(layout);
 
         var customer = indexed.Materialize(materializer);
         var firstDefault = ObservationMaterializer.GetDefault<Customer>(indexed);
@@ -150,6 +155,7 @@ public sealed class IndexedObservationOccurrenceTests
         var firstShape = CustomerShape("customer-graph/v1");
         var secondShape = CustomerShape("customer-graph/v2");
         var second = IndexedObservationOccurrence.FromObservation(
+            secondShape,
             Occurrence(secondShape, "occurrence/customer-1", "customer-1"),
             Observe(
                 secondShape,
@@ -172,6 +178,7 @@ public sealed class IndexedObservationOccurrenceTests
         GraphShapeId shape = new(graph, definition.Id);
         var semantic = CoreObservation.Create(shape, new Dictionary<string, ObservationValue>());
         var indexed = IndexedObservationOccurrence.FromObservation(
+            shape,
             Occurrence(shape, "occurrence/marker-1", "marker-1"),
             semantic);
 
