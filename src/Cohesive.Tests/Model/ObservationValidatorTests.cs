@@ -5,6 +5,61 @@ namespace Cohesive.Tests.Model;
 public sealed class ObservationValidatorTests
 {
     [Fact]
+    public void TryValidateAgainstShape_OrdinalBuffers_PreservesDiagnosticsAndDoesNotAllocateAfterWarmup()
+    {
+        const int Iterations = 1_000;
+        var (graph, definition, value) = CreateComplexFixture();
+        GraphShapeId shape = new(graph, definition.Id);
+        var layout = ObservationLayout.Create(shape);
+        var values = new ObservationValue[layout.Count];
+        var presence = new ulong[(layout.Count + 63) / 64];
+        foreach (var (fieldIdentity, fieldValue) in value.Fields!)
+        {
+            var ordinal = layout.GetOrdinal(fieldIdentity);
+            values[ordinal] = fieldValue;
+            presence[ordinal >> 6] |= 1UL << (ordinal & 63);
+        }
+
+        for (var iteration = 0; iteration < 100; iteration++)
+            _ = ObservationValidator.TryValidateAgainstShape(shape, layout, values, presence, out _);
+
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var isValid = true;
+        string? validationError = null;
+        for (var iteration = 0; iteration < Iterations; iteration++)
+        {
+            isValid &= ObservationValidator.TryValidateAgainstShape(
+                shape,
+                layout,
+                values,
+                presence,
+                out validationError);
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Assert.True(isValid, validationError);
+        Assert.Null(validationError);
+        Assert.Equal(0, allocated);
+
+        values[layout.GetOrdinal("status")] = ObservationValue.FromString("suspended");
+        Assert.False(ObservationValidator.TryValidateAgainstShape(
+            shape,
+            layout,
+            values,
+            presence,
+            out validationError));
+        var invalidValue = value.WithField(
+            FieldPath.Parse("status"),
+            ObservationValue.FromString("suspended"));
+        Assert.False(ObservationValidator.TryValidateAgainstShape(
+            invalidValue,
+            definition,
+            out var dictionaryValidationError,
+            graph));
+        Assert.Equal(dictionaryValidationError, validationError);
+    }
+
+    [Fact]
     public void TryValidateAgainstShape_ValidComplexValue_DoesNotAllocateAfterWarmup()
     {
         var (graph, shape, value) = CreateComplexFixture();

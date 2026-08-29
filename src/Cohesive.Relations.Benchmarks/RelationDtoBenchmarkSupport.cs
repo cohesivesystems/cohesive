@@ -90,13 +90,11 @@ static class RelationDtoBenchmarkSupport
             .Single(document => document.Graph.Id == relation.Shape.GraphId)
             .Graph;
         var shape = new GraphShapeId(graph, relation.Shape.ShapeId);
+        var layout = ObservationLayout.Create(shape);
         var observations = ImmutableArray.CreateBuilder<IndexedObservationOccurrence>(scenario.Observations.Length);
         for (var index = 0; index < scenario.Observations.Length; index++)
         {
             var semantic = scenario.Observations[index];
-            var layout = ObservationLayout.Create(
-                shape.ShapeId,
-                semantic.Fields.Keys.Order(StringComparer.Ordinal));
             observations.Add(IndexedObservationOccurrence.FromObservation(
                 shape,
                 new(

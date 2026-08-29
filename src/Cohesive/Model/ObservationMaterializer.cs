@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -29,20 +30,33 @@ public enum ObservationMissingFieldBehavior
 /// <typeparam name="T">CLR target type.</typeparam>
 /// <remarks>
 /// A materializer is immutable and thread-safe. Its qualified shape identity, field mappings, converters,
-/// serializer contract, and missing-field policy are fixed when it is compiled.
+/// serializer contract, missing-field policy, and optional ordinal layout are fixed when it is compiled.
 /// </remarks>
 public sealed class ObservationMaterializer<T>
 {
     readonly Func<IObservationFieldReader, T> materialize;
+    readonly ObservationLayout? ordinalLayout;
+    readonly Func<IOrdinalObservationFieldReader, T>? materializeByOrdinal;
 
-    internal ObservationMaterializer(QualifiedShapeId shapeId, Func<IObservationFieldReader, T> materialize)
+    internal ObservationMaterializer(
+        QualifiedShapeId shapeId,
+        Func<IObservationFieldReader, T> materialize,
+        ObservationLayout? ordinalLayout = null,
+        Func<IOrdinalObservationFieldReader, T>? materializeByOrdinal = null)
     {
         ShapeId = shapeId;
         this.materialize = Guard.RequireNotNull(materialize);
+        this.ordinalLayout = ordinalLayout;
+        this.materializeByOrdinal = materializeByOrdinal;
     }
 
     /// <summary>Gets the exact graph-qualified shape accepted by this materializer.</summary>
     public QualifiedShapeId ShapeId { get; }
+
+    /// <summary>
+    /// Gets the exact shared layout bound to the ordinal fast path, or <see langword="null"/> for a name-only plan.
+    /// </summary>
+    public ObservationLayout? OrdinalLayout => ordinalLayout;
 
     /// <summary>Materializes a CLR value from an observation governed by <see cref="ShapeId"/>.</summary>
     /// <param name="observation">Identity-free observation to interpret.</param>
@@ -70,6 +84,7 @@ public sealed class ObservationMaterializer<T>
     /// The reader has another qualified shape, a required mapped field is absent, conversion fails, or a converter
     /// returns null for a non-nullable target member.
     /// </exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public T Materialize(IObservationFieldReader reader)
     {
         ArgumentNullException.ThrowIfNull(reader);
@@ -79,7 +94,12 @@ public sealed class ObservationMaterializer<T>
                 $"Materializer shape '{ShapeId}' does not match observation shape '{reader.ShapeId}'.");
         }
 
-        return materialize(reader);
+        return ordinalLayout is not null
+            && materializeByOrdinal is not null
+            && reader is IOrdinalObservationFieldReader ordinalReader
+            && ReferenceEquals(ordinalReader.Layout, ordinalLayout)
+                ? materializeByOrdinal(ordinalReader)
+                : materialize(reader);
     }
 }
 
@@ -157,7 +177,7 @@ public static class ObservationMaterializer
 /// <summary>Builds an immutable compiled observation-to-CLR materializer.</summary>
 /// <typeparam name="T">CLR target type.</typeparam>
 /// <remarks>
-/// This builder is mutable and is intended for single-threaded authoring before <see cref="Compile"/>. The framework
+/// This builder is mutable and is intended for single-threaded authoring before <see cref="Compile()"/>. The framework
 /// default serializer contract compiles canonical scalar, array, and immutable constructor-object reads directly.
 /// Customized or unsupported JSON contracts retain the serializer compatibility path.
 /// </remarks>
@@ -264,7 +284,7 @@ public sealed class ObservationMaterializerBuilder<T>
     }
 
     /// <summary>Sets serializer options used by default field conversions.</summary>
-    /// <param name="options">Serializer contract to snapshot when <see cref="Compile"/> is called.</param>
+    /// <param name="options">Serializer contract to snapshot when <see cref="Compile()"/> is called.</param>
     /// <returns>This builder for continued configuration.</returns>
     /// <remarks>Compilation clones and freezes the options; later caller mutation cannot change the materializer.</remarks>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
@@ -294,6 +314,42 @@ public sealed class ObservationMaterializerBuilder<T>
     /// metadata does not identify this target type and exact qualified shape.
     /// </exception>
     public ObservationMaterializer<T> Compile()
+        => CompileCore(ordinalLayout: null);
+
+    /// <summary>
+    /// Compiles the configured mappings with an ordinal-specialized path for one exact shared physical layout.
+    /// </summary>
+    /// <param name="layout">
+    /// Immutable layout to bind into the compiled plan. Readers must expose this exact instance to use ordinal reads.
+    /// </param>
+    /// <returns>
+    /// A thread-safe materializer with an ordinal fast path and a name-based fallback for semantic observations or
+    /// readers using another layout.
+    /// </returns>
+    /// <remarks>
+    /// Binding is performed once during compilation. Runtime materialization selects the ordinal path with a
+    /// reference comparison and never performs per-field name lookup when the layout matches.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="layout"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="layout"/> targets another qualified shape.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Mappings are empty, duplicated, absent from the layout, cannot satisfy a constructor, leave a property
+    /// unsettable, or supplied CLR metadata does not identify this target type and exact qualified shape.
+    /// </exception>
+    public ObservationMaterializer<T> Compile(ObservationLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        if (layout.ShapeId != shapeId)
+        {
+            throw new ArgumentException(
+                $"Materializer shape '{shapeId}' does not match layout shape '{layout.ShapeId}'.",
+                nameof(layout));
+        }
+
+        return CompileCore(layout);
+    }
+
+    ObservationMaterializer<T> CompileCore(ObservationLayout? ordinalLayout)
     {
         var effectiveMappings = BuildEffectiveMappings(ObservationMaterializerTypeCache<T>.ReadableProperties);
         if (effectiveMappings.Count == 0)
@@ -325,13 +381,23 @@ public sealed class ObservationMaterializerBuilder<T>
             serializerOptions,
             ObservationMaterializerDefaults.SerializerOptions);
         var frozenSerializerOptions = ObservationMaterializerDefaults.Snapshot(serializerOptions);
-        var compiled = CompileMaterializer(
+        var compiled = CompileMaterializer<IObservationFieldReader>(
             constructor,
             byProperty,
             effectiveMappings,
             frozenSerializerOptions,
-            useDefaultValueConverters);
-        return new(shapeId, compiled);
+            useDefaultValueConverters,
+            ordinalLayout: null);
+        var compiledByOrdinal = ordinalLayout is null
+            ? null
+            : CompileMaterializer<IOrdinalObservationFieldReader>(
+                constructor,
+                byProperty,
+                effectiveMappings,
+                frozenSerializerOptions,
+                useDefaultValueConverters,
+                ordinalLayout);
+        return new(shapeId, compiled, ordinalLayout, compiledByOrdinal);
     }
 
     IReadOnlyList<PropertyMapping> BuildEffectiveMappings(IReadOnlyList<PropertyInfo> readableProperties)
@@ -440,14 +506,16 @@ public sealed class ObservationMaterializerBuilder<T>
         return maximumArityCandidates[0];
     }
 
-    Func<IObservationFieldReader, T> CompileMaterializer(
+    Func<TReader, T> CompileMaterializer<TReader>(
         ConstructorInfo? constructor,
         IReadOnlyDictionary<string, PropertyMapping> byProperty,
         IReadOnlyList<PropertyMapping> effectiveMappings,
         JsonSerializerOptions frozenSerializerOptions,
-        bool useDefaultValueConverters)
+        bool useDefaultValueConverters,
+        ObservationLayout? ordinalLayout)
+        where TReader : IObservationFieldReader
     {
-        var observation = Expression.Parameter(typeof(IObservationFieldReader), "observation");
+        var observation = Expression.Parameter(typeof(TReader), "observation");
         var options = Expression.Constant(frozenSerializerOptions);
         var constructorParameters = constructor?.GetParameters() ?? [];
         var constructorArguments = constructorParameters
@@ -460,6 +528,7 @@ public sealed class ObservationMaterializerBuilder<T>
                     parameter.ParameterType,
                     options,
                     useDefaultValueConverters,
+                    ordinalLayout,
                     ResolveMissingField(
                         parameter.ParameterType,
                         parameter.HasDefaultValue,
@@ -491,6 +560,7 @@ public sealed class ObservationMaterializerBuilder<T>
                         mapping.Property.PropertyType,
                         options,
                         useDefaultValueConverters,
+                        ordinalLayout,
                         ResolveMissingField(mapping.Property.PropertyType)));
             })
             .ToArray();
@@ -498,15 +568,16 @@ public sealed class ObservationMaterializerBuilder<T>
         Expression body = additionalBindings.Length == 0
             ? creation
             : Expression.MemberInit(creation, additionalBindings);
-        return Expression.Lambda<Func<IObservationFieldReader, T>>(body, observation).Compile();
+        return Expression.Lambda<Func<TReader, T>>(body, observation).Compile();
     }
 
-    MethodCallExpression BuildReadExpression(
+    Expression BuildReadExpression(
         ParameterExpression observation,
         PropertyMapping mapping,
         Type targetType,
         ConstantExpression serializerOptions,
         bool useDefaultValueConverters,
+        ObservationLayout? ordinalLayout,
         MissingFieldResolution missingFieldResolution)
     {
         var converter = mapping.Converter;
@@ -515,15 +586,47 @@ public sealed class ObservationMaterializerBuilder<T>
             converter = DefaultObservationValueConverterCache.Get(targetType);
         }
 
-        return Expression.Call(
-            ObservationMaterializerTypeCache<T>.ReadMappedValueMethod.MakeGenericMethod(targetType),
-            observation,
-            Expression.Constant(converter, typeof(Delegate)),
-            serializerOptions,
-            Expression.Constant(mapping.FieldIdentity),
-            Expression.Constant(missingFieldResolution));
+        if (ordinalLayout is null)
+        {
+            return Expression.Call(
+                ObservationMaterializerTypeCache<T>.ReadMappedValueMethod.MakeGenericMethod(targetType),
+                observation,
+                Expression.Constant(converter, typeof(Delegate)),
+                serializerOptions,
+                Expression.Constant(mapping.FieldIdentity),
+                Expression.Constant(missingFieldResolution));
+        }
+
+        if (!ordinalLayout.TryGetOrdinal(mapping.FieldIdentity, out var ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Materializer field '{mapping.FieldIdentity}' is absent from layout '{ordinalLayout}'.");
+        }
+
+        var observed = Expression.Variable(typeof(ObservationValue), "observed");
+        var fieldIdentity = Expression.Constant(mapping.FieldIdentity);
+        return Expression.Block(
+            [observed],
+            Expression.Condition(
+                Expression.Call(
+                    observation,
+                    ObservationMaterializerTypeCache<T>.TryGetFieldByOrdinalMethod,
+                    Expression.Constant(ordinal),
+                    observed),
+                Expression.Call(
+                    ObservationMaterializerTypeCache<T>.ConvertObservedValueMethod.MakeGenericMethod(targetType),
+                    observed,
+                    Expression.Constant(converter, typeof(Delegate)),
+                    serializerOptions,
+                    fieldIdentity),
+                Expression.Call(
+                    ObservationMaterializerTypeCache<T>.ResolveMissingValueMethod.MakeGenericMethod(targetType),
+                    observation,
+                    fieldIdentity,
+                    Expression.Constant(missingFieldResolution))));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static TValue ReadMappedValue<TValue>(
         IObservationFieldReader observation,
         Delegate? converter,
@@ -534,6 +637,16 @@ public sealed class ObservationMaterializerBuilder<T>
         if (!observation.TryGetField(fieldIdentity, out var observed))
             return ResolveMissingValue<TValue>(observation, fieldIdentity, missingFieldResolution);
 
+        return ConvertObservedValue<TValue>(observed, converter, serializerOptions, fieldIdentity);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static TValue ConvertObservedValue<TValue>(
+        ObservationValue observed,
+        Delegate? converter,
+        JsonSerializerOptions serializerOptions,
+        string fieldIdentity)
+    {
         if (converter is Func<ObservationValue, TValue> typedConverter)
             return EnsureNonNull(typedConverter(observed), fieldIdentity);
 
@@ -669,6 +782,24 @@ static class ObservationMaterializerTypeCache<T>
             "ReadMappedValue",
             BindingFlags.Static | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("Observation materializer read method was not found.");
+
+    public static MethodInfo TryGetFieldByOrdinalMethod { get; } =
+        typeof(IOrdinalObservationFieldReader).GetMethod(
+            nameof(IOrdinalObservationFieldReader.TryGetField),
+            [typeof(int), typeof(ObservationValue).MakeByRefType()])
+        ?? throw new InvalidOperationException("Observation ordinal reader method was not found.");
+
+    public static MethodInfo ConvertObservedValueMethod { get; } =
+        typeof(ObservationMaterializerBuilder<T>).GetMethod(
+            "ConvertObservedValue",
+            BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("Observation materializer conversion method was not found.");
+
+    public static MethodInfo ResolveMissingValueMethod { get; } =
+        typeof(ObservationMaterializerBuilder<T>).GetMethod(
+            "ResolveMissingValue",
+            BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("Observation materializer missing-value method was not found.");
 }
 
 static class DefaultObservationMaterializerCache<T>

@@ -130,15 +130,7 @@ public static class CanonicalJsonWriter
         var completed = false;
         try
         {
-            writer.WriteStartObject();
-            writer.WriteString(GetObservationPropertyName(ObservationFormatPropertyToken), Observation.CanonicalFormat);
-            writer.WriteString(
-                GetObservationPropertyName(ObservationGraphIdPropertyToken),
-                observation.ShapeId.GraphId.Value);
-            writer.WriteString(
-                GetObservationPropertyName(ObservationShapeIdPropertyToken),
-                observation.ShapeId.ShapeId.Value);
-            writer.WritePropertyName(GetObservationPropertyName(ObservationValuePropertyToken));
+            WriteCanonicalObservationEnvelopeStart(writer, observation.ShapeId);
             WriteCanonicalObservationValue(writer, observation.Value);
             writer.WriteEndObject();
             writer.Flush();
@@ -149,6 +141,71 @@ public static class CanonicalJsonWriter
             if (completed)
                 CanonicalObservationJsonWriterPool.Return(writer);
         }
+    }
+
+    /// <summary>
+    /// Writes a qualified observation directly from exact ordinal-aligned storage as canonical portable UTF-8 JSON.
+    /// </summary>
+    /// <param name="output">Caller-owned destination that receives the complete canonical representation.</param>
+    /// <param name="observation">Validated ordinal reader whose exact layout identifies every readable field.</param>
+    /// <remarks>
+    /// Top-level fields are emitted using canonical ordinal name order cached by the shared layout. The operation
+    /// neither projects the reader to a dictionary-backed <see cref="Observation"/> nor retains destination storage.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="output"/> or <paramref name="observation"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The reader and layout have different qualified shapes or a retained value has no canonical encoding.
+    /// </exception>
+    public static void WriteCanonicalObservation(
+        IBufferWriter<byte> output,
+        IOrdinalObservationFieldReader observation)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(observation);
+        var layout = observation.Layout;
+        if (layout.ShapeId != observation.ShapeId)
+        {
+            throw new InvalidOperationException(
+                $"Observation reader shape '{observation.ShapeId}' does not match layout shape '{layout.ShapeId}'.");
+        }
+
+        var writer = CanonicalObservationJsonWriterPool.Rent(output);
+        var completed = false;
+        try
+        {
+            WriteCanonicalObservationEnvelopeStart(writer, observation.ShapeId);
+            writer.WriteStartObject();
+            foreach (var ordinal in layout.CanonicalJsonOrdinals)
+            {
+                if (!observation.TryGetField(ordinal, out var value))
+                    continue;
+
+                writer.WritePropertyName(layout.GetJsonPropertyName(ordinal));
+                WriteCanonicalObservationValue(writer, value);
+            }
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+            writer.Flush();
+            completed = true;
+        }
+        finally
+        {
+            if (completed)
+                CanonicalObservationJsonWriterPool.Return(writer);
+        }
+    }
+
+    static void WriteCanonicalObservationEnvelopeStart(
+        Utf8JsonWriter writer,
+        QualifiedShapeId shapeId)
+    {
+        writer.WriteStartObject();
+        writer.WriteString(GetObservationPropertyName(ObservationFormatPropertyToken), Observation.CanonicalFormat);
+        writer.WriteString(GetObservationPropertyName(ObservationGraphIdPropertyToken), shapeId.GraphId.Value);
+        writer.WriteString(GetObservationPropertyName(ObservationShapeIdPropertyToken), shapeId.ShapeId.Value);
+        writer.WritePropertyName(GetObservationPropertyName(ObservationValuePropertyToken));
     }
 
     static ReadOnlySpan<byte> GetObservationPropertyName(ReadOnlySpan<byte> token) => token[2..^2];

@@ -81,6 +81,84 @@ public static class ObservationValidator
         return false;
     }
 
+    /// <summary>
+    /// Validates ordinal-aligned observation fields directly against one exact graph-scoped shape.
+    /// </summary>
+    /// <param name="shape">Exact graph and shape governing the physical values.</param>
+    /// <param name="layout">Layout assigning each physical value slot to a canonical shape field.</param>
+    /// <param name="valuesByOrdinal">One value slot for every layout ordinal.</param>
+    /// <param name="hasValueBitMask">Packed presence bits for the ordinal-aligned value slots.</param>
+    /// <param name="validationError">Validation failure reason when a present value violates shape semantics.</param>
+    /// <returns><see langword="true"/> when the present fields satisfy the exact shape; otherwise false.</returns>
+    /// <remarks>
+    /// Successful validation does not materialize a dictionary-backed object value. The supplied storage is read
+    /// only for the duration of this call and is not retained.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="shape"/> is default or <paramref name="layout"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// The layout belongs to another shape, the value or bitmap length is invalid, or the bitmap contains presence
+    /// bits outside the layout.
+    /// </exception>
+    public static bool TryValidateAgainstShape(
+        GraphShapeId shape,
+        ObservationLayout layout,
+        ReadOnlySpan<ObservationValue> valuesByOrdinal,
+        ReadOnlySpan<ulong> hasValueBitMask,
+        out string? validationError)
+    {
+        ArgumentNullException.ThrowIfNull(shape.Graph);
+        ArgumentNullException.ThrowIfNull(layout);
+        if (layout.ShapeId != shape.QualifiedId)
+        {
+            throw new ArgumentException(
+                $"Observation layout shape '{layout.ShapeId}' does not match supplied shape '{shape.QualifiedId}'.",
+                nameof(layout));
+        }
+        if (valuesByOrdinal.Length != layout.Count)
+        {
+            throw new ArgumentException(
+                "Ordinal-aligned observation values must contain one slot per layout field.",
+                nameof(valuesByOrdinal));
+        }
+
+        var requiredWords = RequiredPresenceWordCount(layout.Count);
+        if (hasValueBitMask.Length != requiredWords)
+        {
+            throw new ArgumentException(
+                "Observation presence bitmap length does not match the layout field count.",
+                nameof(hasValueBitMask));
+        }
+        RequireNoPresenceOutsideLayout(hasValueBitMask, layout.Count);
+
+        var definition = shape.Graph.GetShape(shape.ShapeId);
+
+        NoDiagnostics noDiagnostics = default;
+        if (TryValidateOrdinalFields(
+                valuesByOrdinal,
+                hasValueBitMask,
+                layout,
+                definition,
+                shape.Graph,
+                ref noDiagnostics))
+        {
+            validationError = null;
+            return true;
+        }
+
+        DetailedDiagnostics detailedDiagnostics = new();
+        _ = TryValidateOrdinalFields(
+            valuesByOrdinal,
+            hasValueBitMask,
+            layout,
+            definition,
+            shape.Graph,
+            ref detailedDiagnostics);
+        validationError = detailedDiagnostics.Error ?? "The ordinal observation fields do not adhere to the supplied shape.";
+        return false;
+    }
+
     static bool TryValidateRoot<TDiagnostics>(
         in ObservationValue value,
         Shape shape,
@@ -97,6 +175,58 @@ public static class ObservationValidator
             graph,
             keysAreCanonical: true,
             ref diagnostics);
+    }
+
+    static bool TryValidateOrdinalFields<TDiagnostics>(
+        ReadOnlySpan<ObservationValue> valuesByOrdinal,
+        ReadOnlySpan<ulong> hasValueBitMask,
+        ObservationLayout layout,
+        Shape shape,
+        ShapeGraph graph,
+        ref TDiagnostics diagnostics)
+        where TDiagnostics : IValidationDiagnostics
+    {
+        foreach (var field in shape.Fields)
+        {
+            if (!layout.TryGetOrdinal(field.Name.Value, out var ordinal)
+                || !HasValue(hasValueBitMask, ordinal))
+            {
+                if (field.Presence != FieldPresence.Required)
+                    continue;
+
+                diagnostics.PushField(field.Name.Value);
+                return Fail(ref diagnostics, new(ErrorCode.MissingRequiredShapeField, field.Name.Value));
+            }
+
+            diagnostics.PushField(field.Name.Value);
+            if (!TryValidateFieldValue(valuesByOrdinal[ordinal], field, graph, ref diagnostics))
+                return false;
+            diagnostics.Pop();
+        }
+
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static bool HasValue(ReadOnlySpan<ulong> hasValueBitMask, int ordinal) =>
+        (hasValueBitMask[ordinal >> 6] & (1UL << (ordinal & 63))) != 0;
+
+    static int RequiredPresenceWordCount(int fieldCount) =>
+        fieldCount == 0 ? 0 : ((fieldCount - 1) >> 6) + 1;
+
+    static void RequireNoPresenceOutsideLayout(ReadOnlySpan<ulong> hasValueBitMask, int fieldCount)
+    {
+        var remainder = fieldCount & 63;
+        if (remainder == 0 || hasValueBitMask.IsEmpty)
+            return;
+
+        var allowed = (1UL << remainder) - 1UL;
+        if ((hasValueBitMask[^1] & ~allowed) != 0)
+        {
+            throw new ArgumentException(
+                "The observation presence bitmap contains values outside the layout.",
+                nameof(hasValueBitMask));
+        }
     }
 
     static bool TryValidateShapeFields<TDiagnostics>(
@@ -547,19 +677,7 @@ public static class ObservationValidator
                     (int)unionType.Discriminator.Type));
         }
 
-        TypeRef? matchingType = null;
-        foreach (var unionCase in unionType.Cases)
-        {
-            if (!MatchesPrimitiveLiteral(
-                    unionType.Discriminator.Type,
-                    discriminatorValue,
-                    unionCase.DiscriminatorValue))
-            {
-                continue;
-            }
-            matchingType = unionCase.Type;
-            break;
-        }
+        var matchingType = TryResolveUnionCase(unionType, discriminatorValue);
 
         if (matchingType is null)
         {
@@ -569,6 +687,24 @@ public static class ObservationValidator
         }
 
         return TryMatchTypeCore(matchingType, value, graph, maxDepth, ref diagnostics);
+    }
+
+    internal static TypeRef? TryResolveUnionCase(
+        TypeDefinition.Union unionType,
+        in ObservationValue discriminatorValue)
+    {
+        foreach (var unionCase in unionType.Cases)
+        {
+            if (MatchesPrimitiveLiteral(
+                    unionType.Discriminator.Type,
+                    discriminatorValue,
+                    unionCase.DiscriminatorValue))
+            {
+                return unionCase.Type;
+            }
+        }
+
+        return null;
     }
 
     static bool TryMatchQuantity<TDiagnostics>(

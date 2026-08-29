@@ -1,9 +1,16 @@
 using System.Buffers;
 using System.Collections.Immutable;
+using System.Collections.ObjectModel;
+using System.Text;
+using System.Text.Json;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Columns;
 using BenchmarkDotNet.Configs;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
+using Cohesive.Relations.Diagnostics;
+using Cohesive.Relations.Model;
+using Cohesive.Relations.Physical;
 using CoreObservation = Cohesive.Model.Observation;
 
 namespace Cohesive.Relations.Benchmarks;
@@ -89,7 +96,9 @@ public class ObservationCreationBenchmarks
 public class ObservationProjectionBenchmarks
 {
     CoreObservation observation = null!;
+    IndexedObservationOccurrence indexedObservation = null!;
     ObservationMaterializer<ObservationBenchmarkState> materializer = null!;
+    ObservationMaterializer<ObservationBenchmarkState> ordinalMaterializer = null!;
     ArrayBufferWriter<byte> canonicalJsonOutput = null!;
 
     /// <summary>Creates and validates a representative state value and warms both materializer paths.</summary>
@@ -99,15 +108,34 @@ public class ObservationProjectionBenchmarks
         var fixture = ObservationProjectionFixture.Create();
         observation = fixture.Observation;
         materializer = fixture.Materializer;
+        var layout = ObservationLayout.Create(fixture.Shape);
+        ordinalMaterializer = ObservationMaterializer
+            .For<ObservationBenchmarkState>(fixture.Shape)
+            .Compile(layout);
+        indexedObservation = IndexedObservationOccurrence.FromObservation(
+            fixture.Shape,
+            new(
+                new("observation-projection-benchmark/0"),
+                new("observation-projection-benchmark"),
+                fixture.Shape.QualifiedId,
+                "observation-projection-benchmark/0"),
+            observation,
+            layout);
         var expectedCanonicalJson = observation.ToCanonicalJsonUtf8();
         canonicalJsonOutput = new(initialCapacity: expectedCanonicalJson.Length);
         observation.WriteCanonicalJson(canonicalJsonOutput);
+        canonicalJsonOutput.Clear();
+        indexedObservation.WriteCanonicalJson(canonicalJsonOutput);
 
         var handwritten = MaterializeHandwritten();
         var compiled = materializer.Materialize(observation);
+        var indexed = materializer.Materialize(indexedObservation);
+        var indexedByOrdinal = ordinalMaterializer.Materialize(indexedObservation);
         var cachedDefault = observation.Materialize<ObservationBenchmarkState>();
         if (!MatchesExpected(handwritten, fixture.Expected)
             || !MatchesExpected(compiled, fixture.Expected)
+            || !MatchesExpected(indexed, fixture.Expected)
+            || !MatchesExpected(indexedByOrdinal, fixture.Expected)
             || !MatchesExpected(cachedDefault, fixture.Expected)
             || !canonicalJsonOutput.WrittenSpan.SequenceEqual(expectedCanonicalJson))
         {
@@ -147,6 +175,20 @@ public class ObservationProjectionBenchmarks
     public ObservationBenchmarkState MaterializeWithCompiledPlan() =>
         materializer.Materialize(observation);
 
+    /// <summary>Materializes state through the same string-bound plan over an indexed physical occurrence.</summary>
+    /// <returns>The materialized CLR state.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "ClrMaterialization")]
+    public ObservationBenchmarkState MaterializeIndexedWithStringPlan() =>
+        materializer.Materialize(indexedObservation);
+
+    /// <summary>Materializes state through a plan prebound to the indexed occurrence's shared layout.</summary>
+    /// <returns>The materialized CLR state.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "ClrMaterialization")]
+    public ObservationBenchmarkState MaterializeIndexedWithOrdinalPlan() =>
+        ordinalMaterializer.Materialize(indexedObservation);
+
     /// <summary>Materializes state through the process-wide default materializer cache.</summary>
     /// <returns>The materialized CLR state.</returns>
     [Benchmark]
@@ -177,6 +219,17 @@ public class ObservationProjectionBenchmarks
         return canonicalJsonOutput.WrittenCount;
     }
 
+    /// <summary>Writes canonical UTF-8 directly from ordinal storage into reusable caller-owned storage.</summary>
+    /// <returns>The number of canonical UTF-8 bytes written.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "JsonSerialization")]
+    public int WriteIndexedCanonicalJsonToCallerOwnedBuffer()
+    {
+        canonicalJsonOutput.Clear();
+        indexedObservation.WriteCanonicalJson(canonicalJsonOutput);
+        return canonicalJsonOutput.WrittenCount;
+    }
+
     /// <summary>Computes the canonical observation fingerprint without materializing the JSON payload.</summary>
     /// <returns>The versioned canonical fingerprint.</returns>
     [Benchmark]
@@ -195,6 +248,356 @@ public class ObservationProjectionBenchmarks
         && actual.Tags.SequenceEqual(expected.Tags, StringComparer.Ordinal);
 }
 
+/// <summary>Repeated top-level field reads through semantic, indexed-name, and prebound-ordinal paths.</summary>
+[Config(typeof(RelationBenchmarkConfig))]
+[MemoryDiagnoser]
+[CategoriesColumn]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+public class ObservationFieldAccessBenchmarks
+{
+    CoreObservation observation = null!;
+    IndexedObservationOccurrence indexedObservation = null!;
+    string[] fieldNames = null!;
+
+    /// <summary>Number of present scalar fields read per benchmark operation.</summary>
+    [Params(4, 16, 64)]
+    public int FieldCount { get; set; }
+
+    /// <summary>Builds one semantic observation and one equivalent indexed occurrence outside measurement.</summary>
+    [GlobalSetup]
+    public void Setup()
+    {
+        var fixture = ObservationFieldAccessFixture.Create(FieldCount);
+        observation = fixture.Observation;
+        indexedObservation = fixture.IndexedObservation;
+        fieldNames = fixture.FieldNames;
+
+        var expected = checked((long)(FieldCount - 1) * FieldCount / 2);
+        if (ReadSemanticByName() != expected
+            || ReadIndexedByName() != expected
+            || ReadIndexedByOrdinal() != expected)
+        {
+            throw new InvalidOperationException("Observation field-access benchmark produced an unexpected sum.");
+        }
+    }
+
+    /// <summary>Reads every field through the semantic object dictionary.</summary>
+    /// <returns>Sum of all scalar values.</returns>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Observation", "FieldAccess")]
+    public long ReadSemanticByName()
+    {
+        long sum = 0;
+        foreach (var fieldName in fieldNames)
+        {
+            if (!observation.TryGetField(fieldName, out var value))
+                throw new InvalidOperationException($"Semantic observation omitted field '{fieldName}'.");
+            sum += value.Int64;
+        }
+        return sum;
+    }
+
+    /// <summary>Reads every field through the physical layout's name-to-ordinal index.</summary>
+    /// <returns>Sum of all scalar values.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "FieldAccess")]
+    public long ReadIndexedByName()
+    {
+        long sum = 0;
+        foreach (var fieldName in fieldNames)
+        {
+            if (!indexedObservation.TryGetField(fieldName, out var value))
+                throw new InvalidOperationException($"Indexed observation omitted field '{fieldName}'.");
+            sum += value.Int64;
+        }
+        return sum;
+    }
+
+    /// <summary>Reads every field through prebound physical ordinals.</summary>
+    /// <returns>Sum of all scalar values.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "FieldAccess")]
+    public long ReadIndexedByOrdinal()
+    {
+        long sum = 0;
+        for (var ordinal = 0; ordinal < FieldCount; ordinal++)
+        {
+            if (!indexedObservation.TryGetField(ordinal, out var value))
+                throw new InvalidOperationException($"Indexed observation omitted ordinal '{ordinal}'.");
+            sum += value.Int64;
+        }
+        return sum;
+    }
+}
+
+/// <summary>Validation and immutable ingestion of ordinal-aligned observation state.</summary>
+[Config(typeof(RelationBenchmarkConfig))]
+[MemoryDiagnoser]
+[CategoriesColumn]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+public class ObservationOrdinalIngestionBenchmarks
+{
+    GraphShapeId shape;
+    ObservationLayout layout = null!;
+    ObservationValue[] valuesByOrdinal = null!;
+    ulong[] presence = null!;
+    RelationQueryObservationOccurrence occurrence = null!;
+
+    /// <summary>Builds a sixteen-field sparse-layout fixture and warms all ingestion paths.</summary>
+    [GlobalSetup]
+    public void Setup()
+    {
+        const int FieldCount = 16;
+        var definitions = ImmutableArray.CreateBuilder<FieldDefinition>(FieldCount);
+        var fieldNames = new string[FieldCount];
+        for (var ordinal = 0; ordinal < FieldCount; ordinal++)
+        {
+            var fieldIdentity = $"field_{ordinal:D2}";
+            fieldNames[FieldCount - ordinal - 1] = fieldIdentity;
+            definitions.Add(new(new(fieldIdentity), new ScalarTypeRef(ScalarTypeKind.Int64)));
+        }
+
+        Shape definition = new(new("ordinal-ingestion-state"), definitions.MoveToImmutable());
+        ShapeGraph graph = new(new("observation-ordinal-ingestion-v1"), [definition]);
+        shape = new(graph, definition.Id);
+        layout = ObservationLayout.Create(shape, fieldNames);
+        valuesByOrdinal = new ObservationValue[FieldCount];
+        presence = new ulong[ObservationBuffer.RequiredWordCount(FieldCount)];
+        for (var ordinal = 0; ordinal < FieldCount; ordinal++)
+        {
+            valuesByOrdinal[ordinal] = ObservationValue.FromInt64(ordinal);
+            ObservationBuffer.SetHasValue(presence, ordinal);
+        }
+        occurrence = new(
+            new("ordinal-ingestion/0"),
+            new("ordinal-ingestion"),
+            shape.QualifiedId,
+            "ordinal-ingestion/0");
+
+        _ = ValidateAfterDictionaryProjection();
+        if (!ValidateOrdinalBuffers())
+            throw new InvalidOperationException("Ordinal validation benchmark fixture is invalid.");
+        _ = CreateIndexedOccurrence();
+    }
+
+    /// <summary>Reconstructs dictionary state before applying canonical semantic validation.</summary>
+    /// <returns>The validated semantic observation allocated by the projection path.</returns>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Observation", "OrdinalValidation")]
+    public CoreObservation ValidateAfterDictionaryProjection()
+    {
+        Dictionary<string, ObservationValue> fields = new(layout.Count, StringComparer.Ordinal);
+        for (var ordinal = 0; ordinal < layout.Count; ordinal++)
+        {
+            if ((presence[ordinal >> 6] & (1UL << (ordinal & 63))) != 0)
+                fields.Add(layout.FieldIdentities[ordinal], valuesByOrdinal[ordinal]);
+        }
+
+        return CoreObservation.Create(
+            shape,
+            new ReadOnlyDictionary<string, ObservationValue>(fields));
+    }
+
+    /// <summary>Validates the ordinal buffers without constructing dictionary-backed state.</summary>
+    /// <returns><see langword="true"/> when the representative buffers remain valid.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "OrdinalValidation")]
+    public bool ValidateOrdinalBuffers() =>
+        ObservationValidator.TryValidateAgainstShape(
+            shape,
+            layout,
+            valuesByOrdinal,
+            presence,
+            out _);
+
+    /// <summary>Snapshots and validates one immutable indexed occurrence from ordinal buffers.</summary>
+    /// <returns>The immutable indexed occurrence.</returns>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Observation", "OrdinalHydration")]
+    public IndexedObservationOccurrence CreateIndexedOccurrence() =>
+        IndexedObservationOccurrence.Create(
+            shape,
+            occurrence,
+            layout,
+            valuesByOrdinal,
+            presence);
+}
+
+/// <summary>Plain UTF-8 JSON hydration for a representative sixteen-scalar state object.</summary>
+[Config(typeof(RelationBenchmarkConfig))]
+[MemoryDiagnoser]
+[CategoriesColumn]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+public class ObservationJsonHydrationBenchmarks
+{
+    byte[] json = null!;
+    GraphShapeId shape;
+    ObservationLayout layout = null!;
+    RelationQueryObservationOccurrence occurrence = null!;
+
+    /// <summary>Builds the shared shape, layout, occurrence, and UTF-8 payload outside measurement.</summary>
+    [GlobalSetup]
+    public void Setup()
+    {
+        const int FieldCount = 16;
+        var definitions = ImmutableArray.CreateBuilder<FieldDefinition>(FieldCount);
+        for (var ordinal = 0; ordinal < FieldCount; ordinal++)
+        {
+            definitions.Add(new(
+                new($"field_{ordinal:D2}"),
+                new ScalarTypeRef(ScalarTypeKind.Int64)));
+        }
+
+        Shape definition = new(new("json-hydration-state"), definitions.MoveToImmutable());
+        ShapeGraph graph = new(new("observation-json-hydration-v1"), [definition]);
+        shape = new(graph, definition.Id);
+        layout = ObservationLayout.Create(shape);
+        occurrence = new(
+            new("json-hydration/0"),
+            new("json-hydration"),
+            shape.QualifiedId,
+            "json-hydration/0");
+        json = Encoding.UTF8.GetBytes(
+            "{" + string.Join(",", Enumerable.Range(0, FieldCount)
+                .Select(static ordinal => $"\"field_{ordinal:D2}\":{ordinal}")) + "}");
+
+        var legacy = ReadViaJsonDocument();
+        var streaming = ReadStreamingValue();
+        var projected = HydrateIndexedViaObservation();
+        var indexed = HydrateIndexedOccurrence();
+        if (!ObservationValue.DeepEquals(legacy, streaming)
+            || !projected.TryGetField(15, out var projectedLast)
+            || projectedLast.Int64 != 15
+            || !indexed.TryGetField(15, out var last)
+            || last.Int64 != 15)
+        {
+            throw new InvalidOperationException("Observation JSON hydration benchmark fixture is invalid.");
+        }
+    }
+
+    /// <summary>Reads through the former transient JSON document representation.</summary>
+    /// <returns>The untyped observation value tree.</returns>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Observation", "JsonValueHydration")]
+    public ObservationValue ReadViaJsonDocument()
+    {
+        using var document = JsonDocument.Parse(json);
+        return ObservationValue.FromJsonElement(document.RootElement);
+    }
+
+    /// <summary>Reads the untyped observation value tree directly from the streaming JSON reader.</summary>
+    /// <returns>The untyped observation value tree.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "JsonValueHydration")]
+    public ObservationValue ReadStreamingValue()
+    {
+        var reader = new Utf8JsonReader(json);
+        if (!reader.Read())
+            throw new JsonException("Benchmark JSON is empty.");
+        return ObservationJsonReader.ReadValue(ref reader);
+    }
+
+    /// <summary>Reads through a JSON document and semantic observation before building ordinal storage.</summary>
+    /// <returns>The immutable indexed occurrence.</returns>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Observation", "JsonIndexedHydration")]
+    public IndexedObservationOccurrence HydrateIndexedViaObservation()
+    {
+        using var document = JsonDocument.Parse(json);
+        var value = ObservationValue.FromJsonElement(document.RootElement);
+        var observation = CoreObservation.Create(shape, value);
+        return IndexedObservationOccurrence.FromObservation(shape, occurrence, observation, layout);
+    }
+
+    /// <summary>Reads, restores shaped values, and validates directly into retained ordinal storage.</summary>
+    /// <returns>The immutable indexed occurrence.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "JsonIndexedHydration")]
+    public IndexedObservationOccurrence HydrateIndexedOccurrence() =>
+        IndexedObservationOccurrence.FromJson(shape, occurrence, layout, json);
+}
+
+/// <summary>Warm CLR materialization for a representative state object containing sixteen flat scalar fields.</summary>
+[Config(typeof(RelationBenchmarkConfig))]
+[MemoryDiagnoser]
+[CategoriesColumn]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+public class ObservationFlatScalarMaterializationBenchmarks
+{
+    IndexedObservationOccurrence indexedObservation = null!;
+    ObservationMaterializer<ObservationFlatScalarState> stringMaterializer = null!;
+    ObservationMaterializer<ObservationFlatScalarState> ordinalMaterializer = null!;
+
+    /// <summary>Builds the semantic shape, shared layout, indexed occurrence, and both compiled plans.</summary>
+    [GlobalSetup]
+    public void Setup()
+    {
+        const int FieldCount = 16;
+        var definitions = ImmutableArray.CreateBuilder<FieldDefinition>(FieldCount);
+        var values = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+        for (var ordinal = 0; ordinal < FieldCount; ordinal++)
+        {
+            var fieldIdentity = $"Field{ordinal:D2}";
+            definitions.Add(new(new(fieldIdentity), new ScalarTypeRef(ScalarTypeKind.Int64)));
+            values.Add(fieldIdentity, ObservationValue.FromInt64(ordinal));
+        }
+
+        Shape definition = new(new("flat-scalar-state"), definitions.MoveToImmutable());
+        ShapeGraph graph = new(new("observation-flat-scalar-materialization-v1"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var observation = CoreObservation.Create(shape, ObservationValue.FromObject(values.ToImmutable()));
+        var layout = ObservationLayout.Create(shape);
+        indexedObservation = IndexedObservationOccurrence.FromObservation(
+            shape,
+            new(
+                new("flat-scalar-materialization/0"),
+                new("flat-scalar-materialization"),
+                shape.QualifiedId,
+                "flat-scalar-materialization/0"),
+            observation,
+            layout);
+        stringMaterializer = ObservationMaterializer.For<ObservationFlatScalarState>(shape).Compile();
+        ordinalMaterializer = ObservationMaterializer.For<ObservationFlatScalarState>(shape).Compile(layout);
+
+        var expected = Handwritten();
+        if (stringMaterializer.Materialize(indexedObservation) != expected
+            || ordinalMaterializer.Materialize(indexedObservation) != expected)
+        {
+            throw new InvalidOperationException("Flat-scalar observation materialization produced an unexpected value.");
+        }
+    }
+
+    /// <summary>Materializes the sixteen scalar fields through direct handwritten ordinal reads.</summary>
+    /// <returns>The materialized state.</returns>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Observation", "FlatScalarClrMaterialization")]
+    public ObservationFlatScalarState Handwritten() =>
+        new(
+            Read(0), Read(1), Read(2), Read(3),
+            Read(4), Read(5), Read(6), Read(7),
+            Read(8), Read(9), Read(10), Read(11),
+            Read(12), Read(13), Read(14), Read(15));
+
+    /// <summary>Materializes the sixteen scalar fields through repeated layout name lookup.</summary>
+    /// <returns>The materialized state.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "FlatScalarClrMaterialization")]
+    public ObservationFlatScalarState MaterializeIndexedWithStringPlan() =>
+        stringMaterializer.Materialize(indexedObservation);
+
+    /// <summary>Materializes the sixteen scalar fields through prebound layout ordinals.</summary>
+    /// <returns>The materialized state.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "FlatScalarClrMaterialization")]
+    public ObservationFlatScalarState MaterializeIndexedWithOrdinalPlan() =>
+        ordinalMaterializer.Materialize(indexedObservation);
+
+    long Read(int ordinal) =>
+        indexedObservation.TryGetField(ordinal, out var value)
+            ? value.GetInt64()
+            : throw new InvalidOperationException($"Flat-scalar observation omitted ordinal '{ordinal}'.");
+}
+
 /// <summary>Fresh observation-to-CLR plan compilation after process-wide CLR metadata caches are warm.</summary>
 [Config(typeof(RelationBenchmarkConfig))]
 [MemoryDiagnoser]
@@ -203,13 +606,17 @@ public class ObservationProjectionBenchmarks
 public class ObservationMaterializerCompilationBenchmarks
 {
     QualifiedShapeId shapeId;
+    ObservationLayout layout = null!;
 
     /// <summary>Warms process-wide CLR target metadata before measuring independently created plans.</summary>
     [GlobalSetup]
     public void Setup()
     {
-        shapeId = ObservationProjectionFixture.Create().Observation.ShapeId;
+        var fixture = ObservationProjectionFixture.Create();
+        shapeId = fixture.Observation.ShapeId;
+        layout = ObservationLayout.Create(fixture.Shape);
         _ = CompileFreshPlan();
+        _ = CompileFreshOrdinalPlan();
     }
 
     /// <summary>Creates and compiles a new conventional materializer plan.</summary>
@@ -218,6 +625,13 @@ public class ObservationMaterializerCompilationBenchmarks
     [BenchmarkCategory("Observation", "ClrMaterializerCompilation")]
     public ObservationMaterializer<ObservationBenchmarkState> CompileFreshPlan() =>
         ObservationMaterializer.For<ObservationBenchmarkState>(shapeId).Compile();
+
+    /// <summary>Creates and compiles a new conventional materializer with a shared-layout ordinal path.</summary>
+    /// <returns>A newly compiled immutable materializer.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "ClrMaterializerCompilation")]
+    public ObservationMaterializer<ObservationBenchmarkState> CompileFreshOrdinalPlan() =>
+        ObservationMaterializer.For<ObservationBenchmarkState>(shapeId).Compile(layout);
 }
 
 /// <summary>A representative CLR projection of canonical application state.</summary>
@@ -236,6 +650,41 @@ public sealed record ObservationBenchmarkState(
     decimal Balance,
     ObservationBenchmarkAddress Address,
     string[] Tags);
+
+/// <summary>Representative flat state with sixteen scalar fields.</summary>
+/// <param name="Field00">Scalar field at ordinal 0.</param>
+/// <param name="Field01">Scalar field at ordinal 1.</param>
+/// <param name="Field02">Scalar field at ordinal 2.</param>
+/// <param name="Field03">Scalar field at ordinal 3.</param>
+/// <param name="Field04">Scalar field at ordinal 4.</param>
+/// <param name="Field05">Scalar field at ordinal 5.</param>
+/// <param name="Field06">Scalar field at ordinal 6.</param>
+/// <param name="Field07">Scalar field at ordinal 7.</param>
+/// <param name="Field08">Scalar field at ordinal 8.</param>
+/// <param name="Field09">Scalar field at ordinal 9.</param>
+/// <param name="Field10">Scalar field at ordinal 10.</param>
+/// <param name="Field11">Scalar field at ordinal 11.</param>
+/// <param name="Field12">Scalar field at ordinal 12.</param>
+/// <param name="Field13">Scalar field at ordinal 13.</param>
+/// <param name="Field14">Scalar field at ordinal 14.</param>
+/// <param name="Field15">Scalar field at ordinal 15.</param>
+public sealed record ObservationFlatScalarState(
+    long Field00,
+    long Field01,
+    long Field02,
+    long Field03,
+    long Field04,
+    long Field05,
+    long Field06,
+    long Field07,
+    long Field08,
+    long Field09,
+    long Field10,
+    long Field11,
+    long Field12,
+    long Field13,
+    long Field14,
+    long Field15);
 
 /// <summary>A representative nested CLR value projected from observation state.</summary>
 /// <param name="City">Address city.</param>
@@ -355,6 +804,7 @@ sealed record ObservationCreationFixture(
 }
 
 sealed record ObservationProjectionFixture(
+    GraphShapeId Shape,
     CoreObservation Observation,
     ObservationMaterializer<ObservationBenchmarkState> Materializer,
     ObservationBenchmarkState Expected)
@@ -408,6 +858,45 @@ sealed record ObservationProjectionFixture(
             Balance: 1250.75m,
             Address: new("Seattle", "98101"),
             Tags: ["priority", "west"]);
-        return new(observation, materializer, expected);
+        return new(shape, observation, materializer, expected);
+    }
+}
+
+sealed record ObservationFieldAccessFixture(
+    CoreObservation Observation,
+    IndexedObservationOccurrence IndexedObservation,
+    string[] FieldNames)
+{
+    public static ObservationFieldAccessFixture Create(int fieldCount)
+    {
+        if (fieldCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(fieldCount));
+
+        var definitions = ImmutableArray.CreateBuilder<FieldDefinition>(fieldCount);
+        var values = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+        string[] fieldNames = new string[fieldCount];
+        for (var ordinal = 0; ordinal < fieldCount; ordinal++)
+        {
+            var fieldName = $"field_{ordinal:D2}";
+            fieldNames[ordinal] = fieldName;
+            definitions.Add(new(new(fieldName), new ScalarTypeRef(ScalarTypeKind.Int64)));
+            values.Add(fieldName, ObservationValue.FromInt64(ordinal));
+        }
+
+        Shape definition = new(new("field-access-state"), definitions.MoveToImmutable());
+        ShapeGraph graph = new(new($"observation-field-access-{fieldCount}"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var observation = CoreObservation.Create(shape, ObservationValue.FromObject(values.ToImmutable()));
+        var layout = ObservationLayout.Create(shape, fieldNames);
+        var indexed = IndexedObservationOccurrence.FromObservation(
+            shape,
+            new(
+                new("field-access/0"),
+                new("field-access"),
+                shape.QualifiedId,
+                "field-access/0"),
+            observation,
+            layout);
+        return new(observation, indexed, fieldNames);
     }
 }
