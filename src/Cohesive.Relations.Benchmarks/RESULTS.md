@@ -45,8 +45,69 @@
 - Physical planning, federated physical execution, and diagnostic-heavy mapping are descriptive
   allocation/performance baselines. They are not CI thresholds; optimize them only from representative
   end-to-end profiles.
+- Stage-isolated profiling of 1,024-row relation execution reduced joined execution from 32.15 ms and
+  58,439 KB to 26.06 ms and 45,847 KB, and simple execution from 8.06 ms and 20,739 KB to 6.43 ms and
+  14,922 KB. Runtime rows now preserve canonical provenance incrementally and project expression bindings over
+  their authoritative binding store instead of rebuilding provenance and retaining duplicate dictionaries.
 
 ## History
+
+### 2026-08-30 (relation execution row allocations)
+
+- Base commit: `0c6ced0`
+- Branch: `codex/relation-execution-allocation-investigation`
+- Worktree: dirty; includes the execution-stage benchmarks, incremental provenance, projected expression bindings,
+  and focused invariant tests
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*RelationQueryExecutionStageBenchmarks*"
+
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*RelationQueryExecutionStageBenchmarks.ExecuteJoined*1024*" \
+  --profiler EP
+```
+
+The initial stage benchmark established that execution, rather than output projection or serialization, owns most of
+the end-to-end cost. At 1,024 rows, joined execution took 32.15 ms and allocated 58,439.48 KB, while projecting its
+observations took 143.7 μs and 160.02 KB, warm CLR materialization took 117.4 μs and 104.02 KB, and canonical JSON to
+a reused caller-owned buffer took 379.8 μs and 0 B. Requirement analysis and evidence indexing remained separately
+visible at 6.97 ms / 6,413.12 KB and 987.0 μs / 1,781.41 KB respectively.
+
+| Execution scenario, 1,024 rows | Initial mean | Current mean | Time reduction | Initial allocation | Current allocation | Allocation reduction |
+|---|---:|---:|---:|---:|---:|---:|
+| Joined | 32.15 ms | 26.06 ms | 18.9% | 58,439.48 KB | 45,846.76 KB | 21.5% |
+| Simple | 8.06 ms | 6.43 ms | 20.2% | 20,738.81 KB | 14,921.81 KB | 28.0% |
+
+The first EventPipe trace attributed about 3.25 seconds of sampled inclusive time to provenance normalization across
+the benchmark run. Runtime-row operations now maintain one sorted, duplicate-checked immutable provenance sequence:
+single occurrences are inserted by identity and row merges use a linear canonical merge. The normal construction
+path no longer creates a dictionary, concatenated enumerables, or a sorted replacement array merely to re-establish
+an invariant already owned by the row.
+
+After that change, a fresh trace exposed about 1.86 seconds of sampled inclusive time in `ToDictionary`. Every row
+retained both its authoritative runtime-binding dictionary and an expression-only copy, and expression evaluation
+then defensively copied that already-validated store again. The evaluator now retains execution-owned stores through
+an explicit trusted boundary. A runtime row implements a lazy read-only expression-binding projection over its one
+authoritative dictionary, and the projected binding is a value record, so hot `TryGetValue` reads do not allocate.
+The ordinary expression-context constructor still validates and snapshots caller-owned dictionaries.
+
+This deliberately stops short of introducing an ordinal row layout. The duplicate semantic authority and repeated
+canonicalization were independently measurable and removable without changing addressing semantics. A subsequent
+profile should establish whether binding lookup is now expensive enough to justify plan-bound ordinals and should
+measure the added layout, row-update, sparse-binding, and diagnostic complexity against this cleaner baseline. These
+are ShortRun measurements with three iterations; process-priority elevation was unavailable, but BenchmarkDotNet
+reported no critical validation errors.
 
 ### 2026-08-30 (prebound ordinal validation)
 
