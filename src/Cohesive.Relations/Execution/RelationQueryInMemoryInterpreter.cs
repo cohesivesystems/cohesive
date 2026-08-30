@@ -212,7 +212,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
         return new Engine(request, analysis, cancellationToken).Run();
     }
 
-    sealed class Engine
+    sealed class Engine : IRelationQueryExpressionRuntimeAvailability
     {
         readonly RelationQueryExecutionRequest request;
         readonly RelationRequirementGapAnalysisResult gapAnalysis;
@@ -2014,12 +2014,10 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             {
                 value = evaluator.Evaluate(
                     site.Analysis.Site.Expression,
-                    row.CreateExpressionContext(
+                    row.CreateExecutionExpressionContext(
                         site.Analysis.Site.Scope.ImplicitBinding,
                         parameters,
-                        isFieldAvailable: (binding, path) => IsFieldAvailable(row, binding, path),
-                        isParameterAvailable: IsParameterAvailable,
-                        isCapabilityAvailable: IsCapabilityAvailable));
+                        this));
                 return true;
             }
             catch (RelationQueryExpressionEvaluationException exception)
@@ -2124,6 +2122,18 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             return capabilityEvidence.TryGetValue(input.Id, out var observed)
                 && observed.State == RelationQueryCapabilityEvidenceState.Available;
         }
+
+        bool IRelationQueryExpressionRuntimeAvailability.IsFieldAvailable(
+            RelationQueryRuntimeRow row,
+            ValueBindingId binding,
+            FieldPath path) =>
+            IsFieldAvailable(row, binding, path);
+
+        bool IRelationQueryExpressionRuntimeAvailability.IsParameterAvailable(string parameter) =>
+            IsParameterAvailable(parameter);
+
+        bool IRelationQueryExpressionRuntimeAvailability.IsCapabilityAvailable(ExprCapabilityId capability) =>
+            IsCapabilityAvailable(capability);
 
         bool RequireBoolean(
             ObservationValue value,
