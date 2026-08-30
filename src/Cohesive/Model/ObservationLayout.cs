@@ -13,7 +13,9 @@ namespace Cohesive.Model;
 /// A layout assigns stable zero-based ordinals to canonical field identities for one exact graph-qualified shape.
 /// It is an execution artifact, not another semantic authority: the governing <see cref="Shape"/> remains the
 /// source of field meaning, and <see cref="Observation"/> remains the portable validated value representation.
-/// Layout instances are safe to share across occurrences, readers, materializers, and concurrent operations.
+/// Layout construction also prebinds shape-declaration fields to physical ordinals so repeated validation does not
+/// resolve field names per occurrence. Layout instances are safe to share across occurrences, readers,
+/// materializers, and concurrent operations.
 /// </remarks>
 public sealed class ObservationLayout
 {
@@ -24,11 +26,13 @@ public sealed class ObservationLayout
     readonly ImmutableArray<FieldDefinition> fieldDefinitions;
     readonly Dictionary<string, int> ordinalByFieldIdentity;
     readonly Dictionary<ulong, int> ordinalByJsonNameHash;
+    readonly ImmutableArray<int> ordinalsByShapeFieldIndex;
     readonly ImmutableArray<int> canonicalJsonOrdinals;
     readonly ImmutableArray<JsonEncodedText> jsonPropertyNamesByOrdinal;
 
     ObservationLayout(
         QualifiedShapeId shapeId,
+        Shape shape,
         ImmutableArray<string> fieldIdentities,
         ImmutableArray<FieldDefinition> fieldDefinitions)
     {
@@ -59,9 +63,19 @@ public sealed class ObservationLayout
                 ordinalByJsonNameHash[hash] = -1;
         }
 
+        var shapeFieldOrdinals = ImmutableArray.CreateBuilder<int>(shape.Fields.Length);
+        foreach (var field in shape.Fields)
+        {
+            shapeFieldOrdinals.Add(
+                ordinalByFieldIdentity.TryGetValue(field.Name.Value, out var ordinal)
+                    ? ordinal
+                    : -1);
+        }
+
         Array.Sort(
             canonicalOrdinals,
             (left, right) => StringComparer.Ordinal.Compare(fieldIdentities[left], fieldIdentities[right]));
+        ordinalsByShapeFieldIndex = shapeFieldOrdinals.MoveToImmutable();
         canonicalJsonOrdinals = ImmutableArray.Create(canonicalOrdinals);
         jsonPropertyNamesByOrdinal = jsonPropertyNames.MoveToImmutable();
     }
@@ -76,6 +90,8 @@ public sealed class ObservationLayout
     public int Count => fieldIdentities.Length;
 
     internal ReadOnlySpan<int> CanonicalJsonOrdinals => canonicalJsonOrdinals.AsSpan();
+
+    internal ReadOnlySpan<int> OrdinalsByShapeFieldIndex => ordinalsByShapeFieldIndex.AsSpan();
 
     internal JsonEncodedText GetJsonPropertyName(int ordinal) => jsonPropertyNamesByOrdinal[ordinal];
 
@@ -160,7 +176,11 @@ public sealed class ObservationLayout
             fields.Add(field);
         }
 
-        return new(shape.QualifiedId, identities.MoveToImmutable(), fields.MoveToImmutable());
+        return new(
+            shape.QualifiedId,
+            definition,
+            identities.MoveToImmutable(),
+            fields.MoveToImmutable());
     }
 
     /// <summary>Creates a caller-ordered layout for an exact graph-scoped shape.</summary>
@@ -202,7 +222,11 @@ public sealed class ObservationLayout
             fields.Add(field);
         }
 
-        return new(shape.QualifiedId, identities.ToImmutable(), fields.ToImmutable());
+        return new(
+            shape.QualifiedId,
+            definition,
+            identities.ToImmutable(),
+            fields.ToImmutable());
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

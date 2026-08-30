@@ -186,10 +186,12 @@ public static class ObservationValidator
         ref TDiagnostics diagnostics)
         where TDiagnostics : IValidationDiagnostics
     {
-        foreach (var field in shape.Fields)
+        var ordinalsByShapeFieldIndex = layout.OrdinalsByShapeFieldIndex;
+        for (var fieldIndex = 0; fieldIndex < shape.Fields.Length; fieldIndex++)
         {
-            if (!layout.TryGetOrdinal(field.Name.Value, out var ordinal)
-                || !HasValue(hasValueBitMask, ordinal))
+            var field = shape.Fields[fieldIndex];
+            var ordinal = ordinalsByShapeFieldIndex[fieldIndex];
+            if (ordinal < 0 || !HasValue(hasValueBitMask, ordinal))
             {
                 if (field.Presence != FieldPresence.Required)
                     continue;

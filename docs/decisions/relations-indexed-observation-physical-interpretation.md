@@ -4,7 +4,7 @@ status: implemented
 authority: cohesive.relations.indexed-observation-physical-interpretation
 owners: [cohesive-relations]
 applies_to: [cohesive, cohesive-relations]
-last_verified: 2026-08-29
+last_verified: 2026-08-30
 supersedes: []
 ---
 
@@ -51,6 +51,11 @@ Relations occurrence without reconstructing a dictionary. The interface is not a
 implementations must be validated at their construction boundary, and consumers requiring validation or portable JSON
 must project to core `Observation`.
 
+`ObservationLayout` prebinds the semantic shape's declaration-order fields to physical ordinals once when the layout
+is constructed. Core `ObservationValidator` consumes that derived table while retaining declaration-order traversal,
+required-field behavior, diagnostics, and all value semantics. The table is execution metadata; field definitions and
+validation rules remain owned by the graph and validator.
+
 ARI-504 removed the legacy local-shape row and mapper. Supplied roots now retain stable source identity beside exact
 qualified shape and portable fields; evaluation validates those fields against the persisted compilation graph before
 execution. Entity versions remain on `EntityObservationSnapshot` and are not copied into relation roots.
@@ -64,6 +69,8 @@ execution. Entity versions remain on `EntityObservationSnapshot` and are not cop
   returning; the builder may transfer only storage that it exclusively allocated and consumes.
 - Layouts of at most 64 fields retain presence in the occurrence itself. Larger layouts allocate the exact required
   external presence-word array.
+- Layout validation mappings are derived once from the governing shape and cannot introduce field semantics or bypass
+  core value validation.
 - Presence bits cannot address ordinals outside the layout.
 - Lineage belongs to the derived occurrence and is not projected into an identity-free observation or entity snapshot.
 - A compiled CLR materializer rejects a reader governed by another qualified shape, even when local shape ids match.
@@ -82,15 +89,18 @@ caller already has reusable populated buffers, while preserving its defensive-co
 
 | Physical ingestion operation | Mean | Allocated |
 | --- | ---: | ---: |
-| Snapshot already-populated caller buffers | 172.8 ns | 608 B |
-| Populate fresh caller buffers, then snapshot | 198.8 ns | 1,176 B |
-| Populate and transfer through owned builder | 184.6 ns | 688 B |
-| Shape-bound JSON hydration into indexed storage | 677.0 ns | 608 B |
+| Direct ordinal validation | 94.36 ns | 0 B |
+| Snapshot already-populated caller buffers | 111.3 ns | 608 B |
+| Populate fresh caller buffers, then snapshot | 143.0 ns | 1,176 B |
+| Populate and transfer through owned builder | 131.5 ns | 688 B |
+| Shape-bound JSON hydration into indexed storage | 606.0 ns | 608 B |
 
-The builder reduced end-to-end ordinal-ingestion allocation by 41.5% and elapsed time by 7.1% versus producing fresh
-caller buffers and then snapshotting them. Inline presence removed the separate heap bitmap for the common ≤64-field
-case; the remaining 608 B JSON allocation is the retained sixteen-value array and occurrence. These figures are a
-representative regression signal rather than a release performance guarantee.
+Prebinding shape fields to physical ordinals reduced direct validation from 188.6 ns to 94.36 ns, snapshot construction
+from 172.8 ns to 111.3 ns, owned-builder construction from 184.6 ns to 131.5 ns, and shape-bound JSON hydration from
+677.0 ns to 606.0 ns. Allocations were unchanged. The mapping adds one compact, layout-lifetime `int` array—88 B for
+this sixteen-field fixture—rather than repeated per-row work. Inline presence removes the separate heap bitmap for the
+common ≤64-field case; the remaining 608 B JSON allocation is the retained sixteen-value array and occurrence. These
+figures are a representative regression signal rather than a release performance guarantee.
 
 An informational short run on the same Apple M5 Max / .NET 10 environment as the checked-in baseline measured the
 new `SharedCoreIndexedSimple` path as follows. Allocations were unchanged from the legacy indexed compiler; the shared
