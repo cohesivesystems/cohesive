@@ -14,15 +14,15 @@
   scalar fields across repeated ShortRuns. Both ordinal paths remain at the destination-only allocation floor. Raw
   ordinal field access is about 2.3–3.2× faster than semantic or indexed name lookup across the measured 4-, 16-,
   and 64-field cases.
-- Direct sixteen-field ordinal validation takes 188.6 ns and 0 B versus 423.8 ns and 2,240 B after dictionary
-  projection. Snapshot construction from populated buffers takes 172.8 ns and 608 B. The single-owner builder takes
-  184.6 ns and 688 B end to end, versus 198.8 ns and 1,176 B when fresh caller buffers must then be snapshotted.
+- Direct sixteen-field ordinal validation takes 94.36 ns and 0 B versus 423.8 ns and 2,240 B after dictionary
+  projection. Snapshot construction from populated buffers takes 111.3 ns and 608 B. The single-owner builder takes
+  131.5 ns and 688 B end to end, versus 143.0 ns and 1,176 B when fresh caller buffers must then be snapshotted.
   Direct canonical JSON from the indexed buffer takes 360.5 ns and 0 B, 45.0% less time than the equivalent 655.0 ns
   dictionary-backed write.
 - Streaming JSON-to-value hydration of sixteen flat scalars takes 761.6 ns and 1,680 B, 16.8% less time and 408 B
-  less allocation than the `JsonDocument` path. Shape-bound JSON-to-indexed hydration takes 677.0 ns and 608 B,
-  versus 1.503 μs and 2,816 B through `JsonDocument`, semantic observation construction, and ordinal projection:
-  55.0% less time and 78.4% less allocation.
+  less allocation than the `JsonDocument` path. Shape-bound JSON-to-indexed hydration takes 606.0 ns and 608 B,
+  versus 1.522 μs and 2,816 B through `JsonDocument`, semantic observation construction, and ordinal projection:
+  60.2% less time and 78.4% less allocation.
 - Canonical observation serialization now takes 658.3 ns and 344 B for returned UTF-8 or 688.2 ns and 632 B for a
   returned string. Reusable caller-owned output takes 643.2 ns with 0 B of steady-state allocation. Compared with the
   previous 0.86 μs implementation, returned UTF-8 is 1.31× faster and eliminates 6,456 B; returned strings are 1.25×
@@ -47,6 +47,46 @@
   end-to-end profiles.
 
 ## History
+
+### 2026-08-30 (prebound ordinal validation)
+
+- Base commit: `65e3b5c3fc8772bf203fae7ab9f2204fd4abfbeb`
+- Branch: `codex/observation-prebound-validation`
+- Worktree: dirty; includes the prebound layout mapping, diagnostic-preservation tests, and benchmark results
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*ObservationOrdinalIngestionBenchmarks*" \
+           "*ObservationJsonHydrationBenchmarks*"
+```
+
+Sixteen flat `Int64` fields using one reverse-ordered immutable layout:
+
+| Operation | Previous mean | Current mean | Improvement | Allocated |
+|---|---:|---:|---:|---:|
+| Direct ordinal validation | 188.6 ns | 94.36 ns | 50.0% | 0 B |
+| Snapshot populated caller buffers | 172.8 ns | 111.3 ns | 35.6% | 608 B |
+| Populate fresh caller buffers, then snapshot | 198.8 ns | 143.0 ns | 28.1% | 1,176 B |
+| Populate and transfer through owned builder | 184.6 ns | 131.5 ns | 28.8% | 688 B |
+| Shape-bound JSON to indexed occurrence | 677.0 ns | 606.0 ns | 10.5% | 608 B |
+
+The immutable layout now stores the shape declaration's physical ordinal for each semantic field. Successful ordinal
+validation therefore performs indexed reads rather than one string-dictionary lookup per field. Traversal remains in
+semantic declaration order, so missing-required-field precedence and detailed diagnostic paths are unchanged even for
+reverse-ordered or sparse layouts. Core `ObservationValidator` remains the sole validation authority.
+
+The mapping adds one layout-lifetime `int` array—88 B for this sixteen-field fixture—and no per-occurrence allocation.
+Canonical layouts are graph-cached and explicit layouts are intended to be shared with compiled plans and row batches,
+so this small fixed cost replaces repeated work on every validation, builder completion, and JSON hydration. These are
+ShortRun measurements with three measurement iterations; process-priority elevation was unavailable, but
+BenchmarkDotNet reported no critical validation errors.
 
 ### 2026-08-29 (compact indexed storage and owned ordinal ingestion)
 

@@ -10,7 +10,9 @@ public sealed class ObservationValidatorTests
         const int Iterations = 1_000;
         var (graph, definition, value) = CreateComplexFixture();
         GraphShapeId shape = new(graph, definition.Id);
-        var layout = ObservationLayout.Create(shape);
+        var layout = ObservationLayout.Create(
+            shape,
+            definition.Fields.Reverse().Select(static field => field.Name.Value));
         var values = new ObservationValue[layout.Count];
         var presence = new ulong[(layout.Count + 63) / 64];
         foreach (var (fieldIdentity, fieldValue) in value.Fields!)
@@ -57,6 +59,32 @@ public sealed class ObservationValidatorTests
             out var dictionaryValidationError,
             graph));
         Assert.Equal(dictionaryValidationError, validationError);
+    }
+
+    [Fact]
+    public void TryValidateAgainstShape_OrdinalBuffers_PreservesDeclarationOrderForFieldsOmittedFromLayout()
+    {
+        Shape definition = new(
+            new("state"),
+            [
+                new(new("first"), new ScalarTypeRef(ScalarTypeKind.String)),
+                new(new("second"), new ScalarTypeRef(ScalarTypeKind.Int64))
+            ]);
+        ShapeGraph graph = new(new("state-v1"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var layout = ObservationLayout.Create(shape, ["second"]);
+        ObservationValue[] values = [ObservationValue.FromString("invalid")];
+        ulong[] presence = [1UL];
+
+        var isValid = ObservationValidator.TryValidateAgainstShape(
+            shape,
+            layout,
+            values,
+            presence,
+            out var validationError);
+
+        Assert.False(isValid);
+        Assert.Contains("required field 'first'", validationError, StringComparison.Ordinal);
     }
 
     [Fact]
