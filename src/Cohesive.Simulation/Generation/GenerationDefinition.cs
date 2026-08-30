@@ -1,13 +1,38 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Cohesive.Model;
 
 namespace Cohesive.Simulation.Generation;
+
+/// <summary>Stable property and discriminator names in the portable generation-definition wire contract.</summary>
+public static class GenerationDefinitionWireNames
+{
+    /// <summary>Polymorphic discriminator property for one value-generator node.</summary>
+    public const string GeneratorDiscriminator = "$generator";
+
+    /// <summary>Discriminator for an exact constant generator.</summary>
+    public const string Constant = "constant";
+
+    /// <summary>Discriminator for an inclusive uniform Int32 generator.</summary>
+    public const string Int32 = "int32";
+
+    /// <summary>Discriminator for a Bernoulli Boolean generator.</summary>
+    public const string Bernoulli = "bernoulli";
+
+    /// <summary>Discriminator for a finite weighted categorical generator.</summary>
+    public const string WeightedCategorical = "weightedCategorical";
+}
 
 /// <summary>Base contract for one provider-neutral generator of a concrete field value.</summary>
 /// <remarks>
 /// Generator nodes describe value semantics only. Entropy, CLR materialization, and test-runner policy belong to
 /// separate interpretations.
 /// </remarks>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = GenerationDefinitionWireNames.GeneratorDiscriminator)]
+[JsonDerivedType(typeof(ConstantGenerationNode), GenerationDefinitionWireNames.Constant)]
+[JsonDerivedType(typeof(Int32GenerationNode), GenerationDefinitionWireNames.Int32)]
+[JsonDerivedType(typeof(BernoulliGenerationNode), GenerationDefinitionWireNames.Bernoulli)]
+[JsonDerivedType(typeof(WeightedCategoricalGenerationNode), GenerationDefinitionWireNames.WeightedCategorical)]
 public abstract record ValueGeneratorNode
 {
     /// <summary>Gets the portable semantic type produced by this node.</summary>
@@ -21,6 +46,7 @@ public sealed record ConstantGenerationNode : ValueGeneratorNode
     /// <param name="valueType">Portable semantic type of <paramref name="value"/>.</param>
     /// <param name="value">Exact portable value emitted by the node.</param>
     /// <exception cref="ArgumentNullException"><paramref name="valueType"/> is <see langword="null"/>.</exception>
+    [JsonConstructor]
     public ConstantGenerationNode(TypeRef valueType, ObservationValue value)
     {
         ValueType = Guard.RequireNotNull(valueType);
@@ -43,6 +69,7 @@ public sealed record Int32GenerationNode : ValueGeneratorNode
     /// <param name="minimum">Inclusive minimum value.</param>
     /// <param name="maximum">Inclusive maximum value.</param>
     /// <remarks>Range ordering is validated by the generation compiler so invalid direct IR yields diagnostics.</remarks>
+    [JsonConstructor]
     public Int32GenerationNode(int minimum, int maximum)
     {
         Minimum = minimum;
@@ -67,6 +94,7 @@ public sealed record BernoulliGenerationNode : ValueGeneratorNode
     /// <summary>Creates a Bernoulli generator.</summary>
     /// <param name="probability">Finite probability of <see langword="true"/> in the inclusive range 0 through 1.</param>
     /// <remarks>Probability validity is checked by the compiler so invalid direct IR yields diagnostics.</remarks>
+    [JsonConstructor]
     public BernoulliGenerationNode(double probability) => Probability = probability;
 
     /// <inheritdoc />
@@ -83,6 +111,7 @@ public sealed record WeightedCategoricalOption
     /// <param name="value">Portable value selected by this option.</param>
     /// <param name="weight">Finite positive relative weight.</param>
     /// <remarks>Weight validity is checked by the compiler so invalid direct IR yields diagnostics.</remarks>
+    [JsonConstructor]
     public WeightedCategoricalOption(ObservationValue value, double weight)
     {
         Value = value;
@@ -103,6 +132,7 @@ public sealed record WeightedCategoricalGenerationNode : ValueGeneratorNode
     /// <param name="valueType">Portable semantic type shared by every option.</param>
     /// <param name="options">Finite categorical options in authoring order.</param>
     /// <exception cref="ArgumentNullException"><paramref name="valueType"/> is <see langword="null"/>.</exception>
+    [JsonConstructor]
     public WeightedCategoricalGenerationNode(
         TypeRef valueType,
         ImmutableArray<WeightedCategoricalOption> options)
@@ -125,6 +155,7 @@ public sealed record RecordGenerationMember
     /// <param name="identity">Stable semantic identity shared with the output shape field.</param>
     /// <param name="generator">Provider-neutral field-value generator.</param>
     /// <exception cref="ArgumentNullException"><paramref name="generator"/> is <see langword="null"/>.</exception>
+    [JsonConstructor]
     public RecordGenerationMember(FieldName identity, ValueGeneratorNode generator)
     {
         Identity = identity;
@@ -144,6 +175,7 @@ public sealed record RecordGenerationNode
     /// <summary>Creates a record generator.</summary>
     /// <param name="shapeId">Stable identity of the output shape.</param>
     /// <param name="members">Generated members. Declaration order is non-semantic.</param>
+    [JsonConstructor]
     public RecordGenerationNode(ShapeId shapeId, ImmutableArray<RecordGenerationMember> members)
     {
         ShapeId = shapeId;
@@ -167,6 +199,7 @@ public sealed record GenerationDefinition
     /// <param name="root">Canonical record generator.</param>
     /// <exception cref="ArgumentNullException"><paramref name="shapeGraph"/> or <paramref name="root"/> is null.</exception>
     /// <exception cref="ArgumentException"><paramref name="id"/> or <paramref name="revision"/> is empty.</exception>
+    [JsonConstructor]
     public GenerationDefinition(
         string id,
         string revision,

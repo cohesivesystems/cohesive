@@ -419,6 +419,14 @@ public sealed class CompiledPocoGenerator<T>
     /// <returns>The CLR value, its authoritative generated observation, and replay evidence.</returns>
     public Generated<T> Generate(long seed) => Generate(seed, sequenceIndex: 0);
 
+    /// <summary>Generates one deterministic CLR value in an isolated semantic scope.</summary>
+    /// <param name="seed">Caller-supplied root seed.</param>
+    /// <param name="scope">Stable semantic namespace isolating this generated stream.</param>
+    /// <returns>The CLR value, its authoritative generated observation, and replay evidence.</returns>
+    /// <exception cref="ArgumentException"><paramref name="scope"/> is default or empty.</exception>
+    public Generated<T> Generate(long seed, GenerationScope scope) =>
+        Generate(seed, scope, sequenceIndex: 0);
+
     /// <summary>Generates one deterministic CLR value at an explicit sequence address.</summary>
     /// <param name="seed">Caller-supplied root seed.</param>
     /// <param name="sequenceIndex">Stable zero-based sequence item index.</param>
@@ -427,10 +435,20 @@ public sealed class CompiledPocoGenerator<T>
     public Generated<T> Generate(long seed, long sequenceIndex)
     {
         var generated = ReferenceGenerationInterpreter.Generate(Plan, seed, sequenceIndex);
-        return new(
-            value: Materializer.Materialize(generated.Observation),
-            observation: generated.Observation,
-            replay: generated.Replay);
+        return Materialize(generated);
+    }
+
+    /// <summary>Generates one deterministic CLR value in an isolated scope at an explicit sequence address.</summary>
+    /// <param name="seed">Caller-supplied root seed.</param>
+    /// <param name="scope">Stable semantic namespace isolating this generated stream.</param>
+    /// <param name="sequenceIndex">Stable zero-based sequence item index.</param>
+    /// <returns>The CLR value, its authoritative generated observation, and replay evidence.</returns>
+    /// <exception cref="ArgumentException"><paramref name="scope"/> is default or empty.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sequenceIndex"/> is negative.</exception>
+    public Generated<T> Generate(long seed, GenerationScope scope, long sequenceIndex)
+    {
+        var generated = ReferenceGenerationInterpreter.Generate(Plan, seed, scope, sequenceIndex);
+        return Materialize(generated);
     }
 
     /// <summary>Generates an eagerly materialized bounded sequence addressed by item index.</summary>
@@ -439,22 +457,59 @@ public sealed class CompiledPocoGenerator<T>
     /// <returns>Generated CLR values in ascending zero-based sequence-index order.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is negative.</exception>
     public ImmutableArray<Generated<T>> GenerateSequence(long seed, int count)
+        => GenerateSequence(seed, GenerationScope.Default, count);
+
+    /// <summary>Generates an eagerly materialized bounded sequence in an isolated semantic scope.</summary>
+    /// <param name="seed">Caller-supplied root seed shared by the sequence.</param>
+    /// <param name="scope">Stable semantic namespace isolating this generated stream.</param>
+    /// <param name="count">Number of items to generate.</param>
+    /// <returns>Generated CLR values in ascending zero-based sequence-index order.</returns>
+    /// <exception cref="ArgumentException"><paramref name="scope"/> is default or empty.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is negative.</exception>
+    public ImmutableArray<Generated<T>> GenerateSequence(long seed, GenerationScope scope, int count)
     {
-        var observations = ReferenceGenerationInterpreter.GenerateSequence(Plan, seed, count);
-        if (observations.IsDefaultOrEmpty)
+        var observations = ReferenceGenerationInterpreter.EnumerateSequence(Plan, seed, scope, count);
+        if (count == 0)
             return [];
 
-        var generated = ImmutableArray.CreateBuilder<Generated<T>>(observations.Length);
+        var generated = ImmutableArray.CreateBuilder<Generated<T>>(count);
         foreach (var item in observations)
-        {
-            generated.Add(new(
-                value: Materializer.Materialize(item.Observation),
-                observation: item.Observation,
-                replay: item.Replay));
-        }
+            generated.Add(Materialize(item));
 
         return generated.MoveToImmutable();
     }
+
+    /// <summary>Lazily enumerates a bounded generated CLR sequence addressed by item index.</summary>
+    /// <param name="seed">Caller-supplied root seed shared by the sequence.</param>
+    /// <param name="count">Maximum number of items exposed by the returned sequence.</param>
+    /// <returns>A lazy sequence in ascending zero-based sequence-index order.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is negative.</exception>
+    public IEnumerable<Generated<T>> EnumerateSequence(long seed, int count) =>
+        EnumerateSequence(seed, GenerationScope.Default, count);
+
+    /// <summary>Lazily enumerates a bounded generated CLR sequence in an isolated semantic scope.</summary>
+    /// <param name="seed">Caller-supplied root seed shared by the sequence.</param>
+    /// <param name="scope">Stable semantic namespace isolating this generated stream.</param>
+    /// <param name="count">Maximum number of items exposed by the returned sequence.</param>
+    /// <returns>A lazy sequence in ascending zero-based sequence-index order.</returns>
+    /// <exception cref="ArgumentException"><paramref name="scope"/> is default or empty.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is negative.</exception>
+    public IEnumerable<Generated<T>> EnumerateSequence(long seed, GenerationScope scope, int count)
+    {
+        var observations = ReferenceGenerationInterpreter.EnumerateSequence(Plan, seed, scope, count);
+        return MaterializeSequence(observations);
+    }
+
+    IEnumerable<Generated<T>> MaterializeSequence(IEnumerable<GeneratedObservation> observations)
+    {
+        foreach (var observation in observations)
+            yield return Materialize(observation);
+    }
+
+    Generated<T> Materialize(GeneratedObservation generated) => new(
+        value: Materializer.Materialize(generated.Observation),
+        observation: generated.Observation,
+        replay: generated.Replay);
 }
 
 /// <summary>One generated CLR value, its core observation authority, and separate replay evidence.</summary>
