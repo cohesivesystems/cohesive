@@ -55,6 +55,45 @@ Scope identities are exact ordinal strings and are retained in replay evidence. 
 stable scenario or world identities, not runtime object identities. Calls that omit a scope use
 `GenerationScope.Default` for the original single-stream convenience behavior.
 
+## Worlds
+
+A `WorldDefinition` composes named bounded populations into one portable static initial state. Each population owns
+one canonical generation definition; declaration order is non-semantic, while population identity and count are
+semantic. The compiler derives an isolated scope from exact world and population identities and exposes eager or lazy
+raw-observation streams:
+
+```csharp
+using Cohesive.Simulation.Worlds;
+
+var world = Simulation.DefineWorld("demo", "r1", builder => builder
+    .Population("customers", count: 100, customers)
+    .Population("operators", count: 5, operators));
+
+CompiledWorldPlan plan = world.Compile();
+IEnumerable<GeneratedObservation> customerObservations = plan
+    .GetPopulation("customers")
+    .Enumerate(seed: 42);
+```
+
+Typed generation remains a local interpretation and must match the population's exact generation identity, revision,
+and fingerprint:
+
+```csharp
+IEnumerable<Generated<Customer>> typedCustomers = plan
+    .GetPopulation("customers")
+    .Enumerate(seed: 42, customers.Compile());
+```
+
+Persist or exchange a complete world with `WorldDefinitionJsonSerializer`. The strict document embeds each
+population's generation semantics and governing shape graph, normalizes population and member order, verifies a world
+fingerprint, and can be consumed by scripts without CLR authoring callbacks. Population replay evidence remains valid
+when unrelated populations are added because the exact generation definition and derived population scope are the
+replay coordinates.
+
+Worlds currently define static initial populations only. A future scenario layer will add activity after ordering,
+causality, clock, transition, and failure semantics are explicit; those concerns are intentionally not represented as
+placeholder callbacks or opaque host-language code.
+
 ## Portable definitions and replay
 
 Persist a validated definition for scripts, tooling, or another process with the strict portable document boundary:
@@ -97,7 +136,7 @@ CLR interpretation and never enters the canonical generator IR.
 
 The package references only `Cohesive`; it does not require Entities, Transitions, Processes, Storage, a property-test
 framework, or a fake-data provider. Current canonical generators are constant, inclusive uniform Int32, Bernoulli,
-weighted categorical, and record/member composition. Generation scopes and bounded lazy enumeration provide
-population isolation and streaming mechanics without yet defining world semantics. Property runners, shrinking,
-populations, relationships, automatic POCO inference, world artifacts, provisioning, and provider plugins are
+weighted categorical, record/member composition, and portable static worlds. Generation scopes and bounded lazy
+enumeration provide population isolation and streaming mechanics. Property runners, shrinking, inter-population
+relationships, automatic POCO inference, provisioning adapters, temporal scenarios, and provider plugins are
 intentionally deferred.

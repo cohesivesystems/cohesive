@@ -9,7 +9,7 @@ using Cohesive.Simulation.Generation;
 namespace Cohesive.Simulation;
 
 /// <summary>Entry points for typed authoring of canonical generation definitions.</summary>
-public static class Simulation
+public static partial class Simulation
 {
     /// <summary>Defines deterministic generation for an ordinary CLR object type.</summary>
     /// <typeparam name="T">Mutable class, immutable record, or explicitly materializable CLR target type.</typeparam>
