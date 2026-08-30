@@ -40,6 +40,12 @@ internal sealed class SimulationFingerprintWriter : IDisposable
         hash.AppendData(numberBuffer.AsSpan(0, sizeof(int)));
     }
 
+    public void Append(long value)
+    {
+        BinaryPrimitives.WriteInt64BigEndian(numberBuffer, value);
+        hash.AppendData(numberBuffer);
+    }
+
     public void Append(double value)
     {
         BinaryPrimitives.WriteInt64BigEndian(numberBuffer, BitConverter.DoubleToInt64Bits(value));

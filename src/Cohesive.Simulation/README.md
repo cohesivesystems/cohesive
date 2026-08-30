@@ -94,6 +94,41 @@ Worlds currently define static initial populations only. A future scenario layer
 causality, clock, transition, and failure semantics are explicit; those concerns are intentionally not represented as
 placeholder callbacks or opaque host-language code.
 
+## Provisioning tests and demo environments
+
+`WorldProvisioner` is the provider-neutral execution boundary between a compiled world and a test fixture, setup
+script, or environment seeder. It generates one bounded batch at a time in stable population and sequence order and
+delivers each batch through `IWorldProvisioningSink`:
+
+```csharp
+using Cohesive.Simulation.Provisioning;
+
+await using var output = File.Create("demo-world.jsonl");
+var sink = new WorldJsonLinesSink("artifact/demo-world", output);
+
+WorldProvisioningResult result = await WorldProvisioner.ProvisionAsync(
+    plan,
+    rootSeed: 42,
+    sink,
+    new WorldProvisioningOptions(batchSize: 500));
+```
+
+The run identity covers the exact world identity, revision, fingerprint, root seed, batch size, reference interpreter,
+entropy algorithm, and logical sink target. Each batch gets a stable identity from that run plus its population scope
+and contiguous sequence range. A durable sink should use the batch identity as its idempotency key and respond with
+`AlreadyCommitted` only after verifying the same complete batch. `Committed` and `AlreadyCommitted` both acknowledge
+the whole batch; `Rejected` stops execution with the exact batch and receipt attached.
+
+The reference provisioner performs no automatic retries. A sink exception can mean that the commit outcome is
+unknown, so policy belongs in a concrete adapter that can reconcile the stable batch identity with its target. This
+keeps storage atomicity, replacement policy, and entity identity out of the Simulation semantic authority.
+
+`WorldJsonLinesSink` provides a framework-independent bridge for unit-test artifacts, command-line scripts, and
+Playwright global setup. It emits one generated item per UTF-8 line with world and generation fingerprints, population
+scope, deterministic run and batch IDs, replay token, and the Core canonical observation envelope. The signed 64-bit
+root seed is encoded as a decimal string so JavaScript can consume it without numeric precision loss. The sink flushes
+each acknowledged batch, never closes the caller-owned stream, and intentionally does not claim durable deduplication.
+
 ## Portable definitions and replay
 
 Persist a validated definition for scripts, tooling, or another process with the strict portable document boundary:
@@ -136,7 +171,7 @@ CLR interpretation and never enters the canonical generator IR.
 
 The package references only `Cohesive`; it does not require Entities, Transitions, Processes, Storage, a property-test
 framework, or a fake-data provider. Current canonical generators are constant, inclusive uniform Int32, Bernoulli,
-weighted categorical, record/member composition, and portable static worlds. Generation scopes and bounded lazy
-enumeration provide population isolation and streaming mechanics. Property runners, shrinking, inter-population
-relationships, automatic POCO inference, provisioning adapters, temporal scenarios, and provider plugins are
-intentionally deferred.
+weighted categorical, record/member composition, and portable static worlds. Generation scopes, bounded lazy
+enumeration, deterministic provisioning batches, and the JSON Lines sink provide population isolation and streaming
+mechanics. Property runners, shrinking, inter-population relationships, automatic POCO inference, storage-specific
+provisioning adapters, temporal scenarios, and provider plugins are intentionally deferred.
