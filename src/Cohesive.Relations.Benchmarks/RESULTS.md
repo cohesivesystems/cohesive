@@ -14,13 +14,15 @@
   scalar fields across repeated ShortRuns. Both ordinal paths remain at the destination-only allocation floor. Raw
   ordinal field access is about 2.3–3.2× faster than semantic or indexed name lookup across the measured 4-, 16-,
   and 64-field cases.
-- Direct sixteen-field ordinal validation takes 211.1 ns and 0 B versus 726.3 ns and 3,968 B after dictionary
-  projection. Complete immutable indexed hydration takes 289.8 ns and 1,424 B. Direct canonical JSON from the
-  indexed buffer takes 360.5 ns and 0 B, 45.0% less time than the equivalent 655.0 ns dictionary-backed write.
-- Streaming JSON-to-value hydration of sixteen flat scalars takes 916.5 ns and 2,496 B, 17.4% less time and 360 B
-  less allocation than the former `JsonDocument` path. Shape-bound JSON-to-indexed hydration takes 897.0 ns and
-  1,424 B, versus 1.813 μs and 4,448 B through `JsonDocument`, semantic observation construction, and ordinal
-  projection: 50.5% less time and 68.0% less allocation.
+- Direct sixteen-field ordinal validation takes 188.6 ns and 0 B versus 423.8 ns and 2,240 B after dictionary
+  projection. Snapshot construction from populated buffers takes 172.8 ns and 608 B. The single-owner builder takes
+  184.6 ns and 688 B end to end, versus 198.8 ns and 1,176 B when fresh caller buffers must then be snapshotted.
+  Direct canonical JSON from the indexed buffer takes 360.5 ns and 0 B, 45.0% less time than the equivalent 655.0 ns
+  dictionary-backed write.
+- Streaming JSON-to-value hydration of sixteen flat scalars takes 761.6 ns and 1,680 B, 16.8% less time and 408 B
+  less allocation than the `JsonDocument` path. Shape-bound JSON-to-indexed hydration takes 677.0 ns and 608 B,
+  versus 1.503 μs and 2,816 B through `JsonDocument`, semantic observation construction, and ordinal projection:
+  55.0% less time and 78.4% less allocation.
 - Canonical observation serialization now takes 658.3 ns and 344 B for returned UTF-8 or 688.2 ns and 632 B for a
   returned string. Reusable caller-owned output takes 643.2 ns with 0 B of steady-state allocation. Compared with the
   previous 0.86 μs implementation, returned UTF-8 is 1.31× faster and eliminates 6,456 B; returned strings are 1.25×
@@ -45,6 +47,47 @@
   end-to-end profiles.
 
 ## History
+
+### 2026-08-29 (compact indexed storage and owned ordinal ingestion)
+
+- Base commit: `eb904d5`
+- Branch: `codex/observation-compact-buffer`
+- Worktree: dirty; includes inline presence, the owned builder, allocation guards, and benchmark coverage
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*ObservationOrdinalIngestionBenchmarks*" \
+           "*ObservationJsonHydrationBenchmarks*"
+```
+
+Sixteen flat `Int64` fields using one shared immutable layout:
+
+| Operation | Mean | Allocated | Relative time | Relative allocation |
+|---|---:|---:|---:|---:|
+| Populate fresh caller buffers, then snapshot | 198.8 ns | 1,176 B | 1.00× | 1.00× |
+| Populate and transfer through owned builder | 184.6 ns | 688 B | 0.93× | 0.59× |
+| Snapshot already-populated caller buffers | 172.8 ns | 608 B | — | — |
+| Shape-bound JSON to indexed occurrence | 677.0 ns | 608 B | 0.45× | 0.22× |
+| JSON DOM → semantic observation → indexed occurrence | 1.503 μs | 2,816 B | 1.00× | 1.00× |
+
+The physical buffer now stores the first presence word inline and allocates an external bitmap only beyond 64 fields.
+Its raw arrays are internal implementation state. Public `Create` still snapshots caller-owned buffers, while the
+single-use builder exclusively owns its storage and transfers it after the same core ordinal validation. This removes
+the redundant value-array copy for adapter/database hydration without weakening immutability or introducing a second
+validation authority.
+
+The owned builder reduces allocation by 488 B (41.5%) and time by 7.1% versus populating new caller buffers and then
+defensively snapshotting them. Its remaining 80 B over direct retained construction is the explicit single-use
+ownership object. Direct JSON hydration reaches the 608 B retained storage floor for this fixture. These are ShortRun
+measurements with three measurement iterations; process-priority elevation was unavailable, but BenchmarkDotNet
+reported no critical validation errors.
 
 ### 2026-08-29 (streaming and shape-bound observation JSON hydration)
 

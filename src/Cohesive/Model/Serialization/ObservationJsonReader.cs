@@ -44,11 +44,11 @@ public static class ObservationJsonReader
     /// contains invalid JSON.
     /// </exception>
     public static bool TryReadShape(
-        ref Utf8JsonReader reader,
+        scoped ref Utf8JsonReader reader,
         GraphShapeId shape,
         ObservationLayout layout,
-        Span<ObservationValue> valuesByOrdinal,
-        Span<ulong> hasValueBitMask,
+        scoped Span<ObservationValue> valuesByOrdinal,
+        scoped Span<ulong> hasValueBitMask,
         out string? validationError)
     {
         ArgumentNullException.ThrowIfNull(shape.Graph);
@@ -86,11 +86,11 @@ public static class ObservationJsonReader
     }
 
     static void ReadShapeObject(
-        ref Utf8JsonReader reader,
+        scoped ref Utf8JsonReader reader,
         ShapeGraph graph,
         ObservationLayout layout,
-        Span<ObservationValue> valuesByOrdinal,
-        Span<ulong> hasValueBitMask)
+        scoped Span<ObservationValue> valuesByOrdinal,
+        scoped Span<ulong> hasValueBitMask)
     {
         RequireToken(reader.TokenType, JsonTokenType.StartObject);
         while (reader.Read())

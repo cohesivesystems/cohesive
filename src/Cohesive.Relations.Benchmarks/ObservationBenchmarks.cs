@@ -378,6 +378,8 @@ public class ObservationOrdinalIngestionBenchmarks
         if (!ValidateOrdinalBuffers())
             throw new InvalidOperationException("Ordinal validation benchmark fixture is invalid.");
         _ = CreateIndexedOccurrence();
+        _ = CreateIndexedOccurrenceFromFreshBuffers();
+        _ = BuildIndexedOccurrence();
     }
 
     /// <summary>Reconstructs dictionary state before applying canonical semantic validation.</summary>
@@ -421,6 +423,41 @@ public class ObservationOrdinalIngestionBenchmarks
             layout,
             valuesByOrdinal,
             presence);
+
+    /// <summary>Populates fresh caller-owned buffers before snapshotting and validating an indexed occurrence.</summary>
+    /// <returns>The immutable indexed occurrence.</returns>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Observation", "OrdinalOwnedHydration")]
+    public IndexedObservationOccurrence CreateIndexedOccurrenceFromFreshBuffers()
+    {
+        var values = new ObservationValue[layout.Count];
+        var presenceWords = new ulong[ObservationBuffer.RequiredWordCount(layout.Count)];
+        for (var ordinal = 0; ordinal < layout.Count; ordinal++)
+        {
+            values[ordinal] = valuesByOrdinal[ordinal];
+            ObservationBuffer.SetHasValue(presenceWords, ordinal);
+        }
+
+        return IndexedObservationOccurrence.Create(
+            shape,
+            occurrence,
+            layout,
+            values,
+            presenceWords);
+    }
+
+    /// <summary>Populates and transfers single-owner buffers without a defensive snapshot.</summary>
+    /// <returns>The immutable indexed occurrence.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Observation", "OrdinalOwnedHydration")]
+    public IndexedObservationOccurrence BuildIndexedOccurrence()
+    {
+        var builder = IndexedObservationOccurrence.CreateBuilder(shape, occurrence, layout);
+        for (var ordinal = 0; ordinal < layout.Count; ordinal++)
+            builder.SetField(ordinal, valuesByOrdinal[ordinal]);
+
+        return builder.Build();
+    }
 }
 
 /// <summary>Plain UTF-8 JSON hydration for a representative sixteen-scalar state object.</summary>

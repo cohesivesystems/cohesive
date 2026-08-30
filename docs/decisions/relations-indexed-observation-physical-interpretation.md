@@ -4,7 +4,7 @@ status: implemented
 authority: cohesive.relations.indexed-observation-physical-interpretation
 owners: [cohesive-relations]
 applies_to: [cohesive, cohesive-relations]
-last_verified: 2026-08-25
+last_verified: 2026-08-29
 supersedes: []
 ---
 
@@ -36,6 +36,10 @@ Construction follows two boundaries:
   can be proven to belong to the shape.
 - `Create` accepts ordinal buffers with exact `GraphShapeId`, validates layout identities, buffer lengths, out-of-range
   presence bits, and all present field values through core `ObservationValidator`, then snapshots mutable inputs.
+- `CreateBuilder` is the single-owner ingestion boundary for adapters and database readers. It allocates the ordinal
+  storage, accepts fields by identity or ordinal, validates through the same core authority on `Build`, and transfers
+  its buffers without copying. A successful build consumes the builder; a semantic validation failure leaves it
+  available for completion and retry.
 
 `ToObservation` reconstructs and validates the complete semantic value against the exact supplied graph. Projection is
 lossless for qualified shape identity, present versus absent fields, nulls, nested values, numbers, and every portable
@@ -56,7 +60,10 @@ execution. Entity versions remain on `EntityObservationSnapshot` and are not cop
 - Core `Observation` and `ObservationValue` are the sole semantic value and validation authorities.
 - A physical occurrence always carries the exact qualified shape from `RelationQueryObservationOccurrence`.
 - Layout and buffer objects never enter Cohesive core contracts.
-- Public physical factories snapshot caller-owned lists and buffers before returning.
+- Public raw buffer storage is not exposed. Physical factories snapshot caller-owned lists and buffers before
+  returning; the builder may transfer only storage that it exclusively allocated and consumes.
+- Layouts of at most 64 fields retain presence in the occurrence itself. Larger layouts allocate the exact required
+  external presence-word array.
 - Presence bits cannot address ordinals outside the layout.
 - Lineage belongs to the derived occurrence and is not projected into an identity-free observation or entity snapshot.
 - A compiled CLR materializer rejects a reader governed by another qualified shape, even when local shape ids match.
@@ -67,6 +74,23 @@ The indexed path retains direct ordinal reads, dense buffers, and packed presenc
 compares the shared core compiler over semantic observations and the indexed reader adapter, while
 `IndexedObservationOccurrenceTests` cover direct materialization and ordinal access. Relations semantic, executor,
 hydration, query, mapping, portable serialization, and benchmark-project builds remain regression gates.
+
+A focused Apple M5 Max / .NET 10 ShortRun over sixteen flat `Int64` fields measured the compact storage and ownership
+boundaries as follows. The owned builder is the appropriate end-to-end adapter comparison: it avoids the caller's
+fresh value and presence buffers being copied into a second retained set. `Create` remains slightly faster when its
+caller already has reusable populated buffers, while preserving its defensive-copy contract.
+
+| Physical ingestion operation | Mean | Allocated |
+| --- | ---: | ---: |
+| Snapshot already-populated caller buffers | 172.8 ns | 608 B |
+| Populate fresh caller buffers, then snapshot | 198.8 ns | 1,176 B |
+| Populate and transfer through owned builder | 184.6 ns | 688 B |
+| Shape-bound JSON hydration into indexed storage | 677.0 ns | 608 B |
+
+The builder reduced end-to-end ordinal-ingestion allocation by 41.5% and elapsed time by 7.1% versus producing fresh
+caller buffers and then snapshotting them. Inline presence removed the separate heap bitmap for the common ≤64-field
+case; the remaining 608 B JSON allocation is the retained sixteen-value array and occurrence. These figures are a
+representative regression signal rather than a release performance guarantee.
 
 An informational short run on the same Apple M5 Max / .NET 10 environment as the checked-in baseline measured the
 new `SharedCoreIndexedSimple` path as follows. Allocations were unchanged from the legacy indexed compiler; the shared

@@ -16,7 +16,7 @@ namespace Cohesive.Relations.Physical;
 /// <remarks>
 /// <para>
 /// The core <see cref="CoreObservation"/> remains the semantic authority for what was observed. This type composes
-/// the existing evaluation-scoped occurrence identity with an ordinal layout, dense value buffer, packed presence
+/// the existing evaluation-scoped occurrence identity with an ordinal layout, dense value buffer, compact presence
 /// bits, and derived-field lineage. It does not introduce entity identity or source-version semantics.
 /// </para>
 /// <para>
@@ -51,17 +51,36 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
     /// <summary>Gets the immutable ordinal layout used by the physical buffer.</summary>
     public ObservationLayout Layout { get; }
 
-    /// <summary>Gets ordinal-aligned values as read-only memory.</summary>
-    public ReadOnlyMemory<ObservationValue> ValuesByOrdinal => buffer.ValuesByOrdinal;
-
-    /// <summary>Gets the packed value-presence bitmap as read-only memory.</summary>
-    public ReadOnlyMemory<ulong> HasValueBitMask => buffer.HasValueBitMask;
-
     /// <summary>Gets derived-field lineage attached to this occurrence.</summary>
     public ObservationLineage Lineage { get; }
 
     /// <summary>Gets present fields keyed by canonical semantic identity.</summary>
     public IReadOnlyDictionary<string, ObservationValue> Fields => fields ??= BuildFields(Layout, buffer);
+
+    /// <summary>Creates a single-use builder that owns and transfers ordinal storage without defensive recopying.</summary>
+    /// <param name="shape">Exact graph and shape governing the physical occurrence.</param>
+    /// <param name="occurrence">Evaluation-scoped occurrence descriptor.</param>
+    /// <param name="layout">Physical layout that assigns fields to ordinals.</param>
+    /// <param name="lineage">Optional derived-field lineage for the completed occurrence.</param>
+    /// <returns>A mutable ingestion boundary whose successful <see cref="Builder.Build"/> transfers owned storage.</returns>
+    /// <remarks>
+    /// Use this boundary when an adapter or database reader is producing new storage exclusively for one occurrence.
+    /// Use <see cref="Create"/> when the supplied buffers remain caller-owned and must be snapshotted.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="shape"/> is default, or <paramref name="occurrence"/> or <paramref name="layout"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">The occurrence or layout belongs to another qualified shape.</exception>
+    public static Builder CreateBuilder(
+        GraphShapeId shape,
+        RelationQueryObservationOccurrence occurrence,
+        ObservationLayout layout,
+        ObservationLineage? lineage = null)
+    {
+        RequireOccurrenceAndLayout(shape, occurrence, layout);
+        return new(shape, occurrence, layout, lineage);
+    }
 
     /// <summary>
     /// Creates an indexed occurrence from a validated identity-free observation using the shape's declaration-order
@@ -153,7 +172,8 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
         RequireLayoutShape(layout, occurrence.Shape);
 
         var values = new ObservationValue[layout.Count];
-        var presence = new ulong[ObservationBuffer.RequiredWordCount(layout.Count)];
+        ulong inlinePresence = 0;
+        var presenceWords = ObservationBuffer.CreatePresenceWords(layout.Count);
         foreach (var (fieldIdentity, value) in observation.Fields)
         {
             if (!layout.TryGetOrdinal(fieldIdentity, out var ordinal))
@@ -164,10 +184,14 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
             }
 
             values[ordinal] = value;
-            ObservationBuffer.SetHasValue(presence, ordinal);
+            ObservationBuffer.SetHasValue(
+                ref inlinePresence,
+                presenceWords,
+                layout.Count,
+                ordinal);
         }
 
-        ObservationBuffer effectiveBuffer = new(values, presence, layout.Count);
+        ObservationBuffer effectiveBuffer = new(values, inlinePresence, presenceWords);
         return new(
             occurrence,
             layout,
@@ -203,27 +227,20 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
         ReadOnlyMemory<ulong> hasValueBitMask,
         ObservationLineage? lineage = null)
     {
-        ArgumentNullException.ThrowIfNull(shape.Graph);
-        ArgumentNullException.ThrowIfNull(occurrence);
-        ArgumentNullException.ThrowIfNull(layout);
-        if (occurrence.Shape != shape.QualifiedId)
-        {
-            throw new ArgumentException(
-                $"Occurrence shape '{occurrence.Shape}' does not match supplied shape '{shape.QualifiedId}'.",
-                nameof(occurrence));
-        }
+        RequireOccurrenceAndLayout(shape, occurrence, layout);
 
-        RequireLayoutShape(layout, shape.QualifiedId);
-
+        SnapshotPresence(
+            hasValueBitMask.Span,
+            layout.Count,
+            out var inlinePresence,
+            out var presenceWords);
         var valuesSnapshot = valuesByOrdinal.ToArray();
-        var presenceSnapshot = hasValueBitMask.ToArray();
-        var effectiveBuffer = new ObservationBuffer(valuesSnapshot, presenceSnapshot, layout.Count);
-        RequireNoPresenceOutsideLayout(effectiveBuffer);
-        if (!ObservationValidator.TryValidateAgainstShape(
+        if (!TryValidateOwnedStorage(
                 shape,
                 layout,
                 valuesSnapshot,
-                presenceSnapshot,
+                inlinePresence,
+                presenceWords,
                 out var validationError))
         {
             throw new ArgumentException(
@@ -231,6 +248,7 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
                 nameof(valuesByOrdinal));
         }
 
+        var effectiveBuffer = new ObservationBuffer(valuesSnapshot, inlinePresence, presenceWords);
         return new(
             occurrence,
             layout,
@@ -292,28 +310,42 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
         ReadOnlySpan<byte> utf8Json,
         ObservationLineage? lineage = null)
     {
-        ArgumentNullException.ThrowIfNull(shape.Graph);
-        ArgumentNullException.ThrowIfNull(occurrence);
-        ArgumentNullException.ThrowIfNull(layout);
-        if (occurrence.Shape != shape.QualifiedId)
-        {
-            throw new ArgumentException(
-                $"Occurrence shape '{occurrence.Shape}' does not match supplied shape '{shape.QualifiedId}'.",
-                nameof(occurrence));
-        }
+        RequireOccurrenceAndLayout(shape, occurrence, layout);
 
         var values = new ObservationValue[layout.Count];
-        var presence = new ulong[ObservationBuffer.RequiredWordCount(layout.Count)];
+        Span<ulong> inlinePresenceWord = stackalloc ulong[1];
+        inlinePresenceWord.Clear();
+        var presenceWords = ObservationBuffer.CreatePresenceWords(layout.Count);
+
         var reader = new Utf8JsonReader(utf8Json);
         if (!reader.Read())
             throw new JsonException("The JSON observation is empty.");
-        if (!ObservationJsonReader.TryReadShape(
+        string? validationError;
+        var isValid = layout.Count switch
+        {
+            0 => ObservationJsonReader.TryReadShape(
                 ref reader,
                 shape,
                 layout,
                 values,
-                presence,
-                out var validationError))
+                Span<ulong>.Empty,
+                out validationError),
+            <= 64 => ObservationJsonReader.TryReadShape(
+                ref reader,
+                shape,
+                layout,
+                values,
+                inlinePresenceWord,
+                out validationError),
+            _ => ObservationJsonReader.TryReadShape(
+                ref reader,
+                shape,
+                layout,
+                values,
+                presenceWords,
+                out validationError),
+        };
+        if (!isValid)
         {
             throw new ArgumentException(
                 $"JSON observation does not adhere to shape '{shape.QualifiedId}': {validationError}",
@@ -326,7 +358,8 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
                 throw new JsonException("The JSON observation contains trailing content.");
         }
 
-        ObservationBuffer effectiveBuffer = new(values, presence, layout.Count);
+        var inlinePresence = layout.Count is > 0 and <= 64 ? inlinePresenceWord[0] : 0;
+        ObservationBuffer effectiveBuffer = new(values, inlinePresence, presenceWords);
         return new(
             occurrence,
             layout,
@@ -400,6 +433,109 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
         return materializer.Materialize(this);
     }
 
+    /// <summary>
+    /// Single-use owned ingestion boundary for adapter- or database-produced ordinal state.
+    /// </summary>
+    /// <remarks>
+    /// The builder exclusively owns its mutable buffers. A successful <see cref="Build"/> validates the complete
+    /// physical occurrence, transfers those buffers without copying, and consumes the builder. Failed validation
+    /// does not consume it, so callers may populate or replace fields and retry.
+    /// </remarks>
+    public sealed class Builder
+    {
+        readonly GraphShapeId shape;
+        readonly RelationQueryObservationOccurrence occurrence;
+        readonly ObservationLineage? lineage;
+        ObservationValue[]? valuesByOrdinal;
+        ulong inlinePresence;
+        ulong[]? presenceWords;
+
+        internal Builder(
+            GraphShapeId shape,
+            RelationQueryObservationOccurrence occurrence,
+            ObservationLayout layout,
+            ObservationLineage? lineage)
+        {
+            this.shape = shape;
+            this.occurrence = occurrence;
+            Layout = layout;
+            this.lineage = lineage;
+            valuesByOrdinal = new ObservationValue[layout.Count];
+            presenceWords = ObservationBuffer.CreatePresenceWords(layout.Count);
+        }
+
+        /// <summary>Gets the exact immutable layout governing field ordinals accepted by this builder.</summary>
+        public ObservationLayout Layout { get; }
+
+        /// <summary>Assigns or replaces a field by canonical identity.</summary>
+        /// <param name="fieldIdentity">Canonical top-level field identity in <see cref="Layout"/>.</param>
+        /// <param name="value">Value to retain at the field's physical ordinal.</param>
+        /// <exception cref="ArgumentNullException"><paramref name="fieldIdentity"/> is <see langword="null"/>.</exception>
+        /// <exception cref="ArgumentException"><paramref name="fieldIdentity"/> is empty or white-space.</exception>
+        /// <exception cref="KeyNotFoundException"><paramref name="fieldIdentity"/> is absent from <see cref="Layout"/>.</exception>
+        /// <exception cref="InvalidOperationException">The builder has already transferred its storage.</exception>
+        public void SetField(string fieldIdentity, ObservationValue value)
+        {
+            _ = RequireActiveValues();
+            SetField(Layout.GetOrdinal(fieldIdentity), value);
+        }
+
+        /// <summary>Assigns or replaces a field directly by physical ordinal.</summary>
+        /// <param name="ordinal">Zero-based ordinal in <see cref="Layout"/>.</param>
+        /// <param name="value">Value to retain at <paramref name="ordinal"/>.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="ordinal"/> is outside <see cref="Layout"/>.</exception>
+        /// <exception cref="InvalidOperationException">The builder has already transferred its storage.</exception>
+        public void SetField(int ordinal, ObservationValue value)
+        {
+            var values = RequireActiveValues();
+            if ((uint)ordinal >= (uint)values.Length)
+                throw new ArgumentOutOfRangeException(nameof(ordinal));
+
+            values[ordinal] = value;
+            ObservationBuffer.SetHasValue(
+                ref inlinePresence,
+                presenceWords,
+                values.Length,
+                ordinal);
+        }
+
+        /// <summary>Validates the populated fields and transfers owned storage into an immutable occurrence.</summary>
+        /// <returns>The immutable indexed occurrence backed by this builder's transferred storage.</returns>
+        /// <exception cref="InvalidOperationException">
+        /// The builder was already consumed or the populated fields do not satisfy the governing shape.
+        /// </exception>
+        /// <exception cref="ArgumentException">The supplied lineage is invalid for the populated fields.</exception>
+        public IndexedObservationOccurrence Build()
+        {
+            var values = RequireActiveValues();
+            if (!TryValidateOwnedStorage(
+                    shape,
+                    Layout,
+                    values,
+                    inlinePresence,
+                    presenceWords,
+                    out var validationError))
+            {
+                throw new InvalidOperationException(
+                    $"Owned physical observation does not adhere to shape '{shape.QualifiedId}': {validationError}");
+            }
+
+            ObservationBuffer effectiveBuffer = new(values, inlinePresence, presenceWords);
+            var result = new IndexedObservationOccurrence(
+                occurrence,
+                Layout,
+                effectiveBuffer,
+                SnapshotLineage(lineage, Layout, effectiveBuffer));
+            valuesByOrdinal = null;
+            presenceWords = null;
+            return result;
+        }
+
+        ObservationValue[] RequireActiveValues() =>
+            valuesByOrdinal
+            ?? throw new InvalidOperationException("The indexed observation builder has already transferred its storage.");
+    }
+
     static ObservationLineage SnapshotLineage(
         ObservationLineage? lineage,
         ObservationLayout layout,
@@ -453,19 +589,89 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
         }
     }
 
-    static void RequireNoPresenceOutsideLayout(ObservationBuffer buffer)
+    static void RequireOccurrenceAndLayout(
+        GraphShapeId shape,
+        RelationQueryObservationOccurrence occurrence,
+        ObservationLayout layout)
     {
-        var remainder = buffer.FieldCount & 63;
-        if (remainder == 0 || buffer.HasValueBitMask.Length == 0)
-            return;
-
-        var allowed = (1UL << remainder) - 1UL;
-        if ((buffer.HasValueBitMask.Span[^1] & ~allowed) != 0)
+        ArgumentNullException.ThrowIfNull(shape.Graph);
+        ArgumentNullException.ThrowIfNull(occurrence);
+        ArgumentNullException.ThrowIfNull(layout);
+        if (occurrence.Shape != shape.QualifiedId)
         {
             throw new ArgumentException(
-                "The physical presence bitmap contains values outside the observation layout.",
-                "hasValueBitMask");
+                $"Occurrence shape '{occurrence.Shape}' does not match supplied shape '{shape.QualifiedId}'.",
+                nameof(occurrence));
         }
+
+        RequireLayoutShape(layout, shape.QualifiedId);
+    }
+
+    static void SnapshotPresence(
+        ReadOnlySpan<ulong> hasValueBitMask,
+        int fieldCount,
+        out ulong inlinePresence,
+        out ulong[]? presenceWords)
+    {
+        var requiredWords = ObservationBuffer.RequiredWordCount(fieldCount);
+        if (hasValueBitMask.Length != requiredWords)
+        {
+            throw new ArgumentException(
+                "Physical presence bitmap length does not match the observation layout.",
+                nameof(hasValueBitMask));
+        }
+
+        if (requiredWords == 0)
+        {
+            inlinePresence = 0;
+            presenceWords = null;
+        }
+        else if (requiredWords == 1)
+        {
+            inlinePresence = hasValueBitMask[0];
+            presenceWords = null;
+        }
+        else
+        {
+            inlinePresence = 0;
+            presenceWords = hasValueBitMask.ToArray();
+        }
+    }
+
+    static bool TryValidateOwnedStorage(
+        GraphShapeId shape,
+        ObservationLayout layout,
+        ReadOnlySpan<ObservationValue> valuesByOrdinal,
+        ulong inlinePresence,
+        ulong[]? presenceWords,
+        out string? validationError)
+    {
+        if (layout.Count == 0)
+        {
+            return ObservationValidator.TryValidateAgainstShape(
+                shape,
+                layout,
+                valuesByOrdinal,
+                ReadOnlySpan<ulong>.Empty,
+                out validationError);
+        }
+        if (presenceWords is not null)
+        {
+            return ObservationValidator.TryValidateAgainstShape(
+                shape,
+                layout,
+                valuesByOrdinal,
+                presenceWords,
+                out validationError);
+        }
+
+        ReadOnlySpan<ulong> inlinePresenceWords = [inlinePresence];
+        return ObservationValidator.TryValidateAgainstShape(
+            shape,
+            layout,
+            valuesByOrdinal,
+            inlinePresenceWords,
+            out validationError);
     }
 
     static IReadOnlyDictionary<string, ObservationValue> BuildFields(

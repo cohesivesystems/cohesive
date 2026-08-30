@@ -5,6 +5,7 @@ using System.Buffers;
 using System.Globalization;
 using System.Numerics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -16,49 +17,81 @@ namespace Cohesive.Model;
 /// <summary>
 /// Compact scalar/object/array JSON-like value container used by observation and entity-state snapshots.
 /// </summary>
-/// <param name="kind">The logical value kind that selects the active payload.</param>
-/// <param name="int64">The Int64 payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Int64"/>.</param>
-/// <param name="d">The binary floating-point payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Double"/>.</param>
-/// <param name="b">The Boolean payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Bool"/>.</param>
-/// <param name="s">The string or temporal text payload for string-backed kinds.</param>
-/// <param name="fields">The object properties when <paramref name="kind"/> is <see cref="ObservationValueKind.Object"/>.</param>
-/// <param name="array">The array items when <paramref name="kind"/> is <see cref="ObservationValueKind.Array"/>.</param>
-/// <param name="bytes">The binary payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Bytes"/>.</param>
-/// <param name="dec">The exact base-10 payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Decimal"/>.</param>
 /// <remarks>
 /// Caller-owned mutable object dictionaries, arrays, and byte buffers are snapshotted during construction.
 /// Subsequent mutation of the supplied storage does not change the observation value. Immutable collection
 /// storage may be retained directly because its ownership contract prevents subsequent mutation.
+/// Only the payload selected by <see cref="Kind"/> is retained; inactive payload accessors are unspecified.
 /// </remarks>
 [JsonConverter(typeof(ObservationValueJsonConverter))]
-public readonly struct ObservationValue(
-    ObservationValueKind kind,
-    long int64 = 0,
-    double d = 0,
-    bool b = false,
-    string? s = null,
-    IReadOnlyDictionary<string, ObservationValue>? fields = null,
-    ObservationValue[]? array = null,
-    ReadOnlyMemory<byte> bytes = default,
-    decimal dec = 0m
-    ) : IEquatable<ObservationValue>
+public readonly struct ObservationValue : IEquatable<ObservationValue>
 {
-    ObservationValue(ImmutableArray<ObservationValue> array)
-        : this(ObservationValueKind.Array)
+    readonly ScalarPayload scalar;
+    readonly object? reference;
+
+    /// <summary>Creates a value whose active payload is selected by <paramref name="kind"/>.</summary>
+    /// <param name="kind">The logical value kind that selects the active payload.</param>
+    /// <param name="int64">The Int64 payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Int64"/>.</param>
+    /// <param name="d">The binary floating-point payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Double"/>.</param>
+    /// <param name="b">The Boolean payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Bool"/>.</param>
+    /// <param name="s">The string or temporal text payload for string-backed kinds.</param>
+    /// <param name="fields">The object properties when <paramref name="kind"/> is <see cref="ObservationValueKind.Object"/>.</param>
+    /// <param name="array">The array items when <paramref name="kind"/> is <see cref="ObservationValueKind.Array"/>.</param>
+    /// <param name="bytes">The binary payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Bytes"/>.</param>
+    /// <param name="dec">The exact base-10 payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Decimal"/>.</param>
+    public ObservationValue(
+        ObservationValueKind kind,
+        long int64 = 0,
+        double d = 0,
+        bool b = false,
+        string? s = null,
+        IReadOnlyDictionary<string, ObservationValue>? fields = null,
+        ObservationValue[]? array = null,
+        ReadOnlyMemory<byte> bytes = default,
+        decimal dec = 0m)
     {
-        Array = array;
+        Kind = kind;
+        scalar = kind switch
+        {
+            ObservationValueKind.Int64 => new(int64),
+            ObservationValueKind.Double => new(d),
+            ObservationValueKind.Bool => new(b),
+            ObservationValueKind.Decimal => new(dec),
+            _ => default
+        };
+        reference = kind switch
+        {
+            ObservationValueKind.String
+                or ObservationValueKind.DateTimeOffset
+                or ObservationValueKind.DateOnly
+                or ObservationValueKind.TimeOnly
+                or ObservationValueKind.TimeSpan => s,
+            ObservationValueKind.Object => SnapshotFields(fields),
+            ObservationValueKind.Array => SnapshotArray(array),
+            ObservationValueKind.Bytes => SnapshotBytes(bytes),
+            _ => null
+        };
+    }
+
+    ObservationValue(ImmutableArray<ObservationValue> array)
+    {
+        Kind = ObservationValueKind.Array;
+        scalar = default;
+        reference = ImmutableCollectionsMarshal.AsArray(array) ?? EmptyArrayValues;
     }
 
     ObservationValue(byte[] ownedBytes)
-        : this(ObservationValueKind.Bytes)
     {
-        Bytes = ownedBytes;
+        Kind = ObservationValueKind.Bytes;
+        scalar = default;
+        reference = ownedBytes.Length == 0 ? null : ownedBytes;
     }
 
     ObservationValue(Dictionary<string, ObservationValue> ownedFields)
-        : this(ObservationValueKind.Object)
     {
-        Fields = ownedFields.Count == 0
+        Kind = ObservationValueKind.Object;
+        scalar = default;
+        reference = ownedFields.Count == 0
             ? EmptyObjectValues
             : new OwnedObservationFields(ownedFields);
     }
@@ -66,48 +99,55 @@ public readonly struct ObservationValue(
     /// <summary>
     /// Value shape kind.
     /// </summary>
-    public ObservationValueKind Kind { get; } = kind;
+    public ObservationValueKind Kind { get; }
 
     /// <summary>
     /// 64-bit integer payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Int64"/>.
     /// </summary>
-    public long Int64 { get; } = int64;
+    public long Int64 => scalar.Int64;
 
     /// <summary>
     /// Floating-point payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Double"/>.
     /// </summary>
-    public double Double { get; } = d;
+    public double Double => scalar.Double;
 
     /// <summary>
     /// Base-10 numeric payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Decimal"/>.
     /// </summary>
-    public decimal Decimal { get; } = dec;
+    public decimal Decimal => scalar.Decimal;
 
     /// <summary>
     /// Boolean payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Bool"/>.
     /// </summary>
-    public bool Bool { get; } = b;
+    public bool Bool => scalar.Bool;
 
     /// <summary>
     /// String payload when <see cref="Kind"/> is <see cref="ObservationValueKind.String"/>
     /// or a temporal string-backed kind.
     /// </summary>
-    public string? String { get; } = s;
+    public string? String => reference as string;
 
     /// <summary>
     /// Object payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Object"/>.
     /// </summary>
-    public IReadOnlyDictionary<string, ObservationValue>? Fields { get; } = SnapshotFields(fields);
+    public IReadOnlyDictionary<string, ObservationValue>? Fields =>
+        reference as IReadOnlyDictionary<string, ObservationValue>;
 
     /// <summary>
     /// Immutable array payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Array"/>.
     /// </summary>
-    public ImmutableArray<ObservationValue> Array { get; } = SnapshotArray(array);
+    public ImmutableArray<ObservationValue> Array =>
+        reference is ObservationValue[] values
+            ? ImmutableCollectionsMarshal.AsImmutableArray(values)
+            : [];
 
     /// <summary>
     /// Binary payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Bytes"/>.
     /// </summary>
-    public ReadOnlyMemory<byte> Bytes { get; } = SnapshotBytes(bytes);
+    public ReadOnlyMemory<byte> Bytes =>
+        reference is byte[] values
+            ? values
+            : ReadOnlyMemory<byte>.Empty;
 
     /// <summary>Attempts to resolve a direct or nested field from this object value.</summary>
     /// <param name="path">Canonical field-only path to resolve. A default path is treated as absent.</param>
@@ -232,15 +272,55 @@ public readonly struct ObservationValue(
         return new OwnedObservationFields(snapshot);
     }
 
-    static ImmutableArray<ObservationValue> SnapshotArray(ObservationValue[]? array) => array switch
+    static ObservationValue[] SnapshotArray(ObservationValue[]? array) => array switch
     {
-        null => [],
-        { Length: 0 } => [],
-        _ => ImmutableArray.CreateRange(array)
+        null => EmptyArrayValues,
+        { Length: 0 } => EmptyArrayValues,
+        _ => [.. array]
     };
 
-    static ReadOnlyMemory<byte> SnapshotBytes(ReadOnlyMemory<byte> bytes) =>
-        bytes.IsEmpty ? ReadOnlyMemory<byte>.Empty : bytes.ToArray();
+    static byte[]? SnapshotBytes(ReadOnlyMemory<byte> bytes) =>
+        bytes.IsEmpty ? null : bytes.ToArray();
+
+    [StructLayout(LayoutKind.Explicit, Size = 16)]
+    readonly struct ScalarPayload
+    {
+        [FieldOffset(0)]
+        public readonly long Int64;
+
+        [FieldOffset(0)]
+        public readonly double Double;
+
+        [FieldOffset(0)]
+        public readonly decimal Decimal;
+
+        [FieldOffset(0)]
+        public readonly bool Bool;
+
+        public ScalarPayload(long value)
+        {
+            this = default;
+            Int64 = value;
+        }
+
+        public ScalarPayload(double value)
+        {
+            this = default;
+            Double = value;
+        }
+
+        public ScalarPayload(decimal value)
+        {
+            this = default;
+            Decimal = value;
+        }
+
+        public ScalarPayload(bool value)
+        {
+            this = default;
+            Bool = value;
+        }
+    }
 
     static ObservationValue WithFieldCore(
         ObservationValue current,
