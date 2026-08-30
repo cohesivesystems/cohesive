@@ -238,17 +238,16 @@ sealed class RelationQueryEvidenceIndex
         parameterInputs = planIndex.ParameterInputs;
         bindingFields = planIndex.BindingFields;
 
-        Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrenceIndex = [];
-        foreach (var occurrence in evidence.Sources.SelectMany(static source => source.Occurrences)
-                     .Concat(evidence.Traversals.SelectMany(static traversal => traversal.Results))
-                     .Concat(evidence.CollectionOccurrences.Select(static item => item.Occurrence)))
-        {
-            if (!occurrenceIndex.TryAdd(occurrence.Id, occurrence))
-            {
-                throw new InvalidOperationException(
-                    $"Runtime evidence contains duplicate occurrence '{occurrence.Id.Value}'; analyze evidence before indexing it.");
-            }
-        }
+        Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrenceIndex =
+            new(evidence.OccurrenceEntryCount);
+        foreach (var source in evidence.Sources)
+        foreach (var occurrence in source.Occurrences)
+            AddOccurrence(occurrenceIndex, occurrence);
+        foreach (var traversal in evidence.Traversals)
+        foreach (var occurrence in traversal.Results)
+            AddOccurrence(occurrenceIndex, occurrence);
+        foreach (var item in evidence.CollectionOccurrences)
+            AddOccurrence(occurrenceIndex, item.Occurrence);
 
         occurrences = new ReadOnlyDictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence>(
             occurrenceIndex);
@@ -529,13 +528,13 @@ sealed class RelationQueryEvidenceIndex
     }
 
     static IReadOnlyDictionary<TKey, TValue> IndexUnique<TKey, TValue>(
-        IEnumerable<TValue> values,
+        ImmutableArray<TValue> values,
         Func<TValue, TKey> keySelector,
         string description)
         where TKey : notnull
         where TValue : class
     {
-        Dictionary<TKey, TValue> result = [];
+        Dictionary<TKey, TValue> result = new(values.Length);
         foreach (var value in values)
         {
             var key = keySelector(value);
@@ -547,6 +546,17 @@ sealed class RelationQueryEvidenceIndex
         }
 
         return new ReadOnlyDictionary<TKey, TValue>(result);
+    }
+
+    static void AddOccurrence(
+        Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrences,
+        RelationQueryObservationOccurrence occurrence)
+    {
+        if (!occurrences.TryAdd(occurrence.Id, occurrence))
+        {
+            throw new InvalidOperationException(
+                $"Runtime evidence contains duplicate occurrence '{occurrence.Id.Value}'; analyze evidence before indexing it.");
+        }
     }
 
 }
