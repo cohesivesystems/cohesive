@@ -33,7 +33,7 @@ sealed class RelationQueryExpressionEvaluationException(
     public RelationQueryExpressionEvaluationError Error { get; } = error;
 }
 
-sealed record RelationQueryExpressionBinding
+readonly record struct RelationQueryExpressionBinding
 {
     public RelationQueryExpressionBinding(
         ObservationValue value,
@@ -77,10 +77,59 @@ sealed record RelationQueryExpressionBinding
     public string? ObservationIdentity { get; }
 }
 
-sealed class RelationQueryExpressionContext
+/// <summary>
+/// Resolves evaluation-scoped availability without allocating row-capturing delegates for every expression site.
+/// </summary>
+interface IRelationQueryExpressionRuntimeAvailability
 {
+    /// <summary>Determines whether one field can be read from the supplied runtime row.</summary>
+    /// <param name="row">Runtime row being evaluated.</param>
+    /// <param name="binding">Binding that owns the field.</param>
+    /// <param name="path">Canonical field path.</param>
+    /// <returns><see langword="true"/> when the field may be evaluated; otherwise, <see langword="false"/>.</returns>
+    bool IsFieldAvailable(
+        RelationQueryRuntimeRow row,
+        ValueBindingId binding,
+        FieldPath path);
+
+    /// <summary>Determines whether one named parameter can be evaluated.</summary>
+    /// <param name="parameter">Canonical parameter name.</param>
+    /// <returns><see langword="true"/> when the parameter may be evaluated; otherwise, <see langword="false"/>.</returns>
+    bool IsParameterAvailable(string parameter);
+
+    /// <summary>Determines whether one ambient expression capability is available.</summary>
+    /// <param name="capability">Canonical expression capability.</param>
+    /// <returns><see langword="true"/> when the capability is available; otherwise, <see langword="false"/>.</returns>
+    bool IsCapabilityAvailable(ExprCapabilityId capability);
+}
+
+/// <summary>Immutable stores and policies used during one expression evaluation.</summary>
+readonly struct RelationQueryExpressionContext
+{
+    static readonly IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding> EmptyBindings =
+        ImmutableDictionary<ValueBindingId, RelationQueryExpressionBinding>.Empty;
+    static readonly IReadOnlyDictionary<string, ObservationValue> EmptyParameters =
+        ImmutableDictionary.Create<string, ObservationValue>(StringComparer.Ordinal);
+    static readonly IReadOnlyList<ObservationValue> EmptySourceRows = [];
+    static readonly Func<ValueBindingId, FieldPath, bool> AllFieldsAvailable = static (_, _) => true;
+    static readonly Func<string, bool> AllParametersAvailable = static _ => true;
+    static readonly Func<ExprCapabilityId, bool> AllCapabilitiesAvailable = static _ => true;
+    readonly IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding>? bindings;
+    readonly IReadOnlyDictionary<string, ObservationValue>? parameters;
+    readonly IReadOnlyList<ObservationValue>? sourceRows;
+    readonly Func<ValueBindingId, FieldPath, bool>? isFieldAvailable;
+    readonly Func<string, bool>? isParameterAvailable;
+    readonly Func<ExprCapabilityId, bool>? isCapabilityAvailable;
+    readonly IRelationQueryExpressionRuntimeAvailability? runtimeAvailability;
+    readonly RelationQueryRuntimeRow? runtimeRow;
+
+    public RelationQueryExpressionContext()
+        : this(bindings: null)
+    {
+    }
+
     public RelationQueryExpressionContext(
-        IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding>? bindings = null,
+        IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding>? bindings,
         ValueBindingId? implicitBinding = null,
         IReadOnlyDictionary<string, ObservationValue>? parameters = null,
         ObservationValue? currentItem = null,
@@ -103,9 +152,7 @@ sealed class RelationQueryExpressionContext
             {
                 if (string.IsNullOrWhiteSpace(binding.Value))
                     throw new ArgumentException("Expression bindings must have non-empty identities.", nameof(bindings));
-                bindingValues.Add(binding, value ?? throw new ArgumentException(
-                    "Expression bindings cannot contain null values.",
-                    nameof(bindings)));
+                bindingValues.Add(binding, value);
             }
         }
 
@@ -119,49 +166,161 @@ sealed class RelationQueryExpressionContext
             }
         }
 
-        Bindings = new ReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding>(bindingValues);
+        this.bindings = new ReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding>(bindingValues);
         ImplicitBinding = implicitBinding;
-        Parameters = new ReadOnlyDictionary<string, ObservationValue>(parameterValues);
+        this.parameters = new ReadOnlyDictionary<string, ObservationValue>(parameterValues);
         CurrentItem = currentItem;
         RootIdentity = rootIdentity;
-        SourceRows = sourceRows is null ? [] : [.. sourceRows];
-        IsFieldAvailable = isFieldAvailable ?? (static (_, _) => true);
-        IsParameterAvailable = isParameterAvailable ?? (static _ => true);
-        IsCapabilityAvailable = isCapabilityAvailable ?? (static _ => true);
+        this.sourceRows = sourceRows is null ? [] : [.. sourceRows];
+        this.isFieldAvailable = isFieldAvailable ?? AllFieldsAvailable;
+        this.isParameterAvailable = isParameterAvailable ?? AllParametersAvailable;
+        this.isCapabilityAvailable = isCapabilityAvailable ?? AllCapabilitiesAvailable;
+        runtimeAvailability = null;
+        runtimeRow = null;
     }
 
     RelationQueryExpressionContext(
-        RelationQueryExpressionContext source,
-        ObservationValue currentItem)
+        IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding> bindings,
+        IReadOnlyDictionary<string, ObservationValue> parameters,
+        IReadOnlyList<ObservationValue> sourceRows,
+        ValueBindingId? implicitBinding,
+        ObservationValue? currentItem,
+        string? rootIdentity,
+        Func<ValueBindingId, FieldPath, bool> isFieldAvailable,
+        Func<string, bool> isParameterAvailable,
+        Func<ExprCapabilityId, bool> isCapabilityAvailable,
+        IRelationQueryExpressionRuntimeAvailability? runtimeAvailability = null,
+        RelationQueryRuntimeRow? runtimeRow = null)
     {
-        Bindings = source.Bindings;
-        ImplicitBinding = source.ImplicitBinding;
-        Parameters = source.Parameters;
+        this.bindings = bindings;
+        ImplicitBinding = implicitBinding;
+        this.parameters = parameters;
         CurrentItem = currentItem;
-        RootIdentity = source.RootIdentity;
-        SourceRows = source.SourceRows;
-        IsFieldAvailable = source.IsFieldAvailable;
-        IsParameterAvailable = source.IsParameterAvailable;
-        IsCapabilityAvailable = source.IsCapabilityAvailable;
+        RootIdentity = rootIdentity;
+        this.sourceRows = sourceRows;
+        this.isFieldAvailable = isFieldAvailable;
+        this.isParameterAvailable = isParameterAvailable;
+        this.isCapabilityAvailable = isCapabilityAvailable;
+        this.runtimeAvailability = runtimeAvailability;
+        this.runtimeRow = runtimeRow;
     }
 
-    public IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding> Bindings { get; }
+    RelationQueryExpressionContext(
+        in RelationQueryExpressionContext source,
+        ObservationValue currentItem)
+    {
+        bindings = source.Bindings;
+        ImplicitBinding = source.ImplicitBinding;
+        parameters = source.Parameters;
+        CurrentItem = currentItem;
+        RootIdentity = source.RootIdentity;
+        sourceRows = source.SourceRows;
+        isFieldAvailable = source.isFieldAvailable ?? AllFieldsAvailable;
+        isParameterAvailable = source.isParameterAvailable ?? AllParametersAvailable;
+        isCapabilityAvailable = source.isCapabilityAvailable ?? AllCapabilitiesAvailable;
+        runtimeAvailability = source.runtimeAvailability;
+        runtimeRow = source.runtimeRow;
+    }
+
+    public IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding> Bindings =>
+        bindings ?? EmptyBindings;
 
     public ValueBindingId? ImplicitBinding { get; }
 
-    public IReadOnlyDictionary<string, ObservationValue> Parameters { get; }
+    public IReadOnlyDictionary<string, ObservationValue> Parameters =>
+        parameters ?? EmptyParameters;
 
     public ObservationValue? CurrentItem { get; }
 
     public string? RootIdentity { get; }
 
-    public IReadOnlyList<ObservationValue> SourceRows { get; }
+    public IReadOnlyList<ObservationValue> SourceRows =>
+        sourceRows ?? EmptySourceRows;
 
-    public Func<ValueBindingId, FieldPath, bool> IsFieldAvailable { get; }
+    public bool IsFieldAvailable(ValueBindingId binding, FieldPath path) =>
+        runtimeAvailability is null
+            ? (isFieldAvailable ?? AllFieldsAvailable)(binding, path)
+            : runtimeAvailability.IsFieldAvailable(runtimeRow!, binding, path);
 
-    public Func<string, bool> IsParameterAvailable { get; }
+    public bool IsParameterAvailable(string parameter) =>
+        runtimeAvailability is null
+            ? (isParameterAvailable ?? AllParametersAvailable)(parameter)
+            : runtimeAvailability.IsParameterAvailable(parameter);
 
-    public Func<ExprCapabilityId, bool> IsCapabilityAvailable { get; }
+    public bool IsCapabilityAvailable(ExprCapabilityId capability) =>
+        runtimeAvailability is null
+            ? (isCapabilityAvailable ?? AllCapabilitiesAvailable)(capability)
+            : runtimeAvailability.IsCapabilityAvailable(capability);
+
+    /// <summary>
+    /// Creates a context over immutable or execution-owned stores whose identities and values were already
+    /// validated at their owning boundaries.
+    /// </summary>
+    /// <param name="bindings">Validated binding store retained by the context.</param>
+    /// <param name="implicitBinding">Optional binding used by unqualified field expressions.</param>
+    /// <param name="parameters">Optional execution-owned parameter store retained by the context.</param>
+    /// <param name="currentItem">Optional current collection item.</param>
+    /// <param name="rootIdentity">Optional observation identity of the relation root.</param>
+    /// <param name="sourceRows">Optional execution-owned source-row store retained by the context.</param>
+    /// <param name="isFieldAvailable">Optional field-availability policy.</param>
+    /// <param name="isParameterAvailable">Optional parameter-availability policy.</param>
+    /// <param name="isCapabilityAvailable">Optional expression-capability policy.</param>
+    /// <returns>A context that does not copy the supplied execution-owned stores.</returns>
+    internal static RelationQueryExpressionContext FromPrevalidated(
+        IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding> bindings,
+        ValueBindingId? implicitBinding = null,
+        IReadOnlyDictionary<string, ObservationValue>? parameters = null,
+        ObservationValue? currentItem = null,
+        string? rootIdentity = null,
+        IReadOnlyList<ObservationValue>? sourceRows = null,
+        Func<ValueBindingId, FieldPath, bool>? isFieldAvailable = null,
+        Func<string, bool>? isParameterAvailable = null,
+        Func<ExprCapabilityId, bool>? isCapabilityAvailable = null)
+    {
+        ArgumentNullException.ThrowIfNull(bindings);
+        return new(
+            bindings,
+            parameters ?? EmptyParameters,
+            sourceRows ?? EmptySourceRows,
+            implicitBinding,
+            currentItem,
+            rootIdentity,
+            isFieldAvailable ?? AllFieldsAvailable,
+            isParameterAvailable ?? AllParametersAvailable,
+            isCapabilityAvailable ?? AllCapabilitiesAvailable);
+    }
+
+    /// <summary>
+    /// Creates an allocation-free context over one execution-owned row and the engine that owns runtime
+    /// availability decisions.
+    /// </summary>
+    /// <param name="row">Execution-owned row whose bindings and provenance are being evaluated.</param>
+    /// <param name="implicitBinding">Optional binding used by unqualified field expressions.</param>
+    /// <param name="parameters">Execution-owned effective parameter values.</param>
+    /// <param name="availability">Execution engine that resolves runtime field, parameter, and capability availability.</param>
+    /// <returns>A stack context that retains the execution-owned stores without allocating delegates.</returns>
+    internal static RelationQueryExpressionContext FromExecution(
+        RelationQueryRuntimeRow row,
+        ValueBindingId? implicitBinding,
+        IReadOnlyDictionary<string, ObservationValue> parameters,
+        IRelationQueryExpressionRuntimeAvailability availability)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentNullException.ThrowIfNull(availability);
+        return new(
+            row.ExpressionBindings,
+            parameters,
+            EmptySourceRows,
+            implicitBinding,
+            currentItem: null,
+            row.Root?.ObservationIdentity,
+            AllFieldsAvailable,
+            AllParametersAvailable,
+            AllCapabilitiesAvailable,
+            availability,
+            row);
+    }
 
     public RelationQueryExpressionContext WithCurrentItem(ObservationValue item) => new(this, item);
 }
@@ -196,10 +355,9 @@ sealed class RelationQueryExpressionEvaluator
     internal static bool SupportsFieldPath(FieldPath path) =>
         !path.Segments.Any(static segment => segment.Kind == SegmentKind.Element);
 
-    public ObservationValue Evaluate(Expr expression, RelationQueryExpressionContext context)
+    public ObservationValue Evaluate(Expr expression, in RelationQueryExpressionContext context)
     {
         ArgumentNullException.ThrowIfNull(expression);
-        ArgumentNullException.ThrowIfNull(context);
         RequireCapabilities(expression, context);
 
         return expression switch
@@ -239,7 +397,10 @@ sealed class RelationQueryExpressionEvaluator
         };
     }
 
-    ObservationValue EvaluateField(FieldPath path, ValueBindingId? explicitBinding, RelationQueryExpressionContext context)
+    ObservationValue EvaluateField(
+        FieldPath path,
+        ValueBindingId? explicitBinding,
+        in RelationQueryExpressionContext context)
     {
         if (path.Segments.IsDefaultOrEmpty)
         {
@@ -277,7 +438,7 @@ sealed class RelationQueryExpressionEvaluator
 
     static ObservationValue EvaluateParameter(
         ParameterExpr parameter,
-        RelationQueryExpressionContext context)
+        in RelationQueryExpressionContext context)
     {
         if (!context.IsParameterAvailable(parameter.Parameter))
         {
@@ -333,7 +494,7 @@ sealed class RelationQueryExpressionEvaluator
 
     ObservationValue EvaluateUnary(
         UnaryExpr unary,
-        RelationQueryExpressionContext context)
+        in RelationQueryExpressionContext context)
     {
         var operand = Evaluate(unary.Operand, context);
         return unary.Operator switch
@@ -347,7 +508,7 @@ sealed class RelationQueryExpressionEvaluator
 
     ObservationValue EvaluateBinary(
         BinaryExpr binary,
-        RelationQueryExpressionContext context)
+        in RelationQueryExpressionContext context)
     {
         if (binary.Operator == BinaryOperator.And)
         {
@@ -393,7 +554,7 @@ sealed class RelationQueryExpressionEvaluator
 
     ObservationValue EvaluateConditional(
         ConditionalExpr conditional,
-        RelationQueryExpressionContext context)
+        in RelationQueryExpressionContext context)
     {
         var test = RequireBoolean(Evaluate(conditional.Test, context), "conditional test");
         return Evaluate(test ? conditional.IfTrue : conditional.IfFalse, context);
@@ -401,7 +562,7 @@ sealed class RelationQueryExpressionEvaluator
 
     ObservationValue EvaluateCall(
         CallExpr call,
-        RelationQueryExpressionContext context)
+        in RelationQueryExpressionContext context)
     {
         if (!ExprSemanticsCatalog.Default.TryGetFunction(call.Function, out var definition))
         {
@@ -452,7 +613,7 @@ sealed class RelationQueryExpressionEvaluator
 
     ObservationValue EvaluateAggregate(
         AggregateExpr aggregate,
-        RelationQueryExpressionContext context)
+        in RelationQueryExpressionContext context)
     {
         if (!aggregate.GroupBy.IsDefaultOrEmpty)
         {
@@ -465,14 +626,14 @@ sealed class RelationQueryExpressionEvaluator
         return Aggregate(aggregate.Operator, values);
     }
 
-    ObservationValue EvaluateContains(CallExpr call, RelationQueryExpressionContext context)
+    ObservationValue EvaluateContains(CallExpr call, in RelationQueryExpressionContext context)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
         var candidate = Evaluate(call.Arguments[1], context);
         return ObservationValue.FromBool(source.Any(item => RelationQueryValueSemantics.Equals(item, candidate)));
     }
 
-    ObservationValue EvaluateCount(CallExpr call, RelationQueryExpressionContext context)
+    ObservationValue EvaluateCount(CallExpr call, in RelationQueryExpressionContext context)
     {
         var value = Evaluate(call.Arguments[0], context);
         return value.Kind switch
@@ -484,28 +645,28 @@ sealed class RelationQueryExpressionEvaluator
         };
     }
 
-    ObservationValue EvaluateEndsWith(CallExpr call, RelationQueryExpressionContext context)
+    ObservationValue EvaluateEndsWith(CallExpr call, in RelationQueryExpressionContext context)
     {
         var value = RequireString(Evaluate(call.Arguments[0], context), call.Function);
         var suffix = RequireString(Evaluate(call.Arguments[1], context), call.Function);
         return ObservationValue.FromBool(value.EndsWith(suffix, StringComparison.Ordinal));
     }
 
-    ObservationValue EvaluateStartsWith(CallExpr call, RelationQueryExpressionContext context)
+    ObservationValue EvaluateStartsWith(CallExpr call, in RelationQueryExpressionContext context)
     {
         var value = RequireString(Evaluate(call.Arguments[0], context), call.Function);
         var prefix = RequireString(Evaluate(call.Arguments[1], context), call.Function);
         return ObservationValue.FromBool(value.StartsWith(prefix, StringComparison.Ordinal));
     }
 
-    ObservationValue EvaluateTextContains(CallExpr call, RelationQueryExpressionContext context)
+    ObservationValue EvaluateTextContains(CallExpr call, in RelationQueryExpressionContext context)
     {
         var value = RequireString(Evaluate(call.Arguments[0], context), call.Function);
         var substring = RequireString(Evaluate(call.Arguments[1], context), call.Function);
         return ObservationValue.FromBool(value.Contains(substring, StringComparison.Ordinal));
     }
 
-    ObservationValue EvaluateObject(CallExpr call, RelationQueryExpressionContext context)
+    ObservationValue EvaluateObject(CallExpr call, in RelationQueryExpressionContext context)
     {
         var fields = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
         for (var index = 0; index < call.Arguments.Length; index += 2)
@@ -522,7 +683,7 @@ sealed class RelationQueryExpressionEvaluator
         return ObservationValue.FromObject(fields.ToImmutable());
     }
 
-    ObservationValue EvaluateSelect(CallExpr call, RelationQueryExpressionContext context)
+    ObservationValue EvaluateSelect(CallExpr call, in RelationQueryExpressionContext context)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
         ObservationValue[] result = new ObservationValue[source.Count];
@@ -531,7 +692,7 @@ sealed class RelationQueryExpressionEvaluator
         return FromOwnedArray(result);
     }
 
-    ObservationValue EvaluateAppend(CallExpr call, RelationQueryExpressionContext context)
+    ObservationValue EvaluateAppend(CallExpr call, in RelationQueryExpressionContext context)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
         var result = new ObservationValue[source.Count + 1];
@@ -541,7 +702,7 @@ sealed class RelationQueryExpressionEvaluator
         return FromOwnedArray(result);
     }
 
-    ObservationValue EvaluateAppendRange(CallExpr call, RelationQueryExpressionContext context)
+    ObservationValue EvaluateAppendRange(CallExpr call, in RelationQueryExpressionContext context)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
         var appended = RequireArray(Evaluate(call.Arguments[1], context), call.Function);
@@ -551,7 +712,7 @@ sealed class RelationQueryExpressionEvaluator
         return FromOwnedArray(result);
     }
 
-    ObservationValue EvaluateInsertAt(CallExpr call, RelationQueryExpressionContext context)
+    ObservationValue EvaluateInsertAt(CallExpr call, in RelationQueryExpressionContext context)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
         var index = RequireIndex(Evaluate(call.Arguments[1], context), source.Count, call.Function);
@@ -565,7 +726,7 @@ sealed class RelationQueryExpressionEvaluator
         return FromOwnedArray(result);
     }
 
-    ObservationValue EvaluateInsertRangeAt(CallExpr call, RelationQueryExpressionContext context)
+    ObservationValue EvaluateInsertRangeAt(CallExpr call, in RelationQueryExpressionContext context)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
         var index = RequireIndex(Evaluate(call.Arguments[1], context), source.Count, call.Function);
@@ -579,7 +740,7 @@ sealed class RelationQueryExpressionEvaluator
         return FromOwnedArray(result);
     }
 
-    ObservationValue EvaluateConcat(CallExpr call, RelationQueryExpressionContext context)
+    ObservationValue EvaluateConcat(CallExpr call, in RelationQueryExpressionContext context)
     {
         StringBuilder result = new();
         foreach (var argument in call.Arguments)
@@ -594,7 +755,7 @@ sealed class RelationQueryExpressionEvaluator
 
     ObservationValue EvaluateSequenceAggregate(
         CallExpr call,
-        RelationQueryExpressionContext context)
+        in RelationQueryExpressionContext context)
     {
         var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
         if (call.Function is ExprFunctionNames.Any or ExprFunctionNames.All)
@@ -751,14 +912,14 @@ sealed class RelationQueryExpressionEvaluator
         return value.String;
     }
 
-    static ObservationValue RequireCurrentItem(RelationQueryExpressionContext context) =>
+    static ObservationValue RequireCurrentItem(in RelationQueryExpressionContext context) =>
         context.CurrentItem ?? throw Failure(
             RelationQueryExpressionEvaluationError.EvaluationContextUnavailable,
             "The expression requires a current-item scope that is not available.");
 
     static void RequireCapabilities(
         Expr expression,
-        RelationQueryExpressionContext context)
+        in RelationQueryExpressionContext context)
     {
         switch (expression)
         {
@@ -805,7 +966,7 @@ sealed class RelationQueryExpressionEvaluator
 
     static void RequireCapability(
         ExprCapabilityId capability,
-        RelationQueryExpressionContext context)
+        in RelationQueryExpressionContext context)
     {
         if (!context.IsCapabilityAvailable(capability))
         {

@@ -204,7 +204,9 @@ sealed class RelationQueryEvidenceIndex
     readonly IReadOnlyDictionary<(RelationQueryInputId Input, RelationQueryOccurrenceId From), RelationQueryTraversalEvidence> traversals;
     readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryParameterEvidence> parameters;
     readonly IReadOnlyDictionary<QueryParameterId, RelationQueryParameterInput> parameterInputs;
-    readonly IReadOnlyDictionary<(ValueBindingId Binding, QualifiedShapeId Shape), ImmutableArray<RelationQueryFieldInput>> bindingFields;
+    readonly IReadOnlyDictionary<
+        (ValueBindingId Binding, QualifiedShapeId Shape),
+        (ImmutableArray<RelationQueryFieldInput> Inputs, ImmutableArray<string> TopLevelNames)> bindingFields;
     readonly IReadOnlyDictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrences;
 
     /// <summary>Builds an index for runtime evidence already validated against the compiled plan.</summary>
@@ -215,7 +217,8 @@ sealed class RelationQueryEvidenceIndex
         ArgumentNullException.ThrowIfNull(plan);
         this.evidence = evidence ?? throw new ArgumentNullException(nameof(evidence));
 
-        inputs = plan.RequirementGraph.Inputs.ToDictionary(static input => input.Id);
+        var planIndex = RelationQueryCompiledPlanIndex.For(plan);
+        inputs = planIndex.Inputs;
         sources = IndexUnique(
             evidence.Sources,
             static item => item.Input,
@@ -232,29 +235,19 @@ sealed class RelationQueryEvidenceIndex
             evidence.Parameters,
             static item => item.Input,
             "parameter evidence");
-        parameterInputs = plan.RequirementGraph.Inputs
-            .OfType<RelationQueryParameterInput>()
-            .ToDictionary(static input => input.Parameter);
-        bindingFields = plan.RequirementGraph.Inputs
-            .OfType<RelationQueryFieldInput>()
-            .GroupBy(static input => (input.Binding, input.Field.Shape))
-            .ToDictionary(
-                static group => group.Key,
-                static group => group
-                    .OrderBy(static input => input.Id.Value, StringComparer.Ordinal)
-                    .ToImmutableArray());
+        parameterInputs = planIndex.ParameterInputs;
+        bindingFields = planIndex.BindingFields;
 
-        Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrenceIndex = [];
-        foreach (var occurrence in evidence.Sources.SelectMany(static source => source.Occurrences)
-                     .Concat(evidence.Traversals.SelectMany(static traversal => traversal.Results))
-                     .Concat(evidence.CollectionOccurrences.Select(static item => item.Occurrence)))
-        {
-            if (!occurrenceIndex.TryAdd(occurrence.Id, occurrence))
-            {
-                throw new InvalidOperationException(
-                    $"Runtime evidence contains duplicate occurrence '{occurrence.Id.Value}'; analyze evidence before indexing it.");
-            }
-        }
+        Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrenceIndex =
+            new(evidence.OccurrenceEntryCount);
+        foreach (var source in evidence.Sources)
+        foreach (var occurrence in source.Occurrences)
+            AddOccurrence(occurrenceIndex, occurrence);
+        foreach (var traversal in evidence.Traversals)
+        foreach (var occurrence in traversal.Results)
+            AddOccurrence(occurrenceIndex, occurrence);
+        foreach (var item in evidence.CollectionOccurrences)
+            AddOccurrence(occurrenceIndex, item.Occurrence);
 
         occurrences = new ReadOnlyDictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence>(
             occurrenceIndex);
@@ -376,7 +369,20 @@ sealed class RelationQueryEvidenceIndex
                 nameof(owner));
         }
 
-        fields.TryGetValue((input.Id, owner.Id), out var field);
+        return ResolveValidatedField(input.Id, owner.Id);
+    }
+
+    /// <summary>
+    /// Resolves field evidence after the caller has obtained both identities from this validated execution index.
+    /// </summary>
+    /// <param name="input">Exact compiled field-input identity.</param>
+    /// <param name="owner">Exact indexed owner-occurrence identity.</param>
+    /// <returns>The lossless materialized field state.</returns>
+    internal RelationQueryMaterializedValue ResolveValidatedField(
+        RelationQueryInputId input,
+        RelationQueryOccurrenceId owner)
+    {
+        fields.TryGetValue((input, owner), out var field);
         return RelationQueryMaterializedValue.FromField(field);
     }
 
@@ -393,9 +399,13 @@ sealed class RelationQueryEvidenceIndex
         var value = RelationQueryObjectValues.Empty;
         if (bindingFields.TryGetValue((occurrence.Binding, occurrence.Shape), out var compiledFields))
         {
-            foreach (var input in compiledFields)
+            var topLevelFields = !compiledFields.TopLevelNames.IsDefault
+                ? ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal)
+                : null;
+            for (var index = 0; index < compiledFields.Inputs.Length; index++)
             {
-                var materialized = ResolveField(input, occurrence);
+                var input = compiledFields.Inputs[index];
+                var materialized = ResolveValidatedField(input.Id, occurrence.Id);
                 if (materialized.State == RelationQueryMaterializedValueState.Missing
                     || !materialized.TryGetSemanticValue(out var fieldValue))
                 {
@@ -410,8 +420,18 @@ sealed class RelationQueryEvidenceIndex
                         + "which cannot be reconstructed losslessly from one occurrence-scoped field evidence value.");
                 }
 
-                value = RelationQueryObjectValues.Set(value, input.Field.Path, fieldValue);
+                if (topLevelFields is null)
+                {
+                    value = RelationQueryObjectValues.Set(value, input.Field.Path, fieldValue);
+                }
+                else
+                {
+                    topLevelFields[compiledFields.TopLevelNames[index]] = fieldValue;
+                }
             }
+
+            if (topLevelFields is not null)
+                value = ObservationValue.FromObject(topLevelFields.ToImmutable());
         }
 
         return RelationQueryRuntimeBinding.FromObservation(occurrence, value);
@@ -508,13 +528,13 @@ sealed class RelationQueryEvidenceIndex
     }
 
     static IReadOnlyDictionary<TKey, TValue> IndexUnique<TKey, TValue>(
-        IEnumerable<TValue> values,
+        ImmutableArray<TValue> values,
         Func<TValue, TKey> keySelector,
         string description)
         where TKey : notnull
         where TValue : class
     {
-        Dictionary<TKey, TValue> result = [];
+        Dictionary<TKey, TValue> result = new(values.Length);
         foreach (var value in values)
         {
             var key = keySelector(value);
@@ -527,4 +547,16 @@ sealed class RelationQueryEvidenceIndex
 
         return new ReadOnlyDictionary<TKey, TValue>(result);
     }
+
+    static void AddOccurrence(
+        Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrences,
+        RelationQueryObservationOccurrence occurrence)
+    {
+        if (!occurrences.TryAdd(occurrence.Id, occurrence))
+        {
+            throw new InvalidOperationException(
+                $"Runtime evidence contains duplicate occurrence '{occurrence.Id.Value}'; analyze evidence before indexing it.");
+        }
+    }
+
 }
