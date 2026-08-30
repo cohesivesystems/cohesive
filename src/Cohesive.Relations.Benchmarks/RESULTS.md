@@ -46,11 +46,52 @@
   allocation/performance baselines. They are not CI thresholds; optimize them only from representative
   end-to-end profiles.
 - Stage-isolated profiling of 1,024-row relation execution reduced joined execution from 32.15 ms and
-  58,439 KB to 26.06 ms and 45,847 KB, and simple execution from 8.06 ms and 20,739 KB to 6.43 ms and
-  14,922 KB. Runtime rows now preserve canonical provenance incrementally and project expression bindings over
-  their authoritative binding store instead of rebuilding provenance and retaining duplicate dictionaries.
+  58,439 KB to 19.98 ms and 31,707 KB, and simple execution from 8.06 ms and 20,739 KB to 5.48 ms and
+  10,209 KB. Runtime rows preserve canonical provenance incrementally, expression evaluation projects over the
+  authoritative binding store, and flat projections build one canonical object instead of repeatedly rebuilding it.
 
 ## History
+
+### 2026-08-30 (relation output construction and fused projection)
+
+- Base commit: `25cea63`
+- Branch: `codex/relation-execution-allocation-investigation`
+- Worktree: dirty; includes trusted output construction, no-gap policy handling, fused flat projection, and focused
+  invariant tests
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*RelationQueryExecutionStageBenchmarks.ExecuteJoined*1024*" \
+           "*RelationQueryExecutionStageBenchmarks.ExecuteSimple*1024*"
+```
+
+| Execution scenario, 1,024 rows | Previous mean | Current mean | Time reduction | Previous allocation | Current allocation | Allocation reduction |
+|---|---:|---:|---:|---:|---:|---:|
+| Joined | 26.06 ms | 19.98 ms | 23.3% | 45,846.76 KB | 31,707.11 KB | 30.8% |
+| Simple | 6.43 ms | 5.48 ms | 14.9% | 14,921.81 KB | 10,208.58 KB | 31.6% |
+
+A fresh EventPipe trace showed that runtime binding lookup was not the dominant remaining cost, so this iteration did
+not add an ordinal binding layout. Output-row construction, enumerable materialization, and repeated immutable object
+updates were larger targets that could be removed without introducing another addressing model.
+
+The interpreter now transfers already-canonical provenance and gap arrays through an internal prevalidated output-row
+boundary. The public constructor continues validating and defensively copying caller-owned input. Rows with no active
+requirement gaps bypass policy-set construction, and an unchanged policy value retains its existing runtime binding.
+Flat compiled projections build one sorted immutable object in a fused pass; nested paths retain the existing semantic
+path-update implementation. The optimized selection path consumes canonical compiled field order rather than becoming
+a second source of field-order or deduplication semantics.
+
+Across both execution optimization iterations, joined execution is 37.9% faster and allocates 45.7% less than the
+original 32.15 ms / 58,439.48 KB baseline. Simple execution is 32.0% faster and allocates 50.8% less than its original
+8.06 ms / 20,738.81 KB baseline. These are ShortRun measurements with three iterations; process-priority elevation
+was unavailable, but BenchmarkDotNet reported no critical validation errors.
 
 ### 2026-08-30 (relation execution row allocations)
 

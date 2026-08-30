@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using Cohesive.Relations.Diagnostics;
 
@@ -70,6 +71,29 @@ public sealed class RelationQueryRuntimeRowTests
         Assert.Same(row.ExpressionBindings, context.Bindings);
         Assert.Same(parameters, context.Parameters);
         Assert.Same(sourceRows, context.SourceRows);
+    }
+
+    [Fact]
+    public void OutputRowFromPrevalidatedExecution_RetainsCanonicalStores()
+    {
+        var first = Occurrence("occurrence/a", "first", "first-a");
+        var second = Occurrence("occurrence/b", "second", "second-b");
+        var occurrences = ImmutableArray.Create(first, second);
+        var gaps = ImmutableArray.Create(
+            new RelationRequirementGapId("gap/a"),
+            new RelationRequirementGapId("gap/b"));
+
+        var output = RelationQueryOutputRow.FromPrevalidatedExecution(
+            LoadCustomerRelationFixture.LoadShapeId,
+            ObservationValue.EmptyObject,
+            identity: null,
+            root: first,
+            occurrences,
+            gaps);
+
+        Assert.True(occurrences == output.InputOccurrences);
+        Assert.True(gaps == output.UnresolvedGaps);
+        Assert.Same(first, output.Root);
     }
 
     static RelationQueryObservationOccurrence Occurrence(

@@ -562,7 +562,7 @@ sealed class RelationQueryRuntimeRow : IReadOnlyDictionary<ValueBindingId, Relat
         ];
     }
 
-    static bool IsCanonicalProvenance(ImmutableArray<RelationQueryObservationOccurrence> provenance)
+    internal static bool IsCanonicalProvenance(ImmutableArray<RelationQueryObservationOccurrence> provenance)
     {
         if (provenance.IsDefault)
             return false;
@@ -578,7 +578,7 @@ sealed class RelationQueryRuntimeRow : IReadOnlyDictionary<ValueBindingId, Relat
         return true;
     }
 
-    static bool ContainsOccurrence(
+    internal static bool ContainsOccurrence(
         ImmutableArray<RelationQueryObservationOccurrence> provenance,
         RelationQueryObservationOccurrence occurrence)
     {
