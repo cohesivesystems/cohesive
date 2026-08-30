@@ -129,6 +129,10 @@ scope, deterministic run and batch IDs, replay token, and the Core canonical obs
 root seed is encoded as a decimal string so JavaScript can consume it without numeric precision loss. The sink flushes
 each acknowledged batch, never closes the caller-owned stream, and intentionally does not claim durable deduplication.
 
+Use the optional `Cohesive.Simulation.Storage` package to bind world populations to generic entity repositories. That
+integration keeps repository selection, entity-ID policy, state version, batch atomicity, and upsert behavior outside
+the provider-neutral Simulation package while deriving them into the effective provisioning target identity.
+
 ## Portable definitions and replay
 
 Persist a validated definition for scripts, tooling, or another process with the strict portable document boundary:

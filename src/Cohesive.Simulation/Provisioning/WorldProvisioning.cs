@@ -188,6 +188,7 @@ public sealed class WorldProvisioningBatch
         WorldFingerprintAlgorithm = world.FingerprintAlgorithm;
         WorldFingerprintCanonicalization = world.FingerprintCanonicalization;
         PopulationId = population.Definition.Id;
+        PopulationCount = population.Definition.Count;
         PopulationScope = population.Scope;
         RootSeed = rootSeed;
         Ordinal = ordinal;
@@ -221,6 +222,9 @@ public sealed class WorldProvisioningBatch
 
     /// <summary>Gets the stable population identity.</summary>
     public string PopulationId { get; }
+
+    /// <summary>Gets the total declared number of items in the population.</summary>
+    public int PopulationCount { get; }
 
     /// <summary>Gets the exact isolated generation scope for the population.</summary>
     public GenerationScope PopulationScope { get; }

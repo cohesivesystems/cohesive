@@ -75,6 +75,7 @@ public sealed class WorldJsonLinesSink : IWorldProvisioningSink
                 writer.WriteString("worldFingerprint", batch.WorldFingerprint);
                 writer.WriteString("rootSeed", batch.RootSeed.ToString(CultureInfo.InvariantCulture));
                 writer.WriteString("populationId", batch.PopulationId);
+                writer.WriteNumber("populationCount", batch.PopulationCount);
                 writer.WriteString("populationScope", batch.PopulationScope.Value);
                 writer.WriteNumber("batchOrdinal", batch.Ordinal);
                 writer.WriteNumber("sequenceIndex", item.Replay.SequenceIndex);
