@@ -217,7 +217,8 @@ sealed class RelationQueryEvidenceIndex
         ArgumentNullException.ThrowIfNull(plan);
         this.evidence = evidence ?? throw new ArgumentNullException(nameof(evidence));
 
-        inputs = plan.RequirementGraph.Inputs.ToDictionary(static input => input.Id);
+        var planIndex = RelationQueryCompiledPlanIndex.For(plan);
+        inputs = planIndex.Inputs;
         sources = IndexUnique(
             evidence.Sources,
             static item => item.Input,
@@ -234,27 +235,19 @@ sealed class RelationQueryEvidenceIndex
             evidence.Parameters,
             static item => item.Input,
             "parameter evidence");
-        parameterInputs = plan.RequirementGraph.Inputs
-            .OfType<RelationQueryParameterInput>()
-            .ToDictionary(static input => input.Parameter);
-        bindingFields = plan.RequirementGraph.Inputs
-            .OfType<RelationQueryFieldInput>()
-            .GroupBy(static input => (input.Binding, input.Field.Shape))
-            .ToDictionary(
-                static group => group.Key,
-                static group => CreateBindingFields(group));
+        parameterInputs = planIndex.ParameterInputs;
+        bindingFields = planIndex.BindingFields;
 
-        Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrenceIndex = [];
-        foreach (var occurrence in evidence.Sources.SelectMany(static source => source.Occurrences)
-                     .Concat(evidence.Traversals.SelectMany(static traversal => traversal.Results))
-                     .Concat(evidence.CollectionOccurrences.Select(static item => item.Occurrence)))
-        {
-            if (!occurrenceIndex.TryAdd(occurrence.Id, occurrence))
-            {
-                throw new InvalidOperationException(
-                    $"Runtime evidence contains duplicate occurrence '{occurrence.Id.Value}'; analyze evidence before indexing it.");
-            }
-        }
+        Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrenceIndex =
+            new(evidence.OccurrenceEntryCount);
+        foreach (var source in evidence.Sources)
+        foreach (var occurrence in source.Occurrences)
+            AddOccurrence(occurrenceIndex, occurrence);
+        foreach (var traversal in evidence.Traversals)
+        foreach (var occurrence in traversal.Results)
+            AddOccurrence(occurrenceIndex, occurrence);
+        foreach (var item in evidence.CollectionOccurrences)
+            AddOccurrence(occurrenceIndex, item.Occurrence);
 
         occurrences = new ReadOnlyDictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence>(
             occurrenceIndex);
@@ -535,13 +528,13 @@ sealed class RelationQueryEvidenceIndex
     }
 
     static IReadOnlyDictionary<TKey, TValue> IndexUnique<TKey, TValue>(
-        IEnumerable<TValue> values,
+        ImmutableArray<TValue> values,
         Func<TValue, TKey> keySelector,
         string description)
         where TKey : notnull
         where TValue : class
     {
-        Dictionary<TKey, TValue> result = [];
+        Dictionary<TKey, TValue> result = new(values.Length);
         foreach (var value in values)
         {
             var key = keySelector(value);
@@ -555,19 +548,15 @@ sealed class RelationQueryEvidenceIndex
         return new ReadOnlyDictionary<TKey, TValue>(result);
     }
 
-    static (ImmutableArray<RelationQueryFieldInput> Inputs, ImmutableArray<string> TopLevelNames)
-        CreateBindingFields(IEnumerable<RelationQueryFieldInput> fields)
+    static void AddOccurrence(
+        Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrences,
+        RelationQueryObservationOccurrence occurrence)
     {
-        var inputs = fields
-            .OrderBy(static input => input.Id.Value, StringComparer.Ordinal)
-            .ToImmutableArray();
-        var names = ImmutableArray.CreateBuilder<string>(inputs.Length);
-        foreach (var input in inputs)
+        if (!occurrences.TryAdd(occurrence.Id, occurrence))
         {
-            if (!RelationQueryObjectValues.TryGetTopLevelFieldName(input.Field.Path, out var name))
-                return (inputs, default);
-            names.Add(name);
+            throw new InvalidOperationException(
+                $"Runtime evidence contains duplicate occurrence '{occurrence.Id.Value}'; analyze evidence before indexing it.");
         }
-        return (inputs, names.MoveToImmutable());
     }
+
 }

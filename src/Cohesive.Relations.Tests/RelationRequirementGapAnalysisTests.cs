@@ -1205,6 +1205,62 @@ public sealed class RelationRequirementGapAnalysisTests
     }
 
     [Fact]
+    public void Analyze_DuplicateEvidenceRemainsGroupedWhenLegacyCompositeSortKeysCollide()
+    {
+        var plan = Compile();
+        RelationQueryInputId duplicateInput = new("a\u001fb");
+        RelationQueryOccurrenceId duplicateOwner = new("c");
+        RelationQueryInputId collidingInput = new("a");
+        RelationQueryOccurrenceId collidingOwner = new("b\u001fc");
+        RelationQueryFieldEvidence duplicate = new(
+            duplicateInput,
+            duplicateOwner,
+            RelationQueryFieldEvidenceState.NotLoaded,
+            evidenceReference: "tests/duplicate");
+        RelationQueryFieldEvidence collision = new(
+            collidingInput,
+            collidingOwner,
+            RelationQueryFieldEvidenceState.NotLoaded,
+            evidenceReference: "tests/collision");
+        var evidence = Evidence(plan, fields: [duplicate, collision, duplicate]);
+
+        var result = RelationRequirementGapAnalyzer.Analyze(plan, evidence);
+
+        Assert.Equal(
+            [collidingInput, duplicateInput, duplicateInput],
+            evidence.Fields.Select(static field => field.Input));
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Code == RelationRuntimeDiagnosticCodes.EvidenceDuplicate
+                && diagnostic.Input == duplicateInput
+                && diagnostic.Occurrence == duplicateOwner);
+    }
+
+    [Fact]
+    public void RuntimeEvidence_AlreadyCanonicalImmutableStorageIsRetained()
+    {
+        var plan = Compile();
+        RelationQueryOccurrenceId owner = new("owner");
+        ImmutableArray<RelationQueryFieldEvidence> fields =
+        [
+            new(
+                new("a"),
+                owner,
+                RelationQueryFieldEvidenceState.NotLoaded,
+                evidenceReference: "tests/a"),
+            new(
+                new("b"),
+                owner,
+                RelationQueryFieldEvidenceState.NotLoaded,
+                evidenceReference: "tests/b")
+        ];
+
+        var evidence = Evidence(plan, fields: fields);
+
+        Assert.True(fields == evidence.Fields);
+    }
+
+    [Fact]
     public void Analyze_EvidenceKindMismatchProducesStructuredDiagnosticInsteadOfGaps()
     {
         var plan = Compile();

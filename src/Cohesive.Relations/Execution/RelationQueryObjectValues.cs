@@ -54,7 +54,7 @@ static class RelationQueryObjectValues
         var topLevelOnly = true;
         foreach (var field in fields)
         {
-            if (!TryGetTopLevelFieldName(field.Path, out _))
+            if (!field.Path.TryGetDirectFieldName(out _))
             {
                 topLevelOnly = false;
                 break;
@@ -67,7 +67,7 @@ static class RelationQueryObjectValues
                 StringComparer.Ordinal);
             foreach (var field in fields)
             {
-                _ = TryGetTopLevelFieldName(field.Path, out var name);
+                _ = field.Path.TryGetDirectFieldName(out var name);
                 if (value.TryGetProperty(name, out var selected))
                     selectedFields.Add(name, selected);
             }
@@ -83,19 +83,4 @@ static class RelationQueryObjectValues
         return result;
     }
 
-    /// <summary>Tries to resolve one direct field name without nested or collection navigation.</summary>
-    /// <param name="path">Field path to inspect.</param>
-    /// <param name="name">Direct field name when the path contains exactly one field segment.</param>
-    /// <returns><see langword="true"/> when <paramref name="path"/> addresses one direct field.</returns>
-    public static bool TryGetTopLevelFieldName(FieldPath path, out string name)
-    {
-        if (path.Segments is [{ Kind: SegmentKind.Field, Segment: { } field }])
-        {
-            name = field;
-            return true;
-        }
-
-        name = string.Empty;
-        return false;
-    }
 }

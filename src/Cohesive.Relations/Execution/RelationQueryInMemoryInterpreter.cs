@@ -221,15 +221,16 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
         readonly RelationQueryExpressionEvaluator evaluator = new();
         readonly RelationQueryShapeResolver shapeResolver;
         readonly IReadOnlyDictionary<string, ObservationValue> parameters;
+        readonly IReadOnlyDictionary<QueryNodeId, RelationQuerySourceSetInput> sourceInputs;
         readonly IReadOnlyDictionary<(ValueBindingId Binding, QualifiedShapeId Shape, FieldPath Path), RelationQueryFieldInput> fieldInputs;
-        readonly IReadOnlyDictionary<string, RelationQueryParameterInput> parameterInputs;
+        readonly IReadOnlyDictionary<QueryParameterId, RelationQueryParameterInput> parameterInputs;
         readonly IReadOnlyDictionary<ExprCapabilityId, RelationQueryCapabilityInput> capabilityInputs;
         readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryCapabilityEvidence> capabilityEvidence;
         readonly IReadOnlyDictionary<RelationRequirementGapId, RelationRequirementGap> gapsById;
         readonly IReadOnlyDictionary<RelationQueryInputId, ImmutableArray<RelationRequirementGap>> directGapsByInput;
         readonly IReadOnlyDictionary<RelationQueryInputId, ImmutableArray<RelationRequirementGap>> blockersByInput;
         readonly IReadOnlyDictionary<RelationQueryOccurrenceId, ImmutableArray<RelationQueryOccurrenceId>> occurrenceParents;
-        readonly Dictionary<QueryNodeId, RelationQueryExecutionNode> nodes;
+        readonly IReadOnlyDictionary<QueryNodeId, RelationQueryExecutionNode> nodes;
         readonly Dictionary<QueryNodeId, ImmutableArray<RelationQueryRuntimeRow>> results = [];
         readonly HashSet<QueryNodeId> incompleteNodes = [];
         readonly HashSet<QueryNodeId> globallyIncompleteNodes = [];
@@ -249,20 +250,15 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             this.request = request;
             this.gapAnalysis = gapAnalysis;
             this.cancellationToken = cancellationToken;
+            var planIndex = RelationQueryCompiledPlanIndex.For(request.Plan);
             evidence = new(request.Plan, request.Evidence);
             shapeResolver = new(
                 [.. request.Plan.Provenance.ShapeDocuments.Select(static document => document.Graph)]);
             parameters = evidence.CreateEffectiveParameterValues();
-            fieldInputs = request.Plan.RequirementGraph.Inputs
-                .OfType<RelationQueryFieldInput>()
-                .GroupBy(static input => (input.Binding, input.Field.Shape, input.Field.Path))
-                .ToDictionary(static group => group.Key, static group => group.First());
-            parameterInputs = request.Plan.RequirementGraph.Inputs
-                .OfType<RelationQueryParameterInput>()
-                .ToDictionary(static input => input.Parameter.Value, StringComparer.Ordinal);
-            capabilityInputs = request.Plan.RequirementGraph.Inputs
-                .OfType<RelationQueryCapabilityInput>()
-                .ToDictionary(static input => input.Capability.Capability);
+            sourceInputs = planIndex.SourceInputs;
+            fieldInputs = planIndex.FieldInputs;
+            parameterInputs = planIndex.ParameterInputs;
+            capabilityInputs = planIndex.CapabilityInputs;
             capabilityEvidence = request.Evidence.Capabilities
                 .ToDictionary(static item => item.Input);
             gapsById = gapAnalysis.Gaps.ToDictionary(static gap => gap.Id);
@@ -295,7 +291,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                         .Distinct()
                         .OrderBy(static parent => parent.Value, StringComparer.Ordinal)
                         .ToImmutableArray());
-            nodes = request.Plan.ExecutionSlice.Nodes.ToDictionary(static node => node.Id);
+            nodes = planIndex.Nodes;
             rootPartitioned = request.Plan.Definition is Cohesive.Relations.IR.RelationDefinition
             {
                 Output.Mode: not RelationOutputMode.Set
@@ -421,13 +417,13 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
 
         ImmutableArray<RelationQueryRuntimeRow> ExecuteSource(SourceQueryNode node)
         {
-            var input = request.Plan.RequirementGraph.Inputs
-                .OfType<RelationQuerySourceSetInput>()
-                .SingleOrDefault(candidate => candidate.Source == node.Id)
-                ?? throw Failure(
+            if (!sourceInputs.TryGetValue(node.Id, out var input))
+            {
+                throw Failure(
                     RelationRuntimeDiagnosticCodes.ExecutionExpressionFailure,
                     $"Retained source node '{node.Id.Value}' has no compiled source-set input.",
                     node.Id);
+            }
             var directGaps = DirectGaps(input.Id, row: null);
             if (!directGaps.IsDefaultOrEmpty)
             {
@@ -1035,9 +1031,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
         {
             var projected = ImmutableArray.CreateBuilder<RelationQueryRuntimeRow>();
             var topLevelOnly = execution.ProjectionAssignments.All(static assignment =>
-                RelationQueryObjectValues.TryGetTopLevelFieldName(
-                    assignment.Definition.Target,
-                    out _));
+                assignment.Definition.Target.TryGetDirectFieldName(out _));
             foreach (var row in InputRows(execution, inputIndex: 0))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1056,9 +1050,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                         }
                         else
                         {
-                            _ = RelationQueryObjectValues.TryGetTopLevelFieldName(
-                                assignment.Definition.Target,
-                                out var fieldName);
+                            _ = assignment.Definition.Target.TryGetDirectFieldName(out var fieldName);
                             if (assigned.Kind == ObservationValueKind.Undefined)
                                 topLevelFields.Remove(fieldName);
                             else
@@ -2090,7 +2082,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
 
         bool IsParameterAvailable(string parameter)
         {
-            if (!parameterInputs.TryGetValue(parameter, out var input))
+            if (!parameterInputs.TryGetValue(new(parameter), out var input))
                 return false;
             if (MarkInputGaps(input.Id, occurrence: null))
                 return false;
