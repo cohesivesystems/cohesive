@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using Cohesive.Relations.Compilation;
+
 namespace Cohesive.Relations.Execution;
 
 /// <summary>Deterministic object-path operations shared by runtime evidence reconstruction and output shaping.</summary>
@@ -33,5 +36,66 @@ static class RelationQueryObjectValues
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Selects fields whose uniqueness and deterministic ordering were established by the compiled execution slice.
+    /// </summary>
+    /// <param name="value">Object value from which demanded fields are selected.</param>
+    /// <param name="fields">Canonical compiled field references.</param>
+    /// <returns>An object containing the demanded fields that are present in <paramref name="value"/>.</returns>
+    public static ObservationValue SelectCanonical(
+        ObservationValue value,
+        ImmutableArray<RelationQueryFieldReference> fields)
+    {
+        if (fields.IsDefaultOrEmpty)
+            return value;
+
+        var topLevelOnly = true;
+        foreach (var field in fields)
+        {
+            if (!TryGetTopLevelFieldName(field.Path, out _))
+            {
+                topLevelOnly = false;
+                break;
+            }
+        }
+
+        if (topLevelOnly)
+        {
+            var selectedFields = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(
+                StringComparer.Ordinal);
+            foreach (var field in fields)
+            {
+                _ = TryGetTopLevelFieldName(field.Path, out var name);
+                if (value.TryGetProperty(name, out var selected))
+                    selectedFields.Add(name, selected);
+            }
+            return ObservationValue.FromObject(selectedFields.ToImmutable());
+        }
+
+        var result = Empty;
+        foreach (var field in fields)
+        {
+            if (TryGet(value, field.Path, out var selected))
+                result = Set(result, field.Path, selected);
+        }
+        return result;
+    }
+
+    /// <summary>Tries to resolve one direct field name without nested or collection navigation.</summary>
+    /// <param name="path">Field path to inspect.</param>
+    /// <param name="name">Direct field name when the path contains exactly one field segment.</param>
+    /// <returns><see langword="true"/> when <paramref name="path"/> addresses one direct field.</returns>
+    public static bool TryGetTopLevelFieldName(FieldPath path, out string name)
+    {
+        if (path.Segments is [{ Kind: SegmentKind.Field, Segment: { } field }])
+        {
+            name = field;
+            return true;
+        }
+
+        name = string.Empty;
+        return false;
     }
 }

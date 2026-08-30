@@ -92,6 +92,7 @@ public static class RelationRequirementGapAnalyzer
         readonly Dictionary<RelationQueryInputId, RelationQueryCapabilityEvidence> capabilities = [];
         readonly Dictionary<(RelationQueryInputId Input, string Occurrence), RelationQueryConversionFailureEvidence> conversions = [];
         readonly Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrences = [];
+        readonly Dictionary<(ValueBindingId Binding, QualifiedShapeId Shape), List<RelationQueryObservationOccurrence>> occurrenceOwners = [];
         readonly Dictionary<RelationQueryOccurrenceId, RelationQueryCollectionOccurrenceEvidence> collectionOccurrences = [];
         readonly List<RelationRuntimeDiagnostic> diagnostics = [];
         readonly Dictionary<(string Occurrence, RelationQueryInputId Input, RelationRequirementGapCause Cause), RelationRequirementGap> gaps = [];
@@ -981,10 +982,13 @@ public static class RelationRequirementGapAnalyzer
         {
             foreach (var contract in fieldContracts.Values.OrderBy(static item => item.Input.Id.Value, StringComparer.Ordinal))
             {
-                var owners = occurrences.Values
-                    .Where(occurrence => occurrence.Binding == contract.Input.Binding
-                                         && occurrence.Shape == contract.Input.Field.Shape)
-                    .OrderBy(static occurrence => occurrence.Id.Value, StringComparer.Ordinal);
+                if (!occurrenceOwners.TryGetValue(
+                        (contract.Input.Binding, contract.Input.Field.Shape),
+                        out var owners))
+                {
+                    continue;
+                }
+
                 foreach (var owner in owners)
                 {
                     if (blockedOccurrences.Contains(owner.Id)
@@ -1044,10 +1048,13 @@ public static class RelationRequirementGapAnalyzer
         {
             foreach (var contract in identityContracts.Values.OrderBy(static item => item.Input.Id.Value, StringComparer.Ordinal))
             {
-                var owners = occurrences.Values
-                    .Where(occurrence => occurrence.Binding == contract.Input.Binding
-                                         && occurrence.Shape == contract.Input.Shape)
-                    .OrderBy(static occurrence => occurrence.Id.Value, StringComparer.Ordinal);
+                if (!occurrenceOwners.TryGetValue(
+                        (contract.Input.Binding, contract.Input.Shape),
+                        out var owners))
+                {
+                    continue;
+                }
+
                 foreach (var owner in owners)
                 {
                     if (blockedOccurrences.Contains(owner.Id)
@@ -1713,20 +1720,29 @@ public static class RelationRequirementGapAnalyzer
             RelationQueryInputId input,
             string? evidenceReference)
         {
-            if (!occurrences.TryAdd(occurrence.Id, occurrence))
+            if (occurrences.TryAdd(occurrence.Id, occurrence))
             {
-                var existing = occurrences[occurrence.Id];
-                AddDiagnostic(
-                    Equals(existing, occurrence)
-                        ? RelationRuntimeDiagnosticCodes.EvidenceDuplicate
-                        : RelationRuntimeDiagnosticCodes.EvidenceConflict,
-                    Equals(existing, occurrence)
-                        ? $"Occurrence '{occurrence.Id.Value}' is declared more than once."
-                        : $"Occurrence '{occurrence.Id.Value}' has conflicting binding, shape, or identity evidence.",
-                    input,
-                    occurrence.Id,
-                    evidenceReference);
+                var key = (occurrence.Binding, occurrence.Shape);
+                if (!occurrenceOwners.TryGetValue(key, out var owners))
+                {
+                    owners = [];
+                    occurrenceOwners.Add(key, owners);
+                }
+                owners.Add(occurrence);
+                return;
             }
+
+            var existing = occurrences[occurrence.Id];
+            AddDiagnostic(
+                Equals(existing, occurrence)
+                    ? RelationRuntimeDiagnosticCodes.EvidenceDuplicate
+                    : RelationRuntimeDiagnosticCodes.EvidenceConflict,
+                Equals(existing, occurrence)
+                    ? $"Occurrence '{occurrence.Id.Value}' is declared more than once."
+                    : $"Occurrence '{occurrence.Id.Value}' has conflicting binding, shape, or identity evidence.",
+                input,
+                occurrence.Id,
+                evidenceReference);
         }
 
         bool ValidateInputKind<TInput>(
@@ -1757,8 +1773,8 @@ public static class RelationRequirementGapAnalyzer
             return false;
         }
 
-        IEnumerable<TEvidence> QuarantineDuplicateEvidence<TEvidence, TKey>(
-            IEnumerable<TEvidence> values,
+        ImmutableArray<TEvidence> QuarantineDuplicateEvidence<TEvidence, TKey>(
+            ImmutableArray<TEvidence> values,
             Func<TEvidence, TKey> keySelector,
             Func<TEvidence, RelationQueryInputId> inputSelector,
             Func<TEvidence, RelationQueryOccurrenceId?> occurrenceSelector,
@@ -1766,24 +1782,42 @@ public static class RelationRequirementGapAnalyzer
             where TKey : notnull
             where TEvidence : class
         {
-            foreach (var group in values.GroupBy(keySelector))
-            {
-                var candidates = group.Take(2).ToArray();
-                var candidate = candidates[0];
-                if (candidates.Length == 1)
-                {
-                    yield return candidate;
-                    continue;
-                }
+            if (values.Length < 2)
+                return values;
 
-                var input = inputSelector(candidate);
-                var occurrence = occurrenceSelector(candidate);
+            HashSet<TKey> seen = new(values.Length);
+            HashSet<TKey>? duplicates = null;
+            foreach (var value in values)
+            {
+                var key = keySelector(value);
+                if (seen.Add(key))
+                    continue;
+
+                duplicates ??= [];
+                if (!duplicates.Add(key))
+                    continue;
+
+                var input = inputSelector(value);
+                var occurrence = occurrenceSelector(value);
                 AddDiagnostic(
                     RelationRuntimeDiagnosticCodes.EvidenceDuplicate,
                     $"{evidenceKind} evidence repeats input '{input.Value}'{(occurrence is null ? string.Empty : $" for occurrence '{occurrence.Value.Value}'")}.",
                     input,
                     occurrence);
             }
+
+            if (duplicates is null)
+                return values;
+
+            var retained = ImmutableArray.CreateBuilder<TEvidence>(seen.Count - duplicates.Count);
+            foreach (var value in values)
+            {
+                if (duplicates.Contains(keySelector(value)))
+                    continue;
+                retained.Add(value);
+            }
+
+            return retained.MoveToImmutable();
         }
 
         void AddDiagnostic(

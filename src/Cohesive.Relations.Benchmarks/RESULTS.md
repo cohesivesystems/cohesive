@@ -45,8 +45,156 @@
 - Physical planning, federated physical execution, and diagnostic-heavy mapping are descriptive
   allocation/performance baselines. They are not CI thresholds; optimize them only from representative
   end-to-end profiles.
+- Stage-isolated profiling of 1,024-row relation execution reduced joined execution from 32.15 ms and
+  58,439 KB to 16.61 ms and 25,371 KB, and simple execution from 8.06 ms and 20,739 KB to 4.79 ms and
+  8,253 KB. Runtime rows preserve canonical provenance incrementally, evidence validation avoids per-record grouping,
+  expression evaluation uses validated indexes, and flat objects are built once instead of repeatedly rebuilt.
 
 ## History
+
+### 2026-08-30 (relation gap analysis and observed binding reconstruction)
+
+- Base commit: `188d22c`
+- Branch: `codex/relation-execution-allocation-investigation`
+- Worktree: dirty; includes canonical duplicate quarantine, occurrence-owner indexing, validated field lookup,
+  fused observed binding reconstruction, and focused invariant coverage
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*RelationQueryExecutionStageBenchmarks.AnalyzeRequirementsJoined*1024*" \
+           "*RelationQueryExecutionStageBenchmarks.AnalyzeRequirementsSimple*1024*" \
+           "*RelationQueryExecutionStageBenchmarks.ExecuteJoined*1024*" \
+           "*RelationQueryExecutionStageBenchmarks.ExecuteSimple*1024*"
+```
+
+| Scenario, 1,024 rows | Previous mean | Current mean | Time reduction | Previous allocation | Current allocation | Allocation reduction |
+|---|---:|---:|---:|---:|---:|---:|
+| Analyze requirements, joined | 7.167 ms | 5.099 ms | 28.9% | 6,413.12 KB | 4,318.67 KB | 32.7% |
+| Analyze requirements, simple | 1.244 ms | 1.075 ms | 13.6% | 1,178.68 KB | 631.55 KB | 46.4% |
+| Execute joined | 19.981 ms | 16.613 ms | 16.9% | 31,707.11 KB | 25,370.78 KB | 20.0% |
+| Execute simple | 5.476 ms | 4.785 ms | 12.6% | 10,208.58 KB | 8,253.03 KB | 19.2% |
+
+The profile attributed most requirement-analysis time to evidence validation. Duplicate quarantine previously built a
+LINQ lookup and a temporary candidate array for every evidence record. It now performs one hash pass, retains the
+canonical immutable array when evidence is unique, and allocates a filtered replacement only when an entire duplicate
+key group must be quarantined. Occurrences are indexed by binding and shape while they are validated, so field and
+identity analysis no longer rescan every occurrence for every contract.
+
+Execution now uses a narrow trusted field lookup only after the public evidence boundary and gap analyzer have
+validated the plan and occurrence identities. Direct gaps are read from the existing per-input index instead of
+filtering the complete gap array for each field access. Observed bindings prebind flat field names once per evidence
+index and build one immutable object; nested and collection paths retain the existing semantic reconstruction path.
+The validated index and compiled contracts remain the authorities for evidence state and field identity.
+
+Across all execution optimization iterations, joined execution is 48.3% faster and allocates 56.6% less than the
+original 32.15 ms / 58,439.48 KB baseline. Simple execution is 40.6% faster and allocates 60.2% less than its original
+8.06 ms / 20,738.81 KB baseline. These are ShortRun measurements with three iterations; process-priority elevation
+was unavailable, but BenchmarkDotNet reported no critical validation errors.
+
+### 2026-08-30 (relation output construction and fused projection)
+
+- Base commit: `25cea63`
+- Branch: `codex/relation-execution-allocation-investigation`
+- Worktree: dirty; includes trusted output construction, no-gap policy handling, fused flat projection, and focused
+  invariant tests
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*RelationQueryExecutionStageBenchmarks.ExecuteJoined*1024*" \
+           "*RelationQueryExecutionStageBenchmarks.ExecuteSimple*1024*"
+```
+
+| Execution scenario, 1,024 rows | Previous mean | Current mean | Time reduction | Previous allocation | Current allocation | Allocation reduction |
+|---|---:|---:|---:|---:|---:|---:|
+| Joined | 26.06 ms | 19.98 ms | 23.3% | 45,846.76 KB | 31,707.11 KB | 30.8% |
+| Simple | 6.43 ms | 5.48 ms | 14.9% | 14,921.81 KB | 10,208.58 KB | 31.6% |
+
+A fresh EventPipe trace showed that runtime binding lookup was not the dominant remaining cost, so this iteration did
+not add an ordinal binding layout. Output-row construction, enumerable materialization, and repeated immutable object
+updates were larger targets that could be removed without introducing another addressing model.
+
+The interpreter now transfers already-canonical provenance and gap arrays through an internal prevalidated output-row
+boundary. The public constructor continues validating and defensively copying caller-owned input. Rows with no active
+requirement gaps bypass policy-set construction, and an unchanged policy value retains its existing runtime binding.
+Flat compiled projections build one sorted immutable object in a fused pass; nested paths retain the existing semantic
+path-update implementation. The optimized selection path consumes canonical compiled field order rather than becoming
+a second source of field-order or deduplication semantics.
+
+Across both execution optimization iterations, joined execution is 37.9% faster and allocates 45.7% less than the
+original 32.15 ms / 58,439.48 KB baseline. Simple execution is 32.0% faster and allocates 50.8% less than its original
+8.06 ms / 20,738.81 KB baseline. These are ShortRun measurements with three iterations; process-priority elevation
+was unavailable, but BenchmarkDotNet reported no critical validation errors.
+
+### 2026-08-30 (relation execution row allocations)
+
+- Base commit: `0c6ced0`
+- Branch: `codex/relation-execution-allocation-investigation`
+- Worktree: dirty; includes the execution-stage benchmarks, incremental provenance, projected expression bindings,
+  and focused invariant tests
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*RelationQueryExecutionStageBenchmarks*"
+
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*RelationQueryExecutionStageBenchmarks.ExecuteJoined*1024*" \
+  --profiler EP
+```
+
+The initial stage benchmark established that execution, rather than output projection or serialization, owns most of
+the end-to-end cost. At 1,024 rows, joined execution took 32.15 ms and allocated 58,439.48 KB, while projecting its
+observations took 143.7 μs and 160.02 KB, warm CLR materialization took 117.4 μs and 104.02 KB, and canonical JSON to
+a reused caller-owned buffer took 379.8 μs and 0 B. Requirement analysis and evidence indexing remained separately
+visible at 6.97 ms / 6,413.12 KB and 987.0 μs / 1,781.41 KB respectively.
+
+| Execution scenario, 1,024 rows | Initial mean | Current mean | Time reduction | Initial allocation | Current allocation | Allocation reduction |
+|---|---:|---:|---:|---:|---:|---:|
+| Joined | 32.15 ms | 26.06 ms | 18.9% | 58,439.48 KB | 45,846.76 KB | 21.5% |
+| Simple | 8.06 ms | 6.43 ms | 20.2% | 20,738.81 KB | 14,921.81 KB | 28.0% |
+
+The first EventPipe trace attributed about 3.25 seconds of sampled inclusive time to provenance normalization across
+the benchmark run. Runtime-row operations now maintain one sorted, duplicate-checked immutable provenance sequence:
+single occurrences are inserted by identity and row merges use a linear canonical merge. The normal construction
+path no longer creates a dictionary, concatenated enumerables, or a sorted replacement array merely to re-establish
+an invariant already owned by the row.
+
+After that change, a fresh trace exposed about 1.86 seconds of sampled inclusive time in `ToDictionary`. Every row
+retained both its authoritative runtime-binding dictionary and an expression-only copy, and expression evaluation
+then defensively copied that already-validated store again. The evaluator now retains execution-owned stores through
+an explicit trusted boundary. A runtime row implements a lazy read-only expression-binding projection over its one
+authoritative dictionary, and the projected binding is a value record, so hot `TryGetValue` reads do not allocate.
+The ordinary expression-context constructor still validates and snapshots caller-owned dictionaries.
+
+This deliberately stops short of introducing an ordinal row layout. The duplicate semantic authority and repeated
+canonicalization were independently measurable and removable without changing addressing semantics. A subsequent
+profile should establish whether binding lookup is now expensive enough to justify plan-bound ordinals and should
+measure the added layout, row-update, sparse-binding, and diagnostic complexity against this cleaner baseline. These
+are ShortRun measurements with three iterations; process-priority elevation was unavailable, but BenchmarkDotNet
+reported no critical validation errors.
 
 ### 2026-08-30 (prebound ordinal validation)
 

@@ -33,7 +33,7 @@ sealed class RelationQueryExpressionEvaluationException(
     public RelationQueryExpressionEvaluationError Error { get; } = error;
 }
 
-sealed record RelationQueryExpressionBinding
+readonly record struct RelationQueryExpressionBinding
 {
     public RelationQueryExpressionBinding(
         ObservationValue value,
@@ -79,6 +79,13 @@ sealed record RelationQueryExpressionBinding
 
 sealed class RelationQueryExpressionContext
 {
+    static readonly IReadOnlyDictionary<string, ObservationValue> EmptyParameters =
+        ImmutableDictionary.Create<string, ObservationValue>(StringComparer.Ordinal);
+    static readonly IReadOnlyList<ObservationValue> EmptySourceRows = [];
+    static readonly Func<ValueBindingId, FieldPath, bool> AllFieldsAvailable = static (_, _) => true;
+    static readonly Func<string, bool> AllParametersAvailable = static _ => true;
+    static readonly Func<ExprCapabilityId, bool> AllCapabilitiesAvailable = static _ => true;
+
     public RelationQueryExpressionContext(
         IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding>? bindings = null,
         ValueBindingId? implicitBinding = null,
@@ -103,9 +110,7 @@ sealed class RelationQueryExpressionContext
             {
                 if (string.IsNullOrWhiteSpace(binding.Value))
                     throw new ArgumentException("Expression bindings must have non-empty identities.", nameof(bindings));
-                bindingValues.Add(binding, value ?? throw new ArgumentException(
-                    "Expression bindings cannot contain null values.",
-                    nameof(bindings)));
+                bindingValues.Add(binding, value);
             }
         }
 
@@ -125,9 +130,31 @@ sealed class RelationQueryExpressionContext
         CurrentItem = currentItem;
         RootIdentity = rootIdentity;
         SourceRows = sourceRows is null ? [] : [.. sourceRows];
-        IsFieldAvailable = isFieldAvailable ?? (static (_, _) => true);
-        IsParameterAvailable = isParameterAvailable ?? (static _ => true);
-        IsCapabilityAvailable = isCapabilityAvailable ?? (static _ => true);
+        IsFieldAvailable = isFieldAvailable ?? AllFieldsAvailable;
+        IsParameterAvailable = isParameterAvailable ?? AllParametersAvailable;
+        IsCapabilityAvailable = isCapabilityAvailable ?? AllCapabilitiesAvailable;
+    }
+
+    RelationQueryExpressionContext(
+        IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding> bindings,
+        IReadOnlyDictionary<string, ObservationValue> parameters,
+        IReadOnlyList<ObservationValue> sourceRows,
+        ValueBindingId? implicitBinding,
+        ObservationValue? currentItem,
+        string? rootIdentity,
+        Func<ValueBindingId, FieldPath, bool> isFieldAvailable,
+        Func<string, bool> isParameterAvailable,
+        Func<ExprCapabilityId, bool> isCapabilityAvailable)
+    {
+        Bindings = bindings;
+        ImplicitBinding = implicitBinding;
+        Parameters = parameters;
+        CurrentItem = currentItem;
+        RootIdentity = rootIdentity;
+        SourceRows = sourceRows;
+        IsFieldAvailable = isFieldAvailable;
+        IsParameterAvailable = isParameterAvailable;
+        IsCapabilityAvailable = isCapabilityAvailable;
     }
 
     RelationQueryExpressionContext(
@@ -162,6 +189,44 @@ sealed class RelationQueryExpressionContext
     public Func<string, bool> IsParameterAvailable { get; }
 
     public Func<ExprCapabilityId, bool> IsCapabilityAvailable { get; }
+
+    /// <summary>
+    /// Creates a context over immutable or execution-owned stores whose identities and values were already
+    /// validated at their owning boundaries.
+    /// </summary>
+    /// <param name="bindings">Validated binding store retained by the context.</param>
+    /// <param name="implicitBinding">Optional binding used by unqualified field expressions.</param>
+    /// <param name="parameters">Optional execution-owned parameter store retained by the context.</param>
+    /// <param name="currentItem">Optional current collection item.</param>
+    /// <param name="rootIdentity">Optional observation identity of the relation root.</param>
+    /// <param name="sourceRows">Optional execution-owned source-row store retained by the context.</param>
+    /// <param name="isFieldAvailable">Optional field-availability policy.</param>
+    /// <param name="isParameterAvailable">Optional parameter-availability policy.</param>
+    /// <param name="isCapabilityAvailable">Optional expression-capability policy.</param>
+    /// <returns>A context that does not copy the supplied execution-owned stores.</returns>
+    internal static RelationQueryExpressionContext FromPrevalidated(
+        IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding> bindings,
+        ValueBindingId? implicitBinding = null,
+        IReadOnlyDictionary<string, ObservationValue>? parameters = null,
+        ObservationValue? currentItem = null,
+        string? rootIdentity = null,
+        IReadOnlyList<ObservationValue>? sourceRows = null,
+        Func<ValueBindingId, FieldPath, bool>? isFieldAvailable = null,
+        Func<string, bool>? isParameterAvailable = null,
+        Func<ExprCapabilityId, bool>? isCapabilityAvailable = null)
+    {
+        ArgumentNullException.ThrowIfNull(bindings);
+        return new(
+            bindings,
+            parameters ?? EmptyParameters,
+            sourceRows ?? EmptySourceRows,
+            implicitBinding,
+            currentItem,
+            rootIdentity,
+            isFieldAvailable ?? AllFieldsAvailable,
+            isParameterAvailable ?? AllParametersAvailable,
+            isCapabilityAvailable ?? AllCapabilitiesAvailable);
+    }
 
     public RelationQueryExpressionContext WithCurrentItem(ObservationValue item) => new(this, item);
 }

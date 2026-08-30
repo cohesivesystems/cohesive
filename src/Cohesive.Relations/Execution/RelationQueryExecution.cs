@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.IR;
@@ -92,6 +93,22 @@ public sealed class RelationQueryExecutionRequest
 /// <summary>One shaped output row produced by canonical relation/query interpretation.</summary>
 public sealed record RelationQueryOutputRow : IObservationFieldReader
 {
+    RelationQueryOutputRow(
+        ImmutableArray<RelationQueryObservationOccurrence> inputOccurrences,
+        ImmutableArray<RelationRequirementGapId> unresolvedGaps,
+        QualifiedShapeId shape,
+        ObservationValue value,
+        ObservationValue? identity,
+        RelationQueryObservationOccurrence? root)
+    {
+        Shape = shape;
+        Value = value;
+        Identity = identity;
+        Root = root;
+        InputOccurrences = inputOccurrences;
+        UnresolvedGaps = unresolvedGaps;
+    }
+
     /// <summary>Creates one shaped, provenance-attributed execution row.</summary>
     /// <param name="shape">Graph-qualified semantic shape of <paramref name="value"/>.</param>
     /// <param name="value">Object-shaped output value containing the retained fields.</param>
@@ -185,6 +202,45 @@ public sealed record RelationQueryOutputRow : IObservationFieldReader
     /// <summary>Unresolved requirement gaps that still affect this row under the selected policy.</summary>
     public ImmutableArray<RelationRequirementGapId> UnresolvedGaps { get; }
 
+    /// <summary>
+    /// Creates an output row from canonical stores validated by the in-memory execution pipeline without
+    /// renormalizing or copying them.
+    /// </summary>
+    /// <param name="shape">Validated graph-qualified output shape.</param>
+    /// <param name="value">Validated object-shaped output value.</param>
+    /// <param name="identity">Validated concrete scalar identity, or <see langword="null"/>.</param>
+    /// <param name="root">Canonical relation root, or <see langword="null"/>.</param>
+    /// <param name="inputOccurrences">Canonical contributing occurrences retained by the row.</param>
+    /// <param name="unresolvedGaps">Canonical unresolved gap identities retained by the row.</param>
+    /// <returns>An output row that retains the supplied canonical immutable stores.</returns>
+    internal static RelationQueryOutputRow FromPrevalidatedExecution(
+        QualifiedShapeId shape,
+        ObservationValue value,
+        ObservationValue? identity,
+        RelationQueryObservationOccurrence? root,
+        ImmutableArray<RelationQueryObservationOccurrence> inputOccurrences,
+        ImmutableArray<RelationRequirementGapId> unresolvedGaps)
+    {
+        Debug.Assert(!string.IsNullOrWhiteSpace(shape.GraphId.Value));
+        Debug.Assert(!string.IsNullOrWhiteSpace(shape.ShapeId.Value));
+        Debug.Assert(value.Kind == ObservationValueKind.Object);
+        Debug.Assert(identity is null || identity.Value.Kind is not (
+            ObservationValueKind.Undefined
+            or ObservationValueKind.Null
+            or ObservationValueKind.Array
+            or ObservationValueKind.Object));
+        Debug.Assert(RelationQueryRuntimeRow.IsCanonicalProvenance(inputOccurrences));
+        Debug.Assert(root is null || RelationQueryRuntimeRow.ContainsOccurrence(inputOccurrences, root));
+        Debug.Assert(IsCanonicalGaps(unresolvedGaps));
+        return new(
+            inputOccurrences,
+            unresolvedGaps,
+            shape,
+            value,
+            identity,
+            root);
+    }
+
     QualifiedShapeId IObservationFieldReader.ShapeId => Shape;
 
     bool IObservationFieldReader.TryGetField(string fieldIdentity, out ObservationValue field)
@@ -198,6 +254,25 @@ public sealed record RelationQueryOutputRow : IObservationFieldReader
     /// evidence or another execution diagnostic can still make the containing terminal incomplete or failed.
     /// </summary>
     public bool IsComplete => UnresolvedGaps.IsDefaultOrEmpty;
+
+    static bool IsCanonicalGaps(ImmutableArray<RelationRequirementGapId> gaps)
+    {
+        if (gaps.IsDefault)
+            return false;
+
+        for (var index = 0; index < gaps.Length; index++)
+        {
+            if (string.IsNullOrWhiteSpace(gaps[index].Value))
+                return false;
+            if (index > 0
+                && StringComparer.Ordinal.Compare(gaps[index - 1].Value, gaps[index].Value) >= 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }
 
 /// <summary>Demanded output of a canonical relation definition.</summary>

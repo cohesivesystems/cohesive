@@ -1,5 +1,6 @@
+using System.Collections;
 using System.Collections.Immutable;
-using System.Collections.ObjectModel;
+using System.Diagnostics;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Model;
 
@@ -187,7 +188,7 @@ sealed record RelationQueryRuntimeBinding
 /// Immutable binding environment for one in-memory row, including exact occurrence provenance and the
 /// optional relation root from which the row was derived.
 /// </summary>
-sealed class RelationQueryRuntimeRow
+sealed class RelationQueryRuntimeRow : IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding>
 {
     static readonly ImmutableDictionary<ValueBindingId, RelationQueryRuntimeBinding> EmptyBindings =
         ImmutableDictionary<ValueBindingId, RelationQueryRuntimeBinding>.Empty;
@@ -199,23 +200,10 @@ sealed class RelationQueryRuntimeRow
         RelationQueryObservationOccurrence? root)
     {
         this.bindings = bindings;
-        Provenance = NormalizeProvenance(
-            provenance,
-            bindings.Values.Select(static binding => binding.Occurrence),
-            root);
-        if (root is not null
-            && !Provenance.Any(occurrence => occurrence.Id == root.Id && Equals(occurrence, root)))
-        {
-            throw new ArgumentException(
-                "A relation root must be included in the row provenance.",
-                nameof(root));
-        }
-
+        Debug.Assert(IsCanonicalProvenance(provenance));
+        Debug.Assert(root is null || ContainsOccurrence(provenance, root));
+        Provenance = provenance;
         Root = root;
-        ExpressionBindings = new ReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding>(
-            bindings.ToDictionary(
-                static pair => pair.Key,
-                static pair => pair.Value.ToExpressionBinding()));
     }
 
     /// <summary>Creates an empty runtime row.</summary>
@@ -233,7 +221,7 @@ sealed class RelationQueryRuntimeRow
         RequireBindingValue(binding, value, nameof(value));
         return new(
             EmptyBindings.Add(binding, value),
-            [],
+            CreateProvenance(value.Occurrence, root),
             root);
     }
 
@@ -241,7 +229,26 @@ sealed class RelationQueryRuntimeRow
     public IReadOnlyDictionary<ValueBindingId, RelationQueryRuntimeBinding> Bindings => bindings;
 
     /// <summary>Expression-evaluator projection of <see cref="Bindings"/>.</summary>
-    public IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding> ExpressionBindings { get; }
+    public IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding> ExpressionBindings => this;
+
+    /// <inheritdoc />
+    public RelationQueryExpressionBinding this[ValueBindingId key] => bindings[key].ToExpressionBinding();
+
+    /// <inheritdoc />
+    public int Count => bindings.Count;
+
+    /// <inheritdoc />
+    public IEnumerable<ValueBindingId> Keys => bindings.Keys;
+
+    /// <inheritdoc />
+    public IEnumerable<RelationQueryExpressionBinding> Values
+    {
+        get
+        {
+            foreach (var binding in bindings.Values)
+                yield return binding.ToExpressionBinding();
+        }
+    }
 
     /// <summary>Exact contributing occurrences sorted by occurrence identity.</summary>
     public ImmutableArray<RelationQueryObservationOccurrence> Provenance { get; }
@@ -255,6 +262,33 @@ sealed class RelationQueryRuntimeRow
         out RelationQueryRuntimeBinding value) =>
         Bindings.TryGetValue(binding, out value!);
 
+    /// <inheritdoc />
+    public bool ContainsKey(ValueBindingId key) => bindings.ContainsKey(key);
+
+    /// <inheritdoc />
+    public bool TryGetValue(
+        ValueBindingId key,
+        out RelationQueryExpressionBinding value)
+    {
+        if (bindings.TryGetValue(key, out var binding))
+        {
+            value = binding.ToExpressionBinding();
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
+
+    /// <inheritdoc />
+    public IEnumerator<KeyValuePair<ValueBindingId, RelationQueryExpressionBinding>> GetEnumerator()
+    {
+        foreach (var (key, binding) in bindings)
+            yield return KeyValuePair.Create(key, binding.ToExpressionBinding());
+    }
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
     /// <summary>Adds or replaces one binding while retaining row provenance and relation-root attribution.</summary>
     public RelationQueryRuntimeRow WithBinding(
         ValueBindingId binding,
@@ -265,7 +299,7 @@ sealed class RelationQueryRuntimeRow
         RequireBindingValue(binding, value, nameof(value));
         return new(
             bindings.SetItem(binding, value),
-            Provenance,
+            AddOccurrence(Provenance, value.Occurrence),
             Root);
     }
 
@@ -281,7 +315,7 @@ sealed class RelationQueryRuntimeRow
         RequireBindingValue(binding, value, nameof(value));
         return new(
             EmptyBindings.Add(binding, value),
-            Provenance,
+            AddOccurrence(Provenance, value.Occurrence),
             Root);
     }
 
@@ -291,7 +325,7 @@ sealed class RelationQueryRuntimeRow
         ArgumentNullException.ThrowIfNull(root);
         return new(
             bindings,
-            Provenance,
+            AddOccurrence(Provenance, root),
             root);
     }
 
@@ -313,9 +347,16 @@ sealed class RelationQueryRuntimeRow
         IEnumerable<RelationQueryObservationOccurrence> occurrences)
     {
         ArgumentNullException.ThrowIfNull(occurrences);
+        var additional = occurrences is ImmutableArray<RelationQueryObservationOccurrence> immutable
+            ? immutable.IsDefault
+                ? []
+                : IsCanonicalProvenance(immutable)
+                    ? immutable
+                    : NormalizeProvenance(immutable)
+            : NormalizeProvenance(occurrences);
         return new(
             bindings,
-            [.. Provenance, .. occurrences],
+            MergeProvenance(Provenance, additional),
             Root);
     }
 
@@ -355,7 +396,7 @@ sealed class RelationQueryRuntimeRow
 
         return new(
             mergedBindings,
-            [.. Provenance, .. other.Provenance],
+            MergeProvenance(Provenance, other.Provenance),
             root);
     }
 
@@ -368,7 +409,7 @@ sealed class RelationQueryRuntimeRow
         Func<ValueBindingId, FieldPath, bool>? isFieldAvailable = null,
         Func<string, bool>? isParameterAvailable = null,
         Func<Cohesive.Model.Expressions.ExprCapabilityId, bool>? isCapabilityAvailable = null) =>
-        new(
+        RelationQueryExpressionContext.FromPrevalidated(
             ExpressionBindings,
             implicitBinding,
             parameters,
@@ -379,29 +420,134 @@ sealed class RelationQueryRuntimeRow
             isParameterAvailable,
             isCapabilityAvailable);
 
-    static ImmutableArray<RelationQueryObservationOccurrence> NormalizeProvenance(
-        ImmutableArray<RelationQueryObservationOccurrence> provenance,
-        IEnumerable<RelationQueryObservationOccurrence?> bindingOccurrences,
+    static ImmutableArray<RelationQueryObservationOccurrence> CreateProvenance(
+        RelationQueryObservationOccurrence? occurrence,
         RelationQueryObservationOccurrence? root)
     {
-        var supplied = provenance.IsDefault ? [] : provenance;
-        if (supplied.Any(static occurrence => occurrence is null))
-            throw new ArgumentException("Row provenance cannot contain null occurrences.", nameof(provenance));
+        if (occurrence is null)
+            return root is null ? [] : [root];
+        if (root is null)
+            return [occurrence];
 
-        Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> normalized = [];
-        foreach (var occurrence in supplied
-                     .Concat(bindingOccurrences.WhereNotNull())
-                     .Concat(root is null ? [] : [root]))
+        var comparison = CompareOccurrenceIds(occurrence, root);
+        if (comparison == 0)
         {
+            RequireSameOccurrence(occurrence, root);
+            return [occurrence];
+        }
+
+        return comparison < 0 ? [occurrence, root] : [root, occurrence];
+    }
+
+    static ImmutableArray<RelationQueryObservationOccurrence> AddOccurrence(
+        ImmutableArray<RelationQueryObservationOccurrence> provenance,
+        RelationQueryObservationOccurrence? occurrence)
+    {
+        if (occurrence is null)
+            return provenance;
+
+        var lower = 0;
+        var upper = provenance.Length;
+        while (lower < upper)
+        {
+            var middle = lower + ((upper - lower) / 2);
+            var comparison = CompareOccurrenceIds(provenance[middle], occurrence);
+            if (comparison < 0)
+                lower = middle + 1;
+            else
+                upper = middle;
+        }
+
+        if (lower < provenance.Length && CompareOccurrenceIds(provenance[lower], occurrence) == 0)
+        {
+            RequireSameOccurrence(provenance[lower], occurrence);
+            return provenance;
+        }
+
+        var result = ImmutableArray.CreateBuilder<RelationQueryObservationOccurrence>(provenance.Length + 1);
+        for (var index = 0; index < lower; index++)
+            result.Add(provenance[index]);
+        result.Add(occurrence);
+        for (var index = lower; index < provenance.Length; index++)
+            result.Add(provenance[index]);
+        return result.MoveToImmutable();
+    }
+
+    static ImmutableArray<RelationQueryObservationOccurrence> MergeProvenance(
+        ImmutableArray<RelationQueryObservationOccurrence> left,
+        ImmutableArray<RelationQueryObservationOccurrence> right)
+    {
+        if (left.IsDefaultOrEmpty)
+            return right.IsDefault ? [] : right;
+        if (right.IsDefaultOrEmpty)
+            return left;
+        if (left == right)
+            return left;
+
+        var duplicateCount = 0;
+        var leftIndex = 0;
+        var rightIndex = 0;
+        while (leftIndex < left.Length && rightIndex < right.Length)
+        {
+            var comparison = CompareOccurrenceIds(left[leftIndex], right[rightIndex]);
+            if (comparison < 0)
+            {
+                leftIndex++;
+            }
+            else if (comparison > 0)
+            {
+                rightIndex++;
+            }
+            else
+            {
+                RequireSameOccurrence(left[leftIndex], right[rightIndex]);
+                duplicateCount++;
+                leftIndex++;
+                rightIndex++;
+            }
+        }
+
+        var result = ImmutableArray.CreateBuilder<RelationQueryObservationOccurrence>(
+            left.Length + right.Length - duplicateCount);
+        leftIndex = 0;
+        rightIndex = 0;
+        while (leftIndex < left.Length && rightIndex < right.Length)
+        {
+            var comparison = CompareOccurrenceIds(left[leftIndex], right[rightIndex]);
+            if (comparison < 0)
+            {
+                result.Add(left[leftIndex++]);
+            }
+            else if (comparison > 0)
+            {
+                result.Add(right[rightIndex++]);
+            }
+            else
+            {
+                result.Add(left[leftIndex]);
+                leftIndex++;
+                rightIndex++;
+            }
+        }
+        while (leftIndex < left.Length)
+            result.Add(left[leftIndex++]);
+        while (rightIndex < right.Length)
+            result.Add(right[rightIndex++]);
+        return result.MoveToImmutable();
+    }
+
+    static ImmutableArray<RelationQueryObservationOccurrence> NormalizeProvenance(
+        IEnumerable<RelationQueryObservationOccurrence> occurrences)
+    {
+        Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> normalized = [];
+        foreach (var occurrence in occurrences)
+        {
+            if (occurrence is null)
+                throw new ArgumentException("Row provenance cannot contain null occurrences.", nameof(occurrences));
+
             if (normalized.TryGetValue(occurrence.Id, out var existing))
             {
-                if (!Equals(existing, occurrence))
-                {
-                    throw new ArgumentException(
-                        $"Row provenance contains conflicting occurrence '{occurrence.Id.Value}'.",
-                        nameof(provenance));
-                }
-
+                RequireSameOccurrence(existing, occurrence);
                 continue;
             }
 
@@ -414,6 +560,55 @@ sealed class RelationQueryRuntimeRow
                 static occurrence => occurrence.Id.Value,
                 StringComparer.Ordinal)
         ];
+    }
+
+    internal static bool IsCanonicalProvenance(ImmutableArray<RelationQueryObservationOccurrence> provenance)
+    {
+        if (provenance.IsDefault)
+            return false;
+
+        for (var index = 0; index < provenance.Length; index++)
+        {
+            if (provenance[index] is null)
+                return false;
+            if (index > 0 && CompareOccurrenceIds(provenance[index - 1], provenance[index]) >= 0)
+                return false;
+        }
+
+        return true;
+    }
+
+    internal static bool ContainsOccurrence(
+        ImmutableArray<RelationQueryObservationOccurrence> provenance,
+        RelationQueryObservationOccurrence occurrence)
+    {
+        foreach (var candidate in provenance)
+        {
+            var comparison = CompareOccurrenceIds(candidate, occurrence);
+            if (comparison == 0)
+                return Equals(candidate, occurrence);
+            if (comparison > 0)
+                return false;
+        }
+
+        return false;
+    }
+
+    static int CompareOccurrenceIds(
+        RelationQueryObservationOccurrence left,
+        RelationQueryObservationOccurrence right) =>
+        StringComparer.Ordinal.Compare(left.Id.Value, right.Id.Value);
+
+    static void RequireSameOccurrence(
+        RelationQueryObservationOccurrence existing,
+        RelationQueryObservationOccurrence candidate)
+    {
+        if (!Equals(existing, candidate))
+        {
+            throw new ArgumentException(
+                $"Row provenance contains conflicting occurrence '{candidate.Id.Value}'.",
+                nameof(candidate));
+        }
     }
 
     static void RequireBinding(ValueBindingId binding, string parameterName)
