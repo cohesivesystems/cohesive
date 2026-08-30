@@ -181,6 +181,12 @@ public sealed record GenerationDefinitionDocument
             new(definition.Root.ShapeId, orderedMembers));
     }
 
+    internal static GenerationDefinition Normalize(CompiledGenerationPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        return Normalize(plan.Definition, plan.Members);
+    }
+
     static GenerationDefinitionFingerprint CreateFingerprint(CompiledGenerationPlan plan) => new(
         plan.FingerprintAlgorithm,
         plan.FingerprintCanonicalization,
