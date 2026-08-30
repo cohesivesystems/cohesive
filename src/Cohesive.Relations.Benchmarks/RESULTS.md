@@ -28,18 +28,20 @@
   previous 0.86 μs implementation, returned UTF-8 is 1.31× faster and eliminates 6,456 B; returned strings are 1.25×
   faster and eliminate 6,768 B. SHA-256 fingerprinting takes 3.406 μs while streaming bounded JSON chunks and
   retaining a fixed 360 B of managed allocation without materializing the JSON payload.
-- In the ARI-145 1,024-row DefaultJob verification run, the generated kernel is approximately 1.74×
-  handwritten for the simple DTO and 1.54× for the joined DTO. It allocates exactly the same bytes as
-  handwritten mapping.
-- AutoMapper's compiled constructor-member plan is approximately 1.32× handwritten for the simple DTO
-  and 1.25× for the joined DTO over the same canonical rows. Its mean is 24.0% lower than the Cohesive
-  simple kernel and 18.7% lower than the joined kernel at this scale; the difference is therefore
-  scenario- and scale-dependent rather than a uniform 5%. AutoMapper does not provide Cohesive's
+- In the merged 1,024-row ShortRun, the generated kernel is approximately 1.36× handwritten for the simple DTO
+  and 1.49× for the joined DTO. AutoMapper's compiled constructor-member plan is 1.25× and 1.22× handwritten over
+  the same canonical rows, making the Cohesive kernel 9.4% slower for simple mapping and 22.3% slower for joined
+  mapping. Both allocate exactly the handwritten destination-object floor. AutoMapper does not provide Cohesive's
   requirement-gap, completeness, diagnostic, or provenance semantics.
-- The full canonical mapper is approximately 1.98× handwritten for simple mapping and 1.43× for joined
-  mapping. It adds about 8.5 KB per 1,024-row batch for typed provenance rows and result bookkeeping.
-  Kernel-only and full-canonical timings use different loop/delegate orchestration, so their means
-  should not be interpreted as a strictly additive envelope cost.
+- The full canonical mapper is approximately 1.57× handwritten for simple mapping and 1.53× for joined mapping in
+  that warm run. It adds about 8.5 KB per 1,024-row batch for typed provenance rows and result bookkeeping.
+  Kernel-only and full-canonical timings use different loop/delegate orchestration, so their means should not be
+  interpreted as a strictly additive envelope cost.
+- When canonical relation interpretation and typed materialization are measured together, compiled canonical
+  materialization is within 2.2% of handwritten materialization across the 1,024-row simple and joined scenarios.
+  Warm compiled mapping accounts for only 0.7–0.8% of the corresponding end-to-end mean. Substituting the measured
+  AutoMapper mapping time would therefore save only about 0.14–0.16% of total time while omitting canonical mapping
+  semantics; this is a decomposition of separate measurements, not a directly benchmarked AutoMapper end-to-end path.
 - Fresh Cohesive kernel compilation is about 5.2–5.5× faster than fresh AutoMapper configuration,
   validation, and eager compilation in this ShortRun, while a cached Cohesive lookup is about 63–66 ns.
 - Physical planning, federated physical execution, and diagnostic-heavy mapping are descriptive
@@ -60,6 +62,75 @@
   falls from 21.39 MB to 18.80 MB.
 
 ## History
+
+### 2026-08-30 (merged relation execution and AutoMapper checkpoint)
+
+- Base commit: `0396414` (`Merge branch 'codex/relation-evidence-validation-indexing'`)
+- Branch used to record results: `codex/relation-automapper-benchmark-refresh`
+- Worktree during measurement: clean
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short --filter "*RelationDtoWarmBenchmarks*"
+
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short --filter "*RelationDtoEndToEndBenchmarks*"
+```
+
+Representative 1,024-row warm materialization results:
+
+| Scenario | Mapper/input | Mean | vs handwritten | vs AutoMapper | Allocated |
+|---|---|---:|---:|---:|---:|
+| Simple | Handwritten canonical rows | 19.250 μs | 1.00× | 0.80× | 57,368 B |
+| Simple | AutoMapper canonical rows | 23.998 μs | 1.25× | 1.00× | 57,368 B |
+| Simple | Cohesive compiled kernel | 26.243 μs | 1.36× | 1.09× | 57,368 B |
+| Simple | Cohesive full canonical | 30.257 μs | 1.57× | 1.26× | 65,898 B |
+| Simple | Shared core indexed occurrence | 31.231 μs | 1.62× | 1.30× | 57,368 B |
+| Joined | Handwritten canonical rows | 65.754 μs | 1.00× | 0.82× | 106,520 B |
+| Joined | Shared core indexed occurrence | 75.348 μs | 1.15× | 0.94× | 106,520 B |
+| Joined | AutoMapper canonical rows | 80.159 μs | 1.22× | 1.00× | 106,520 B |
+| Joined | Cohesive compiled kernel | 98.060 μs | 1.49× | 1.22× | 106,520 B |
+| Joined | Cohesive full canonical | 100.383 μs | 1.53× | 1.25× | 115,051 B |
+
+The same-input comparison is handwritten, AutoMapper, and the Cohesive kernel over prebuilt canonical
+`RelationQueryOutputRow` values. The full canonical mapper additionally returns typed provenance and result
+bookkeeping. The shared-core indexed path begins from prebuilt `IndexedObservationOccurrence` values, so its 6.0%
+joined advantage over AutoMapper demonstrates the ordinal representation's potential rather than an interchangeable
+AutoMapper replacement.
+
+Relative to the prior 1,024-row ShortRun, the simple kernel-to-AutoMapper ratio narrowed from 1.21× to 1.09× and the
+joined ratio narrowed from 1.29× to 1.22×. Absolute means also fell for handwritten and AutoMapper paths, so these
+three-iteration measurements are descriptive evidence, not an attribution of every change to Cohesive code or a
+regression threshold. Allocation stayed at the same destination-object floor.
+
+Canonical interpretation plus typed materialization:
+
+| Scenario | Rows | Handwritten | Shared core observation | Compiled canonical | Compiled/handwritten |
+|---|---:|---:|---:|---:|---:|
+| Simple | 1 | 6.300 μs | 6.179 μs | 6.057 μs | 0.96× |
+| Simple | 32 | 82.974 μs | 90.601 μs | 83.622 μs | 1.01× |
+| Simple | 1,024 | 3.767 ms | 3.912 ms | 3.850 ms | 1.02× |
+| Joined | 1 | 17.428 μs | 17.970 μs | 17.333 μs | 0.99× |
+| Joined | 32 | 304.663 μs | 318.340 μs | 311.676 μs | 1.02× |
+| Joined | 1,024 | 14.334 ms | 13.814 ms | 14.249 ms | 0.99× |
+
+At 1,024 rows, the compiled canonical path allocated 6,520,809 B for simple output and 19,823,524 B for joined
+output, only 8,779 B and 8,863 B above the corresponding handwritten paths. Its warm mapping portion was 0.79% of
+the simple end-to-end mean and 0.70% of the joined mean. Applying the observed warm AutoMapper difference as a
+hypothetical substitution would change total time by only about 0.16% and 0.14%, respectively. AutoMapper is not
+included as an end-to-end method because it does not interpret relations or provide requirement-gap, completeness,
+diagnostic, and provenance behavior.
+
+ShortRun used three iterations. Process-priority elevation was unavailable, but BenchmarkDotNet reported no critical
+validation errors. Use a longer run before turning any of these ratios into a regression gate.
 
 ### 2026-08-30 (relation evidence validation and indexing)
 
