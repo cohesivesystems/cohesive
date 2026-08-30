@@ -73,15 +73,15 @@ public static class RelationRequirementGapAnalyzer
         readonly CompiledRelationQueryPlan plan;
         readonly RelationQueryRuntimeEvidence evidence;
         readonly IRelationRequirementGapPolicy policy;
-        readonly Dictionary<RelationQueryInputId, RelationQueryRequirementInput> inputs;
-        readonly Dictionary<RelationQueryInputId, RelationQueryDependencyEntry> dependencies;
-        readonly Dictionary<RelationQueryInputId, RelationQuerySourceInputContract> sourceContracts;
-        readonly Dictionary<RelationQueryInputId, RelationQueryTraversalInputContract> traversalContracts;
-        readonly Dictionary<RelationQueryInputId, RelationQueryFieldInputContract> fieldContracts;
-        readonly Dictionary<RelationQueryInputId, RelationQueryIdentityInputContract> identityContracts;
-        readonly Dictionary<RelationQueryInputId, RelationQueryParameterInputContract> parameterContracts;
-        readonly Dictionary<RelationQueryInputId, RelationQueryCapabilityInputContract> capabilityContracts;
-        readonly Dictionary<QueryNodeId, RelationQueryCollectionExpansionInputContract> expansionContracts;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryRequirementInput> inputs;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryDependencyEntry> dependencies;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQuerySourceInputContract> sourceContracts;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryTraversalInputContract> traversalContracts;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryFieldInputContract> fieldContracts;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryIdentityInputContract> identityContracts;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryParameterInputContract> parameterContracts;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryCapabilityInputContract> capabilityContracts;
+        readonly IReadOnlyDictionary<QueryNodeId, RelationQueryCollectionExpansionInputContract> expansionContracts;
         readonly Dictionary<RelationQueryInputId, RelationQueryFieldInputContract> forwardReferenceFields = [];
         readonly Dictionary<RelationQueryInputId, RelationQueryCollectionExpansionInputContract> forwardCollectionReferences = [];
         readonly Dictionary<RelationQueryInputId, RelationQueryIdentityInputContract> inverseAnchorIdentities = [];
@@ -110,17 +110,16 @@ public static class RelationRequirementGapAnalyzer
             this.plan = plan;
             this.evidence = evidence;
             this.policy = policy;
-            inputs = plan.RequirementGraph.Inputs.ToDictionary(static input => input.Id);
-            dependencies = plan.DependencyManifest.Entries.ToDictionary(static entry => entry.Input.Id);
-            sourceContracts = plan.InputContract.Sources.ToDictionary(static source => source.Input.Id);
-            traversalContracts = plan.InputContract.Traversals.ToDictionary(static traversal => traversal.Input.Id);
-            fieldContracts = plan.InputContract.Sources.SelectMany(static source => source.Fields)
-                .Concat(plan.InputContract.Traversals.SelectMany(static traversal => traversal.Fields))
-                .ToDictionary(static field => field.Input.Id);
-            identityContracts = plan.InputContract.Identities.ToDictionary(static identity => identity.Input.Id);
-            parameterContracts = plan.InputContract.Parameters.ToDictionary(static parameter => parameter.Input.Id);
-            capabilityContracts = plan.InputContract.Capabilities.ToDictionary(static capability => capability.Input.Id);
-            expansionContracts = plan.InputContract.Expansions.ToDictionary(static expansion => expansion.Expansion);
+            var planIndex = RelationQueryCompiledPlanIndex.For(plan);
+            inputs = planIndex.Inputs;
+            dependencies = planIndex.Dependencies;
+            sourceContracts = planIndex.SourceContracts;
+            traversalContracts = planIndex.TraversalContracts;
+            fieldContracts = planIndex.FieldContracts;
+            identityContracts = planIndex.IdentityContracts;
+            parameterContracts = planIndex.ParameterContracts;
+            capabilityContracts = planIndex.CapabilityContracts;
+            expansionContracts = planIndex.ExpansionContracts;
         }
 
         public RelationRequirementGapAnalysisResult Run()

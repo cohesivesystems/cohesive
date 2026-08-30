@@ -50,8 +50,59 @@
   6,845 KB. Runtime rows preserve canonical provenance incrementally, evidence validation avoids per-record grouping,
   expression evaluation uses validated indexes and stack contexts, and flat objects are built once instead of
   repeatedly rebuilt.
+- Weak-caching read-only lookup projections derived from an immutable compiled relation plan removes repeated fixed
+  setup without caching evidence or policy state. With one row, joined execution improves from 23.83 to 19.12 μs
+  and simple execution from 8.12 to 6.53 μs; both allocate about 17% less. The benefit is deliberately concentrated
+  in repeated execution of the same exact plan instance and becomes allocation-only noise at 1,024 rows.
 
 ## History
+
+### 2026-08-30 (relation compiled-plan lookup projections)
+
+- Base commit: `2d1112e`
+- Branch: `codex/relation-prepared-execution-metadata`
+- Worktree: dirty; includes the weak plan index, shared direct-field recognition, and focused invariant coverage
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*RelationQueryExecutionStageBenchmarks.AnalyzeRequirementsJoined(RowCount: 1)" \
+           "*RelationQueryExecutionStageBenchmarks.IndexEvidenceJoined(RowCount: 1)" \
+           "*RelationQueryExecutionStageBenchmarks.ExecuteJoined(RowCount: 1)" \
+           "*RelationQueryExecutionStageBenchmarks.AnalyzeRequirementsSimple(RowCount: 1)" \
+           "*RelationQueryExecutionStageBenchmarks.IndexEvidenceSimple(RowCount: 1)" \
+           "*RelationQueryExecutionStageBenchmarks.ExecuteSimple(RowCount: 1)"
+```
+
+| Scenario, 1 row | Previous mean | Current mean | Time reduction | Previous allocation | Current allocation | Allocation reduction |
+|---|---:|---:|---:|---:|---:|---:|
+| Analyze requirements, joined | 7.792 μs | 6.068 μs | 22.1% | 18,145 B | 14,344 B | 20.9% |
+| Index evidence, joined | 2.024 μs | 793.2 ns | 60.8% | 6,128 B | 2,904 B | 52.6% |
+| Execute joined | 23.832 μs | 19.116 μs | 19.8% | 63,897 B | 52,926 B | 17.2% |
+| Analyze requirements, simple | 2.311 μs | 1.734 μs | 25.0% | 9,472 B | 7,384 B | 22.0% |
+| Index evidence, simple | 727.7 ns | 298.1 ns | 59.0% | 3,296 B | 1,600 B | 51.5% |
+| Execute simple | 8.122 μs | 6.526 μs | 19.6% | 31,600 B | 26,151 B | 17.2% |
+
+This is an exact-base A/B: the baseline ran from a detached worktree at `2d1112e`, while the current run used the
+same benchmark and parameters with only this worktree's changes. Benchmark setup performs one execution before the
+timed stages, so these measurements intentionally represent warm reuse of one compiled-plan instance. The first
+consumer constructs the projections once; a conditional weak-table cache does not extend the plan's lifetime.
+
+The compiled plan remains the semantic authority. The shared index contains only deterministic lookup projections of
+its immutable inputs, contracts, and execution nodes. Evidence, duplicate quarantine, gaps, policy decisions, result
+rows, and the shape resolver's mutable expansion cache remain evaluation-owned. Direct-field recognition moved to
+`FieldPath`, eliminating three execution-local copies of that semantic test.
+
+A separate 1,024-row spot check saved only about 2–5 KB in each isolated setup stage and did not establish a
+throughput change; row processing dominates at that scale. The optimization is therefore justified by small and
+partial operations, where fixed setup is material, rather than by a claimed large-batch speedup. ShortRun used three
+iterations, process-priority elevation was unavailable, and BenchmarkDotNet reported no critical validation errors.
 
 ### 2026-08-30 (relation expression execution context)
 
