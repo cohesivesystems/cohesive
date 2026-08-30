@@ -46,11 +46,59 @@
   allocation/performance baselines. They are not CI thresholds; optimize them only from representative
   end-to-end profiles.
 - Stage-isolated profiling of 1,024-row relation execution reduced joined execution from 32.15 ms and
-  58,439 KB to 16.61 ms and 25,371 KB, and simple execution from 8.06 ms and 20,739 KB to 4.79 ms and
-  8,253 KB. Runtime rows preserve canonical provenance incrementally, evidence validation avoids per-record grouping,
-  expression evaluation uses validated indexes, and flat objects are built once instead of repeatedly rebuilt.
+  58,439 KB to 16.04 ms and 21,850 KB, and simple execution from 8.06 ms and 20,739 KB to 4.07 ms and
+  6,845 KB. Runtime rows preserve canonical provenance incrementally, evidence validation avoids per-record grouping,
+  expression evaluation uses validated indexes and stack contexts, and flat objects are built once instead of
+  repeatedly rebuilt.
 
 ## History
+
+### 2026-08-30 (relation expression execution context)
+
+- Base commit: `914d10f`
+- Branch: `codex/relation-expression-context-allocation`
+- Worktree: dirty; includes an execution-only stack context and direct runtime-availability bridge
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*RelationQueryExecutionStageBenchmarks.ExecuteJoined*1024*" \
+           "*RelationQueryExecutionStageBenchmarks.ExecuteSimple*1024*"
+```
+
+| Scenario, 1,024 rows | Previous mean | Current mean | Time reduction | Previous allocation | Current allocation | Allocation reduction |
+|---|---:|---:|---:|---:|---:|---:|
+| Execute joined | 16.613 ms | 16.037 ms | 3.5% | 25,370.78 KB | 21,850.49 KB | 13.9% |
+| Execute simple | 4.785 ms | 4.072 ms | 14.9% | 8,253.03 KB | 6,844.60 KB | 17.1% |
+
+A fresh pre-change EventPipe trace attributed 1.483 seconds of inclusive benchmark-run time to `TryEvaluate` and
+1.467 seconds to the evaluator itself. Context construction was therefore not a material exclusive CPU cost, but
+source inspection showed that every expression-site evaluation allocated one context, a row-capturing field
+availability closure, and two instance-method delegates. Those objects accounted for enough GC pressure to make the
+same expression path slower despite its small sampled construction time.
+
+The ordinary expression context still validates and snapshots caller-owned binding, parameter, and source-row stores.
+Canonical execution instead creates a readonly stack context over its already-validated runtime row and calls one
+execution-owned availability interface. This removes the context and delegate objects without moving field,
+parameter, or capability decisions out of the execution engine. Recursive evaluation passes the context by readonly
+reference, while collection-item scopes remain stack values.
+
+The post-change trace leaves plan/evidence setup as the clearest bounded follow-up: the execution-engine constructor
+accounted for 927 ms of inclusive benchmark-run time, including 526 ms in the evaluation-specific evidence index and
+about 397 ms in repeated dictionary construction. The next investigation should separate plan-static maps from
+evaluation-specific indexes and weak-cache only the former; runtime evidence, gaps, and policy state must remain
+evaluation-owned.
+
+Across all execution optimization iterations, joined execution is 50.1% faster and allocates 62.6% less than the
+original 32.15 ms / 58,439.48 KB baseline. Simple execution is 49.5% faster and allocates 67.0% less than its original
+8.06 ms / 20,738.81 KB baseline. These are ShortRun measurements with three iterations; process-priority elevation
+was unavailable, but BenchmarkDotNet reported no critical validation errors.
 
 ### 2026-08-30 (relation gap analysis and observed binding reconstruction)
 

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Collections.ObjectModel;
+using Cohesive.Model.Expressions;
 using Cohesive.Relations.Diagnostics;
 
 namespace Cohesive.Relations.Tests;
@@ -74,6 +75,34 @@ public sealed class RelationQueryRuntimeRowTests
     }
 
     [Fact]
+    public void CreateExecutionExpressionContext_RetainsRowAndUsesRuntimeAvailabilityOwner()
+    {
+        var occurrence = Occurrence("occurrence/execution", "value", "value-execution");
+        var row = RelationQueryRuntimeRow.FromBinding(
+            occurrence.Binding,
+            RelationQueryRuntimeBinding.FromObservation(occurrence, ObservationValue.FromString("one")));
+        IReadOnlyDictionary<string, ObservationValue> parameters =
+            new ReadOnlyDictionary<string, ObservationValue>(
+                new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
+                {
+                    ["parameter"] = ObservationValue.FromString("value")
+                });
+        var availability = new RecordingRuntimeAvailability(row);
+
+        var context = row.CreateExecutionExpressionContext(
+            occurrence.Binding,
+            parameters,
+            availability);
+
+        Assert.Same(row.ExpressionBindings, context.Bindings);
+        Assert.Same(parameters, context.Parameters);
+        Assert.True(context.IsFieldAvailable(occurrence.Binding, FieldPath.FromField("field")));
+        Assert.False(context.IsParameterAvailable("parameter"));
+        Assert.True(context.IsCapabilityAvailable(ExprCapabilities.Field));
+        Assert.Same(row, availability.LastRow);
+    }
+
+    [Fact]
     public void OutputRowFromPrevalidatedExecution_RetainsCanonicalStores()
     {
         var first = Occurrence("occurrence/a", "first", "first-a");
@@ -105,4 +134,24 @@ public sealed class RelationQueryRuntimeRowTests
             new(binding),
             LoadCustomerRelationFixture.LoadShapeId,
             observationIdentity);
+
+    sealed class RecordingRuntimeAvailability(RelationQueryRuntimeRow expectedRow)
+        : IRelationQueryExpressionRuntimeAvailability
+    {
+        public RelationQueryRuntimeRow? LastRow { get; private set; }
+
+        public bool IsFieldAvailable(
+            RelationQueryRuntimeRow row,
+            ValueBindingId binding,
+            FieldPath path)
+        {
+            Assert.Same(expectedRow, row);
+            LastRow = row;
+            return true;
+        }
+
+        public bool IsParameterAvailable(string parameter) => false;
+
+        public bool IsCapabilityAvailable(ExprCapabilityId capability) => true;
+    }
 }

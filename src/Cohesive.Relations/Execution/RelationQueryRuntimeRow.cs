@@ -420,6 +420,21 @@ sealed class RelationQueryRuntimeRow : IReadOnlyDictionary<ValueBindingId, Relat
             isParameterAvailable,
             isCapabilityAvailable);
 
+    /// <summary>Creates an allocation-free expression context for canonical in-memory execution.</summary>
+    /// <param name="implicitBinding">Optional binding used by unqualified field expressions.</param>
+    /// <param name="parameters">Execution-owned effective parameter values.</param>
+    /// <param name="availability">Execution engine that owns runtime availability decisions.</param>
+    /// <returns>A stack context over this row and the supplied execution-owned stores.</returns>
+    internal RelationQueryExpressionContext CreateExecutionExpressionContext(
+        ValueBindingId? implicitBinding,
+        IReadOnlyDictionary<string, ObservationValue> parameters,
+        IRelationQueryExpressionRuntimeAvailability availability) =>
+        RelationQueryExpressionContext.FromExecution(
+            this,
+            implicitBinding,
+            parameters,
+            availability);
+
     static ImmutableArray<RelationQueryObservationOccurrence> CreateProvenance(
         RelationQueryObservationOccurrence? occurrence,
         RelationQueryObservationOccurrence? root)
