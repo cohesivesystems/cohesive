@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Buffers.Binary;
-using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using Cohesive.Model;
@@ -10,8 +9,8 @@ namespace Cohesive.Simulation.Generation;
 
 static class GenerationCanonicalizer
 {
-    public const string FingerprintAlgorithm = "sha256";
-    public const string CanonicalizationProfile = "cohesive-generation/v1-c14n/v1";
+    public const string FingerprintAlgorithm = GenerationDefinitionFingerprint.CurrentAlgorithm;
+    public const string CanonicalizationProfile = GenerationDefinitionFingerprint.CurrentCanonicalization;
 
     public static string ComputeShapeFingerprint(
         ShapeId shapeId,
@@ -33,7 +32,9 @@ static class GenerationCanonicalizer
     {
         using HashWriter writer = new();
         writer.Append(CanonicalizationProfile);
-        writer.Append(definition.ShapeGraph.Id.Value);
+        writer.Append(StrictDocumentJson.GetCanonicalBytes(
+            ShapeGraphDocument.FromGraph(definition.ShapeGraph),
+            StrictDocumentJson.CreateOptions()));
         writer.Append(definition.Root.ShapeId.Value);
         foreach (var member in definition.Root.Members.OrderBy(
                      static member => member.Identity.Value,
@@ -51,24 +52,24 @@ static class GenerationCanonicalizer
         switch (generator)
         {
             case ConstantGenerationNode constant:
-                writer.Append("constant");
+                writer.Append(GenerationDefinitionWireNames.Constant);
                 AppendType(writer, constant.ValueType);
                 writer.Append(constant.Value);
                 return;
 
             case Int32GenerationNode integer:
-                writer.Append("int32");
+                writer.Append(GenerationDefinitionWireNames.Int32);
                 writer.Append(integer.Minimum);
                 writer.Append(integer.Maximum);
                 return;
 
             case BernoulliGenerationNode bernoulli:
-                writer.Append("bernoulli");
+                writer.Append(GenerationDefinitionWireNames.Bernoulli);
                 writer.Append(bernoulli.Probability);
                 return;
 
             case WeightedCategoricalGenerationNode categorical:
-                writer.Append("weighted-categorical");
+                writer.Append(GenerationDefinitionWireNames.WeightedCategorical);
                 AppendType(writer, categorical.ValueType);
                 writer.Append(categorical.Options.Length);
                 foreach (var option in categorical.Options)
@@ -192,8 +193,13 @@ static class GenerationCanonicalizer
         {
             ArrayBufferWriter<byte> buffer = new();
             CanonicalJsonWriter.WriteCanonicalObservationValue(buffer, value);
-            Append(buffer.WrittenSpan.Length);
-            hash.AppendData(buffer.WrittenSpan);
+            Append(buffer.WrittenSpan);
+        }
+
+        public void Append(ReadOnlySpan<byte> value)
+        {
+            Append(value.Length);
+            hash.AppendData(value);
         }
 
         public string Complete() => Convert.ToHexStringLower(hash.GetHashAndReset());
