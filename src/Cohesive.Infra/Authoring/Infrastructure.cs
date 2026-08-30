@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
+using Cohesive.Infra.Realization;
 
 namespace Cohesive.Infra;
 
@@ -25,6 +26,62 @@ public static class Infrastructure
         InfrastructureRevisionId revision,
         Action<InfrastructureDefinitionBuilder> configure)
     {
+        ValidateConfigure(configure);
+
+        InfrastructureDefinitionBuilder builder = new(id, revision);
+        configure(builder);
+        return InfrastructureDefinitionDocument.FromDefinition(builder.Build());
+    }
+
+    /// <summary>
+    /// Authors one canonical infrastructure definition and its exact binding-elaboration profile together.
+    /// </summary>
+    /// <param name="id">Stable identity shared by semantic revisions.</param>
+    /// <param name="revision">Stable identity of the authored semantic revision.</param>
+    /// <param name="bindingProfileId">Stable versioned identity of the coordinated binding-elaboration profile.</param>
+    /// <param name="configure">Synchronous callback that produces canonical IR data and is not retained.</param>
+    /// <returns>The immutable definition document and binding-elaboration profile produced by the session.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="configure"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// An identity or authored semantic value is invalid, or <paramref name="configure"/> is asynchronous.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The authored graph or a contract declaration is empty, incomplete, duplicated, unused, or inconsistent.
+    /// </exception>
+    /// <exception cref="System.Text.Json.JsonException">Canonical content cannot be serialized.</exception>
+    /// <exception cref="NotSupportedException">Canonical content contains an unsupported runtime type.</exception>
+    public static InfrastructureAuthoringResult Define(
+        InfrastructureDefinitionId id,
+        InfrastructureRevisionId revision,
+        InfrastructureBindingElaborationProfileId bindingProfileId,
+        Action<InfrastructureDefinitionBuilder> configure)
+    {
+        ValidateConfigure(configure);
+
+        InfrastructureDefinitionBuilder builder = new(id, revision, bindingProfileId);
+        configure(builder);
+        return builder.BuildResult();
+    }
+
+    /// <summary>Completes a binding with a contract declared by the same coordinated authoring session.</summary>
+    /// <param name="binding">Final binding stage awaiting its semantic contract.</param>
+    /// <param name="contract">Typed contract handle that also owns the single elaboration rule.</param>
+    /// <returns>The owning definition builder for continued authoring.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="binding"/> or <paramref name="contract"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="contract"/> belongs to another authoring session.</exception>
+    /// <exception cref="InvalidOperationException">The binding stage was already completed.</exception>
+    public static InfrastructureDefinitionBuilder As(
+        this InfrastructureBindingContractBuilder binding,
+        InfrastructureBindingContractHandle contract)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        return binding.AsContract(contract);
+    }
+
+    static void ValidateConfigure(Action<InfrastructureDefinitionBuilder> configure)
+    {
         ArgumentNullException.ThrowIfNull(configure);
         if (configure.GetInvocationList().Any(static callback =>
                 callback.Method.IsDefined(typeof(AsyncStateMachineAttribute), inherit: false)))
@@ -33,10 +90,6 @@ public static class Infrastructure
                 "Infrastructure authoring callbacks must complete synchronously and cannot be async.",
                 nameof(configure));
         }
-
-        InfrastructureDefinitionBuilder builder = new(id, revision);
-        configure(builder);
-        return InfrastructureDefinitionDocument.FromDefinition(builder.Build());
     }
 }
 
@@ -49,15 +102,19 @@ public sealed class InfrastructureDefinitionBuilder
 {
     readonly InfrastructureDefinitionId id;
     readonly InfrastructureRevisionId revision;
+    readonly InfrastructureBindingElaborationProfileId? bindingProfileId;
     readonly List<InfrastructureWorkloadBuilder> workloads = [];
     readonly List<InfrastructureResourceBuilder> resources = [];
     readonly List<InfrastructureBindingDraft> bindings = [];
+    readonly Dictionary<InfrastructureBindingContractId, InfrastructureBindingContractHandle> contracts = [];
+    readonly HashSet<InfrastructureBindingContractId> usedContracts = [];
     readonly HashSet<InfrastructureNodeId> nodeIds = [];
     readonly HashSet<InfrastructureBindingId> bindingIds = [];
 
     internal InfrastructureDefinitionBuilder(
         InfrastructureDefinitionId id,
-        InfrastructureRevisionId revision)
+        InfrastructureRevisionId revision,
+        InfrastructureBindingElaborationProfileId? bindingProfileId = null)
     {
         if (string.IsNullOrWhiteSpace(id.Value))
             throw new ArgumentException("Infrastructure authoring requires a definition identity.", nameof(id));
@@ -66,6 +123,13 @@ public sealed class InfrastructureDefinitionBuilder
 
         this.id = id;
         this.revision = revision;
+        if (bindingProfileId is { } profileId && string.IsNullOrWhiteSpace(profileId.Value))
+        {
+            throw new ArgumentException(
+                "Coordinated infrastructure authoring requires a binding-elaboration profile identity.",
+                nameof(bindingProfileId));
+        }
+        this.bindingProfileId = bindingProfileId;
     }
 
     /// <summary>Adds one executable workload node.</summary>
@@ -113,6 +177,68 @@ public sealed class InfrastructureDefinitionBuilder
         return Resource(id).WithLifecycle(lifecycle);
     }
 
+    /// <summary>Declares one binding contract and its single elaboration-rule authority.</summary>
+    /// <param name="contract">Exact provider-neutral binding contract identity.</param>
+    /// <param name="rule">Stable versioned identity of the rule that elaborates the contract.</param>
+    /// <returns>A typed contract handle used both to author the rule and to complete bindings.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// This definition was not opened for coordinated binding authoring, or the contract is already declared.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="contract"/> or <paramref name="rule"/> is default.</exception>
+    public InfrastructureBindingContractHandle Contract(
+        InfrastructureBindingContractId contract,
+        InfrastructureBindingElaborationRuleId rule)
+    {
+        if (bindingProfileId is null)
+        {
+            throw new InvalidOperationException(
+                "Binding contracts can be declared only by the Infrastructure.Define overload that supplies a binding profile identity.");
+        }
+        if (string.IsNullOrWhiteSpace(contract.Value))
+            throw new ArgumentException("Infrastructure contract authoring requires a contract identity.", nameof(contract));
+        if (string.IsNullOrWhiteSpace(rule.Value))
+            throw new ArgumentException("Infrastructure contract authoring requires an elaboration-rule identity.", nameof(rule));
+        if (contracts.ContainsKey(contract))
+            throw new InvalidOperationException($"Infrastructure binding contract '{contract.Value}' is already declared.");
+
+        InfrastructureBindingContractHandle handle = new(this, contract, rule);
+        contracts.Add(contract, handle);
+        return handle;
+    }
+
+    /// <summary>Begins a conventionally identified directed binding from a node.</summary>
+    /// <param name="source">Node that consumes or initiates the binding contract.</param>
+    /// <returns>The binding stage that requires a target node.</returns>
+    /// <exception cref="ArgumentException"><paramref name="source"/> is default.</exception>
+    public InfrastructureBindingTargetBuilder Bind(InfrastructureNodeId source) =>
+        BeginBinding(explicitId: null, source);
+
+    /// <summary>Begins a conventionally identified directed binding from a workload builder.</summary>
+    /// <param name="source">Workload that consumes or initiates the binding contract.</param>
+    /// <returns>The binding stage that requires a target node.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="source"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="source"/> belongs to another definition.</exception>
+    public InfrastructureBindingTargetBuilder Bind(InfrastructureWorkloadBuilder source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!ReferenceEquals(source.Owner, this))
+            throw new ArgumentException("The source workload belongs to another infrastructure definition.", nameof(source));
+        return Bind(source.Id);
+    }
+
+    /// <summary>Begins a conventionally identified directed binding from a resource builder.</summary>
+    /// <param name="source">Resource that consumes or initiates the binding contract.</param>
+    /// <returns>The binding stage that requires a target node.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="source"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="source"/> belongs to another definition.</exception>
+    public InfrastructureBindingTargetBuilder Bind(InfrastructureResourceBuilder source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!ReferenceEquals(source.Owner, this))
+            throw new ArgumentException("The source resource belongs to another infrastructure definition.", nameof(source));
+        return Bind(source.Id);
+    }
+
     /// <summary>Begins an explicitly identified directed binding from a node.</summary>
     /// <param name="id">Stable definition-local binding identity.</param>
     /// <param name="source">Node that consumes or initiates the binding contract.</param>
@@ -126,14 +252,9 @@ public sealed class InfrastructureDefinitionBuilder
     {
         if (string.IsNullOrWhiteSpace(id.Value))
             throw new ArgumentException("Infrastructure binding authoring requires a binding identity.", nameof(id));
-        if (string.IsNullOrWhiteSpace(source.Value))
-            throw new ArgumentException("Infrastructure binding authoring requires a source node.", nameof(source));
         if (!bindingIds.Add(id))
             throw new ArgumentException($"Infrastructure binding identity '{id.Value}' is already used.", nameof(id));
-
-        InfrastructureBindingDraft draft = new(id, source);
-        bindings.Add(draft);
-        return new(this, draft);
+        return BeginBinding(id, source);
     }
 
     /// <summary>Begins an explicitly identified directed binding from a workload builder.</summary>
@@ -182,7 +303,7 @@ public sealed class InfrastructureDefinitionBuilder
         if (incompleteBinding is not null)
         {
             throw new InvalidOperationException(
-                $"Infrastructure binding '{incompleteBinding.Id.Value}' must complete To(...).As(...). before Build().");
+                $"Infrastructure binding '{incompleteBinding.DisplayIdentity}' must complete To(...).As(...). before Build().");
         }
 
         return new(
@@ -193,13 +314,86 @@ public sealed class InfrastructureDefinitionBuilder
             [.. bindings.Select(static binding => binding.Definition!)]);
     }
 
+    internal InfrastructureAuthoringResult BuildResult()
+    {
+        var profileId = bindingProfileId
+            ?? throw new InvalidOperationException("This infrastructure authoring session does not own a binding profile.");
+        var definition = InfrastructureDefinitionDocument.FromDefinition(Build());
+
+        var undeclared = usedContracts
+            .Where(contract => !contracts.ContainsKey(contract))
+            .OrderBy(static contract => contract.Value, StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(undeclared.Value))
+        {
+            throw new InvalidOperationException(
+                $"Infrastructure binding contract '{undeclared.Value}' is used but has no coordinated elaboration declaration.");
+        }
+
+        var unused = contracts.Keys
+            .Where(contract => !usedContracts.Contains(contract))
+            .OrderBy(static contract => contract.Value, StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(unused.Value))
+        {
+            throw new InvalidOperationException(
+                $"Infrastructure binding contract '{unused.Value}' is declared but is not used by any binding.");
+        }
+
+        var rules = contracts.Values
+            .OrderBy(static contract => contract.Id.Value, StringComparer.Ordinal)
+            .Select(static contract => contract.BuildRule())
+            .ToImmutableArray();
+        InfrastructureBindingElaborationProfile profile = new(
+            InfrastructureBindingElaborationProfile.CurrentSchemaVersion,
+            profileId,
+            [InfrastructureDefinitionDocument.CurrentSchemaVersion],
+            rules);
+        return new(definition, profile);
+    }
+
     internal InfrastructureDefinitionBuilder CompleteBinding(
         InfrastructureBindingDraft draft,
         InfrastructureNodeId target,
         InfrastructureBindingContractId contract)
     {
-        draft.Complete(target, contract);
+        var definition = draft.Complete(target, contract);
+        if (!draft.HasExplicitId && !bindingIds.Add(definition.Id))
+        {
+            throw new InvalidOperationException(
+                $"Conventional infrastructure binding identity '{definition.Id.Value}' is already used; supply an explicit identity only when the bindings are semantically distinct.");
+        }
+        if (bindingProfileId is not null)
+            usedContracts.Add(contract);
         return this;
+    }
+
+    internal InfrastructureDefinitionBuilder CompleteBinding(
+        InfrastructureBindingDraft draft,
+        InfrastructureNodeId target,
+        InfrastructureBindingContractHandle contract)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        if (!ReferenceEquals(contract.Owner, this))
+        {
+            throw new ArgumentException(
+                "The binding contract belongs to another infrastructure authoring session.",
+                nameof(contract));
+        }
+
+        return CompleteBinding(draft, target, contract.Id);
+    }
+
+    InfrastructureBindingTargetBuilder BeginBinding(
+        InfrastructureBindingId? explicitId,
+        InfrastructureNodeId source)
+    {
+        if (string.IsNullOrWhiteSpace(source.Value))
+            throw new ArgumentException("Infrastructure binding authoring requires a source node.", nameof(source));
+
+        InfrastructureBindingDraft draft = new(explicitId, source);
+        bindings.Add(draft);
+        return new(this, draft);
     }
 
     void RegisterNode(InfrastructureNodeId node)
@@ -350,7 +544,7 @@ public sealed class InfrastructureResourceBuilder
     }
 }
 
-/// <summary>Fluent binding stage that selects the target of an explicitly identified source binding.</summary>
+/// <summary>Fluent binding stage that selects the target of a directed source binding.</summary>
 public sealed class InfrastructureBindingTargetBuilder
 {
     readonly InfrastructureDefinitionBuilder owner;
@@ -375,7 +569,7 @@ public sealed class InfrastructureBindingTargetBuilder
         if (string.IsNullOrWhiteSpace(target.Value))
             throw new ArgumentException("Infrastructure binding authoring requires a target node.", nameof(target));
         if (targetSelected)
-            throw new InvalidOperationException($"Infrastructure binding '{draft.Id.Value}' already selected a target.");
+            throw new InvalidOperationException($"Infrastructure binding '{draft.DisplayIdentity}' already selected a target.");
 
         targetSelected = true;
         return new(owner, draft, target);
@@ -436,10 +630,98 @@ public sealed class InfrastructureBindingContractBuilder
         if (string.IsNullOrWhiteSpace(contract.Value))
             throw new ArgumentException("Infrastructure binding authoring requires a contract identity.", nameof(contract));
         if (completed)
-            throw new InvalidOperationException($"Infrastructure binding '{draft.Id.Value}' is already complete.");
+            throw new InvalidOperationException($"Infrastructure binding '{draft.DisplayIdentity}' is already complete.");
 
         completed = true;
         return owner.CompleteBinding(draft, target, contract);
+    }
+
+    internal InfrastructureDefinitionBuilder AsContract(InfrastructureBindingContractHandle contract)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        if (completed)
+            throw new InvalidOperationException($"Infrastructure binding '{draft.DisplayIdentity}' is already complete.");
+
+        completed = true;
+        return owner.CompleteBinding(draft, target, contract);
+    }
+}
+
+/// <summary>
+/// Typed authoring handle that co-locates one binding contract with its single elaboration-rule authority.
+/// </summary>
+/// <remarks>
+/// The handle is a session-owned producer only. Bindings and the elaboration profile retain canonical identities,
+/// capabilities, and source references; no handle or callback survives in either materialized IR artifact.
+/// </remarks>
+public sealed class InfrastructureBindingContractHandle
+{
+    readonly InfrastructureBindingElaborationRuleId rule;
+    readonly HashSet<InfrastructureCapabilityId> capabilities = [];
+    readonly HashSet<string> sourceReferences = new(StringComparer.Ordinal);
+
+    internal InfrastructureBindingContractHandle(
+        InfrastructureDefinitionBuilder owner,
+        InfrastructureBindingContractId id,
+        InfrastructureBindingElaborationRuleId rule)
+    {
+        Owner = owner;
+        Id = id;
+        this.rule = rule;
+    }
+
+    internal InfrastructureDefinitionBuilder Owner { get; }
+
+    /// <summary>Exact provider-neutral contract authored by this handle.</summary>
+    public InfrastructureBindingContractId Id { get; }
+
+    /// <summary>Adds one capability or assurance obligation induced by this contract.</summary>
+    /// <param name="capability">Provider-neutral obligation induced for every binding carrying this contract.</param>
+    /// <returns>This contract handle.</returns>
+    /// <exception cref="ArgumentException"><paramref name="capability"/> is default or already declared.</exception>
+    public InfrastructureBindingContractHandle Requires(InfrastructureCapabilityId capability)
+    {
+        if (string.IsNullOrWhiteSpace(capability.Value))
+            throw new ArgumentException("A binding contract obligation requires a capability identity.", nameof(capability));
+        if (!capabilities.Add(capability))
+        {
+            throw new ArgumentException(
+                $"Infrastructure binding contract '{Id.Value}' already requires capability '{capability.Value}'.",
+                nameof(capability));
+        }
+        return this;
+    }
+
+    /// <summary>Adds one attributable producer or specification reference supporting the elaboration rule.</summary>
+    /// <param name="sourceReference">Stable non-empty source reference.</param>
+    /// <returns>This contract handle.</returns>
+    /// <exception cref="ArgumentException"><paramref name="sourceReference"/> is empty or already declared.</exception>
+    public InfrastructureBindingContractHandle SourcedFrom(string sourceReference)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceReference);
+        if (!sourceReferences.Add(sourceReference))
+        {
+            throw new ArgumentException(
+                $"Infrastructure binding contract '{Id.Value}' already cites source '{sourceReference}'.",
+                nameof(sourceReference));
+        }
+        return this;
+    }
+
+    internal InfrastructureBindingElaborationRule BuildRule()
+    {
+        if (capabilities.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Infrastructure binding contract '{Id.Value}' must declare at least one capability obligation.");
+        }
+        if (sourceReferences.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Infrastructure binding contract '{Id.Value}' must declare at least one source reference.");
+        }
+
+        return new(rule, Id, [.. capabilities], [.. sourceReferences]);
     }
 }
 
@@ -478,13 +760,17 @@ sealed class InfrastructureRequirementBuilder
 
 sealed class InfrastructureBindingDraft
 {
-    public InfrastructureBindingDraft(InfrastructureBindingId id, InfrastructureNodeId source)
+    readonly InfrastructureBindingId? explicitId;
+
+    public InfrastructureBindingDraft(InfrastructureBindingId? explicitId, InfrastructureNodeId source)
     {
-        Id = id;
+        this.explicitId = explicitId;
         Source = source;
     }
 
-    public InfrastructureBindingId Id { get; }
+    public bool HasExplicitId => explicitId is not null;
+
+    public string DisplayIdentity => explicitId?.Value ?? $"from {Source.Value}";
 
     public InfrastructureNodeId Source { get; }
 
@@ -492,12 +778,15 @@ sealed class InfrastructureBindingDraft
 
     public bool IsComplete => Definition is not null;
 
-    public void Complete(
+    public InfrastructureBindingDefinition Complete(
         InfrastructureNodeId target,
         InfrastructureBindingContractId contract)
     {
         if (Definition is not null)
-            throw new InvalidOperationException($"Infrastructure binding '{Id.Value}' is already complete.");
-        Definition = new(Id, Source, target, contract);
+            throw new InvalidOperationException($"Infrastructure binding '{DisplayIdentity}' is already complete.");
+
+        var id = explicitId ?? InfrastructureBindingDefinition.DeriveId(Source, target, contract);
+        Definition = new(id, Source, target, contract);
+        return Definition;
     }
 }

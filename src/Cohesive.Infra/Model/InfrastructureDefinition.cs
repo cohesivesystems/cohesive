@@ -239,6 +239,28 @@ public sealed record InfrastructureBindingDefinition
 
     /// <summary>Provider-neutral contract carried by the binding.</summary>
     public InfrastructureBindingContractId Contract { get; }
+
+    /// <summary>Derives the conventional stable identity for one exact directed contract binding.</summary>
+    /// <param name="source">Node that consumes or initiates the binding contract.</param>
+    /// <param name="target">Node that supplies or receives the binding contract.</param>
+    /// <param name="contract">Provider-neutral contract carried by the binding.</param>
+    /// <returns>An identity derived only from the exact source, target, and contract semantic slot.</returns>
+    /// <exception cref="ArgumentException">Any identity is a default uninitialized value.</exception>
+    public static InfrastructureBindingId DeriveId(
+        InfrastructureNodeId source,
+        InfrastructureNodeId target,
+        InfrastructureBindingContractId contract)
+    {
+        if (string.IsNullOrWhiteSpace(source.Value))
+            throw new ArgumentException("A conventional infrastructure binding requires a source node.", nameof(source));
+        if (string.IsNullOrWhiteSpace(target.Value))
+            throw new ArgumentException("A conventional infrastructure binding requires a target node.", nameof(target));
+        if (string.IsNullOrWhiteSpace(contract.Value))
+            throw new ArgumentException("A conventional infrastructure binding requires a contract identity.", nameof(contract));
+
+        return new(
+            $"bindings/{Uri.EscapeDataString(source.Value)}/to/{Uri.EscapeDataString(target.Value)}/as/{Uri.EscapeDataString(contract.Value)}");
+    }
 }
 
 /// <summary>Canonical provider-neutral desired infrastructure topology.</summary>
