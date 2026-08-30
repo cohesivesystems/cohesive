@@ -322,7 +322,7 @@ Use the next layer only when the application needs it:
 - [Capability reference](CAPABILITIES.md) records the generated target-profile inventory and demand-scoped
   realization decision kinds.
 - [Migration guide](MIGRATION.md) maps deleted legacy hydration, repository, join, and query APIs to canonical v1.
-- The package [README](../README.md#structural-c-authoring) introduces structural authoring for tools that need
+- The [DTO mapping internals](internals/DTO_MAPPING.md#structural-c-authoring) introduce structural authoring for tools that need
   direct node, binding, expression, or identity control.
 
 The expression author, structural builder, persisted document, compiled plan, and backend artifact are successive

@@ -60,7 +60,7 @@ The following rules are invariant:
 
 ### PostgreSQL source
 
-Follow the [PostgreSQL adapter guide](../src/adapters/Cohesive.Adapters.Postgres/README.md#logical-replication) and
+Follow the [PostgreSQL adapter internals](../src/adapters/Cohesive.Adapters.Postgres/INTERNALS.md#logical-replication) and
 verify all of the following:
 
 - The ordinary `NpgsqlDataSource` and logical-replication connection factory address the same single server,
@@ -80,7 +80,7 @@ verify all of the following:
 
 ### Cosmos DB source
 
-Follow the [Cosmos adapter guide](../src/adapters/Cohesive.Adapters.Cosmos/README.md#materialization-source) and
+Follow the [Cosmos adapter internals](../src/adapters/Cohesive.Adapters.Cosmos/INTERNALS.md#materialization-source) and
 pin the account, database, container, partition-key representation, document discriminator, storage-binding
 fingerprint, and runtime resource identity.
 
@@ -91,7 +91,7 @@ lease-store affinity. The monitored and lease containers must not be the same re
 ### Elasticsearch target
 
 Follow the
-[Elasticsearch adapter guide](../src/adapters/Cohesive.Adapters.Elastic/README.md#generation-materialization-target)
+[Elasticsearch adapter internals](../src/adapters/Cohesive.Adapters.Elastic/INTERNALS.md#generation-materialization-target)
 and verify:
 
 - `ElasticMaterializationTargetBinding` identifies the cluster, target, materialization, generation-index

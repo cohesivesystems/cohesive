@@ -9,6 +9,7 @@ using Cohesive.Processes.Authoring;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
+using Cohesive.Relations.Authoring;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
@@ -2615,7 +2616,6 @@ public sealed class ProcessComputationAuthoringTests
 }
 
 /// <summary>Representative generated Process used by canonical-equivalence tests.</summary>
-// <docs:sequential-process>
 [GenerateProcessDefinition(nameof(Run))]
 public static partial class CustomerQueryProcess
 {
@@ -2635,6 +2635,65 @@ public static partial class CustomerQueryProcess
         var queryInput = input;
         var row = await process.Query<string>(Relation, queryInput);
         return row;
+    }
+}
+
+/// <summary>Conventions-driven Relation catalog used by the package documentation.</summary>
+public static class CustomerRelations
+{
+    /// <summary>Typed customer lookup Relation used by the representative Process.</summary>
+    public static Relation<FindCustomerInput, CustomerResult> ByEmail { get; } = CreateByEmail();
+
+    static Relation<FindCustomerInput, CustomerResult> CreateByEmail()
+    {
+        var author = RelationQuery.Expression();
+        var inputs = author.Source<FindCustomerInput>();
+        var customers = author.Project(inputs, input => new CustomerResult
+        {
+            Id = input.Email,
+            Email = input.Email
+        });
+
+        return author.CreateRelation(
+            input: inputs,
+            result: customers,
+            key: customer => customer.Id,
+            revisionId: new("1"),
+            metadata: new(origin: DocumentOrigin.Generated, producer: "tests", producerVersion: "1"));
+    }
+}
+
+/// <summary>Input to the conventions-driven Process documentation example.</summary>
+public sealed class FindCustomerInput
+{
+    /// <summary>Email used to find the customer.</summary>
+    public required string Email { get; init; }
+}
+
+/// <summary>Customer result returned by the conventions-driven Process documentation example.</summary>
+public sealed class CustomerResult
+{
+    /// <summary>Stable customer identity.</summary>
+    public required string Id { get; init; }
+
+    /// <summary>Customer email.</summary>
+    public required string Email { get; init; }
+}
+
+/// <summary>Representative conventions-driven Process used by the package documentation.</summary>
+// <docs:sequential-process>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class FindCustomerProcess
+{
+    static async ProcessTask<CustomerResult> Run(
+        ProcessContext process,
+        FindCustomerInput input)
+    {
+        var customer = await process.Query(
+            CustomerRelations.ByEmail,
+            input);
+
+        return customer;
     }
 }
 // </docs:sequential-process>

@@ -1,6 +1,7 @@
 # Cohesive.Presentation
 
-Target-independent presentation IR for declaring navigation, workspaces, views, fields, actions, forms, flows, data sources, and design semantics.
+`Cohesive.Presentation` is a target-independent presentation language for backend-declared views, fields, actions,
+forms, navigation, data sources, flows, accessibility, and design semantics.
 
 ## Install
 
@@ -8,17 +9,12 @@ Target-independent presentation IR for declaring navigation, workspaces, views, 
 dotnet add package Cohesive.Presentation
 ```
 
-## Use When
+## Declare a data source
 
-- You want backend-declared UI semantics that can be projected into frontend runtimes.
-- You need a shared model for views, actions, forms, navigation, and data-source binding.
-- You want presentation identifiers, selectors, routes, and actions to come from a semantic source of truth.
-
-## Example
+Presentation identities are application-owned contracts used by generated frontend artifacts, routes, selectors,
+tests, and bindings. They are distinct from compiler-internal node IDs:
 
 ```csharp
-using Cohesive.Presentation;
-
 var shipments = new DataSourceDefinition(
     Id: "shipments",
     Name: "Shipments",
@@ -27,121 +23,39 @@ var shipments = new DataSourceDefinition(
     Parameters: [new("status", "string", IsRequired: false, Label: "Status")],
     DefaultSort: [new("pickupDate", Descending: false)],
     Cache: null,
-    Invalidation: new(DataSourceIds: ["shipments"], ActionIds: ["assign-carrier"], EntityIds: ["Load"]),
+    Invalidation: null,
     Residency: ResidencyHint.Server,
-    Binding: new(PresentationBindingKind.RelationQuery, Id: "queries.shipments"),
+    Binding: new(
+        PresentationBindingKind.RelationQuery,
+        Id: "queries.shipments"),
     Annotations: []);
-
-var assignCarrier = new ActionDefinition(
-    Id: "assign-carrier",
-    Name: "Assign carrier",
-    Kind: ActionKind.TransitionAction,
-    Scope: ActionScopeKind.Row,
-    Binding: new(PresentationBindingKind.Transition, TransitionId: "Load.AssignCarrier"),
-    Parameters: [new("loadId", "string", IsRequired: true)],
-    Preparation: null,
-    Enablement: [],
-    Execution: new(ActionExecutionMode.Immediate, IsLongRunning: false, RequiresConfirmation: false),
-    EndpointRequests: [],
-    Result: new(InvalidateDataSourceIds: ["shipments"], NavigateToRouteId: null, Toast: "Carrier assigned"),
-    Design: null,
-    Accessibility: null,
-    Annotations: []);
-
-var page = new ViewDefinition(
-    Id: "shipments-page",
-    Name: "Shipments",
-    Kind: ViewKind.Page,
-    Subject: new(ViewSubjectKind.DataSource, DataSourceId: "shipments"),
-    DataSourceIds: ["shipments"],
-    Regions: [],
-    FieldIds: ["load-id", "status", "carrier"],
-    Actions: [new("assign-carrier", Region: "toolbar", Label: "Assign carrier")],
-    Chrome: new(
-        Title: new(PresentationValueKind.Literal, Literal: "Shipments"),
-        Subtitle: null,
-        Collapsible: false,
-        CollapseStateId: null,
-        Slots: []),
-    State: [],
-    Synchronization: [],
-    InteractionStateId: null,
-    Accessibility: null,
-    Design: null,
-    Annotations: [],
-    Collection: new(
-        Chrome: new(
-        [
-            new CollectionChromeSlotDefinition(
-                Id: "grid",
-                Name: "Shipment grid",
-                Kind: CollectionChromeSlotKind.Body,
-                Placement: CollectionChromeSlotPlacement.Inline,
-                DataSourceIds: ["shipments"],
-                QueryFormId: null,
-                DetailViewId: null,
-                ActionIds: ["assign-carrier"],
-                RowActions:
-                [
-                    new(
-                        Id: "assign-carrier-row",
-                        ActionId: "assign-carrier",
-                        Kind: CollectionRowActionKind.Primary,
-                        Label: "Assign",
-                        Icon: "truck",
-                        Order: 0,
-                        Parameters:
-                        [
-                            new("loadId", ValuePath: "loadId", FieldId: "load-id", OmitWhenNull: true, Annotations: [])
-                        ],
-                        IsEnabled: null,
-                        IsVisible: null,
-                        Annotations: [])
-                ],
-                SelectionActions: [],
-                Columns:
-                [
-                    new("load", "load-id", ValuePath: "loadId", IsVisible: true, Order: 0, Width: "12rem", Annotations: []),
-                    new("status", "status", ValuePath: "status", IsVisible: true, Order: 1, Width: "10rem", Annotations: []),
-                    new("carrier", "carrier", ValuePath: "carrierName", IsVisible: true, Order: 2, Width: "16rem", Annotations: [])
-                ],
-                RowIdentityPath: "loadId",
-                RowLabelPath: "loadId",
-                SelectionMode: CollectionSelectionMode.Single,
-                ActivatedRowActionId: null,
-                ActivateOnRowClick: false,
-                SelectOnRowClick: true,
-                DetailActivation: null,
-                Title: null,
-                EmptyMessage: "No shipments",
-                ClearSelectionOnQueryChange: true,
-                FieldIds: ["load-id", "status", "carrier"],
-                StateId: null,
-                Value: null,
-                Annotations: [])
-        ],
-        Annotations: []),
-        Annotations: []));
-
-var module = PresentationModuleComposer.Compose(
-    id: "dispatch",
-    name: "Dispatch",
-    version: "1",
-    new PresentationModuleContribution
-    {
-        DataSources = [shipments],
-        Fields =
-        [
-            new("load-id", "loadId", "Load", null, FieldDisplayKind.Text, FieldEditKind.ReadOnly, null, null, null, ["sort"], null, null, []),
-            new("status", "status", "Status", null, FieldDisplayKind.Status, FieldEditKind.ReadOnly, null, null, null, ["filter"], null, null, []),
-            new("carrier", "carrierName", "Carrier", null, FieldDisplayKind.Text, FieldEditKind.ReadOnly, null, null, null, [], null, null, [])
-        ],
-        Actions = [assignCarrier],
-        Views = [page]
-    });
 ```
 
-## Related Packages
+The binding points to backend-owned Relation semantics. A frontend interpreter decides how to request, cache, render,
+and refresh the data without creating another independent query catalog.
 
-- `Cohesive.Api` for action endpoint declarations.
-- `Cohesive.Adapters.TypeScript` and the `@cohesivesystems/*` npm packages for frontend projection and rendering.
+## What this package describes
+
+- Applications, workspaces, routes, pages, regions, and nested views.
+- Fields, collections, forms, actions, navigation, metrics, and interaction state.
+- Relation/query data sources and Transition, Process, or API action bindings.
+- Visibility, enablement, synchronization, invalidation, and result behavior.
+- Accessibility semantics, stable automation selectors, and design annotations.
+- Deterministic module composition, validation, persistence, and frontend projection inputs.
+
+## Current boundary
+
+The canonical presentation module is the source of truth. React components, routes, TypeScript contracts, CSS,
+component-library choices, and runtime data clients are derived interpretations.
+
+The current package exposes the complete structural record surface. Application helpers and generators may provide a
+smaller conventions-driven authoring projection, but they must lower to the same module definition rather than create
+another UI model.
+
+## Continue
+
+- [Internals](INTERNALS.md) retains the complete collection page, action, field, data-source, and module composition
+  example.
+- [`Cohesive.Api`](../Cohesive.Api/README.md) provides semantic endpoint declarations.
+- [`Cohesive.Adapters.TypeScript`](../adapters/Cohesive.Adapters.TypeScript/README.md) emits frontend contracts.
+- [Frontend packages](../frontend/README.md) contain the React rendering and design-system interpretations.

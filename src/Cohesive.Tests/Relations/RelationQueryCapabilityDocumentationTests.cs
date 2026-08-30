@@ -43,14 +43,25 @@ public sealed class RelationQueryCapabilityDocumentationTests
         string[][] documentationFiles =
         [
             ["src", "Cohesive.Relations", "README.md"],
+            ["src", "Cohesive.Relations", "INTERNALS.md"],
             ["src", "Cohesive.Relations", "docs", "GETTING_STARTED.md"],
             ["src", "Cohesive.Relations", "docs", "EXECUTION_AND_ADAPTERS.md"],
             ["src", "Cohesive.Relations", "docs", "DIAGNOSTICS.md"],
             ["src", "Cohesive.Relations", "docs", "CAPABILITIES.md"],
             ["src", "Cohesive.Relations", "docs", "MIGRATION.md"],
+            ["src", "Cohesive.Relations", "docs", "internals", "SEMANTIC_MODEL.md"],
+            ["src", "Cohesive.Relations", "docs", "internals", "RELATIONS_AND_QUERIES.md"],
+            ["src", "Cohesive.Relations", "docs", "internals", "DTO_MAPPING.md"],
+            ["src", "Cohesive.Relations", "docs", "internals", "DIAGNOSTICS_AND_EXECUTION.md"],
+            ["src", "Cohesive.Relations", "docs", "internals", "INTERPRETATIONS_AND_USE_CASES.md"],
+            ["src", "Cohesive.Relations", "docs", "internals", "COMPILATION_AND_REALIZATION.md"],
+            ["src", "Cohesive.Relations", "docs", "internals", "PORTABILITY_AND_STATUS.md"],
             ["src", "adapters", "Cohesive.Adapters.Cosmos", "README.md"],
+            ["src", "adapters", "Cohesive.Adapters.Cosmos", "INTERNALS.md"],
             ["src", "adapters", "Cohesive.Adapters.Elastic", "README.md"],
-            ["src", "adapters", "Cohesive.Adapters.Postgres", "README.md"]
+            ["src", "adapters", "Cohesive.Adapters.Elastic", "INTERNALS.md"],
+            ["src", "adapters", "Cohesive.Adapters.Postgres", "README.md"],
+            ["src", "adapters", "Cohesive.Adapters.Postgres", "INTERNALS.md"]
         ];
 
         foreach (var segments in documentationFiles)
