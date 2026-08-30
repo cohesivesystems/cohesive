@@ -46,11 +46,57 @@
   allocation/performance baselines. They are not CI thresholds; optimize them only from representative
   end-to-end profiles.
 - Stage-isolated profiling of 1,024-row relation execution reduced joined execution from 32.15 ms and
-  58,439 KB to 19.98 ms and 31,707 KB, and simple execution from 8.06 ms and 20,739 KB to 5.48 ms and
-  10,209 KB. Runtime rows preserve canonical provenance incrementally, expression evaluation projects over the
-  authoritative binding store, and flat projections build one canonical object instead of repeatedly rebuilding it.
+  58,439 KB to 16.61 ms and 25,371 KB, and simple execution from 8.06 ms and 20,739 KB to 4.79 ms and
+  8,253 KB. Runtime rows preserve canonical provenance incrementally, evidence validation avoids per-record grouping,
+  expression evaluation uses validated indexes, and flat objects are built once instead of repeatedly rebuilt.
 
 ## History
+
+### 2026-08-30 (relation gap analysis and observed binding reconstruction)
+
+- Base commit: `188d22c`
+- Branch: `codex/relation-execution-allocation-investigation`
+- Worktree: dirty; includes canonical duplicate quarantine, occurrence-owner indexing, validated field lookup,
+  fused observed binding reconstruction, and focused invariant coverage
+- BenchmarkDotNet: 0.15.8
+- OS: macOS Tahoe 26.5.2 (25F84), Darwin 25.5.0
+- Hardware: Apple M5 Max, Arm64, 18 physical/logical cores
+- SDK/runtime: .NET SDK 10.0.201; .NET 10.0.5 Arm64 RyuJIT
+
+```bash
+dotnet run \
+  --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
+  -c Release --no-build -- \
+  --job Short \
+  --filter "*RelationQueryExecutionStageBenchmarks.AnalyzeRequirementsJoined*1024*" \
+           "*RelationQueryExecutionStageBenchmarks.AnalyzeRequirementsSimple*1024*" \
+           "*RelationQueryExecutionStageBenchmarks.ExecuteJoined*1024*" \
+           "*RelationQueryExecutionStageBenchmarks.ExecuteSimple*1024*"
+```
+
+| Scenario, 1,024 rows | Previous mean | Current mean | Time reduction | Previous allocation | Current allocation | Allocation reduction |
+|---|---:|---:|---:|---:|---:|---:|
+| Analyze requirements, joined | 7.167 ms | 5.099 ms | 28.9% | 6,413.12 KB | 4,318.67 KB | 32.7% |
+| Analyze requirements, simple | 1.244 ms | 1.075 ms | 13.6% | 1,178.68 KB | 631.55 KB | 46.4% |
+| Execute joined | 19.981 ms | 16.613 ms | 16.9% | 31,707.11 KB | 25,370.78 KB | 20.0% |
+| Execute simple | 5.476 ms | 4.785 ms | 12.6% | 10,208.58 KB | 8,253.03 KB | 19.2% |
+
+The profile attributed most requirement-analysis time to evidence validation. Duplicate quarantine previously built a
+LINQ lookup and a temporary candidate array for every evidence record. It now performs one hash pass, retains the
+canonical immutable array when evidence is unique, and allocates a filtered replacement only when an entire duplicate
+key group must be quarantined. Occurrences are indexed by binding and shape while they are validated, so field and
+identity analysis no longer rescan every occurrence for every contract.
+
+Execution now uses a narrow trusted field lookup only after the public evidence boundary and gap analyzer have
+validated the plan and occurrence identities. Direct gaps are read from the existing per-input index instead of
+filtering the complete gap array for each field access. Observed bindings prebind flat field names once per evidence
+index and build one immutable object; nested and collection paths retain the existing semantic reconstruction path.
+The validated index and compiled contracts remain the authorities for evidence state and field identity.
+
+Across all execution optimization iterations, joined execution is 48.3% faster and allocates 56.6% less than the
+original 32.15 ms / 58,439.48 KB baseline. Simple execution is 40.6% faster and allocates 60.2% less than its original
+8.06 ms / 20,738.81 KB baseline. These are ShortRun measurements with three iterations; process-priority elevation
+was unavailable, but BenchmarkDotNet reported no critical validation errors.
 
 ### 2026-08-30 (relation output construction and fused projection)
 

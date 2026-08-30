@@ -2083,7 +2083,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             if (MarkInputGaps(input.Id, occurrence.Id))
                 return false;
 
-            return evidence.ResolveField(input, occurrence).State is
+            return evidence.ResolveValidatedField(input.Id, occurrence.Id).State is
                 RelationQueryMaterializedValueState.Value
                 or RelationQueryMaterializedValueState.Null
                 or RelationQueryMaterializedValueState.Missing
@@ -2439,11 +2439,14 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             RelationQueryInputId input,
             RelationQueryOccurrenceId? occurrence)
         {
+            if (!directGapsByInput.TryGetValue(input, out var inputGaps))
+                return false;
+
             var found = false;
-            foreach (var gap in gapAnalysis.Gaps.Where(gap =>
-                         gap.Input.Id == input
-                         && gap.Occurrence?.Id == occurrence))
+            foreach (var gap in inputGaps)
             {
+                if (gap.Occurrence?.Id != occurrence)
+                    continue;
                 activeGaps.Add(gap.Id);
                 found = true;
             }

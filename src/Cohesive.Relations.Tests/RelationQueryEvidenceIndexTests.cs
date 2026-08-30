@@ -76,6 +76,12 @@ public sealed class RelationQueryEvidenceIndexTests
 
         var index = new RelationQueryEvidenceIndex(plan, evidence);
 
+        Assert.Equal(
+            index.ResolveField(loadIdInput, load),
+            index.ResolveValidatedField(loadIdInput.Id, load.Id));
+        Assert.Equal(
+            index.ResolveField(customerReferenceInput, load),
+            index.ResolveValidatedField(customerReferenceInput.Id, load.Id));
         Assert.True(index.TryCreateSourceRows(sourceInput, out var rows));
         var row = Assert.Single(rows);
         Assert.Equal(load, row.Root);
