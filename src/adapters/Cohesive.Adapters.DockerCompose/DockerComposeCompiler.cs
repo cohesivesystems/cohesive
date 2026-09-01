@@ -223,7 +223,7 @@ public static class DockerComposeCompiler
         CapabilityRealizationKind kind,
         string rationale,
         ImmutableArray<string> boundaries,
-        ImmutableArray<string> sourceReferences) => new(
+        ImmutableArray<SourceReference> sourceReferences) => new(
         target: DockerComposeArtifactManifest.CurrentTarget,
         concern: concern,
         kind: kind,

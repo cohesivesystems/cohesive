@@ -383,7 +383,7 @@ public sealed class InfrastructureCapabilityCompilerTests
         var boundary = new InfrastructureOperatingBoundary(
             boundaryId,
             "Scheduling durability is limited to the lifetime of the local development process.",
-            sourceReferences: ["ari/AspireHost"]);
+            sourceReferences: ["ari://AspireHost"]);
         var profile = Profile(
             "aspire-local",
             new InfrastructureCapabilityVariant(
@@ -395,7 +395,7 @@ public sealed class InfrastructureCapabilityCompilerTests
                         new(DurableScheduler),
                         CapabilityRealizationKind.Constrained,
                         operatingBoundaries: [boundaryId],
-                        sourceReferences: ["ari/AspireHost"])
+                        sourceReferences: ["ari://AspireHost"])
                 ],
                 operatingBoundaries: [boundary]));
 
@@ -421,7 +421,7 @@ public sealed class InfrastructureCapabilityCompilerTests
         Assert.Equal("constrained proof with unaccepted operating boundaries", evidence.Observed);
         Assert.Contains("capability-evidence/evidence%2Faspire-process-scheduler", evidence.RelatedLocations);
         Assert.Contains("operating-boundary/boundaries%2Fprocess-lifetime-only", evidence.RelatedLocations);
-        Assert.Contains("ari/AspireHost", evidence.SourceReferences);
+        Assert.Contains("ari://AspireHost", evidence.SourceReferences);
         Assert.Equal(3, evidence.ResolutionOptions.Length);
     }
 

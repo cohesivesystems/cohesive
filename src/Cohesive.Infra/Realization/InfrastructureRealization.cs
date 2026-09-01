@@ -12,7 +12,7 @@ public sealed record InfrastructureRealizationFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current realization fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-infra-realization/v1-c14n/v2";
+    public const string CurrentCanonicalization = "cohesive-infra-realization/v1-c14n/v3";
 
     /// <summary>Creates realization fingerprint metadata.</summary>
     /// <param name="algorithm">Stable digest algorithm identity.</param>

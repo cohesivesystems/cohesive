@@ -159,10 +159,10 @@ public sealed class AspireLocalCompilerTests
             item.Kind is CapabilityRealizationKind.Unavailable or CapabilityRealizationKind.Unknown);
         Assert.All(compose.Manifest.Decisions, decision => Assert.Contains(
             decision.SourceReferences,
-            reference => reference.Contains(source.Fingerprint.Value, StringComparison.Ordinal)));
+            reference => reference.Value.Contains(source.Fingerprint.Value, StringComparison.Ordinal)));
         Assert.All(aspire.Decisions, decision => Assert.Contains(
             decision.SourceReferences,
-            reference => reference.Contains(source.Fingerprint.Value, StringComparison.Ordinal)));
+            reference => reference.Value.Contains(source.Fingerprint.Value, StringComparison.Ordinal)));
         Assert.Contains(compose.Manifest.Decisions, static decision =>
             decision.Concern == "local/health/timing" && decision.Kind == CapabilityRealizationKind.Native);
         Assert.Contains(aspire.Decisions, static decision =>
@@ -191,7 +191,7 @@ public sealed class AspireLocalCompilerTests
                         strategy: AspireCommandHealthOverrideStrategy.TcpConnect,
                         endpoint: new("postgres"),
                         rationale: "Intentionally stale test override.",
-                        sourceReferences: ["test/stale"])
+                        sourceReferences: ["test://stale"])
                 ]));
 
         Assert.False(missing.IsSuccess);
@@ -366,13 +366,16 @@ public sealed class AspireLocalCompilerTests
                 strategy: AspireCommandHealthOverrideStrategy.TcpConnect,
                 endpoint: new("postgres"),
                 rationale: "Stable Aspire has no command health probe, so the test selects explicit TCP readiness.",
-                sourceReferences: ["ARI-467", "test/aspire-command-health"])
+                sourceReferences: ["linear://ARI-467", "test://aspire-command-health"])
         ]);
 
     static InfrastructureLocalRealizationDocument ProjectWorkloadSource()
     {
         InfrastructureNodeId workload = new("workload/ari-training-api");
         InfrastructurePhysicalResourceId physical = new("local/ari-training-api");
+        var project = new InfrastructureLocalProjectSource(
+            new("cohesive/infra-tests"),
+            new("src/Cohesive.Infra.Tests/Cohesive.Infra.Tests.csproj"));
         var definition = InfrastructureDefinitionDocument.FromDefinition(new(
             id: new("ari-training-project-application-test"),
             revision: new("v1"),
@@ -394,7 +397,7 @@ public sealed class AspireLocalCompilerTests
                     workload: workload,
                     physicalResource: physical,
                     interpreter: new("aspire"),
-                    sourceReferences: ["scenario-derived-from:ari:origin/main@0e790b8/src/Ari.Testing.AppHost/Program.cs"])
+                    sourceReferences: [project.Reference])
             ]);
         InfrastructureConfigurationSubject subject = new("environment/ari-training");
         InfrastructureSettingId projectName = new("project-name");
@@ -408,7 +411,7 @@ public sealed class AspireLocalCompilerTests
         var topology = InfrastructureLocal.Define(local => local.ProjectService(
             workload: workload,
             physicalResource: physical,
-            projectPath: "src/Cohesive.Infra.Tests/Cohesive.Infra.Tests.csproj"));
+            project: project));
         var configuration = new InfrastructureConventionProfile(
             id: new("ari-training/aspire-local/test/v1"),
             candidates:

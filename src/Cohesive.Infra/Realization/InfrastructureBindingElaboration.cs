@@ -33,7 +33,7 @@ public sealed record InfrastructureBindingElaborationProfileFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current profile fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-infra-binding-elaboration-profile/v1-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-infra-binding-elaboration-profile/v2-c14n/v1";
 
     /// <summary>Creates binding-elaboration profile fingerprint metadata.</summary>
     /// <param name="algorithm">Stable digest algorithm identity.</param>
@@ -118,12 +118,17 @@ public sealed record InfrastructureBindingElaborationRule
         InfrastructureBindingElaborationRuleId id,
         InfrastructureBindingContractId contract,
         ImmutableArray<InfrastructureCapabilityId> requiredCapabilities,
-        ImmutableArray<string> sourceReferences)
+        ImmutableArray<SourceReference> sourceReferences)
     {
         if (string.IsNullOrWhiteSpace(id.Value))
+        {
             throw new ArgumentException("A binding-elaboration rule requires a stable identity.", nameof(id));
+        }
+
         if (string.IsNullOrWhiteSpace(contract.Value))
+        {
             throw new ArgumentException("A binding-elaboration rule requires an exact contract identity.", nameof(contract));
+        }
 
         Id = id;
         Contract = contract;
@@ -132,7 +137,7 @@ public sealed record InfrastructureBindingElaborationRule
             static capability => capability.Value,
             nameof(requiredCapabilities),
             requireNonEmpty: true);
-        SourceReferences = InfrastructureCapabilityCollections.StringSet(
+        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
             sourceReferences,
             nameof(sourceReferences),
             requireNonEmpty: true);
@@ -148,7 +153,7 @@ public sealed record InfrastructureBindingElaborationRule
     public ImmutableArray<InfrastructureCapabilityId> RequiredCapabilities { get; }
 
     /// <summary>Attributable producer or specification references in ordinal order.</summary>
-    public ImmutableArray<string> SourceReferences { get; }
+    public ImmutableArray<SourceReference> SourceReferences { get; }
 
     /// <summary>Compares binding-elaboration rules structurally.</summary>
     /// <param name="other">Other rule.</param>
@@ -159,7 +164,7 @@ public sealed record InfrastructureBindingElaborationRule
         && Id == other.Id
         && Contract == other.Contract
         && RequiredCapabilities.SequenceEqual(other.RequiredCapabilities)
-        && SourceReferences.SequenceEqual(other.SourceReferences, StringComparer.Ordinal);
+        && SourceReferences.SequenceEqual(other.SourceReferences);
 
     /// <summary>Returns a structural hash code for this rule.</summary>
     /// <returns>A hash code derived from every field.</returns>
@@ -169,9 +174,15 @@ public sealed record InfrastructureBindingElaborationRule
         hash.Add(Id);
         hash.Add(Contract);
         foreach (var capability in RequiredCapabilities)
+        {
             hash.Add(capability);
+        }
+
         foreach (var source in SourceReferences)
-            hash.Add(source, StringComparer.Ordinal);
+        {
+            hash.Add(source);
+        }
+
         return hash.ToHashCode();
     }
 }
@@ -180,7 +191,7 @@ public sealed record InfrastructureBindingElaborationRule
 public sealed record InfrastructureBindingElaborationProfile
 {
     /// <summary>Current persisted binding-elaboration profile schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive.infra.bindings/1";
+    public const string CurrentSchemaVersion = "cohesive.infra.bindings/2";
 
     /// <summary>Explicit empty profile used by the compatibility compiler overload to preserve fail-closed behavior.</summary>
     public static InfrastructureBindingElaborationProfile Empty { get; } = new(
@@ -349,21 +360,29 @@ public sealed record InfrastructureBindingObligation
         InfrastructureBindingElaborationRuleId rule,
         InfrastructureCapabilityRequirement requirement,
         string location,
-        ImmutableArray<string> sourceReferences)
+        ImmutableArray<SourceReference> sourceReferences)
     {
         if (string.IsNullOrWhiteSpace(binding.Value))
+        {
             throw new ArgumentException("A binding obligation requires a source binding identity.", nameof(binding));
+        }
+
         if (string.IsNullOrWhiteSpace(contract.Value))
+        {
             throw new ArgumentException("A binding obligation requires an exact contract identity.", nameof(contract));
+        }
+
         if (string.IsNullOrWhiteSpace(rule.Value))
+        {
             throw new ArgumentException("A binding obligation requires an elaboration-rule authority.", nameof(rule));
+        }
 
         Binding = binding;
         Contract = contract;
         Rule = rule;
         Requirement = Guard.RequireNotNull(requirement);
         Location = Guard.RequireNotNullOrWhiteSpace(location);
-        SourceReferences = InfrastructureCapabilityCollections.StringSet(
+        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
             sourceReferences,
             nameof(sourceReferences),
             requireNonEmpty: true);
@@ -385,7 +404,7 @@ public sealed record InfrastructureBindingObligation
     public string Location { get; }
 
     /// <summary>Attributable rule or specification references in ordinal order.</summary>
-    public ImmutableArray<string> SourceReferences { get; }
+    public ImmutableArray<SourceReference> SourceReferences { get; }
 
     /// <summary>Derives the stable capability-requirement identity for one binding obligation.</summary>
     /// <param name="binding">Exact source binding.</param>
@@ -415,7 +434,7 @@ public sealed record InfrastructureBindingObligation
         && Rule == other.Rule
         && Requirement == other.Requirement
         && string.Equals(Location, other.Location, StringComparison.Ordinal)
-        && SourceReferences.SequenceEqual(other.SourceReferences, StringComparer.Ordinal);
+        && SourceReferences.SequenceEqual(other.SourceReferences);
 
     /// <summary>Returns a structural hash code for this obligation.</summary>
     /// <returns>A hash code derived from every field.</returns>
@@ -428,7 +447,10 @@ public sealed record InfrastructureBindingObligation
         hash.Add(Requirement);
         hash.Add(Location, StringComparer.Ordinal);
         foreach (var source in SourceReferences)
-            hash.Add(source, StringComparer.Ordinal);
+        {
+            hash.Add(source);
+        }
+
         return hash.ToHashCode();
     }
 }
@@ -575,7 +597,7 @@ public sealed record InfrastructureBindingElaborationFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current report fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-infra-binding-elaboration/v1-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-infra-binding-elaboration/v2-c14n/v1";
 
     /// <summary>Creates binding-elaboration fingerprint metadata.</summary>
     /// <param name="algorithm">Stable digest algorithm identity.</param>
@@ -917,7 +939,7 @@ public static class InfrastructureBindingElaborator
                         relatedLocations: [RuleLocation(rule.Id)],
                         sourceReferences:
                         [
-                            .. rule.SourceReferences
+                            .. rule.SourceReferences.Select(static reference => reference.Value)
                                 .Append(InfrastructureDiagnosticReferences.Definition(definition))
                                 .Append(InfrastructureDiagnosticReferences.BindingProfile(profile))
                                 .Distinct(StringComparer.Ordinal)
@@ -967,6 +989,7 @@ public static class InfrastructureBindingElaborator
             .ToImmutableArray();
         var sourceReferences = rules
             .SelectMany(static rule => rule.SourceReferences)
+            .Select(static reference => reference.Value)
             .Append(InfrastructureDiagnosticReferences.Definition(definition))
             .Append(InfrastructureDiagnosticReferences.BindingProfile(profile))
             .Distinct(StringComparer.Ordinal)

@@ -13,26 +13,26 @@
       }
     },
     "profile": {
-      "schemaVersion": "cohesive.infra.capabilities/1",
+      "schemaVersion": "cohesive.infra.capabilities/2",
       "id": "materialization-harness/local-containers/v1",
       "fingerprint": {
         "algorithm": "sha256",
-        "canonicalization": "cohesive-infra-capability-profile/v1-c14n/v1",
-        "value": "57c97601f4bb1ec81223d6bdeacc5348dc3e597c2fa4aaf9aa797b88fb5a443e"
+        "canonicalization": "cohesive-infra-capability-profile/v2-c14n/v1",
+        "value": "02a189d257ad9fd16a8dc5556b1219c89bc11e1301fdbf04d05eb1204c5d7f71"
       }
     },
     "target": "local-orchestration",
     "variant": "local-containers",
     "fingerprint": {
       "algorithm": "sha256",
-      "canonicalization": "cohesive-infra-realization/v1-c14n/v2",
-      "value": "4029ec93872daf71ebd9b517e5c7a68e9a2bac7ccdded25552e45755f5c9c65f"
+      "canonicalization": "cohesive-infra-realization/v1-c14n/v3",
+      "value": "02e0cd61d55fc2858ef44471945aa69a4287b81f1c05787e04f6287468bd7fab"
     }
   },
   "localRealization": {
     "algorithm": "sha256",
-    "canonicalization": "cohesive-infra-local-realization/v2-c14n/v1",
-    "value": "b12009dab93e4406b6960b96c0979fa83082b74b65fd10fa35605c52ad013ab4"
+    "canonicalization": "cohesive-infra-local-realization/v3-c14n/v1",
+    "value": "a859be5b0e97284e9cc55f6b16487220747b43da90bc74b03751009677ee132c"
   },
   "environment": "materialization-harness/interactive/v1",
   "lifecycleAuthority": "local/materialization-harness",
@@ -380,7 +380,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization:b12009dab93e4406b6960b96c0979fa83082b74b65fd10fa35605c52ad013ab4"
+        "local-realization:a859be5b0e97284e9cc55f6b16487220747b43da90bc74b03751009677ee132c"
       ]
     },
     {
@@ -391,7 +391,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization:b12009dab93e4406b6960b96c0979fa83082b74b65fd10fa35605c52ad013ab4"
+        "local-realization:a859be5b0e97284e9cc55f6b16487220747b43da90bc74b03751009677ee132c"
       ]
     },
     {
@@ -402,7 +402,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization:b12009dab93e4406b6960b96c0979fa83082b74b65fd10fa35605c52ad013ab4"
+        "local-realization:a859be5b0e97284e9cc55f6b16487220747b43da90bc74b03751009677ee132c"
       ]
     },
     {
@@ -413,7 +413,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization:b12009dab93e4406b6960b96c0979fa83082b74b65fd10fa35605c52ad013ab4"
+        "local-realization:a859be5b0e97284e9cc55f6b16487220747b43da90bc74b03751009677ee132c"
       ]
     },
     {
@@ -426,7 +426,7 @@
       ],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization:b12009dab93e4406b6960b96c0979fa83082b74b65fd10fa35605c52ad013ab4"
+        "local-realization:a859be5b0e97284e9cc55f6b16487220747b43da90bc74b03751009677ee132c"
       ]
     },
     {
@@ -437,7 +437,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization:b12009dab93e4406b6960b96c0979fa83082b74b65fd10fa35605c52ad013ab4"
+        "local-realization:a859be5b0e97284e9cc55f6b16487220747b43da90bc74b03751009677ee132c"
       ]
     },
     {
@@ -448,7 +448,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization:b12009dab93e4406b6960b96c0979fa83082b74b65fd10fa35605c52ad013ab4"
+        "local-realization:a859be5b0e97284e9cc55f6b16487220747b43da90bc74b03751009677ee132c"
       ]
     },
     {
@@ -459,7 +459,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization:b12009dab93e4406b6960b96c0979fa83082b74b65fd10fa35605c52ad013ab4"
+        "local-realization:a859be5b0e97284e9cc55f6b16487220747b43da90bc74b03751009677ee132c"
       ]
     },
     {
@@ -470,7 +470,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization:b12009dab93e4406b6960b96c0979fa83082b74b65fd10fa35605c52ad013ab4"
+        "local-realization:a859be5b0e97284e9cc55f6b16487220747b43da90bc74b03751009677ee132c"
       ]
     }
   ],

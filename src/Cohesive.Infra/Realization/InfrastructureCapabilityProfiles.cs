@@ -14,7 +14,7 @@ public sealed record InfrastructureCapabilityProfileFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current capability-profile fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-infra-capability-profile/v1-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-infra-capability-profile/v2-c14n/v1";
 
     /// <summary>Creates capability-profile fingerprint metadata.</summary>
     /// <param name="algorithm">Stable digest algorithm identity.</param>
@@ -88,14 +88,16 @@ public sealed record InfrastructureOperatingBoundary
     public InfrastructureOperatingBoundary(
         InfrastructureOperatingBoundaryId id,
         string assertion,
-        ImmutableArray<string> sourceReferences = default)
+        ImmutableArray<SourceReference> sourceReferences = default)
     {
         if (string.IsNullOrWhiteSpace(id.Value))
+        {
             throw new ArgumentException("An infrastructure operating boundary requires a stable identity.", nameof(id));
+        }
 
         Id = id;
         Assertion = Guard.RequireNotNullOrWhiteSpace(assertion);
-        SourceReferences = InfrastructureCapabilityCollections.StringSet(
+        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
             sourceReferences,
             nameof(sourceReferences));
     }
@@ -107,7 +109,7 @@ public sealed record InfrastructureOperatingBoundary
     public string Assertion { get; }
 
     /// <summary>Attributable evidence references in ordinal order.</summary>
-    public ImmutableArray<string> SourceReferences { get; }
+    public ImmutableArray<SourceReference> SourceReferences { get; }
 
     /// <summary>Compares operating boundaries structurally.</summary>
     /// <param name="other">Other boundary.</param>
@@ -117,7 +119,7 @@ public sealed record InfrastructureOperatingBoundary
         || other is not null
         && Id == other.Id
         && string.Equals(Assertion, other.Assertion, StringComparison.Ordinal)
-        && SourceReferences.SequenceEqual(other.SourceReferences, StringComparer.Ordinal);
+        && SourceReferences.SequenceEqual(other.SourceReferences);
 
     /// <summary>Returns a structural hash code for this boundary.</summary>
     /// <returns>A hash code derived from every field.</returns>
@@ -127,7 +129,10 @@ public sealed record InfrastructureOperatingBoundary
         hash.Add(Id);
         hash.Add(Assertion, StringComparer.Ordinal);
         foreach (var sourceReference in SourceReferences)
-            hash.Add(sourceReference, StringComparer.Ordinal);
+        {
+            hash.Add(sourceReference);
+        }
+
         return hash.ToHashCode();
     }
 }
@@ -160,12 +165,18 @@ public sealed record InfrastructureCapabilityEvidence
         ImmutableArray<InfrastructureCapabilityEvidenceId> auxiliaries = default,
         ImmutableArray<InfrastructureOperatingBoundaryId> operatingBoundaries = default,
         ImmutableArray<EffectiveConfigurationDecision> configuration = default,
-        ImmutableArray<string> sourceReferences = default)
+        ImmutableArray<SourceReference> sourceReferences = default)
     {
         if (string.IsNullOrWhiteSpace(id.Value))
+        {
             throw new ArgumentException("Infrastructure capability evidence requires a stable identity.", nameof(id));
+        }
+
         if (string.IsNullOrWhiteSpace(capability.Value))
+        {
             throw new ArgumentException("Infrastructure capability evidence requires a capability.", nameof(capability));
+        }
+
         if (!Enum.IsDefined(realization)
             || realization is CapabilityRealizationKind.Unavailable
                 or CapabilityRealizationKind.Unknown
@@ -189,7 +200,7 @@ public sealed record InfrastructureCapabilityEvidence
             static identity => identity.Value,
             nameof(operatingBoundaries));
         Configuration = InfrastructureCapabilityCollections.Configuration(configuration, nameof(configuration));
-        SourceReferences = InfrastructureCapabilityCollections.StringSet(
+        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
             sourceReferences,
             nameof(sourceReferences),
             requireNonEmpty: true);
@@ -235,7 +246,7 @@ public sealed record InfrastructureCapabilityEvidence
     public ImmutableArray<EffectiveConfigurationDecision> Configuration { get; }
 
     /// <summary>Attributable evidence references in ordinal order.</summary>
-    public ImmutableArray<string> SourceReferences { get; }
+    public ImmutableArray<SourceReference> SourceReferences { get; }
 
     /// <summary>Compares capability evidence structurally.</summary>
     /// <param name="other">Other evidence.</param>
@@ -249,7 +260,7 @@ public sealed record InfrastructureCapabilityEvidence
         && Auxiliaries.SequenceEqual(other.Auxiliaries)
         && OperatingBoundaries.SequenceEqual(other.OperatingBoundaries)
         && Configuration.SequenceEqual(other.Configuration)
-        && SourceReferences.SequenceEqual(other.SourceReferences, StringComparer.Ordinal);
+        && SourceReferences.SequenceEqual(other.SourceReferences);
 
     /// <summary>Returns a structural hash code for this evidence.</summary>
     /// <returns>A hash code derived from every field.</returns>
@@ -260,13 +271,25 @@ public sealed record InfrastructureCapabilityEvidence
         hash.Add(Capability);
         hash.Add(Realization);
         foreach (var auxiliary in Auxiliaries)
+        {
             hash.Add(auxiliary);
+        }
+
         foreach (var boundary in OperatingBoundaries)
+        {
             hash.Add(boundary);
+        }
+
         foreach (var decision in Configuration)
+        {
             hash.Add(decision);
+        }
+
         foreach (var sourceReference in SourceReferences)
-            hash.Add(sourceReference, StringComparer.Ordinal);
+        {
+            hash.Add(sourceReference);
+        }
+
         return hash.ToHashCode();
     }
 }
@@ -289,12 +312,17 @@ public sealed record InfrastructureCapabilityRule
         ImmutableArray<InfrastructureCapabilityId> requiredCapabilities,
         ImmutableArray<InfrastructureCapabilityId> preservedGuarantees = default,
         ImmutableArray<InfrastructureOperatingBoundaryId> operatingBoundaries = default,
-        ImmutableArray<string> sourceReferences = default)
+        ImmutableArray<SourceReference> sourceReferences = default)
     {
         if (string.IsNullOrWhiteSpace(id.Value))
+        {
             throw new ArgumentException("An infrastructure capability rule requires a stable identity.", nameof(id));
+        }
+
         if (string.IsNullOrWhiteSpace(providedCapability.Value))
+        {
             throw new ArgumentException("An infrastructure capability rule requires a provided capability.", nameof(providedCapability));
+        }
 
         Id = id;
         ProvidedCapability = providedCapability;
@@ -311,10 +339,12 @@ public sealed record InfrastructureCapabilityRule
             operatingBoundaries,
             static identity => identity.Value,
             nameof(operatingBoundaries));
-        SourceReferences = InfrastructureCapabilityCollections.StringSet(sourceReferences, nameof(sourceReferences));
+        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(sourceReferences, nameof(sourceReferences));
 
         if (RequiredCapabilities.Contains(providedCapability))
+        {
             throw new ArgumentException("A capability rule cannot directly require the capability it provides.", nameof(requiredCapabilities));
+        }
     }
 
     /// <summary>Stable versioned rule identity.</summary>
@@ -333,7 +363,7 @@ public sealed record InfrastructureCapabilityRule
     public ImmutableArray<InfrastructureOperatingBoundaryId> OperatingBoundaries { get; }
 
     /// <summary>Attributable source references in ordinal order.</summary>
-    public ImmutableArray<string> SourceReferences { get; }
+    public ImmutableArray<SourceReference> SourceReferences { get; }
 
     /// <summary>Compares capability rules structurally.</summary>
     /// <param name="other">Other rule.</param>
@@ -346,7 +376,7 @@ public sealed record InfrastructureCapabilityRule
         && RequiredCapabilities.SequenceEqual(other.RequiredCapabilities)
         && PreservedGuarantees.SequenceEqual(other.PreservedGuarantees)
         && OperatingBoundaries.SequenceEqual(other.OperatingBoundaries)
-        && SourceReferences.SequenceEqual(other.SourceReferences, StringComparer.Ordinal);
+        && SourceReferences.SequenceEqual(other.SourceReferences);
 
     /// <summary>Returns a structural hash code for this rule.</summary>
     /// <returns>A hash code derived from every field.</returns>
@@ -356,13 +386,25 @@ public sealed record InfrastructureCapabilityRule
         hash.Add(Id);
         hash.Add(ProvidedCapability);
         foreach (var capability in RequiredCapabilities)
+        {
             hash.Add(capability);
+        }
+
         foreach (var guarantee in PreservedGuarantees)
+        {
             hash.Add(guarantee);
+        }
+
         foreach (var boundary in OperatingBoundaries)
+        {
             hash.Add(boundary);
+        }
+
         foreach (var sourceReference in SourceReferences)
-            hash.Add(sourceReference, StringComparer.Ordinal);
+        {
+            hash.Add(sourceReference);
+        }
+
         return hash.ToHashCode();
     }
 }
@@ -508,7 +550,7 @@ public sealed record InfrastructureCapabilityVariant
 public sealed record InfrastructureCapabilityProfile
 {
     /// <summary>Current persisted capability-profile schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive.infra.capabilities/1";
+    public const string CurrentSchemaVersion = "cohesive.infra.capabilities/2";
 
     /// <summary>Creates an infrastructure capability profile.</summary>
     /// <param name="schemaVersion">Exact persisted capability-profile schema version.</param>
@@ -722,7 +764,43 @@ static class InfrastructureCapabilityCollections
         for (var index = 1; index < ordered.Length; index++)
         {
             if (string.Equals(ordered[index - 1], ordered[index], StringComparison.Ordinal))
+            {
                 throw new ArgumentException($"Infrastructure value '{ordered[index]}' is duplicated.", paramName);
+            }
+        }
+        return ordered;
+    }
+
+    internal static ImmutableArray<SourceReference> ReferenceSet(
+        ImmutableArray<SourceReference> values,
+        string paramName,
+        bool requireNonEmpty = false)
+    {
+        if (values.IsDefaultOrEmpty)
+        {
+            if (requireNonEmpty)
+            {
+                throw new ArgumentException("The infrastructure source-reference collection cannot be empty.", paramName);
+            }
+
+            return [];
+        }
+
+        foreach (var value in values)
+        {
+            if (string.IsNullOrWhiteSpace(value.Value))
+            {
+                throw new ArgumentException("Infrastructure source references cannot be default or empty.", paramName);
+            }
+        }
+
+        var ordered = values.Sort();
+        for (var index = 1; index < ordered.Length; index++)
+        {
+            if (ordered[index - 1] == ordered[index])
+            {
+                throw new ArgumentException($"Infrastructure source reference '{ordered[index].Value}' is duplicated.", paramName);
+            }
         }
         return ordered;
     }

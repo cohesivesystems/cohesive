@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Infra.Configuration;
 using Cohesive.Infra.Realization;
+using Cohesive.Model;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Infra.Local;
@@ -632,36 +633,48 @@ public sealed record InfrastructureLocalContainerSource : InfrastructureLocalSer
 public sealed record InfrastructureLocalProjectSource : InfrastructureLocalServiceSource
 {
     /// <summary>Creates a repository-project construction source.</summary>
-    /// <param name="projectPath">Repository-relative project path.</param>
+    /// <param name="id">Stable project identity used by placements, topology, and diagnostics.</param>
+    /// <param name="projectPath">Validated repository-relative project path.</param>
     /// <param name="launchProfile">Optional project launch-profile name.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="projectPath"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// <paramref name="projectPath"/> is empty or white-space, is absolute, escapes the repository, or does not name a project file;
-    /// or <paramref name="launchProfile"/> is empty or white-space.
+    /// <paramref name="id"/> is default, <paramref name="projectPath"/> does not name a project file, or
+    /// <paramref name="launchProfile"/> is empty or white-space.
     /// </exception>
     [JsonConstructor]
-    public InfrastructureLocalProjectSource(string projectPath, string? launchProfile = null)
+    public InfrastructureLocalProjectSource(
+        InfrastructureLocalProjectId id,
+        RepositoryPath projectPath,
+        string? launchProfile = null)
     {
-        ProjectPath = Guard.RequireNotNullOrWhiteSpace(projectPath).Replace('\\', '/');
-        var pathSegments = ProjectPath.Split('/');
-        var isWindowsAbsolute = ProjectPath.Length >= 3
-            && char.IsAsciiLetter(ProjectPath[0])
-            && ProjectPath[1] == ':'
-            && ProjectPath[2] == '/';
-        if (Path.IsPathRooted(ProjectPath)
-            || isWindowsAbsolute
-            || pathSegments.Any(static segment => segment.Length == 0 || segment is "." or "..")
-            || !ProjectPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(id.Value))
         {
-            throw new ArgumentException("A local project source must be a repository-relative .csproj path that does not escape the repository.", nameof(projectPath));
+            throw new ArgumentException("A local project source requires a stable project identity.", nameof(id));
+        }
+
+        if (string.IsNullOrWhiteSpace(projectPath.Value)
+            || !projectPath.Value.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("A local project source must name a repository-relative .csproj path.", nameof(projectPath));
         }
         if (launchProfile is not null && string.IsNullOrWhiteSpace(launchProfile))
+        {
             throw new ArgumentException("A local project launch profile cannot be empty or white-space.", nameof(launchProfile));
+        }
+
+        Id = id;
+        ProjectPath = projectPath;
         LaunchProfile = launchProfile;
     }
 
+    /// <summary>Stable project identity shared by every reference to this source.</summary>
+    public InfrastructureLocalProjectId Id { get; }
+
     /// <summary>Normalized repository-relative project path.</summary>
-    public string ProjectPath { get; }
+    public RepositoryPath ProjectPath { get; }
+
+    /// <summary>Canonical source reference for placements, witnesses, and diagnostics.</summary>
+    [JsonIgnore]
+    public SourceReference Reference => SourceReference.Create("project", Id.Value);
 
     /// <summary>Optional project launch-profile name.</summary>
     public string? LaunchProfile { get; }

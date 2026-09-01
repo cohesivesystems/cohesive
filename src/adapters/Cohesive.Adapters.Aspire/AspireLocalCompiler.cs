@@ -13,7 +13,7 @@ namespace Cohesive.Adapters.Aspire;
 public static class AspireLocalCompiler
 {
     const string Stage = "aspire-local-compilation";
-    const string TargetReference = "aspire/13.5.2";
+    const string TargetReference = "aspire://13.5.2";
 
     /// <summary>Stable adapter diagnostic codes.</summary>
     public static class DiagnosticCodes
@@ -566,7 +566,7 @@ public static class AspireLocalCompiler
         CapabilityRealizationKind kind,
         string rationale,
         ImmutableArray<string> boundaries,
-        ImmutableArray<string> sourceReferences) => new(
+        ImmutableArray<SourceReference> sourceReferences) => new(
         target: AspireLocalProjectionDocument.CurrentTarget,
         concern: concern,
         kind: kind,

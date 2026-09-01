@@ -99,21 +99,21 @@ public sealed class InfrastructureLocalBuilder
     /// <summary>Adds a repository-project-backed workload service.</summary>
     /// <param name="workload">Canonical logical workload.</param>
     /// <param name="physicalResource">Exact workload placement identity.</param>
-    /// <param name="projectPath">Repository-relative project path.</param>
-    /// <param name="launchProfile">Optional project launch-profile name.</param>
+    /// <param name="project">Single structured project source shared with workload placement.</param>
     /// <param name="configure">Optional service configuration.</param>
     /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="project"/> is <see langword="null"/>.</exception>
     public InfrastructureLocalBuilder ProjectService(
         InfrastructureNodeId workload,
         InfrastructurePhysicalResourceId physicalResource,
-        string projectPath,
-        string? launchProfile = null,
+        InfrastructureLocalProjectSource project,
         Action<InfrastructureLocalServiceBuilder>? configure = null)
     {
+        ArgumentNullException.ThrowIfNull(project);
         InfrastructureLocalServiceBuilder builder = new(
             node: workload,
             physicalResource: physicalResource,
-            source: new InfrastructureLocalProjectSource(projectPath, launchProfile));
+            source: project);
         configure?.Invoke(builder);
         services.Add(builder.Build());
         return this;

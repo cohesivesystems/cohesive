@@ -46,19 +46,27 @@ public sealed record InfrastructureWorkloadPlacement
         InfrastructureNodeId workload,
         InfrastructurePhysicalResourceId physicalResource,
         InfrastructureTargetId interpreter,
-        ImmutableArray<string> sourceReferences)
+        ImmutableArray<SourceReference> sourceReferences)
     {
         if (string.IsNullOrWhiteSpace(workload.Value))
+        {
             throw new ArgumentException("A workload placement requires a logical workload identity.", nameof(workload));
+        }
+
         if (string.IsNullOrWhiteSpace(physicalResource.Value))
+        {
             throw new ArgumentException("A workload placement requires a physical deployment identity.", nameof(physicalResource));
+        }
+
         if (string.IsNullOrWhiteSpace(interpreter.Value))
+        {
             throw new ArgumentException("A workload placement requires an interpreter identity.", nameof(interpreter));
+        }
 
         Workload = workload;
         PhysicalResource = physicalResource;
         Interpreter = interpreter;
-        SourceReferences = InfrastructureCapabilityCollections.StringSet(
+        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
             sourceReferences,
             nameof(sourceReferences),
             requireNonEmpty: true);
@@ -74,7 +82,7 @@ public sealed record InfrastructureWorkloadPlacement
     public InfrastructureTargetId Interpreter { get; }
 
     /// <summary>Attributable plan, artifact, provider, or import references in ordinal order.</summary>
-    public ImmutableArray<string> SourceReferences { get; }
+    public ImmutableArray<SourceReference> SourceReferences { get; }
 
     /// <summary>Compares workload placements structurally.</summary>
     /// <param name="other">Other placement.</param>
@@ -85,7 +93,7 @@ public sealed record InfrastructureWorkloadPlacement
         && Workload == other.Workload
         && PhysicalResource == other.PhysicalResource
         && Interpreter == other.Interpreter
-        && SourceReferences.SequenceEqual(other.SourceReferences, StringComparer.Ordinal);
+        && SourceReferences.SequenceEqual(other.SourceReferences);
 
     /// <summary>Returns a structural hash code for this placement.</summary>
     /// <returns>A hash code derived from every field.</returns>
@@ -96,7 +104,10 @@ public sealed record InfrastructureWorkloadPlacement
         hash.Add(PhysicalResource);
         hash.Add(Interpreter);
         foreach (var source in SourceReferences)
-            hash.Add(source, StringComparer.Ordinal);
+        {
+            hash.Add(source);
+        }
+
         return hash.ToHashCode();
     }
 }
@@ -115,12 +126,17 @@ public sealed record InfrastructureCapabilityEvidenceWitness
         InfrastructureRequirementId requirement,
         InfrastructureCapabilityEvidenceId evidence,
         ImmutableArray<InfrastructurePhysicalResourceId> physicalResources,
-        ImmutableArray<string> sourceReferences)
+        ImmutableArray<SourceReference> sourceReferences)
     {
         if (string.IsNullOrWhiteSpace(requirement.Value))
+        {
             throw new ArgumentException("A capability witness requires an exact requirement identity.", nameof(requirement));
+        }
+
         if (string.IsNullOrWhiteSpace(evidence.Value))
+        {
             throw new ArgumentException("A capability witness requires an evidence identity.", nameof(evidence));
+        }
 
         Requirement = requirement;
         Evidence = evidence;
@@ -129,7 +145,7 @@ public sealed record InfrastructureCapabilityEvidenceWitness
             static resource => resource.Value,
             nameof(physicalResources),
             requireNonEmpty: true);
-        SourceReferences = InfrastructureCapabilityCollections.StringSet(
+        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
             sourceReferences,
             nameof(sourceReferences),
             requireNonEmpty: true);
@@ -145,7 +161,7 @@ public sealed record InfrastructureCapabilityEvidenceWitness
     public ImmutableArray<InfrastructurePhysicalResourceId> PhysicalResources { get; }
 
     /// <summary>Attributable plan, artifact, provider, conformance, or import references in ordinal order.</summary>
-    public ImmutableArray<string> SourceReferences { get; }
+    public ImmutableArray<SourceReference> SourceReferences { get; }
 
     /// <summary>Compares evidence witnesses structurally.</summary>
     /// <param name="other">Other witness.</param>
@@ -156,7 +172,7 @@ public sealed record InfrastructureCapabilityEvidenceWitness
         && Requirement == other.Requirement
         && Evidence == other.Evidence
         && PhysicalResources.SequenceEqual(other.PhysicalResources)
-        && SourceReferences.SequenceEqual(other.SourceReferences, StringComparer.Ordinal);
+        && SourceReferences.SequenceEqual(other.SourceReferences);
 
     /// <summary>Returns a structural hash code for this witness.</summary>
     /// <returns>A hash code derived from every field.</returns>
@@ -166,9 +182,15 @@ public sealed record InfrastructureCapabilityEvidenceWitness
         hash.Add(Requirement);
         hash.Add(Evidence);
         foreach (var resource in PhysicalResources)
+        {
             hash.Add(resource);
+        }
+
         foreach (var source in SourceReferences)
-            hash.Add(source, StringComparer.Ordinal);
+        {
+            hash.Add(source);
+        }
+
         return hash.ToHashCode();
     }
 }
@@ -438,7 +460,9 @@ static class InfrastructureCapabilityWitnessEvaluator
                 Evidence: new(
                     stage: InfrastructureRealizationCompiler.Stage,
                     subject: placement.Workload.Value,
-                    sourceReferences: Merge(exactSources, placement.SourceReferences),
+                    sourceReferences: Merge(
+                        exactSources,
+                        placement.SourceReferences.Select(static reference => reference.Value).ToImmutableArray()),
                     resolutionOptions: ["Remove the placement or bind it to an exact declared workload."],
                     expected: "a workload in the exact infrastructure definition",
                     observed: "unknown or non-workload node")));
@@ -485,7 +509,9 @@ static class InfrastructureCapabilityWitnessEvaluator
                 Evidence: new(
                     stage: InfrastructureRealizationCompiler.Stage,
                     subject: witness.Requirement.Value,
-                    sourceReferences: Merge(exactSources, witness.SourceReferences),
+                    sourceReferences: Merge(
+                        exactSources,
+                        witness.SourceReferences.Select(static reference => reference.Value).ToImmutableArray()),
                     resolutionOptions: ["Remove the stale witness or regenerate it from the exact capability closure."],
                     expected: "a requirement in the exact capability closure",
                     observed: "unknown requirement")));
@@ -680,7 +706,9 @@ static class InfrastructureCapabilityWitnessEvaluator
                 ],
                 sourceReferences: Merge(
                     exactSources,
-                    witnesses.SelectMany(static witness => witness.SourceReferences).ToImmutableArray()),
+                    witnesses.SelectMany(static witness => witness.SourceReferences)
+                        .Select(static reference => reference.Value)
+                        .ToImmutableArray()),
                 resolutionOptions: resolutionOptions,
                 expected: expected,
                 observed: observed));

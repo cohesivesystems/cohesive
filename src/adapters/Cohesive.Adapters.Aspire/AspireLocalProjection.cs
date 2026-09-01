@@ -62,18 +62,42 @@ public sealed record AspireCommandHealthOverride
         AspireCommandHealthOverrideStrategy strategy,
         InfrastructureLocalEndpointId endpoint,
         string rationale,
-        ImmutableArray<string> sourceReferences)
+        ImmutableArray<SourceReference> sourceReferences)
     {
         if (string.IsNullOrWhiteSpace(physicalResource.Value))
+        {
             throw new ArgumentException("An Aspire health override requires a physical resource.", nameof(physicalResource));
+        }
+
         if (string.IsNullOrWhiteSpace(endpoint.Value))
+        {
             throw new ArgumentException("An Aspire health override requires an endpoint.", nameof(endpoint));
+        }
+
         if (!Enum.IsDefined(strategy))
+        {
             throw new ArgumentOutOfRangeException(nameof(strategy), strategy, "Unsupported Aspire command-health override strategy.");
+        }
+
         if (!arguments.IsDefaultOrEmpty && arguments.Any(static argument => argument is null))
+        {
             throw new ArgumentException("Aspire health override arguments cannot contain null.", nameof(arguments));
-        if (sourceReferences.IsDefaultOrEmpty || sourceReferences.Any(static reference => string.IsNullOrWhiteSpace(reference)))
+        }
+
+        if (sourceReferences.IsDefaultOrEmpty
+            || sourceReferences.Any(static reference => string.IsNullOrWhiteSpace(reference.Value)))
+        {
             throw new ArgumentException("An Aspire health override requires non-empty source references.", nameof(sourceReferences));
+        }
+
+        var normalizedSourceReferences = sourceReferences.Sort();
+        for (var index = 1; index < normalizedSourceReferences.Length; index++)
+        {
+            if (normalizedSourceReferences[index - 1] == normalizedSourceReferences[index])
+            {
+                throw new ArgumentException("Aspire health override source references cannot be duplicated.", nameof(sourceReferences));
+            }
+        }
 
         PhysicalResource = physicalResource;
         Executable = Guard.RequireNotNullOrWhiteSpace(executable);
@@ -81,7 +105,7 @@ public sealed record AspireCommandHealthOverride
         Strategy = strategy;
         Endpoint = endpoint;
         Rationale = Guard.RequireNotNullOrWhiteSpace(rationale);
-        SourceReferences = sourceReferences.Sort(StringComparer.Ordinal);
+        SourceReferences = normalizedSourceReferences;
     }
 
     /// <summary>Canonical service whose command probe is replaced.</summary>
@@ -103,7 +127,7 @@ public sealed record AspireCommandHealthOverride
     public string Rationale { get; }
 
     /// <summary>Attributable source or decision references.</summary>
-    public ImmutableArray<string> SourceReferences { get; }
+    public ImmutableArray<SourceReference> SourceReferences { get; }
 }
 
 /// <summary>Compiler policy for projecting a local realization into Aspire.</summary>
@@ -340,7 +364,7 @@ public sealed record AspireLocalProjectionFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Current projection canonicalization profile.</summary>
-    public const string CurrentCanonicalization = "cohesive-aspire-local-projection/json-jcs/v3";
+    public const string CurrentCanonicalization = "cohesive-aspire-local-projection/json-jcs/v4";
 
     /// <summary>Creates projection fingerprint metadata.</summary>
     /// <param name="algorithm">Digest algorithm.</param>
@@ -378,10 +402,10 @@ public sealed record AspireLocalProjectionDocument
     public const string CurrentTarget = "aspire/dcp-13.5.2";
 
     /// <summary>Current portable projection schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-aspire-local-projection/v3";
+    public const string CurrentSchemaVersion = "cohesive-aspire-local-projection/v4";
 
     /// <summary>Current deterministic compiler identity.</summary>
-    public const string CurrentCompiler = "cohesive.adapters.aspire/v3";
+    public const string CurrentCompiler = "cohesive.adapters.aspire/v4";
 
     /// <summary>Creates or restores an exact Aspire projection.</summary>
     /// <param name="schemaVersion">Exact projection schema.</param>
