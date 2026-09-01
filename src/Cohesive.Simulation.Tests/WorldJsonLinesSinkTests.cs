@@ -42,6 +42,7 @@ public sealed class WorldJsonLinesSinkTests
             Assert.Equal(first.RunId.Value, root.GetProperty("runId").GetString());
             Assert.Equal("-9223372036854775808", root.GetProperty("rootSeed").GetString());
             Assert.Equal("customers", root.GetProperty("populationId").GetString());
+            Assert.Equal(3, root.GetProperty("populationCount").GetInt32());
             Assert.Equal(index, root.GetProperty("sequenceIndex").GetInt64());
 
             var replay = GenerationReplayEvidence.ParseToken(root.GetProperty("replayToken").GetString()!);
