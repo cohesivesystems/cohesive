@@ -311,6 +311,13 @@ separates not found, in-progress, available, and terminal-without-artifact outco
 never claims completeness. The migration-only Core reader is unsupported because its provider history is not
 canonical trace evidence.
 
+Canonical Process values use a different, explicitly sensitive boundary. `IProcessExecutionValueRepository` accepts
+only trusted authority scope plus logical Process identity, derives one exact physical lookup, and returns the start
+receipt's typed `PortableValue` together with the terminal result's canonical outcome when available. Its explicit
+states preserve active execution and missing terminal-artifact evidence without consulting Scheduler history. The
+generic `IProcessExecutionRepository` remains payload-free; applications decide whether and how an authorized
+operator surface may materialize the opt-in values.
+
 Current monitoring retains the start receipt's exact definition reference and canonical logical Process identity
 directly on `ProcessExecutionRecord`, including the pending admission window before custom status exists. The
 physical task-hub identity remains a separate engine-administration key. `DurableTaskProcessExecutionExplainRepository`

@@ -80,6 +80,20 @@ IProcessExecutionRepository historicalRepository = new DurableTaskProcessExecuti
     taskHubName: "orders");
 ```
 
+Applications using dependency injection can register the current repository once and project its execution, value,
+trace, and explanation capabilities without maintaining parallel aliases:
+
+```csharp
+services.AddCohesiveDurableTaskProcessExecutionRepository(serviceProvider => new(
+        serviceProvider.GetRequiredService<DurableTaskClient>(),
+        taskHubName: "orders"))
+    .AddExecutionExplainRepository(_ => deployedPlanCatalog);
+```
+
+An application that needs a policy-bearing execution view can call `DecorateExecutionRepository<TRepository>`.
+The decorator changes only the application-facing `IProcessExecutionRepository`; the underlying Durable Task
+repository remains the sole canonical value and trace authority.
+
 The primary constructor queries the same standalone `DurableTaskClient` used to schedule canonical Process
 orchestrations. Exact lookup accepts the physical task-hub ID returned by `ScheduleCohesiveProcessAsync`; the
 `ProcessExecutionRecord.ProcessId` remains that authority-scoped physical identity. Its exact `Definition` is
@@ -121,6 +135,14 @@ The physical task-hub key never enters the artifact. `NotFound`, `InProgress`, `
 activation-evidence entries without a trace; only a zero missing-prefix count is complete. Trace artifacts are
 available after a canonical terminal result exists—this boundary does not stream live event traces or enlarge custom
 status.
+
+Applications that have established a trusted authority scope can opt in separately through
+`IProcessExecutionValueRepository`. That read returns the exact `PortableValue` from the retained start receipt and,
+when available, the canonical terminal outcome from `DurableTaskSequentialProcessResult`. It distinguishes active,
+available, and terminal-without-artifact states and validates the same physical/start/status/result affinity as safe
+monitoring. These potentially sensitive values never enter `ProcessExecutionRecord`; application policy owns any
+subsequent disclosure or product-specific operator projection. The migration-only Core reader does not implement
+this boundary.
 
 `DurableTaskProcessExecutionExplainRepository` composes that same current repository with the immutable exact plan
 catalog. It returns the shared `ExecutionExplainArtifact`, never a Scheduler-specific diagnostics DTO. Static

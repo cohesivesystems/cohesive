@@ -296,6 +296,7 @@ public enum TransitionTraceEventKind
 /// <summary>One event in deterministic semantic execution order.</summary>
 public sealed record TransitionTraceEvent
 {
+    [JsonConstructor]
     internal TransitionTraceEvent(
         int sequence,
         TransitionTraceEventKind kind,
