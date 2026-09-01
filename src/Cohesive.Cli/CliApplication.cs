@@ -68,7 +68,10 @@ public sealed class CliApplication(string? description = null)
         ArgumentNullException.ThrowIfNull(configure);
         GetPipeline(parameterPipelines, typeof(TConfiguration)).Add(configure);
         foreach (var command in commands)
+        {
             command.ApplyParameterConfiguration(typeof(TConfiguration), configure);
+        }
+
         return this;
     }
 
@@ -83,7 +86,10 @@ public sealed class CliApplication(string? description = null)
         ArgumentNullException.ThrowIfNull(middleware);
         GetPipeline(executionPipelines, typeof(TConfiguration)).Add(middleware);
         foreach (var command in commands)
+        {
             command.ApplyExecutionMiddleware(typeof(TConfiguration), middleware);
+        }
+
         return this;
     }
 
@@ -104,7 +110,10 @@ public sealed class CliApplication(string? description = null)
         ArgumentNullException.ThrowIfNull(validate);
         GetPipeline(validationPipelines, typeof(TConfiguration)).Add(validate);
         foreach (var command in commands)
+        {
             command.ApplyValidation(typeof(TConfiguration), validate);
+        }
+
         return this;
     }
 
@@ -131,9 +140,15 @@ public sealed class CliApplication(string? description = null)
         ApplyRegisteredPipelines(command);
         commands.Add(command);
         if (execute != null)
+        {
             command = command.OnExecute(execute);
+        }
+
         if (validate != null)
+        {
             command = command.Validate(validate);
+        }
+
         return command;
     }
 
@@ -153,7 +168,10 @@ public sealed class CliApplication(string? description = null)
     {
         ArgumentNullException.ThrowIfNull(args);
         if (args.Count == 0)
+        {
             return false;
+        }
+
         var candidate = args[0];
         return commands.Any(command => string.Equals(command.Name, candidate, StringComparison.OrdinalIgnoreCase));
     }
@@ -170,14 +188,25 @@ public sealed class CliApplication(string? description = null)
     /// <summary>
     /// Parses and executes the registered command tree using invocation-specific output channels.
     /// </summary>
+    /// <param name="args">Program arguments.</param>
+    /// <param name="options">Optional output and serialization settings for this invocation.</param>
+    /// <param name="ct">Cancellation token for parsing and command execution.</param>
+    /// <returns>The command exit code.</returns>
     public Task<int> InvokeAsync(IReadOnlyList<string> args, CliInvocationOptions? options, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(args);
         var rootCommand = BuildRootCommand(options);
         var parseResult = rootCommand.Parse(args);
         var invocationConfiguration = new InvocationConfiguration();
+        if (options?.StandardOutput is not null)
+        {
+            invocationConfiguration.Output = options.StandardOutput;
+        }
+
         if (options?.ErrorOutput is not null)
+        {
             invocationConfiguration.Error = options.ErrorOutput;
+        }
 
         return parseResult.InvokeAsync(invocationConfiguration, ct);
     }
@@ -221,7 +250,9 @@ public sealed class CliApplication(string? description = null)
         ArgumentNullException.ThrowIfNull(contextType);
         GetDynamicBindingPipeline(typeof(TConfiguration)).Add(new(contextType, createValidationServicesScope));
         foreach (var command in commands)
+        {
             command.ApplyDynamicBindingMetadata(typeof(TConfiguration), contextType, createValidationServicesScope);
+        }
     }
 
     void ApplyRegisteredPipelines(CliCommandNode command)
@@ -229,25 +260,33 @@ public sealed class CliApplication(string? description = null)
         foreach (var (configurationType, configureSteps) in parameterPipelines)
         {
             foreach (var step in configureSteps)
+            {
                 command.ApplyParameterConfiguration(configurationType, step);
+            }
         }
 
         foreach (var (configurationType, middlewareSteps) in executionPipelines)
         {
             foreach (var step in middlewareSteps)
+            {
                 command.ApplyExecutionMiddleware(configurationType, step);
+            }
         }
 
         foreach (var (configurationType, validationSteps) in validationPipelines)
         {
             foreach (var step in validationSteps)
+            {
                 command.ApplyValidation(configurationType, step);
+            }
         }
 
         foreach (var (configurationType, registrations) in dynamicBindingPipelines)
         {
             foreach (var registration in registrations)
+            {
                 command.ApplyDynamicBindingMetadata(configurationType, registration.ContextType, registration.CreateValidationServicesScope);
+            }
         }
     }
 
@@ -275,14 +314,19 @@ public sealed class CliApplication(string? description = null)
     static void EnsureUniqueChildName(IEnumerable<CliCommandNode> existing, string name)
     {
         if (existing.Any(command => string.Equals(command.Name, name, StringComparison.OrdinalIgnoreCase)))
+        {
             throw new InvalidOperationException($"A command named '{name}' is already registered at this level.");
+        }
     }
 
     RootCommand BuildRootCommand(CliInvocationOptions? options)
     {
         var root = string.IsNullOrWhiteSpace(Description) ? new RootCommand() : new RootCommand(Description);
         foreach (var command in commands)
+        {
             root.Subcommands.Add(command.BuildCommand(this, options));
+        }
+
         return root;
     }
 

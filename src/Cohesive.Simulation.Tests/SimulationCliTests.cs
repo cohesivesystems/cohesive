@@ -107,9 +107,9 @@ public sealed class SimulationCliTests
     }
 
     [Theory]
-    [InlineData("--seed", "not-a-number", "not a signed 64-bit integer")]
+    [InlineData("--seed", "not-a-number", "RootSeed")]
     [InlineData("--batch-size", "0", "not a positive 32-bit integer")]
-    public void Parser_RejectsInvalidNumericPolicy(string option, string value, string expectedError)
+    public async Task SharedCliBinding_RejectsInvalidNumericPolicy(string option, string value, string expectedError)
     {
         string[] arguments = option switch
         {
@@ -129,48 +129,37 @@ public sealed class SimulationCliTests
                 option, value
             ]
         };
-        var parsed = SimulationCliParser.TryParse(
-            arguments,
-            out var options,
-            out var error,
-            out var showHelp);
+        var result = await Run(arguments);
 
-        Assert.False(parsed);
-        Assert.False(showHelp);
-        Assert.Null(options);
-        Assert.Contains(expectedError, error, StringComparison.Ordinal);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.Output);
+        Assert.Contains(expectedError, result.Error, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Parser_RejectsDuplicateAndUnknownOptions()
+    public async Task SharedCliBinding_RejectsDuplicateAndUnknownOptions()
     {
-        var duplicate = SimulationCliParser.TryParse(
+        var duplicate = await Run(
             [
                 "provision",
                 "--world", "world.json",
                 "--world", "another.json",
                 "--seed", "42",
                 "--target", "scripts/demo"
-            ],
-            out _,
-            out var duplicateError,
-            out _);
-        var unknown = SimulationCliParser.TryParse(
+            ]);
+        var unknown = await Run(
             [
                 "provision",
                 "--world", "world.json",
                 "--seed", "42",
                 "--target", "scripts/demo",
                 "--mystery", "value"
-            ],
-            out _,
-            out var unknownError,
-            out _);
+            ]);
 
-        Assert.False(duplicate);
-        Assert.Contains("cannot be supplied more than once", duplicateError, StringComparison.Ordinal);
-        Assert.False(unknown);
-        Assert.Contains("Unknown option", unknownError, StringComparison.Ordinal);
+        Assert.NotEqual(0, duplicate.ExitCode);
+        Assert.Contains("--world", duplicate.Error, StringComparison.Ordinal);
+        Assert.NotEqual(0, unknown.ExitCode);
+        Assert.Contains("--mystery", unknown.Error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -186,8 +175,34 @@ public sealed class SimulationCliTests
             error);
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("cohesive-sim provision", Encoding.UTF8.GetString(output.ToArray()), StringComparison.Ordinal);
+        var help = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("Compile and provision", help, StringComparison.Ordinal);
+        Assert.Contains("--world", help, StringComparison.Ordinal);
+        Assert.Contains("--seed", help, StringComparison.Ordinal);
         Assert.Empty(error.ToString());
+    }
+
+    [Fact]
+    public async Task RootInvocation_WritesGeneratedHelpWithoutDiagnostics()
+    {
+        var result = await Run([]);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("Provision deterministic data", result.Output, StringComparison.Ordinal);
+        Assert.Contains("provision", result.Output, StringComparison.Ordinal);
+        Assert.Empty(result.Error);
+    }
+
+    static async Task<(int ExitCode, string Output, string Error)> Run(IReadOnlyList<string> arguments)
+    {
+        await using MemoryStream output = new();
+        using StringWriter error = new();
+        var exitCode = await SimulationCliApplication.RunAsync(
+            [.. arguments],
+            Stream.Null,
+            output,
+            error);
+        return (exitCode, Encoding.UTF8.GetString(output.ToArray()), error.ToString());
     }
 
     static async Task<(int ExitCode, string Output, string Error)> RunWithStandardStreams(string worldJson)

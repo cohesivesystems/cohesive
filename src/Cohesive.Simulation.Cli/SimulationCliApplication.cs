@@ -1,4 +1,5 @@
 using System.Text;
+using Cohesive.Cli;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Worlds;
 
@@ -8,7 +9,6 @@ static class SimulationCliApplication
 {
     const int SuccessExitCode = 0;
     const int FailureExitCode = 1;
-    const int UsageExitCode = 2;
     const int CancelledExitCode = 130;
 
     public static async Task<int> RunAsync(
@@ -22,53 +22,94 @@ static class SimulationCliApplication
         ArgumentNullException.ThrowIfNull(standardInput);
         ArgumentNullException.ThrowIfNull(standardOutput);
         ArgumentNullException.ThrowIfNull(standardError);
-        if (!SimulationCliParser.TryParse(args, out var options, out var error, out var showHelp))
+
+        using StreamWriter standardOutputWriter = new(
+            standardOutput,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            bufferSize: 1024,
+            leaveOpen: true)
         {
-            if (showHelp)
-            {
-                using StreamWriter helpWriter = new(
-                    standardOutput,
-                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-                    bufferSize: 1024,
-                    leaveOpen: true)
+            AutoFlush = true
+        };
+        var app = Create(standardInput, standardOutput);
+        IReadOnlyList<string> invocationArgs = args.Length == 0 ? ["--help"] : args;
+        return await app.InvokeAsync(
+                invocationArgs,
+                new()
                 {
-                    AutoFlush = true
-                };
-                SimulationCliUsage.WriteTo(helpWriter);
-                return SuccessExitCode;
-            }
+                    StandardOutput = standardOutputWriter,
+                    ErrorOutput = standardError
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
 
-            await standardError.WriteLineAsync(error).ConfigureAwait(false);
-            SimulationCliUsage.WriteTo(standardError);
-            return UsageExitCode;
-        }
+    static CliApplication Create(Stream standardInput, Stream standardOutput)
+    {
+        var app = new CliApplication("Provision deterministic data from a portable Cohesive simulation world.");
+        app.Command<SimulationCliOptions>("provision", "Compile and provision a portable world as JSON Lines.")
+            .Validate((SimulationCliOptions options) =>
+                options.BatchSize > 0
+                    ? []
+                    : new[] { $"Batch size '{options.BatchSize}' is not a positive 32-bit integer." })
+            .OnExecute((CliCommandContext<SimulationCliOptions> context) =>
+                ProvisionAsync(context, standardInput, standardOutput));
+        return app;
+    }
 
+    static async Task<int> ProvisionAsync(
+        CliCommandContext<SimulationCliOptions> context,
+        Stream standardInput,
+        Stream standardOutput)
+    {
         try
         {
-            var parsedOptions = options!;
-            var worldJson = await ReadWorldJsonAsync(parsedOptions, standardInput, cancellationToken)
+            var options = NormalizePaths(context.Configuration);
+            var worldJson = await ReadWorldJsonAsync(options, standardInput, context.CancellationToken)
                 .ConfigureAwait(false);
             var document = WorldDefinitionJsonSerializer.Deserialize(worldJson);
-            if (parsedOptions.WritesStandardOutput)
+            if (options.WritesStandardOutput)
             {
-                await ProvisionAsync(document, parsedOptions, standardOutput, cancellationToken).ConfigureAwait(false);
+                await ProvisionAsync(document, options, standardOutput, context.CancellationToken).ConfigureAwait(false);
             }
             else
             {
-                await ProvisionFileAsync(document, parsedOptions, cancellationToken).ConfigureAwait(false);
+                await ProvisionFileAsync(document, options, context.CancellationToken).ConfigureAwait(false);
             }
 
             return SuccessExitCode;
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
-            await standardError.WriteLineAsync("Simulation provisioning was cancelled.").ConfigureAwait(false);
+            context.Output.WriteErrorLine("Simulation provisioning was cancelled.");
             return CancelledExitCode;
         }
         catch (Exception exception)
         {
-            await standardError.WriteLineAsync(exception.Message).ConfigureAwait(false);
+            context.Output.WriteErrorLine(exception.Message);
             return FailureExitCode;
+        }
+    }
+
+    static SimulationCliOptions NormalizePaths(SimulationCliOptions options) =>
+        options with
+        {
+            WorldPath = NormalizePath(options.WorldPath, "--world"),
+            OutputPath = NormalizePath(options.OutputPath, "--out")
+        };
+
+    static string NormalizePath(string value, string option)
+    {
+        if (string.Equals(value, SimulationCliOptions.StandardStreamPath, StringComparison.Ordinal))
+            return value;
+
+        try
+        {
+            return Path.GetFullPath(value);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new ArgumentException($"Option '{option}' has invalid path '{value}': {exception.Message}", option, exception);
         }
     }
 

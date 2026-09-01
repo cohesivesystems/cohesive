@@ -53,3 +53,5 @@ export default function globalSetup() {
 
 The CLI does not invent a second fixture model or storage policy: it interprets the portable world through
 `WorldProvisioner`, while repository provisioning remains in the optional `Cohesive.Simulation.Storage` package.
+Its typed options, validation, generated help, output routing, and invocation behavior come from `Cohesive.Cli`; the
+tool does not maintain a parallel command parser.

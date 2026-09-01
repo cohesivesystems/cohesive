@@ -21,6 +21,20 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task Help_UsesInvocationOutputChannels()
+    {
+        var app = new CliApplication("Training jobs");
+        app.Command<TrainCommandConfiguration>("train", "Start a training run")
+            .OnExecute((CliCommandContext<TrainCommandConfiguration> _) => 0);
+
+        var result = await CliApplicationTestHarness.InvokeAsync(app, ["train", "--help"]);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("Start a training run", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Empty(result.ErrorOutput);
+    }
+
+    [Fact]
     public async Task InvokeAsync_ParsesCommandOptionsIntoTypedConfiguration()
     {
         var envPrefix = $"COHESIVE_CLI_{Guid.NewGuid():N}_";

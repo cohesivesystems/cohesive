@@ -14,6 +14,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Cohesive.Cli\Cohesive.Cli.csproj" />
+    <ProjectReference Include="..\Cohesive.Configuration\Cohesive.Configuration.csproj" />
     <ProjectReference Include="..\Cohesive.Simulation\Cohesive.Simulation.csproj" />
   </ItemGroup>
 
