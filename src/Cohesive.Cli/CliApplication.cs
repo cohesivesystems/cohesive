@@ -2,7 +2,7 @@ using System.CommandLine;
 using Cohesive.Configuration;
 using Microsoft.Extensions.Configuration;
 
-namespace Cohesive.Host.Cli;
+namespace Cohesive.Cli;
 
 /// <summary>
 /// Builds and runs a command tree whose option values are merged into an <see cref="IConfiguration"/> pipeline

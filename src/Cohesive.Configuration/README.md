@@ -29,5 +29,6 @@ var overrides = projection.Build(new TrainCommand(
 
 ## Related Packages
 
-- `Cohesive.Host` for CLI binding that can flow into configuration projection.
+- `Cohesive.Cli` for typed command binding that can flow into configuration projection.
+- `Cohesive.Host` for optional generic-host lifecycle and dependency-injection integration.
 - `Cohesive.Adapters.AzureAppConfiguration` for Azure App Configuration integration.

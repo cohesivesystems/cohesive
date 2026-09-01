@@ -74,7 +74,8 @@ catalogs.
 | `Cohesive.Control` in `Cohesive.Storage` | Typed feedback-loop compilation and materialization operating-point state under workload and adapter limits | Process lifecycle authority or an adapter-specific throttle API |
 | [`Cohesive.Api`](../src/Cohesive.Api/README.md) | Generic route-neutral operation, endpoint, authorization, result, and semantic-reference declarations | Process execution contracts, execution behavior, or a second diagnostics schema |
 | [`Cohesive.Api.Execution`](../src/Cohesive.Api.Execution/README.md) | Optional route-neutral execution-control catalog and safe bindings to canonical commands, status, trace, and explain artifacts | Process meaning, execution behavior, or transport-specific routes |
-| `Cohesive.Host` | Application and CLI hosting mechanics that bind typed operations and render canonical projections | Semantic execution definitions or lifecycle policy |
+| [`Cohesive.Cli`](../src/Cohesive.Cli/README.md) | Provider-neutral typed command composition, configuration binding, validation, invocation, and testing | Generic-host lifecycle or semantic execution definitions |
+| [`Cohesive.Host`](../src/Cohesive.Host/README.md) | Generic-host lifecycle and dependency-injection integration for typed commands and runtime bindings | Provider-neutral command semantics or lifecycle policy |
 | `Cohesive.Adapters.*` | Attributable target capabilities, constraints, concrete bindings, physical I/O, and target-specific evidence | Portable semantics or silent guarantee weakening |
 
 Important adapter placements include:

@@ -30,7 +30,8 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.AI` | Inference, training, text, vector, ontology, and model registry contracts. |
 | `Cohesive.Simulation` | Provider-neutral deterministic generator IR, addressable entropy, replay evidence, and core-observation POCO generation. |
 | `Cohesive.Identity` | Identity context and scope resolution helpers. |
-| `Cohesive.Host` | CLI, host, and runtime binding helpers. |
+| `Cohesive.Cli` | Reusable typed command composition, configuration binding, validation, invocation, and testing helpers. |
+| `Cohesive.Host` | Generic-host lifecycle, dependency-injection scope, and runtime binding helpers. |
 | `Cohesive.CodeGen.Cli` | Build-facing code generation for shapes, APIs, OpenAPI, GraphQL, and TypeScript artifacts. |
 | `Cohesive.Analyzers` | Roslyn analyzers and source generators for Cohesive authoring patterns. |
 

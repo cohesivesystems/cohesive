@@ -6,7 +6,7 @@ using System.Reflection;
 using Cohesive.Configuration;
 using Microsoft.Extensions.Configuration;
 
-namespace Cohesive.Host.Cli;
+namespace Cohesive.Cli;
 
 /// <summary>
 /// Fluent builder for a typed CLI command that merges CLI values into configuration before binding.

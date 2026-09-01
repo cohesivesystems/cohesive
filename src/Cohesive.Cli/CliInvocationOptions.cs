@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Cohesive.Host.Cli;
+namespace Cohesive.Cli;
 
 /// <summary>
 /// Invocation-specific options used when executing a CLI application.

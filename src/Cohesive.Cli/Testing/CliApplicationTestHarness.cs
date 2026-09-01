@@ -1,4 +1,4 @@
-namespace Cohesive.Host.Cli.Testing;
+namespace Cohesive.Cli.Testing;
 
 /// <summary>
 /// Helpers for invoking CLI applications in tests with captured output channels.

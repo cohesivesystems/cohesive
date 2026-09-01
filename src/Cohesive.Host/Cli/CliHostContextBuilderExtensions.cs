@@ -1,4 +1,5 @@
 using System.CommandLine;
+using Cohesive.Cli;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -42,10 +43,10 @@ public static class CliHostContextBuilderExtensions
         /// Registers host-backed execution middleware for every command bound to <typeparamref name="TConfiguration"/>.
         /// </summary>
         public CliApplication UseHostContext<TConfiguration, TContext>(
-            Func<CliCommandContext<TConfiguration>, IHost> createHost, 
+            Func<CliCommandContext<TConfiguration>, IHost> createHost,
             Func<CliCommandContext<TConfiguration>, IServiceProvider, TContext> createContext
             ) where TContext : CliCommandContext<TConfiguration> =>
-            app.UseHostContext(createHost, context => createContext(context, context));
+            app.UseHostContext(createHost, context => createContext(context, context.GetAttachedServices()));
     }
 
     extension<TConfiguration>(CliCommandBuilder<TConfiguration> cmd)
@@ -63,7 +64,7 @@ public static class CliHostContextBuilderExtensions
         /// Registers host-backed execution middleware for a specific command.
         /// </summary>
         public CliCommandBuilder<TConfiguration> UseHostContext<TContext>(
-            Func<CliCommandContext<TConfiguration>, IHost> createHost, 
+            Func<CliCommandContext<TConfiguration>, IHost> createHost,
             Func<CliCommandContext<TConfiguration>, IHost, TContext> createContext
             ) where TContext : CliCommandContext<TConfiguration>
         {
@@ -78,10 +79,10 @@ public static class CliHostContextBuilderExtensions
         /// Registers host-backed execution middleware for a specific command.
         /// </summary>
         public CliCommandBuilder<TConfiguration> UseHostContext<TContext>(
-            Func<CliCommandContext<TConfiguration>, IHost> createHost, 
+            Func<CliCommandContext<TConfiguration>, IHost> createHost,
             Func<CliCommandContext<TConfiguration>, IServiceProvider, TContext> createContext
             ) where TContext : CliCommandContext<TConfiguration> =>
-            cmd.UseHostContext(createHost, context => createContext(context, context));
+            cmd.UseHostContext(createHost, context => createContext(context, context.GetAttachedServices()));
     }
 
     static async Task<int> StartHostThenExecute<TConfiguration, TContext>(
@@ -119,7 +120,9 @@ public static class CliHostContextBuilderExtensions
         {
             var host = createHost(CreateValidationContext<TConfiguration>());
             if (TryCreateValidationScope(host.Services, out var scope))
+            {
                 return new(scope.ServiceProvider, new CliValidationScopeLease(host, scope));
+            }
 
             return new(host.Services, host);
         };

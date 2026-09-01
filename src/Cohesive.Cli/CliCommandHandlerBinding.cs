@@ -3,7 +3,7 @@ using System.Runtime.ExceptionServices;
 using System.Reflection;
 using Microsoft.Extensions.Configuration;
 
-namespace Cohesive.Host.Cli;
+namespace Cohesive.Cli;
 
 static class CliCommandHandlerBinding
 {

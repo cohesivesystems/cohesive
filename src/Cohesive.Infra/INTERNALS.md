@@ -377,9 +377,9 @@ lifecycle ownership before the package grows a general resource ontology.
 The eventual `cohesive` CLI should be a thin client over a tooling-neutral Infra operation protocol, not deployment
 authority. The same protocol should support CLI, IDE, CI, test, API, and agent clients with cancellation, structured
 progress, normalized diagnostics, explain artifacts, backend receipts, and stable outcome/exit classifications.
-`Cohesive.Host.Cli` already supplies command composition, configuration, middleware, host integration, output routing,
-and a test harness; an Infra CLI should reuse it while keeping canonical document serialization under Infra's strict
-serializer.
+`Cohesive.Cli` supplies command composition, configuration, middleware, output routing, and a test harness, while
+`Cohesive.Host.Cli` adds host lifecycle integration. An Infra CLI should reuse those layers while keeping canonical
+document serialization under Infra's strict serializer.
 
 A useful command surface is:
 

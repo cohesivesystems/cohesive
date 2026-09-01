@@ -1,4 +1,4 @@
-namespace Cohesive.Host.Cli;
+namespace Cohesive.Cli;
 
 /// <summary>
 /// Fluent builder used to configure a positional CLI argument mapped to a configuration property.

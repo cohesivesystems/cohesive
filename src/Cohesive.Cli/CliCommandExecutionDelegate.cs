@@ -1,4 +1,4 @@
-namespace Cohesive.Host.Cli;
+namespace Cohesive.Cli;
 
 /// <summary>
 /// Delegate used by CLI command middleware to continue command execution.
