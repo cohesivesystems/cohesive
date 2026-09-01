@@ -59,6 +59,9 @@ jobs:
       - name: Test generic API package consumer
         run: bash ./eng/test-api-package-consumer.sh 0.1.0-ci.${{ github.run_number }}
 
+      - name: Test CLI package consumer
+        run: bash ./eng/test-cli-package-consumer.sh 0.1.0-ci.${{ github.run_number }}
+
   notify-slack:
     if: ${{ always() && github.event_name == 'pull_request' }}
     needs: build-test-pack

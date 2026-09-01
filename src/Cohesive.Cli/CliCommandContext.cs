@@ -2,7 +2,7 @@ using System.CommandLine;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Cohesive.Host.Cli;
+namespace Cohesive.Cli;
 
 /// <summary>
 /// Base invocation context supplied to CLI command middleware and handlers.

@@ -1,6 +1,6 @@
 using System.Reflection;
 
-namespace Cohesive.Host.Cli;
+namespace Cohesive.Cli;
 
 /// <summary>
 /// Immutable description of a registered CLI command.

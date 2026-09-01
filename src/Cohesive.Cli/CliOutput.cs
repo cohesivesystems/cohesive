@@ -2,7 +2,7 @@ using System.CommandLine;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Cohesive.Host.Cli;
+namespace Cohesive.Cli;
 
 /// <summary>
 /// Output channels available to a CLI invocation.
