@@ -46,7 +46,7 @@ public static class CliHostContextBuilderExtensions
             Func<CliCommandContext<TConfiguration>, IHost> createHost,
             Func<CliCommandContext<TConfiguration>, IServiceProvider, TContext> createContext
             ) where TContext : CliCommandContext<TConfiguration> =>
-            app.UseHostContext(createHost, context => createContext(context, context));
+            app.UseHostContext(createHost, context => createContext(context, context.GetAttachedServices()));
     }
 
     extension<TConfiguration>(CliCommandBuilder<TConfiguration> cmd)
@@ -82,7 +82,7 @@ public static class CliHostContextBuilderExtensions
             Func<CliCommandContext<TConfiguration>, IHost> createHost,
             Func<CliCommandContext<TConfiguration>, IServiceProvider, TContext> createContext
             ) where TContext : CliCommandContext<TConfiguration> =>
-            cmd.UseHostContext(createHost, context => createContext(context, context));
+            cmd.UseHostContext(createHost, context => createContext(context, context.GetAttachedServices()));
     }
 
     static async Task<int> StartHostThenExecute<TConfiguration, TContext>(

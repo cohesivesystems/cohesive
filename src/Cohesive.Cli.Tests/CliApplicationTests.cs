@@ -1,3 +1,4 @@
+using System.CommandLine;
 using Cohesive.Cli.Testing;
 using Cohesive.Configuration;
 using Microsoft.Extensions.Configuration;
@@ -6,6 +7,19 @@ namespace Cohesive.Cli.Tests;
 
 public sealed class CliApplicationTests
 {
+    [Fact]
+    public void ServiceResolution_WithoutAttachedProvider_ReturnsNullForOptionalAndThrowsForRequired()
+    {
+        var context = new CliCommandContext(
+            configurationRoot: new ConfigurationBuilder().Build(),
+            parseResult: new RootCommand().Parse([]),
+            cancellationToken: CancellationToken.None);
+
+        Assert.Null(context.GetService(typeof(TestDependency)));
+        var error = Assert.Throws<InvalidOperationException>(context.GetRequiredService<TestDependency>);
+        Assert.Contains("does not have an attached service provider", error.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task InvokeAsync_ParsesCommandOptionsIntoTypedConfiguration()
     {
@@ -223,4 +237,6 @@ public sealed class CliApplicationTests
         [ConfigurationParameter("projection-ids", CliKey = "projection-ids", Description = "Projection identifiers")]
         public string[] ProjectionIds { get; init; } = [];
     }
+
+    sealed class TestDependency;
 }

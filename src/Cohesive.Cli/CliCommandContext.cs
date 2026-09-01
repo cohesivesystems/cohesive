@@ -7,24 +7,47 @@ namespace Cohesive.Cli;
 /// <summary>
 /// Base invocation context supplied to CLI command middleware and handlers.
 /// </summary>
-public class CliCommandContext(
-    IConfigurationRoot configurationRoot,
-    ParseResult parseResult,
-    CancellationToken cancellationToken,
-    CliOutput? output = null,
-    IServiceProvider? serviceProvider = null
-    ) : ICancellationTokenContext, IServiceProvider
+public class CliCommandContext : ICancellationTokenContext, IServiceProvider
 {
-    readonly IServiceProvider? serviceProvider = serviceProvider;
+    readonly IServiceProvider? serviceProvider;
+
+    /// <summary>Initializes a command invocation context without an attached service provider.</summary>
+    /// <param name="configurationRoot">Fully merged configuration for the invocation.</param>
+    /// <param name="parseResult">Parsed command-line input for the invocation.</param>
+    /// <param name="cancellationToken">Cancellation token for the invocation.</param>
+    /// <param name="output">Optional output channels; standard process output is used when omitted.</param>
+    public CliCommandContext(
+        IConfigurationRoot configurationRoot,
+        ParseResult parseResult,
+        CancellationToken cancellationToken,
+        CliOutput? output = null)
+        : this(configurationRoot, parseResult, cancellationToken, output, serviceProvider: null)
+    {
+    }
+
+    internal CliCommandContext(
+        IConfigurationRoot configurationRoot,
+        ParseResult parseResult,
+        CancellationToken cancellationToken,
+        CliOutput? output,
+        IServiceProvider? serviceProvider)
+    {
+        ConfigurationRoot = Guard.RequireNotNull(configurationRoot);
+        ParseResult = Guard.RequireNotNull(parseResult);
+        CancellationToken = cancellationToken;
+        Output = output ?? CliOutput.Standard;
+        this.serviceProvider = serviceProvider;
+    }
 
     /// <summary>Initializes a derived command context from an existing context.</summary>
-    protected CliCommandContext(CliCommandContext source, IServiceProvider? serviceProvider = null)
+    /// <param name="source">Invocation context whose configuration, parsing, output, and service scope are retained.</param>
+    protected CliCommandContext(CliCommandContext source)
         : this(
             configurationRoot: source.ConfigurationRoot,
             parseResult: source.ParseResult,
             cancellationToken: source.CancellationToken,
             output: source.Output,
-            serviceProvider: serviceProvider ?? source.serviceProvider
+            serviceProvider: source.serviceProvider
             )
     {
     }
@@ -32,32 +55,33 @@ public class CliCommandContext(
     /// <summary>
     /// Fully merged raw configuration graph used to create the typed command configuration.
     /// </summary>
-    public IConfigurationRoot ConfigurationRoot { get; } = Guard.RequireNotNull(configurationRoot);
+    public IConfigurationRoot ConfigurationRoot { get; }
 
     /// <summary>
     /// System.CommandLine parse result for the invocation.
     /// </summary>
-    public ParseResult ParseResult { get; } = Guard.RequireNotNull(parseResult);
+    public ParseResult ParseResult { get; }
 
     /// <summary>
     /// Ambient cancellation token for the command invocation.
     /// </summary>
-    public CancellationToken CancellationToken { get; } = cancellationToken;
+    public CancellationToken CancellationToken { get; }
 
     /// <summary>
     /// Output channels available to the current invocation.
     /// </summary>
-    public CliOutput Output { get; } = output ?? CliOutput.Standard;
+    public CliOutput Output { get; }
 
     /// <summary>
     /// Resolves a required service from the command invocation context.
     /// </summary>
-    public T GetRequiredService<T>() where T : notnull
-    {
-        if (serviceProvider is null)
-            throw new InvalidOperationException("The CLI command context does not have an attached service provider.");
-        return serviceProvider.GetRequiredService<T>();
-    }
+    /// <typeparam name="T">Service type to resolve.</typeparam>
+    /// <returns>The resolved service.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// The context has no attached service provider, or the provider does not contain the requested service.
+    /// </exception>
+    public T GetRequiredService<T>() where T : notnull =>
+        GetAttachedServices().GetRequiredService<T>();
 
     /// <summary>
     /// Resolves an invocation dependency for handler binding.
@@ -75,13 +99,13 @@ public class CliCommandContext(
     internal bool TryResolveInvocationDependency(Type dependencyType, out object? value) =>
         TryResolveDependency(dependencyType, out value);
 
-    /// <summary>Gets service.</summary>
-    public object? GetService(Type serviceType)
-    {
-        if (serviceProvider is null)
-            throw new InvalidOperationException("The CLI command context does not have an attached service provider.");
-        return serviceProvider.GetService(serviceType);
-    }
+    internal IServiceProvider GetAttachedServices() =>
+        serviceProvider ?? throw new InvalidOperationException("The CLI command context does not have an attached service provider.");
+
+    /// <summary>Resolves an optional service from the command invocation context.</summary>
+    /// <param name="serviceType">Service type to resolve.</param>
+    /// <returns>The resolved service, or <see langword="null"/> when no provider or service is available.</returns>
+    public object? GetService(Type serviceType) => serviceProvider?.GetService(serviceType);
 }
 
 /// <summary>
@@ -91,21 +115,37 @@ public class CliCommandContext(
 public class CliCommandContext<TConfiguration> : CliCommandContext, ICliTypedCommandContext
 {
     /// <summary>Initializes a new instance of the cli command context type.</summary>
+    /// <param name="configuration">Typed configuration bound for the invocation.</param>
+    /// <param name="configurationRoot">Fully merged configuration for the invocation.</param>
+    /// <param name="parseResult">Parsed command-line input for the invocation.</param>
+    /// <param name="cancellationToken">Cancellation token for the invocation.</param>
+    /// <param name="output">Optional output channels; standard process output is used when omitted.</param>
     public CliCommandContext(
         TConfiguration configuration,
         IConfigurationRoot configurationRoot,
         ParseResult parseResult,
         CancellationToken cancellationToken,
-        CliOutput? output = null,
-        IServiceProvider? serviceProvider = null
-        ) : base(configurationRoot, parseResult, cancellationToken, output, serviceProvider)
+        CliOutput? output = null)
+        : this(configuration, configurationRoot, parseResult, cancellationToken, output, serviceProvider: null)
+    {
+    }
+
+    internal CliCommandContext(
+        TConfiguration configuration,
+        IConfigurationRoot configurationRoot,
+        ParseResult parseResult,
+        CancellationToken cancellationToken,
+        CliOutput? output,
+        IServiceProvider? serviceProvider)
+        : base(configurationRoot, parseResult, cancellationToken, output, serviceProvider)
     {
         Configuration = configuration;
     }
 
     /// <summary>Initializes a derived typed command context from an existing context.</summary>
-    protected CliCommandContext(CliCommandContext<TConfiguration> source, IServiceProvider? serviceProvider = null)
-        : base(source, serviceProvider)
+    /// <param name="source">Typed invocation context whose configuration, parsing, output, and service scope are retained.</param>
+    protected CliCommandContext(CliCommandContext<TConfiguration> source)
+        : base(source)
     {
         Configuration = source.Configuration;
     }

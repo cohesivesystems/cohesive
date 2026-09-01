@@ -25,6 +25,11 @@ Command-line values, environment variables, and registered configuration provide
 `Cohesive.Configuration` before binding to the command configuration. The same command tree owns generated help,
 validation, middleware, output routing, cancellation, dynamic handler binding, and invocation diagnostics.
 
+Prefer declaring invocation dependencies as typed handler parameters. Command contexts also expose optional
+`IServiceProvider` lookup for custom context implementations: `GetService` returns `null` when no runtime integration
+has attached a provider, while `GetRequiredService` fails explicitly. Provider attachment is reserved for the CLI
+runtime and trusted integrations rather than the public context constructors.
+
 Use `Cohesive.Cli.Testing.CliApplicationTestHarness` to invoke a command tree with captured output channels. Add
 `Cohesive.Host` only when a command needs host lifecycle and dependency-injection scope integration through
 `Cohesive.Host.Cli.UseHostContext`.

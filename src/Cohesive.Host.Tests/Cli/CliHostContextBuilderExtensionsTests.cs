@@ -13,13 +13,18 @@ public sealed class CliHostContextBuilderExtensionsTests
     {
         TestTrainCommandContext? capturedContext = null;
         TestDependency? capturedDependency = null;
+        IServiceProvider? capturedServices = null;
         RecordingHost? host = null;
 
         var app = new CliApplication("Training jobs");
         app.Command<TrainCommandConfiguration>("train", "Start a training run").OnExecute(ExecuteAsync);
         app.UseHostContext<TrainCommandConfiguration, TestTrainCommandContext>(
             createHost: _ => host = new(new SingleServiceProvider(new("dep-001"))),
-            createContext: static context => new(context, stage: "host")
+            createContext: (context, services) =>
+            {
+                capturedServices = services;
+                return new(context, stage: "host");
+            }
         );
 
         var validationErrors = app.ValidateDynamicHandlers();
@@ -38,6 +43,8 @@ public sealed class CliHostContextBuilderExtensionsTests
         Assert.Equal("ds_shipments_v3", capturedContext!.Configuration.Dataset);
         Assert.Equal("host", capturedContext.Stage);
         Assert.Equal("dep-001", capturedDependency!.Id);
+        Assert.Same(host.Services, capturedServices);
+        Assert.NotSame(capturedContext, capturedServices);
         Assert.Equal(1, host!.StartCount);
         Assert.Equal(1, host.StopCount);
         Assert.Equal(1, host.DisposeCount);
