@@ -13,8 +13,8 @@ namespace Cohesive.Adapters.DurableTask;
 /// <remarks>
 /// The caller supplies stable logical identities and typed Process input through <see cref="Request"/>. The
 /// admission orchestration replaces its authority, issuance, and provenance with <see cref="Invocation"/> before
-/// canonical evaluation. Authority and provenance in <see cref="ActivationContext"/> are replaced by the same
-/// trusted evidence if the start wins admission.
+/// canonical evaluation. Authority in <see cref="ActivationContext"/> is replaced by the trusted invocation scope;
+/// emission provenance is projected from the exact compiled Process document resolved by admission.
 /// </remarks>
 public sealed record DurableTaskProcessStartAdmission
 {
@@ -59,8 +59,9 @@ public sealed record DurableTaskProcessStartAdmission
 /// <param name="invocation">Trusted API authorization, timing, provenance, and grants.</param>
 /// <returns>Correlation, delivery, causation, and ordering policy for the initial Process activation.</returns>
 /// <remarks>
-/// Durable Task admission always replaces the returned authority scope and provenance with
-/// <paramref name="invocation"/>. The projection owns only product or transport correlation and delivery policy.
+/// Durable Task admission replaces the returned authority scope with <paramref name="invocation"/> and its
+/// provenance with the exact compiled Process document provenance. The projection owns only product or transport
+/// correlation and delivery policy.
 /// </remarks>
 public delegate ProcessActivationContext DurableTaskProcessStartActivationContextFactory(
     OperationContext context,
@@ -183,6 +184,7 @@ sealed class DurableTaskProcessStartAdmissionOrchestrator(
             var existingInstance = await ReadAsync(context, instanceIndex).ConfigureAwait(true);
             var evaluated = DurableTaskProcessStartAdmissionEvaluator.Evaluate(
                 input,
+                plan.CanonicalPlan.Document.Metadata.Provenance,
                 sameCommand,
                 sameIdempotency,
                 existingInstance);
@@ -242,11 +244,13 @@ internal static class DurableTaskProcessStartAdmissionEvaluator
 
     internal static DurableTaskProcessStartAdmissionEvaluation Evaluate(
         DurableTaskProcessStartAdmission input,
+        ExecutionProvenance activationProvenance,
         DurableTaskSequentialProcessStart? sameCommand,
         DurableTaskSequentialProcessStart? sameIdempotency,
         DurableTaskSequentialProcessStart? existingInstance)
     {
         ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(activationProvenance);
         var canonical = Rebind(
             input.Request,
             input.Invocation,
@@ -262,7 +266,7 @@ internal static class DurableTaskProcessStartAdmissionEvaluator
         var accepted = decision.RequiresPersistence
             ? new DurableTaskSequentialProcessStart(
                 decision.Receipt!,
-                Rebind(input.ActivationContext, input.Invocation))
+                Rebind(input.ActivationContext, input.Invocation, activationProvenance))
             : null;
         return new(decision, accepted);
     }
@@ -289,11 +293,12 @@ internal static class DurableTaskProcessStartAdmissionEvaluator
 
     static ProcessActivationContext Rebind(
         ProcessActivationContext activation,
-        ExecutionApiInvocationContext invocation) => new(
+        ExecutionApiInvocationContext invocation,
+        ExecutionProvenance provenance) => new(
         invocation.Authorization.AuthorityScope,
         activation.CorrelationId,
         activation.Delivery,
-        invocation.Provenance,
+        provenance,
         activation.CausationId,
         activation.Ordering);
 }

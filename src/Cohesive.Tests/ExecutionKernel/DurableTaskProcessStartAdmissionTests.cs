@@ -32,12 +32,14 @@ public sealed class DurableTaskProcessStartAdmissionTests
     }
 
     [Fact]
-    public void AcceptedStart_RebindsTrustedEvidenceAndPreservesTypedActivationPolicy()
+    public void AcceptedStart_SeparatesTrustedCommandEvidenceFromCanonicalActivationProvenance()
     {
         var admission = Admission();
+        var activationProvenance = ActivationProvenance();
 
         var evaluated = DurableTaskProcessStartAdmissionEvaluator.Evaluate(
             admission,
+            activationProvenance,
             sameCommand: null,
             sameIdempotency: null,
             existingInstance: null);
@@ -51,7 +53,8 @@ public sealed class DurableTaskProcessStartAdmissionTests
         Assert.Equal(admission.Invocation.Provenance, context.Provenance);
         Assert.Equal(admission.Invocation.ObservedAtUtc, start.Receipt.AcceptedAtUtc);
         Assert.Equal(admission.Invocation.Authorization.AuthorityScope, start.ActivationContext.AuthorityScope);
-        Assert.Equal(admission.Invocation.Provenance, start.ActivationContext.Provenance);
+        Assert.Equal(activationProvenance, start.ActivationContext.Provenance);
+        Assert.NotEqual(context.Provenance, start.ActivationContext.Provenance);
         Assert.Equal(admission.ActivationContext.CorrelationId, start.ActivationContext.CorrelationId);
         Assert.Equal(admission.ActivationContext.Delivery, start.ActivationContext.Delivery);
     }
@@ -62,6 +65,7 @@ public sealed class DurableTaskProcessStartAdmissionTests
         var admission = Admission();
         var accepted = DurableTaskProcessStartAdmissionEvaluator.Evaluate(
             admission,
+            ActivationProvenance(),
             sameCommand: null,
             sameIdempotency: null,
             existingInstance: null);
@@ -69,6 +73,7 @@ public sealed class DurableTaskProcessStartAdmissionTests
 
         var exact = DurableTaskProcessStartAdmissionEvaluator.Evaluate(
             Admission(observedAtUtc: admission.Invocation.ObservedAtUtc.AddMinutes(2)),
+            ActivationProvenance(),
             start,
             start,
             start);
@@ -77,6 +82,7 @@ public sealed class DurableTaskProcessStartAdmissionTests
                 commandId: "start-command/retry",
                 issuedAtUtc: admission.Invocation.IssuedAtUtc.AddMinutes(2),
                 observedAtUtc: admission.Invocation.ObservedAtUtc.AddMinutes(2)),
+            ActivationProvenance(),
             sameCommand: null,
             sameIdempotency: start,
             existingInstance: start);
@@ -94,6 +100,7 @@ public sealed class DurableTaskProcessStartAdmissionTests
     {
         var accepted = DurableTaskProcessStartAdmissionEvaluator.Evaluate(
             Admission(),
+            ActivationProvenance(),
             sameCommand: null,
             sameIdempotency: null,
             existingInstance: null);
@@ -101,16 +108,19 @@ public sealed class DurableTaskProcessStartAdmissionTests
 
         var command = DurableTaskProcessStartAdmissionEvaluator.Evaluate(
             Admission(input: "different"),
+            ActivationProvenance(),
             sameCommand: start,
             sameIdempotency: null,
             existingInstance: null);
         var idempotency = DurableTaskProcessStartAdmissionEvaluator.Evaluate(
             Admission(commandId: "start-command/other", input: "different"),
+            ActivationProvenance(),
             sameCommand: null,
             sameIdempotency: start,
             existingInstance: null);
         var instance = DurableTaskProcessStartAdmissionEvaluator.Evaluate(
             Admission(commandId: "start-command/new", idempotencyKey: "start-idempotency/new"),
+            ActivationProvenance(),
             sameCommand: null,
             sameIdempotency: null,
             existingInstance: start);
@@ -207,4 +217,9 @@ public sealed class DurableTaskProcessStartAdmissionTests
             [ExecutionControlApiWireNames.AuthorizationRequirement(ProcessStartWireNames.Start)]);
         return new(request, activation, invocation);
     }
+
+    static ExecutionProvenance ActivationProvenance() => new(
+        new("cohesive-tests.process", "1"),
+        new("tests/process/start-definition"),
+        DocumentOrigin.User);
 }

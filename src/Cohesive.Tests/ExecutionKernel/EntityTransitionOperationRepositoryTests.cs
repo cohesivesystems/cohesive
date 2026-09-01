@@ -1,3 +1,6 @@
+using System.IO.Compression;
+using System.Text.Json;
+using Cohesive.Adapters.Cosmos;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Execution;
@@ -7,12 +10,148 @@ using Cohesive.Storage.Processes;
 using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Execution;
 using Cohesive.Transitions.IR;
+using Microsoft.Azure.Cosmos;
 using CanonicalTransitionDefinition = Cohesive.Transitions.IR.TransitionDefinition;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
 public sealed class EntityTransitionOperationRepositoryTests
 {
+    [CosmosEntityTransitionOperationFact]
+    public async Task CosmosRepository_AtomicallyCommitsAndReplaysTransitionReceiptAfterRestart()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("COSMOS_ENTITY_TRANSITION_OPERATION_CONNECTION_STRING")
+            ?? throw new InvalidOperationException("The Cosmos connection string disappeared after discovery.");
+        var fixture = await Fixture.CreateAsync();
+        var databaseId = $"cohesive-entity-transition-operation-tests-{Guid.NewGuid():N}";
+        using var client = new CosmosClient(connectionString, new CosmosClientOptions
+        {
+            ConnectionMode = ConnectionMode.Gateway,
+            Serializer = new CosmosSystemTextJsonSerializer(),
+            HttpClientFactory = static () => new HttpClient(new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback =
+                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            })
+        });
+        var database = (await client.CreateDatabaseAsync(databaseId)).Database;
+        try
+        {
+            var container = (await database.CreateContainerAsync(
+                new ContainerProperties("entities", "/partitionKey"))).Container;
+            var partitionKeyPolicy = new EntityPartitionKeyPolicy(
+                "customer tenant",
+                static (_, entity) => entity.GetField(nameof(CustomerEntity.Tenant)).GetRequiredString(),
+                static (_, _) => "tenant/acme");
+            var repository = new CosmosEntityOutboxRepository(
+                fixture.Repository.EntityDefinition,
+                container,
+                partitionKeyPolicy: partitionKeyPolicy);
+            var initial = await repository.Upsert(fixture.Context, new(fixture.Initial.Entity));
+            var reloadedInitial = await repository.TryGet(
+                fixture.Context,
+                fixture.Subject.EntityId.Value,
+                EntityReadOptions.Full.WithPartitionKey("tenant/acme"));
+            Assert.Equal(initial.ConcurrencyToken, reloadedInitial?.ConcurrencyToken);
+            var commit = fixture.CreateCommit(expectedConcurrencyToken: initial.ConcurrencyToken);
+
+            var committed = await repository.CommitTransitionOperation(fixture.Context, commit);
+            var receiptIterator = container.GetItemQueryIterator<CosmosObservationContainerDocument>(
+                new QueryDefinition(
+                        "SELECT * FROM c WHERE c.documentKind = @kind AND IS_DEFINED(c.transitionCommitPayload)")
+                    .WithParameter(
+                        "@kind",
+                        CosmosObservationOutboxRepositoryOptions.DefaultTransitionOperationReceiptDocumentKind),
+                requestOptions: new()
+                {
+                    PartitionKey = new("tenant/acme"),
+                    MaxItemCount = 10
+                });
+            var receiptPage = await receiptIterator.ReadNextAsync();
+            var receiptDocument = Assert.Single(receiptPage.Resource);
+            Assert.Null(receiptDocument.TransitionCommit);
+            Assert.Equal(
+                CosmosEntityOutboxRepository.TransitionCommitBrotliEncoding,
+                receiptDocument.TransitionCommitEncoding);
+            var compressedPayload = Assert.IsType<string>(receiptDocument.TransitionCommitPayload);
+            Assert.False(string.IsNullOrWhiteSpace(compressedPayload));
+            var restarted = new CosmosEntityOutboxRepository(
+                fixture.Repository.EntityDefinition,
+                container,
+                partitionKeyPolicy: partitionKeyPolicy);
+            var replayed = await restarted.TryGetTransitionOperation(fixture.Context, fixture.Request);
+            var current = await restarted.TryGet(
+                fixture.Context,
+                fixture.Subject.EntityId.Value,
+                EntityReadOptions.Full.WithPartitionKey("tenant/acme"));
+
+            var malformedDocument = receiptDocument with
+            {
+                TransitionCommitPayload = "not-base64",
+                ETag = null
+            };
+            var malformedReplace = await container.ReplaceItemAsync(
+                malformedDocument,
+                malformedDocument.Id,
+                new(malformedDocument.PartitionKey),
+                new ItemRequestOptions { IfMatchEtag = receiptDocument.ETag });
+            var malformedError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                restarted.TryGetTransitionOperation(fixture.Context, fixture.Request));
+            Assert.Contains("invalid compressed canonical commit evidence", malformedError.Message);
+
+            var compressed = Convert.FromBase64String(compressedPayload);
+            using var compressedStream = new MemoryStream(compressed, writable: false);
+            using var decompressor = new BrotliStream(compressedStream, CompressionMode.Decompress);
+            using var canonicalStream = new MemoryStream();
+            await decompressor.CopyToAsync(canonicalStream);
+            Assert.InRange(
+                canonicalStream.Length,
+                1,
+                CosmosEntityOutboxRepository.MaximumTransitionCommitCanonicalBytes);
+            using var canonicalDocument = JsonDocument.Parse(canonicalStream.ToArray());
+            var legacyDocument = receiptDocument with
+            {
+                TransitionCommit = canonicalDocument.RootElement.Clone(),
+                TransitionCommitEncoding = null,
+                TransitionCommitPayload = null,
+                ETag = null
+            };
+            await container.ReplaceItemAsync(
+                legacyDocument,
+                legacyDocument.Id,
+                new(legacyDocument.PartitionKey),
+                new ItemRequestOptions { IfMatchEtag = malformedReplace.ETag });
+            var legacyRestarted = new CosmosEntityOutboxRepository(
+                fixture.Repository.EntityDefinition,
+                container,
+                partitionKeyPolicy: partitionKeyPolicy);
+            var legacyReplayed = await legacyRestarted.TryGetTransitionOperation(
+                fixture.Context,
+                fixture.Request);
+
+            Assert.True(
+                committed.Disposition == EntityTransitionOperationDisposition.Committed,
+                string.Join(Environment.NewLine, committed.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+            Assert.Equal(EntityTransitionOperationDisposition.Replayed, replayed.Disposition);
+            Assert.Equal(EntityTransitionOperationDisposition.Replayed, legacyReplayed.Disposition);
+            Assert.Equal(commit.Fingerprint, replayed.Receipt?.Commit.Fingerprint);
+            Assert.Equal(commit.Fingerprint, legacyReplayed.Receipt?.Commit.Fingerprint);
+            Assert.Equal(commit.Result.Value, replayed.Receipt?.Result.Value);
+            Assert.Equal(
+                commit.Result.Emissions.Select(static envelope =>
+                    InteractionEnvelopeJsonSerializer.Serialize(envelope)),
+                replayed.Receipt?.Result.Emissions.Select(static envelope =>
+                    InteractionEnvelopeJsonSerializer.Serialize(envelope)));
+            Assert.True(commit.Write.Entity.HasSameContent(current?.Entity));
+            Assert.Equal(committed.Receipt?.Entity.ConcurrencyToken, current?.ConcurrencyToken);
+            Assert.Equal(replayed.Receipt?.Entity.ConcurrencyToken, current?.ConcurrencyToken);
+        }
+        finally
+        {
+            await database.DeleteAsync();
+        }
+    }
+
     [Fact]
     public async Task ExactRetry_ReplaysTypedResultAndHandoffWithoutReevaluatingOrPublishing()
     {
@@ -530,6 +669,18 @@ public sealed class EntityTransitionOperationRepositoryTests
 
         public Task<EntitySnapshot> Upsert(OperationContext context, EntityWriteRequest write) =>
             inner.Upsert(context, write);
+    }
+
+    sealed class CosmosEntityTransitionOperationFactAttribute : FactAttribute
+    {
+        public CosmosEntityTransitionOperationFactAttribute()
+        {
+            if (string.IsNullOrWhiteSpace(
+                    Environment.GetEnvironmentVariable("COSMOS_ENTITY_TRANSITION_OPERATION_CONNECTION_STRING")))
+            {
+                Skip = "Set COSMOS_ENTITY_TRANSITION_OPERATION_CONNECTION_STRING to run the Cosmos Transition receipt integration test.";
+            }
+        }
     }
 
     sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
