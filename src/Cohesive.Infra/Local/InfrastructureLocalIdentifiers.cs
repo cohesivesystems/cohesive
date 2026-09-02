@@ -8,11 +8,17 @@ namespace Cohesive.Infra.Local;
 public readonly record struct InfrastructureLocalProjectId
 {
     /// <summary>Creates a local project identity.</summary>
-    /// <param name="value">Stable non-empty project identity.</param>
+    /// <param name="value">Stable non-empty project identity containing no white-space.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or contains white-space.</exception>
     [JsonConstructor]
-    public InfrastructureLocalProjectId(string value) => Value = Guard.RequireNotNullOrWhiteSpace(value);
+    public InfrastructureLocalProjectId(string value)
+    {
+        value = Guard.RequireNotNullOrWhiteSpace(value);
+        if (value.Any(char.IsWhiteSpace))
+            throw new ArgumentException("A local project identity cannot contain white-space.", nameof(value));
+        Value = value;
+    }
 
     /// <summary>Stable project identity.</summary>
     public string Value { get; }

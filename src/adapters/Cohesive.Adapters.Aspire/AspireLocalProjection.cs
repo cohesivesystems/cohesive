@@ -84,28 +84,13 @@ public sealed record AspireCommandHealthOverride
             throw new ArgumentException("Aspire health override arguments cannot contain null.", nameof(arguments));
         }
 
-        if (sourceReferences.IsDefaultOrEmpty
-            || sourceReferences.Any(static reference => string.IsNullOrWhiteSpace(reference.Value)))
-        {
-            throw new ArgumentException("An Aspire health override requires non-empty source references.", nameof(sourceReferences));
-        }
-
-        var normalizedSourceReferences = sourceReferences.Sort();
-        for (var index = 1; index < normalizedSourceReferences.Length; index++)
-        {
-            if (normalizedSourceReferences[index - 1] == normalizedSourceReferences[index])
-            {
-                throw new ArgumentException("Aspire health override source references cannot be duplicated.", nameof(sourceReferences));
-            }
-        }
-
         PhysicalResource = physicalResource;
         Executable = Guard.RequireNotNullOrWhiteSpace(executable);
         Arguments = arguments.IsDefaultOrEmpty ? [] : arguments;
         Strategy = strategy;
         Endpoint = endpoint;
         Rationale = Guard.RequireNotNullOrWhiteSpace(rationale);
-        SourceReferences = normalizedSourceReferences;
+        SourceReferences = SourceReference.NormalizeSet(sourceReferences, requireNonEmpty: true);
     }
 
     /// <summary>Canonical service whose command probe is replaced.</summary>

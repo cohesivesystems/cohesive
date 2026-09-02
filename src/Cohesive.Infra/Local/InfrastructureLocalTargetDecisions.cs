@@ -55,9 +55,8 @@ public sealed record InfrastructureLocalTargetDecision
         Kind = kind;
         Rationale = Guard.RequireNotNullOrWhiteSpace(rationale);
         Boundaries = boundaries.IsDefaultOrEmpty ? [] : boundaries.Sort(StringComparer.Ordinal);
-        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
+        SourceReferences = SourceReference.NormalizeSet(
             sourceReferences,
-            nameof(sourceReferences),
             requireNonEmpty: true);
     }
 

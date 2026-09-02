@@ -97,9 +97,9 @@ public sealed record InfrastructureOperatingBoundary
 
         Id = id;
         Assertion = Guard.RequireNotNullOrWhiteSpace(assertion);
-        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
+        SourceReferences = SourceReference.NormalizeSet(
             sourceReferences,
-            nameof(sourceReferences));
+            requireNonEmpty: false);
     }
 
     /// <summary>Stable boundary identity.</summary>
@@ -200,9 +200,8 @@ public sealed record InfrastructureCapabilityEvidence
             static identity => identity.Value,
             nameof(operatingBoundaries));
         Configuration = InfrastructureCapabilityCollections.Configuration(configuration, nameof(configuration));
-        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
+        SourceReferences = SourceReference.NormalizeSet(
             sourceReferences,
-            nameof(sourceReferences),
             requireNonEmpty: true);
 
         if (Auxiliaries.Contains(id))
@@ -339,7 +338,7 @@ public sealed record InfrastructureCapabilityRule
             operatingBoundaries,
             static identity => identity.Value,
             nameof(operatingBoundaries));
-        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(sourceReferences, nameof(sourceReferences));
+        SourceReferences = SourceReference.NormalizeSet(sourceReferences);
 
         if (RequiredCapabilities.Contains(providedCapability))
         {
@@ -766,40 +765,6 @@ static class InfrastructureCapabilityCollections
             if (string.Equals(ordered[index - 1], ordered[index], StringComparison.Ordinal))
             {
                 throw new ArgumentException($"Infrastructure value '{ordered[index]}' is duplicated.", paramName);
-            }
-        }
-        return ordered;
-    }
-
-    internal static ImmutableArray<SourceReference> ReferenceSet(
-        ImmutableArray<SourceReference> values,
-        string paramName,
-        bool requireNonEmpty = false)
-    {
-        if (values.IsDefaultOrEmpty)
-        {
-            if (requireNonEmpty)
-            {
-                throw new ArgumentException("The infrastructure source-reference collection cannot be empty.", paramName);
-            }
-
-            return [];
-        }
-
-        foreach (var value in values)
-        {
-            if (string.IsNullOrWhiteSpace(value.Value))
-            {
-                throw new ArgumentException("Infrastructure source references cannot be default or empty.", paramName);
-            }
-        }
-
-        var ordered = values.Sort();
-        for (var index = 1; index < ordered.Length; index++)
-        {
-            if (ordered[index - 1] == ordered[index])
-            {
-                throw new ArgumentException($"Infrastructure source reference '{ordered[index].Value}' is duplicated.", paramName);
             }
         }
         return ordered;

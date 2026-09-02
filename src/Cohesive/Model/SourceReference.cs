@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -61,16 +63,14 @@ public readonly record struct SourceReference : IComparable<SourceReference>
     /// <param name="value">Canonical URI-shaped reference.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// <paramref name="value"/> is empty, contains white-space, or lacks a valid scheme and scheme-specific value.
+    /// <paramref name="value"/> is empty, contains white-space, or is not in canonical
+    /// <c>scheme://identity</c> form.
     /// </exception>
     public SourceReference(string value)
     {
         value = Guard.RequireNotNullOrWhiteSpace(value);
-        var separator = value.IndexOf(':');
-        var identityStart = separator >= 0
-            && value.AsSpan(separator + 1).StartsWith("//")
-                ? separator + 3
-                : separator + 1;
+        var separator = value.IndexOf("://", StringComparison.Ordinal);
+        var identityStart = separator + 3;
         if (separator <= 0
             || identityStart >= value.Length
             || !IsSchemeStart(value[0])
@@ -79,7 +79,7 @@ public readonly record struct SourceReference : IComparable<SourceReference>
             || value.AsSpan(0, separator).ContainsAny("ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
         {
             throw new ArgumentException(
-                "A source reference requires a URI-shaped scheme and non-empty scheme-specific value.",
+                "A source reference requires canonical scheme://identity form.",
                 nameof(value));
         }
         if (value.Any(char.IsWhiteSpace))
@@ -141,6 +141,43 @@ public readonly record struct SourceReference : IComparable<SourceReference>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">The provider or identifier is invalid.</exception>
     public static SourceReference Issue(string provider, string identifier) => Create(provider, identifier);
+
+    /// <summary>Validates, ordinally sorts, and deduplicates a source-reference set.</summary>
+    /// <param name="references">Source references to normalize.</param>
+    /// <param name="requireNonEmpty">Whether the normalized set must contain at least one reference.</param>
+    /// <param name="parameterName">Caller argument name reported by validation exceptions.</param>
+    /// <returns>An immutable canonical set ordered by reference value.</returns>
+    /// <exception cref="ArgumentException">
+    /// A reference is default, the set contains duplicates, or <paramref name="requireNonEmpty"/> is
+    /// <see langword="true"/> and <paramref name="references"/> is empty.
+    /// </exception>
+    public static ImmutableArray<SourceReference> NormalizeSet(
+        ImmutableArray<SourceReference> references,
+        bool requireNonEmpty = false,
+        [CallerArgumentExpression(nameof(references))] string? parameterName = null)
+    {
+        parameterName ??= nameof(references);
+        if (references.IsDefaultOrEmpty)
+        {
+            if (requireNonEmpty)
+                throw new ArgumentException("The source-reference collection cannot be empty.", parameterName);
+            return [];
+        }
+
+        foreach (var reference in references)
+        {
+            if (string.IsNullOrWhiteSpace(reference.Value))
+                throw new ArgumentException("Source references cannot be default or empty.", parameterName);
+        }
+
+        var ordered = references.Sort();
+        for (var index = 1; index < ordered.Length; index++)
+        {
+            if (ordered[index - 1] == ordered[index])
+                throw new ArgumentException($"Source reference '{ordered[index].Value}' is duplicated.", parameterName);
+        }
+        return ordered;
+    }
 
     /// <summary>Compares references by their canonical ordinal representation.</summary>
     /// <param name="other">Other source reference.</param>

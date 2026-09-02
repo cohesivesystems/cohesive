@@ -24,11 +24,23 @@ public sealed class SourceReferenceTests
     public void References_and_repository_paths_reject_noncanonical_values()
     {
         Assert.Throws<ArgumentException>(() => new SourceReference("missing-scheme"));
+        Assert.Throws<ArgumentException>(() => new SourceReference("repo:src/file.cs"));
         Assert.Throws<ArgumentException>(() => new SourceReference("Repo://src/file.cs"));
         Assert.Throws<ArgumentException>(() => new SourceReference("repo://"));
         Assert.Throws<ArgumentException>(() => new SourceReference("repo://src/file name.cs"));
         Assert.Throws<ArgumentException>(() => SourceReference.Create("Repo", "src/file.cs"));
         Assert.Throws<ArgumentException>(() => new RepositoryPath("../outside.csproj"));
         Assert.Throws<ArgumentException>(() => new RepositoryPath("src//app.csproj"));
+    }
+
+    [Fact]
+    public void Reference_sets_have_one_shared_canonicalization_authority()
+    {
+        SourceReference first = new("test://a");
+        SourceReference second = new("test://b");
+
+        Assert.Equal<SourceReference>([first, second], SourceReference.NormalizeSet([second, first]));
+        Assert.Throws<ArgumentException>(() => SourceReference.NormalizeSet([first, first]));
+        Assert.Throws<ArgumentException>(() => SourceReference.NormalizeSet([], requireNonEmpty: true));
     }
 }

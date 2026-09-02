@@ -141,9 +141,8 @@ public sealed record InfrastructureBoundaryAcceptance
         Requirement = requirement;
         Boundary = boundary;
         Rationale = Guard.RequireNotNullOrWhiteSpace(rationale);
-        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
+        SourceReferences = SourceReference.NormalizeSet(
             sourceReferences,
-            nameof(sourceReferences),
             requireNonEmpty: true);
     }
 

@@ -318,6 +318,7 @@ public sealed class InfrastructureLocalRealizationTests
     [Fact]
     public void Repository_project_source_must_remain_inside_the_repository()
     {
+        Assert.Throws<ArgumentException>(() => new InfrastructureLocalProjectId("my project"));
         Assert.Throws<ArgumentException>(() => new RepositoryPath("../Ari.Api/Ari.Api.csproj"));
         Assert.Throws<ArgumentException>(() => new RepositoryPath("/src/Ari.Api/Ari.Api.csproj"));
         Assert.Throws<ArgumentException>(() => new RepositoryPath("C:\\src\\Ari.Api\\Ari.Api.csproj"));
@@ -426,7 +427,7 @@ public sealed class InfrastructureLocalRealizationTests
 
     static InfrastructureRealization WorkloadRealization(SourceReference? projectReference = null)
     {
-        var placementReference = projectReference ?? new SourceReference("fixture:local-workload-tests/v1");
+        var placementReference = projectReference ?? new SourceReference("fixture://local-workload-tests/v1");
         var definition = InfrastructureDefinitionDocument.FromDefinition(new(
             id: new("local-workload-tests"),
             revision: new("v1"),

@@ -66,9 +66,8 @@ public sealed record InfrastructureWorkloadPlacement
         Workload = workload;
         PhysicalResource = physicalResource;
         Interpreter = interpreter;
-        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
+        SourceReferences = SourceReference.NormalizeSet(
             sourceReferences,
-            nameof(sourceReferences),
             requireNonEmpty: true);
     }
 
@@ -145,9 +144,8 @@ public sealed record InfrastructureCapabilityEvidenceWitness
             static resource => resource.Value,
             nameof(physicalResources),
             requireNonEmpty: true);
-        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
+        SourceReferences = SourceReference.NormalizeSet(
             sourceReferences,
-            nameof(sourceReferences),
             requireNonEmpty: true);
     }
 

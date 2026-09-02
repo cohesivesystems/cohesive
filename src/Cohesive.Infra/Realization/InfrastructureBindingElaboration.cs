@@ -137,9 +137,8 @@ public sealed record InfrastructureBindingElaborationRule
             static capability => capability.Value,
             nameof(requiredCapabilities),
             requireNonEmpty: true);
-        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
+        SourceReferences = SourceReference.NormalizeSet(
             sourceReferences,
-            nameof(sourceReferences),
             requireNonEmpty: true);
     }
 
@@ -382,9 +381,8 @@ public sealed record InfrastructureBindingObligation
         Rule = rule;
         Requirement = Guard.RequireNotNull(requirement);
         Location = Guard.RequireNotNullOrWhiteSpace(location);
-        SourceReferences = InfrastructureCapabilityCollections.ReferenceSet(
+        SourceReferences = SourceReference.NormalizeSet(
             sourceReferences,
-            nameof(sourceReferences),
             requireNonEmpty: true);
     }
 
