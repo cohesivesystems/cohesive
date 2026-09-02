@@ -23,14 +23,7 @@ static class SimulationCliApplication
         ArgumentNullException.ThrowIfNull(standardOutput);
         ArgumentNullException.ThrowIfNull(standardError);
 
-        using StreamWriter standardOutputWriter = new(
-            standardOutput,
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            bufferSize: 1024,
-            leaveOpen: true)
-        {
-            AutoFlush = true
-        };
+        using var standardOutputWriter = CliStandardStreams.OpenUtf8Writer(standardOutput);
         var app = Create(standardInput, standardOutput);
         IReadOnlyList<string> invocationArgs = args.Length == 0 ? ["--help"] : args;
         return await app.InvokeAsync(
@@ -121,12 +114,7 @@ static class SimulationCliApplication
         if (!options.ReadsStandardInput)
             return await File.ReadAllTextAsync(options.WorldPath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
 
-        using StreamReader reader = new(
-            standardInput,
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
-            detectEncodingFromByteOrderMarks: true,
-            bufferSize: 4096,
-            leaveOpen: true);
+        using var reader = CliStandardStreams.OpenUtf8Reader(standardInput);
         return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
     }
 
