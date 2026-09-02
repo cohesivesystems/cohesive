@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
@@ -115,6 +116,7 @@ public sealed record TransitionObservationAccess
 {
     static readonly TransitionObservationAccess WholeValue = new(path: null);
 
+    [JsonConstructor]
     TransitionObservationAccess(FieldPath? path) => Path = path;
 
     /// <summary>The complete coherent aggregate observation.</summary>

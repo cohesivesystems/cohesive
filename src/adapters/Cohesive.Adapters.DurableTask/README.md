@@ -41,6 +41,7 @@ The adapter also provides:
 
 - Canonical start admission and exact replay.
 - Safe Process status, trace, and explain projections.
+- Separate authority-scoped retrieval of retained canonical input and terminal values.
 - Lifecycle control across Continue-as-new.
 - Current standalone-SDK monitoring repositories.
 - A migration-only reader for hubs created by the retired Core adapter.
@@ -53,13 +54,15 @@ activation-local Signal delivery, lifecycle Signal qualification, atomic-with-or
 provider cleanup/recovery semantics remain unavailable and fail closed.
 
 Scheduler custom status and history are physical evidence, not a replacement Process definition, continuation,
-inbox, outbox, or semantic trace. The migration reader does not fabricate canonical evidence that historical runs did
-not retain.
+inbox, outbox, or semantic trace. Potentially sensitive input and terminal values are available only through the
+separate trusted value repository and never enter generic monitoring records.
+
+The migration reader does not fabricate canonical evidence that historical runs did not retain.
 
 ## Continue
 
-- [Internals](INTERNALS.md) contains monitoring, planning, worker registration, execution, suspension, recovery,
-  validation, and the full capability boundary.
+- [Internals](INTERNALS.md) contains monitoring, trusted value retrieval, planning, worker registration, execution,
+  suspension, recovery, validation, and the full capability boundary.
 - [Durable Task interpreter decision](../../../docs/decisions/durable-task-process-interpreter.md) records the
   accepted architecture.
 - [`Cohesive.Processes`](../../Cohesive.Processes/README.md) owns canonical Process semantics.

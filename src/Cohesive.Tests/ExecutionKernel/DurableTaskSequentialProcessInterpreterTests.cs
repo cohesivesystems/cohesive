@@ -6175,7 +6175,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             start.ActivationContext,
             new(
                 context.Authorization,
-                context.Provenance,
+                ApiInvocationProvenance(),
                 context.IssuedAtUtc,
                 start.Receipt.AcceptedAtUtc,
                 [ExecutionControlApiWireNames.AuthorizationRequirement(ProcessStartWireNames.Start)]));
@@ -6592,6 +6592,11 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         new("durable-task-sequential-tests", "1"),
         new("tests/execution-kernel/durable-task-sequential"),
         DocumentOrigin.Generated);
+
+    static ExecutionProvenance ApiInvocationProvenance() => new(
+        new("durable-task-sequential-tests.api", "1"),
+        new("tests/execution-kernel/durable-task-sequential/start"),
+        DocumentOrigin.User);
 
     static string Serialize<T>(T value) => DurableTaskProcessDataConverter.Create().Serialize(value)!;
 

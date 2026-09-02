@@ -48,6 +48,30 @@ sealed record CosmosObservationContainerDocument(
     [property: JsonPropertyName("envelopeFingerprint")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? EnvelopeFingerprint = null,
+    [property: JsonPropertyName("transitionRequestFingerprint")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? TransitionRequestFingerprint = null,
+    [property: JsonPropertyName("transitionIntentFingerprint")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? TransitionIntentFingerprint = null,
+    [property: JsonPropertyName("transitionCommitFingerprint")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? TransitionCommitFingerprint = null,
+    [property: JsonPropertyName("transitionCommit")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    JsonElement? TransitionCommit = null,
+    [property: JsonPropertyName("transitionCommitEncoding")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? TransitionCommitEncoding = null,
+    [property: JsonPropertyName("transitionCommitPayload")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? TransitionCommitPayload = null,
+    [property: JsonPropertyName("transitionOperationReceiptId")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? TransitionOperationReceiptId = null,
     [property: JsonPropertyName("_etag")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? ETag = null);
+    string? ETag = null,
+    [property: JsonPropertyName("entityConcurrencyToken")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? EntityConcurrencyToken = null);

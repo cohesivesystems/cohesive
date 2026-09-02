@@ -60,6 +60,7 @@ public sealed class Observation : IEquatable<Observation>, IObservationFieldRead
     /// <summary>Canonicalization profile used by <see cref="ComputeFingerprint"/>.</summary>
     public const string FingerprintCanonicalization = "cohesive-observation/v1-c14n/v1";
 
+    [JsonConstructor]
     Observation(QualifiedShapeId shapeId, ObservationValue value)
     {
         ShapeId = shapeId;

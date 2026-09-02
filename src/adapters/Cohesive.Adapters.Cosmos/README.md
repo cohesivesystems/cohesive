@@ -1,7 +1,7 @@
 # Cohesive.Adapters.Cosmos
 
 `Cohesive.Adapters.Cosmos` provides Azure Cosmos DB interpretations for Cohesive entity storage, Relations,
-materialization sources, domain-event inboxes, outbox records, and vector storage.
+materialization sources, Process Transition receipts, domain-event inboxes, outbox records, and vector storage.
 
 ## Install
 
@@ -43,6 +43,7 @@ provenance. Placement and the Cosmos storage binding remain explicit persisted i
 - Parameterized Cosmos SQL compilation for the supported canonical Relation/query slice.
 - Bounded Cosmos SDK source acquisition and materialization change sources.
 - Entity repository and embedded aggregate storage realization.
+- Atomic Process Transition execution with exact partition-local replay receipts.
 - A durable, target-deduplicating canonical domain-event inbox.
 - Safe standalone Cosmos SQL construction.
 - Outbox persistence and vector storage integrations.
@@ -52,13 +53,17 @@ provenance. Placement and the Cosmos storage binding remain explicit persisted i
 Cosmos `JOIN` expands arrays within one document; it is not a cross-document join. Cross-container relationships use
 bounded reads and local correlation when the physical plan can preserve the requested semantics.
 
+Process Transition receipt lookup requires exact point-read partition placement. The adapter fails with structured
+capability evidence when that placement cannot be resolved and never substitutes a cross-partition scan for atomic
+subject authority.
+
 Missing values, `null`, ordering, paging, aggregation, partition scope, and continuation behavior are represented
 explicitly. Unsupported combinations fail with structured diagnostics rather than inheriting SDK coercions.
 
 ## Continue
 
-- [Internals](INTERNALS.md) contains the domain-event inbox, full SQL builder, canonical compilation, semantic
-  envelope, acquisition, materialization, query authority, and storage realization details.
+- [Internals](INTERNALS.md) contains Process Transition receipts, the domain-event inbox, full SQL builder, canonical
+  compilation, semantic envelope, acquisition, materialization, query authority, and storage realization details.
 - [Relations execution and adapters](../../Cohesive.Relations/docs/EXECUTION_AND_ADAPTERS.md) explains composed
   PostgreSQL/Cosmos reads.
 - [Relations capability reference](../../Cohesive.Relations/docs/CAPABILITIES.md) records the generated profile.

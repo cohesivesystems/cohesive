@@ -71,7 +71,8 @@ orchestrator; target or domain I/O crosses an attributable activity or external-
 returns exact portable evidence to the interpreter.
 
 Top-level start admission is a separate generic orchestration over the canonical `ProcessStartRequest`. It rebinds
-trusted API authorization, issuance, and provenance; validates the exact deployed plan and typed input; then locks
+trusted API authorization, issuance, and command provenance; projects activation emission provenance from the exact
+deployed Process document; validates the exact deployed plan and typed input; then locks
 three authority-scoped Durable Entity entries for command, idempotency, and logical-instance identity. The canonical
 start evaluator alone decides acceptance, replay, or the precise conflict. Each index retains the exact winning
 receipt and activation evidence, and the instance index schedules physical execution only on its first claim.
@@ -309,6 +310,13 @@ status affinity, and exposes only `NormalizedExecutionTrace` artifacts plus an e
 separates not found, in-progress, available, and terminal-without-artifact outcomes; an empty trace collection alone
 never claims completeness. The migration-only Core reader is unsupported because its provider history is not
 canonical trace evidence.
+
+Canonical Process values use a different, explicitly sensitive boundary. `IProcessExecutionValueRepository` accepts
+only trusted authority scope plus logical Process identity, derives one exact physical lookup, and returns the start
+receipt's typed `PortableValue` together with the terminal result's canonical outcome when available. Its explicit
+states preserve active execution and missing terminal-artifact evidence without consulting Scheduler history. The
+generic `IProcessExecutionRepository` remains payload-free; applications decide whether and how an authorized
+operator surface may materialize the opt-in values.
 
 Current monitoring retains the start receipt's exact definition reference and canonical logical Process identity
 directly on `ProcessExecutionRecord`, including the pending admission window before custom status exists. The
