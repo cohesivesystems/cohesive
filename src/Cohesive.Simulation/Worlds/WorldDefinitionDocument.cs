@@ -8,8 +8,9 @@ namespace Cohesive.Simulation.Worlds;
 
 /// <summary>Versioned deterministic identity of canonical world-definition content.</summary>
 /// <remarks>
-/// The fingerprint covers population identities, counts, exact nested generation coordinates and fingerprints, and
-/// the population-scope convention. Logical world identity and revision remain separate coordinates.
+/// The fingerprint covers population identities, counts, exact nested generation coordinates and fingerprints,
+/// exemplar identities and coordinates, and the population-scope convention. Logical world identity and revision
+/// remain separate coordinates.
 /// </remarks>
 public sealed record WorldDefinitionFingerprint
 {
@@ -17,7 +18,7 @@ public sealed record WorldDefinitionFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current world-definition fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-simulation-world/v1-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-simulation-world/v2-c14n/v1";
 
     /// <summary>Creates world-definition fingerprint metadata.</summary>
     /// <param name="algorithm">Hash-algorithm identity.</param>
@@ -45,13 +46,13 @@ public sealed record WorldDefinitionFingerprint
 
 /// <summary>Portable self-validating envelope for one canonical world definition.</summary>
 /// <remarks>
-/// Population declarations and every nested generation member declaration are normalized by stable identity.
-/// Deserialization rejects wire order that would preserve a second non-semantic declaration order.
+/// Population, exemplar, and nested generation member declarations are normalized by stable identity. Deserialization
+/// rejects wire order that would preserve a second non-semantic declaration order.
 /// </remarks>
 public sealed record WorldDefinitionDocument
 {
     /// <summary>Current portable world-definition document schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-simulation-world/v1";
+    public const string CurrentSchemaVersion = "cohesive-simulation-world/v2";
 
     /// <summary>Creates or restores one portable world-definition document.</summary>
     /// <param name="schemaVersion">Exact portable world-definition schema.</param>

@@ -33,17 +33,63 @@ public sealed record WorldPopulationDefinition
     public GenerationDefinition Generation { get; }
 }
 
+/// <summary>Stable semantic alias for one exact generated member of a world population.</summary>
+public sealed record WorldExemplarDefinition
+{
+    /// <summary>Creates a named world exemplar.</summary>
+    /// <param name="id">Stable world-wide exemplar identity.</param>
+    /// <param name="populationId">Stable identity of the containing population.</param>
+    /// <param name="sequenceIndex">Zero-based sequence index within the population.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="id"/> or <paramref name="populationId"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="id"/> or <paramref name="populationId"/> is empty.</exception>
+    /// <remarks>
+    /// Sequence bounds are validated by the world compiler so malformed direct IR produces structured diagnostics.
+    /// </remarks>
+    [JsonConstructor]
+    public WorldExemplarDefinition(string id, string populationId, int sequenceIndex)
+    {
+        Id = Guard.RequireNotNullOrWhiteSpace(id);
+        PopulationId = Guard.RequireNotNullOrWhiteSpace(populationId);
+        SequenceIndex = sequenceIndex;
+    }
+
+    /// <summary>Gets the stable world-wide exemplar identity.</summary>
+    public string Id { get; }
+
+    /// <summary>Gets the stable identity of the containing population.</summary>
+    public string PopulationId { get; }
+
+    /// <summary>Gets the zero-based sequence index within the population.</summary>
+    public int SequenceIndex { get; }
+}
+
 /// <summary>Portable semantic authority for a static initial simulation world.</summary>
 /// <remarks>
-/// A world currently defines initial populations only. Temporal activity, transitions, causality, and scheduling will
-/// belong to a scenario layer once those semantics are explicit.
+/// A world currently defines initial populations and stable aliases to exact population members. Temporal activity,
+/// transitions, causality, and scheduling will belong to a scenario layer once those semantics are explicit.
 /// </remarks>
 public sealed record WorldDefinition
 {
+    /// <summary>Creates a simulation world definition without named exemplars.</summary>
+    /// <param name="id">Stable logical world identity.</param>
+    /// <param name="revision">Exact authored world revision.</param>
+    /// <param name="populations">Initial population declarations. Declaration order is non-semantic.</param>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="id"/> or <paramref name="revision"/> is empty or white-space.
+    /// </exception>
+    public WorldDefinition(
+        string id,
+        string revision,
+        ImmutableArray<WorldPopulationDefinition> populations)
+        : this(id, revision, populations, [])
+    {
+    }
+
     /// <summary>Creates a simulation world definition.</summary>
     /// <param name="id">Stable logical world identity.</param>
     /// <param name="revision">Exact authored world revision.</param>
     /// <param name="populations">Initial population declarations. Declaration order is non-semantic.</param>
+    /// <param name="exemplars">Named population members. Declaration order is non-semantic.</param>
     /// <exception cref="ArgumentException">
     /// <paramref name="id"/> or <paramref name="revision"/> is empty or white-space.
     /// </exception>
@@ -51,11 +97,13 @@ public sealed record WorldDefinition
     public WorldDefinition(
         string id,
         string revision,
-        ImmutableArray<WorldPopulationDefinition> populations)
+        ImmutableArray<WorldPopulationDefinition> populations,
+        ImmutableArray<WorldExemplarDefinition> exemplars)
     {
         Id = Guard.RequireNotNullOrWhiteSpace(id);
         Revision = Guard.RequireNotNullOrWhiteSpace(revision);
         Populations = populations.IsDefault ? [] : populations;
+        Exemplars = exemplars.IsDefault ? [] : exemplars;
     }
 
     /// <summary>Gets the stable logical world identity.</summary>
@@ -66,6 +114,9 @@ public sealed record WorldDefinition
 
     /// <summary>Gets initial population declarations.</summary>
     public ImmutableArray<WorldPopulationDefinition> Populations { get; }
+
+    /// <summary>Gets stable world-wide aliases for exact generated population members.</summary>
+    public ImmutableArray<WorldExemplarDefinition> Exemplars { get; }
 
     /// <summary>Attempts provider-neutral world compilation and retains structured diagnostics.</summary>
     /// <returns>A result containing a compiled world only when every population is valid.</returns>

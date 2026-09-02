@@ -14,7 +14,7 @@ namespace Cohesive.Simulation.Provisioning;
 public sealed class WorldJsonLinesSink : IWorldProvisioningSink
 {
     /// <summary>Stable identity of the emitted JSON Lines record format.</summary>
-    public const string Format = "cohesive-simulation-world-item/v1";
+    public const string Format = "cohesive-simulation-world-item/v2";
 
     readonly Stream output;
 
@@ -79,6 +79,14 @@ public sealed class WorldJsonLinesSink : IWorldProvisioningSink
                 writer.WriteString("populationScope", batch.PopulationScope.Value);
                 writer.WriteNumber("batchOrdinal", batch.Ordinal);
                 writer.WriteNumber("sequenceIndex", item.Replay.SequenceIndex);
+                writer.WriteStartArray("exemplars");
+                foreach (var exemplar in batch.Exemplars)
+                {
+                    if (exemplar.SequenceIndex == item.Replay.SequenceIndex)
+                        writer.WriteStringValue(exemplar.Id);
+                }
+
+                writer.WriteEndArray();
                 writer.WriteString("definitionId", item.Replay.DefinitionId);
                 writer.WriteString("definitionRevision", item.Replay.DefinitionRevision);
                 writer.WriteString("definitionFingerprint", item.Replay.DefinitionFingerprint);

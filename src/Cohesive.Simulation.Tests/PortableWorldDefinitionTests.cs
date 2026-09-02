@@ -45,6 +45,41 @@ public sealed class PortableWorldDefinitionTests
     }
 
     [Fact]
+    public void PortableWorld_RoundTripsNamedExemplarsAndExactResolution()
+    {
+        var authored = World(
+            ["customers", "orders"],
+            ["order-for-ui", "customer-for-ui"]);
+        var json = WorldDefinitionJsonSerializer.Serialize(authored);
+
+        var restored = WorldDefinitionJsonSerializer.Deserialize(json).Compile();
+
+        Assert.Equal(
+            ["customer-for-ui", "order-for-ui"],
+            restored.Exemplars.Select(static exemplar => exemplar.Id));
+        Assert.Equal(
+            authored.Compile().GenerateExemplar("customer-for-ui", seed: 42),
+            restored.GenerateExemplar("customer-for-ui", seed: 42));
+        Assert.Equal(json, WorldDefinitionJsonSerializer.Serialize(restored.Definition));
+    }
+
+    [Fact]
+    public void EquivalentExemplarDeclarationOrders_ProduceOneCanonicalDocument()
+    {
+        var first = World(
+            ["customers", "orders"],
+            ["customer-for-ui", "order-for-ui"]);
+        var reordered = World(
+            ["customers", "orders"],
+            ["order-for-ui", "customer-for-ui"]);
+
+        Assert.Equal(
+            WorldDefinitionJsonSerializer.Serialize(first),
+            WorldDefinitionJsonSerializer.Serialize(reordered));
+        Assert.Equal(first.Compile().Fingerprint, reordered.Compile().Fingerprint);
+    }
+
+    [Fact]
     public void IndentedWorld_RestoresToTheSameCanonicalCompactDocument()
     {
         var document = WorldDefinitionDocument.FromDefinition(World(["customers", "orders"]));
@@ -64,10 +99,13 @@ public sealed class PortableWorldDefinitionTests
     [InlineData("schema", "simulation.world.document.contentInvalid")]
     [InlineData("unknown", "simulation.world.document.contentInvalid")]
     [InlineData("order", "simulation.world.document.wireNonCanonical")]
+    [InlineData("exemplar-order", "simulation.world.document.wireNonCanonical")]
     [InlineData("count", "simulation.world.document.contentInvalid")]
     public void InvalidPortableWorlds_ProduceStructuredDiagnostics(string scenario, string expectedCode)
     {
-        var json = WorldDefinitionJsonSerializer.Serialize(World(["customers", "orders"]));
+        var json = WorldDefinitionJsonSerializer.Serialize(World(
+            ["customers", "orders"],
+            ["customer-for-ui", "order-for-ui"]));
         var invalid = scenario switch
         {
             "fingerprint" => Mutate(json, root =>
@@ -76,6 +114,7 @@ public sealed class PortableWorldDefinitionTests
                 root["schemaVersion"] = "cohesive-simulation-world/v999"),
             "unknown" => Mutate(json, root => root["unexpected"] = true),
             "order" => Mutate(json, ReversePopulations),
+            "exemplar-order" => Mutate(json, ReverseExemplars),
             "count" => Mutate(json, root =>
                 root["definition"]!["populations"]![0]!["count"] = -1),
             _ => throw new InvalidOperationException($"Unknown invalid-world scenario '{scenario}'.")
@@ -117,7 +156,28 @@ public sealed class PortableWorldDefinitionTests
         Assert.NotEqual(baseline.Compile().Fingerprint, changedRevision.Compile().Fingerprint);
     }
 
-    static WorldDefinition World(IReadOnlyList<string> order)
+    [Fact]
+    public void WorldFingerprint_IncludesExemplarIdentityAndCoordinates()
+    {
+        var baseline = World(["customers", "orders"], ["customer-for-ui"]);
+        var moved = new WorldDefinition(
+            baseline.Id,
+            baseline.Revision,
+            baseline.Populations,
+            [new("customer-for-ui", "customers", sequenceIndex: 2)]);
+        var renamed = new WorldDefinition(
+            baseline.Id,
+            baseline.Revision,
+            baseline.Populations,
+            [new("renamed-customer", "customers", sequenceIndex: 1)]);
+
+        Assert.NotEqual(baseline.Compile().Fingerprint, moved.Compile().Fingerprint);
+        Assert.NotEqual(baseline.Compile().Fingerprint, renamed.Compile().Fingerprint);
+    }
+
+    static WorldDefinition World(
+        IReadOnlyList<string> order,
+        IReadOnlyList<string>? exemplarOrder = null)
     {
         var customers = Simulation.Define<PortableCustomer>(customer => customer
             .Member(value => value.Name, Gen.Constant("Ada"))
@@ -138,6 +198,21 @@ public sealed class PortableWorldDefinitionTests
                         break;
                     default:
                         throw new InvalidOperationException($"Unknown population '{population}'.");
+                }
+            }
+
+            foreach (var exemplar in exemplarOrder ?? [])
+            {
+                switch (exemplar)
+                {
+                    case "customer-for-ui":
+                        world.Exemplar(exemplar, "customers", sequenceIndex: 1);
+                        break;
+                    case "order-for-ui":
+                        world.Exemplar(exemplar, "orders", sequenceIndex: 4);
+                        break;
+                    default:
+                        throw new InvalidOperationException($"Unknown exemplar '{exemplar}'.");
                 }
             }
         });
@@ -162,6 +237,19 @@ public sealed class PortableWorldDefinitionTests
         populations.Clear();
         foreach (var population in reversed)
             populations.Add(population);
+    }
+
+    static void ReverseExemplars(JsonObject root)
+    {
+        var exemplars = root["definition"]?["exemplars"]?.AsArray()
+                        ?? throw new InvalidOperationException("World-definition JSON has no exemplars array.");
+        var reversed = exemplars
+            .Select(static exemplar => exemplar?.DeepClone())
+            .Reverse()
+            .ToArray();
+        exemplars.Clear();
+        foreach (var exemplar in reversed)
+            exemplars.Add(exemplar);
     }
 
     public sealed record PortableCustomer(string Name, int Age);

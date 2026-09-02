@@ -15,7 +15,8 @@ switch (args[0])
                 Gen.Weighted("Grace", weight: 1d)))
             .Member(value => value.Age, Gen.Int32(minimum: 18, maximum: 90)));
         var world = Simulation.DefineWorld("world/package-smoke", "r1", builder => builder
-            .Population("customers", count: 2, customers));
+            .Population("customers", count: 2, customers)
+            .Exemplar("customer-for-ui", "customers", sequenceIndex: 1));
         await File.WriteAllTextAsync(args[1], WorldDefinitionJsonSerializer.Serialize(world));
         break;
     case "verify":
@@ -34,6 +35,15 @@ switch (args[0])
                 || root.GetProperty("sequenceIndex").GetInt64() != index)
             {
                 throw new InvalidOperationException($"Provisioned item '{index}' has invalid population coordinates.");
+            }
+
+            var exemplars = root.GetProperty("exemplars").EnumerateArray().ToArray();
+            if ((index == 0 && exemplars.Length != 0)
+                || (index == 1
+                    && (exemplars.Length != 1
+                        || !string.Equals(exemplars[0].GetString(), "customer-for-ui", StringComparison.Ordinal))))
+            {
+                throw new InvalidOperationException($"Provisioned item '{index}' has invalid exemplar evidence.");
             }
         }
         break;

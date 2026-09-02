@@ -84,6 +84,23 @@ IEnumerable<Generated<Customer>> typedCustomers = plan
     .Enumerate(seed: 42, customers.Compile());
 ```
 
+Name purposeful instances as exemplars when a unit test, demo, or UI workflow needs stable semantic discovery rather
+than an incidental query or a generated ordinal convention:
+
+```csharp
+var world = Simulation.DefineWorld("demo", "r1", builder => builder
+    .Population("customers", count: 100, customers)
+    .Exemplar("customer-for-ui", "customers", sequenceIndex: 7));
+
+Generated<Customer> customer = world
+    .Compile()
+    .GenerateExemplar("customer-for-ui", seed: 42, generator: customers.Compile());
+```
+
+An exemplar aliases one exact population coordinate; it does not duplicate the observation or claim that the value
+satisfies an unstated cohort condition. Exemplar declarations are portable, world-wide unique, canonicalized by
+identity, included in the world fingerprint, and projected into provisioning evidence.
+
 Persist or exchange a complete world with `WorldDefinitionJsonSerializer`. The strict document embeds each
 population's generation semantics and governing shape graph, normalizes population and member order, verifies a world
 fingerprint, and can be consumed by scripts without CLR authoring callbacks. Population replay evidence remains valid
@@ -125,9 +142,10 @@ keeps storage atomicity, replacement policy, and entity identity out of the Simu
 
 `WorldJsonLinesSink` provides a framework-independent bridge for unit-test artifacts, command-line scripts, and
 Playwright global setup. It emits one generated item per UTF-8 line with world and generation fingerprints, population
-scope, deterministic run and batch IDs, replay token, and the Core canonical observation envelope. The signed 64-bit
-root seed is encoded as a decimal string so JavaScript can consume it without numeric precision loss. The sink flushes
-each acknowledged batch, never closes the caller-owned stream, and intentionally does not claim durable deduplication.
+scope, zero or more exemplar identities, deterministic run and batch IDs, replay token, and the Core canonical
+observation envelope. The signed 64-bit root seed is encoded as a decimal string so JavaScript can consume it without
+numeric precision loss. The sink flushes each acknowledged batch, never closes the caller-owned stream, and
+intentionally does not claim durable deduplication.
 
 Use the optional `Cohesive.Simulation.Storage` package to bind world populations to generic entity repositories. That
 integration keeps repository selection, entity-ID policy, state version, batch atomicity, and upsert behavior outside
@@ -181,6 +199,7 @@ CLR interpretation and never enters the canonical generator IR.
 The package references only `Cohesive`; it does not require Entities, Transitions, Processes, Storage, a property-test
 framework, or a fake-data provider. Current canonical generators are constant, inclusive uniform Int32, Bernoulli,
 weighted categorical, record/member composition, and portable static worlds. Generation scopes, bounded lazy
-enumeration, deterministic provisioning batches, and the JSON Lines sink provide population isolation and streaming
-mechanics. Property runners, shrinking, inter-population relationships, automatic POCO inference, storage-specific
-provisioning adapters, temporal scenarios, and provider plugins are intentionally deferred.
+enumeration, named exemplars, deterministic provisioning batches, and the JSON Lines sink provide population isolation,
+stable discovery, and streaming mechanics. Property runners, shrinking, inter-population relationships, automatic
+POCO inference, storage-specific provisioning adapters, temporal scenarios, and provider plugins are intentionally
+deferred.
