@@ -14,8 +14,9 @@ interpretations of that realization; none is the source of infrastructure meanin
 ## First-slice status
 
 This package is the zero-third-party-dependency semantic core. The first slice establishes the portable definition and
-realization model, stable identities, binding and lifecycle invariants, deterministic conventions, coherent target
-variants, exactly fingerprinted binding elaboration, capability evidence, and fail-closed compilation diagnostics.
+realization model, stable identities, binding and lifecycle invariants, deterministic conventions, declarative target
+facilities, coherent target variants, exactly fingerprinted binding elaboration, capability evidence, and fail-closed
+compilation diagnostics.
 
 It intentionally does **not** reference Terraform, Pulumi, Aspire, Azure, AWS, GCP, Kubernetes, or their SDKs. Actual
 third-party emitters, CLI integrations, deployment runners, and observation importers are deferred to dedicated
@@ -29,6 +30,8 @@ Infra keeps four related authorities distinct:
 | --- | --- | --- |
 | Application IR | Application behavior and the storage, execution, identity, API, and process guarantees it induces | Vendor resources or deployment mechanics |
 | `InfrastructureDefinition` | In this slice, portable workloads, logical resources, capability requirements, directed contract bindings, and resource lifecycle intent | A selected provider topology |
+| `InfrastructureTargetFacilityManifest` | A target adapter's selectable physical construction families and the exact capability evidence each family owns | Application topology, environment policy, or deployment execution |
+| `InfrastructureTargetFacilityPlan` | One exact definition's facility selections, attributable effective configuration, and capability closure | Provider naming, emitted artifacts, backend state, or deployment receipts |
 | `InfrastructureRealization` | One exact definition's capability closure, physical placements, lifecycle partition, and demand-scoped evidence witnesses | Deployment readiness, backend execution state, or the original application semantics |
 | Backend state and observations | Backend-native identities, receipts, outputs, drift, and time-indexed operational evidence | An implicit rewrite of the definition or realization |
 
@@ -38,6 +41,7 @@ The normal flow is:
 application definitions and explicit Infra authoring
     -> InfrastructureDefinitionDocument
     -> deterministic convention resolution
+    -> facility selection from one exactly fingerprinted target manifest
     -> exact binding elaboration and attributable obligation derivation
     -> capability proof against one coherent target variant
     -> exact workload placements and demand-scoped physical evidence witnesses
@@ -119,6 +123,33 @@ evidence, composition rules, and named operating boundaries form one internally 
 retains an exact profile schema, identity, and SHA-256 fingerprint; available evidence also requires attributable
 source references. Backend adapters must add their own provider-version and artifact fingerprints.
 
+## Declarative target facilities
+
+`InfrastructureTargetFacilityManifest` is the provider-neutral boundary between capability evidence and a target's
+physical construction choices. It owns one complete capability profile and groups exact native or constrained leaf
+evidence into stable workload or resource facilities such as an application service, container runtime, object store,
+or database family. Composition remains in `InfrastructureCapabilityRule`; a facility does not create a second
+capability vocabulary or duplicate evidence records.
+
+`InfrastructureTargetCompiler` is the shared planning mechanism. For each logical workload and resource it finds the
+facilities whose owned leaf evidence and capability rules can prove every requirement declared directly on that node.
+One candidate is selected automatically; zero candidates and unresolved alternatives produce structured diagnostics.
+The standard `target/facility` setting, scoped to the exact logical-node identity, lets the normal convention
+precedence choose among semantically compatible facilities while preserving the selected value's origin and authority.
+
+After facility selection, the compiler restricts capability resolution to the evidence owned by selected facilities,
+plus unowned target-wide evidence and required auxiliary evidence. It then delegates binding elaboration, capability
+composition, constrained-boundary acceptance, and residual diagnostics to `InfrastructureCapabilityCompiler`. The
+closure remains fenced to the manifest's exact capability profile; the facility decisions in the outer plan retain
+the evidence-selection policy. This avoids synthetic profiles and lets an acceptance policy be authored against the
+stable target manifest rather than against a compiler-generated identity.
+
+Bindings may induce end-to-end capabilities that no single facility directly supplies. Those obligations are proved
+after physical families are selected because their rules may compose evidence across the selected workload and
+resource facilities. A target-specific projection may translate successful decisions into Azure, AWS, GCP,
+Kubernetes, or local resource descriptions and names, but it does not reimplement selection, capability closure,
+convention precedence, diagnostics, or plan identity. Provider emission and execution remain adapter concerns.
+
 ## Capability proof rules
 
 Requirements and supplied capabilities use the same requirement-shaped vocabulary. A provider manifest must not
@@ -165,11 +196,12 @@ the repository-wide precedence order:
 
 `InfrastructureConventionResolver` currently retains the stable subject and setting, canonical value, suite-wide
 origin, and supplying authority. Equally authoritative conflicting values produce a structured ambiguity diagnostic.
-Convention resolution is explicit and is not yet an implicit stage inside `InfrastructureCapabilityCompiler`.
-Later explain artifacts can add input fingerprints, alternatives, reasons, and relevant capability evidence without
-making conventions semantic authority. Conventions may select among semantically valid alternatives, derive stable
-names and tags, choose a local emulator, attach standard telemetry, or add an attributable auxiliary resource. They
-may not invent application requirements, hide ambiguity, or weaken a guarantee.
+`InfrastructureTargetCompiler` resolves supplied convention profiles as part of facility planning;
+`InfrastructureCapabilityCompiler` remains independently usable and does not resolve ambient configuration. Later
+explain artifacts can add input fingerprints, alternatives, reasons, and relevant capability evidence without making
+conventions semantic authority. Conventions may select among semantically valid alternatives, derive stable names and
+tags, choose a local emulator, attach standard telemetry, or add an attributable auxiliary resource. They may not
+invent application requirements, hide ambiguity, or weaken a guarantee.
 
 ## Diagnostics are part of the programming model
 
