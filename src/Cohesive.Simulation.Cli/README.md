@@ -31,8 +31,10 @@ cancellation, or provisioning failure preserves the previous artifact. Standard 
 a partial batch if its consumer fails.
 
 The emitted records use `WorldJsonLinesSink.Format` and retain deterministic world, run, batch, population, sequence,
-and replay provenance. `--target` is required because logical destination identity participates in run and batch IDs;
-filesystem paths and machine-specific working directories are not allowed to silently change those identities.
+named-exemplar, and replay provenance. Each record's `exemplars` array lets a script locate purposeful instances such
+as `customer-for-ui` without relying on output position or incidental generated values. `--target` is required because
+logical destination identity participates in run and batch IDs; filesystem paths and machine-specific working
+directories are not allowed to silently change those identities.
 
 In Playwright, run the tool from `globalSetup` before creating application fixtures, then load the resulting JSON
 Lines file or pass it to an application-specific seeding endpoint:

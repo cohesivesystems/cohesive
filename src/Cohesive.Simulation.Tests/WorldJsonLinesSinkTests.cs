@@ -14,7 +14,10 @@ public sealed class WorldJsonLinesSinkTests
             .Member(value => value.Name, Gen.Constant("Ada"))
             .Member(value => value.Age, Gen.Int32(minimum: 18, maximum: 90)));
         var world = Simulation.DefineWorld("world/json-lines", "r1", builder => builder
-                .Population("customers", count: 3, generation))
+                .Population("customers", count: 3, generation)
+                .Exemplar("primary-customer", "customers", sequenceIndex: 0)
+                .Exemplar("customer-for-ui", "customers", sequenceIndex: 2)
+                .Exemplar("secondary-ui-alias", "customers", sequenceIndex: 2))
             .Compile();
         using MemoryStream firstOutput = new();
         using MemoryStream secondOutput = new();
@@ -44,6 +47,17 @@ public sealed class WorldJsonLinesSinkTests
             Assert.Equal("customers", root.GetProperty("populationId").GetString());
             Assert.Equal(3, root.GetProperty("populationCount").GetInt32());
             Assert.Equal(index, root.GetProperty("sequenceIndex").GetInt64());
+            Assert.Equal(
+                index switch
+                {
+                    0 => ["primary-customer"],
+                    1 => [],
+                    2 => ["customer-for-ui", "secondary-ui-alias"],
+                    _ => throw new InvalidOperationException()
+                },
+                root.GetProperty("exemplars")
+                    .EnumerateArray()
+                    .Select(static item => item.GetString()));
 
             var replay = GenerationReplayEvidence.ParseToken(root.GetProperty("replayToken").GetString()!);
             var generated = ReferenceGenerationInterpreter.Replay(

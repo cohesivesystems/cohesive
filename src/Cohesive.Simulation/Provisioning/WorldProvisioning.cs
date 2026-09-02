@@ -194,6 +194,11 @@ public sealed class WorldProvisioningBatch
         Ordinal = ordinal;
         StartSequenceIndex = startSequenceIndex;
         Items = items;
+        Exemplars = SelectExemplars(
+            world.Exemplars,
+            population.Definition.Id,
+            startSequenceIndex,
+            items.Length);
     }
 
     /// <summary>Gets the deterministic batch identity.</summary>
@@ -240,6 +245,34 @@ public sealed class WorldProvisioningBatch
 
     /// <summary>Gets generated observations in ascending contiguous sequence-index order.</summary>
     public ImmutableArray<GeneratedObservation> Items { get; }
+
+    /// <summary>Gets exemplar declarations whose exact generated members occur in this batch.</summary>
+    /// <remarks>Declarations retain stable exemplar identity order and do not duplicate generated observations.</remarks>
+    public ImmutableArray<WorldExemplarDefinition> Exemplars { get; }
+
+    static ImmutableArray<WorldExemplarDefinition> SelectExemplars(
+        ImmutableArray<WorldExemplarDefinition> exemplars,
+        string populationId,
+        long startSequenceIndex,
+        int itemCount)
+    {
+        if (exemplars.IsDefaultOrEmpty)
+            return [];
+
+        var endSequenceIndex = startSequenceIndex + itemCount;
+        var selected = ImmutableArray.CreateBuilder<WorldExemplarDefinition>();
+        foreach (var exemplar in exemplars)
+        {
+            if (string.Equals(exemplar.PopulationId, populationId, StringComparison.Ordinal)
+                && exemplar.SequenceIndex >= startSequenceIndex
+                && exemplar.SequenceIndex < endSequenceIndex)
+            {
+                selected.Add(exemplar);
+            }
+        }
+
+        return selected.ToImmutable();
+    }
 }
 
 /// <summary>Outcome asserted by a sink for one complete provisioning batch.</summary>

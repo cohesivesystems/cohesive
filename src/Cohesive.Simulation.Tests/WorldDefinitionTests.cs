@@ -112,6 +112,53 @@ public sealed class WorldDefinitionTests
     }
 
     [Fact]
+    public void NamedExemplar_ResolvesTheExactRawAndTypedPopulationMember()
+    {
+        var customers = CustomerGeneration();
+        var plan = Simulation.DefineWorld("world/exemplars", "r1", world => world
+                .Population("customers", count: 3, customers)
+                .Exemplar("customer-for-ui", "customers", sequenceIndex: 2))
+            .Compile();
+        var population = plan.GetPopulation("customers");
+        var typedGenerator = customers.Compile();
+
+        var direct = population.Generate(seed: 42)[2];
+        var exemplar = plan.GenerateExemplar("customer-for-ui", seed: 42);
+        var typed = plan.GenerateExemplar("customer-for-ui", seed: 42, generator: typedGenerator);
+
+        Assert.Equal(["customer-for-ui"], plan.Exemplars.Select(static item => item.Id));
+        Assert.Equal(direct, exemplar);
+        Assert.Equal(direct.Observation, typed.Observation);
+        Assert.Equal(direct.Replay, typed.Replay);
+        Assert.Equal(typedGenerator.Materializer.Materialize(direct.Observation), typed.Value);
+        Assert.Throws<ArgumentException>(() => plan.GenerateExemplar(
+            "customer-for-ui",
+            seed: 42,
+            generator: OrderGeneration().Compile()));
+        Assert.Throws<KeyNotFoundException>(() => plan.GenerateExemplar("missing", seed: 42));
+    }
+
+    [Fact]
+    public void AddingAnUnrelatedExemplar_DoesNotPerturbExistingGenerationCoordinates()
+    {
+        var customers = CustomerGeneration();
+        var baseline = Simulation.DefineWorld("world/exemplar-stability", "r1", world => world
+                .Population("customers", count: 3, customers)
+                .Exemplar("primary-customer", "customers", sequenceIndex: 0))
+            .Compile();
+        var extended = Simulation.DefineWorld("world/exemplar-stability", "r2", world => world
+                .Population("customers", count: 3, customers)
+                .Exemplar("secondary-customer", "customers", sequenceIndex: 1)
+                .Exemplar("primary-customer", "customers", sequenceIndex: 0))
+            .Compile();
+
+        Assert.Equal(
+            baseline.GenerateExemplar("primary-customer", seed: 42),
+            extended.GenerateExemplar("primary-customer", seed: 42));
+        Assert.NotEqual(baseline.Fingerprint, extended.Fingerprint);
+    }
+
+    [Fact]
     public void PopulationEnumeration_IsLazyAcrossItsDeclaredBound()
     {
         var world = Simulation.DefineWorld("world/preview", "r1", builder => builder
@@ -173,6 +220,64 @@ public sealed class WorldDefinitionTests
             invalidGeneration.CompileResult(),
             "simulation.generation.int32RangeInvalid",
             "/populations/0/generation/root/members/1/generator");
+    }
+
+    [Fact]
+    public void InvalidExemplars_ProducePreciseStructuredDiagnostics()
+    {
+        WorldPopulationDefinition population = new(
+            "customers",
+            count: 2,
+            CustomerGeneration().Definition);
+        var duplicate = new WorldDefinition(
+            "world/duplicate-exemplar",
+            "r1",
+            [population],
+            [
+                new("customer-for-ui", "customers", sequenceIndex: 0),
+                new("customer-for-ui", "customers", sequenceIndex: 1)
+            ]);
+        var unknownPopulation = new WorldDefinition(
+            "world/unknown-exemplar-population",
+            "r1",
+            [population],
+            [new("customer-for-ui", "missing", sequenceIndex: 0)]);
+        var outOfRange = new WorldDefinition(
+            "world/out-of-range-exemplar",
+            "r1",
+            [population],
+            [new("customer-for-ui", "customers", sequenceIndex: 2)]);
+        var negative = new WorldDefinition(
+            "world/negative-exemplar",
+            "r1",
+            [population],
+            [new("customer-for-ui", "customers", sequenceIndex: -1)]);
+        var empty = new WorldDefinition(
+            "world/empty-exemplar-population",
+            "r1",
+            [new("customers", count: 0, CustomerGeneration().Definition)],
+            [new("customer-for-ui", "customers", sequenceIndex: 0)]);
+
+        AssertDiagnostic(
+            duplicate.CompileResult(),
+            "simulation.world.exemplarIdentityDuplicate",
+            "/exemplars/1/id");
+        AssertDiagnostic(
+            unknownPopulation.CompileResult(),
+            "simulation.world.exemplarPopulationUnknown",
+            "/exemplars/0/populationId");
+        AssertDiagnostic(
+            outOfRange.CompileResult(),
+            "simulation.world.exemplarSequenceIndexInvalid",
+            "/exemplars/0/sequenceIndex");
+        AssertDiagnostic(
+            negative.CompileResult(),
+            "simulation.world.exemplarSequenceIndexInvalid",
+            "/exemplars/0/sequenceIndex");
+        AssertDiagnostic(
+            empty.CompileResult(),
+            "simulation.world.exemplarSequenceIndexInvalid",
+            "/exemplars/0/sequenceIndex");
     }
 
     static void AssertDiagnostic(

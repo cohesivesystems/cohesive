@@ -30,6 +30,13 @@ public sealed class WorldProvisioningTests
         Assert.Equal(["customers", "customers", "orders"], firstSink.Batches.Select(static batch => batch.PopulationId));
         Assert.Equal([0L, 2L, 0L], firstSink.Batches.Select(static batch => batch.StartSequenceIndex));
         Assert.All(firstSink.Batches, static batch => Assert.InRange(batch.Items.Length, low: 1, high: 2));
+        Assert.Empty(firstSink.Batches[0].Exemplars);
+        Assert.Equal(
+            ["customer-for-ui"],
+            firstSink.Batches[1].Exemplars.Select(static exemplar => exemplar.Id));
+        Assert.Equal(
+            ["first-order"],
+            firstSink.Batches[2].Exemplars.Select(static exemplar => exemplar.Id));
         Assert.Equal(
             [0L, 1L, 2L],
             firstSink.Batches
@@ -191,7 +198,9 @@ public sealed class WorldProvisioningTests
             .Member(value => value.Number, Gen.Int32(minimum: 1, maximum: 1_000_000)));
         return Simulation.DefineWorld("world/provisioning", "r1", world => world
             .Population("orders", count: 2, orders)
-            .Population("customers", count: 3, customers));
+            .Population("customers", count: 3, customers)
+            .Exemplar("customer-for-ui", "customers", sequenceIndex: 2)
+            .Exemplar("first-order", "orders", sequenceIndex: 0));
     }
 
     sealed class RecordingSink(

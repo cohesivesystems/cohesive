@@ -29,6 +29,11 @@ public sealed class SimulationCliTests
             Assert.Equal("playwright/global-setup", root.GetProperty("targetId").GetString());
             Assert.Equal("-9223372036854775808", root.GetProperty("rootSeed").GetString());
             Assert.Equal(index, root.GetProperty("sequenceIndex").GetInt64());
+            Assert.Equal(
+                index == 1 ? ["customer-for-ui"] : [],
+                root.GetProperty("exemplars")
+                    .EnumerateArray()
+                    .Select(static item => item.GetString()));
         }
     }
 
@@ -249,7 +254,8 @@ public sealed class SimulationCliTests
                 Gen.Weighted("Grace", weight: 1d)))
             .Member(value => value.Age, Gen.Int32(minimum: 18, maximum: 90)));
         return Simulation.DefineWorld("world/cli", "r1", world => world
-            .Population("customers", count: 2, customers));
+            .Population("customers", count: 2, customers)
+            .Exemplar("customer-for-ui", "customers", sequenceIndex: 1));
     }
 
     static string CreateTemporaryDirectory()

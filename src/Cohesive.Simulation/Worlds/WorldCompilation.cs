@@ -81,7 +81,7 @@ public sealed class CompiledWorldPopulation
         return generator.EnumerateSequence(seed, Scope, Definition.Count);
     }
 
-    void ValidateGenerator<T>(CompiledPocoGenerator<T> generator)
+    internal void ValidateGenerator<T>(CompiledPocoGenerator<T> generator)
     {
         ArgumentNullException.ThrowIfNull(generator);
         var observed = generator.Plan;
@@ -106,10 +106,12 @@ public sealed class CompiledWorldPlan
     internal CompiledWorldPlan(
         WorldDefinition definition,
         ImmutableArray<CompiledWorldPopulation> populations,
+        ImmutableArray<WorldExemplarDefinition> exemplars,
         string fingerprint)
     {
         Definition = definition;
         Populations = populations;
+        Exemplars = exemplars;
         Fingerprint = fingerprint;
     }
 
@@ -119,7 +121,10 @@ public sealed class CompiledWorldPlan
     /// <summary>Gets compiled populations in stable identity order.</summary>
     public ImmutableArray<CompiledWorldPopulation> Populations { get; }
 
-    /// <summary>Gets the lowercase SHA-256 fingerprint of exact world population content.</summary>
+    /// <summary>Gets named exemplars in stable identity order.</summary>
+    public ImmutableArray<WorldExemplarDefinition> Exemplars { get; }
+
+    /// <summary>Gets the lowercase SHA-256 fingerprint of exact world semantic content.</summary>
     public string Fingerprint { get; }
 
     /// <summary>Gets the fingerprint algorithm identity.</summary>
@@ -161,6 +166,82 @@ public sealed class CompiledWorldPlan
             ? population!
             : throw new KeyNotFoundException(
                 $"World '{Definition.Id}' contains no population with identity '{id}'.");
+
+    /// <summary>Finds one named exemplar by stable world-wide identity.</summary>
+    /// <param name="id">Stable exemplar identity.</param>
+    /// <param name="exemplar">Receives the exemplar declaration when found.</param>
+    /// <returns><see langword="true"/> when the exemplar exists; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="id"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="id"/> is empty or white-space.</exception>
+    public bool TryGetExemplar(string id, out WorldExemplarDefinition? exemplar)
+    {
+        id = Guard.RequireNotNullOrWhiteSpace(id);
+        foreach (var candidate in Exemplars)
+        {
+            if (!string.Equals(candidate.Id, id, StringComparison.Ordinal))
+                continue;
+
+            exemplar = candidate;
+            return true;
+        }
+
+        exemplar = null;
+        return false;
+    }
+
+    /// <summary>Gets one named exemplar by stable world-wide identity.</summary>
+    /// <param name="id">Stable exemplar identity.</param>
+    /// <returns>The exemplar declaration named by <paramref name="id"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="id"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="id"/> is empty or white-space.</exception>
+    /// <exception cref="KeyNotFoundException">The world contains no exemplar with the supplied identity.</exception>
+    public WorldExemplarDefinition GetExemplar(string id) =>
+        TryGetExemplar(id, out var exemplar)
+            ? exemplar!
+            : throw new KeyNotFoundException(
+                $"World '{Definition.Id}' contains no exemplar with identity '{id}'.");
+
+    /// <summary>Generates the exact observation named by a world exemplar.</summary>
+    /// <param name="id">Stable exemplar identity.</param>
+    /// <param name="seed">World root seed shared by all populations.</param>
+    /// <returns>The generated observation and its exact replay evidence.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="id"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="id"/> is empty or white-space.</exception>
+    /// <exception cref="KeyNotFoundException">The world contains no exemplar with the supplied identity.</exception>
+    public GeneratedObservation GenerateExemplar(string id, long seed)
+    {
+        var exemplar = GetExemplar(id);
+        var population = GetPopulation(exemplar.PopulationId);
+        return ReferenceGenerationInterpreter.Generate(
+            population.GenerationPlan,
+            seed,
+            population.Scope,
+            exemplar.SequenceIndex);
+    }
+
+    /// <summary>Generates and materializes the exact observation named by a world exemplar.</summary>
+    /// <typeparam name="T">CLR target type.</typeparam>
+    /// <param name="id">Stable exemplar identity.</param>
+    /// <param name="seed">World root seed shared by all populations.</param>
+    /// <param name="generator">Typed generator compiled from the exemplar population's generation definition.</param>
+    /// <returns>The generated CLR value, authoritative observation, and exact replay evidence.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="id"/> or <paramref name="generator"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="id"/> is empty, or <paramref name="generator"/> names another generation definition.
+    /// </exception>
+    /// <exception cref="KeyNotFoundException">The world contains no exemplar with the supplied identity.</exception>
+    public Generated<T> GenerateExemplar<T>(
+        string id,
+        long seed,
+        CompiledPocoGenerator<T> generator)
+    {
+        var exemplar = GetExemplar(id);
+        var population = GetPopulation(exemplar.PopulationId);
+        population.ValidateGenerator(generator);
+        return generator.Generate(seed, population.Scope, exemplar.SequenceIndex);
+    }
 }
 
 /// <summary>Result of attempting provider-neutral world compilation.</summary>
@@ -232,6 +313,7 @@ public static class WorldCompiler
         }
 
         HashSet<string> identities = new(StringComparer.Ordinal);
+        Dictionary<string, int> populationCounts = new(StringComparer.Ordinal);
         List<(WorldPopulationDefinition Population, CompiledGenerationPlan Generation)> compiled = [];
         for (var index = 0; index < definition.Populations.Length; index++)
         {
@@ -256,6 +338,10 @@ public static class WorldCompiler
                     message: $"Population identity '{population.Id}' is declared more than once.",
                     location: $"{location}/id");
                 usable = false;
+            }
+            else
+            {
+                populationCounts.Add(population.Id, population.Count);
             }
 
             if (population.Count < 0)
@@ -286,12 +372,69 @@ public static class WorldCompiler
                 compiled.Add((population, generation.Plan!));
         }
 
+        HashSet<string> exemplarIdentities = new(StringComparer.Ordinal);
+        List<WorldExemplarDefinition> compiledExemplars = [];
+        for (var index = 0; index < definition.Exemplars.Length; index++)
+        {
+            var exemplar = definition.Exemplars[index];
+            var location = $"/exemplars/{index}";
+            if (exemplar is null)
+            {
+                Add(
+                    diagnostics,
+                    code: "simulation.world.exemplarMissing",
+                    message: "A world cannot contain a null exemplar.",
+                    location: location);
+                continue;
+            }
+
+            var usable = true;
+            if (!exemplarIdentities.Add(exemplar.Id))
+            {
+                Add(
+                    diagnostics,
+                    code: "simulation.world.exemplarIdentityDuplicate",
+                    message: $"Exemplar identity '{exemplar.Id}' is declared more than once.",
+                    location: $"{location}/id");
+                usable = false;
+            }
+
+            if (!populationCounts.TryGetValue(exemplar.PopulationId, out var populationCount))
+            {
+                Add(
+                    diagnostics,
+                    code: "simulation.world.exemplarPopulationUnknown",
+                    message: $"Exemplar '{exemplar.Id}' references unknown population '{exemplar.PopulationId}'.",
+                    location: $"{location}/populationId");
+                usable = false;
+            }
+            else if (populationCount >= 0
+                     && (exemplar.SequenceIndex < 0 || exemplar.SequenceIndex >= populationCount))
+            {
+                var message = populationCount == 0
+                    ? $"Exemplar '{exemplar.Id}' cannot reference empty population '{exemplar.PopulationId}'."
+                    : $"Exemplar '{exemplar.Id}' sequence index '{exemplar.SequenceIndex}' is outside population "
+                      + $"'{exemplar.PopulationId}' bounds 0 through {populationCount - 1}.";
+                Add(
+                    diagnostics,
+                    code: "simulation.world.exemplarSequenceIndexInvalid",
+                    message,
+                    location: $"{location}/sequenceIndex");
+                usable = false;
+            }
+
+            if (usable)
+                compiledExemplars.Add(exemplar);
+        }
+
         var validation = CreateValidation(diagnostics);
         if (!validation.IsValid)
             return new(definition, plan: null, validation);
 
         compiled.Sort(static (left, right) =>
             StringComparer.Ordinal.Compare(left.Population.Id, right.Population.Id));
+        compiledExemplars.Sort(static (left, right) =>
+            StringComparer.Ordinal.Compare(left.Id, right.Id));
         var populations = ImmutableArray.CreateBuilder<CompiledWorldPopulation>(compiled.Count);
         var normalizedDefinitions = ImmutableArray.CreateBuilder<WorldPopulationDefinition>(compiled.Count);
         foreach (var item in compiled)
@@ -312,15 +455,17 @@ public static class WorldCompiler
                 WorldPopulationScopeConvention.Create(definition.Id, normalizedPopulation.Id)));
         }
 
+        ImmutableArray<WorldExemplarDefinition> exemplars = [.. compiledExemplars];
         var normalizedWorld = new WorldDefinition(
             definition.Id,
             definition.Revision,
-            normalizedDefinitions.MoveToImmutable());
+            normalizedDefinitions.MoveToImmutable(),
+            exemplars);
         var compiledPopulations = populations.MoveToImmutable();
-        var fingerprint = WorldCanonicalizer.ComputeDefinitionFingerprint(compiledPopulations);
+        var fingerprint = WorldCanonicalizer.ComputeDefinitionFingerprint(compiledPopulations, exemplars);
         return new(
             definition,
-            new CompiledWorldPlan(normalizedWorld, compiledPopulations, fingerprint),
+            new CompiledWorldPlan(normalizedWorld, compiledPopulations, exemplars, fingerprint),
             validation);
     }
 
@@ -354,7 +499,8 @@ static class WorldCanonicalizer
     public const string CanonicalizationProfile = WorldDefinitionFingerprint.CurrentCanonicalization;
 
     public static string ComputeDefinitionFingerprint(
-        ImmutableArray<CompiledWorldPopulation> populations)
+        ImmutableArray<CompiledWorldPopulation> populations,
+        ImmutableArray<WorldExemplarDefinition> exemplars)
     {
         using SimulationFingerprintWriter writer = new();
         writer.Append(CanonicalizationProfile);
@@ -369,6 +515,14 @@ static class WorldCanonicalizer
             writer.Append(population.GenerationPlan.FingerprintAlgorithm);
             writer.Append(population.GenerationPlan.FingerprintCanonicalization);
             writer.Append(population.GenerationPlan.Fingerprint);
+        }
+
+        writer.Append(exemplars.Length);
+        foreach (var exemplar in exemplars)
+        {
+            writer.Append(exemplar.Id);
+            writer.Append(exemplar.PopulationId);
+            writer.Append(exemplar.SequenceIndex);
         }
 
         return writer.Complete();
