@@ -88,7 +88,7 @@ public sealed record WorldDefinitionDocument
     /// <summary>Gets the normalized provider-neutral world definition.</summary>
     public WorldDefinition Definition { get; }
 
-    /// <summary>Gets the fingerprint of exact world population content.</summary>
+    /// <summary>Gets the fingerprint of exact world semantic content.</summary>
     public WorldDefinitionFingerprint Fingerprint { get; }
 
     /// <summary>Creates a current-version portable document from one valid world definition.</summary>
@@ -100,6 +100,12 @@ public sealed record WorldDefinitionDocument
     {
         ArgumentNullException.ThrowIfNull(definition);
         return new(CreateState(definition));
+    }
+
+    internal static WorldDefinitionDocument FromCompiledPlan(CompiledWorldPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        return new(CreateState(plan));
     }
 
     /// <summary>Compiles the validated document into isolated deterministic population streams.</summary>
@@ -148,7 +154,14 @@ public sealed record WorldDefinitionDocument
         WorldDefinition Definition,
         WorldDefinitionFingerprint Fingerprint) CreateState(WorldDefinition definition)
     {
-        var plan = RequirePlan(definition);
+        return CreateState(RequirePlan(definition));
+    }
+
+    static (
+        string SchemaVersion,
+        WorldDefinition Definition,
+        WorldDefinitionFingerprint Fingerprint) CreateState(CompiledWorldPlan plan)
+    {
         return (
             CurrentSchemaVersion,
             plan.Definition,

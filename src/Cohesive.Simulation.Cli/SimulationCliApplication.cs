@@ -1,5 +1,6 @@
 using System.Text;
 using Cohesive.Cli;
+using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Worlds;
 
@@ -39,37 +40,88 @@ static class SimulationCliApplication
 
     static CliApplication Create(Stream standardInput, Stream standardOutput)
     {
-        var app = new CliApplication("Provision deterministic data from a portable Cohesive simulation world.");
-        app.Command<SimulationCliOptions>("provision", "Compile and provision a portable world as JSON Lines.")
-            .Validate((SimulationCliOptions options) =>
+        var app = new CliApplication("Create and provision deterministic Cohesive world artifacts.");
+        app.Command<WorldManifestCliOptions>(
+                "manifest",
+                "Create and retain a verified world-artifact manifest.")
+            .OnExecute((CliCommandContext<WorldManifestCliOptions> context) =>
+                CreateManifestAsync(context, standardInput, standardOutput));
+        app.Command<WorldProvisionCliOptions>(
+                "provision",
+                "Provision a retained world-artifact manifest as JSON Lines.")
+            .Validate((WorldProvisionCliOptions options) =>
                 options.BatchSize > 0
                     ? []
                     : new[] { $"Batch size '{options.BatchSize}' is not a positive 32-bit integer." })
-            .OnExecute((CliCommandContext<SimulationCliOptions> context) =>
+            .OnExecute((CliCommandContext<WorldProvisionCliOptions> context) =>
                 ProvisionAsync(context, standardInput, standardOutput));
         return app;
     }
 
-    static async Task<int> ProvisionAsync(
-        CliCommandContext<SimulationCliOptions> context,
+    static async Task<int> CreateManifestAsync(
+        CliCommandContext<WorldManifestCliOptions> context,
         Stream standardInput,
         Stream standardOutput)
     {
         try
         {
             var options = NormalizePaths(context.Configuration);
-            var worldJson = await ReadWorldJsonAsync(options, standardInput, context.CancellationToken)
+            var worldJson = await ReadJsonAsync(
+                    options.WorldPath,
+                    options.ReadsStandardInput,
+                    standardInput,
+                    context.CancellationToken)
                 .ConfigureAwait(false);
-            var document = WorldDefinitionJsonSerializer.Deserialize(worldJson);
-            if (options.WritesStandardOutput)
-            {
-                await ProvisionAsync(document, options, standardOutput, context.CancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                await ProvisionFileAsync(document, options, context.CancellationToken).ConfigureAwait(false);
-            }
+            var world = WorldDefinitionJsonSerializer.Deserialize(worldJson);
+            var manifest = WorldArtifactManifest.FromWorld(world, options.RootSeed);
+            var canonicalManifest = WorldArtifactManifestJsonSerializer.GetCanonicalBytes(manifest);
+            await WriteOutputAsync(
+                    options.OutputPath,
+                    options.WritesStandardOutput,
+                    standardOutput,
+                    async (output, cancellationToken) =>
+                    {
+                        await output.WriteAsync(canonicalManifest, cancellationToken).ConfigureAwait(false);
+                        await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    },
+                    context.CancellationToken)
+                .ConfigureAwait(false);
+            return SuccessExitCode;
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            context.Output.WriteErrorLine("Simulation manifest creation was cancelled.");
+            return CancelledExitCode;
+        }
+        catch (Exception exception)
+        {
+            context.Output.WriteErrorLine(exception.Message);
+            return FailureExitCode;
+        }
+    }
 
+    static async Task<int> ProvisionAsync(
+        CliCommandContext<WorldProvisionCliOptions> context,
+        Stream standardInput,
+        Stream standardOutput)
+    {
+        try
+        {
+            var options = NormalizePaths(context.Configuration);
+            var manifestJson = await ReadJsonAsync(
+                    options.ManifestPath,
+                    options.ReadsStandardInput,
+                    standardInput,
+                    context.CancellationToken)
+                .ConfigureAwait(false);
+            var manifest = WorldArtifactManifestJsonSerializer.Deserialize(manifestJson);
+            await WriteOutputAsync(
+                    options.OutputPath,
+                    options.WritesStandardOutput,
+                    standardOutput,
+                    (output, cancellationToken) => ProvisionAsync(manifest, options, output, cancellationToken),
+                    context.CancellationToken)
+                .ConfigureAwait(false);
             return SuccessExitCode;
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
@@ -84,16 +136,23 @@ static class SimulationCliApplication
         }
     }
 
-    static SimulationCliOptions NormalizePaths(SimulationCliOptions options) =>
+    static WorldManifestCliOptions NormalizePaths(WorldManifestCliOptions options) =>
         options with
         {
             WorldPath = NormalizePath(options.WorldPath, "--world"),
             OutputPath = NormalizePath(options.OutputPath, "--out")
         };
 
+    static WorldProvisionCliOptions NormalizePaths(WorldProvisionCliOptions options) =>
+        options with
+        {
+            ManifestPath = NormalizePath(options.ManifestPath, "--manifest"),
+            OutputPath = NormalizePath(options.OutputPath, "--out")
+        };
+
     static string NormalizePath(string value, string option)
     {
-        if (string.Equals(value, SimulationCliOptions.StandardStreamPath, StringComparison.Ordinal))
+        if (string.Equals(value, SimulationCliPaths.StandardStream, StringComparison.Ordinal))
             return value;
 
         try
@@ -106,29 +165,38 @@ static class SimulationCliApplication
         }
     }
 
-    static async Task<string> ReadWorldJsonAsync(
-        SimulationCliOptions options,
+    static async Task<string> ReadJsonAsync(
+        string inputPath,
+        bool readsStandardInput,
         Stream standardInput,
         CancellationToken cancellationToken)
     {
-        if (!options.ReadsStandardInput)
-            return await File.ReadAllTextAsync(options.WorldPath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+        if (!readsStandardInput)
+            return await File.ReadAllTextAsync(inputPath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
 
         using var reader = CliStandardStreams.OpenUtf8Reader(standardInput);
         return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    static async Task ProvisionFileAsync(
-        WorldDefinitionDocument document,
-        SimulationCliOptions options,
+    static async Task WriteOutputAsync(
+        string outputPath,
+        bool writesStandardOutput,
+        Stream standardOutput,
+        Func<Stream, CancellationToken, Task> write,
         CancellationToken cancellationToken)
     {
-        var outputDirectory = Path.GetDirectoryName(options.OutputPath)
-            ?? throw new InvalidOperationException($"Output path '{options.OutputPath}' has no parent directory.");
+        if (writesStandardOutput)
+        {
+            await write(standardOutput, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var outputDirectory = Path.GetDirectoryName(outputPath)
+            ?? throw new InvalidOperationException($"Output path '{outputPath}' has no parent directory.");
         Directory.CreateDirectory(outputDirectory);
         var temporaryPath = Path.Combine(
             outputDirectory,
-            $".{Path.GetFileName(options.OutputPath)}.{Guid.NewGuid():N}.tmp");
+            $".{Path.GetFileName(outputPath)}.{Guid.NewGuid():N}.tmp");
         try
         {
             await using (FileStream temporaryOutput = new(
@@ -139,11 +207,11 @@ static class SimulationCliApplication
                              bufferSize: 4096,
                              FileOptions.Asynchronous | FileOptions.SequentialScan))
             {
-                await ProvisionAsync(document, options, temporaryOutput, cancellationToken).ConfigureAwait(false);
+                await write(temporaryOutput, cancellationToken).ConfigureAwait(false);
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            File.Move(temporaryPath, options.OutputPath, overwrite: true);
+            File.Move(temporaryPath, outputPath, overwrite: true);
         }
         catch
         {
@@ -160,23 +228,21 @@ static class SimulationCliApplication
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            // Preserve the provisioning failure. The uniquely named temporary artifact remains diagnosable.
+            // Preserve the write failure. The uniquely named temporary artifact remains diagnosable.
         }
     }
 
-    static async Task ProvisionAsync(
-        WorldDefinitionDocument document,
-        SimulationCliOptions options,
+    static Task ProvisionAsync(
+        WorldArtifactManifest manifest,
+        WorldProvisionCliOptions options,
         Stream output,
         CancellationToken cancellationToken)
     {
         WorldJsonLinesSink sink = new(options.TargetId, output);
-        await WorldProvisioner.ProvisionAsync(
-                document.Compile(),
-                options.RootSeed,
-                sink,
-                new(options.BatchSize),
-                cancellationToken)
-            .ConfigureAwait(false);
+        return WorldProvisioner.ProvisionAsync(
+            manifest,
+            sink,
+            new(options.BatchSize),
+            cancellationToken);
     }
 }

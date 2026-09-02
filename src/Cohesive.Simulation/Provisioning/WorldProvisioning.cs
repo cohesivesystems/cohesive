@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Worlds;
 
@@ -50,15 +51,14 @@ public readonly record struct WorldProvisioningBatchId
 
 /// <summary>Deterministic convention for provisioning run and batch identities.</summary>
 /// <remarks>
-/// A run identity names one exact compiled world, root seed, batching policy, reference interpreter, and logical sink
-/// target. Batch identities additionally name a population and contiguous sequence range. The generated observations
-/// need not be hashed again because those coordinates completely determine them under the versioned interpreter
-/// contract.
+/// A run identity names one exact world artifact, batching policy, and logical sink target. Batch identities
+/// additionally name a population and contiguous sequence range. The generated observations need not be hashed again
+/// because the artifact manifest pins the world, seed, scopes, and versioned generation interpreter.
 /// </remarks>
 public static class WorldProvisioningIdentityConvention
 {
     /// <summary>Stable identity of the current provisioning identity convention.</summary>
-    public const string Identity = "cohesive-simulation-world-provisioning/v1";
+    public const string Identity = "cohesive-simulation-world-provisioning/v2";
 
     /// <summary>Derives the run identity for one exact world, seed, batching policy, and logical sink target.</summary>
     /// <param name="world">Exact compiled world to provision.</param>
@@ -77,22 +77,33 @@ public static class WorldProvisioningIdentityConvention
         int batchSize = WorldProvisioningOptions.DefaultBatchSize)
     {
         ArgumentNullException.ThrowIfNull(world);
+        return CreateRunId(WorldArtifactManifest.FromWorld(world, rootSeed), targetId, batchSize);
+    }
+
+    /// <summary>Derives the run identity for one exact artifact, batching policy, and logical sink target.</summary>
+    /// <param name="artifact">Exact target-independent world artifact to provision.</param>
+    /// <param name="targetId">Stable logical identity of the sink target.</param>
+    /// <param name="batchSize">Positive maximum number of observations delivered in one sink call.</param>
+    /// <returns>A deterministic content-addressed run identity.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="artifact"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="targetId"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="targetId"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="batchSize"/> is not positive.</exception>
+    public static WorldProvisioningRunId CreateRunId(
+        WorldArtifactManifest artifact,
+        string targetId,
+        int batchSize = WorldProvisioningOptions.DefaultBatchSize)
+    {
+        ArgumentNullException.ThrowIfNull(artifact);
         targetId = Guard.RequireNotNullOrWhiteSpace(targetId);
         if (batchSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(batchSize), batchSize, "Provisioning batch size must be positive.");
         using SimulationFingerprintWriter writer = new();
         writer.Append(Identity);
-        writer.Append(world.Definition.Id);
-        writer.Append(world.Definition.Revision);
-        writer.Append(world.FingerprintAlgorithm);
-        writer.Append(world.FingerprintCanonicalization);
-        writer.Append(world.Fingerprint);
-        writer.Append(rootSeed);
+        writer.Append(artifact.ArtifactId.Value);
         writer.Append(batchSize);
-        writer.Append(ReferenceGenerationInterpreter.Identity);
-        writer.Append(ReferenceGenerationInterpreter.EntropyAlgorithm);
         writer.Append(targetId);
-        return new($"csimrun1_{writer.Complete()}");
+        return new($"csimrun2_{writer.Complete()}");
     }
 
     /// <summary>Derives the identity of one contiguous population batch.</summary>
@@ -141,7 +152,7 @@ public static class WorldProvisioningIdentityConvention
         writer.Append(batchOrdinal);
         writer.Append(startSequenceIndex);
         writer.Append(itemCount);
-        return new($"csimbatch1_{writer.Complete()}");
+        return new($"csimbatch2_{writer.Complete()}");
     }
 }
 
@@ -172,9 +183,9 @@ public sealed class WorldProvisioningBatch
         WorldProvisioningBatchId id,
         WorldProvisioningRunId runId,
         string targetId,
-        CompiledWorldPlan world,
+        WorldArtifactManifest artifact,
         CompiledWorldPopulation population,
-        long rootSeed,
+        int batchSize,
         int ordinal,
         long startSequenceIndex,
         ImmutableArray<GeneratedObservation> items)
@@ -182,20 +193,16 @@ public sealed class WorldProvisioningBatch
         Id = id;
         RunId = runId;
         TargetId = targetId;
-        WorldId = world.Definition.Id;
-        WorldRevision = world.Definition.Revision;
-        WorldFingerprint = world.Fingerprint;
-        WorldFingerprintAlgorithm = world.FingerprintAlgorithm;
-        WorldFingerprintCanonicalization = world.FingerprintCanonicalization;
+        Artifact = artifact;
         PopulationId = population.Definition.Id;
         PopulationCount = population.Definition.Count;
         PopulationScope = population.Scope;
-        RootSeed = rootSeed;
+        BatchSize = batchSize;
         Ordinal = ordinal;
         StartSequenceIndex = startSequenceIndex;
         Items = items;
         Exemplars = SelectExemplars(
-            world.Exemplars,
+            artifact.Exemplars,
             population.Definition.Id,
             startSequenceIndex,
             items.Length);
@@ -210,20 +217,26 @@ public sealed class WorldProvisioningBatch
     /// <summary>Gets the stable logical sink target identity.</summary>
     public string TargetId { get; }
 
+    /// <summary>Gets the exact target-independent artifact manifest being provisioned.</summary>
+    public WorldArtifactManifest Artifact { get; }
+
+    /// <summary>Gets the content-addressed identity of the exact world artifact.</summary>
+    public WorldArtifactId ArtifactId => Artifact.ArtifactId;
+
     /// <summary>Gets the stable logical world identity.</summary>
-    public string WorldId { get; }
+    public string WorldId => Artifact.World.Definition.Id;
 
     /// <summary>Gets the exact authored world revision.</summary>
-    public string WorldRevision { get; }
+    public string WorldRevision => Artifact.World.Definition.Revision;
 
     /// <summary>Gets the exact compiled world fingerprint.</summary>
-    public string WorldFingerprint { get; }
+    public string WorldFingerprint => Artifact.World.Fingerprint.Value;
 
     /// <summary>Gets the world fingerprint algorithm identity.</summary>
-    public string WorldFingerprintAlgorithm { get; }
+    public string WorldFingerprintAlgorithm => Artifact.World.Fingerprint.Algorithm;
 
     /// <summary>Gets the world fingerprint canonicalization profile.</summary>
-    public string WorldFingerprintCanonicalization { get; }
+    public string WorldFingerprintCanonicalization => Artifact.World.Fingerprint.Canonicalization;
 
     /// <summary>Gets the stable population identity.</summary>
     public string PopulationId { get; }
@@ -234,8 +247,11 @@ public sealed class WorldProvisioningBatch
     /// <summary>Gets the exact isolated generation scope for the population.</summary>
     public GenerationScope PopulationScope { get; }
 
+    /// <summary>Gets the configured maximum number of observations per provisioning batch.</summary>
+    public int BatchSize { get; }
+
     /// <summary>Gets the deterministic root seed.</summary>
-    public long RootSeed { get; }
+    public long RootSeed => Artifact.RootSeed;
 
     /// <summary>Gets the zero-based batch ordinal within the population.</summary>
     public int Ordinal { get; }
@@ -381,19 +397,13 @@ public sealed class WorldProvisioningResult
     internal WorldProvisioningResult(
         WorldProvisioningRunId runId,
         string targetId,
-        CompiledWorldPlan world,
-        long rootSeed,
+        WorldArtifactManifest artifact,
         int batchSize,
         ImmutableArray<WorldProvisionedPopulation> populations)
     {
         RunId = runId;
         TargetId = targetId;
-        WorldId = world.Definition.Id;
-        WorldRevision = world.Definition.Revision;
-        WorldFingerprint = world.Fingerprint;
-        WorldFingerprintAlgorithm = world.FingerprintAlgorithm;
-        WorldFingerprintCanonicalization = world.FingerprintCanonicalization;
-        RootSeed = rootSeed;
+        Artifact = artifact;
         BatchSize = batchSize;
         Populations = populations;
     }
@@ -404,23 +414,29 @@ public sealed class WorldProvisioningResult
     /// <summary>Gets the stable logical sink target identity.</summary>
     public string TargetId { get; }
 
+    /// <summary>Gets the exact target-independent artifact manifest that was provisioned.</summary>
+    public WorldArtifactManifest Artifact { get; }
+
+    /// <summary>Gets the content-addressed identity of the exact world artifact.</summary>
+    public WorldArtifactId ArtifactId => Artifact.ArtifactId;
+
     /// <summary>Gets the stable logical world identity.</summary>
-    public string WorldId { get; }
+    public string WorldId => Artifact.World.Definition.Id;
 
     /// <summary>Gets the exact authored world revision.</summary>
-    public string WorldRevision { get; }
+    public string WorldRevision => Artifact.World.Definition.Revision;
 
     /// <summary>Gets the exact compiled world fingerprint.</summary>
-    public string WorldFingerprint { get; }
+    public string WorldFingerprint => Artifact.World.Fingerprint.Value;
 
     /// <summary>Gets the world fingerprint algorithm identity.</summary>
-    public string WorldFingerprintAlgorithm { get; }
+    public string WorldFingerprintAlgorithm => Artifact.World.Fingerprint.Algorithm;
 
     /// <summary>Gets the world fingerprint canonicalization profile.</summary>
-    public string WorldFingerprintCanonicalization { get; }
+    public string WorldFingerprintCanonicalization => Artifact.World.Fingerprint.Canonicalization;
 
     /// <summary>Gets the deterministic root seed.</summary>
-    public long RootSeed { get; }
+    public long RootSeed => Artifact.RootSeed;
 
     /// <summary>Gets the maximum number of observations per delivered batch.</summary>
     public int BatchSize { get; }
@@ -508,15 +524,88 @@ public static class WorldProvisioner
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(world);
+        return ProvisionAsync(
+            world,
+            WorldArtifactManifest.FromWorld(world, rootSeed),
+            sink,
+            options,
+            cancellationToken);
+    }
+
+    /// <summary>Provisions every population described by an exact world-artifact manifest.</summary>
+    /// <param name="artifact">Target-independent artifact manifest that pins the world and generation run.</param>
+    /// <param name="sink">Destination receiving sequential deterministic batches.</param>
+    /// <param name="options">Optional batching policy; defaults to <see cref="WorldProvisioningOptions.DefaultBatchSize"/>.</param>
+    /// <param name="cancellationToken">Token requesting cancellation before generation or sink acknowledgement.</param>
+    /// <returns>Completion evidence after every batch has been acknowledged as committed.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="artifact"/> or <paramref name="sink"/> is null.</exception>
+    /// <exception cref="ArgumentException">The sink target identity is empty.</exception>
+    /// <exception cref="NotSupportedException">
+    /// The artifact names a generation interpreter or entropy algorithm unavailable to the reference provisioner.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">The sink returns no receipt or a receipt naming another batch.</exception>
+    /// <exception cref="WorldProvisioningRejectedException">The sink explicitly rejects a batch.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> requests cancellation.</exception>
+    /// <remarks>
+    /// This overload consumes the portable manifest as the artifact identity authority. Generated observations remain
+    /// streamed in bounded batches and are not materialized into the manifest.
+    /// </remarks>
+    public static Task<WorldProvisioningResult> ProvisionAsync(
+        WorldArtifactManifest artifact,
+        IWorldProvisioningSink sink,
+        WorldProvisioningOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(artifact);
+        return ProvisionAsync(
+            artifact.World.Compile(),
+            artifact,
+            sink,
+            options,
+            cancellationToken);
+    }
+
+    static Task<WorldProvisioningResult> ProvisionAsync(
+        CompiledWorldPlan world,
+        WorldArtifactManifest artifact,
+        IWorldProvisioningSink sink,
+        WorldProvisioningOptions? options,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(sink);
+        RequireReferenceCompatibility(artifact);
         var targetId = Guard.RequireNotNullOrWhiteSpace(sink.TargetId);
         options ??= new();
-        return ProvisionCoreAsync(world, rootSeed, sink, targetId, options, cancellationToken);
+        return ProvisionCoreAsync(
+            world,
+            artifact,
+            sink,
+            targetId,
+            options,
+            cancellationToken);
+    }
+
+    internal static void RequireReferenceCompatibility(WorldArtifactManifest artifact)
+    {
+        ArgumentNullException.ThrowIfNull(artifact);
+        if (!string.Equals(
+                artifact.Interpreter,
+                ReferenceGenerationInterpreter.Identity,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                artifact.EntropyAlgorithm,
+                ReferenceGenerationInterpreter.EntropyAlgorithm,
+                StringComparison.Ordinal))
+        {
+            throw new NotSupportedException(
+                $"Reference provisioning cannot realize artifact interpreter '{artifact.Interpreter}' with entropy "
+                + $"algorithm '{artifact.EntropyAlgorithm}'.");
+        }
     }
 
     static async Task<WorldProvisioningResult> ProvisionCoreAsync(
         CompiledWorldPlan world,
-        long rootSeed,
+        WorldArtifactManifest artifact,
         IWorldProvisioningSink sink,
         string targetId,
         WorldProvisioningOptions options,
@@ -524,8 +613,7 @@ public static class WorldProvisioner
     {
         cancellationToken.ThrowIfCancellationRequested();
         var runId = WorldProvisioningIdentityConvention.CreateRunId(
-            world,
-            rootSeed,
+            artifact,
             targetId,
             options.BatchSize);
         var populationResults = ImmutableArray.CreateBuilder<WorldProvisionedPopulation>(world.Populations.Length);
@@ -544,7 +632,7 @@ public static class WorldProvisioner
                     cancellationToken.ThrowIfCancellationRequested();
                     items.Add(ReferenceGenerationInterpreter.Generate(
                         population.GenerationPlan,
-                        rootSeed,
+                        artifact.RootSeed,
                         population.Scope,
                         sequenceIndex: (long)start + offset));
                 }
@@ -560,9 +648,9 @@ public static class WorldProvisioner
                     batchId,
                     runId,
                     targetId,
-                    world,
+                    artifact,
                     population,
-                    rootSeed,
+                    options.BatchSize,
                     ordinal: batchCount,
                     startSequenceIndex: start,
                     items.MoveToImmutable());
@@ -592,8 +680,7 @@ public static class WorldProvisioner
         return new(
             runId,
             targetId,
-            world,
-            rootSeed,
+            artifact,
             options.BatchSize,
             populationResults.MoveToImmutable());
     }

@@ -101,11 +101,31 @@ An exemplar aliases one exact population coordinate; it does not duplicate the o
 satisfies an unstated cohort condition. Exemplar declarations are portable, world-wide unique, canonicalized by
 identity, included in the world fingerprint, and projected into provisioning evidence.
 
-Persist or exchange a complete world with `WorldDefinitionJsonSerializer`. The strict document embeds each
+Persist or exchange a complete world definition with `WorldDefinitionJsonSerializer`. The strict document embeds each
 population's generation semantics and governing shape graph, normalizes population and member order, verifies a world
 fingerprint, and can be consumed by scripts without CLR authoring callbacks. Population replay evidence remains valid
 when unrelated populations are added because the exact generation definition and derived population scope are the
 replay coordinates.
+
+When data crosses a process, persistence, or test-run boundary, use a `WorldArtifactManifest` to pin the complete
+generation run independently of where or how its observations will be written:
+
+```csharp
+using Cohesive.Simulation.Artifacts;
+
+WorldArtifactManifest artifact = WorldArtifactManifest.FromWorld(plan, rootSeed: 42);
+string manifestJson = WorldArtifactManifestJsonSerializer.Serialize(artifact);
+
+WorldExemplarDefinition customer = artifact.GetExemplar("customer-for-ui");
+```
+
+The manifest embeds the exact fingerprint-verified world definition, root seed, reference interpreter and entropy
+algorithm, compiled population counts and scopes, nested generation coordinates, and exemplar aliases. Its
+content-addressed artifact identity is independent of sink target and batching policy. It does not contain generated
+observations, so even a very large declared population produces a small manifest and remains suitable for scripts,
+test reports, and agent inspection. Persist the manifest before provisioning when observations cross a process or
+persistence boundary. Concrete framing and storage of streamed observation batches remain separate format and
+adapter concerns.
 
 Worlds currently define static initial populations only. A future scenario layer will add activity after ordering,
 causality, clock, transition, and failure semantics are explicit; those concerns are intentionally not represented as
@@ -118,43 +138,54 @@ script, or environment seeder. It generates one bounded batch at a time in stabl
 delivers each batch through `IWorldProvisioningSink`:
 
 ```csharp
+using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Provisioning;
 
 await using var output = File.Create("demo-world.jsonl");
 var sink = new WorldJsonLinesSink("artifact/demo-world", output);
 
+WorldArtifactManifest artifact = WorldArtifactManifest.FromWorld(plan, rootSeed: 42);
 WorldProvisioningResult result = await WorldProvisioner.ProvisionAsync(
-    plan,
-    rootSeed: 42,
+    artifact,
     sink,
     new WorldProvisioningOptions(batchSize: 500));
 ```
 
-The run identity covers the exact world identity, revision, fingerprint, root seed, batch size, reference interpreter,
-entropy algorithm, and logical sink target. Each batch gets a stable identity from that run plus its population scope
-and contiguous sequence range. A durable sink should use the batch identity as its idempotency key and respond with
-`AlreadyCommitted` only after verifying the same complete batch. `Committed` and `AlreadyCommitted` both acknowledge
-the whole batch; `Rejected` stops execution with the exact batch and receipt attached.
+The artifact identity covers exact generation semantics and is stable across destinations and batch sizes. A
+provisioning run identity combines that artifact identity with batch size and logical sink target. Each batch gets a
+stable identity from that run plus its population scope and contiguous sequence range. A durable sink should use the
+batch identity as its idempotency key and respond with `AlreadyCommitted` only after verifying the same complete
+batch. `Committed` and `AlreadyCommitted` both acknowledge the whole batch; `Rejected` stops execution with the exact
+batch and receipt attached.
 
 The reference provisioner performs no automatic retries. A sink exception can mean that the commit outcome is
 unknown, so policy belongs in a concrete adapter that can reconcile the stable batch identity with its target. This
 keeps storage atomicity, replacement policy, and entity identity out of the Simulation semantic authority.
 
 `WorldJsonLinesSink` provides a framework-independent bridge for unit-test artifacts, command-line scripts, and
-Playwright global setup. It emits one generated item per UTF-8 line with world and generation fingerprints, population
-scope, zero or more exemplar identities, deterministic run and batch IDs, replay token, and the Core canonical
-observation envelope. The signed 64-bit root seed is encoded as a decimal string so JavaScript can consume it without
-numeric precision loss. The sink flushes each acknowledged batch, never closes the caller-owned stream, and
-intentionally does not claim durable deduplication.
+Playwright global setup. It emits one generated item per UTF-8 line with artifact-manifest, world, and generation
+fingerprints, population scope, zero or more exemplar identities, deterministic artifact, run, and batch IDs, replay
+token, and the Core canonical observation envelope. The signed 64-bit root seed is encoded as a decimal string so
+JavaScript can consume it without numeric precision loss. The sink flushes each acknowledged batch, never closes the
+caller-owned stream, and intentionally does not claim durable deduplication.
+
+`WorldJsonLinesVerifier.VerifyAsync` verifies a complete v3 stream against an independently retained manifest. It
+uses the same internal v3 codec as `WorldJsonLinesSink` and checks canonical record bytes, exact item count and order,
+manifest and world provenance, stable target and batching policy, recomputed run and batch identities, exemplar
+aliases, replay evidence, and canonical regenerated observations. Verification holds only one record and regenerated
+observation at a time and exposes completion evidence only after the entire stream passes; malformed, tampered,
+missing, or extra records fail closed. Use `WorldJsonLinesVerifier.ValidateAsync` when tooling needs stable
+`DocumentValidationResult` codes and JSON Pointer locations instead of an exception.
 
 Use the optional `Cohesive.Simulation.Storage` package to bind world populations to generic entity repositories. That
 integration keeps repository selection, entity-ID policy, state version, batch atomicity, and upsert behavior outside
 the provider-neutral Simulation package while deriving them into the effective provisioning target identity.
 
 Install the optional `Cohesive.Simulation.Cli` .NET tool when a shell script, CI job, or Playwright global setup needs
-to provision a portable world without hosting .NET application code. `cohesive-sim provision` reads the verified
-world document from a path or standard input and writes the same versioned JSON Lines contract to a path or standard
-output.
+to provision a portable world without hosting .NET application code. `cohesive-sim manifest` creates and atomically
+retains the strict artifact manifest from a world and root seed. `cohesive-sim provision` accepts only that verified
+manifest and atomically writes the same versioned JSON Lines contract. This makes the retained manifest the
+cross-process authority rather than reconstructing it opportunistically during provisioning.
 
 ## Portable definitions and replay
 
@@ -199,7 +230,7 @@ CLR interpretation and never enters the canonical generator IR.
 The package references only `Cohesive`; it does not require Entities, Transitions, Processes, Storage, a property-test
 framework, or a fake-data provider. Current canonical generators are constant, inclusive uniform Int32, Bernoulli,
 weighted categorical, record/member composition, and portable static worlds. Generation scopes, bounded lazy
-enumeration, named exemplars, deterministic provisioning batches, and the JSON Lines sink provide population isolation,
-stable discovery, and streaming mechanics. Property runners, shrinking, inter-population relationships, automatic
-POCO inference, storage-specific provisioning adapters, temporal scenarios, and provider plugins are intentionally
-deferred.
+enumeration, named exemplars, portable world-artifact manifests, deterministic provisioning batches, and the JSON
+Lines sink provide population isolation, stable discovery, cross-process provenance, and streaming mechanics.
+Property runners, shrinking, inter-population relationships, automatic POCO inference, storage-specific provisioning
+adapters, temporal scenarios, and provider plugins are intentionally deferred.

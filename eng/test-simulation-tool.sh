@@ -31,9 +31,13 @@ dotnet tool install Cohesive.Simulation.Cli \
   --tool-path "$tool_directory" \
   --add-source "$feed"
 
-"$tool_directory/cohesive-sim" provision \
+"$tool_directory/cohesive-sim" manifest \
   --world "$work_directory/world.json" \
   --seed 42 \
+  --out "$work_directory/world.manifest.json"
+
+"$tool_directory/cohesive-sim" provision \
+  --manifest "$work_directory/world.manifest.json" \
   --target package-smoke/cli \
   --out "$work_directory/world.jsonl" \
   --batch-size 1
@@ -44,6 +48,6 @@ dotnet run \
   --no-restore \
   --property:CohesivePackageVersion="$version" \
   --property:CohesivePackageFeed="$feed" \
-  -- verify "$work_directory/world.jsonl"
+  -- verify "$work_directory/world.jsonl" "$work_directory/world.manifest.json"
 
-echo "Cohesive.Simulation.Cli $version package installed and provisioned a verified portable world."
+echo "Cohesive.Simulation.Cli $version package installed and provisioned a verified portable world artifact."
