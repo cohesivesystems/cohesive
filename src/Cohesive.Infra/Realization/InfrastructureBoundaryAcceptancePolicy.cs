@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text.Json.Serialization;
+using Cohesive.Model;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Infra.Realization;
@@ -12,7 +13,7 @@ public sealed record InfrastructureBoundaryAcceptancePolicyFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current policy fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-infra-boundary-acceptance-policy/v1-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-infra-boundary-acceptance-policy/v2-c14n/v1";
 
     /// <summary>Creates boundary-acceptance policy fingerprint metadata.</summary>
     /// <param name="algorithm">Stable digest algorithm identity.</param>
@@ -125,19 +126,23 @@ public sealed record InfrastructureBoundaryAcceptance
         InfrastructureRequirementId requirement,
         InfrastructureOperatingBoundaryId boundary,
         string rationale,
-        ImmutableArray<string> sourceReferences)
+        ImmutableArray<SourceReference> sourceReferences)
     {
         if (string.IsNullOrWhiteSpace(requirement.Value))
+        {
             throw new ArgumentException("A boundary acceptance requires an exact requirement identity.", nameof(requirement));
+        }
+
         if (string.IsNullOrWhiteSpace(boundary.Value))
+        {
             throw new ArgumentException("A boundary acceptance requires an operating-boundary identity.", nameof(boundary));
+        }
 
         Requirement = requirement;
         Boundary = boundary;
         Rationale = Guard.RequireNotNullOrWhiteSpace(rationale);
-        SourceReferences = InfrastructureCapabilityCollections.StringSet(
+        SourceReferences = SourceReference.NormalizeSet(
             sourceReferences,
-            nameof(sourceReferences),
             requireNonEmpty: true);
     }
 
@@ -151,7 +156,7 @@ public sealed record InfrastructureBoundaryAcceptance
     public string Rationale { get; }
 
     /// <summary>Attributable policy, approval, or specification references in ordinal order.</summary>
-    public ImmutableArray<string> SourceReferences { get; }
+    public ImmutableArray<SourceReference> SourceReferences { get; }
 
     /// <summary>Compares boundary acceptances structurally.</summary>
     /// <param name="other">Other acceptance.</param>
@@ -162,7 +167,7 @@ public sealed record InfrastructureBoundaryAcceptance
         && Requirement == other.Requirement
         && Boundary == other.Boundary
         && string.Equals(Rationale, other.Rationale, StringComparison.Ordinal)
-        && SourceReferences.SequenceEqual(other.SourceReferences, StringComparer.Ordinal);
+        && SourceReferences.SequenceEqual(other.SourceReferences);
 
     /// <summary>Returns a structural hash code for this acceptance.</summary>
     /// <returns>A hash code derived from every field.</returns>
@@ -173,7 +178,10 @@ public sealed record InfrastructureBoundaryAcceptance
         hash.Add(Boundary);
         hash.Add(Rationale, StringComparer.Ordinal);
         foreach (var source in SourceReferences)
-            hash.Add(source, StringComparer.Ordinal);
+        {
+            hash.Add(source);
+        }
+
         return hash.ToHashCode();
     }
 }
@@ -182,7 +190,7 @@ public sealed record InfrastructureBoundaryAcceptance
 public sealed record InfrastructureBoundaryAcceptancePolicy
 {
     /// <summary>Current persisted boundary-acceptance policy schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive.infra.boundary-acceptance/1";
+    public const string CurrentSchemaVersion = "cohesive.infra.boundary-acceptance/2";
 
     /// <summary>Creates or restores an exact boundary-acceptance policy.</summary>
     /// <param name="schemaVersion">Exact persisted policy schema.</param>

@@ -180,20 +180,23 @@ public sealed class InfrastructureLocalRealizationTests
     [Fact]
     public void Repository_project_workload_uses_exact_placement_and_round_trips()
     {
-        var realization = WorkloadRealization();
+        var projectSource = new InfrastructureLocalProjectSource(
+            new("ari/training-api"),
+            new("src/Ari.Training.Api/Ari.Training.Api.csproj"),
+            "https");
+        var realization = WorkloadRealization(projectSource.Reference);
         var directProjectTopology = new InfrastructureLocalTopology(
             services:
             [
                 new(
                     node: new("workload/api"),
                     physicalResource: new("physical/api"),
-                    source: new InfrastructureLocalProjectSource("src/Ari.Training.Api/Ari.Training.Api.csproj", "https"))
+                    source: projectSource)
             ]);
         var fluentProjectTopology = InfrastructureLocal.Define(local => local.ProjectService(
             workload: new("workload/api"),
             physicalResource: new("physical/api"),
-            projectPath: "src/Ari.Training.Api/Ari.Training.Api.csproj",
-            launchProfile: "https"));
+            project: projectSource));
         var projectConfiguration = Configuration((ProjectName, "ari-local"));
         var directProject = InfrastructureLocalRealizationCompiler.Compile(
             realization,
@@ -223,8 +226,7 @@ public sealed class InfrastructureLocalRealizationTests
             .ProjectService(
                 workload: new("workload/api"),
                 physicalResource: new("physical/api"),
-                projectPath: "src/Ari.Training.Api/Ari.Training.Api.csproj",
-                launchProfile: "https",
+                project: projectSource,
                 configure: api => api
                     .Endpoint(
                         id: new("https"),
@@ -252,9 +254,24 @@ public sealed class InfrastructureLocalRealizationTests
 
         Assert.True(document.IsValid);
         var project = Assert.IsType<InfrastructureLocalProjectSource>(document.Topology.Services.Single(service => service.Node == new InfrastructureNodeId("workload/api")).Source);
-        Assert.Equal("src/Ari.Training.Api/Ari.Training.Api.csproj", project.ProjectPath);
+        Assert.Equal("ari/training-api", project.Id.Value);
+        Assert.Equal("src/Ari.Training.Api/Ari.Training.Api.csproj", project.ProjectPath.Value);
+        Assert.Equal("project://ari/training-api", project.Reference.Value);
         Assert.Equal("https", project.LaunchProfile);
         Assert.Equal(document.Fingerprint, roundTrip?.Fingerprint);
+        var roundTripProject = Assert.IsType<InfrastructureLocalProjectSource>(
+            Assert.Single(roundTrip!.Topology.Services, service => service.Node == new InfrastructureNodeId("workload/api")).Source);
+        Assert.Equal(projectSource, roundTripProject);
+
+        var unattributed = InfrastructureLocalRealizationCompiler.Compile(
+            WorkloadRealization(),
+            Environment(InfrastructureLocalDataLifetime.Persistent),
+            directProjectTopology,
+            [projectConfiguration]);
+        Assert.Contains(
+            unattributed.Diagnostics,
+            static diagnostic => diagnostic.Code ==
+                InfrastructureLocalRealizationCompiler.DiagnosticCodes.ProjectPlacementReferenceMissing);
     }
 
     [Fact]
@@ -267,11 +284,15 @@ public sealed class InfrastructureLocalRealizationTests
                 new(
                     node: new("resource/scheduler"),
                     physicalResource: new("physical/scheduler"),
-                    source: new InfrastructureLocalProjectSource("src/Scheduler/Scheduler.csproj")),
+                    source: new InfrastructureLocalProjectSource(
+                        new("scheduler"),
+                        new("src/Scheduler/Scheduler.csproj"))),
                 new(
                     node: new("workload/api"),
                     physicalResource: new("physical/not-api"),
-                    source: new InfrastructureLocalProjectSource("src/Ari.Training.Api/Ari.Training.Api.csproj"),
+                    source: new InfrastructureLocalProjectSource(
+                        new("ari/training-api"),
+                        new("src/Ari.Training.Api/Ari.Training.Api.csproj")),
                     readyDependencies: [new("physical/scheduler")])
             ]);
 
@@ -297,11 +318,14 @@ public sealed class InfrastructureLocalRealizationTests
     [Fact]
     public void Repository_project_source_must_remain_inside_the_repository()
     {
-        Assert.Throws<ArgumentException>(() => new InfrastructureLocalProjectSource("../Ari.Api/Ari.Api.csproj"));
-        Assert.Throws<ArgumentException>(() => new InfrastructureLocalProjectSource("/src/Ari.Api/Ari.Api.csproj"));
-        Assert.Throws<ArgumentException>(() => new InfrastructureLocalProjectSource("C:\\src\\Ari.Api\\Ari.Api.csproj"));
-        Assert.Throws<ArgumentException>(() => new InfrastructureLocalProjectSource("./src/Ari.Api/Ari.Api.csproj"));
-        Assert.Throws<ArgumentException>(() => new InfrastructureLocalProjectSource("src/Ari.Api/Program.cs"));
+        Assert.Throws<ArgumentException>(() => new InfrastructureLocalProjectId("my project"));
+        Assert.Throws<ArgumentException>(() => new RepositoryPath("../Ari.Api/Ari.Api.csproj"));
+        Assert.Throws<ArgumentException>(() => new RepositoryPath("/src/Ari.Api/Ari.Api.csproj"));
+        Assert.Throws<ArgumentException>(() => new RepositoryPath("C:\\src\\Ari.Api\\Ari.Api.csproj"));
+        Assert.Throws<ArgumentException>(() => new RepositoryPath("./src/Ari.Api/Ari.Api.csproj"));
+        Assert.Throws<ArgumentException>(() => new InfrastructureLocalProjectSource(
+            new("ari/api"),
+            new("src/Ari.Api/Program.cs")));
     }
 
     static InfrastructureLocalTopology DirectTopology() => new(
@@ -401,8 +425,9 @@ public sealed class InfrastructureLocalRealizationTests
         return InfrastructureRealizationCompiler.Compile(closure, lifecycle);
     }
 
-    static InfrastructureRealization WorkloadRealization()
+    static InfrastructureRealization WorkloadRealization(SourceReference? projectReference = null)
     {
+        var placementReference = projectReference ?? new SourceReference("fixture://local-workload-tests/v1");
         var definition = InfrastructureDefinitionDocument.FromDefinition(new(
             id: new("local-workload-tests"),
             revision: new("v1"),
@@ -436,7 +461,7 @@ public sealed class InfrastructureLocalRealizationTests
                     workload: new("workload/api"),
                     physicalResource: new("physical/api"),
                     interpreter: new("local-orchestration"),
-                    sourceReferences: ["fixture:local-workload-tests/v1"])
+                    sourceReferences: [placementReference])
             ]);
     }
 }

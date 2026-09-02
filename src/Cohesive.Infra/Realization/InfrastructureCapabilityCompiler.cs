@@ -826,7 +826,7 @@ public static class InfrastructureCapabilityCompiler
                         relatedLocations: [$"operating-boundary/{Uri.EscapeDataString(acceptance.Boundary.Value)}"],
                         sourceReferences: MergeOrdinalSets(
                             [InfrastructureDiagnosticReferences.BoundaryAcceptancePolicy(policy)],
-                            acceptance.SourceReferences),
+                            acceptance.SourceReferences.Select(static reference => reference.Value).ToImmutableArray()),
                         resolutionOptions:
                         ["Remove the stale acceptance or regenerate policy from the exact compiled requirement set."],
                         expected: "a requirement in the exact definition and binding-elaboration result",
@@ -853,7 +853,7 @@ public static class InfrastructureCapabilityCompiler
                     relatedLocations: MergeOrdinalSets(site.RelatedLocations, DecisionLocations(decision)),
                     sourceReferences: MergeOrdinalSets(
                         [InfrastructureDiagnosticReferences.BoundaryAcceptancePolicy(policy)],
-                        acceptance.SourceReferences),
+                        acceptance.SourceReferences.Select(static reference => reference.Value).ToImmutableArray()),
                     resolutionOptions:
                     ["Remove the stale acceptance or select the exact constrained proof that requires it."],
                     expected: decision.Realization == CapabilityRealizationKind.Constrained
@@ -875,7 +875,8 @@ public static class InfrastructureCapabilityCompiler
         [
             InfrastructureDiagnosticReferences.BoundaryAcceptancePolicy(policy),
             .. acceptedBoundaries.SelectMany(boundary =>
-                policy.FindAcceptance(requirement, boundary)?.SourceReferences ?? [])
+                    policy.FindAcceptance(requirement, boundary)?.SourceReferences ?? [])
+                .Select(static reference => reference.Value)
         ];
     }
 
@@ -983,7 +984,7 @@ public static class InfrastructureCapabilityCompiler
                     $"binding-elaboration-rule/{Uri.EscapeDataString(obligation.Rule.Value)}"
                 ],
                 [
-                    .. obligation.SourceReferences,
+                    .. obligation.SourceReferences.Select(static reference => reference.Value),
                     definitionReference,
                     InfrastructureDiagnosticReferences.BindingProfileReference(bindingElaboration.Profile)
                 ]));
@@ -1016,9 +1017,11 @@ public static class InfrastructureCapabilityCompiler
         .. variant.Evidence
             .Where(item => item.Capability == capability)
             .SelectMany(static item => item.SourceReferences)
+            .Select(static reference => reference.Value)
             .Concat(variant.Rules
                 .Where(item => item.ProvidedCapability == capability)
-                .SelectMany(static item => item.SourceReferences))
+                .SelectMany(static item => item.SourceReferences)
+                .Select(static reference => reference.Value))
             .Append(InfrastructureDiagnosticReferences.CapabilityProfile(profile))
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
@@ -1046,12 +1049,15 @@ public static class InfrastructureCapabilityCompiler
             .. variant.Evidence
                 .Where(item => evidence.Contains(item.Id))
                 .SelectMany(static item => item.SourceReferences)
+                .Select(static reference => reference.Value)
                 .Concat(variant.Rules
                     .Where(item => rules.Contains(item.Id))
-                    .SelectMany(static item => item.SourceReferences))
+                    .SelectMany(static item => item.SourceReferences)
+                    .Select(static reference => reference.Value))
                 .Concat(variant.OperatingBoundaries
                     .Where(item => boundaries.Contains(item.Id))
-                    .SelectMany(static item => item.SourceReferences))
+                    .SelectMany(static item => item.SourceReferences)
+                    .Select(static reference => reference.Value))
                 .Append(InfrastructureDiagnosticReferences.CapabilityProfile(profile))
                 .Distinct(StringComparer.Ordinal)
                 .Order(StringComparer.Ordinal)

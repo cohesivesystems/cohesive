@@ -13,7 +13,7 @@ namespace Cohesive.Adapters.Aspire;
 public static class AspireLocalCompiler
 {
     const string Stage = "aspire-local-compilation";
-    const string TargetReference = "aspire/13.5.2";
+    static readonly SourceReference TargetReference = new("aspire://13.5.2");
 
     /// <summary>Stable adapter diagnostic codes.</summary>
     public static class DiagnosticCodes
@@ -155,7 +155,7 @@ public static class AspireLocalCompiler
             return new(projection: null, diagnostics: [.. diagnostics]);
 
         var endpoints = EndpointMappings(source, effective, serviceNames);
-        var sourceReference = $"local-realization:{source.Fingerprint.Value}";
+        var sourceReference = SourceReference.Create("local-realization", source.Fingerprint.Value);
         List<InfrastructureLocalTargetDecision> decisions =
         [
             Decision(
@@ -566,7 +566,7 @@ public static class AspireLocalCompiler
         CapabilityRealizationKind kind,
         string rationale,
         ImmutableArray<string> boundaries,
-        ImmutableArray<string> sourceReferences) => new(
+        ImmutableArray<SourceReference> sourceReferences) => new(
         target: AspireLocalProjectionDocument.CurrentTarget,
         concern: concern,
         kind: kind,
@@ -589,7 +589,7 @@ public static class AspireLocalCompiler
             Evidence: new(
                 stage: Stage,
                 subject: subject,
-                sourceReferences: [AspireLocalProjectionDocument.CurrentCompiler, TargetReference],
+                sourceReferences: [AspireLocalProjectionDocument.CurrentCompiler, TargetReference.Value],
                 resolutionOptions: [resolution])));
 
     static bool HasErrors(IEnumerable<DocumentValidationDiagnostic> diagnostics) =>

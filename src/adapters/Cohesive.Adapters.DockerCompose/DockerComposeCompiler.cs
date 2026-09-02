@@ -14,7 +14,7 @@ namespace Cohesive.Adapters.DockerCompose;
 public static class DockerComposeCompiler
 {
     const string Stage = "docker-compose-compilation";
-    const string TargetReference = "https://docs.docker.com/compose/compose-file/";
+    static readonly SourceReference TargetReference = new("https://docs.docker.com/compose/compose-file/");
 
     /// <summary>Stable adapter diagnostic codes.</summary>
     public static class DiagnosticCodes
@@ -156,7 +156,7 @@ public static class DockerComposeCompiler
 
     static ImmutableArray<InfrastructureLocalTargetDecision> Decisions(InfrastructureLocalRealizationDocument source)
     {
-        var sourceReference = $"local-realization:{source.Fingerprint.Value}";
+        var sourceReference = SourceReference.Create("local-realization", source.Fingerprint.Value);
         return
         [
             Decision(
@@ -223,7 +223,7 @@ public static class DockerComposeCompiler
         CapabilityRealizationKind kind,
         string rationale,
         ImmutableArray<string> boundaries,
-        ImmutableArray<string> sourceReferences) => new(
+        ImmutableArray<SourceReference> sourceReferences) => new(
         target: DockerComposeArtifactManifest.CurrentTarget,
         concern: concern,
         kind: kind,

@@ -178,7 +178,7 @@ public static class AspireLocalApplicationBuilderExtensions
                 case InfrastructureLocalProjectSource project:
                     var projectResource = builder.AddProject(
                             name: item.ResourceName,
-                            projectPath: Path.GetFullPath(project.ProjectPath, options.OperationWorkingDirectory),
+                            projectPath: Path.GetFullPath(project.ProjectPath.Value, options.OperationWorkingDirectory),
                             launchProfileName: project.LaunchProfile)
                         .WithAnnotation(annotation);
                     projects.Add(item.Service.PhysicalResource, projectResource);

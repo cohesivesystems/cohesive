@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using Cohesive.Infra.Realization;
+using Cohesive.Model;
 
 namespace Cohesive.Infra;
 
@@ -658,7 +659,7 @@ public sealed class InfrastructureBindingContractHandle
 {
     readonly InfrastructureBindingElaborationRuleId rule;
     readonly HashSet<InfrastructureCapabilityId> capabilities = [];
-    readonly HashSet<string> sourceReferences = new(StringComparer.Ordinal);
+    readonly HashSet<SourceReference> sourceReferences = [];
 
     internal InfrastructureBindingContractHandle(
         InfrastructureDefinitionBuilder owner,
@@ -693,16 +694,20 @@ public sealed class InfrastructureBindingContractHandle
     }
 
     /// <summary>Adds one attributable producer or specification reference supporting the elaboration rule.</summary>
-    /// <param name="sourceReference">Stable non-empty source reference.</param>
+    /// <param name="sourceReference">Stable typed source reference.</param>
     /// <returns>This contract handle.</returns>
-    /// <exception cref="ArgumentException"><paramref name="sourceReference"/> is empty or already declared.</exception>
-    public InfrastructureBindingContractHandle SourcedFrom(string sourceReference)
+    /// <exception cref="ArgumentException"><paramref name="sourceReference"/> is default or already declared.</exception>
+    public InfrastructureBindingContractHandle SourcedFrom(SourceReference sourceReference)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(sourceReference);
+        if (string.IsNullOrWhiteSpace(sourceReference.Value))
+        {
+            throw new ArgumentException("A binding contract source reference cannot be default.", nameof(sourceReference));
+        }
+
         if (!sourceReferences.Add(sourceReference))
         {
             throw new ArgumentException(
-                $"Infrastructure binding contract '{Id.Value}' already cites source '{sourceReference}'.",
+                $"Infrastructure binding contract '{Id.Value}' already cites source '{sourceReference.Value}'.",
                 nameof(sourceReference));
         }
         return this;

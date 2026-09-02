@@ -16,7 +16,7 @@ public sealed record InfrastructureLocalRealizationFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Current canonicalization profile.</summary>
-    public const string CurrentCanonicalization = "cohesive-infra-local-realization/v2-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-infra-local-realization/v3-c14n/v1";
 
     /// <summary>Creates local-realization fingerprint metadata.</summary>
     /// <param name="algorithm">Digest algorithm.</param>
@@ -50,7 +50,7 @@ public sealed record InfrastructureLocalRealizationFingerprint
 public sealed record InfrastructureLocalRealizationDocument
 {
     /// <summary>Current portable document schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-infra-local-realization/v2";
+    public const string CurrentSchemaVersion = "cohesive-infra-local-realization/v3";
 
     /// <summary>Creates or restores an exact local realization document.</summary>
     /// <param name="schemaVersion">Exact document schema.</param>
@@ -155,6 +155,8 @@ public static class InfrastructureLocalRealizationCompiler
         public const string ServiceNodeUnknown = "infra.local.service.nodeUnknown";
         /// <summary>A service construction source is incompatible with its logical node family.</summary>
         public const string ServiceSourceMismatch = "infra.local.service.sourceMismatch";
+        /// <summary>A project-backed service is absent from the exact workload placement attribution.</summary>
+        public const string ProjectPlacementReferenceMissing = "infra.local.project.placementReferenceMissing";
         /// <summary>A container image is not pinned to a non-latest tag or digest.</summary>
         public const string ImageNotPinned = "infra.local.service.imageNotPinned";
         /// <summary>A referenced effective setting has no resolved value.</summary>
@@ -325,6 +327,26 @@ public static class InfrastructureLocalRealizationCompiler
                         ],
                         expected: $"workload placement {service.Node.Value} -> {service.PhysicalResource.Value}",
                         observed: "no exact workload placement");
+                }
+                else if (service.Source is InfrastructureLocalProjectSource project
+                         && !placement.SourceReferences.Contains(project.Reference))
+                {
+                    Add(
+                        diagnostics,
+                        DiagnosticCodes.ProjectPlacementReferenceMissing,
+                        $"Project '{project.Id.Value}' is not cited by the exact placement for workload '{service.Node.Value}'.",
+                        $"/topology/services/{service.PhysicalResource.Value}/source/id",
+                        project.Id.Value,
+                        sourceReferences: [.. diagnosticSources, project.Reference.Value],
+                        resolutionOptions:
+                        [
+                            "Reuse the project source reference when authoring the workload placement.",
+                            "Correct the project source or select a placement attributed to this project identity."
+                        ],
+                        expected: $"placement source reference {project.Reference.Value}",
+                        observed: placement.SourceReferences.IsDefaultOrEmpty
+                            ? "no placement source references"
+                            : string.Join(", ", placement.SourceReferences.Select(static reference => reference.Value)));
                 }
             }
 
