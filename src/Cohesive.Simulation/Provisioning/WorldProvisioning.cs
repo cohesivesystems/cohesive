@@ -185,6 +185,7 @@ public sealed class WorldProvisioningBatch
         string targetId,
         WorldArtifactManifest artifact,
         CompiledWorldPopulation population,
+        int batchSize,
         int ordinal,
         long startSequenceIndex,
         ImmutableArray<GeneratedObservation> items)
@@ -196,6 +197,7 @@ public sealed class WorldProvisioningBatch
         PopulationId = population.Definition.Id;
         PopulationCount = population.Definition.Count;
         PopulationScope = population.Scope;
+        BatchSize = batchSize;
         Ordinal = ordinal;
         StartSequenceIndex = startSequenceIndex;
         Items = items;
@@ -244,6 +246,9 @@ public sealed class WorldProvisioningBatch
 
     /// <summary>Gets the exact isolated generation scope for the population.</summary>
     public GenerationScope PopulationScope { get; }
+
+    /// <summary>Gets the configured maximum number of observations per provisioning batch.</summary>
+    public int BatchSize { get; }
 
     /// <summary>Gets the deterministic root seed.</summary>
     public long RootSeed => Artifact.RootSeed;
@@ -568,6 +573,21 @@ public static class WorldProvisioner
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(sink);
+        RequireReferenceCompatibility(artifact);
+        var targetId = Guard.RequireNotNullOrWhiteSpace(sink.TargetId);
+        options ??= new();
+        return ProvisionCoreAsync(
+            world,
+            artifact,
+            sink,
+            targetId,
+            options,
+            cancellationToken);
+    }
+
+    internal static void RequireReferenceCompatibility(WorldArtifactManifest artifact)
+    {
+        ArgumentNullException.ThrowIfNull(artifact);
         if (!string.Equals(
                 artifact.Interpreter,
                 ReferenceGenerationInterpreter.Identity,
@@ -581,16 +601,6 @@ public static class WorldProvisioner
                 $"Reference provisioning cannot realize artifact interpreter '{artifact.Interpreter}' with entropy "
                 + $"algorithm '{artifact.EntropyAlgorithm}'.");
         }
-
-        var targetId = Guard.RequireNotNullOrWhiteSpace(sink.TargetId);
-        options ??= new();
-        return ProvisionCoreAsync(
-            world,
-            artifact,
-            sink,
-            targetId,
-            options,
-            cancellationToken);
     }
 
     static async Task<WorldProvisioningResult> ProvisionCoreAsync(
@@ -640,6 +650,7 @@ public static class WorldProvisioner
                     targetId,
                     artifact,
                     population,
+                    options.BatchSize,
                     ordinal: batchCount,
                     startSequenceIndex: start,
                     items.MoveToImmutable());

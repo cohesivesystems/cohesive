@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Cohesive.Simulation.Artifacts;
@@ -10,28 +11,34 @@ namespace Cohesive.Simulation.Tests;
 public sealed class SimulationCliTests
 {
     [Fact]
-    public async Task StandardStreams_ProvisionPortableWorldAsDeterministicJsonLines()
+    public async Task StandardStreams_RetainManifestBeforeProvisioningDeterministicJsonLines()
     {
         var worldJson = WorldDefinitionJsonSerializer.Serialize(DemoWorld());
+        var manifestOutput = await RunManifestWithStandardStreams(worldJson, long.MinValue);
 
-        var first = await RunWithStandardStreams(worldJson);
-        var second = await RunWithStandardStreams(worldJson);
+        Assert.Equal(0, manifestOutput.ExitCode);
+        Assert.Empty(manifestOutput.Error);
+        var retainedManifest = WorldArtifactManifestJsonSerializer.Deserialize(manifestOutput.Output);
+        var first = await RunProvisionWithStandardStreams(manifestOutput.Output);
+        var second = await RunProvisionWithStandardStreams(manifestOutput.Output);
 
         Assert.Equal(0, first.ExitCode);
         Assert.Empty(first.Error);
         Assert.Equal(first.Output, second.Output);
+        await using MemoryStream verifiedInput = new(Encoding.UTF8.GetBytes(first.Output));
+        var verification = await WorldJsonLinesVerifier.VerifyAsync(retainedManifest, verifiedInput);
+        Assert.Equal(retainedManifest.ArtifactId, verification.ArtifactId);
+        Assert.Equal("playwright/global-setup", verification.TargetId);
+        Assert.Equal(1, verification.BatchSize);
+        Assert.Equal(2, verification.ItemCount);
+
         var lines = first.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        Assert.Equal(2, lines.Length);
         for (var index = 0; index < lines.Length; index++)
         {
             using var document = JsonDocument.Parse(lines[index]);
             var root = document.RootElement;
-            Assert.Equal(WorldJsonLinesSink.Format, root.GetProperty("format").GetString());
-            Assert.Equal("playwright/global-setup", root.GetProperty("targetId").GetString());
-            Assert.Equal(
-                WorldArtifactManifest.CurrentSchemaVersion,
-                root.GetProperty("artifactManifestSchema").GetString());
-            Assert.StartsWith("csimartifact1_", root.GetProperty("artifactId").GetString(), StringComparison.Ordinal);
+            Assert.Equal(retainedManifest.ArtifactId.Value, root.GetProperty("artifactId").GetString());
+            Assert.Equal(retainedManifest.Fingerprint.Value, root.GetProperty("artifactManifestFingerprint").GetString());
             Assert.Equal("-9223372036854775808", root.GetProperty("rootSeed").GetString());
             Assert.Equal(index, root.GetProperty("sequenceIndex").GetInt64());
             Assert.Equal(
@@ -43,19 +50,46 @@ public sealed class SimulationCliTests
     }
 
     [Fact]
-    public async Task FileOutput_ReplacesOnlyAfterSuccessfulProvisioning()
+    public async Task ManifestFileOutput_ReplacesOnlyAfterSuccessfulValidation()
     {
         var temporaryDirectory = CreateTemporaryDirectory();
         try
         {
             var worldPath = Path.Combine(temporaryDirectory, "demo.world.json");
-            var outputPath = Path.Combine(temporaryDirectory, "nested", "demo.world.jsonl");
+            var manifestPath = Path.Combine(temporaryDirectory, "nested", "demo.manifest.json");
             await File.WriteAllTextAsync(worldPath, WorldDefinitionJsonSerializer.Serialize(DemoWorld()));
 
-            var firstExitCode = await RunWithFiles(worldPath, outputPath);
-            var firstOutput = await File.ReadAllTextAsync(outputPath);
+            var firstExitCode = await RunManifestWithFiles(worldPath, manifestPath);
+            var firstOutput = await File.ReadAllTextAsync(manifestPath);
             await File.WriteAllTextAsync(worldPath, "{\"invalid\":true}");
-            var failedExitCode = await RunWithFiles(worldPath, outputPath);
+            var failedExitCode = await RunManifestWithFiles(worldPath, manifestPath);
+
+            Assert.Equal(0, firstExitCode);
+            Assert.Equal(1, failedExitCode);
+            Assert.Equal(firstOutput, await File.ReadAllTextAsync(manifestPath));
+            _ = WorldArtifactManifestJsonSerializer.Deserialize(firstOutput);
+            Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(manifestPath)!, "*.tmp"));
+        }
+        finally
+        {
+            Directory.Delete(temporaryDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ProvisionFileOutput_RequiresStrictManifestAndPreservesLastCompleteArtifact()
+    {
+        var temporaryDirectory = CreateTemporaryDirectory();
+        try
+        {
+            var manifestPath = Path.Combine(temporaryDirectory, "demo.manifest.json");
+            var outputPath = Path.Combine(temporaryDirectory, "nested", "demo.world.jsonl");
+            await File.WriteAllTextAsync(manifestPath, CreateManifestJson(rootSeed: 42));
+
+            var firstExitCode = await RunProvisionWithFiles(manifestPath, outputPath);
+            var firstOutput = await File.ReadAllTextAsync(outputPath);
+            await File.WriteAllTextAsync(manifestPath, "{\"invalid\":true}");
+            var failedExitCode = await RunProvisionWithFiles(manifestPath, outputPath);
 
             Assert.Equal(0, firstExitCode);
             Assert.Equal(1, failedExitCode);
@@ -70,13 +104,25 @@ public sealed class SimulationCliTests
     }
 
     [Fact]
-    public async Task InvalidPortableWorld_ReportsStructuredDiagnosticWithoutOutput()
+    public async Task InvalidPortableWorld_ReportsStructuredDiagnosticWithoutManifest()
     {
-        var result = await RunWithStandardStreams("{\"invalid\":true}");
+        var result = await RunManifestWithStandardStreams("{\"invalid\":true}", rootSeed: 42);
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.Output);
         Assert.Contains("simulation.world.document.contentInvalid", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InvalidManifest_ReportsStructuredDiagnosticWithoutProvisioningOutput()
+    {
+        var result = await Run(
+            ["provision", "--manifest", "-", "--target", "scripts/demo"],
+            "{\"invalid\":true}");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.Output);
+        Assert.Contains("simulation.worldArtifact.manifest.contentInvalid", result.Error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -85,9 +131,9 @@ public sealed class SimulationCliTests
         var temporaryDirectory = CreateTemporaryDirectory();
         try
         {
-            var worldPath = Path.Combine(temporaryDirectory, "demo.world.json");
+            var manifestPath = Path.Combine(temporaryDirectory, "demo.manifest.json");
             var outputPath = Path.Combine(temporaryDirectory, "demo.world.jsonl");
-            await File.WriteAllTextAsync(worldPath, WorldDefinitionJsonSerializer.Serialize(DemoWorld()));
+            await File.WriteAllTextAsync(manifestPath, CreateManifestJson(rootSeed: 42));
             await File.WriteAllTextAsync(outputPath, "previous-fixture");
             using CancellationTokenSource cancellation = new();
             cancellation.Cancel();
@@ -96,8 +142,7 @@ public sealed class SimulationCliTests
             var exitCode = await SimulationCliApplication.RunAsync(
                 [
                     "provision",
-                    "--world", worldPath,
-                    "--seed", "42",
+                    "--manifest", manifestPath,
                     "--target", "scripts/demo",
                     "--out", outputPath
                 ],
@@ -123,21 +168,8 @@ public sealed class SimulationCliTests
     {
         string[] arguments = option switch
         {
-            "--seed" =>
-            [
-                "provision",
-                "--world", "world.json",
-                "--target", "scripts/demo",
-                option, value
-            ],
-            _ =>
-            [
-                "provision",
-                "--world", "world.json",
-                "--seed", "42",
-                "--target", "scripts/demo",
-                option, value
-            ]
+            "--seed" => ["manifest", "--world", "world.json", option, value],
+            _ => ["provision", "--manifest", "manifest.json", "--target", "scripts/demo", option, value]
         };
         var result = await Run(arguments);
 
@@ -152,44 +184,44 @@ public sealed class SimulationCliTests
         var duplicate = await Run(
             [
                 "provision",
-                "--world", "world.json",
-                "--world", "another.json",
-                "--seed", "42",
+                "--manifest", "manifest.json",
+                "--manifest", "another.json",
                 "--target", "scripts/demo"
             ]);
         var unknown = await Run(
             [
                 "provision",
-                "--world", "world.json",
-                "--seed", "42",
+                "--manifest", "manifest.json",
                 "--target", "scripts/demo",
                 "--mystery", "value"
             ]);
 
         Assert.NotEqual(0, duplicate.ExitCode);
-        Assert.Contains("--world", duplicate.Error, StringComparison.Ordinal);
+        Assert.Contains("--manifest", duplicate.Error, StringComparison.Ordinal);
         Assert.NotEqual(0, unknown.ExitCode);
         Assert.Contains("--mystery", unknown.Error, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Help_WritesUsageWithoutDiagnostics()
+    public async Task CommandHelp_SeparatesManifestCreationFromProvisioning()
     {
-        await using MemoryStream output = new();
-        using StringWriter error = new();
+        var manifest = await Run(["manifest", "--help"]);
+        var provision = await Run(["provision", "--help"]);
 
-        var exitCode = await SimulationCliApplication.RunAsync(
-            ["provision", "--help"],
-            Stream.Null,
-            output,
-            error);
+        Assert.Equal(0, manifest.ExitCode);
+        Assert.Contains("Create and retain", manifest.Output, StringComparison.Ordinal);
+        Assert.Contains("--world", manifest.Output, StringComparison.Ordinal);
+        Assert.Contains("--seed", manifest.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("--manifest", manifest.Output, StringComparison.Ordinal);
+        Assert.Empty(manifest.Error);
 
-        Assert.Equal(0, exitCode);
-        var help = Encoding.UTF8.GetString(output.ToArray());
-        Assert.Contains("Compile and provision", help, StringComparison.Ordinal);
-        Assert.Contains("--world", help, StringComparison.Ordinal);
-        Assert.Contains("--seed", help, StringComparison.Ordinal);
-        Assert.Empty(error.ToString());
+        Assert.Equal(0, provision.ExitCode);
+        Assert.Contains("Provision a retained", provision.Output, StringComparison.Ordinal);
+        Assert.Contains("--manifest", provision.Output, StringComparison.Ordinal);
+        Assert.Contains("--batch-size", provision.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("--world", provision.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("--seed", provision.Output, StringComparison.Ordinal);
+        Assert.Empty(provision.Error);
     }
 
     [Fact]
@@ -198,50 +230,68 @@ public sealed class SimulationCliTests
         var result = await Run([]);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("Provision deterministic data", result.Output, StringComparison.Ordinal);
+        Assert.Contains("Create and provision deterministic", result.Output, StringComparison.Ordinal);
+        Assert.Contains("manifest", result.Output, StringComparison.Ordinal);
         Assert.Contains("provision", result.Output, StringComparison.Ordinal);
         Assert.Empty(result.Error);
     }
 
-    static async Task<(int ExitCode, string Output, string Error)> Run(IReadOnlyList<string> arguments)
+    static async Task<(int ExitCode, string Output, string Error)> Run(
+        IReadOnlyList<string> arguments,
+        string? standardInput = null)
     {
+        await using MemoryStream input = standardInput is null
+            ? new()
+            : new(Encoding.UTF8.GetBytes(standardInput));
         await using MemoryStream output = new();
         using StringWriter error = new();
         var exitCode = await SimulationCliApplication.RunAsync(
             [.. arguments],
-            Stream.Null,
-            output,
-            error);
-        return (exitCode, Encoding.UTF8.GetString(output.ToArray()), error.ToString());
-    }
-
-    static async Task<(int ExitCode, string Output, string Error)> RunWithStandardStreams(string worldJson)
-    {
-        await using MemoryStream input = new(Encoding.UTF8.GetBytes(worldJson));
-        await using MemoryStream output = new();
-        using StringWriter error = new();
-        var exitCode = await SimulationCliApplication.RunAsync(
-            [
-                "provision",
-                "--world", "-",
-                "--seed", long.MinValue.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                "--target", "playwright/global-setup",
-                "--batch-size", "1"
-            ],
             input,
             output,
             error);
         return (exitCode, Encoding.UTF8.GetString(output.ToArray()), error.ToString());
     }
 
-    static async Task<int> RunWithFiles(string worldPath, string outputPath)
+    static Task<(int ExitCode, string Output, string Error)> RunManifestWithStandardStreams(
+        string worldJson,
+        long rootSeed) =>
+        Run(
+            [
+                "manifest",
+                "--world", "-",
+                "--seed", rootSeed.ToString(CultureInfo.InvariantCulture)
+            ],
+            worldJson);
+
+    static Task<(int ExitCode, string Output, string Error)> RunProvisionWithStandardStreams(
+        string manifestJson) =>
+        Run(
+            [
+                "provision",
+                "--manifest", "-",
+                "--target", "playwright/global-setup",
+                "--batch-size", "1"
+            ],
+            manifestJson);
+
+    static async Task<int> RunManifestWithFiles(string worldPath, string manifestPath)
+    {
+        using StringWriter error = new();
+        return await SimulationCliApplication.RunAsync(
+            ["manifest", "--world", worldPath, "--seed", "42", "--out", manifestPath],
+            Stream.Null,
+            Stream.Null,
+            error);
+    }
+
+    static async Task<int> RunProvisionWithFiles(string manifestPath, string outputPath)
     {
         using StringWriter error = new();
         return await SimulationCliApplication.RunAsync(
             [
                 "provision",
-                "--world", worldPath,
-                "--seed", "42",
+                "--manifest", manifestPath,
                 "--target", "scripts/demo",
                 "--out", outputPath,
                 "--batch-size", "1"
@@ -250,6 +300,10 @@ public sealed class SimulationCliTests
             Stream.Null,
             error);
     }
+
+    static string CreateManifestJson(long rootSeed) =>
+        WorldArtifactManifestJsonSerializer.Serialize(
+            WorldArtifactManifest.FromWorld(DemoWorld().Compile(), rootSeed));
 
     static WorldDefinition DemoWorld()
     {

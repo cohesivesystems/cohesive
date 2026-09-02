@@ -46,7 +46,10 @@ public sealed record WorldArtifactManifestFingerprint
     /// <param name="algorithm">Hash-algorithm identity.</param>
     /// <param name="canonicalization">Canonical manifest profile identity.</param>
     /// <param name="value">Lowercase hexadecimal fingerprint value.</param>
-    /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="world"/>, <paramref name="interpreter"/>, or <paramref name="entropyAlgorithm"/> is
+    /// <see langword="null"/>.
+    /// </exception>
     /// <exception cref="ArgumentException">A parameter is empty or white-space.</exception>
     [JsonConstructor]
     public WorldArtifactManifestFingerprint(string algorithm, string canonicalization, string value)
@@ -239,9 +242,35 @@ public sealed record WorldArtifactManifest
     /// <returns>A current-version target-independent world-artifact manifest.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="world"/> is <see langword="null"/>.</exception>
     public static WorldArtifactManifest FromWorld(WorldDefinitionDocument world, long rootSeed)
+        => FromWorld(
+            world,
+            rootSeed,
+            ReferenceGenerationInterpreter.Identity,
+            ReferenceGenerationInterpreter.EntropyAlgorithm);
+
+    /// <summary>Creates a manifest for an exact world and explicitly selected generation interpreter.</summary>
+    /// <param name="world">Exact portable world definition to describe.</param>
+    /// <param name="rootSeed">Deterministic root seed shared by all populations.</param>
+    /// <param name="interpreter">Exact generation-interpreter identity and version.</param>
+    /// <param name="entropyAlgorithm">Exact addressable entropy-algorithm identity and version.</param>
+    /// <returns>A current-version target-independent world-artifact manifest.</returns>
+    /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="interpreter"/> or <paramref name="entropyAlgorithm"/> is empty or white-space.
+    /// </exception>
+    public static WorldArtifactManifest FromWorld(
+        WorldDefinitionDocument world,
+        long rootSeed,
+        string interpreter,
+        string entropyAlgorithm)
     {
         ArgumentNullException.ThrowIfNull(world);
-        return Create(world, world.Compile(), rootSeed);
+        return Create(
+            world,
+            world.Compile(),
+            rootSeed,
+            Guard.RequireNotNullOrWhiteSpace(interpreter),
+            Guard.RequireNotNullOrWhiteSpace(entropyAlgorithm));
     }
 
     /// <summary>Finds one exemplar alias by stable world-wide identity.</summary>
@@ -281,7 +310,9 @@ public sealed record WorldArtifactManifest
     static WorldArtifactManifest Create(
         WorldDefinitionDocument document,
         CompiledWorldPlan world,
-        long rootSeed)
+        long rootSeed,
+        string interpreter = ReferenceGenerationInterpreter.Identity,
+        string entropyAlgorithm = ReferenceGenerationInterpreter.EntropyAlgorithm)
     {
         var populations = ProjectPopulations(world);
         var exemplars = world.Exemplars;
@@ -289,8 +320,8 @@ public sealed record WorldArtifactManifest
             CurrentSchemaVersion,
             document,
             rootSeed,
-            ReferenceGenerationInterpreter.Identity,
-            ReferenceGenerationInterpreter.EntropyAlgorithm,
+            interpreter,
+            entropyAlgorithm,
             populations,
             exemplars);
         return new(new ManifestState(
@@ -298,8 +329,8 @@ public sealed record WorldArtifactManifest
             CreateArtifactId(fingerprint),
             document,
             rootSeed,
-            ReferenceGenerationInterpreter.Identity,
-            ReferenceGenerationInterpreter.EntropyAlgorithm,
+            interpreter,
+            entropyAlgorithm,
             populations,
             exemplars,
             fingerprint));

@@ -1,4 +1,5 @@
 using Cohesive.Simulation.Artifacts;
+using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Worlds;
 
@@ -104,6 +105,28 @@ public sealed class WorldProvisioningTests
         Assert.All(sink.Batches, batch => Assert.Same(artifact, batch.Artifact));
         Assert.Equal(artifact.ArtifactId, result.ArtifactId);
         Assert.Equal(5, result.ItemCount);
+    }
+
+    [Theory]
+    [InlineData("unsupported-interpreter/v1", ReferenceGenerationInterpreter.EntropyAlgorithm)]
+    [InlineData(ReferenceGenerationInterpreter.Identity, "unsupported-entropy/v1")]
+    public async Task UnsupportedArtifactInterpreterOrEntropy_FailsClosedBeforeSinkCommit(
+        string interpreter,
+        string entropyAlgorithm)
+    {
+        var artifact = WorldArtifactManifest.FromWorld(
+            WorldDefinitionDocument.FromDefinition(DemoWorld()),
+            rootSeed: 42,
+            interpreter,
+            entropyAlgorithm);
+        RecordingSink sink = new("demo/unsupported");
+
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            WorldProvisioner.ProvisionAsync(artifact, sink));
+
+        Assert.Contains(interpreter, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(entropyAlgorithm, exception.Message, StringComparison.Ordinal);
+        Assert.Empty(sink.Batches);
     }
 
     [Fact]

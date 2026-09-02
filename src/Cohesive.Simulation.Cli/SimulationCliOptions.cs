@@ -3,10 +3,13 @@ using Cohesive.Simulation.Provisioning;
 
 namespace Cohesive.Simulation.Cli;
 
-sealed record SimulationCliOptions
+static class SimulationCliPaths
 {
-    public const string StandardStreamPath = "-";
+    public const string StandardStream = "-";
+}
 
+sealed record WorldManifestCliOptions
+{
     [ConfigurationParameter(
         "world",
         Description = "Portable world-definition JSON path, or '-' for standard input.",
@@ -15,8 +18,38 @@ sealed record SimulationCliOptions
 
     [ConfigurationParameter(
         "out",
-        Description = "JSON Lines output path, or '-' for standard output.")]
-    public string OutputPath { get; init; } = StandardStreamPath;
+        Description = "World-artifact manifest JSON path, or '-' for standard output.")]
+    public string OutputPath { get; init; } = SimulationCliPaths.StandardStream;
+
+    [ConfigurationParameter(
+        "seed",
+        Description = "Deterministic signed 64-bit root seed.",
+        Required = true)]
+    public long RootSeed { get; init; }
+
+    public bool ReadsStandardInput => string.Equals(
+        WorldPath,
+        SimulationCliPaths.StandardStream,
+        StringComparison.Ordinal);
+
+    public bool WritesStandardOutput => string.Equals(
+        OutputPath,
+        SimulationCliPaths.StandardStream,
+        StringComparison.Ordinal);
+}
+
+sealed record WorldProvisionCliOptions
+{
+    [ConfigurationParameter(
+        "manifest",
+        Description = "Verified world-artifact manifest JSON path, or '-' for standard input.",
+        Required = true)]
+    public string ManifestPath { get; init; } = string.Empty;
+
+    [ConfigurationParameter(
+        "out",
+        Description = "Verified-manifest JSON Lines output path, or '-' for standard output.")]
+    public string OutputPath { get; init; } = SimulationCliPaths.StandardStream;
 
     [ConfigurationParameter(
         "target",
@@ -25,23 +58,17 @@ sealed record SimulationCliOptions
     public string TargetId { get; init; } = string.Empty;
 
     [ConfigurationParameter(
-        "seed",
-        Description = "Deterministic signed 64-bit root seed.",
-        Required = true)]
-    public long RootSeed { get; init; }
-
-    [ConfigurationParameter(
         "batch-size",
         Description = "Positive provisioning batch size.")]
     public int BatchSize { get; init; } = WorldProvisioningOptions.DefaultBatchSize;
 
     public bool ReadsStandardInput => string.Equals(
-        WorldPath,
-        StandardStreamPath,
+        ManifestPath,
+        SimulationCliPaths.StandardStream,
         StringComparison.Ordinal);
 
     public bool WritesStandardOutput => string.Equals(
         OutputPath,
-        StandardStreamPath,
+        SimulationCliPaths.StandardStream,
         StringComparison.Ordinal);
 }

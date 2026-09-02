@@ -24,16 +24,20 @@ dotnet run \
   --configuration Release \
   --property:CohesivePackageVersion="$version" \
   --property:CohesivePackageFeed="$feed" \
-  -- emit "$work_directory/world.json" "$work_directory/world.manifest.json"
+  -- emit "$work_directory/world.json"
 
 dotnet tool install Cohesive.Simulation.Cli \
   --version "$version" \
   --tool-path "$tool_directory" \
   --add-source "$feed"
 
-"$tool_directory/cohesive-sim" provision \
+"$tool_directory/cohesive-sim" manifest \
   --world "$work_directory/world.json" \
   --seed 42 \
+  --out "$work_directory/world.manifest.json"
+
+"$tool_directory/cohesive-sim" provision \
+  --manifest "$work_directory/world.manifest.json" \
   --target package-smoke/cli \
   --out "$work_directory/world.jsonl" \
   --batch-size 1

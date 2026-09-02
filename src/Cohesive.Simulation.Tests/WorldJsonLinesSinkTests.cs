@@ -33,8 +33,14 @@ public sealed class WorldJsonLinesSinkTests
             rootSeed: long.MinValue,
             new WorldJsonLinesSink("artifact/demo.jsonl", secondOutput),
             new(batchSize: 2));
+        var retainedManifest = WorldArtifactManifestJsonSerializer.Deserialize(
+            WorldArtifactManifestJsonSerializer.Serialize(first.Artifact));
+        using MemoryStream verificationInput = new(firstOutput.ToArray(), writable: false);
+        var verification = await WorldJsonLinesVerifier.VerifyAsync(retainedManifest, verificationInput);
 
         Assert.Equal(firstOutput.ToArray(), secondOutput.ToArray());
+        Assert.Equal(retainedManifest.ArtifactId, verification.ArtifactId);
+        Assert.Equal(3, verification.ItemCount);
         var lines = Encoding.UTF8.GetString(firstOutput.ToArray())
             .Split('\n', StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal(3, lines.Length);
@@ -49,17 +55,18 @@ public sealed class WorldJsonLinesSinkTests
                 root.GetProperty("artifactManifestSchema").GetString());
             Assert.Equal(first.ArtifactId.Value, root.GetProperty("artifactId").GetString());
             Assert.Equal(
-                first.Artifact.Fingerprint.Algorithm,
+                retainedManifest.Fingerprint.Algorithm,
                 root.GetProperty("artifactManifestFingerprintAlgorithm").GetString());
             Assert.Equal(
-                first.Artifact.Fingerprint.Canonicalization,
+                retainedManifest.Fingerprint.Canonicalization,
                 root.GetProperty("artifactManifestFingerprintCanonicalization").GetString());
             Assert.Equal(
-                first.Artifact.Fingerprint.Value,
+                retainedManifest.Fingerprint.Value,
                 root.GetProperty("artifactManifestFingerprint").GetString());
             Assert.Equal("-9223372036854775808", root.GetProperty("rootSeed").GetString());
             Assert.Equal("customers", root.GetProperty("populationId").GetString());
             Assert.Equal(3, root.GetProperty("populationCount").GetInt32());
+            Assert.Equal(2, root.GetProperty("batchSize").GetInt32());
             Assert.Equal(index, root.GetProperty("sequenceIndex").GetInt64());
             Assert.Equal(
                 index switch

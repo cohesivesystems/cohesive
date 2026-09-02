@@ -10,7 +10,8 @@ namespace Cohesive.Simulation.Provisioning;
 /// parseable generated item carrying exact artifact, run, batch, world, population, and replay provenance. The caller
 /// owns the stream, which is flushed but never closed. A successful receipt means the complete encoded batch was
 /// written and flushed; an exception may leave a partial batch in the stream. The sink does not deduplicate repeated
-/// batch IDs.
+/// batch IDs. Use <see cref="WorldJsonLinesVerifier"/> with an independently retained manifest to verify a complete
+/// stream before consuming its items.
 /// </remarks>
 public sealed class WorldJsonLinesSink : IWorldProvisioningSink
 {
@@ -85,7 +86,10 @@ public sealed class WorldJsonLinesSink : IWorldProvisioningSink
                 writer.WriteString("populationId", batch.PopulationId);
                 writer.WriteNumber("populationCount", batch.PopulationCount);
                 writer.WriteString("populationScope", batch.PopulationScope.Value);
+                writer.WriteNumber("batchSize", batch.BatchSize);
                 writer.WriteNumber("batchOrdinal", batch.Ordinal);
+                writer.WriteNumber("batchStartSequenceIndex", batch.StartSequenceIndex);
+                writer.WriteNumber("batchItemCount", batch.Items.Length);
                 writer.WriteNumber("sequenceIndex", item.Replay.SequenceIndex);
                 writer.WriteStartArray("exemplars");
                 foreach (var exemplar in batch.Exemplars)

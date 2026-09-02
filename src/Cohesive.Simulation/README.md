@@ -123,8 +123,9 @@ The manifest embeds the exact fingerprint-verified world definition, root seed, 
 algorithm, compiled population counts and scopes, nested generation coordinates, and exemplar aliases. Its
 content-addressed artifact identity is independent of sink target and batching policy. It does not contain generated
 observations, so even a very large declared population produces a small manifest and remains suitable for scripts,
-test reports, and agent inspection. Concrete framing and storage of streamed observation batches remain separate
-format and adapter concerns.
+test reports, and agent inspection. Persist the manifest before provisioning when observations cross a process or
+persistence boundary. Concrete framing and storage of streamed observation batches remain separate format and
+adapter concerns.
 
 Worlds currently define static initial populations only. A future scenario layer will add activity after ordering,
 causality, clock, transition, and failure semantics are explicit; those concerns are intentionally not represented as
@@ -168,14 +169,21 @@ token, and the Core canonical observation envelope. The signed 64-bit root seed 
 JavaScript can consume it without numeric precision loss. The sink flushes each acknowledged batch, never closes the
 caller-owned stream, and intentionally does not claim durable deduplication.
 
+`WorldJsonLinesVerifier.VerifyAsync` verifies a complete v3 stream against an independently retained manifest. It
+checks exact item count and order, manifest and world provenance, stable target and batching policy, recomputed run
+and batch identities, exemplar aliases, replay evidence, and canonical regenerated observations. Verification holds
+only one record and regenerated observation at a time and exposes completion evidence only after the entire stream
+passes; malformed, tampered, missing, or extra records fail closed.
+
 Use the optional `Cohesive.Simulation.Storage` package to bind world populations to generic entity repositories. That
 integration keeps repository selection, entity-ID policy, state version, batch atomicity, and upsert behavior outside
 the provider-neutral Simulation package while deriving them into the effective provisioning target identity.
 
 Install the optional `Cohesive.Simulation.Cli` .NET tool when a shell script, CI job, or Playwright global setup needs
-to provision a portable world without hosting .NET application code. `cohesive-sim provision` reads the verified
-world document from a path or standard input and writes the same versioned JSON Lines contract to a path or standard
-output.
+to provision a portable world without hosting .NET application code. `cohesive-sim manifest` creates and atomically
+retains the strict artifact manifest from a world and root seed. `cohesive-sim provision` accepts only that verified
+manifest and atomically writes the same versioned JSON Lines contract. This makes the retained manifest the
+cross-process authority rather than reconstructing it opportunistically during provisioning.
 
 ## Portable definitions and replay
 
