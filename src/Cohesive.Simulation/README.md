@@ -55,6 +55,45 @@ Scope identities are exact ordinal strings and are retained in replay evidence. 
 stable scenario or world identities, not runtime object identities. Calls that omit a scope use
 `GenerationScope.Default` for the original single-stream convenience behavior.
 
+## Property cases
+
+The same compiled generator can drive bounded property checks without adopting a particular test framework:
+
+```csharp
+CompiledPocoGenerator<Customer> generator = customers.Compile();
+PropertyCaseRunResult run = generator.CheckProperty(
+    seed: 42,
+    property: static customer => customer.Age < 80,
+    options: new(requiredPassedCases: 250));
+
+if (run.Status == PropertyCaseRunStatus.CounterexampleFound)
+{
+    PropertyCase counterexample = run.BestCounterexample!;
+    string replayToken = counterexample.Replay.ToToken();
+    Customer replayed = generator.ReplayPropertyCase(replayToken);
+}
+```
+
+`ReferencePropertyCaseInterpreter.Check` exposes the equivalent raw `Observation` surface for scripts, agents, and
+runner adapters. A richer evaluator can return `PropertyCaseEvaluation` to attach stable classifications or discard
+cases that do not satisfy a local precondition. Runs bound required passes, total discards, and shrink candidates;
+invalid options and exhausted bounds return structured diagnostics instead of claiming a conclusive result. Coverage
+counts classifications on all initially generated cases in stable ordinal order; shrink attempts do not distort that
+distribution.
+
+The local property callback is interpretation policy, not persisted generation semantics. A failing case is shrunk
+against the canonical generator IR: Int32 values move toward zero or the nearest zero-facing range boundary,
+Bernoulli values move from true to false, weighted categorical values move toward earlier authored options, constants
+do not shrink, and record members are considered in canonical identity order. Every candidate is validated against
+the governing core shape before evaluation. The result is a deterministic local semantic minimum; if a discard or
+shrink bound is exhausted, `BestCounterexample` retains the best failure reached but `IsConclusive` remains false.
+
+The `csimpc1` replay token retains the original generation coordinates, exact generation fingerprint, shrinker
+version, and accepted semantic candidate ordinals. Replay therefore fails closed for a different definition or
+shrinker version. It restores the counterexample observation; it does not serialize or rerun the local property.
+Test-framework integrations can translate the result and diagnostics into their own assertion and reporting model
+without becoming a second generation authority.
+
 ## Worlds
 
 A `WorldDefinition` composes named bounded populations into one portable static initial state. Each population owns
@@ -230,7 +269,8 @@ CLR interpretation and never enters the canonical generator IR.
 The package references only `Cohesive`; it does not require Entities, Transitions, Processes, Storage, a property-test
 framework, or a fake-data provider. Current canonical generators are constant, inclusive uniform Int32, Bernoulli,
 weighted categorical, record/member composition, and portable static worlds. Generation scopes, bounded lazy
-enumeration, named exemplars, portable world-artifact manifests, deterministic provisioning batches, and the JSON
-Lines sink provide population isolation, stable discovery, cross-process provenance, and streaming mechanics.
-Property runners, shrinking, inter-population relationships, automatic POCO inference, storage-specific provisioning
-adapters, temporal scenarios, and provider plugins are intentionally deferred.
+enumeration, runner-neutral property cases and semantic shrinking, named exemplars, portable world-artifact manifests,
+deterministic provisioning batches, and the JSON Lines sink provide population isolation, stable discovery,
+cross-process provenance, and streaming mechanics. Test-runner-specific adapters, inter-population relationships,
+automatic POCO inference, storage-specific provisioning adapters, temporal scenarios, and provider plugins are
+intentionally deferred.
