@@ -7,14 +7,15 @@ namespace Cohesive.Simulation.Provisioning;
 /// <summary>Writes deterministic generated world items as UTF-8 newline-delimited JSON.</summary>
 /// <remarks>
 /// This reference sink is intended for scripts, test harnesses, and Playwright setup. Every line is one independently
-/// parseable generated item carrying exact run, batch, world, population, and replay provenance. The caller owns the
-/// stream, which is flushed but never closed. A successful receipt means the complete encoded batch was written and
-/// flushed; an exception may leave a partial batch in the stream. The sink does not deduplicate repeated batch IDs.
+/// parseable generated item carrying exact artifact, run, batch, world, population, and replay provenance. The caller
+/// owns the stream, which is flushed but never closed. A successful receipt means the complete encoded batch was
+/// written and flushed; an exception may leave a partial batch in the stream. The sink does not deduplicate repeated
+/// batch IDs.
 /// </remarks>
 public sealed class WorldJsonLinesSink : IWorldProvisioningSink
 {
     /// <summary>Stable identity of the emitted JSON Lines record format.</summary>
-    public const string Format = "cohesive-simulation-world-item/v2";
+    public const string Format = "cohesive-simulation-world-item/v3";
 
     readonly Stream output;
 
@@ -68,6 +69,13 @@ public sealed class WorldJsonLinesSink : IWorldProvisioningSink
                 writer.WriteString("runId", batch.RunId.Value);
                 writer.WriteString("batchId", batch.Id.Value);
                 writer.WriteString("targetId", batch.TargetId);
+                writer.WriteString("artifactManifestSchema", batch.Artifact.SchemaVersion);
+                writer.WriteString("artifactId", batch.ArtifactId.Value);
+                writer.WriteString("artifactManifestFingerprintAlgorithm", batch.Artifact.Fingerprint.Algorithm);
+                writer.WriteString(
+                    "artifactManifestFingerprintCanonicalization",
+                    batch.Artifact.Fingerprint.Canonicalization);
+                writer.WriteString("artifactManifestFingerprint", batch.Artifact.Fingerprint.Value);
                 writer.WriteString("worldId", batch.WorldId);
                 writer.WriteString("worldRevision", batch.WorldRevision);
                 writer.WriteString("worldFingerprintAlgorithm", batch.WorldFingerprintAlgorithm);

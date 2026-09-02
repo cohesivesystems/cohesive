@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
 
@@ -43,6 +44,19 @@ public sealed class WorldJsonLinesSinkTests
             var root = document.RootElement;
             Assert.Equal(WorldJsonLinesSink.Format, root.GetProperty("format").GetString());
             Assert.Equal(first.RunId.Value, root.GetProperty("runId").GetString());
+            Assert.Equal(
+                WorldArtifactManifest.CurrentSchemaVersion,
+                root.GetProperty("artifactManifestSchema").GetString());
+            Assert.Equal(first.ArtifactId.Value, root.GetProperty("artifactId").GetString());
+            Assert.Equal(
+                first.Artifact.Fingerprint.Algorithm,
+                root.GetProperty("artifactManifestFingerprintAlgorithm").GetString());
+            Assert.Equal(
+                first.Artifact.Fingerprint.Canonicalization,
+                root.GetProperty("artifactManifestFingerprintCanonicalization").GetString());
+            Assert.Equal(
+                first.Artifact.Fingerprint.Value,
+                root.GetProperty("artifactManifestFingerprint").GetString());
             Assert.Equal("-9223372036854775808", root.GetProperty("rootSeed").GetString());
             Assert.Equal("customers", root.GetProperty("populationId").GetString());
             Assert.Equal(3, root.GetProperty("populationCount").GetInt32());

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Cli;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Worlds;
@@ -27,6 +28,10 @@ public sealed class SimulationCliTests
             var root = document.RootElement;
             Assert.Equal(WorldJsonLinesSink.Format, root.GetProperty("format").GetString());
             Assert.Equal("playwright/global-setup", root.GetProperty("targetId").GetString());
+            Assert.Equal(
+                WorldArtifactManifest.CurrentSchemaVersion,
+                root.GetProperty("artifactManifestSchema").GetString());
+            Assert.StartsWith("csimartifact1_", root.GetProperty("artifactId").GetString(), StringComparison.Ordinal);
             Assert.Equal("-9223372036854775808", root.GetProperty("rootSeed").GetString());
             Assert.Equal(index, root.GetProperty("sequenceIndex").GetInt64());
             Assert.Equal(

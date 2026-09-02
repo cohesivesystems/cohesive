@@ -1,3 +1,4 @@
+using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Worlds;
 
@@ -24,6 +25,8 @@ public sealed class WorldProvisioningTests
             new(batchSize: 2));
 
         Assert.Equal(first.RunId, second.RunId);
+        Assert.Equal(first.ArtifactId, second.ArtifactId);
+        Assert.All(firstSink.Batches, batch => Assert.Equal(first.ArtifactId, batch.ArtifactId));
         Assert.Equal(
             firstSink.Batches.Select(static batch => batch.Id),
             secondSink.Batches.Select(static batch => batch.Id));
@@ -61,6 +64,7 @@ public sealed class WorldProvisioningTests
 
         Assert.NotEqual(databaseResult.RunId, artifactResult.RunId);
         Assert.NotEqual(database.Batches[0].Id, artifact.Batches[0].Id);
+        Assert.Equal(databaseResult.ArtifactId, artifactResult.ArtifactId);
     }
 
     [Fact]
@@ -82,6 +86,24 @@ public sealed class WorldProvisioningTests
             new(batchSize: 3));
 
         Assert.NotEqual(pairResult.RunId, tripleResult.RunId);
+        Assert.Equal(pairResult.ArtifactId, tripleResult.ArtifactId);
+    }
+
+    [Fact]
+    public async Task PortableArtifact_IsTheRetainedProvisioningAuthority()
+    {
+        var artifact = WorldArtifactManifest.FromWorld(DemoWorld().Compile(), rootSeed: 42);
+        RecordingSink sink = new("demo/manifest");
+
+        var result = await WorldProvisioner.ProvisionAsync(
+            artifact,
+            sink,
+            new(batchSize: 2));
+
+        Assert.Same(artifact, result.Artifact);
+        Assert.All(sink.Batches, batch => Assert.Same(artifact, batch.Artifact));
+        Assert.Equal(artifact.ArtifactId, result.ArtifactId);
+        Assert.Equal(5, result.ItemCount);
     }
 
     [Fact]
@@ -129,7 +151,7 @@ public sealed class WorldProvisioningTests
         RecordingSink sink = new(
             "demo/broken",
             static _ => new(
-                new WorldProvisioningBatchId("csimbatch1_wrong"),
+                new WorldProvisioningBatchId("csimbatch2_wrong"),
                 WorldProvisioningBatchDisposition.Committed));
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>

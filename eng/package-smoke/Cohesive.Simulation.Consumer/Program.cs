@@ -1,10 +1,12 @@
 using System.Text.Json;
 using Cohesive.Simulation;
+using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Worlds;
 
-if (args.Length != 2)
-    throw new ArgumentException("Expected 'emit <world-path>' or 'verify <json-lines-path>'.");
+if (args.Length != 3)
+    throw new ArgumentException(
+        "Expected 'emit <world-path> <manifest-path>' or 'verify <json-lines-path> <manifest-path>'.");
 
 switch (args[0])
 {
@@ -18,8 +20,17 @@ switch (args[0])
             .Population("customers", count: 2, customers)
             .Exemplar("customer-for-ui", "customers", sequenceIndex: 1));
         await File.WriteAllTextAsync(args[1], WorldDefinitionJsonSerializer.Serialize(world));
+        await File.WriteAllTextAsync(
+            args[2],
+            WorldArtifactManifestJsonSerializer.Serialize(
+                WorldArtifactManifest.FromWorld(world.Compile(), rootSeed: 42)));
         break;
     case "verify":
+        var manifest = WorldArtifactManifestJsonSerializer.Deserialize(await File.ReadAllTextAsync(args[2]));
+        var exemplar = manifest.GetExemplar("customer-for-ui");
+        Require(exemplar.PopulationId, "customers", "exemplar populationId");
+        if (exemplar.SequenceIndex != 1)
+            throw new InvalidOperationException("Manifest exemplar has an invalid sequence index.");
         var lines = await File.ReadAllLinesAsync(args[1]);
         if (lines.Length != 2)
             throw new InvalidOperationException($"Expected two provisioned items but found '{lines.Length}'.");
@@ -29,6 +40,23 @@ switch (args[0])
             var root = document.RootElement;
             Require(root.GetProperty("format").GetString(), WorldJsonLinesSink.Format, "format");
             Require(root.GetProperty("targetId").GetString(), "package-smoke/cli", "targetId");
+            Require(
+                root.GetProperty("artifactManifestSchema").GetString(),
+                manifest.SchemaVersion,
+                "artifactManifestSchema");
+            Require(root.GetProperty("artifactId").GetString(), manifest.ArtifactId.Value, "artifactId");
+            Require(
+                root.GetProperty("artifactManifestFingerprintAlgorithm").GetString(),
+                manifest.Fingerprint.Algorithm,
+                "artifactManifestFingerprintAlgorithm");
+            Require(
+                root.GetProperty("artifactManifestFingerprintCanonicalization").GetString(),
+                manifest.Fingerprint.Canonicalization,
+                "artifactManifestFingerprintCanonicalization");
+            Require(
+                root.GetProperty("artifactManifestFingerprint").GetString(),
+                manifest.Fingerprint.Value,
+                "artifactManifestFingerprint");
             Require(root.GetProperty("worldId").GetString(), "world/package-smoke", "worldId");
             Require(root.GetProperty("rootSeed").GetString(), "42", "rootSeed");
             if (root.GetProperty("populationCount").GetInt32() != 2

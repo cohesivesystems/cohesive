@@ -30,11 +30,18 @@ same-directory temporary file and moved over the requested path only after every
 cancellation, or provisioning failure preserves the previous artifact. Standard output is streaming and can contain
 a partial batch if its consumer fails.
 
-The emitted records use `WorldJsonLinesSink.Format` and retain deterministic world, run, batch, population, sequence,
-named-exemplar, and replay provenance. Each record's `exemplars` array lets a script locate purposeful instances such
-as `customer-for-ui` without relying on output position or incidental generated values. `--target` is required because
-logical destination identity participates in run and batch IDs; filesystem paths and machine-specific working
-directories are not allowed to silently change those identities.
+The emitted records use `WorldJsonLinesSink.Format` and retain deterministic artifact-manifest, world, run, batch,
+population, sequence, named-exemplar, and replay provenance. The artifact ID and manifest fingerprint are independent
+of `--target` and `--batch-size`; run and batch IDs bind that artifact to those execution choices. Each record's
+`exemplars` array lets a script locate purposeful instances such as `customer-for-ui` without relying on output
+position or incidental generated values. `--target` is required because logical destination identity participates in
+run and batch IDs; filesystem paths and machine-specific working directories are not allowed to silently change
+those identities.
+
+JSON Lines records reference the exact manifest but do not repeat the embedded world definition on every line. A
+consumer that retains generated data beyond the producing process should also persist the corresponding
+`WorldArtifactManifest`; concrete joint framing for a manifest and large streamed batches remains a separate format
+decision.
 
 In Playwright, run the tool from `globalSetup` before creating application fixtures, then load the resulting JSON
 Lines file or pass it to an application-specific seeding endpoint:
