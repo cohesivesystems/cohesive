@@ -1,6 +1,4 @@
 using System.Buffers;
-using System.Globalization;
-using System.Text.Json;
 
 namespace Cohesive.Simulation.Provisioning;
 
@@ -16,7 +14,7 @@ namespace Cohesive.Simulation.Provisioning;
 public sealed class WorldJsonLinesSink : IWorldProvisioningSink
 {
     /// <summary>Stable identity of the emitted JSON Lines record format.</summary>
-    public const string Format = "cohesive-simulation-world-item/v3";
+    public const string Format = WorldJsonLinesV3Codec.Format;
 
     readonly Stream output;
 
@@ -63,52 +61,11 @@ public sealed class WorldJsonLinesSink : IWorldProvisioningSink
             cancellationToken.ThrowIfCancellationRequested();
             encodedObservation.Clear();
             item.Observation.WriteCanonicalJson(encodedObservation);
-            using (var writer = new Utf8JsonWriter(encodedBatch))
-            {
-                writer.WriteStartObject();
-                writer.WriteString("format", Format);
-                writer.WriteString("runId", batch.RunId.Value);
-                writer.WriteString("batchId", batch.Id.Value);
-                writer.WriteString("targetId", batch.TargetId);
-                writer.WriteString("artifactManifestSchema", batch.Artifact.SchemaVersion);
-                writer.WriteString("artifactId", batch.ArtifactId.Value);
-                writer.WriteString("artifactManifestFingerprintAlgorithm", batch.Artifact.Fingerprint.Algorithm);
-                writer.WriteString(
-                    "artifactManifestFingerprintCanonicalization",
-                    batch.Artifact.Fingerprint.Canonicalization);
-                writer.WriteString("artifactManifestFingerprint", batch.Artifact.Fingerprint.Value);
-                writer.WriteString("worldId", batch.WorldId);
-                writer.WriteString("worldRevision", batch.WorldRevision);
-                writer.WriteString("worldFingerprintAlgorithm", batch.WorldFingerprintAlgorithm);
-                writer.WriteString("worldFingerprintCanonicalization", batch.WorldFingerprintCanonicalization);
-                writer.WriteString("worldFingerprint", batch.WorldFingerprint);
-                writer.WriteString("rootSeed", batch.RootSeed.ToString(CultureInfo.InvariantCulture));
-                writer.WriteString("populationId", batch.PopulationId);
-                writer.WriteNumber("populationCount", batch.PopulationCount);
-                writer.WriteString("populationScope", batch.PopulationScope.Value);
-                writer.WriteNumber("batchSize", batch.BatchSize);
-                writer.WriteNumber("batchOrdinal", batch.Ordinal);
-                writer.WriteNumber("batchStartSequenceIndex", batch.StartSequenceIndex);
-                writer.WriteNumber("batchItemCount", batch.Items.Length);
-                writer.WriteNumber("sequenceIndex", item.Replay.SequenceIndex);
-                writer.WriteStartArray("exemplars");
-                foreach (var exemplar in batch.Exemplars)
-                {
-                    if (exemplar.SequenceIndex == item.Replay.SequenceIndex)
-                        writer.WriteStringValue(exemplar.Id);
-                }
-
-                writer.WriteEndArray();
-                writer.WriteString("definitionId", item.Replay.DefinitionId);
-                writer.WriteString("definitionRevision", item.Replay.DefinitionRevision);
-                writer.WriteString("definitionFingerprint", item.Replay.DefinitionFingerprint);
-                writer.WriteString("interpreter", item.Replay.Interpreter);
-                writer.WriteString("entropyAlgorithm", item.Replay.EntropyAlgorithm);
-                writer.WriteString("replayToken", item.Replay.ToToken());
-                writer.WritePropertyName("observation");
-                writer.WriteRawValue(encodedObservation.WrittenSpan, skipInputValidation: true);
-                writer.WriteEndObject();
-            }
+            WorldJsonLinesV3Codec.WriteRecord(
+                encodedBatch,
+                batch,
+                item,
+                encodedObservation.WrittenMemory);
 
             var newline = encodedBatch.GetSpan(1);
             newline[0] = (byte)'\n';

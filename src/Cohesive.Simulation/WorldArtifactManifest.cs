@@ -46,10 +46,7 @@ public sealed record WorldArtifactManifestFingerprint
     /// <param name="algorithm">Hash-algorithm identity.</param>
     /// <param name="canonicalization">Canonical manifest profile identity.</param>
     /// <param name="value">Lowercase hexadecimal fingerprint value.</param>
-    /// <exception cref="ArgumentNullException">
-    /// <paramref name="world"/>, <paramref name="interpreter"/>, or <paramref name="entropyAlgorithm"/> is
-    /// <see langword="null"/>.
-    /// </exception>
+    /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">A parameter is empty or white-space.</exception>
     [JsonConstructor]
     public WorldArtifactManifestFingerprint(string algorithm, string canonicalization, string value)
@@ -254,7 +251,10 @@ public sealed record WorldArtifactManifest
     /// <param name="interpreter">Exact generation-interpreter identity and version.</param>
     /// <param name="entropyAlgorithm">Exact addressable entropy-algorithm identity and version.</param>
     /// <returns>A current-version target-independent world-artifact manifest.</returns>
-    /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="world"/>, <paramref name="interpreter"/>, or <paramref name="entropyAlgorithm"/> is
+    /// <see langword="null"/>.
+    /// </exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="interpreter"/> or <paramref name="entropyAlgorithm"/> is empty or white-space.
     /// </exception>

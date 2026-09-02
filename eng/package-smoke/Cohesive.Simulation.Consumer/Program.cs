@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Cohesive.Simulation;
 using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Provisioning;
@@ -9,6 +10,8 @@ const string ExpectedManifestFingerprint =
     "73e9c87d107576fe2a4d4d161829e9ea7ca9d6b8315d91860ea7a62891bc1393";
 const string ExpectedWorldFingerprint =
     "af30a71937b54f72d10de9c68938110624edb6bd778f829a2f65b53fe64b82eb";
+const string ExpectedJsonLinesFingerprint =
+    "8f6947d294acb8ea7141caefad3c00a98a78294a31c6976b18f6c047f3410955";
 
 if (args is ["emit", var worldPath])
 {
@@ -33,6 +36,12 @@ else if (args is ["verify", var jsonLinesPath, var manifestPath])
     Require(exemplar.PopulationId, "customers", "exemplar populationId");
     if (exemplar.SequenceIndex != 1)
         throw new InvalidOperationException("Manifest exemplar has an invalid sequence index.");
+
+    await using (FileStream wireInput = File.OpenRead(jsonLinesPath))
+    {
+        var wireFingerprint = Convert.ToHexString(await SHA256.HashDataAsync(wireInput)).ToLowerInvariant();
+        Require(wireFingerprint, ExpectedJsonLinesFingerprint, "JSON Lines wire fingerprint");
+    }
 
     await using FileStream jsonLines = File.OpenRead(jsonLinesPath);
     var verification = await WorldJsonLinesVerifier.VerifyAsync(manifest, jsonLines);

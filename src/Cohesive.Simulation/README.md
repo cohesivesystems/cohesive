@@ -170,10 +170,12 @@ JavaScript can consume it without numeric precision loss. The sink flushes each 
 caller-owned stream, and intentionally does not claim durable deduplication.
 
 `WorldJsonLinesVerifier.VerifyAsync` verifies a complete v3 stream against an independently retained manifest. It
-checks exact item count and order, manifest and world provenance, stable target and batching policy, recomputed run
-and batch identities, exemplar aliases, replay evidence, and canonical regenerated observations. Verification holds
-only one record and regenerated observation at a time and exposes completion evidence only after the entire stream
-passes; malformed, tampered, missing, or extra records fail closed.
+uses the same internal v3 codec as `WorldJsonLinesSink` and checks canonical record bytes, exact item count and order,
+manifest and world provenance, stable target and batching policy, recomputed run and batch identities, exemplar
+aliases, replay evidence, and canonical regenerated observations. Verification holds only one record and regenerated
+observation at a time and exposes completion evidence only after the entire stream passes; malformed, tampered,
+missing, or extra records fail closed. Use `WorldJsonLinesVerifier.ValidateAsync` when tooling needs stable
+`DocumentValidationResult` codes and JSON Pointer locations instead of an exception.
 
 Use the optional `Cohesive.Simulation.Storage` package to bind world populations to generic entity repositories. That
 integration keeps repository selection, entity-ID policy, state version, batch atomicity, and upsert behavior outside

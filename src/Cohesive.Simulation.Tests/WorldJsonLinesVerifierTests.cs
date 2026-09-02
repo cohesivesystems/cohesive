@@ -14,6 +14,8 @@ public sealed class WorldJsonLinesVerifierTests
         await using MemoryStream input = new(jsonLines, writable: false);
 
         var result = await WorldJsonLinesVerifier.VerifyAsync(manifest, input);
+        await using MemoryStream validationInput = new(jsonLines, writable: false);
+        var validation = await WorldJsonLinesVerifier.ValidateAsync(manifest, validationInput);
 
         Assert.Equal(manifest.ArtifactId, result.ArtifactId);
         Assert.Equal("verification/test", result.TargetId);
@@ -21,16 +23,28 @@ public sealed class WorldJsonLinesVerifierTests
         Assert.Equal(2, result.BatchSize);
         Assert.Equal(3, result.ItemCount);
         Assert.True(input.CanRead);
+        Assert.True(validation.IsSuccessful);
+        Assert.Equal(result, validation.Verification);
+        Assert.Empty(validation.Validation.Diagnostics);
     }
 
     [Theory]
-    [InlineData("artifact-id", "artifactId")]
-    [InlineData("manifest-fingerprint", "artifactManifestFingerprint")]
-    [InlineData("run-id", "runId")]
-    [InlineData("batch-id", "batchId")]
-    [InlineData("observation", "observation")]
-    [InlineData("unknown-property", "unexpected")]
-    public async Task TamperedRecord_FailsClosed(string mutation, string expectedProperty)
+    [InlineData("artifact-id", "artifactId", "simulation.worldArtifact.jsonLines.artifactMismatch")]
+    [InlineData(
+        "manifest-fingerprint",
+        "artifactManifestFingerprint",
+        "simulation.worldArtifact.jsonLines.artifactMismatch")]
+    [InlineData("run-id", "runId", "simulation.worldArtifact.jsonLines.provisioningIdentityMismatch")]
+    [InlineData("batch-id", "batchId", "simulation.worldArtifact.jsonLines.provisioningIdentityMismatch")]
+    [InlineData("observation", "observation", "simulation.worldArtifact.jsonLines.observationMismatch")]
+    [InlineData("unknown-property", "unexpected", "simulation.worldArtifact.jsonLines.propertyUnknown")]
+    [InlineData("duplicate-property", "format", "simulation.worldArtifact.jsonLines.propertyDuplicate")]
+    [InlineData("missing-property", "runId", "simulation.worldArtifact.jsonLines.propertyMissing")]
+    [InlineData("property-order", "runId", "simulation.worldArtifact.jsonLines.propertyOrderInvalid")]
+    public async Task TamperedRecord_FailsClosed(
+        string mutation,
+        string expectedProperty,
+        string expectedCode)
     {
         var (manifest, jsonLines) = await CreateArtifactAsync();
         var content = Encoding.UTF8.GetString(jsonLines);
@@ -51,6 +65,12 @@ public sealed class WorldJsonLinesVerifierTests
                 content,
                 "\"observation\":",
                 "\"unexpected\":true,\"observation\":"),
+            "duplicate-property" => ReplaceOnce(
+                content,
+                "\"runId\":",
+                $"\"format\":\"{WorldJsonLinesSink.Format}\",\"runId\":"),
+            "missing-property" => RemoveProperty(content, "runId"),
+            "property-order" => SwapFirstTwoProperties(content),
             _ => throw new ArgumentOutOfRangeException(nameof(mutation))
         };
         await using MemoryStream input = new(Encoding.UTF8.GetBytes(tampered), writable: false);
@@ -60,6 +80,58 @@ public sealed class WorldJsonLinesVerifierTests
 
         Assert.Equal(1, exception.LineNumber);
         Assert.Equal(expectedProperty, exception.PropertyName);
+        var diagnostic = Assert.Single(exception.Validation.Diagnostics);
+        Assert.Equal(expectedCode, diagnostic.Code);
+        Assert.Equal($"/lines/0/{expectedProperty}", diagnostic.Location);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ReturnsStructuredDiagnosticForNoncanonicalRecordWithoutThrowing()
+    {
+        var (manifest, jsonLines) = await CreateArtifactAsync();
+        var content = Encoding.UTF8.GetString(jsonLines);
+        var noncanonical = ReplaceOnce(content, "{\"format\":", "{ \"format\":");
+        await using MemoryStream input = new(Encoding.UTF8.GetBytes(noncanonical), writable: false);
+
+        var result = await WorldJsonLinesVerifier.ValidateAsync(manifest, input);
+
+        Assert.False(result.IsSuccessful);
+        Assert.Null(result.Verification);
+        var diagnostic = Assert.Single(result.Validation.Diagnostics);
+        Assert.Equal("simulation.worldArtifact.jsonLines.wireNonCanonical", diagnostic.Code);
+        Assert.Equal("/lines/0", diagnostic.Location);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ReturnsStructuredDiagnosticForInvalidUtf8()
+    {
+        var manifest = WorldArtifactManifest.FromWorld(DemoWorld().Compile(), rootSeed: 42);
+        await using MemoryStream input = new([0xff, (byte)'\n'], writable: false);
+
+        var result = await WorldJsonLinesVerifier.ValidateAsync(manifest, input);
+
+        Assert.False(result.IsSuccessful);
+        var diagnostic = Assert.Single(result.Validation.Diagnostics);
+        Assert.Equal("simulation.worldArtifact.jsonLines.jsonInvalid", diagnostic.Code);
+        Assert.Equal("/lines/0", diagnostic.Location);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_RejectsUtf8ByteOrderMarkAsNoncanonicalWire()
+    {
+        var (manifest, jsonLines) = await CreateArtifactAsync();
+        var preamble = Encoding.UTF8.GetPreamble();
+        var withByteOrderMark = new byte[preamble.Length + jsonLines.Length];
+        preamble.CopyTo(withByteOrderMark, 0);
+        jsonLines.CopyTo(withByteOrderMark, preamble.Length);
+        await using MemoryStream input = new(withByteOrderMark, writable: false);
+
+        var result = await WorldJsonLinesVerifier.ValidateAsync(manifest, input);
+
+        Assert.False(result.IsSuccessful);
+        var diagnostic = Assert.Single(result.Validation.Diagnostics);
+        Assert.Equal("simulation.worldArtifact.jsonLines.jsonInvalid", diagnostic.Code);
+        Assert.Equal("/lines/0", diagnostic.Location);
     }
 
     [Fact]
@@ -78,6 +150,9 @@ public sealed class WorldJsonLinesVerifierTests
         Assert.Equal(3, exception.LineNumber);
         Assert.Null(exception.PropertyName);
         Assert.Contains("ended before", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            "simulation.worldArtifact.jsonLines.itemMissing",
+            Assert.Single(exception.Validation.Diagnostics).Code);
     }
 
     [Fact]
@@ -96,6 +171,9 @@ public sealed class WorldJsonLinesVerifierTests
         Assert.Equal(4, exception.LineNumber);
         Assert.Null(exception.PropertyName);
         Assert.Contains("more items", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            "simulation.worldArtifact.jsonLines.itemUnexpected",
+            Assert.Single(exception.Validation.Diagnostics).Code);
     }
 
     [Fact]
@@ -126,7 +204,10 @@ public sealed class WorldJsonLinesVerifierTests
         var prefix = $"\"{propertyName}\":\"";
         var valueStart = content.IndexOf(prefix, StringComparison.Ordinal) + prefix.Length;
         if (valueStart < prefix.Length)
+        {
             throw new InvalidOperationException($"Property '{propertyName}' was not found.");
+        }
+
         var valueEnd = content.IndexOf('"', valueStart);
         return content[..valueStart] + replacement + content[valueEnd..];
     }
@@ -135,8 +216,42 @@ public sealed class WorldJsonLinesVerifierTests
     {
         var index = content.IndexOf(value, StringComparison.Ordinal);
         if (index < 0)
+        {
             throw new InvalidOperationException($"Value '{value}' was not found.");
+        }
+
         return content[..index] + replacement + content[(index + value.Length)..];
+    }
+
+    static string RemoveProperty(string content, string propertyName)
+    {
+        var propertyStart = content.IndexOf($"\"{propertyName}\":", StringComparison.Ordinal);
+        if (propertyStart < 0)
+        {
+            throw new InvalidOperationException($"Property '{propertyName}' was not found.");
+        }
+
+        var valueStart = content.IndexOf('"', propertyStart + propertyName.Length + 3) + 1;
+        var valueEnd = content.IndexOf('"', valueStart) + 1;
+        return content.Remove(propertyStart, valueEnd - propertyStart + 1);
+    }
+
+    static string SwapFirstTwoProperties(string content)
+    {
+        var formatProperty = $"\"format\":\"{WorldJsonLinesSink.Format}\"";
+        const string RunIdPrefix = "\"runId\":\"";
+        var runIdStart = content.IndexOf(RunIdPrefix, StringComparison.Ordinal);
+        if (runIdStart < 0)
+        {
+            throw new InvalidOperationException("Property 'runId' was not found.");
+        }
+
+        var runIdEnd = content.IndexOf('"', runIdStart + RunIdPrefix.Length) + 1;
+        var runIdProperty = content[runIdStart..runIdEnd];
+        return ReplaceOnce(
+            content,
+            $"{{{formatProperty},{runIdProperty}",
+            $"{{{runIdProperty},{formatProperty}");
     }
 
     static WorldDefinition DemoWorld()
