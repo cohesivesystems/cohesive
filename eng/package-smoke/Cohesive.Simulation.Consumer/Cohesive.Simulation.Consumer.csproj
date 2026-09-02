@@ -15,7 +15,7 @@
   </Target>
 
   <ItemGroup>
-    <PackageReference Include="Cohesive.Simulation" Version="$(CohesivePackageVersion)" />
+    <PackageReference Include="Cohesive.Simulation.Xunit" Version="$(CohesivePackageVersion)" />
   </ItemGroup>
 
 </Project>

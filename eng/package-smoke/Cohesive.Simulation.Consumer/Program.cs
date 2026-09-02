@@ -4,6 +4,8 @@ using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Worlds;
+using Cohesive.Simulation.Xunit;
+using Xunit.Sdk;
 
 const string ExpectedArtifactId =
     "csimartifact1_73e9c87d107576fe2a4d4d161829e9ea7ca9d6b8315d91860ea7a62891bc1393";
@@ -29,6 +31,21 @@ if (args is ["emit", var worldPath])
     {
         throw new InvalidOperationException(
             $"Expected a property counterexample but found '{propertyRun.Status}'.");
+    }
+
+    try
+    {
+        PropertyCaseAssert.Passed(propertyRun);
+        throw new InvalidOperationException("Expected the xUnit adapter to reject the property counterexample.");
+    }
+    catch (XunitException exception)
+    {
+        if (!exception.Message.Contains(
+            propertyRun.BestCounterexample!.Replay.ToToken(),
+            StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The xUnit failure omitted the exact replay token.");
+        }
     }
 
     var replayed = compiledCustomers.ReplayPropertyCase(
