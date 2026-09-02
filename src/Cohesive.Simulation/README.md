@@ -133,6 +133,11 @@ Use the optional `Cohesive.Simulation.Storage` package to bind world populations
 integration keeps repository selection, entity-ID policy, state version, batch atomicity, and upsert behavior outside
 the provider-neutral Simulation package while deriving them into the effective provisioning target identity.
 
+Install the optional `Cohesive.Simulation.Cli` .NET tool when a shell script, CI job, or Playwright global setup needs
+to provision a portable world without hosting .NET application code. `cohesive-sim provision` reads the verified
+world document from a path or standard input and writes the same versioned JSON Lines contract to a path or standard
+output.
+
 ## Portable definitions and replay
 
 Persist a validated definition for scripts, tooling, or another process with the strict portable document boundary:

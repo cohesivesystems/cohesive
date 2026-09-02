@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>cohesive-sim</AssemblyName>
+    <PackageId>Cohesive.Simulation.Cli</PackageId>
+    <Description>Command-line provisioning of portable deterministic Cohesive simulation worlds.</Description>
+    <PackageTags>cohesive;simulation;synthetic-data;testing;playwright;cli</PackageTags>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>cohesive-sim</ToolCommandName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cohesive.Cli\Cohesive.Cli.csproj" />
+    <ProjectReference Include="..\Cohesive.Configuration\Cohesive.Configuration.csproj" />
+    <ProjectReference Include="..\Cohesive.Simulation\Cohesive.Simulation.csproj" />
+  </ItemGroup>
+
+</Project>
