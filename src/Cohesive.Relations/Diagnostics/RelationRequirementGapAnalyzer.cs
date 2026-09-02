@@ -73,26 +73,27 @@ public static class RelationRequirementGapAnalyzer
         readonly CompiledRelationQueryPlan plan;
         readonly RelationQueryRuntimeEvidence evidence;
         readonly IRelationRequirementGapPolicy policy;
-        readonly Dictionary<RelationQueryInputId, RelationQueryRequirementInput> inputs;
-        readonly Dictionary<RelationQueryInputId, RelationQueryDependencyEntry> dependencies;
-        readonly Dictionary<RelationQueryInputId, RelationQuerySourceInputContract> sourceContracts;
-        readonly Dictionary<RelationQueryInputId, RelationQueryTraversalInputContract> traversalContracts;
-        readonly Dictionary<RelationQueryInputId, RelationQueryFieldInputContract> fieldContracts;
-        readonly Dictionary<RelationQueryInputId, RelationQueryIdentityInputContract> identityContracts;
-        readonly Dictionary<RelationQueryInputId, RelationQueryParameterInputContract> parameterContracts;
-        readonly Dictionary<RelationQueryInputId, RelationQueryCapabilityInputContract> capabilityContracts;
-        readonly Dictionary<QueryNodeId, RelationQueryCollectionExpansionInputContract> expansionContracts;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryRequirementInput> inputs;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryDependencyEntry> dependencies;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQuerySourceInputContract> sourceContracts;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryTraversalInputContract> traversalContracts;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryFieldInputContract> fieldContracts;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryIdentityInputContract> identityContracts;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryParameterInputContract> parameterContracts;
+        readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryCapabilityInputContract> capabilityContracts;
+        readonly IReadOnlyDictionary<QueryNodeId, RelationQueryCollectionExpansionInputContract> expansionContracts;
         readonly Dictionary<RelationQueryInputId, RelationQueryFieldInputContract> forwardReferenceFields = [];
         readonly Dictionary<RelationQueryInputId, RelationQueryCollectionExpansionInputContract> forwardCollectionReferences = [];
         readonly Dictionary<RelationQueryInputId, RelationQueryIdentityInputContract> inverseAnchorIdentities = [];
-        readonly Dictionary<RelationQueryInputId, RelationQuerySourceEvidence> sources = [];
-        readonly Dictionary<(RelationQueryInputId Input, RelationQueryOccurrenceId Owner), RelationQueryFieldEvidence> fields = [];
-        readonly Dictionary<(RelationQueryInputId Input, RelationQueryOccurrenceId From), RelationQueryTraversalEvidence> traversals = [];
-        readonly Dictionary<RelationQueryInputId, RelationQueryParameterEvidence> parameters = [];
-        readonly Dictionary<RelationQueryInputId, RelationQueryCapabilityEvidence> capabilities = [];
-        readonly Dictionary<(RelationQueryInputId Input, string Occurrence), RelationQueryConversionFailureEvidence> conversions = [];
-        readonly Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrences = [];
-        readonly Dictionary<RelationQueryOccurrenceId, RelationQueryCollectionOccurrenceEvidence> collectionOccurrences = [];
+        readonly Dictionary<RelationQueryInputId, RelationQuerySourceEvidence> sources;
+        readonly Dictionary<(RelationQueryInputId Input, RelationQueryOccurrenceId Owner), RelationQueryFieldEvidence> fields;
+        readonly Dictionary<(RelationQueryInputId Input, RelationQueryOccurrenceId From), RelationQueryTraversalEvidence> traversals;
+        readonly Dictionary<RelationQueryInputId, RelationQueryParameterEvidence> parameters;
+        readonly Dictionary<RelationQueryInputId, RelationQueryCapabilityEvidence> capabilities;
+        readonly Dictionary<(RelationQueryInputId Input, string Occurrence), RelationQueryConversionFailureEvidence> conversions;
+        readonly Dictionary<RelationQueryOccurrenceId, RelationQueryObservationOccurrence> occurrences;
+        readonly Dictionary<(ValueBindingId Binding, QualifiedShapeId Shape), List<RelationQueryObservationOccurrence>> occurrenceOwners = [];
+        readonly Dictionary<RelationQueryOccurrenceId, RelationQueryCollectionOccurrenceEvidence> collectionOccurrences;
         readonly List<RelationRuntimeDiagnostic> diagnostics = [];
         readonly Dictionary<(string Occurrence, RelationQueryInputId Input, RelationRequirementGapCause Cause), RelationRequirementGap> gaps = [];
         readonly HashSet<(RelationQueryInputId Input, RelationQueryOccurrenceId Owner)> processedFields = [];
@@ -109,17 +110,24 @@ public static class RelationRequirementGapAnalyzer
             this.plan = plan;
             this.evidence = evidence;
             this.policy = policy;
-            inputs = plan.RequirementGraph.Inputs.ToDictionary(static input => input.Id);
-            dependencies = plan.DependencyManifest.Entries.ToDictionary(static entry => entry.Input.Id);
-            sourceContracts = plan.InputContract.Sources.ToDictionary(static source => source.Input.Id);
-            traversalContracts = plan.InputContract.Traversals.ToDictionary(static traversal => traversal.Input.Id);
-            fieldContracts = plan.InputContract.Sources.SelectMany(static source => source.Fields)
-                .Concat(plan.InputContract.Traversals.SelectMany(static traversal => traversal.Fields))
-                .ToDictionary(static field => field.Input.Id);
-            identityContracts = plan.InputContract.Identities.ToDictionary(static identity => identity.Input.Id);
-            parameterContracts = plan.InputContract.Parameters.ToDictionary(static parameter => parameter.Input.Id);
-            capabilityContracts = plan.InputContract.Capabilities.ToDictionary(static capability => capability.Input.Id);
-            expansionContracts = plan.InputContract.Expansions.ToDictionary(static expansion => expansion.Expansion);
+            var planIndex = RelationQueryCompiledPlanIndex.For(plan);
+            inputs = planIndex.Inputs;
+            dependencies = planIndex.Dependencies;
+            sourceContracts = planIndex.SourceContracts;
+            traversalContracts = planIndex.TraversalContracts;
+            fieldContracts = planIndex.FieldContracts;
+            identityContracts = planIndex.IdentityContracts;
+            parameterContracts = planIndex.ParameterContracts;
+            capabilityContracts = planIndex.CapabilityContracts;
+            expansionContracts = planIndex.ExpansionContracts;
+            sources = new(evidence.Sources.Length);
+            fields = new(evidence.Fields.Length);
+            traversals = new(evidence.Traversals.Length);
+            parameters = new(evidence.Parameters.Length);
+            capabilities = new(evidence.Capabilities.Length);
+            conversions = new(evidence.ConversionFailures.Length);
+            occurrences = new(evidence.OccurrenceEntryCount);
+            collectionOccurrences = new(evidence.CollectionOccurrences.Length);
         }
 
         public RelationRequirementGapAnalysisResult Run()
@@ -181,7 +189,7 @@ public static class RelationRequirementGapAnalyzer
                     $"Runtime evidence belongs to a different compiled relation/query input contract. Mismatched components: {string.Join(", ", planMismatches)}.");
             }
 
-            foreach (var source in QuarantineDuplicateEvidence(
+            foreach (var source in QuarantineOrderedDuplicateEvidence(
                          evidence.Sources,
                          static source => source.Input,
                          static source => source.Input,
@@ -211,7 +219,7 @@ public static class RelationRequirementGapAnalyzer
                 }
             }
 
-            foreach (var traversal in QuarantineDuplicateEvidence(
+            foreach (var traversal in QuarantineOrderedDuplicateEvidence(
                          evidence.Traversals,
                          static traversal => (traversal.Input, traversal.From),
                          static traversal => traversal.Input,
@@ -331,7 +339,7 @@ public static class RelationRequirementGapAnalyzer
                 }
             }
 
-            foreach (var field in QuarantineDuplicateEvidence(
+            foreach (var field in QuarantineOrderedDuplicateEvidence(
                          evidence.Fields,
                          static field => (field.Input, field.Owner),
                          static field => field.Input,
@@ -379,7 +387,7 @@ public static class RelationRequirementGapAnalyzer
                 }
             }
 
-            foreach (var parameter in QuarantineDuplicateEvidence(
+            foreach (var parameter in QuarantineOrderedDuplicateEvidence(
                          evidence.Parameters,
                          static parameter => parameter.Input,
                          static parameter => parameter.Input,
@@ -407,7 +415,7 @@ public static class RelationRequirementGapAnalyzer
                 }
             }
 
-            foreach (var capability in QuarantineDuplicateEvidence(
+            foreach (var capability in QuarantineOrderedDuplicateEvidence(
                          evidence.Capabilities,
                          static capability => capability.Input,
                          static capability => capability.Input,
@@ -422,7 +430,7 @@ public static class RelationRequirementGapAnalyzer
                 capabilities.Add(capability.Input, capability);
             }
 
-            foreach (var conversion in QuarantineDuplicateEvidence(
+            foreach (var conversion in QuarantineOrderedDuplicateEvidence(
                          evidence.ConversionFailures,
                          static conversion => (conversion.Input, conversion.Occurrence?.Value ?? string.Empty),
                          static conversion => conversion.Input,
@@ -981,10 +989,13 @@ public static class RelationRequirementGapAnalyzer
         {
             foreach (var contract in fieldContracts.Values.OrderBy(static item => item.Input.Id.Value, StringComparer.Ordinal))
             {
-                var owners = occurrences.Values
-                    .Where(occurrence => occurrence.Binding == contract.Input.Binding
-                                         && occurrence.Shape == contract.Input.Field.Shape)
-                    .OrderBy(static occurrence => occurrence.Id.Value, StringComparer.Ordinal);
+                if (!occurrenceOwners.TryGetValue(
+                        (contract.Input.Binding, contract.Input.Field.Shape),
+                        out var owners))
+                {
+                    continue;
+                }
+
                 foreach (var owner in owners)
                 {
                     if (blockedOccurrences.Contains(owner.Id)
@@ -1044,10 +1055,13 @@ public static class RelationRequirementGapAnalyzer
         {
             foreach (var contract in identityContracts.Values.OrderBy(static item => item.Input.Id.Value, StringComparer.Ordinal))
             {
-                var owners = occurrences.Values
-                    .Where(occurrence => occurrence.Binding == contract.Input.Binding
-                                         && occurrence.Shape == contract.Input.Shape)
-                    .OrderBy(static occurrence => occurrence.Id.Value, StringComparer.Ordinal);
+                if (!occurrenceOwners.TryGetValue(
+                        (contract.Input.Binding, contract.Input.Shape),
+                        out var owners))
+                {
+                    continue;
+                }
+
                 foreach (var owner in owners)
                 {
                     if (blockedOccurrences.Contains(owner.Id)
@@ -1713,20 +1727,29 @@ public static class RelationRequirementGapAnalyzer
             RelationQueryInputId input,
             string? evidenceReference)
         {
-            if (!occurrences.TryAdd(occurrence.Id, occurrence))
+            if (occurrences.TryAdd(occurrence.Id, occurrence))
             {
-                var existing = occurrences[occurrence.Id];
-                AddDiagnostic(
-                    Equals(existing, occurrence)
-                        ? RelationRuntimeDiagnosticCodes.EvidenceDuplicate
-                        : RelationRuntimeDiagnosticCodes.EvidenceConflict,
-                    Equals(existing, occurrence)
-                        ? $"Occurrence '{occurrence.Id.Value}' is declared more than once."
-                        : $"Occurrence '{occurrence.Id.Value}' has conflicting binding, shape, or identity evidence.",
-                    input,
-                    occurrence.Id,
-                    evidenceReference);
+                var key = (occurrence.Binding, occurrence.Shape);
+                if (!occurrenceOwners.TryGetValue(key, out var owners))
+                {
+                    owners = [];
+                    occurrenceOwners.Add(key, owners);
+                }
+                owners.Add(occurrence);
+                return;
             }
+
+            var existing = occurrences[occurrence.Id];
+            AddDiagnostic(
+                Equals(existing, occurrence)
+                    ? RelationRuntimeDiagnosticCodes.EvidenceDuplicate
+                    : RelationRuntimeDiagnosticCodes.EvidenceConflict,
+                Equals(existing, occurrence)
+                    ? $"Occurrence '{occurrence.Id.Value}' is declared more than once."
+                    : $"Occurrence '{occurrence.Id.Value}' has conflicting binding, shape, or identity evidence.",
+                input,
+                occurrence.Id,
+                evidenceReference);
         }
 
         bool ValidateInputKind<TInput>(
@@ -1757,8 +1780,12 @@ public static class RelationRequirementGapAnalyzer
             return false;
         }
 
-        IEnumerable<TEvidence> QuarantineDuplicateEvidence<TEvidence, TKey>(
-            IEnumerable<TEvidence> values,
+        /// <summary>
+        /// Quarantines complete duplicate-key groups from an evidence array whose canonical normalization orders
+        /// equal <typeparamref name="TKey"/> values contiguously.
+        /// </summary>
+        ImmutableArray<TEvidence> QuarantineOrderedDuplicateEvidence<TEvidence, TKey>(
+            ImmutableArray<TEvidence> values,
             Func<TEvidence, TKey> keySelector,
             Func<TEvidence, RelationQueryInputId> inputSelector,
             Func<TEvidence, RelationQueryOccurrenceId?> occurrenceSelector,
@@ -1766,24 +1793,44 @@ public static class RelationRequirementGapAnalyzer
             where TKey : notnull
             where TEvidence : class
         {
-            foreach (var group in values.GroupBy(keySelector))
+            if (values.Length < 2)
+                return values;
+
+            var comparer = EqualityComparer<TKey>.Default;
+            ImmutableArray<TEvidence>.Builder? retained = null;
+            var groupStart = 0;
+            while (groupStart < values.Length)
             {
-                var candidates = group.Take(2).ToArray();
-                var candidate = candidates[0];
-                if (candidates.Length == 1)
+                var key = keySelector(values[groupStart]);
+                var groupEnd = groupStart + 1;
+                while (groupEnd < values.Length && comparer.Equals(key, keySelector(values[groupEnd])))
+                    groupEnd++;
+
+                if (groupEnd - groupStart == 1)
                 {
-                    yield return candidate;
+                    retained?.Add(values[groupStart]);
+                    groupStart = groupEnd;
                     continue;
                 }
 
-                var input = inputSelector(candidate);
-                var occurrence = occurrenceSelector(candidate);
+                if (retained is null)
+                {
+                    retained = ImmutableArray.CreateBuilder<TEvidence>(values.Length - (groupEnd - groupStart));
+                    retained.AddRange(values.AsSpan(0, groupStart));
+                }
+
+                var input = inputSelector(values[groupStart]);
+                var occurrence = occurrenceSelector(values[groupStart]);
                 AddDiagnostic(
                     RelationRuntimeDiagnosticCodes.EvidenceDuplicate,
                     $"{evidenceKind} evidence repeats input '{input.Value}'{(occurrence is null ? string.Empty : $" for occurrence '{occurrence.Value.Value}'")}.",
                     input,
                     occurrence);
+
+                groupStart = groupEnd;
             }
+
+            return retained is null ? values : retained.ToImmutable();
         }
 
         void AddDiagnostic(

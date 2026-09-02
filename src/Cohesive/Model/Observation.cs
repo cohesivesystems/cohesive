@@ -1,8 +1,6 @@
 using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Encodings.Web;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 
@@ -239,39 +237,53 @@ public sealed class Observation : IEquatable<Observation>, IObservationFieldRead
     /// <summary>Serializes the qualified shape and value to canonical portable JSON.</summary>
     /// <returns>Canonical JSON whose object properties are ordered ordinally.</returns>
     /// <exception cref="InvalidOperationException">A retained value has no canonical portable JSON encoding.</exception>
-    public string ToCanonicalJson() => Encoding.UTF8.GetString(ToCanonicalJsonUtf8());
+    public string ToCanonicalJson()
+    {
+        using PooledByteBufferWriter buffer = new();
+        WriteCanonicalJson(buffer);
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    /// <summary>Writes the qualified shape and value as canonical portable UTF-8 JSON.</summary>
+    /// <param name="output">Caller-owned destination that receives the complete canonical representation.</param>
+    /// <remarks>
+    /// Output is appended at the destination's current position. The observation retains no reference to destination
+    /// storage, allowing callers to reuse or pool it after consuming the written bytes. After the per-thread JSON
+    /// writer is warm, this operation allocates no managed memory when the destination has sufficient capacity.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="output"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">A retained value has no canonical portable JSON encoding.</exception>
+    public void WriteCanonicalJson(IBufferWriter<byte> output) =>
+        CanonicalJsonWriter.WriteCanonicalObservation(output, this);
 
     /// <summary>Serializes the qualified shape and value to canonical portable UTF-8 JSON.</summary>
     /// <returns>A newly allocated byte array containing the canonical representation.</returns>
     /// <exception cref="InvalidOperationException">A retained value has no canonical portable JSON encoding.</exception>
     public byte[] ToCanonicalJsonUtf8()
     {
-        ArrayBufferWriter<byte> buffer = new();
-        using (Utf8JsonWriter writer = new(buffer, new JsonWriterOptions
-        {
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-            Indented = false
-        }))
-        {
-            writer.WriteStartObject();
-            writer.WriteString("format", CanonicalFormat);
-            writer.WriteString("graphId", ShapeId.GraphId.Value);
-            writer.WriteString("shapeId", ShapeId.ShapeId.Value);
-            writer.WritePropertyName("value");
-            CanonicalJsonWriter.WriteCanonicalObservationValue(writer, value);
-            writer.WriteEndObject();
-        }
-
+        using PooledByteBufferWriter buffer = new();
+        WriteCanonicalJson(buffer);
         return buffer.WrittenSpan.ToArray();
     }
 
     /// <summary>Computes the versioned SHA-256 fingerprint of the canonical qualified shape and value.</summary>
     /// <returns>Fingerprint metadata and a lowercase hexadecimal digest.</returns>
+    /// <remarks>
+    /// Canonical bytes are streamed through bounded staging storage into incremental SHA-256 state; the complete JSON
+    /// payload is never materialized solely for hashing.
+    /// </remarks>
     /// <exception cref="InvalidOperationException">A retained value has no canonical portable JSON encoding.</exception>
-    public ObservationFingerprint ComputeFingerprint() => new(
-        algorithm: FingerprintAlgorithm,
-        canonicalization: FingerprintCanonicalization,
-        value: Convert.ToHexStringLower(SHA256.HashData(ToCanonicalJsonUtf8())));
+    public ObservationFingerprint ComputeFingerprint()
+    {
+        using Sha256BufferWriter hash = new();
+        CanonicalJsonWriter.WriteCanonicalObservationStreaming(hash, this);
+        Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+        hash.Complete(digest);
+        return new(
+            algorithm: FingerprintAlgorithm,
+            canonicalization: FingerprintCanonicalization,
+            value: Convert.ToHexStringLower(digest));
+    }
 
     /// <summary>Compares the qualified shape and concrete value of two identity-free observations.</summary>
     /// <param name="other">Observation to compare, or <see langword="null"/>.</param>
@@ -286,4 +298,145 @@ public sealed class Observation : IEquatable<Observation>, IObservationFieldRead
 
     /// <inheritdoc />
     public override int GetHashCode() => HashCode.Combine(ShapeId, value);
+}
+
+sealed class PooledByteBufferWriter : IBufferWriter<byte>, IDisposable
+{
+    const int InitialCapacity = 512;
+    byte[] buffer = ArrayPool<byte>.Shared.Rent(InitialCapacity);
+    int writtenCount;
+    bool disposed;
+
+    public ReadOnlySpan<byte> WrittenSpan
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            return buffer.AsSpan(0, writtenCount);
+        }
+    }
+
+    public void Advance(int count)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (count < 0 || count > buffer.Length - writtenCount)
+            throw new ArgumentOutOfRangeException(nameof(count), count, "The committed byte count exceeds the supplied buffer.");
+        writtenCount += count;
+    }
+
+    public Memory<byte> GetMemory(int sizeHint = 0)
+    {
+        EnsureCapacity(sizeHint);
+        return buffer.AsMemory(writtenCount);
+    }
+
+    public Span<byte> GetSpan(int sizeHint = 0)
+    {
+        EnsureCapacity(sizeHint);
+        return buffer.AsSpan(writtenCount);
+    }
+
+    public void Dispose()
+    {
+        if (disposed)
+            return;
+
+        disposed = true;
+        ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        buffer = [];
+        writtenCount = 0;
+    }
+
+    void EnsureCapacity(int sizeHint)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (sizeHint < 0)
+            throw new ArgumentOutOfRangeException(nameof(sizeHint), sizeHint, "A buffer size hint cannot be negative.");
+
+        var requiredCapacity = checked(writtenCount + Math.Max(sizeHint, 1));
+        if (requiredCapacity <= buffer.Length)
+            return;
+
+        var replacement = ArrayPool<byte>.Shared.Rent(Math.Max(requiredCapacity, checked(buffer.Length * 2)));
+        buffer.AsSpan(0, writtenCount).CopyTo(replacement);
+        ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        buffer = replacement;
+    }
+}
+
+sealed class Sha256BufferWriter : IBufferWriter<byte>, IDisposable
+{
+    const int BufferSize = 4 * 1024;
+    readonly IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+    byte[] buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+    int bufferedCount;
+    bool disposed;
+
+    public void Advance(int count)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (count < 0 || count > buffer.Length - bufferedCount)
+            throw new ArgumentOutOfRangeException(nameof(count), count, "The committed byte count exceeds the supplied buffer.");
+        bufferedCount += count;
+    }
+
+    public Memory<byte> GetMemory(int sizeHint = 0)
+    {
+        EnsureCapacity(sizeHint);
+        return buffer.AsMemory(bufferedCount);
+    }
+
+    public Span<byte> GetSpan(int sizeHint = 0)
+    {
+        EnsureCapacity(sizeHint);
+        return buffer.AsSpan(bufferedCount);
+    }
+
+    internal void Complete(Span<byte> destination)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        Flush();
+        if (!hash.TryGetHashAndReset(destination, out var written) || written != SHA256.HashSizeInBytes)
+            throw new InvalidOperationException("The canonical observation fingerprint could not be completed.");
+    }
+
+    public void Dispose()
+    {
+        if (disposed)
+            return;
+
+        disposed = true;
+        hash.Dispose();
+        ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        buffer = [];
+        bufferedCount = 0;
+    }
+
+    void EnsureCapacity(int sizeHint)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (sizeHint < 0)
+            throw new ArgumentOutOfRangeException(nameof(sizeHint), sizeHint, "A buffer size hint cannot be negative.");
+
+        sizeHint = Math.Max(sizeHint, 1);
+        if (sizeHint <= buffer.Length - bufferedCount)
+            return;
+
+        Flush();
+        if (sizeHint <= buffer.Length)
+            return;
+
+        var replacement = ArrayPool<byte>.Shared.Rent(sizeHint);
+        ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        buffer = replacement;
+    }
+
+    void Flush()
+    {
+        if (bufferedCount == 0)
+            return;
+
+        hash.AppendData(buffer.AsSpan(0, bufferedCount));
+        bufferedCount = 0;
+    }
 }

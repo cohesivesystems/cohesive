@@ -244,6 +244,21 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
         return false;
     }
 
+    /// <summary>Tries to resolve a direct field name without nested or collection navigation.</summary>
+    /// <param name="fieldName">Direct field name when this path contains exactly one field segment.</param>
+    /// <returns><see langword="true"/> when this path addresses one direct field; otherwise, <see langword="false"/>.</returns>
+    public bool TryGetDirectFieldName(out string fieldName)
+    {
+        if (Segments is [{ Kind: SegmentKind.Field, Segment: { } directField }])
+        {
+            fieldName = directField;
+            return true;
+        }
+
+        fieldName = string.Empty;
+        return false;
+    }
+
     /// <inheritdoc />
     public bool Equals(FieldPath other)
     {

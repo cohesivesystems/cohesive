@@ -1,8 +1,3 @@
-using System.Buffers;
-using System.Buffers.Binary;
-using System.Collections.Immutable;
-using System.Security.Cryptography;
-using System.Text;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 
@@ -10,14 +5,14 @@ namespace Cohesive.Simulation.Generation;
 
 static class GenerationCanonicalizer
 {
-    public const string FingerprintAlgorithm = "sha256";
-    public const string CanonicalizationProfile = "cohesive-generation/v1-c14n/v1";
+    public const string FingerprintAlgorithm = GenerationDefinitionFingerprint.CurrentAlgorithm;
+    public const string CanonicalizationProfile = GenerationDefinitionFingerprint.CurrentCanonicalization;
 
     public static string ComputeShapeFingerprint(
         ShapeId shapeId,
         IEnumerable<RecordGenerationMember> members)
     {
-        using HashWriter writer = new();
+        using SimulationFingerprintWriter writer = new();
         writer.Append("cohesive-simulation-shape/v1");
         writer.Append(shapeId.Value);
         foreach (var member in members.OrderBy(static member => member.Identity.Value, StringComparer.Ordinal))
@@ -31,9 +26,11 @@ static class GenerationCanonicalizer
 
     public static string ComputeDefinitionFingerprint(GenerationDefinition definition)
     {
-        using HashWriter writer = new();
+        using SimulationFingerprintWriter writer = new();
         writer.Append(CanonicalizationProfile);
-        writer.Append(definition.ShapeGraph.Id.Value);
+        writer.Append(StrictDocumentJson.GetCanonicalBytes(
+            ShapeGraphDocument.FromGraph(definition.ShapeGraph),
+            StrictDocumentJson.CreateOptions()));
         writer.Append(definition.Root.ShapeId.Value);
         foreach (var member in definition.Root.Members.OrderBy(
                      static member => member.Identity.Value,
@@ -46,29 +43,29 @@ static class GenerationCanonicalizer
         return writer.Complete();
     }
 
-    static void AppendGenerator(HashWriter writer, ValueGeneratorNode generator)
+    static void AppendGenerator(SimulationFingerprintWriter writer, ValueGeneratorNode generator)
     {
         switch (generator)
         {
             case ConstantGenerationNode constant:
-                writer.Append("constant");
+                writer.Append(GenerationDefinitionWireNames.Constant);
                 AppendType(writer, constant.ValueType);
                 writer.Append(constant.Value);
                 return;
 
             case Int32GenerationNode integer:
-                writer.Append("int32");
+                writer.Append(GenerationDefinitionWireNames.Int32);
                 writer.Append(integer.Minimum);
                 writer.Append(integer.Maximum);
                 return;
 
             case BernoulliGenerationNode bernoulli:
-                writer.Append("bernoulli");
+                writer.Append(GenerationDefinitionWireNames.Bernoulli);
                 writer.Append(bernoulli.Probability);
                 return;
 
             case WeightedCategoricalGenerationNode categorical:
-                writer.Append("weighted-categorical");
+                writer.Append(GenerationDefinitionWireNames.WeightedCategorical);
                 AppendType(writer, categorical.ValueType);
                 writer.Append(categorical.Options.Length);
                 foreach (var option in categorical.Options)
@@ -84,7 +81,7 @@ static class GenerationCanonicalizer
         }
     }
 
-    static void AppendType(HashWriter writer, TypeRef type)
+    static void AppendType(SimulationFingerprintWriter writer, TypeRef type)
     {
         switch (type)
         {
@@ -150,58 +147,4 @@ static class GenerationCanonicalizer
         }
     }
 
-    sealed class HashWriter : IDisposable
-    {
-        readonly IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        readonly byte[] numberBuffer = new byte[8];
-
-        public void Append(string value)
-        {
-            var byteCount = Encoding.UTF8.GetByteCount(value);
-            BinaryPrimitives.WriteInt32BigEndian(numberBuffer, byteCount);
-            hash.AppendData(numberBuffer.AsSpan(0, sizeof(int)));
-
-            if (byteCount == 0)
-                return;
-
-            var rented = ArrayPool<byte>.Shared.Rent(byteCount);
-            try
-            {
-                var written = Encoding.UTF8.GetBytes(value, rented);
-                hash.AppendData(rented.AsSpan(0, written));
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(rented);
-            }
-        }
-
-        public void Append(int value)
-        {
-            BinaryPrimitives.WriteInt32BigEndian(numberBuffer, value);
-            hash.AppendData(numberBuffer.AsSpan(0, sizeof(int)));
-        }
-
-        public void Append(double value)
-        {
-            BinaryPrimitives.WriteInt64BigEndian(numberBuffer, BitConverter.DoubleToInt64Bits(value));
-            hash.AppendData(numberBuffer);
-        }
-
-        public void Append(ObservationValue value)
-        {
-            ArrayBufferWriter<byte> buffer = new();
-            CanonicalJsonWriter.WriteCanonicalObservationValue(buffer, value);
-            Append(buffer.WrittenSpan.Length);
-            hash.AppendData(buffer.WrittenSpan);
-        }
-
-        public string Complete() => Convert.ToHexStringLower(hash.GetHashAndReset());
-
-        public void Dispose()
-        {
-            hash.Dispose();
-            GC.SuppressFinalize(this);
-        }
-    }
 }

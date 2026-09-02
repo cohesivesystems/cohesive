@@ -1,10 +1,10 @@
 using System.Text.Json;
 using Cohesive.Api;
 using Cohesive.Api.Execution;
+using Cohesive.Cli;
+using Cohesive.Cli.Testing;
 using Cohesive.Control;
 using Cohesive.Execution;
-using Cohesive.Host.Cli;
-using Cohesive.Host.Cli.Testing;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Runtime;
 using Cohesive.Storage.Materialization;

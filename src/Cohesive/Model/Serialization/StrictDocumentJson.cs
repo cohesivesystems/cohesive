@@ -483,6 +483,8 @@ public sealed class StrictStringEnumJsonConverterFactory : JsonConverterFactory
     sealed class StrictStringEnumJsonConverter<TEnum> : JsonConverter<TEnum>
         where TEnum : struct, Enum
     {
+        static readonly SerializedEnumMemberCatalog Catalog = CreateCatalog();
+
         public override TEnum Read(
             ref Utf8JsonReader reader,
             Type typeToConvert,
@@ -495,9 +497,9 @@ public sealed class StrictStringEnumJsonConverterFactory : JsonConverterFactory
 
             var text = reader.GetString();
             if (text is null
-                || !Enum.TryParse<TEnum>(text, ignoreCase: false, out var value)
-                || !string.Equals(value.ToString(), text, StringComparison.Ordinal)
-                || IsNumeric(text))
+                || !Catalog.TryGetClrName(text, out var clrName)
+                || !Enum.TryParse<TEnum>(clrName, ignoreCase: false, out var value)
+                || !string.Equals(value.ToString(), clrName, StringComparison.Ordinal))
             {
                 throw new JsonException(
                     $"'{text}' is not a canonical case-sensitive value of enum '{typeToConvert.Name}'.");
@@ -512,18 +514,38 @@ public sealed class StrictStringEnumJsonConverterFactory : JsonConverterFactory
             JsonSerializerOptions options)
         {
             ArgumentNullException.ThrowIfNull(writer);
-            var text = value.ToString();
-            if (IsNumeric(text))
+            var clrName = value.ToString();
+            if (!Catalog.TryGetWireName(clrName, out var wireName))
             {
                 throw new JsonException(
-                    $"Value '{text}' is not a declared value of enum '{typeof(TEnum).Name}'.");
+                    $"Value '{clrName}' is not a declared value of enum '{typeof(TEnum).Name}'.");
             }
 
-            writer.WriteStringValue(text);
+            writer.WriteStringValue(wireName);
         }
 
-        static bool IsNumeric(string value) =>
-            value.Length > 0 && (char.IsDigit(value[0]) || value[0] is '-' or '+');
+        static SerializedEnumMemberCatalog CreateCatalog()
+        {
+            if (SerializedEnumMemberCatalog.TryCreate(
+                    typeof(TEnum),
+                    out var catalog,
+                    out var failure,
+                    out var unsupportedConverter,
+                    useClrNamesForUnsupportedConverter: true))
+            {
+                return catalog!;
+            }
+
+            throw new NotSupportedException(failure switch
+            {
+                SerializedEnumMemberCatalogFailure.UnsupportedConverter =>
+                    $"Enum '{typeof(TEnum).Name}' declares unsupported JSON converter "
+                    + $"'{unsupportedConverter?.FullName ?? typeof(JsonConverterAttribute).FullName}'.",
+                SerializedEnumMemberCatalogFailure.AmbiguousWireMember =>
+                    $"Enum '{typeof(TEnum).Name}' maps multiple members to the same canonical JSON string.",
+                _ => $"Enum '{typeof(TEnum).Name}' has no discoverable serialized-member catalog."
+            });
+        }
     }
 }
 

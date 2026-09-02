@@ -747,30 +747,20 @@ public sealed class RelationQueryRuntimeEvidence
         Evaluation = evaluation;
         PlanReference = RelationQueryCompiledPlanReference.From(plan);
         Completeness = completeness;
-        Sources = Normalize(sources, static evidence => evidence.Input.Value, nameof(sources));
-        Fields = Normalize(
-            fields,
-            static evidence => string.Concat(evidence.Input.Value, "\u001f", evidence.Owner.Value),
-            nameof(fields));
-        Traversals = Normalize(
-            traversals,
-            static evidence => string.Concat(evidence.Input.Value, "\u001f", evidence.From.Value),
-            nameof(traversals));
-        Parameters = Normalize(parameters, static evidence => evidence.Input.Value, nameof(parameters));
-        Capabilities = Normalize(capabilities, static evidence => evidence.Input.Value, nameof(capabilities));
+        Sources = Normalize(sources, CompareSources, nameof(sources));
+        Fields = Normalize(fields, CompareFields, nameof(fields));
+        Traversals = Normalize(traversals, CompareTraversals, nameof(traversals));
+        Parameters = Normalize(parameters, CompareParameters, nameof(parameters));
+        Capabilities = Normalize(capabilities, CompareCapabilities, nameof(capabilities));
         ConversionFailures = Normalize(
             conversionFailures,
-            static evidence => string.Concat(
-                evidence.Input.Value,
-                "\u001f",
-                evidence.Occurrence?.Value ?? string.Empty,
-                "\u001f",
-                evidence.EvidenceReference),
+            CompareConversionFailures,
             nameof(conversionFailures));
         CollectionOccurrences = Normalize(
             collectionOccurrences,
-            static evidence => evidence.Occurrence.Id.Value,
+            CompareCollectionOccurrences,
             nameof(collectionOccurrences));
+        OccurrenceEntryCount = CountOccurrenceEntries(Sources, Traversals, CollectionOccurrences);
     }
 
     /// <summary>Identity of the evaluation represented by this snapshot.</summary>
@@ -806,18 +796,78 @@ public sealed class RelationQueryRuntimeEvidence
     /// <summary>Structured collection-item occurrences in deterministic occurrence order.</summary>
     public ImmutableArray<RelationQueryCollectionOccurrenceEvidence> CollectionOccurrences { get; }
 
+    /// <summary>
+    /// Upper-bound count of occurrence records across source, traversal, and collection evidence.
+    /// Duplicate occurrence identities remain counted so consumers can safely use this as an initial capacity.
+    /// </summary>
+    internal int OccurrenceEntryCount { get; }
+
     static ImmutableArray<T> Normalize<T>(
         ImmutableArray<T> values,
-        Func<T, string> key,
+        Comparison<T> comparison,
         string parameterName)
         where T : class
     {
         var normalized = values.IsDefault ? [] : values;
-        if (normalized.Any(static value => value is null))
+        foreach (var value in normalized)
         {
-            throw new ArgumentException("Runtime evidence arrays cannot contain null entries.", parameterName);
+            if (value is null)
+                throw new ArgumentException("Runtime evidence arrays cannot contain null entries.", parameterName);
         }
 
-        return [.. normalized.OrderBy(key, StringComparer.Ordinal)];
+        return CanonicalDocumentCollections.SortIfNeeded(normalized, comparison);
+    }
+
+    static int CompareSources(RelationQuerySourceEvidence left, RelationQuerySourceEvidence right) =>
+        Compare(left.Input.Value, right.Input.Value);
+
+    static int CompareFields(RelationQueryFieldEvidence left, RelationQueryFieldEvidence right)
+    {
+        var input = Compare(left.Input.Value, right.Input.Value);
+        return input != 0 ? input : Compare(left.Owner.Value, right.Owner.Value);
+    }
+
+    static int CompareTraversals(RelationQueryTraversalEvidence left, RelationQueryTraversalEvidence right)
+    {
+        var input = Compare(left.Input.Value, right.Input.Value);
+        return input != 0 ? input : Compare(left.From.Value, right.From.Value);
+    }
+
+    static int CompareParameters(RelationQueryParameterEvidence left, RelationQueryParameterEvidence right) =>
+        Compare(left.Input.Value, right.Input.Value);
+
+    static int CompareCapabilities(RelationQueryCapabilityEvidence left, RelationQueryCapabilityEvidence right) =>
+        Compare(left.Input.Value, right.Input.Value);
+
+    static int CompareConversionFailures(
+        RelationQueryConversionFailureEvidence left,
+        RelationQueryConversionFailureEvidence right)
+    {
+        var input = Compare(left.Input.Value, right.Input.Value);
+        if (input != 0)
+            return input;
+
+        var occurrence = Compare(left.Occurrence?.Value ?? string.Empty, right.Occurrence?.Value ?? string.Empty);
+        return occurrence != 0 ? occurrence : Compare(left.EvidenceReference, right.EvidenceReference);
+    }
+
+    static int CompareCollectionOccurrences(
+        RelationQueryCollectionOccurrenceEvidence left,
+        RelationQueryCollectionOccurrenceEvidence right) =>
+        Compare(left.Occurrence.Id.Value, right.Occurrence.Id.Value);
+
+    static int Compare(string left, string right) => StringComparer.Ordinal.Compare(left, right);
+
+    static int CountOccurrenceEntries(
+        ImmutableArray<RelationQuerySourceEvidence> sources,
+        ImmutableArray<RelationQueryTraversalEvidence> traversals,
+        ImmutableArray<RelationQueryCollectionOccurrenceEvidence> collectionOccurrences)
+    {
+        long count = collectionOccurrences.Length;
+        foreach (var source in sources)
+            count += source.Occurrences.Length;
+        foreach (var traversal in traversals)
+            count += traversal.Results.Length;
+        return (int)Math.Min(count, int.MaxValue);
     }
 }

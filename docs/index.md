@@ -4,7 +4,7 @@ status: accepted
 authority: cohesive.documentation-index
 owners: [cohesive-core]
 applies_to: [cohesive]
-last_verified: 2026-08-12
+last_verified: 2026-08-30
 supersedes: []
 ---
 
@@ -31,6 +31,7 @@ expectations.
 | What counts as canonical semantics, and what is only a producer or interpretation? | [Semantic model](concepts/semantic-model.md) | Normative conceptual contract |
 | How do the Cohesive languages divide responsibility and compose? | [Language family](architecture/language-family.md) | Architectural ownership map |
 | How should implementation quality be judged when desirable properties conflict? | [Code quality and optimization](quality/code-quality.md) | Normative decision model |
+| How should package READMEs, internals, examples, and website projections stay aligned? | [Package documentation](package-documentation.md) | Authoring and synchronization convention |
 | What does the architecture look like in complete application scenarios? | [Golden verticals](use-cases/golden-verticals.md) | End-to-end examples and intended evidence |
 | How are semantic and target claims tested? | [Conformance](quality/conformance.md) | Verification strategy |
 | Which Execution Kernel behavior exists today? | [Execution Kernel compatibility](EXECUTION_KERNEL_COMPATIBILITY.md) | Implementation compatibility inventory |

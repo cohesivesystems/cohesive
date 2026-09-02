@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>Repository provisioning integration for deterministic Cohesive simulation worlds.</Description>
+    <PackageTags>cohesive;simulation;synthetic-data;storage;seeding;testing</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cohesive.Simulation\Cohesive.Simulation.csproj" />
+    <ProjectReference Include="..\Cohesive.Storage\Cohesive.Storage.csproj" />
+  </ItemGroup>
+
+</Project>

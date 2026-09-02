@@ -5,6 +5,7 @@ using System.Buffers;
 using System.Globalization;
 using System.Numerics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -16,84 +17,137 @@ namespace Cohesive.Model;
 /// <summary>
 /// Compact scalar/object/array JSON-like value container used by observation and entity-state snapshots.
 /// </summary>
-/// <param name="kind">The logical value kind that selects the active payload.</param>
-/// <param name="int64">The Int64 payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Int64"/>.</param>
-/// <param name="d">The binary floating-point payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Double"/>.</param>
-/// <param name="b">The Boolean payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Bool"/>.</param>
-/// <param name="s">The string or temporal text payload for string-backed kinds.</param>
-/// <param name="fields">The object properties when <paramref name="kind"/> is <see cref="ObservationValueKind.Object"/>.</param>
-/// <param name="array">The array items when <paramref name="kind"/> is <see cref="ObservationValueKind.Array"/>.</param>
-/// <param name="bytes">The binary payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Bytes"/>.</param>
-/// <param name="dec">The exact base-10 payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Decimal"/>.</param>
 /// <remarks>
 /// Caller-owned mutable object dictionaries, arrays, and byte buffers are snapshotted during construction.
 /// Subsequent mutation of the supplied storage does not change the observation value. Immutable collection
 /// storage may be retained directly because its ownership contract prevents subsequent mutation.
+/// Only the payload selected by <see cref="Kind"/> is retained; inactive payload accessors are unspecified.
 /// </remarks>
 [JsonConverter(typeof(ObservationValueJsonConverter))]
-public readonly struct ObservationValue(
-    ObservationValueKind kind,
-    long int64 = 0,
-    double d = 0,
-    bool b = false,
-    string? s = null,
-    IReadOnlyDictionary<string, ObservationValue>? fields = null,
-    ObservationValue[]? array = null,
-    ReadOnlyMemory<byte> bytes = default,
-    decimal dec = 0m
-    ) : IEquatable<ObservationValue>
+public readonly struct ObservationValue : IEquatable<ObservationValue>
 {
-    ObservationValue(ImmutableArray<ObservationValue> array)
-        : this(ObservationValueKind.Array)
+    readonly ScalarPayload scalar;
+    readonly object? reference;
+
+    /// <summary>Creates a value whose active payload is selected by <paramref name="kind"/>.</summary>
+    /// <param name="kind">The logical value kind that selects the active payload.</param>
+    /// <param name="int64">The Int64 payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Int64"/>.</param>
+    /// <param name="d">The binary floating-point payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Double"/>.</param>
+    /// <param name="b">The Boolean payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Bool"/>.</param>
+    /// <param name="s">The string or temporal text payload for string-backed kinds.</param>
+    /// <param name="fields">The object properties when <paramref name="kind"/> is <see cref="ObservationValueKind.Object"/>.</param>
+    /// <param name="array">The array items when <paramref name="kind"/> is <see cref="ObservationValueKind.Array"/>.</param>
+    /// <param name="bytes">The binary payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Bytes"/>.</param>
+    /// <param name="dec">The exact base-10 payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Decimal"/>.</param>
+    public ObservationValue(
+        ObservationValueKind kind,
+        long int64 = 0,
+        double d = 0,
+        bool b = false,
+        string? s = null,
+        IReadOnlyDictionary<string, ObservationValue>? fields = null,
+        ObservationValue[]? array = null,
+        ReadOnlyMemory<byte> bytes = default,
+        decimal dec = 0m)
     {
-        Array = array;
+        Kind = kind;
+        scalar = kind switch
+        {
+            ObservationValueKind.Int64 => new(int64),
+            ObservationValueKind.Double => new(d),
+            ObservationValueKind.Bool => new(b),
+            ObservationValueKind.Decimal => new(dec),
+            _ => default
+        };
+        reference = kind switch
+        {
+            ObservationValueKind.String
+                or ObservationValueKind.DateTimeOffset
+                or ObservationValueKind.DateOnly
+                or ObservationValueKind.TimeOnly
+                or ObservationValueKind.TimeSpan => s,
+            ObservationValueKind.Object => SnapshotFields(fields),
+            ObservationValueKind.Array => SnapshotArray(array),
+            ObservationValueKind.Bytes => SnapshotBytes(bytes),
+            _ => null
+        };
+    }
+
+    ObservationValue(ImmutableArray<ObservationValue> array)
+    {
+        Kind = ObservationValueKind.Array;
+        scalar = default;
+        reference = ImmutableCollectionsMarshal.AsArray(array) ?? EmptyArrayValues;
+    }
+
+    ObservationValue(byte[] ownedBytes)
+    {
+        Kind = ObservationValueKind.Bytes;
+        scalar = default;
+        reference = ownedBytes.Length == 0 ? null : ownedBytes;
+    }
+
+    ObservationValue(Dictionary<string, ObservationValue> ownedFields)
+    {
+        Kind = ObservationValueKind.Object;
+        scalar = default;
+        reference = ownedFields.Count == 0
+            ? EmptyObjectValues
+            : new OwnedObservationFields(ownedFields);
     }
 
     /// <summary>
     /// Value shape kind.
     /// </summary>
-    public ObservationValueKind Kind { get; } = kind;
+    public ObservationValueKind Kind { get; }
 
     /// <summary>
     /// 64-bit integer payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Int64"/>.
     /// </summary>
-    public long Int64 { get; } = int64;
+    public long Int64 => scalar.Int64;
 
     /// <summary>
     /// Floating-point payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Double"/>.
     /// </summary>
-    public double Double { get; } = d;
+    public double Double => scalar.Double;
 
     /// <summary>
     /// Base-10 numeric payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Decimal"/>.
     /// </summary>
-    public decimal Decimal { get; } = dec;
+    public decimal Decimal => scalar.Decimal;
 
     /// <summary>
     /// Boolean payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Bool"/>.
     /// </summary>
-    public bool Bool { get; } = b;
+    public bool Bool => scalar.Bool;
 
     /// <summary>
     /// String payload when <see cref="Kind"/> is <see cref="ObservationValueKind.String"/>
     /// or a temporal string-backed kind.
     /// </summary>
-    public string? String { get; } = s;
+    public string? String => reference as string;
 
     /// <summary>
     /// Object payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Object"/>.
     /// </summary>
-    public IReadOnlyDictionary<string, ObservationValue>? Fields { get; } = SnapshotFields(fields);
+    public IReadOnlyDictionary<string, ObservationValue>? Fields =>
+        reference as IReadOnlyDictionary<string, ObservationValue>;
 
     /// <summary>
     /// Immutable array payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Array"/>.
     /// </summary>
-    public ImmutableArray<ObservationValue> Array { get; } = SnapshotArray(array);
+    public ImmutableArray<ObservationValue> Array =>
+        reference is ObservationValue[] values
+            ? ImmutableCollectionsMarshal.AsImmutableArray(values)
+            : [];
 
     /// <summary>
     /// Binary payload when <see cref="Kind"/> is <see cref="ObservationValueKind.Bytes"/>.
     /// </summary>
-    public ReadOnlyMemory<byte> Bytes { get; } = SnapshotBytes(bytes);
+    public ReadOnlyMemory<byte> Bytes =>
+        reference is byte[] values
+            ? values
+            : ReadOnlyMemory<byte>.Empty;
 
     /// <summary>Attempts to resolve a direct or nested field from this object value.</summary>
     /// <param name="path">Canonical field-only path to resolve. A default path is treated as absent.</param>
@@ -215,18 +269,58 @@ public readonly struct ObservationValue(
         Dictionary<string, ObservationValue> snapshot = new(fields.Count, StringComparer.Ordinal);
         foreach (var (name, value) in fields)
             snapshot.Add(name, value);
-        return new ReadOnlyDictionary<string, ObservationValue>(snapshot);
+        return new OwnedObservationFields(snapshot);
     }
 
-    static ImmutableArray<ObservationValue> SnapshotArray(ObservationValue[]? array) => array switch
+    static ObservationValue[] SnapshotArray(ObservationValue[]? array) => array switch
     {
-        null => [],
-        { Length: 0 } => [],
-        _ => ImmutableArray.CreateRange(array)
+        null => EmptyArrayValues,
+        { Length: 0 } => EmptyArrayValues,
+        _ => [.. array]
     };
 
-    static ReadOnlyMemory<byte> SnapshotBytes(ReadOnlyMemory<byte> bytes) =>
-        bytes.IsEmpty ? ReadOnlyMemory<byte>.Empty : bytes.ToArray();
+    static byte[]? SnapshotBytes(ReadOnlyMemory<byte> bytes) =>
+        bytes.IsEmpty ? null : bytes.ToArray();
+
+    [StructLayout(LayoutKind.Explicit, Size = 16)]
+    readonly struct ScalarPayload
+    {
+        [FieldOffset(0)]
+        public readonly long Int64;
+
+        [FieldOffset(0)]
+        public readonly double Double;
+
+        [FieldOffset(0)]
+        public readonly decimal Decimal;
+
+        [FieldOffset(0)]
+        public readonly bool Bool;
+
+        public ScalarPayload(long value)
+        {
+            this = default;
+            Int64 = value;
+        }
+
+        public ScalarPayload(double value)
+        {
+            this = default;
+            Double = value;
+        }
+
+        public ScalarPayload(decimal value)
+        {
+            this = default;
+            Decimal = value;
+        }
+
+        public ScalarPayload(bool value)
+        {
+            this = default;
+            Bool = value;
+        }
+    }
 
     static ObservationValue WithFieldCore(
         ObservationValue current,
@@ -355,6 +449,8 @@ public readonly struct ObservationValue(
     public static ObservationValue FromBytes(ReadOnlyMemory<byte> value) =>
         new(ObservationValueKind.Bytes, bytes: value);
 
+    internal static ObservationValue FromOwnedBytes(byte[] value) => new(value);
+
     /// <summary>
     /// Creates an object observation value, snapshotting mutable properties when necessary.
     /// </summary>
@@ -369,6 +465,8 @@ public readonly struct ObservationValue(
         ArgumentNullException.ThrowIfNull(values);
         return new(ObservationValueKind.Object, fields: values);
     }
+
+    internal static ObservationValue FromOwnedObject(Dictionary<string, ObservationValue> values) => new(values);
 
     /// <summary>
     /// Creates an array observation value and copies the provided items.
@@ -459,7 +557,7 @@ public readonly struct ObservationValue(
             JsonArray arr => FromImmutableArray(ReadJsonArray(arr)),
             _ => throw new NotSupportedException($"Unknown JsonNode type '{node.GetType().Name}'.")
         };
-        
+
         static IImmutableDictionary<string, ObservationValue> ReadJsonObject(JsonObject obj)
         {
             var values = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
@@ -467,7 +565,7 @@ public readonly struct ObservationValue(
                 values[key] = FromJsonNode(value);
             return values.ToImmutable();
         }
-        
+
         static ImmutableArray<ObservationValue> ReadJsonArray(JsonArray arr)
         {
             var values = ImmutableArray.CreateBuilder<ObservationValue>(arr.Count);
@@ -513,7 +611,7 @@ public readonly struct ObservationValue(
 
         if (TryProjectKnownScalar(value, out var scalar))
             return scalar;
-        
+
         return value switch
         {
             IDictionary dictionary => FromDictionary(dictionary, ref visited),
@@ -546,13 +644,13 @@ public readonly struct ObservationValue(
         var observed = value is IDictionary dictionary
             ? FromDictionary(dictionary, ref visited)
             : FromClrObjectProperties(value, ref visited);
-        
+
         if (observed.Kind == ObservationValueKind.Object && observed.Fields is not null)
             return observed;
 
         throw new InvalidOperationException($"CLR input type '{value.GetType().FullName}' cannot be projected as an object property bag.");
     }
-    
+
     /// <summary>
     /// Projects a known non-primitive CLR object into field values keyed by canonical field names.
     /// </summary>
@@ -562,7 +660,7 @@ public readonly struct ObservationValue(
         var observed = value is ObservationValue observationValue ? observationValue : FromClrPropertyBag(value, options);
         if (observed.Kind != ObservationValueKind.Object || observed.Fields is null)
             throw new InvalidOperationException($"Value of CLR type '{value.GetType().FullName}' did not project to an object-shaped observation value.");
-        
+
         return observed.Fields;
     }
 
@@ -1119,7 +1217,7 @@ public readonly struct ObservationValue(
     /// <returns></returns>
     /// <exception cref="InvalidOperationException">The value kind cannot be read as a string, or the string is null.</exception>
     public string GetRequiredString() => GetString() ?? throw new InvalidOperationException("The string value is null.");
-    
+
     /// <summary>
     /// Attempts to read the value as <see cref="DateTimeOffset"/>.
     /// </summary>
@@ -1405,7 +1503,7 @@ public readonly struct ObservationValue(
     /// </summary>
     /// <exception cref="JsonException"></exception>
     /// <exception cref="NotSupportedException"></exception>
-    public T? Deserialize<T>(JsonSerializerOptions? options = null, ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Throw) => 
+    public T? Deserialize<T>(JsonSerializerOptions? options = null, ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Throw) =>
         JsonSerializer.Deserialize<T>(GetRawText(bytesEncoding), options);
 
     /// <summary>
@@ -1420,7 +1518,7 @@ public readonly struct ObservationValue(
         ArgumentNullException.ThrowIfNull(writer);
         WriteValue(writer, this, bytesEncoding);
         return;
-        
+
         static void WriteValue(Utf8JsonWriter writer, ObservationValue value, ObservationBytesJsonEncoding bytesEncoding)
         {
             switch (value.Kind)
@@ -1591,7 +1689,7 @@ public readonly struct ObservationValue(
             return true;
         }
     }
-    
+
     static IImmutableDictionary<string, ObservationValue> ReadObject(JsonElement element)
     {
         var values = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
@@ -1608,7 +1706,7 @@ public readonly struct ObservationValue(
         return values.MoveToImmutable();
     }
 
-    static bool TryParseExactJsonDecimal(ReadOnlySpan<char> text, out decimal result)
+    internal static bool TryParseExactJsonDecimal(ReadOnlySpan<char> text, out decimal result)
     {
         var index = 0;
         var negative = false;
@@ -1975,4 +2073,65 @@ public enum ObservationBytesJsonEncoding
     Throw = 0,
     /// <summary>Represents the base64 string option.</summary>
     Base64String = 1
+}
+
+sealed class OwnedObservationFields(Dictionary<string, ObservationValue> fields)
+    : IReadOnlyDictionary<string, ObservationValue>, IDictionary<string, ObservationValue>
+{
+    public int Count => fields.Count;
+
+    public IEnumerable<string> Keys => fields.Keys;
+
+    public IEnumerable<ObservationValue> Values => fields.Values;
+
+    public ObservationValue this[string key] => fields[key];
+
+    ObservationValue IDictionary<string, ObservationValue>.this[string key]
+    {
+        get => fields[key];
+        set => throw new NotSupportedException("Observation fields are read-only.");
+    }
+
+    ICollection<string> IDictionary<string, ObservationValue>.Keys => fields.Keys;
+
+    ICollection<ObservationValue> IDictionary<string, ObservationValue>.Values => fields.Values;
+
+    bool ICollection<KeyValuePair<string, ObservationValue>>.IsReadOnly => true;
+
+    public bool ContainsKey(string key) => fields.ContainsKey(key);
+
+    public bool TryGetValue(string key, out ObservationValue value) => fields.TryGetValue(key, out value);
+
+    void IDictionary<string, ObservationValue>.Add(string key, ObservationValue value) =>
+        throw new NotSupportedException("Observation fields are read-only.");
+
+    bool IDictionary<string, ObservationValue>.Remove(string key) =>
+        throw new NotSupportedException("Observation fields are read-only.");
+
+    void ICollection<KeyValuePair<string, ObservationValue>>.Add(
+        KeyValuePair<string, ObservationValue> item) =>
+        throw new NotSupportedException("Observation fields are read-only.");
+
+    void ICollection<KeyValuePair<string, ObservationValue>>.Clear() =>
+        throw new NotSupportedException("Observation fields are read-only.");
+
+    bool ICollection<KeyValuePair<string, ObservationValue>>.Contains(
+        KeyValuePair<string, ObservationValue> item) =>
+        ((ICollection<KeyValuePair<string, ObservationValue>>)fields).Contains(item);
+
+    void ICollection<KeyValuePair<string, ObservationValue>>.CopyTo(
+        KeyValuePair<string, ObservationValue>[] array,
+        int arrayIndex) =>
+        ((ICollection<KeyValuePair<string, ObservationValue>>)fields).CopyTo(array, arrayIndex);
+
+    bool ICollection<KeyValuePair<string, ObservationValue>>.Remove(
+        KeyValuePair<string, ObservationValue> item) =>
+        throw new NotSupportedException("Observation fields are read-only.");
+
+    public Dictionary<string, ObservationValue>.Enumerator GetEnumerator() => fields.GetEnumerator();
+
+    IEnumerator<KeyValuePair<string, ObservationValue>>
+        IEnumerable<KeyValuePair<string, ObservationValue>>.GetEnumerator() => fields.GetEnumerator();
+
+    IEnumerator IEnumerable.GetEnumerator() => fields.GetEnumerator();
 }

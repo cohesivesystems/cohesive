@@ -14,7 +14,7 @@ namespace Cohesive.Adapters.DockerCompose;
 public static class DockerComposeCompiler
 {
     const string Stage = "docker-compose-compilation";
-    const string TargetReference = "https://docs.docker.com/compose/compose-file/";
+    static readonly SourceReference TargetReference = new("https://docs.docker.com/compose/compose-file/");
 
     /// <summary>Stable adapter diagnostic codes.</summary>
     public static class DiagnosticCodes
@@ -31,6 +31,8 @@ public static class DockerComposeCompiler
         public const string HealthProbeUnsupported = "infra.compose.health.unsupported";
         /// <summary>A duration cannot be represented without precision loss.</summary>
         public const string DurationUnsupported = "infra.compose.duration.unsupported";
+        /// <summary>A local service construction source cannot be represented by Docker Compose.</summary>
+        public const string ServiceSourceUnsupported = "infra.compose.service.sourceUnsupported";
     }
 
     /// <summary>Compiles one exact local realization without performing Docker I/O.</summary>
@@ -75,6 +77,15 @@ public static class DockerComposeCompiler
             static item => item.Value,
             "service",
             diagnostics);
+        foreach (var service in source.Topology.Services.Where(static service => service.Source is not InfrastructureLocalContainerSource))
+        {
+            Add(
+                diagnostics,
+                DiagnosticCodes.ServiceSourceUnsupported,
+                $"Docker Compose cannot preserve repository-project construction for service '{service.PhysicalResource.Value}'.",
+                $"/topology/services/{service.PhysicalResource.Value}/source",
+                service.PhysicalResource.Value);
+        }
         var volumeNames = Names(
             source.Topology.Volumes.Select(static volume => (volume.Id.Value, volume.Id)),
             static item => item.Value,
@@ -109,7 +120,7 @@ public static class DockerComposeCompiler
             services:
             [
                 .. source.Topology.Services.Select(service => new DockerComposeServiceMapping(
-                    resource: service.Resource,
+                    resource: service.Node,
                     physicalResource: service.PhysicalResource,
                     serviceName: serviceNames[service.PhysicalResource]))
             ],
@@ -139,13 +150,13 @@ public static class DockerComposeCompiler
             decisions: Decisions(source),
             maximumLifetime: source.Environment.MaximumLifetime);
         return new(
-            artifact: new DockerComposeArtifact(yaml, manifest),
+            artifact: new(yaml: yaml, manifest),
             diagnostics: [.. diagnostics]);
     }
 
     static ImmutableArray<InfrastructureLocalTargetDecision> Decisions(InfrastructureLocalRealizationDocument source)
     {
-        var sourceReference = $"local-realization:{source.Fingerprint.Value}";
+        var sourceReference = SourceReference.Create("local-realization", source.Fingerprint.Value);
         return
         [
             Decision(
@@ -212,7 +223,7 @@ public static class DockerComposeCompiler
         CapabilityRealizationKind kind,
         string rationale,
         ImmutableArray<string> boundaries,
-        ImmutableArray<string> sourceReferences) => new(
+        ImmutableArray<SourceReference> sourceReferences) => new(
         target: DockerComposeArtifactManifest.CurrentTarget,
         concern: concern,
         kind: kind,
@@ -226,7 +237,8 @@ public static class DockerComposeCompiler
         IReadOnlyDictionary<InfrastructurePhysicalResourceId, string> serviceNames,
         IReadOnlyDictionary<InfrastructureLocalVolumeId, string> volumeNames,
         IReadOnlyDictionary<InfrastructureLocalFileId, string> configNames,
-        ICollection<DocumentValidationDiagnostic> diagnostics)
+        ICollection<DocumentValidationDiagnostic> diagnostics
+        )
     {
         StringBuilder yaml = new();
         var projectName = Effective(
@@ -238,8 +250,9 @@ public static class DockerComposeCompiler
         foreach (var service in source.Topology.Services.OrderBy(service => serviceNames[service.PhysicalResource], StringComparer.Ordinal))
         {
             var serviceName = serviceNames[service.PhysicalResource];
+            var container = (InfrastructureLocalContainerSource)service.Source;
             Line(yaml, 1, $"{serviceName}:");
-            Line(yaml, 2, $"image: {Quoted(ComposeValue(service.Image))}");
+            Line(yaml, 2, $"image: {Quoted(ComposeValue(container.Image))}");
             if (!service.Environment.IsEmpty)
             {
                 Line(yaml, 2, "environment:");
@@ -376,7 +389,7 @@ public static class DockerComposeCompiler
             {
                 var containerPort = endpoint.ContainerPort.Resolve(source.Configuration);
                 var serviceAddress = $"{endpoint.Scheme}://{serviceNames[service.PhysicalResource]}:{containerPort.ToString(CultureInfo.InvariantCulture)}";
-                string? hostAddress = endpoint.HostPort is null
+                var hostAddress = endpoint.HostPort is null
                     ? null
                     : $"{endpoint.Scheme}://localhost:{Effective(endpoint.HostPort.Subject, endpoint.HostPort.Setting, effective).Value}";
                 yield return new(

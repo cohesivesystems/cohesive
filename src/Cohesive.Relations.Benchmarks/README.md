@@ -1,6 +1,7 @@
-# Cohesive.Relations Benchmarks
+# Cohesive performance benchmarks
 
-This project establishes descriptive performance baselines for canonical relation compilation,
+This project establishes descriptive performance baselines for canonical observation creation,
+validation, CLR materialization, and JSON serialization as well as relation compilation,
 physical planning and execution, diagnostics, and relation-to-CLR DTO materialization. It is
 intentionally separate from the xUnit projects: benchmarks are executable measurement programs,
 not correctness gates.
@@ -10,6 +11,12 @@ exercise the same semantic definitions, runtime evidence, and CLR DTO contracts.
 
 ## Benchmark groups
 
+- **Observation creation and validation:** already-owned immutable values, caller-owned field snapshots,
+  successful validation, and diagnostic production across flat-scalar, nested-object, and array-heavy values.
+- **Observation physical ingestion:** direct ordinal validation, caller-owned snapshot construction, single-owner
+  builder transfer, and shape-bound JSON hydration into retained indexed storage.
+- **Observation projections:** a handwritten destination-allocation lower bound, warm compiled and default-cached CLR
+  materialization, plus canonical UTF-8 and string JSON serialization for representative application state.
 - **Warm kernel:** hand-written materialization, the shared core materializer over validated semantic observations,
   the same materializer over the explicit `IndexedObservationOccurrence` path, a
   preconfigured AutoMapper 16.2.0 canonical-row baseline, the generated construction kernel without result
@@ -20,6 +27,9 @@ exercise the same semantic definitions, runtime evidence, and CLR DTO contracts.
 - **Diagnostics:** missing joined input and incompatible output-value conversion paths, measured
   independently from successful mapping.
 - **Physical:** planning and bounded acquisition/correlation over the shared federated Load fixture.
+- **Execution stages:** requirement analysis, evidence indexing, in-memory execution, observation projection,
+  warm CLR materialization, and canonical JSON output over simple and joined scenarios. Caller-owned JSON buffers
+  isolate serialization work from result-buffer allocation.
 
 The successful warm cases cover a single-source `LoadSummaryDto` and a flattened
 `Load + Customer + Equipment -> LoadSearchDto` relation at 1, 32, and 1,024 rows. The kernel-only
@@ -77,7 +87,7 @@ it is not a performance result:
 dotnet run \
   --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
   -c Release --no-build -- \
-  --job Dry --filter "*Relation*"
+  --job Dry --filter "*"
 ```
 
 Run a quicker representative measurement:
@@ -86,7 +96,7 @@ Run a quicker representative measurement:
 dotnet run \
   --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
   -c Release --no-build -- \
-  --job Short --filter "*Relation*"
+  --job Short --filter "*Observation*"
 ```
 
 Run the default measurement jobs:
@@ -95,20 +105,25 @@ Run the default measurement jobs:
 dotnet run \
   --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj \
   -c Release --no-build -- \
-  --filter "*Relation*"
+  --filter "*Observation*"
 ```
 
-The broad `*Relation*` filter intentionally discovers DTO materialization, diagnostic-scale, physical-planning, and
-physical-execution benchmark groups. Use a class-name filter such as `*RelationDtoWarmBenchmarks*` when measuring one
-concern in isolation.
+The broad `*` filter discovers every benchmark group. Use `*Observation*` for the observation lifecycle or a
+class-name filter such as `*ObservationCreationBenchmarks*`, `*ObservationProjectionBenchmarks*`,
+`*ObservationMaterializerCompilationBenchmarks*`, `*RelationDtoWarmBenchmarks*`, or
+`*RelationQueryExecutionStageBenchmarks*` when measuring one concern in isolation. The projection benchmarks
+independently track returned UTF-8, returned strings, reusable caller-owned JSON buffers, streamed fingerprints,
+and warm CLR materialization so allocation and CPU tradeoffs remain visible. Use
+`*RelationQueryExecutionStageBenchmarks.Execute*` for a focused execution-kernel comparison after the stage suite
+has identified execution as the dominant cost.
 
 ## GitHub Actions
 
 The automatic pull-request workflow does not execute BenchmarkDotNet. To run the benchmarks on demand, open
-**Actions**, select **relation-benchmarks**, and choose **Run workflow**. The workflow accepts:
+**Actions**, select **cohesive-benchmarks**, and choose **Run workflow**. The workflow accepts:
 
 - A `Dry`, `Short`, or `Default` BenchmarkDotNet job. `Dry` is the default discovery and invocation smoke check.
-- A BenchmarkDotNet filter, defaulting to `*Relation*`.
+- A BenchmarkDotNet filter, defaulting to `*` so newly added lifecycle benchmarks participate in discovery checks.
 
 The workflow uploads `BenchmarkDotNet.Artifacts` for 14 days, including artifacts produced before a failed run. GitHub
 hosted runners are appropriate for discovery and coarse on-demand comparisons, but their shared and variable hardware

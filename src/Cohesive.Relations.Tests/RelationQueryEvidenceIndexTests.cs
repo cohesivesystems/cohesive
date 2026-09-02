@@ -8,6 +8,28 @@ namespace Cohesive.Relations.Tests;
 public sealed class RelationQueryEvidenceIndexTests
 {
     [Fact]
+    public void CompiledPlanIndex_IsSharedAndRetainsCanonicalPlanMembers()
+    {
+        var plan = Compile(LoadCustomerRelationFixture.BaselineRelationDocument);
+
+        var first = RelationQueryCompiledPlanIndex.For(plan);
+        var second = RelationQueryCompiledPlanIndex.For(plan);
+
+        Assert.Same(first, second);
+        Assert.Equal(plan.RequirementGraph.Inputs.Length, first.Inputs.Count);
+        foreach (var input in plan.RequirementGraph.Inputs)
+            Assert.Same(input, first.Inputs[input.Id]);
+        foreach (var node in plan.ExecutionSlice.Nodes)
+            Assert.Same(node, first.Nodes[node.Id]);
+
+        var source = Assert.Single(plan.RequirementGraph.Inputs.OfType<RelationQuerySourceSetInput>());
+        Assert.Same(source, first.SourceInputs[source.Source]);
+        var loadFields = first.BindingFields[
+            (LoadCustomerRelationFixture.LoadBinding, LoadCustomerRelationFixture.LoadShapeId)];
+        Assert.Equal(loadFields.Inputs.Length, loadFields.DirectFieldNames.Length);
+    }
+
+    [Fact]
     public void SourceAndTraversalEvidence_ReconstructSparseObservedBindingsAndExactProvenance()
     {
         var plan = Compile(LoadCustomerRelationFixture.BaselineRelationDocument);
@@ -76,6 +98,12 @@ public sealed class RelationQueryEvidenceIndexTests
 
         var index = new RelationQueryEvidenceIndex(plan, evidence);
 
+        Assert.Equal(
+            index.ResolveField(loadIdInput, load),
+            index.ResolveValidatedField(loadIdInput.Id, load.Id));
+        Assert.Equal(
+            index.ResolveField(customerReferenceInput, load),
+            index.ResolveValidatedField(customerReferenceInput.Id, load.Id));
         Assert.True(index.TryCreateSourceRows(sourceInput, out var rows));
         var row = Assert.Single(rows);
         Assert.Equal(load, row.Root);

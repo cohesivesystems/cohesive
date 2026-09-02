@@ -1,6 +1,6 @@
-name: relation-benchmarks
+name: cohesive-benchmarks
 
-run-name: Relation benchmarks (${{ inputs.benchmark_job }}, ${{ inputs.benchmark_filter }})
+run-name: Cohesive benchmarks (${{ inputs.benchmark_job }}, ${{ inputs.benchmark_filter }})
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ on:
       benchmark_filter:
         description: BenchmarkDotNet filter
         required: true
-        default: "*Relation*"
+        default: "*"
         type: string
 
 permissions:
@@ -37,18 +37,18 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Restore relation benchmarks
+      - name: Restore benchmarks
         run: >-
           dotnet restore
           src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj
 
-      - name: Build relation benchmarks
+      - name: Build benchmarks
         run: >-
           dotnet build
           src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj
           -c Release --no-restore -warnaserror
 
-      - name: Run relation benchmarks
+      - name: Run benchmarks
         env:
           BENCHMARK_FILTER: ${{ inputs.benchmark_filter }}
           BENCHMARK_JOB: ${{ inputs.benchmark_job }}
@@ -67,7 +67,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: relation-benchmarks-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.benchmark_job }}
+          name: cohesive-benchmarks-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.benchmark_job }}
           path: BenchmarkDotNet.Artifacts/**
           if-no-files-found: ignore
           retention-days: 14

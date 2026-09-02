@@ -15,6 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Cohesive\Cohesive.csproj" />
     <ProjectReference Include="..\Cohesive.Relations\Cohesive.Relations.csproj" />
     <ProjectReference Include="..\Cohesive.Relations.TestFixtures\Cohesive.Relations.TestFixtures.csproj" />
   </ItemGroup>

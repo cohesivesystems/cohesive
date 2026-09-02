@@ -99,6 +99,18 @@ public sealed class FieldPathTests
     }
 
     [Fact]
+    public void TryGetDirectFieldName_RejectsNestedAndCollectionNavigation()
+    {
+        Assert.True(FieldPath.FromField("Status").TryGetDirectFieldName(out var fieldName));
+        Assert.Equal("Status", fieldName);
+
+        Assert.False(FieldPath.Parse("Customer.Name").TryGetDirectFieldName(out var nestedFieldName));
+        Assert.Empty(nestedFieldName);
+        Assert.False(FieldPath.Parse("Orders.[]").TryGetDirectFieldName(out var collectionFieldName));
+        Assert.Empty(collectionFieldName);
+    }
+
+    [Fact]
     public void SegmentTryGetFieldIdentity_ResolvesFieldSegments()
     {
         var fieldSegment = FieldPathSegment.ForField("OrderId");
