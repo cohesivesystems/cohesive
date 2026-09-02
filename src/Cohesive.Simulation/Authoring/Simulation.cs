@@ -500,6 +500,75 @@ public sealed class CompiledPocoGenerator<T>
         return MaterializeSequence(observations);
     }
 
+    /// <summary>Checks a Boolean property against typed values materialized from deterministic observations.</summary>
+    /// <param name="seed">Caller-supplied deterministic root seed.</param>
+    /// <param name="property">Deterministic local property; false identifies a failing case.</param>
+    /// <param name="scope">Optional stable stream scope; null selects <see cref="GenerationScope.Default"/>.</param>
+    /// <param name="options">Optional bounded run policy.</param>
+    /// <param name="cancellationToken">Token observed between generation, evaluation, and shrink steps.</param>
+    /// <returns>Provider-neutral property-run evidence over authoritative observations.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="property"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="scope"/> is present but invalid.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> requests cancellation.</exception>
+    public PropertyCaseRunResult CheckProperty(
+        long seed,
+        Func<T, bool> property,
+        GenerationScope? scope = null,
+        PropertyCaseRunOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(property);
+        return ReferencePropertyCaseInterpreter.Check(
+            Plan,
+            seed,
+            observation => property(Materializer.Materialize(observation)),
+            scope,
+            options,
+            cancellationToken);
+    }
+
+    /// <summary>Checks a classified property against typed values materialized from deterministic observations.</summary>
+    /// <param name="seed">Caller-supplied deterministic root seed.</param>
+    /// <param name="evaluate">Deterministic local disposition and classification policy.</param>
+    /// <param name="scope">Optional stable stream scope; null selects <see cref="GenerationScope.Default"/>.</param>
+    /// <param name="options">Optional bounded run policy.</param>
+    /// <param name="cancellationToken">Token observed between generation, evaluation, and shrink steps.</param>
+    /// <returns>Provider-neutral property-run evidence over authoritative observations.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="evaluate"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="scope"/> is present but invalid.</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="evaluate"/> returns null.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> requests cancellation.</exception>
+    public PropertyCaseRunResult CheckProperty(
+        long seed,
+        Func<T, PropertyCaseEvaluation> evaluate,
+        GenerationScope? scope = null,
+        PropertyCaseRunOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(evaluate);
+        return ReferencePropertyCaseInterpreter.Check(
+            Plan,
+            seed,
+            observation => evaluate(Materializer.Materialize(observation)),
+            scope,
+            options,
+            cancellationToken);
+    }
+
+    /// <summary>Replays and materializes one exact typed property case.</summary>
+    /// <param name="token">Canonical property-case replay token.</param>
+    /// <returns>The exact replayed CLR value.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="token"/> is <see langword="null"/>.</exception>
+    /// <exception cref="FormatException"><paramref name="token"/> is malformed or noncanonical.</exception>
+    /// <exception cref="NotSupportedException">The token names an unsupported semantic shrinker.</exception>
+    /// <exception cref="ArgumentException">The token names another generation plan or invalid shrink choice.</exception>
+    public T ReplayPropertyCase(string token)
+    {
+        ArgumentNullException.ThrowIfNull(token);
+        var observation = ReferencePropertyCaseInterpreter.Replay(Plan, token);
+        return Materializer.Materialize(observation);
+    }
+
     IEnumerable<Generated<T>> MaterializeSequence(IEnumerable<GeneratedObservation> observations)
     {
         foreach (var observation in observations)

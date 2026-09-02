@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Cohesive.Simulation;
 using Cohesive.Simulation.Artifacts;
+using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Worlds;
 
@@ -20,6 +21,22 @@ if (args is ["emit", var worldPath])
             Gen.Weighted("Ada", weight: 1d),
             Gen.Weighted("Grace", weight: 1d)))
         .Member(value => value.Age, Gen.Int32(minimum: 18, maximum: 90)));
+    var compiledCustomers = customers.Compile();
+    var propertyRun = compiledCustomers.CheckProperty(
+        seed: 42,
+        property: static customer => customer.Age < 50);
+    if (propertyRun.Status != PropertyCaseRunStatus.CounterexampleFound)
+    {
+        throw new InvalidOperationException(
+            $"Expected a property counterexample but found '{propertyRun.Status}'.");
+    }
+
+    var replayed = compiledCustomers.ReplayPropertyCase(
+        propertyRun.BestCounterexample!.Replay.ToToken());
+    Require(replayed.Name, "Ada", "property counterexample name");
+    if (replayed.Age != 50)
+        throw new InvalidOperationException($"Expected property counterexample age '50' but found '{replayed.Age}'.");
+
     var world = Simulation.DefineWorld("world/package-smoke", "r1", builder => builder
         .Population("customers", count: 2, customers)
         .Exemplar("customer-for-ui", "customers", sequenceIndex: 1));
