@@ -36,6 +36,7 @@ public sealed class WorldJsonLinesVerifierTests
         "simulation.worldArtifact.jsonLines.artifactMismatch")]
     [InlineData("run-id", "runId", "simulation.worldArtifact.jsonLines.provisioningIdentityMismatch")]
     [InlineData("batch-id", "batchId", "simulation.worldArtifact.jsonLines.provisioningIdentityMismatch")]
+    [InlineData("entity-id", "entityId", "simulation.worldArtifact.jsonLines.entityIdentityMismatch")]
     [InlineData("observation", "observation", "simulation.worldArtifact.jsonLines.observationMismatch")]
     [InlineData("unknown-property", "unexpected", "simulation.worldArtifact.jsonLines.propertyUnknown")]
     [InlineData("duplicate-property", "format", "simulation.worldArtifact.jsonLines.propertyDuplicate")]
@@ -57,6 +58,7 @@ public sealed class WorldJsonLinesVerifierTests
                 "\"artifactManifestFingerprint\":\"tampered\""),
             "run-id" => ReplacePropertyValue(content, "runId", "tampered"),
             "batch-id" => ReplacePropertyValue(content, "batchId", "tampered"),
+            "entity-id" => ReplacePropertyValue(content, "entityId", "tampered"),
             "observation" => ReplaceOnce(
                 content,
                 "\"observation\":{",

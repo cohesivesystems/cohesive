@@ -1,9 +1,11 @@
 using System.Buffers;
 using System.Collections.Immutable;
 using System.Text;
+using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Generation;
+using Cohesive.Simulation.Worlds;
 
 namespace Cohesive.Simulation.Provisioning;
 
@@ -109,12 +111,12 @@ public sealed class WorldJsonLinesVerificationException : FormatException
             .Replace("/", "~1", StringComparison.Ordinal);
 }
 
-/// <summary>Independently verifies a complete v3 world JSON Lines stream against an exact artifact manifest.</summary>
+/// <summary>Independently verifies a complete v4 world JSON Lines stream against an exact artifact manifest.</summary>
 /// <remarks>
 /// Verification is bounded to one JSON record and one regenerated observation at a time. Success proves exact item
-/// count and order, canonical v3 record bytes, artifact and world provenance, target and batching identity, exemplar
-/// aliases, replay evidence, and canonical observation bytes. No generated item is exposed before the complete stream
-/// has passed verification.
+/// count and order, canonical v4 record bytes, artifact and world provenance, target and batching identity, canonical
+/// entity identity, exemplar aliases, replay evidence, and canonical observation bytes. No generated item is exposed
+/// before the complete stream has passed verification.
 /// </remarks>
 public static class WorldJsonLinesVerifier
 {
@@ -125,6 +127,7 @@ public static class WorldJsonLinesVerifier
     const string PopulationMismatchCode = "simulation.worldArtifact.jsonLines.populationMismatch";
     const string GenerationMismatchCode = "simulation.worldArtifact.jsonLines.generationMismatch";
     const string ReplayInvalidCode = "simulation.worldArtifact.jsonLines.replayInvalid";
+    const string EntityIdentityMismatchCode = "simulation.worldArtifact.jsonLines.entityIdentityMismatch";
     const string ObservationMismatchCode = "simulation.worldArtifact.jsonLines.observationMismatch";
     const string ItemMissingCode = "simulation.worldArtifact.jsonLines.itemMissing";
     const string ItemUnexpectedCode = "simulation.worldArtifact.jsonLines.itemUnexpected";
@@ -220,6 +223,8 @@ public static class WorldJsonLinesVerifier
         long expectedSequenceIndex = 0;
         long itemCount = 0;
         long lineNumber = 0;
+        var identityPopulationIndex = -1;
+        HashSet<EntityId>? uniqueEntityIds = null;
         ArrayBufferWriter<byte> expectedObservation = new();
 
         while (true)
@@ -234,7 +239,7 @@ public static class WorldJsonLinesVerifier
                 throw Failure(
                     lineNumber + 1,
                     propertyName: null,
-                    WorldJsonLinesV3Codec.JsonInvalidCode,
+                    WorldJsonLinesCodec.JsonInvalidCode,
                     "The record is not valid UTF-8.",
                     exception);
             }
@@ -250,8 +255,8 @@ public static class WorldJsonLinesVerifier
                 throw Failure(
                     lineNumber,
                     propertyName: null,
-                    WorldJsonLinesV3Codec.RecordInvalidCode,
-                    "Blank records are not part of the v3 contract.");
+                    WorldJsonLinesCodec.RecordInvalidCode,
+                    "Blank records are not part of the v4 contract.");
             }
 
             while (populationIndex < world.Populations.Length
@@ -269,12 +274,12 @@ public static class WorldJsonLinesVerifier
                     "The stream contains more items than the manifest.");
             }
 
-            WorldJsonLinesV3Record record;
+            WorldJsonLinesRecord record;
             try
             {
-                record = WorldJsonLinesV3Codec.ReadRecord(line);
+                record = WorldJsonLinesCodec.ReadRecord(line);
             }
-            catch (WorldJsonLinesV3CodecException exception)
+            catch (WorldJsonLinesCodecException exception)
             {
                 throw Failure(
                     lineNumber,
@@ -283,26 +288,34 @@ public static class WorldJsonLinesVerifier
                     exception.Message,
                     exception);
             }
-            if (!WorldJsonLinesV3Codec.HasCanonicalEncoding(line, record))
+            if (!WorldJsonLinesCodec.HasCanonicalEncoding(line, record))
             {
                 throw Failure(
                     lineNumber,
                     propertyName: null,
-                    WorldJsonLinesV3Codec.WireNonCanonicalCode,
-                    "The record differs from its unique canonical v3 wire representation.");
+                    WorldJsonLinesCodec.WireNonCanonicalCode,
+                    "The record differs from its unique canonical v4 wire representation.");
             }
 
             var population = world.Populations[populationIndex];
             var generation = population.GenerationPlan;
+            if (identityPopulationIndex != populationIndex)
+            {
+                identityPopulationIndex = populationIndex;
+                uniqueEntityIds =
+                    population.Definition.EntityIdentity.Source == WorldEntityIdentitySource.UniqueObservationField
+                        ? []
+                        : null;
+            }
 
             RequireEqual(
                 record.Format,
-                WorldJsonLinesV3Codec.Format,
+                WorldJsonLinesCodec.Format,
                 lineNumber,
-                WorldJsonLinesV3Codec.FormatProperty,
+                WorldJsonLinesCodec.FormatProperty,
                 FormatUnsupportedCode);
-            RequireIdentity(record.TargetId, lineNumber, WorldJsonLinesV3Codec.TargetIdProperty);
-            RequirePositive(record.BatchSize, lineNumber, WorldJsonLinesV3Codec.BatchSizeProperty);
+            RequireIdentity(record.TargetId, lineNumber, WorldJsonLinesCodec.TargetIdProperty);
+            RequirePositive(record.BatchSize, lineNumber, WorldJsonLinesCodec.BatchSizeProperty);
             var expectedRunId = WorldProvisioningIdentityConvention.CreateRunId(
                 artifact,
                 record.TargetId,
@@ -311,7 +324,7 @@ public static class WorldJsonLinesVerifier
                 record.RunId,
                 expectedRunId.Value,
                 lineNumber,
-                WorldJsonLinesV3Codec.RunIdProperty,
+                WorldJsonLinesCodec.RunIdProperty,
                 ProvisioningIdentityMismatchCode);
             targetId ??= record.TargetId;
             runId ??= expectedRunId;
@@ -320,111 +333,111 @@ public static class WorldJsonLinesVerifier
                 record.TargetId,
                 targetId,
                 lineNumber,
-                WorldJsonLinesV3Codec.TargetIdProperty,
+                WorldJsonLinesCodec.TargetIdProperty,
                 ProvisioningIdentityMismatchCode);
             RequireEqual(
                 expectedRunId,
                 runId.Value,
                 lineNumber,
-                WorldJsonLinesV3Codec.RunIdProperty,
+                WorldJsonLinesCodec.RunIdProperty,
                 ProvisioningIdentityMismatchCode);
             RequireEqual(
                 record.BatchSize,
                 batchSize.Value,
                 lineNumber,
-                WorldJsonLinesV3Codec.BatchSizeProperty,
+                WorldJsonLinesCodec.BatchSizeProperty,
                 ProvisioningIdentityMismatchCode);
 
             RequireEqual(
                 record.ArtifactManifestSchema,
                 artifact.SchemaVersion,
                 lineNumber,
-                WorldJsonLinesV3Codec.ArtifactManifestSchemaProperty,
+                WorldJsonLinesCodec.ArtifactManifestSchemaProperty,
                 ArtifactMismatchCode);
             RequireEqual(
                 record.ArtifactId,
                 artifact.ArtifactId.Value,
                 lineNumber,
-                WorldJsonLinesV3Codec.ArtifactIdProperty,
+                WorldJsonLinesCodec.ArtifactIdProperty,
                 ArtifactMismatchCode);
             RequireEqual(
                 record.ArtifactManifestFingerprintAlgorithm,
                 artifact.Fingerprint.Algorithm,
                 lineNumber,
-                WorldJsonLinesV3Codec.ArtifactManifestFingerprintAlgorithmProperty,
+                WorldJsonLinesCodec.ArtifactManifestFingerprintAlgorithmProperty,
                 ArtifactMismatchCode);
             RequireEqual(
                 record.ArtifactManifestFingerprintCanonicalization,
                 artifact.Fingerprint.Canonicalization,
                 lineNumber,
-                WorldJsonLinesV3Codec.ArtifactManifestFingerprintCanonicalizationProperty,
+                WorldJsonLinesCodec.ArtifactManifestFingerprintCanonicalizationProperty,
                 ArtifactMismatchCode);
             RequireEqual(
                 record.ArtifactManifestFingerprint,
                 artifact.Fingerprint.Value,
                 lineNumber,
-                WorldJsonLinesV3Codec.ArtifactManifestFingerprintProperty,
+                WorldJsonLinesCodec.ArtifactManifestFingerprintProperty,
                 ArtifactMismatchCode);
             RequireEqual(
                 record.WorldId,
                 artifact.World.Definition.Id,
                 lineNumber,
-                WorldJsonLinesV3Codec.WorldIdProperty,
+                WorldJsonLinesCodec.WorldIdProperty,
                 ArtifactMismatchCode);
             RequireEqual(
                 record.WorldRevision,
                 artifact.World.Definition.Revision,
                 lineNumber,
-                WorldJsonLinesV3Codec.WorldRevisionProperty,
+                WorldJsonLinesCodec.WorldRevisionProperty,
                 ArtifactMismatchCode);
             RequireEqual(
                 record.WorldFingerprintAlgorithm,
                 artifact.World.Fingerprint.Algorithm,
                 lineNumber,
-                WorldJsonLinesV3Codec.WorldFingerprintAlgorithmProperty,
+                WorldJsonLinesCodec.WorldFingerprintAlgorithmProperty,
                 ArtifactMismatchCode);
             RequireEqual(
                 record.WorldFingerprintCanonicalization,
                 artifact.World.Fingerprint.Canonicalization,
                 lineNumber,
-                WorldJsonLinesV3Codec.WorldFingerprintCanonicalizationProperty,
+                WorldJsonLinesCodec.WorldFingerprintCanonicalizationProperty,
                 ArtifactMismatchCode);
             RequireEqual(
                 record.WorldFingerprint,
                 artifact.World.Fingerprint.Value,
                 lineNumber,
-                WorldJsonLinesV3Codec.WorldFingerprintProperty,
+                WorldJsonLinesCodec.WorldFingerprintProperty,
                 ArtifactMismatchCode);
             RequireEqual(
                 record.RootSeed,
                 artifact.RootSeed,
                 lineNumber,
-                WorldJsonLinesV3Codec.RootSeedProperty,
+                WorldJsonLinesCodec.RootSeedProperty,
                 ArtifactMismatchCode);
             RequireEqual(
                 record.PopulationId,
                 population.Definition.Id,
                 lineNumber,
-                WorldJsonLinesV3Codec.PopulationIdProperty,
+                WorldJsonLinesCodec.PopulationIdProperty,
                 PopulationMismatchCode);
             RequireEqual(
                 record.PopulationCount,
                 population.Definition.Count,
                 lineNumber,
-                WorldJsonLinesV3Codec.PopulationCountProperty,
+                WorldJsonLinesCodec.PopulationCountProperty,
                 PopulationMismatchCode);
             RequireEqual(
                 record.PopulationScope,
                 population.Scope.Value,
                 lineNumber,
-                WorldJsonLinesV3Codec.PopulationScopeProperty,
+                WorldJsonLinesCodec.PopulationScopeProperty,
                 PopulationMismatchCode);
 
             RequireEqual(
                 record.SequenceIndex,
                 expectedSequenceIndex,
                 lineNumber,
-                WorldJsonLinesV3Codec.SequenceIndexProperty,
+                WorldJsonLinesCodec.SequenceIndexProperty,
                 PopulationMismatchCode);
             var expectedBatchOrdinal = (int)(record.SequenceIndex / record.BatchSize);
             var expectedBatchStart = (long)expectedBatchOrdinal * record.BatchSize;
@@ -435,19 +448,19 @@ public static class WorldJsonLinesVerifier
                 record.BatchOrdinal,
                 expectedBatchOrdinal,
                 lineNumber,
-                WorldJsonLinesV3Codec.BatchOrdinalProperty,
+                WorldJsonLinesCodec.BatchOrdinalProperty,
                 ProvisioningIdentityMismatchCode);
             RequireEqual(
                 record.BatchStartSequenceIndex,
                 expectedBatchStart,
                 lineNumber,
-                WorldJsonLinesV3Codec.BatchStartSequenceIndexProperty,
+                WorldJsonLinesCodec.BatchStartSequenceIndexProperty,
                 ProvisioningIdentityMismatchCode);
             RequireEqual(
                 record.BatchItemCount,
                 expectedBatchItemCount,
                 lineNumber,
-                WorldJsonLinesV3Codec.BatchItemCountProperty,
+                WorldJsonLinesCodec.BatchItemCountProperty,
                 ProvisioningIdentityMismatchCode);
             var expectedBatchId = WorldProvisioningIdentityConvention.CreateBatchId(
                 expectedRunId,
@@ -460,7 +473,7 @@ public static class WorldJsonLinesVerifier
                 record.BatchId,
                 expectedBatchId.Value,
                 lineNumber,
-                WorldJsonLinesV3Codec.BatchIdProperty,
+                WorldJsonLinesCodec.BatchIdProperty,
                 ProvisioningIdentityMismatchCode);
 
             ValidateExemplars(record.Exemplars, artifact, population.Definition.Id, record.SequenceIndex, lineNumber);
@@ -468,31 +481,31 @@ public static class WorldJsonLinesVerifier
                 record.DefinitionId,
                 generation.Definition.Id,
                 lineNumber,
-                WorldJsonLinesV3Codec.DefinitionIdProperty,
+                WorldJsonLinesCodec.DefinitionIdProperty,
                 GenerationMismatchCode);
             RequireEqual(
                 record.DefinitionRevision,
                 generation.Definition.Revision,
                 lineNumber,
-                WorldJsonLinesV3Codec.DefinitionRevisionProperty,
+                WorldJsonLinesCodec.DefinitionRevisionProperty,
                 GenerationMismatchCode);
             RequireEqual(
                 record.DefinitionFingerprint,
                 generation.Fingerprint,
                 lineNumber,
-                WorldJsonLinesV3Codec.DefinitionFingerprintProperty,
+                WorldJsonLinesCodec.DefinitionFingerprintProperty,
                 GenerationMismatchCode);
             RequireEqual(
                 record.Interpreter,
                 artifact.Interpreter,
                 lineNumber,
-                WorldJsonLinesV3Codec.InterpreterProperty,
+                WorldJsonLinesCodec.InterpreterProperty,
                 GenerationMismatchCode);
             RequireEqual(
                 record.EntropyAlgorithm,
                 artifact.EntropyAlgorithm,
                 lineNumber,
-                WorldJsonLinesV3Codec.EntropyAlgorithmProperty,
+                WorldJsonLinesCodec.EntropyAlgorithmProperty,
                 GenerationMismatchCode);
 
             GeneratedObservation replayed;
@@ -503,19 +516,19 @@ public static class WorldJsonLinesVerifier
                     replay.RootSeed,
                     artifact.RootSeed,
                     lineNumber,
-                    WorldJsonLinesV3Codec.ReplayTokenProperty,
+                    WorldJsonLinesCodec.ReplayTokenProperty,
                     ReplayInvalidCode);
                 RequireEqual(
                     replay.Scope,
                     population.Scope,
                     lineNumber,
-                    WorldJsonLinesV3Codec.ReplayTokenProperty,
+                    WorldJsonLinesCodec.ReplayTokenProperty,
                     ReplayInvalidCode);
                 RequireEqual(
                     replay.SequenceIndex,
                     record.SequenceIndex,
                     lineNumber,
-                    WorldJsonLinesV3Codec.ReplayTokenProperty,
+                    WorldJsonLinesCodec.ReplayTokenProperty,
                     ReplayInvalidCode);
                 replayed = ReferenceGenerationInterpreter.Replay(generation, replay);
             }
@@ -527,7 +540,7 @@ public static class WorldJsonLinesVerifier
             {
                 throw Failure(
                     lineNumber,
-                    WorldJsonLinesV3Codec.ReplayTokenProperty,
+                    WorldJsonLinesCodec.ReplayTokenProperty,
                     ReplayInvalidCode,
                     $"Replay evidence is invalid for the manifest: {exception.Message}",
                     exception);
@@ -539,9 +552,40 @@ public static class WorldJsonLinesVerifier
             {
                 throw Failure(
                     lineNumber,
-                    WorldJsonLinesV3Codec.ObservationProperty,
+                    WorldJsonLinesCodec.ObservationProperty,
                     ObservationMismatchCode,
                     "The observation does not equal the canonical deterministic replay from the manifest.");
+            }
+
+            GeneratedWorldItem replayedItem;
+            try
+            {
+                replayedItem = population.ResolveIdentity(replayed);
+            }
+            catch (WorldGenerationException exception)
+            {
+                throw Failure(
+                    lineNumber,
+                    WorldJsonLinesCodec.EntityIdProperty,
+                    EntityIdentityMismatchCode,
+                    exception.Message,
+                    exception);
+            }
+
+            RequireEqual(
+                record.EntityId,
+                replayedItem.EntityId.Value,
+                lineNumber,
+                WorldJsonLinesCodec.EntityIdProperty,
+                EntityIdentityMismatchCode);
+            if (uniqueEntityIds is not null && !uniqueEntityIds.Add(replayedItem.EntityId))
+            {
+                throw Failure(
+                    lineNumber,
+                    WorldJsonLinesCodec.EntityIdProperty,
+                    EntityIdentityMismatchCode,
+                    $"Population '{population.Definition.Id}' resolves entity identity "
+                    + $"'{replayedItem.EntityId.Value}' more than once.");
             }
 
             expectedSequenceIndex++;
@@ -588,7 +632,7 @@ public static class WorldJsonLinesVerifier
             {
                 throw Failure(
                     lineNumber,
-                    WorldJsonLinesV3Codec.ExemplarsProperty,
+                    WorldJsonLinesCodec.ExemplarsProperty,
                     PopulationMismatchCode,
                     $"Expected exemplar '{exemplar.Id}'.");
             }
@@ -599,7 +643,7 @@ public static class WorldJsonLinesVerifier
         {
             throw Failure(
                 lineNumber,
-                WorldJsonLinesV3Codec.ExemplarsProperty,
+                WorldJsonLinesCodec.ExemplarsProperty,
                 PopulationMismatchCode,
                 "The record contains an undeclared exemplar.");
         }

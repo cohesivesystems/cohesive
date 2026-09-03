@@ -14,7 +14,7 @@ namespace Cohesive.Simulation.Provisioning;
 public sealed class WorldJsonLinesSink : IWorldProvisioningSink
 {
     /// <summary>Stable identity of the emitted JSON Lines record format.</summary>
-    public const string Format = WorldJsonLinesV3Codec.Format;
+    public const string Format = WorldJsonLinesCodec.Format;
 
     readonly Stream output;
 
@@ -61,7 +61,7 @@ public sealed class WorldJsonLinesSink : IWorldProvisioningSink
             cancellationToken.ThrowIfCancellationRequested();
             encodedObservation.Clear();
             item.Observation.WriteCanonicalJson(encodedObservation);
-            WorldJsonLinesV3Codec.WriteRecord(
+            WorldJsonLinesCodec.WriteRecord(
                 encodedBatch,
                 batch,
                 item,

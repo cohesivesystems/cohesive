@@ -58,7 +58,7 @@ public readonly record struct WorldProvisioningBatchId
 public static class WorldProvisioningIdentityConvention
 {
     /// <summary>Stable identity of the current provisioning identity convention.</summary>
-    public const string Identity = "cohesive-simulation-world-provisioning/v2";
+    public const string Identity = "cohesive-simulation-world-provisioning/v3";
 
     /// <summary>Derives the run identity for one exact world, seed, batching policy, and logical sink target.</summary>
     /// <param name="world">Exact compiled world to provision.</param>
@@ -103,7 +103,7 @@ public static class WorldProvisioningIdentityConvention
         writer.Append(artifact.ArtifactId.Value);
         writer.Append(batchSize);
         writer.Append(targetId);
-        return new($"csimrun2_{writer.Complete()}");
+        return new($"csimrun3_{writer.Complete()}");
     }
 
     /// <summary>Derives the identity of one contiguous population batch.</summary>
@@ -152,7 +152,7 @@ public static class WorldProvisioningIdentityConvention
         writer.Append(batchOrdinal);
         writer.Append(startSequenceIndex);
         writer.Append(itemCount);
-        return new($"csimbatch2_{writer.Complete()}");
+        return new($"csimbatch3_{writer.Complete()}");
     }
 }
 
@@ -188,7 +188,7 @@ public sealed class WorldProvisioningBatch
         int batchSize,
         int ordinal,
         long startSequenceIndex,
-        ImmutableArray<GeneratedObservation> items)
+        ImmutableArray<GeneratedWorldItem> items)
     {
         Id = id;
         RunId = runId;
@@ -259,8 +259,8 @@ public sealed class WorldProvisioningBatch
     /// <summary>Gets the zero-based sequence index of the first item.</summary>
     public long StartSequenceIndex { get; }
 
-    /// <summary>Gets generated observations in ascending contiguous sequence-index order.</summary>
-    public ImmutableArray<GeneratedObservation> Items { get; }
+    /// <summary>Gets generated world items in ascending contiguous sequence-index order.</summary>
+    public ImmutableArray<GeneratedWorldItem> Items { get; }
 
     /// <summary>Gets exemplar declarations whose exact generated members occur in this batch.</summary>
     /// <remarks>Declarations retain stable exemplar identity order and do not duplicate generated observations.</remarks>
@@ -508,13 +508,16 @@ public static class WorldProvisioner
     /// <returns>Completion evidence after every batch has been acknowledged as committed.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="world"/> or <paramref name="sink"/> is null.</exception>
     /// <exception cref="ArgumentException">The sink target identity is empty.</exception>
+    /// <exception cref="WorldGenerationException">A generated population member cannot receive a valid unique identity.</exception>
     /// <exception cref="InvalidOperationException">The sink returns no receipt or a receipt naming another batch.</exception>
     /// <exception cref="WorldProvisioningRejectedException">The sink explicitly rejects a batch.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> requests cancellation.</exception>
     /// <remarks>
     /// Populations are visited in compiled identity order and each population is visited by ascending sequence index.
-    /// At most one configured batch of generated observations is retained by this method. Sink exceptions are not
-    /// wrapped because they may describe an unknown commit outcome; no automatic retry is attempted.
+    /// At most one configured batch of generated world items is retained by this method. Identity failures are
+    /// discovered as the deterministic population stream is consumed; previously acknowledged batches are not
+    /// rolled back. Sink exceptions are not wrapped because they may describe an unknown commit outcome; no automatic
+    /// retry is attempted.
     /// </remarks>
     public static Task<WorldProvisioningResult> ProvisionAsync(
         CompiledWorldPlan world,
@@ -543,12 +546,14 @@ public static class WorldProvisioner
     /// <exception cref="NotSupportedException">
     /// The artifact names a generation interpreter or entropy algorithm unavailable to the reference provisioner.
     /// </exception>
+    /// <exception cref="WorldGenerationException">A generated population member cannot receive a valid unique identity.</exception>
     /// <exception cref="InvalidOperationException">The sink returns no receipt or a receipt naming another batch.</exception>
     /// <exception cref="WorldProvisioningRejectedException">The sink explicitly rejects a batch.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> requests cancellation.</exception>
     /// <remarks>
-    /// This overload consumes the portable manifest as the artifact identity authority. Generated observations remain
-    /// streamed in bounded batches and are not materialized into the manifest.
+    /// This overload consumes the portable manifest as the artifact identity authority. Generated world items remain
+    /// streamed in bounded batches and are not materialized into the manifest. Identity failures are discovered as
+    /// that stream is consumed; previously acknowledged batches are not rolled back.
     /// </remarks>
     public static Task<WorldProvisioningResult> ProvisionAsync(
         WorldArtifactManifest artifact,
@@ -622,19 +627,23 @@ public static class WorldProvisioner
         {
             var batchCount = 0;
             var alreadyCommittedCount = 0;
+            using var populationItems = population.Enumerate(artifact.RootSeed).GetEnumerator();
             for (long start = 0; start < population.Definition.Count; start += options.BatchSize)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var itemCount = (int)Math.Min(options.BatchSize, population.Definition.Count - start);
-                var items = ImmutableArray.CreateBuilder<GeneratedObservation>(itemCount);
+                var items = ImmutableArray.CreateBuilder<GeneratedWorldItem>(itemCount);
                 for (var offset = 0; offset < itemCount; offset++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    items.Add(ReferenceGenerationInterpreter.Generate(
-                        population.GenerationPlan,
-                        artifact.RootSeed,
-                        population.Scope,
-                        sequenceIndex: (long)start + offset));
+                    if (!populationItems.MoveNext())
+                    {
+                        throw new InvalidOperationException(
+                            $"Population '{population.Definition.Id}' ended before its declared count "
+                            + $"'{population.Definition.Count}'.");
+                    }
+
+                    items.Add(populationItems.Current);
                 }
 
                 var batchId = WorldProvisioningIdentityConvention.CreateBatchId(

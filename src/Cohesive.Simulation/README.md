@@ -135,9 +135,9 @@ without becoming a second generation authority.
 ## Worlds
 
 A `WorldDefinition` composes named bounded populations into one portable static initial state. Each population owns
-one canonical generation definition; declaration order is non-semantic, while population identity and count are
-semantic. The compiler derives an isolated scope from exact world and population identities and exposes eager or lazy
-raw-observation streams:
+one canonical generation definition and entity-identity policy; declaration order is non-semantic, while population
+identity, count, and entity identity are semantic. The compiler derives an isolated scope from exact world and
+population identities and exposes eager or lazy world-item streams:
 
 ```csharp
 using Cohesive.Simulation.Worlds;
@@ -147,10 +147,29 @@ var world = Simulation.DefineWorld("demo", "r1", builder => builder
     .Population("operators", count: 5, operators));
 
 CompiledWorldPlan plan = world.Compile();
-IEnumerable<GeneratedObservation> customerObservations = plan
+IEnumerable<GeneratedWorldItem> customerItems = plan
     .GetPopulation("customers")
     .Enumerate(seed: 42);
 ```
+
+The default `PopulationSequence` policy derives stable entity slots from the world/population scope and sequence
+index. These IDs do not depend on the root seed, so reseeding updates the same logical slots. When a generated domain
+field already owns identity, declare it on the population:
+
+```csharp
+var world = Simulation.DefineWorld("demo", "r1", builder => builder
+    .Population(
+        "customers",
+        count: 100,
+        WorldEntityIdentityPolicy.FromUniqueObservationField("ExternalId"),
+        customers));
+```
+
+Unique-field identity is resolved and checked as the deterministic population stream is consumed, independently of
+storage semantics. Each `GeneratedWorldItem` and each portable JSONL item carries the resolved core `EntityId`, so
+relationship generation and every provisioning adapter can address the same instance without choosing another
+policy. A later duplicate can therefore fail a streaming provisioning run after earlier batches were acknowledged;
+the provisioner does not claim rollback across sink commits.
 
 Typed generation remains a local interpretation and must match the population's exact generation identity, revision,
 and fingerprint:
@@ -197,7 +216,7 @@ WorldExemplarDefinition customer = artifact.GetExemplar("customer-for-ui");
 ```
 
 The manifest embeds the exact fingerprint-verified world definition, root seed, reference interpreter and entropy
-algorithm, compiled population counts and scopes, nested generation coordinates, and exemplar aliases. Its
+algorithm, compiled population counts, scopes and identity policies, nested generation coordinates, and exemplar aliases. Its
 content-addressed artifact identity is independent of sink target and batching policy. It does not contain generated
 observations, so even a very large declared population produces a small manifest and remains suitable for scripts,
 test reports, and agent inspection. Persist the manifest before provisioning when observations cross a process or
@@ -237,7 +256,8 @@ batch and receipt attached.
 
 The reference provisioner performs no automatic retries. A sink exception can mean that the commit outcome is
 unknown, so policy belongs in a concrete adapter that can reconcile the stable batch identity with its target. This
-keeps storage atomicity, replacement policy, and entity identity out of the Simulation semantic authority.
+keeps storage atomicity and replacement policy out of the Simulation semantic authority while preserving world-owned
+entity identity end to end.
 
 `WorldJsonLinesSink` provides a framework-independent bridge for unit-test artifacts, command-line scripts, and
 Playwright global setup. It emits one generated item per UTF-8 line with artifact-manifest, world, and generation

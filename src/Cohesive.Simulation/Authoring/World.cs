@@ -53,8 +53,25 @@ public sealed class WorldBuilder
         string id,
         int count,
         GenerationDefinition generation)
+        => Population(id, count, WorldEntityIdentityPolicy.PopulationSequence, generation);
+
+    /// <summary>Adds a population backed by direct canonical generation IR and an explicit identity policy.</summary>
+    /// <param name="id">Stable population identity within the world.</param>
+    /// <param name="count">Number of initial population members.</param>
+    /// <param name="entityIdentity">Portable policy assigning identity to generated members.</param>
+    /// <param name="generation">Canonical generation semantics for one population member.</param>
+    /// <returns>This builder for continued authoring.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="entityIdentity"/> or <paramref name="generation"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="id"/> is empty or white-space.</exception>
+    public WorldBuilder Population(
+        string id,
+        int count,
+        WorldEntityIdentityPolicy entityIdentity,
+        GenerationDefinition generation)
     {
-        populations.Add(new(id, count, generation));
+        populations.Add(new(id, count, entityIdentity, generation));
         return this;
     }
 
@@ -73,6 +90,27 @@ public sealed class WorldBuilder
     {
         ArgumentNullException.ThrowIfNull(generation);
         return Population(id, count, generation.Definition);
+    }
+
+    /// <summary>Adds a typed POCO population with an explicit portable entity identity policy.</summary>
+    /// <typeparam name="T">CLR target type of the local authoring projection.</typeparam>
+    /// <param name="id">Stable population identity within the world.</param>
+    /// <param name="count">Number of initial population members.</param>
+    /// <param name="entityIdentity">Portable policy assigning identity to generated members.</param>
+    /// <param name="generation">Typed producer whose canonical generation IR enters the world.</param>
+    /// <returns>This builder for continued authoring.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="entityIdentity"/> or <paramref name="generation"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="id"/> is empty or white-space.</exception>
+    public WorldBuilder Population<T>(
+        string id,
+        int count,
+        WorldEntityIdentityPolicy entityIdentity,
+        PocoGenerationDefinition<T> generation)
+    {
+        ArgumentNullException.ThrowIfNull(generation);
+        return Population(id, count, entityIdentity, generation.Definition);
     }
 
     /// <summary>Names one exact generated member of a declared population.</summary>

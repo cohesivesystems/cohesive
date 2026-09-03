@@ -1,13 +1,13 @@
 # Cohesive.Simulation.Storage
 
 `Cohesive.Simulation.Storage` is the optional integration between deterministic simulation worlds and generic
-Cohesive entity repositories. It implements `IWorldProvisioningSink` without adding Storage, Transitions, or entity
-identity policy to the provider-neutral `Cohesive.Simulation` package.
+Cohesive entity repositories. It implements `IWorldProvisioningSink` without making repository behavior part of the
+provider-neutral `Cohesive.Simulation` package.
 
 ## Repository provisioning
 
-Bind each population explicitly to one repository, entity identity policy, state version, and requested batch
-atomicity:
+Bind each population explicitly to one repository, state version, and requested batch atomicity. Entity identity is
+already resolved by the canonical world definition and carried by each generated item:
 
 ```csharp
 using Cohesive.Simulation.Provisioning;
@@ -21,7 +21,6 @@ var sink = new RepositoryWorldProvisioningSink(
         new RepositoryWorldPopulationBinding(
             populationId: "customers",
             repository: customerRepository,
-            entityIdentity: WorldEntityIdentityPolicy.PopulationSequence,
             stateVersion: 0,
             atomicity: EntityBatchAtomicity.None)
     ]);
@@ -33,12 +32,9 @@ WorldProvisioningResult result = await WorldProvisioner.ProvisionAsync(
     new WorldProvisioningOptions(batchSize: 100));
 ```
 
-The sequence policy derives stable entity slots from the world/population scope and sequence index. Its IDs do not
-depend on the root seed, so reseeding with another seed updates the same logical slots. When a domain field already
-owns identity, use `FromUniqueObservationField`; that policy is an assertion that the scalar value is unique across
-the complete population. The sink verifies the assertion across sequential batches in an active run and rejects a
-duplicate before its conflicting write. It retains that bounded-run identity evidence after an unknown repository
-failure so the same run can resume safely, then releases it after the population's final batch commits.
+Declare `WorldEntityIdentityPolicy.PopulationSequence` or `FromUniqueObservationField` while authoring the world.
+Pure world generation resolves those policies and detects duplicate unique-field identities. The sink consumes each
+artifact-provided `EntityId`; it cannot select a different mapping that would break generated references.
 
 Generated observation shapes must exactly equal the repository entity's qualified state shape. Every candidate is
 validated against entity semantics before repository access begins. Missing bindings, unsupported atomicity, native
@@ -52,5 +48,5 @@ a non-atomic batch may have an unknown partial outcome. Storage-specific durable
 belong in adapters that can actually guarantee those semantics.
 
 The sink derives its effective `TargetId` from the logical destination plus normalized population bindings. Changes
-to repository entity identity, qualified shape, entity-ID policy, state version, or requested atomicity therefore
-produce a different provisioning run identity automatically.
+to repository entity identity, qualified shape, state version, or requested atomicity therefore produce a different
+provisioning run identity automatically. World identity-policy changes already change the artifact identity.
