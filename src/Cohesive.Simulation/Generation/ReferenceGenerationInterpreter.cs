@@ -116,7 +116,7 @@ public sealed record GeneratedObservation
 public static class ReferenceGenerationInterpreter
 {
     /// <summary>Stable reference-interpreter identity and version.</summary>
-    public const string Identity = "cohesive-simulation-reference/v2";
+    public const string Identity = "cohesive-simulation-reference/v3";
 
     /// <summary>Stable addressable entropy algorithm identity and version.</summary>
     public const string EntropyAlgorithm = "cohesive-addressable-sha256/v2";
@@ -156,6 +156,25 @@ public static class ReferenceGenerationInterpreter
         if (sequenceIndex < 0)
             throw new ArgumentOutOfRangeException(nameof(sequenceIndex), sequenceIndex, "Sequence index cannot be negative.");
 
+        IReadOnlyDictionary<ValueBindingId, ObservationValue> bindings =
+            ImmutableDictionary<ValueBindingId, ObservationValue>.Empty;
+        if (!plan.Bindings.IsDefaultOrEmpty)
+        {
+            Dictionary<ValueBindingId, ObservationValue> sampled = new(plan.Bindings.Length);
+            foreach (var binding in plan.Bindings)
+            {
+                var address = new EntropyAddress(
+                    scope,
+                    sequenceIndex,
+                    plan.OutputShape.ShapeId.Value,
+                    binding.Identity.Value,
+                    EntropyAddressKind.Binding);
+                sampled.Add(binding.Identity, Generate(binding.Generator, seed, address, sampled));
+            }
+
+            bindings = sampled;
+        }
+
         var fields = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
         foreach (var member in plan.Members)
         {
@@ -163,8 +182,9 @@ public static class ReferenceGenerationInterpreter
                 scope,
                 sequenceIndex,
                 plan.OutputShape.ShapeId.Value,
-                member.Identity.Value);
-            fields.Add(member.Identity.Value, Generate(member.Generator, seed, address));
+                member.Identity.Value,
+                EntropyAddressKind.Member);
+            fields.Add(member.Identity.Value, Generate(member.Generator, seed, address, bindings));
         }
 
         var observation = Observation.Create(plan.OutputShape, fields.ToImmutable());
@@ -304,7 +324,11 @@ public static class ReferenceGenerationInterpreter
             yield return Generate(plan, seed, scope, index);
     }
 
-    static ObservationValue Generate(ValueGeneratorNode generator, long seed, EntropyAddress address) => generator switch
+    static ObservationValue Generate(
+        ValueGeneratorNode generator,
+        long seed,
+        EntropyAddress address,
+        IReadOnlyDictionary<ValueBindingId, ObservationValue> bindings) => generator switch
     {
         ConstantGenerationNode constant => constant.Value,
         Int32GenerationNode integer => ObservationValue.FromInt64(GenerateInt32(integer, seed, address)),
@@ -312,8 +336,32 @@ public static class ReferenceGenerationInterpreter
             bernoulli.Probability >= 1d
             || bernoulli.Probability > 0d && ToUnitInterval(AddressableEntropy.Next(seed, address, attempt: 0)) < bernoulli.Probability),
         WeightedCategoricalGenerationNode categorical => GenerateCategorical(categorical, seed, address),
+        ExpressionGenerationNode expression => EvaluateExpression(expression.Expression, bindings),
         _ => throw new NotSupportedException(
             $"Reference generation interpreter does not support node '{generator.GetType().Name}'.")
+    };
+
+    internal static ObservationValue EvaluateExpression(
+        Expr expression,
+        IReadOnlyDictionary<ValueBindingId, ObservationValue> bindings) => expression switch
+    {
+        BindingExpr binding when bindings.TryGetValue(binding.Binding, out var value) => value,
+        FieldExpr { Binding: { } binding } field
+            when bindings.TryGetValue(binding, out var value)
+                 && value.TryGetField(field.Path, out var projected) => projected,
+        BindingExpr binding => throw new InvalidOperationException(
+            $"Compiled generation expression references unavailable binding '{binding.Binding.Value}'."),
+        FieldExpr field => throw new InvalidOperationException(
+            $"Compiled generation expression could not resolve bound field '{field.Path}'."),
+        _ => throw new NotSupportedException(
+            $"Reference generation interpreter does not support expression '{expression.GetType().Name}'.")
+    };
+
+    internal static bool ReferencesBinding(Expr expression, ValueBindingId binding) => expression switch
+    {
+        BindingExpr value => value.Binding == binding,
+        FieldExpr field => field.Binding == binding,
+        _ => false
     };
 
     static int GenerateInt32(Int32GenerationNode node, long seed, EntropyAddress address)
@@ -384,7 +432,14 @@ public static class ReferenceGenerationInterpreter
         GenerationScope Scope,
         long SequenceIndex,
         string RecordIdentity,
-        string MemberIdentity);
+        string ValueIdentity,
+        EntropyAddressKind Kind);
+
+    enum EntropyAddressKind
+    {
+        Member = 0,
+        Binding = 1
+    }
 
     static class AddressableEntropy
     {
@@ -396,7 +451,9 @@ public static class ReferenceGenerationInterpreter
             Append(hash, address.Scope.Value);
             Append(hash, address.SequenceIndex);
             Append(hash, address.RecordIdentity);
-            Append(hash, address.MemberIdentity);
+            if (address.Kind == EntropyAddressKind.Binding)
+                Append(hash, "binding");
+            Append(hash, address.ValueIdentity);
             Append(hash, attempt);
             Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
             if (!hash.TryGetHashAndReset(digest, out var written) || written != digest.Length)

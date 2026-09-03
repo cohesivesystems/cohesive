@@ -18,7 +18,7 @@ public sealed record WorldDefinitionFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current world-definition fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-simulation-world/v2-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-simulation-world/v3-c14n/v1";
 
     /// <summary>Creates world-definition fingerprint metadata.</summary>
     /// <param name="algorithm">Hash-algorithm identity.</param>
@@ -46,13 +46,13 @@ public sealed record WorldDefinitionFingerprint
 
 /// <summary>Portable self-validating envelope for one canonical world definition.</summary>
 /// <remarks>
-/// Population, exemplar, and nested generation member declarations are normalized by stable identity. Deserialization
-/// rejects wire order that would preserve a second non-semantic declaration order.
+/// Population, exemplar, and nested generation binding/member declarations are normalized by stable identity.
+/// Deserialization rejects wire order that would preserve a second non-semantic declaration order.
 /// </remarks>
 public sealed record WorldDefinitionDocument
 {
     /// <summary>Current portable world-definition document schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-simulation-world/v2";
+    public const string CurrentSchemaVersion = "cohesive-simulation-world/v3";
 
     /// <summary>Creates or restores one portable world-definition document.</summary>
     /// <param name="schemaVersion">Exact portable world-definition schema.</param>

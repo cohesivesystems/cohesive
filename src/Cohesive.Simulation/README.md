@@ -6,8 +6,8 @@ records through the shared core `ObservationMaterializer<T>`.
 
 The canonical `GenerationDefinition` is the semantic authority. Typed fluent authoring produces that IR; it does not
 create a delegate-based generator model. The reference interpreter derives entropy from the root seed and stable
-semantic addresses—record identity, member identity, and sequence index—so member declaration order and unrelated
-member additions do not perturb existing generated fields. A `GenerationScope` adds a stable semantic namespace for
+semantic addresses—record identity, binding or member identity, and sequence index—so declaration order and
+unrelated additions do not perturb existing generated fields. A `GenerationScope` adds a stable semantic namespace for
 a fixture, script, world population, or scenario role, allowing those uses to share one definition and seed without
 coupling their generated streams. Replay evidence remains beside the observation because a seed, scope, interpreter
 version, and generation-definition fingerprint are evidence about how a value was produced, not part of what was
@@ -31,9 +31,47 @@ Generated<Customer> generated = customers
 public sealed record Customer(string Name, int Age, bool IsActive);
 ```
 
+## Correlated record generation
+
+Use a sampled record binding when several output fields must come from one coherent catalog row rather than from
+independent distributions:
+
+```csharp
+var shipments = Simulation.Define<Shipment>(shipment =>
+{
+    var route = shipment.SampleRecord("route", Gen.Categorical(
+        Gen.Weighted(new Route("SEA", "PDX", 174), weight: 1d),
+        Gen.Weighted(new Route("LAX", "SFO", 383), weight: 2d)));
+
+    shipment
+        .Member(value => value.Origin, route.Project(value => value.Origin))
+        .Member(value => value.Destination, route.Project(value => value.Destination))
+        .Member(value => value.DistanceMiles, route.Project(value => value.DistanceMiles));
+});
+
+public sealed record Route(string Origin, string Destination, int DistanceMiles);
+public sealed record Shipment(string Origin, string Destination, int DistanceMiles);
+```
+
+The route source is sampled once per generated shipment at an entropy address derived from the stable `route`
+binding identity. Every projection then evaluates against that retained portable object value. Binding and member
+declaration order is non-semantic, and adding an unrelated binding does not perturb existing direct member streams.
+
+`SampleRecord` and `Project` are typed authoring conveniences. They lower immediately to canonical
+`RecordGenerationBinding` and `ExpressionGenerationNode` values using core `ValueBindingId`, `FieldPath`, and `Expr`
+semantics; no selector callback or CLR reflection dependency remains in persisted IR. The compiler currently admits
+whole-binding and object field-path expressions only. Derived arithmetic/conditional expressions, collection-element
+navigation, cohorts, and inter-population references remain explicit later capabilities rather than hidden runtime
+behavior.
+
+Property-case shrinking treats a sampled binding as one semantic unit. For a categorical record source it considers
+earlier source records and recomputes every dependent projection together, preserving cross-field coherence in both
+the minimized counterexample and its replay token.
+
 Use `CompileResult()` when tooling needs structured diagnostics without exceptions. Invalid ranges, probabilities,
-weights, duplicate semantic identities, missing CLR bindings, shape mismatches, and unsupported materialization all
-produce stable `DocumentValidationDiagnostic` codes. `Compile()` is the convenience form and raises
+weights, duplicate semantic identities, invalid record bindings or projections, missing CLR bindings, shape
+mismatches, and unsupported materialization all produce stable `DocumentValidationDiagnostic` codes. `Compile()` is
+the convenience form and raises
 `GenerationCompilationException` with the same validation result.
 
 Generate a deterministic bounded sequence with `GenerateSequence(seed, count)`. Every item uses its zero-based item
@@ -240,8 +278,8 @@ GeneratedObservation observation = ReferenceGenerationInterpreter.Generate(plan,
 
 The document contains the exact governing shape graph, normalized generator IR, schema version, and a verified
 semantic fingerprint. Compact output is canonical; indented output is available for human authoring and review.
-Unknown properties, duplicate properties, unsupported schemas, invalid generator content, noncanonical member order,
-and fingerprint mismatches are rejected. Use `TryDeserialize` when a tool needs structured diagnostics.
+Unknown properties, duplicate properties, unsupported schemas, invalid generator content, noncanonical binding or
+member order, and fingerprint mismatches are rejected. Use `TryDeserialize` when a tool needs structured diagnostics.
 
 Every `GenerationReplayEvidence` can be encoded as one opaque URL-safe token and replayed against the exact compiled
 definition:

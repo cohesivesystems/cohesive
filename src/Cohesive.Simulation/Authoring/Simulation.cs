@@ -42,6 +42,40 @@ public sealed class Generator<TValue>
     public ValueGeneratorNode Node { get; }
 }
 
+/// <summary>Typed authoring handle for one structured source sampled once per generated record.</summary>
+/// <typeparam name="TRecord">CLR record type projected into portable generation IR.</typeparam>
+/// <remarks>
+/// Projection selectors are captured immediately as core <see cref="FieldPath"/> values. The handle and selectors
+/// are authoring conveniences and do not survive in canonical IR.
+/// </remarks>
+public sealed class SampledRecord<TRecord>
+{
+    static readonly DefaultClrTypeRefMapper TypeMapper = new();
+
+    internal SampledRecord(ValueBindingId identity) => Identity = identity;
+
+    /// <summary>Gets the stable semantic identity of this sampled value binding.</summary>
+    public ValueBindingId Identity { get; }
+
+    /// <summary>Projects one portable field path from the sampled record.</summary>
+    /// <typeparam name="TValue">CLR value type returned by the selected path.</typeparam>
+    /// <param name="member">Member-path selector rooted at the sampled record.</param>
+    /// <returns>A typed expression generator referencing this sampled binding and captured field path.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="member"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="member"/> is not a supported member path.</exception>
+    public Generator<TValue> Project<TValue>(Expression<Func<TRecord, TValue>> member)
+    {
+        ArgumentNullException.ThrowIfNull(member);
+        var boxed = Expression.Lambda<Func<TRecord, object?>>(
+            Expression.Convert(member.Body, typeof(object)),
+            member.Parameters);
+        var path = FieldPath.Capture(boxed);
+        return new(new ExpressionGenerationNode(
+            valueType: TypeMapper.Map(typeof(TValue), nullability: null),
+            expression: Expr.Field(Identity, path)));
+    }
+}
+
 /// <summary>One typed categorical value and its relative weight.</summary>
 /// <typeparam name="TValue">CLR value type projected into portable generation IR.</typeparam>
 public sealed record WeightedValue<TValue>
@@ -131,11 +165,29 @@ public static class Gen
 /// <remarks>The builder is mutable and intended for one single-threaded authoring callback.</remarks>
 public sealed class PocoGeneratorBuilder<T>
 {
-    readonly List<PocoMemberBinding> bindings = [];
+    readonly List<RecordGenerationBinding> recordBindings = [];
+    readonly List<PocoMemberBinding> memberBindings = [];
 
     /// <summary>Creates an empty typed generator builder.</summary>
     public PocoGeneratorBuilder()
     {
+    }
+
+    /// <summary>Declares a structured source sampled exactly once for each generated output record.</summary>
+    /// <typeparam name="TRecord">Portable CLR record type produced by <paramref name="source"/>.</typeparam>
+    /// <param name="identity">Stable identity used by projections and deterministic entropy addressing.</param>
+    /// <param name="source">Typed source generator for the complete structured record.</param>
+    /// <returns>An authoring handle that can project coherently related fields from the sampled record.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="identity"/> or <paramref name="source"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="identity"/> is empty or white space.</exception>
+    public SampledRecord<TRecord> SampleRecord<TRecord>(
+        string identity,
+        Generator<TRecord> source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var bindingIdentity = new ValueBindingId(identity);
+        recordBindings.Add(new(bindingIdentity, source.Node));
+        return new(bindingIdentity);
     }
 
     /// <summary>Binds one direct CLR property to a typed canonical generator.</summary>
@@ -153,20 +205,20 @@ public sealed class PocoGeneratorBuilder<T>
         ArgumentNullException.ThrowIfNull(generator);
         var property = ResolveProperty(member);
         var identity = DefaultClrTypeRefMapper.GetSerializedMemberName(property);
-        bindings.Add(new(property, new(identity), generator.Node));
+        memberBindings.Add(new(property, new(identity), generator.Node));
         return this;
     }
 
     internal PocoGenerationDefinition<T> Build()
     {
         var shapeId = ClrShapeIdentityConvention.GetShapeId(typeof(T));
-        var members = bindings
+        var members = memberBindings
             .Select(static binding => new RecordGenerationMember(binding.Identity, binding.Generator))
             .ToImmutableArray();
-        var root = new RecordGenerationNode(shapeId, members);
+        var root = new RecordGenerationNode(shapeId, [.. recordBindings], members);
 
         Dictionary<string, FieldDefinition> fieldsByIdentity = new(StringComparer.Ordinal);
-        foreach (var binding in bindings)
+        foreach (var binding in memberBindings)
         {
             fieldsByIdentity.TryAdd(
                 binding.Identity.Value,
@@ -198,7 +250,7 @@ public sealed class PocoGeneratorBuilder<T>
             revision: revision,
             shapeGraph: graph,
             root: root);
-        return new(definition, [.. bindings], explicitMaterializer: null);
+        return new(definition, [.. memberBindings], explicitMaterializer: null);
     }
 
     static PropertyInfo ResolveProperty<TValue>(Expression<Func<T, TValue>> selector)

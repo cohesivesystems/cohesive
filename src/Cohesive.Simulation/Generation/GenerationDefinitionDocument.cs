@@ -20,7 +20,7 @@ public sealed record GenerationDefinitionFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current generation-definition fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-generation/v1-c14n/v2";
+    public const string CurrentCanonicalization = "cohesive-generation/v1-c14n/v3";
 
     /// <summary>Creates generation-definition fingerprint metadata.</summary>
     /// <param name="algorithm">Hash-algorithm identity.</param>
@@ -48,13 +48,13 @@ public sealed record GenerationDefinitionFingerprint
 
 /// <summary>Portable, self-validating envelope for one canonical generation definition.</summary>
 /// <remarks>
-/// Member declarations are normalized by stable semantic identity. Deserialization therefore rejects documents whose
-/// wire order would preserve a second, non-semantic declaration order.
+/// Binding and member declarations are normalized by stable semantic identity. Deserialization therefore rejects
+/// documents whose wire order would preserve a second, non-semantic declaration order.
 /// </remarks>
 public sealed record GenerationDefinitionDocument
 {
     /// <summary>Current portable generation-definition document schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-simulation-generation/v1";
+    public const string CurrentSchemaVersion = "cohesive-simulation-generation/v2";
 
     /// <summary>Creates or restores one portable generation-definition document.</summary>
     /// <param name="schemaVersion">Exact portable generation-definition schema.</param>
@@ -163,28 +163,30 @@ public sealed record GenerationDefinitionDocument
         var plan = RequirePlan(definition);
         return (
             CurrentSchemaVersion,
-            Normalize(definition, plan.Members),
+            Normalize(definition, plan.Bindings, plan.Members),
             CreateFingerprint(plan));
     }
 
     static GenerationDefinition Normalize(
         GenerationDefinition definition,
+        ImmutableArray<RecordGenerationBinding> orderedBindings,
         ImmutableArray<RecordGenerationMember> orderedMembers)
     {
-        if (definition.Root.Members.SequenceEqual(orderedMembers))
+        if (definition.Root.Bindings.SequenceEqual(orderedBindings)
+            && definition.Root.Members.SequenceEqual(orderedMembers))
             return definition;
 
         return new(
             definition.Id,
             definition.Revision,
             definition.ShapeGraph,
-            new(definition.Root.ShapeId, orderedMembers));
+            new(definition.Root.ShapeId, orderedBindings, orderedMembers));
     }
 
     internal static GenerationDefinition Normalize(CompiledGenerationPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        return Normalize(plan.Definition, plan.Members);
+        return Normalize(plan.Definition, plan.Bindings, plan.Members);
     }
 
     static GenerationDefinitionFingerprint CreateFingerprint(CompiledGenerationPlan plan) => new(

@@ -32,6 +32,16 @@ static class GenerationCanonicalizer
             ShapeGraphDocument.FromGraph(definition.ShapeGraph),
             StrictDocumentJson.CreateOptions()));
         writer.Append(definition.Root.ShapeId.Value);
+        writer.Append(definition.Root.Bindings.Length);
+        foreach (var binding in definition.Root.Bindings.OrderBy(
+                     static binding => binding.Identity.Value,
+                     StringComparer.Ordinal))
+        {
+            writer.Append(binding.Identity.Value);
+            AppendGenerator(writer, binding.Generator);
+        }
+
+        writer.Append(definition.Root.Members.Length);
         foreach (var member in definition.Root.Members.OrderBy(
                      static member => member.Identity.Value,
                      StringComparer.Ordinal))
@@ -73,6 +83,14 @@ static class GenerationCanonicalizer
                     writer.Append(option.Value);
                     writer.Append(option.Weight);
                 }
+                return;
+
+            case ExpressionGenerationNode expression:
+                writer.Append(GenerationDefinitionWireNames.Expression);
+                AppendType(writer, expression.ValueType);
+                writer.Append(StrictDocumentJson.GetCanonicalBytes(
+                    expression.Expression,
+                    StrictDocumentJson.CreateOptions()));
                 return;
 
             default:

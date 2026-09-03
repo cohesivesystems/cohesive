@@ -21,6 +21,9 @@ public static class GenerationDefinitionWireNames
 
     /// <summary>Discriminator for a finite weighted categorical generator.</summary>
     public const string WeightedCategorical = "weightedCategorical";
+
+    /// <summary>Discriminator for a portable expression over sampled value bindings.</summary>
+    public const string Expression = "expression";
 }
 
 /// <summary>Base contract for one provider-neutral generator of a concrete field value.</summary>
@@ -33,6 +36,7 @@ public static class GenerationDefinitionWireNames
 [JsonDerivedType(typeof(Int32GenerationNode), GenerationDefinitionWireNames.Int32)]
 [JsonDerivedType(typeof(BernoulliGenerationNode), GenerationDefinitionWireNames.Bernoulli)]
 [JsonDerivedType(typeof(WeightedCategoricalGenerationNode), GenerationDefinitionWireNames.WeightedCategorical)]
+[JsonDerivedType(typeof(ExpressionGenerationNode), GenerationDefinitionWireNames.Expression)]
 public abstract record ValueGeneratorNode
 {
     /// <summary>Gets the portable semantic type produced by this node.</summary>
@@ -148,6 +152,54 @@ public sealed record WeightedCategoricalGenerationNode : ValueGeneratorNode
     public ImmutableArray<WeightedCategoricalOption> Options { get; }
 }
 
+/// <summary>Produces a value by evaluating a portable core expression over sampled record bindings.</summary>
+/// <remarks>
+/// The generation compiler declares the exact expression capabilities supported by this IR version. The initial
+/// profile supports whole-binding and field-path projection. Expression callbacks and CLR metadata are not retained.
+/// </remarks>
+public sealed record ExpressionGenerationNode : ValueGeneratorNode
+{
+    /// <summary>Creates an expression-backed generator.</summary>
+    /// <param name="valueType">Declared portable result type, verified against expression analysis.</param>
+    /// <param name="expression">Canonical portable expression evaluated for each generated record.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="valueType"/> or <paramref name="expression"/> is <see langword="null"/>.
+    /// </exception>
+    [JsonConstructor]
+    public ExpressionGenerationNode(TypeRef valueType, Expr expression)
+    {
+        ValueType = Guard.RequireNotNull(valueType);
+        Expression = Guard.RequireNotNull(expression);
+    }
+
+    /// <inheritdoc />
+    public override TypeRef ValueType { get; }
+
+    /// <summary>Gets the canonical portable expression.</summary>
+    public Expr Expression { get; }
+}
+
+/// <summary>Associates one stable semantic binding identity with a source sampled once per generated record.</summary>
+public sealed record RecordGenerationBinding
+{
+    /// <summary>Creates a sampled record binding.</summary>
+    /// <param name="identity">Stable identity used by bound expressions and entropy addressing.</param>
+    /// <param name="generator">Provider-neutral source generator evaluated once per output record.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="generator"/> is <see langword="null"/>.</exception>
+    [JsonConstructor]
+    public RecordGenerationBinding(ValueBindingId identity, ValueGeneratorNode generator)
+    {
+        Identity = identity;
+        Generator = Guard.RequireNotNull(generator);
+    }
+
+    /// <summary>Gets the stable semantic binding identity.</summary>
+    public ValueBindingId Identity { get; }
+
+    /// <summary>Gets the canonical source generator.</summary>
+    public ValueGeneratorNode Generator { get; }
+}
+
 /// <summary>Associates one stable semantic field identity with its canonical value generator.</summary>
 public sealed record RecordGenerationMember
 {
@@ -174,16 +226,32 @@ public sealed record RecordGenerationNode
 {
     /// <summary>Creates a record generator.</summary>
     /// <param name="shapeId">Stable identity of the output shape.</param>
+    /// <param name="bindings">Record sources sampled once per output record. Declaration order is non-semantic.</param>
     /// <param name="members">Generated members. Declaration order is non-semantic.</param>
     [JsonConstructor]
-    public RecordGenerationNode(ShapeId shapeId, ImmutableArray<RecordGenerationMember> members)
+    public RecordGenerationNode(
+        ShapeId shapeId,
+        ImmutableArray<RecordGenerationBinding> bindings,
+        ImmutableArray<RecordGenerationMember> members)
     {
         ShapeId = shapeId;
+        Bindings = bindings.IsDefault ? [] : bindings;
         Members = members.IsDefault ? [] : members;
+    }
+
+    /// <summary>Creates a record generator without sampled record bindings.</summary>
+    /// <param name="shapeId">Stable identity of the output shape.</param>
+    /// <param name="members">Generated members. Declaration order is non-semantic.</param>
+    public RecordGenerationNode(ShapeId shapeId, ImmutableArray<RecordGenerationMember> members)
+        : this(shapeId, bindings: [], members)
+    {
     }
 
     /// <summary>Gets the stable output-shape identity.</summary>
     public ShapeId ShapeId { get; }
+
+    /// <summary>Gets sampled record bindings in authoring order.</summary>
+    public ImmutableArray<RecordGenerationBinding> Bindings { get; }
 
     /// <summary>Gets generated members in authoring order.</summary>
     public ImmutableArray<RecordGenerationMember> Members { get; }
