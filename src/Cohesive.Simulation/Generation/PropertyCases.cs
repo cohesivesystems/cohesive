@@ -831,6 +831,15 @@ public static class ReferencePropertyCaseInterpreter
     {
         var shape = plan.OutputShape.Graph.GetShape(plan.OutputShape.ShapeId);
         HashSet<Observation> emitted = [];
+        foreach (var binding in plan.Bindings)
+        {
+            foreach (var candidate in EnumerateBindingShrinks(plan, shape, binding, current))
+            {
+                if (candidate.Observation is null || emitted.Add(candidate.Observation))
+                    yield return candidate;
+            }
+        }
+
         foreach (var member in plan.Members)
         {
             var currentValue = current.GetField(member.Identity.Value);
@@ -860,6 +869,82 @@ public static class ReferencePropertyCaseInterpreter
                     yield return new(observation, ValidationError: null);
                 }
             }
+        }
+    }
+
+    static IEnumerable<ShrinkCandidate> EnumerateBindingShrinks(
+        CompiledGenerationPlan plan,
+        Shape shape,
+        RecordGenerationBinding binding,
+        Observation current)
+    {
+        foreach (var sourceValue in EnumerateBindingSourceValues(binding.Generator))
+        {
+            var fields = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+            foreach (var field in current.Fields)
+                fields.Add(field.Key, field.Value);
+
+            Dictionary<ValueBindingId, ObservationValue> values = new(1)
+            {
+                [binding.Identity] = sourceValue
+            };
+            foreach (var member in plan.Members)
+            {
+                if (member.Generator is not ExpressionGenerationNode expression
+                    || !ReferenceGenerationInterpreter.ReferencesBinding(
+                        expression.Expression,
+                        binding.Identity))
+                {
+                    continue;
+                }
+
+                fields[member.Identity.Value] = ReferenceGenerationInterpreter.EvaluateExpression(
+                    expression.Expression,
+                    values);
+            }
+
+            var candidateFields = fields.ToImmutable();
+            if (!ObservationValidator.TryValidateAgainstShape(
+                    candidateFields,
+                    shape,
+                    out var validationError,
+                    plan.OutputShape.Graph))
+            {
+                yield return new(Observation: null, ValidationError: validationError);
+                continue;
+            }
+
+            var candidate = Observation.Create(plan.OutputShape, candidateFields);
+            if (candidate.Equals(current))
+                yield break;
+
+            yield return new(candidate, ValidationError: null);
+        }
+
+        throw new InvalidOperationException(
+            $"Generated observation does not correspond to a compiled value for binding '{binding.Identity.Value}'.");
+    }
+
+    static IEnumerable<ObservationValue> EnumerateBindingSourceValues(ValueGeneratorNode generator)
+    {
+        switch (generator)
+        {
+            case ConstantGenerationNode constant:
+                yield return constant.Value;
+                yield break;
+
+            case WeightedCategoricalGenerationNode categorical:
+                HashSet<ObservationValue> emitted = [];
+                foreach (var option in categorical.Options)
+                {
+                    if (emitted.Add(option.Value))
+                        yield return option.Value;
+                }
+                yield break;
+
+            default:
+                throw new NotSupportedException(
+                    $"Reference property shrinking does not support binding source '{generator.GetType().Name}'.");
         }
     }
 
@@ -903,6 +988,9 @@ public static class ReferencePropertyCaseInterpreter
                 }
                 throw new InvalidOperationException(
                     "A generated categorical value must equal one of the compiled generator's options.");
+
+            case ExpressionGenerationNode:
+                yield break;
 
             default:
                 throw new NotSupportedException(

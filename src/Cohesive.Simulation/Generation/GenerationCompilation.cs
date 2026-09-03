@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Globalization;
 using Cohesive.Model;
+using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Simulation.Generation;
@@ -15,11 +16,13 @@ public sealed class CompiledGenerationPlan
     internal CompiledGenerationPlan(
         GenerationDefinition definition,
         GraphShapeId outputShape,
+        ImmutableArray<RecordGenerationBinding> bindings,
         ImmutableArray<RecordGenerationMember> members,
         string fingerprint)
     {
         Definition = definition;
         OutputShape = outputShape;
+        Bindings = bindings;
         Members = members;
         Fingerprint = fingerprint;
     }
@@ -29,6 +32,9 @@ public sealed class CompiledGenerationPlan
 
     /// <summary>Gets the exact graph-scoped shape governing generated observations.</summary>
     public GraphShapeId OutputShape { get; }
+
+    /// <summary>Gets sampled record bindings ordered by stable semantic identity.</summary>
+    public ImmutableArray<RecordGenerationBinding> Bindings { get; }
 
     /// <summary>Gets generated members ordered by stable semantic identity.</summary>
     public ImmutableArray<RecordGenerationMember> Members { get; }
@@ -72,6 +78,9 @@ public sealed class GenerationCompilationResult
 /// <summary>Compiles canonical generator IR into a provider-neutral executable plan.</summary>
 public static class GenerationCompiler
 {
+    static readonly ExprCapabilityProfile BindingExpressionCapabilities = new(
+        [ExprCapabilities.Binding, ExprCapabilities.Field, ExprCapabilities.NestedFieldPath]);
+
     /// <summary>Compiles and validates one canonical generation definition.</summary>
     /// <param name="definition">Canonical definition to compile.</param>
     /// <returns>A result containing either a complete plan or precise structured diagnostics.</returns>
@@ -113,6 +122,73 @@ public static class GenerationCompiler
                 message: "A record generator must contain at least one generated member.",
                 location: "/root/members");
         }
+
+        Dictionary<string, (RecordGenerationBinding Binding, int Index)> bindingsByIdentity =
+            new(StringComparer.Ordinal);
+        for (var index = 0; index < root.Bindings.Length; index++)
+        {
+            var binding = root.Bindings[index];
+            var location = $"/root/bindings/{index}";
+            if (binding is null)
+            {
+                Add(
+                    diagnostics,
+                    code: "simulation.generation.bindingMissing",
+                    message: "A record generator cannot contain a null binding.",
+                    location: location);
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(binding.Identity.Value))
+            {
+                Add(
+                    diagnostics,
+                    code: "simulation.generation.bindingIdentityMissing",
+                    message: "A sampled record binding requires a stable semantic identity.",
+                    location: $"{location}/identity");
+                continue;
+            }
+
+            if (!bindingsByIdentity.TryAdd(binding.Identity.Value, (binding, index)))
+            {
+                Add(
+                    diagnostics,
+                    code: "simulation.generation.bindingIdentityDuplicate",
+                    message: $"Sampled record binding identity '{binding.Identity.Value}' is declared more than once.",
+                    location: $"{location}/identity");
+                continue;
+            }
+
+            if (binding.Generator.ValueType is not ObjectTypeRef)
+            {
+                Add(
+                    diagnostics,
+                    code: "simulation.generation.bindingSourceNotStructured",
+                    message: $"Sampled binding '{binding.Identity.Value}' must produce a statically known object value.",
+                    location: $"{location}/generator/valueType");
+            }
+
+            if (binding.Generator is ExpressionGenerationNode)
+            {
+                Add(
+                    diagnostics,
+                    code: "simulation.generation.bindingSourceExpressionUnsupported",
+                    message: "A sampled record source cannot depend on another binding in this generation profile.",
+                    location: $"{location}/generator");
+                continue;
+            }
+
+            ValidateFieldContract(
+                new FieldDefinition(new(binding.Identity.Value), binding.Generator.ValueType),
+                binding.Generator,
+                definition.ShapeGraph,
+                expressionScope: null,
+                location,
+                diagnostics);
+        }
+
+        ExprScope expressionScope = new(bindingsByIdentity.Values.Select(static value =>
+            new ExprScopeBinding(value.Binding.Identity, new(value.Binding.Generator.ValueType))));
 
         Dictionary<string, (RecordGenerationMember Member, int Index)> membersByIdentity =
             new(StringComparer.Ordinal);
@@ -160,7 +236,13 @@ public static class GenerationCompiler
                 continue;
             }
 
-            ValidateFieldContract(field, member.Generator, definition.ShapeGraph, location, diagnostics);
+            ValidateFieldContract(
+                field,
+                member.Generator,
+                definition.ShapeGraph,
+                expressionScope,
+                location,
+                diagnostics);
         }
 
         for (var fieldIndex = 0; fieldIndex < shape.Fields.Length; fieldIndex++)
@@ -179,6 +261,9 @@ public static class GenerationCompiler
         if (diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
             return Invalid(definition, diagnostics);
 
+        var orderedBindings = root.Bindings
+            .OrderBy(static binding => binding.Identity.Value, StringComparer.Ordinal)
+            .ToImmutableArray();
         var orderedMembers = root.Members
             .OrderBy(static member => member.Identity.Value, StringComparer.Ordinal)
             .ToImmutableArray();
@@ -187,7 +272,7 @@ public static class GenerationCompiler
         var validation = CreateValidation(diagnostics);
         return new(
             definition,
-            new CompiledGenerationPlan(definition, outputShape, orderedMembers, fingerprint),
+            new CompiledGenerationPlan(definition, outputShape, orderedBindings, orderedMembers, fingerprint),
             validation);
     }
 
@@ -195,6 +280,7 @@ public static class GenerationCompiler
         FieldDefinition field,
         ValueGeneratorNode generator,
         ShapeGraph graph,
+        ExprScope? expressionScope,
         string location,
         ICollection<DocumentValidationDiagnostic> diagnostics)
     {
@@ -246,6 +332,10 @@ public static class GenerationCompiler
                 ValidateCategorical(field, categorical, graph, location, diagnostics);
                 break;
 
+            case ExpressionGenerationNode expression when expressionScope is not null:
+                ValidateExpression(expression, expressionScope, location, diagnostics);
+                break;
+
             case ConstantGenerationNode or Int32GenerationNode or BernoulliGenerationNode:
                 break;
 
@@ -256,6 +346,35 @@ public static class GenerationCompiler
                     message: $"Generator node '{generator.GetType().Name}' is not supported by this compiler.",
                     location: $"{location}/generator");
                 break;
+        }
+    }
+
+    static void ValidateExpression(
+        ExpressionGenerationNode generator,
+        ExprScope scope,
+        string location,
+        ICollection<DocumentValidationDiagnostic> diagnostics)
+    {
+        var analysis = ExprAnalyzer.Analyze(new ExprSite(
+            id: new($"simulation-generation:{location}"),
+            expression: generator.Expression,
+            scope: scope,
+            expectation: new(
+                value: new ValueContract(generator.ValueType),
+                allowedDependencies: ExprDependencyKind.Binding),
+            capabilityProfile: BindingExpressionCapabilities,
+            diagnosticLocation: $"{location}/generator/expression"));
+        foreach (var diagnostic in analysis.Validation.Diagnostics)
+            diagnostics.Add(diagnostic);
+
+        if (analysis.Requirements.Fields.Any(static field =>
+                field.Path.Segments.Any(static segment => segment.Kind == SegmentKind.Element)))
+        {
+            Add(
+                diagnostics,
+                code: "simulation.generation.expressionCollectionNavigationUnsupported",
+                message: "Generation binding expressions do not support collection-element navigation in this profile.",
+                location: $"{location}/generator/expression");
         }
     }
 

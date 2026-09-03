@@ -40,7 +40,7 @@ public sealed record WorldArtifactManifestFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current manifest fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-simulation-world-artifact-manifest/v1-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-simulation-world-artifact-manifest/v2-c14n/v1";
 
     /// <summary>Creates world-artifact manifest fingerprint metadata.</summary>
     /// <param name="algorithm">Hash-algorithm identity.</param>
@@ -133,7 +133,7 @@ public sealed record WorldArtifactPopulationManifest
 public sealed record WorldArtifactManifest
 {
     /// <summary>Current portable world-artifact manifest schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-simulation-world-artifact-manifest/v1";
+    public const string CurrentSchemaVersion = "cohesive-simulation-world-artifact-manifest/v2";
 
     const string ArtifactIdPrefix = "csimartifact1_";
 

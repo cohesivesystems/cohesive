@@ -8,21 +8,26 @@ using Cohesive.Simulation.Xunit;
 using Xunit.Sdk;
 
 const string ExpectedArtifactId =
-    "csimartifact1_73e9c87d107576fe2a4d4d161829e9ea7ca9d6b8315d91860ea7a62891bc1393";
+    "csimartifact1_8ca335a80bba74b7c448e78027f408b429b29fbcb15065093e44ec5756a4a8b1";
 const string ExpectedManifestFingerprint =
-    "73e9c87d107576fe2a4d4d161829e9ea7ca9d6b8315d91860ea7a62891bc1393";
+    "8ca335a80bba74b7c448e78027f408b429b29fbcb15065093e44ec5756a4a8b1";
 const string ExpectedWorldFingerprint =
-    "af30a71937b54f72d10de9c68938110624edb6bd778f829a2f65b53fe64b82eb";
+    "f89dcfb60abda64c3e857aa64709c3e74b0772f33d9c1982213d7a2b2f1dabf2";
 const string ExpectedJsonLinesFingerprint =
-    "8f6947d294acb8ea7141caefad3c00a98a78294a31c6976b18f6c047f3410955";
+    "1416245396c3ed8e175433e5d75fb1b99ee13f0ea89f3230ee2292aaf89616c8";
 
 if (args is ["emit", var worldPath])
 {
-    var customers = Simulation.Define<SmokeCustomer>(customer => customer
-        .Member(value => value.Name, Gen.Categorical(
-            Gen.Weighted("Ada", weight: 1d),
-            Gen.Weighted("Grace", weight: 1d)))
-        .Member(value => value.Age, Gen.Int32(minimum: 18, maximum: 90)));
+    var customers = Simulation.Define<SmokeCustomer>(customer =>
+    {
+        var identity = customer.SampleRecord("identity", Gen.Categorical(
+            Gen.Weighted(new SmokeIdentity("Ada", "north"), weight: 1d),
+            Gen.Weighted(new SmokeIdentity("Grace", "west"), weight: 1d)));
+        customer
+            .Member(value => value.Name, identity.Project(value => value.Name))
+            .Member(value => value.Region, identity.Project(value => value.Region))
+            .Member(value => value.Age, Gen.Int32(minimum: 18, maximum: 90));
+    });
     var compiledCustomers = customers.Compile();
     var propertyRun = compiledCustomers.CheckProperty(
         seed: 42,
@@ -51,6 +56,7 @@ if (args is ["emit", var worldPath])
     var replayed = compiledCustomers.ReplayPropertyCase(
         propertyRun.BestCounterexample!.Replay.ToToken());
     Require(replayed.Name, "Ada", "property counterexample name");
+    Require(replayed.Region, "north", "property counterexample region");
     if (replayed.Age != 50)
         throw new InvalidOperationException($"Expected property counterexample age '50' but found '{replayed.Age}'.");
 
@@ -102,4 +108,6 @@ static void Require(string? actual, string expected, string property)
         throw new InvalidOperationException($"Expected {property} '{expected}' but found '{actual}'.");
 }
 
-sealed record SmokeCustomer(string Name, int Age);
+sealed record SmokeIdentity(string Name, string Region);
+
+sealed record SmokeCustomer(string Name, string Region, int Age);
