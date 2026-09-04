@@ -18,12 +18,14 @@ public sealed class CompiledGenerationPlan
         GraphShapeId outputShape,
         ImmutableArray<RecordGenerationBinding> bindings,
         ImmutableArray<RecordGenerationMember> members,
+        ImmutableArray<FieldName> externallyBoundMembers,
         string fingerprint)
     {
         Definition = definition;
         OutputShape = outputShape;
         Bindings = bindings;
         Members = members;
+        ExternallyBoundMembers = externallyBoundMembers;
         Fingerprint = fingerprint;
     }
 
@@ -38,6 +40,15 @@ public sealed class CompiledGenerationPlan
 
     /// <summary>Gets generated members ordered by stable semantic identity.</summary>
     public ImmutableArray<RecordGenerationMember> Members { get; }
+
+    /// <summary>
+    /// Gets members supplied by an owning composition layer instead of this standalone generation definition.
+    /// </summary>
+    /// <remarks>
+    /// The reference interpreter rejects direct generation while this collection is non-empty. The owning compiled
+    /// world must supply these values before validating the complete observation.
+    /// </remarks>
+    internal ImmutableArray<FieldName> ExternallyBoundMembers { get; }
 
     /// <summary>Gets the lowercase SHA-256 semantic fingerprint of this plan's generation content.</summary>
     public string Fingerprint { get; }
@@ -86,9 +97,23 @@ public static class GenerationCompiler
     /// <returns>A result containing either a complete plan or precise structured diagnostics.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="definition"/> is <see langword="null"/>.</exception>
     public static GenerationCompilationResult Compile(GenerationDefinition definition)
+        => Compile(definition, []);
+
+    internal static GenerationCompilationResult Compile(
+        GenerationDefinition definition,
+        ImmutableArray<FieldName> externallyBoundMembers)
     {
         ArgumentNullException.ThrowIfNull(definition);
         List<DocumentValidationDiagnostic> diagnostics = [];
+        var externalMembers = externallyBoundMembers.IsDefault
+            ? ImmutableArray<FieldName>.Empty
+            : externallyBoundMembers
+                .Distinct()
+                .OrderBy(static member => member.Value, StringComparer.Ordinal)
+                .ToImmutableArray();
+        HashSet<string> externalMemberIdentities = new(
+            externalMembers.Select(static member => member.Value),
+            StringComparer.Ordinal);
 
         foreach (var graphDiagnostic in definition.ShapeGraph.Diagnostics)
         {
@@ -114,13 +139,36 @@ public static class GenerationCompiler
             return Invalid(definition, diagnostics);
         }
 
-        if (root.Members.IsDefaultOrEmpty)
+        if (root.Members.IsDefaultOrEmpty && externalMembers.IsDefaultOrEmpty)
         {
             Add(
                 diagnostics,
                 code: "simulation.generation.membersMissing",
                 message: "A record generator must contain at least one generated member.",
                 location: "/root/members");
+        }
+
+        for (var index = 0; index < externalMembers.Length; index++)
+        {
+            var externalMember = externalMembers[index];
+            if (string.IsNullOrWhiteSpace(externalMember.Value))
+            {
+                Add(
+                    diagnostics,
+                    code: "simulation.generation.externalMemberIdentityMissing",
+                    message: "An externally supplied member requires a stable semantic identity.",
+                    location: $"/externalMembers/{index}");
+                continue;
+            }
+
+            if (!shape.TryGetField(externalMember.Value, out _))
+            {
+                Add(
+                    diagnostics,
+                    code: "simulation.generation.externalShapeFieldMissing",
+                    message: $"Externally supplied member '{externalMember.Value}' has no field in output shape '{shape.Id.Value}'.",
+                    location: $"/externalMembers/{index}");
+            }
         }
 
         Dictionary<string, (RecordGenerationBinding Binding, int Index)> bindingsByIdentity =
@@ -226,6 +274,15 @@ public static class GenerationCompiler
                 continue;
             }
 
+            if (externalMemberIdentities.Contains(member.Identity.Value))
+            {
+                Add(
+                    diagnostics,
+                    code: "simulation.generation.externalMemberCollision",
+                    message: $"Generated member '{member.Identity.Value}' is also supplied by an owning composition.",
+                    location: $"{location}/identity");
+            }
+
             if (!shape.TryGetField(member.Identity.Value, out var field))
             {
                 Add(
@@ -248,7 +305,8 @@ public static class GenerationCompiler
         for (var fieldIndex = 0; fieldIndex < shape.Fields.Length; fieldIndex++)
         {
             var field = shape.Fields[fieldIndex];
-            if (!membersByIdentity.ContainsKey(field.Name.Value))
+            if (!membersByIdentity.ContainsKey(field.Name.Value)
+                && !externalMemberIdentities.Contains(field.Name.Value))
             {
                 Add(
                     diagnostics,
@@ -272,7 +330,13 @@ public static class GenerationCompiler
         var validation = CreateValidation(diagnostics);
         return new(
             definition,
-            new CompiledGenerationPlan(definition, outputShape, orderedBindings, orderedMembers, fingerprint),
+            new CompiledGenerationPlan(
+                definition,
+                outputShape,
+                orderedBindings,
+                orderedMembers,
+                externalMembers,
+                fingerprint),
             validation);
     }
 

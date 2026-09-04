@@ -155,6 +155,36 @@ public static class ReferenceGenerationInterpreter
         GenerationScope.Validate(scope, nameof(scope));
         if (sequenceIndex < 0)
             throw new ArgumentOutOfRangeException(nameof(sequenceIndex), sequenceIndex, "Sequence index cannot be negative.");
+        if (!plan.ExternallyBoundMembers.IsDefaultOrEmpty)
+        {
+            throw new NotSupportedException(
+                $"Generation definition '{plan.Definition.Id}' has externally bound members and must be interpreted "
+                + "through its owning compiled composition.");
+        }
+
+        var value = GenerateRecordValue(plan, seed, scope, sequenceIndex);
+        var replay = new GenerationReplayEvidence(
+            rootSeed: seed,
+            sequenceIndex: sequenceIndex,
+            scope: scope,
+            definitionId: plan.Definition.Id,
+            definitionRevision: plan.Definition.Revision,
+            definitionFingerprint: plan.Fingerprint,
+            interpreter: Identity,
+            entropyAlgorithm: EntropyAlgorithm);
+        return new(Observation.Create(plan.OutputShape, value), replay);
+    }
+
+    internal static ObservationValue GenerateRecordValue(
+        CompiledGenerationPlan plan,
+        long seed,
+        GenerationScope scope,
+        long sequenceIndex)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        GenerationScope.Validate(scope, nameof(scope));
+        if (sequenceIndex < 0)
+            throw new ArgumentOutOfRangeException(nameof(sequenceIndex), sequenceIndex, "Sequence index cannot be negative.");
 
         IReadOnlyDictionary<ValueBindingId, ObservationValue> bindings =
             ImmutableDictionary<ValueBindingId, ObservationValue>.Empty;
@@ -187,17 +217,7 @@ public static class ReferenceGenerationInterpreter
             fields.Add(member.Identity.Value, Generate(member.Generator, seed, address, bindings));
         }
 
-        var observation = Observation.Create(plan.OutputShape, fields.ToImmutable());
-        var replay = new GenerationReplayEvidence(
-            rootSeed: seed,
-            sequenceIndex: sequenceIndex,
-            scope: scope,
-            definitionId: plan.Definition.Id,
-            definitionRevision: plan.Definition.Revision,
-            definitionFingerprint: plan.Fingerprint,
-            interpreter: Identity,
-            entropyAlgorithm: EntropyAlgorithm);
-        return new(observation, replay);
+        return ObservationValue.FromObject(fields.ToImmutable());
     }
 
     /// <summary>Replays one exact generation using previously retained evidence.</summary>
@@ -364,6 +384,27 @@ public static class ReferenceGenerationInterpreter
         _ => false
     };
 
+    internal static ulong SampleWorldReferenceEntropy(
+        long seed,
+        GenerationScope scope,
+        long sequenceIndex,
+        string recordIdentity,
+        string relationshipIdentity,
+        string coordinate,
+        int attempt)
+    {
+        GenerationScope.Validate(scope, nameof(scope));
+        return AddressableEntropy.Next(
+            seed,
+            new(
+                scope,
+                sequenceIndex,
+                Guard.RequireNotNullOrWhiteSpace(recordIdentity),
+                $"{Guard.RequireNotNullOrWhiteSpace(relationshipIdentity)}/{Guard.RequireNotNullOrWhiteSpace(coordinate)}",
+                EntropyAddressKind.WorldReference),
+            attempt);
+    }
+
     static int GenerateInt32(Int32GenerationNode node, long seed, EntropyAddress address)
     {
         var range = checked((ulong)((long)node.Maximum - node.Minimum + 1L));
@@ -438,7 +479,8 @@ public static class ReferenceGenerationInterpreter
     enum EntropyAddressKind
     {
         Member = 0,
-        Binding = 1
+        Binding = 1,
+        WorldReference = 2
     }
 
     static class AddressableEntropy
@@ -451,8 +493,14 @@ public static class ReferenceGenerationInterpreter
             Append(hash, address.Scope.Value);
             Append(hash, address.SequenceIndex);
             Append(hash, address.RecordIdentity);
-            if (address.Kind == EntropyAddressKind.Binding)
-                Append(hash, "binding");
+            if (address.Kind != EntropyAddressKind.Member)
+            {
+                Append(
+                    hash,
+                    address.Kind == EntropyAddressKind.Binding
+                        ? "binding"
+                        : "worldReference");
+            }
             Append(hash, address.ValueIdentity);
             Append(hash, attempt);
             Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
@@ -495,56 +543,13 @@ static class GenerationReplayTokenCodec
 {
     const string Prefix = "csimr2.";
 
-    public static string Encode(GenerationReplayEvidence evidence)
-    {
-        ArgumentNullException.ThrowIfNull(evidence);
-        var payload = StrictDocumentJson.GetCanonicalBytes(
-            evidence,
-            StrictDocumentJson.CreateOptions());
-        return Prefix + Convert.ToBase64String(payload)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-    }
+    public static string Encode(GenerationReplayEvidence evidence) =>
+        CanonicalReplayTokenCodec.Encode(evidence, Prefix);
 
-    public static GenerationReplayEvidence Decode(string token)
-    {
-        ArgumentNullException.ThrowIfNull(token);
-        if (!token.StartsWith(Prefix, StringComparison.Ordinal) || token.Length == Prefix.Length)
-            throw new FormatException($"A generation replay token must use the '{Prefix}' format.");
-
-        var encoded = token[Prefix.Length..];
-        byte[] payload;
-        try
-        {
-            var paddingLength = (4 - encoded.Length % 4) % 4;
-            var padded = encoded
-                .Replace('-', '+')
-                .Replace('_', '/')
-                .PadRight(encoded.Length + paddingLength, '=');
-            payload = Convert.FromBase64String(padded);
-        }
-        catch (FormatException exception)
-        {
-            throw new FormatException("Generation replay token payload is not URL-safe Base64.", exception);
-        }
-
-        var json = Encoding.UTF8.GetString(payload);
-        if (!StrictDocumentJson.TryReadCanonicalObject(
-                json,
-                StrictDocumentJson.CreateOptions(),
-                "generation replay evidence",
-                out GenerationReplayEvidence? evidence,
-                out var error)
-            || evidence is null)
-        {
-            throw new FormatException(
-                $"Generation replay token payload is invalid at '{error.Location}': {error.Message}");
-        }
-
-        if (!string.Equals(token, Encode(evidence), StringComparison.Ordinal))
-            throw new FormatException("Generation replay token is not in canonical current-version form.");
-
-        return evidence;
-    }
+    public static GenerationReplayEvidence Decode(string token) =>
+        CanonicalReplayTokenCodec.Decode<GenerationReplayEvidence>(
+            token,
+            Prefix,
+            tokenName: "generation replay token",
+            evidenceContractName: "generation replay evidence");
 }

@@ -83,19 +83,34 @@ public sealed record WorldEntityIdentityPolicy
         out EntityId entityId,
         out string? code,
         out string? detail)
+        => TryResolve(
+            populationScope,
+            generated.Observation.Value,
+            generated.Replay.SequenceIndex,
+            out entityId,
+            out code,
+            out detail);
+
+    internal bool TryResolve(
+        GenerationScope populationScope,
+        ObservationValue value,
+        long sequenceIndex,
+        out EntityId entityId,
+        out string? code,
+        out string? detail)
     {
         switch (Source)
         {
             case WorldEntityIdentitySource.PopulationSequence:
                 entityId = WorldEntitySequenceIdentityConvention.Create(
                     populationScope,
-                    generated.Replay.SequenceIndex);
+                    sequenceIndex);
                 code = null;
                 detail = null;
                 return true;
 
             case WorldEntityIdentitySource.UniqueObservationField when ObservationField is { } path:
-                return TryResolveField(path, generated, out entityId, out code, out detail);
+                return TryResolveField(path, value, sequenceIndex, out entityId, out code, out detail);
 
             case WorldEntityIdentitySource.UniqueObservationField:
                 entityId = default;
@@ -119,16 +134,17 @@ public sealed record WorldEntityIdentityPolicy
 
     static bool TryResolveField(
         FieldPath path,
-        GeneratedObservation generated,
+        ObservationValue observation,
+        long sequenceIndex,
         out EntityId entityId,
         out string? code,
         out string? detail)
     {
-        if (!generated.Observation.TryGetField(path, out var value))
+        if (!observation.TryGetField(path, out var value))
         {
             entityId = default;
             code = "simulation.world.entityIdentityValueMissing";
-            detail = $"Generated observation at sequence index '{generated.Replay.SequenceIndex}' does not contain "
+            detail = $"Generated observation at sequence index '{sequenceIndex}' does not contain "
                 + $"entity identity path '{path}'.";
             return false;
         }
@@ -151,7 +167,7 @@ public sealed record WorldEntityIdentityPolicy
         {
             entityId = default;
             code = "simulation.world.entityIdentityValueInvalid";
-            detail = $"Generated observation at sequence index '{generated.Replay.SequenceIndex}' has entity identity "
+            detail = $"Generated observation at sequence index '{sequenceIndex}' has entity identity "
                 + $"path '{path}' with unsupported or empty value kind '{value.Kind}'.";
             return false;
         }

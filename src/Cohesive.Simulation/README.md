@@ -227,6 +227,10 @@ Worlds currently define static initial populations only. A future scenario layer
 causality, clock, transition, and failure semantics are explicit; those concerns are intentionally not represented as
 placeholder callbacks or opaque host-language code.
 
+Use the optional `Cohesive.Simulation.Relations` package when generated populations must carry canonical entity
+references to one another. It composes the same world and generation semantics with an exact
+`RelationshipCatalogDocument` while keeping the provider-neutral Simulation package dependent only on Cohesive core.
+
 ## Provisioning tests and demo environments
 
 `WorldProvisioner` is the provider-neutral execution boundary between a compiled world and a test fixture, setup

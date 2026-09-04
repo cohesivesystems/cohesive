@@ -397,9 +397,15 @@ public static class WorldCompiler
     /// <param name="definition">Canonical world definition to compile.</param>
     /// <returns>A result containing either a complete world plan or precise structured diagnostics.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="definition"/> is <see langword="null"/>.</exception>
-    public static WorldCompilationResult Compile(WorldDefinition definition)
+    public static WorldCompilationResult Compile(WorldDefinition definition) =>
+        Compile(definition, ImmutableDictionary<string, ImmutableArray<FieldName>>.Empty);
+
+    internal static WorldCompilationResult Compile(
+        WorldDefinition definition,
+        IReadOnlyDictionary<string, ImmutableArray<FieldName>> externallyBoundMembers)
     {
         ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(externallyBoundMembers);
         List<DocumentValidationDiagnostic> diagnostics = [];
         if (definition.Populations.IsDefaultOrEmpty)
         {
@@ -455,7 +461,10 @@ public static class WorldCompiler
             if (!ValidateIdentity(population.EntityIdentity, location, diagnostics))
                 usable = false;
 
-            var generation = GenerationCompiler.Compile(population.Generation);
+            var externalMembers = externallyBoundMembers.TryGetValue(population.Id, out var configured)
+                ? configured
+                : ImmutableArray<FieldName>.Empty;
+            var generation = GenerationCompiler.Compile(population.Generation, externalMembers);
             foreach (var diagnostic in generation.Validation.Diagnostics)
             {
                 diagnostics.Add(diagnostic with
@@ -550,7 +559,11 @@ public static class WorldCompiler
                     normalizedGeneration);
             var normalizedGenerationPlan = ReferenceEquals(normalizedGeneration, item.Generation.Definition)
                 ? item.Generation
-                : GenerationCompiler.Compile(normalizedGeneration).Plan
+                : GenerationCompiler.Compile(
+                    normalizedGeneration,
+                    externallyBoundMembers.TryGetValue(item.Population.Id, out var configured)
+                        ? configured
+                        : ImmutableArray<FieldName>.Empty).Plan
                   ?? throw new InvalidOperationException(
                       $"Normalized generation definition '{normalizedGeneration.Id}' could not be recompiled.");
             normalizedDefinitions.Add(normalizedPopulation);

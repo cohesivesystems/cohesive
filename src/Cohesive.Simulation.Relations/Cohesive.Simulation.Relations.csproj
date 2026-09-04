@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>Canonical relationship integration for deterministic Cohesive simulation worlds.</Description>
+    <PackageTags>cohesive;simulation;synthetic-data;relations;seeding;testing</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cohesive.Relations\Cohesive.Relations.csproj" />
+    <ProjectReference Include="..\Cohesive.Simulation\Cohesive.Simulation.csproj" />
+  </ItemGroup>
+
+</Project>
