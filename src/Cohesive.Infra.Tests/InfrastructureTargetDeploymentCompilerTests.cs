@@ -155,7 +155,71 @@ public sealed class InfrastructureTargetDeploymentCompilerTests
             realization.CapabilityWitnesses,
             witness => witness.Requirement == composed.Requirement
                 && witness.Evidence == new InfrastructureCapabilityEvidenceId("test/evidence/authentication"));
-        Assert.Equal(identityPhysical, Assert.Single(identityEvidence.PhysicalResources));
+        Assert.Equal(3, identityEvidence.PhysicalResources.Length);
+        Assert.Contains(uiPhysical, identityEvidence.PhysicalResources);
+        Assert.Contains(ApiPhysical, identityEvidence.PhysicalResources);
+        Assert.Contains(identityPhysical, identityEvidence.PhysicalResources);
+    }
+
+    [Fact]
+    public void Binding_scoped_evidence_witnesses_every_physical_subject()
+    {
+        InfrastructureCapabilityId execution = new("test/workload/execution");
+        InfrastructureCapabilityId taskHub = new("test/process/task-hub");
+        InfrastructureNodeId worker = new("workloads/worker");
+        InfrastructureNodeId scheduler = new("resources/scheduler");
+        InfrastructureTargetFacilityId workerFacility = new("test/worker-runtime");
+        InfrastructureTargetFacilityId schedulerFacility = new("test/durable-task");
+        InfrastructurePhysicalResourceId workerPhysical = new("test/worker-runtime/apps/worker");
+        InfrastructurePhysicalResourceId schedulerPhysical = new("test/durable-task/hubs/current");
+        InfrastructureCapabilityEvidenceId taskHubEvidence = new("test/evidence/task-hub");
+        var semantic = Infrastructure.Define(
+            new("test/binding-scoped-witness"),
+            new("1"),
+            new("test/binding-scoped-witness/bindings/v1"),
+            infrastructure =>
+            {
+                var contract = infrastructure
+                    .Contract(new("test/contracts/task-hub-client/v1"), new("test/rules/task-hub-client/v1"))
+                    .Requires(taskHub)
+                    .SourcedFrom(Source.Value);
+                var client = infrastructure.Workload(worker).Requires(execution);
+                var hub = infrastructure.Resource(scheduler).Persistent().Requires(taskHub);
+                infrastructure.Bind(client).To(hub).As(contract);
+            });
+        var facilities = InfrastructureTargetFacilities.Define(
+            new("test/binding-scoped-target-facilities/v1"),
+            new("test/binding-scoped-target-capabilities/v1"),
+            new("test-target/1"),
+            Variant,
+            [InfrastructureDefinitionDocument.CurrentSchemaVersion],
+            target =>
+            {
+                target.Workload(workerFacility).Provides(Native("test/evidence/execution", execution));
+                target.Resource(schedulerFacility).Provides(Native(taskHubEvidence.Value, taskHub));
+            });
+        var manifest = InfrastructureTargetDeployments.Define(
+            new("test/deployments/binding-scoped/v1"),
+            semantic.Definition,
+            facilities,
+            deployment =>
+            {
+                deployment.Workload(worker, workerFacility, workerPhysical, [Source]);
+                deployment.Resource(scheduler, schedulerFacility, schedulerPhysical, Authority, [Source]);
+            });
+
+        var plan = InfrastructureTargetDeploymentCompiler.Compile(semantic, manifest);
+
+        Assert.True(plan.IsComplete);
+        var realization = Assert.IsType<InfrastructureRealization>(plan.Realization);
+        var bindingDecision = Assert.Single(
+            realization.WitnessDecisions,
+            decision => decision.Capability == taskHub && decision.Subjects.Length == 2);
+        var witness = Assert.Single(
+            realization.CapabilityWitnesses,
+            candidate => candidate.Requirement == bindingDecision.Requirement
+                && candidate.Evidence == taskHubEvidence);
+        Assert.Equal<InfrastructurePhysicalResourceId>([schedulerPhysical, workerPhysical], witness.PhysicalResources);
     }
 
     [Fact]

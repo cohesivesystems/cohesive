@@ -607,20 +607,33 @@ public static class InfrastructureTargetDeploymentCompiler
             foreach (var evidence in decision.RequiredEvidence)
             {
                 var facility = evidenceOwners[evidence];
-                var applicable = deployments
-                    .Where(deployment => deployment.Facility == facility && decision.Subjects.Contains(deployment.Node))
+                var facilityDeployments = deployments
+                    .Where(deployment => deployment.Facility == facility)
                     .ToImmutableArray();
-                if (applicable.IsDefaultOrEmpty)
-                    applicable = [.. deployments.Where(deployment => deployment.Facility == facility)];
-                if (applicable.IsDefaultOrEmpty)
+                if (facilityDeployments.IsDefaultOrEmpty)
                     continue;
 
+                var applicable = facilityDeployments
+                    .Where(deployment => decision.Subjects.Contains(deployment.Node))
+                    .ToImmutableArray();
+                if (applicable.IsDefaultOrEmpty)
+                    applicable = facilityDeployments;
+                var subjectDeployments = deployments
+                    .Where(deployment => decision.ExpectedPhysicalResources.Contains(deployment.PhysicalResource));
+
+                // Preserve the evidence-owning facility (including an auxiliary facility) while fencing the
+                // witness to every physical workload/resource subject governed by this exact demand.
                 witnesses.Add(new(
                     decision.Requirement,
                     evidence,
-                    [.. applicable.Select(static deployment => deployment.PhysicalResource).Distinct()],
                     [
-                        .. applicable.SelectMany(static deployment => deployment.SourceReferences)
+                        .. decision.ExpectedPhysicalResources
+                            .Concat(applicable.Select(static deployment => deployment.PhysicalResource))
+                            .Distinct()
+                    ],
+                    [
+                        .. applicable.Concat(subjectDeployments)
+                            .SelectMany(static deployment => deployment.SourceReferences)
                             .Append(source)
                             .Distinct()
                     ]));
