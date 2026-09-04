@@ -3,6 +3,7 @@ using System.Text.Json;
 using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
+using Cohesive.Simulation.Worlds;
 
 namespace Cohesive.Simulation.Tests;
 
@@ -68,6 +69,11 @@ public sealed class WorldJsonLinesSinkTests
             Assert.Equal(3, root.GetProperty("populationCount").GetInt32());
             Assert.Equal(2, root.GetProperty("batchSize").GetInt32());
             Assert.Equal(index, root.GetProperty("sequenceIndex").GetInt64());
+            Assert.Equal(
+                WorldEntitySequenceIdentityConvention.Create(
+                    world.GetPopulation("customers").Scope,
+                    index).Value,
+                root.GetProperty("entityId").GetString());
             Assert.Equal(
                 index switch
                 {

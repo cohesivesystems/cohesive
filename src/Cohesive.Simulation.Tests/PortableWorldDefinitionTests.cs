@@ -19,6 +19,16 @@ public sealed class PortableWorldDefinitionTests
 
         Assert.Equal(WorldDefinitionDocument.CurrentSchemaVersion, restoredDocument.SchemaVersion);
         Assert.Equal(["customers", "orders"], restored.Populations.Select(static item => item.Definition.Id));
+        Assert.All(
+            restored.Populations,
+            static population => Assert.Equal(
+                WorldEntityIdentityPolicy.PopulationSequence,
+                population.Definition.EntityIdentity));
+        var root = JsonNode.Parse(json)?.AsObject()
+                   ?? throw new InvalidOperationException("World-definition JSON did not contain an object.");
+        Assert.Equal(
+            nameof(WorldEntityIdentitySource.PopulationSequence),
+            root["definition"]!["populations"]![0]!["entityIdentity"]!["source"]!.GetValue<string>());
         Assert.Equal(authoredPlan.Fingerprint, restored.Fingerprint);
         Assert.Equal(json, WorldDefinitionJsonSerializer.Serialize(restoredDocument));
         foreach (var authoredPopulation in authoredPlan.Populations)
@@ -101,6 +111,7 @@ public sealed class PortableWorldDefinitionTests
     [InlineData("order", "simulation.world.document.wireNonCanonical")]
     [InlineData("exemplar-order", "simulation.world.document.wireNonCanonical")]
     [InlineData("count", "simulation.world.document.contentInvalid")]
+    [InlineData("identity", "simulation.world.document.contentInvalid")]
     public void InvalidPortableWorlds_ProduceStructuredDiagnostics(string scenario, string expectedCode)
     {
         var json = WorldDefinitionJsonSerializer.Serialize(World(
@@ -117,6 +128,9 @@ public sealed class PortableWorldDefinitionTests
             "exemplar-order" => Mutate(json, ReverseExemplars),
             "count" => Mutate(json, root =>
                 root["definition"]!["populations"]![0]!["count"] = -1),
+            "identity" => Mutate(json, root =>
+                root["definition"]!["populations"]![0]!["entityIdentity"]!["source"] =
+                    nameof(WorldEntityIdentitySource.UniqueObservationField)),
             _ => throw new InvalidOperationException($"Unknown invalid-world scenario '{scenario}'.")
         };
 

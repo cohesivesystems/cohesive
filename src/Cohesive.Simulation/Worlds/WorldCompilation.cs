@@ -29,13 +29,15 @@ public sealed class CompiledWorldPopulation
 
     /// <summary>Generates the complete bounded population eagerly.</summary>
     /// <param name="seed">World root seed shared by all populations.</param>
-    /// <returns>Generated observations in ascending population sequence-index order.</returns>
-    public ImmutableArray<GeneratedObservation> Generate(long seed) =>
-        ReferenceGenerationInterpreter.GenerateSequence(
-            GenerationPlan,
-            seed,
-            Scope,
-            Definition.Count);
+    /// <returns>Generated world items in ascending population sequence-index order.</returns>
+    /// <exception cref="WorldGenerationException">An identity cannot be resolved or repeats within the population.</exception>
+    public ImmutableArray<GeneratedWorldItem> Generate(long seed)
+    {
+        var generated = ImmutableArray.CreateBuilder<GeneratedWorldItem>(Definition.Count);
+        foreach (var item in Enumerate(seed))
+            generated.Add(item);
+        return generated.MoveToImmutable();
+    }
 
     /// <summary>Generates the complete bounded population through a compatible CLR interpretation.</summary>
     /// <typeparam name="T">CLR target type.</typeparam>
@@ -46,23 +48,52 @@ public sealed class CompiledWorldPopulation
     /// <exception cref="ArgumentException">
     /// <paramref name="generator"/> names another generation definition, revision, or fingerprint.
     /// </exception>
+    /// <exception cref="WorldGenerationException">An identity cannot be resolved or repeats within the population.</exception>
     public ImmutableArray<Generated<T>> Generate<T>(
         long seed,
         CompiledPocoGenerator<T> generator)
     {
         ValidateGenerator(generator);
-        return generator.GenerateSequence(seed, Scope, Definition.Count);
+        var generated = ImmutableArray.CreateBuilder<Generated<T>>(Definition.Count);
+        foreach (var item in EnumerateTypedCore(seed, generator))
+            generated.Add(item);
+        return generated.MoveToImmutable();
     }
 
     /// <summary>Lazily enumerates the bounded population.</summary>
     /// <param name="seed">World root seed shared by all populations.</param>
     /// <returns>A lazy sequence in ascending population sequence-index order.</returns>
-    public IEnumerable<GeneratedObservation> Enumerate(long seed) =>
-        ReferenceGenerationInterpreter.EnumerateSequence(
+    /// <exception cref="WorldGenerationException">An identity cannot be resolved or repeats within the population.</exception>
+    public IEnumerable<GeneratedWorldItem> Enumerate(long seed) => EnumerateCore(seed);
+
+    /// <summary>Generates one world item at an exact sequence coordinate.</summary>
+    /// <param name="seed">World root seed shared by all populations.</param>
+    /// <param name="sequenceIndex">Zero-based population sequence index.</param>
+    /// <returns>The generated world item and its canonical entity identity.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="sequenceIndex"/> is outside this population's declared bounds.
+    /// </exception>
+    /// <exception cref="WorldGenerationException">The item's identity cannot be resolved.</exception>
+    /// <remarks>
+    /// This operation cannot prove population-wide uniqueness in isolation. Use <see cref="Generate(long)"/> or
+    /// <see cref="Enumerate(long)"/> when the identity policy requires uniqueness across the complete population.
+    /// </remarks>
+    public GeneratedWorldItem GenerateItem(long seed, long sequenceIndex)
+    {
+        if (sequenceIndex < 0 || sequenceIndex >= Definition.Count)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(sequenceIndex),
+                sequenceIndex,
+                $"Sequence index must be from 0 through {Definition.Count - 1}.");
+        }
+
+        return ResolveIdentity(ReferenceGenerationInterpreter.Generate(
             GenerationPlan,
             seed,
             Scope,
-            Definition.Count);
+            sequenceIndex));
+    }
 
     /// <summary>Lazily enumerates the bounded population through a compatible CLR interpretation.</summary>
     /// <typeparam name="T">CLR target type.</typeparam>
@@ -73,12 +104,13 @@ public sealed class CompiledWorldPopulation
     /// <exception cref="ArgumentException">
     /// <paramref name="generator"/> names another generation definition, revision, or fingerprint.
     /// </exception>
+    /// <exception cref="WorldGenerationException">An identity cannot be resolved or repeats within the population.</exception>
     public IEnumerable<Generated<T>> Enumerate<T>(
         long seed,
         CompiledPocoGenerator<T> generator)
     {
         ValidateGenerator(generator);
-        return generator.EnumerateSequence(seed, Scope, Definition.Count);
+        return EnumerateTypedCore(seed, generator);
     }
 
     internal void ValidateGenerator<T>(CompiledPocoGenerator<T> generator)
@@ -97,6 +129,73 @@ public sealed class CompiledWorldPopulation
             + $"does not match population '{Definition.Id}' generation "
             + $"'{GenerationPlan.Definition.Id}/{GenerationPlan.Definition.Revision}/{GenerationPlan.Fingerprint}'.",
             nameof(generator));
+    }
+
+    IEnumerable<GeneratedWorldItem> EnumerateCore(long seed)
+    {
+        var uniqueIdentities = CreateUniqueIdentitySet();
+        foreach (var generated in ReferenceGenerationInterpreter.EnumerateSequence(
+                     GenerationPlan,
+                     seed,
+                     Scope,
+                     Definition.Count))
+        {
+            var item = ResolveIdentity(generated);
+            ValidateUniqueIdentity(item, uniqueIdentities);
+
+            yield return item;
+        }
+    }
+
+    IEnumerable<Generated<T>> EnumerateTypedCore<T>(
+        long seed,
+        CompiledPocoGenerator<T> generator)
+    {
+        var uniqueIdentities = CreateUniqueIdentitySet();
+        foreach (var generated in generator.EnumerateSequence(seed, Scope, Definition.Count))
+        {
+            var item = ResolveIdentity(new(generated.Observation, generated.Replay));
+            ValidateUniqueIdentity(item, uniqueIdentities);
+            yield return generated;
+        }
+    }
+
+    HashSet<EntityId>? CreateUniqueIdentitySet() =>
+        Definition.EntityIdentity.Source == WorldEntityIdentitySource.UniqueObservationField
+            ? []
+            : null;
+
+    void ValidateUniqueIdentity(
+        GeneratedWorldItem item,
+        HashSet<EntityId>? uniqueIdentities)
+    {
+        if (uniqueIdentities is null || uniqueIdentities.Add(item.EntityId))
+            return;
+
+        throw WorldGenerationException.IdentityFailure(
+            Definition.Id,
+            item.Replay.SequenceIndex,
+            "simulation.world.entityIdentityDuplicate",
+            $"Population '{Definition.Id}' resolves entity identity '{item.EntityId.Value}' more than once.");
+    }
+
+    internal GeneratedWorldItem ResolveIdentity(GeneratedObservation generated)
+    {
+        if (Definition.EntityIdentity.TryResolve(
+                Scope,
+                generated,
+                out var entityId,
+                out var code,
+                out var detail))
+        {
+            return new(entityId, generated);
+        }
+
+        throw WorldGenerationException.IdentityFailure(
+            Definition.Id,
+            generated.Replay.SequenceIndex,
+            code!,
+            detail!);
     }
 }
 
@@ -204,19 +303,15 @@ public sealed class CompiledWorldPlan
     /// <summary>Generates the exact observation named by a world exemplar.</summary>
     /// <param name="id">Stable exemplar identity.</param>
     /// <param name="seed">World root seed shared by all populations.</param>
-    /// <returns>The generated observation and its exact replay evidence.</returns>
+    /// <returns>The generated world item, canonical entity identity, and exact replay evidence.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="id"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="id"/> is empty or white-space.</exception>
     /// <exception cref="KeyNotFoundException">The world contains no exemplar with the supplied identity.</exception>
-    public GeneratedObservation GenerateExemplar(string id, long seed)
+    public GeneratedWorldItem GenerateExemplar(string id, long seed)
     {
         var exemplar = GetExemplar(id);
         var population = GetPopulation(exemplar.PopulationId);
-        return ReferenceGenerationInterpreter.Generate(
-            population.GenerationPlan,
-            seed,
-            population.Scope,
-            exemplar.SequenceIndex);
+        return population.GenerateItem(seed, exemplar.SequenceIndex);
     }
 
     /// <summary>Generates and materializes the exact observation named by a world exemplar.</summary>
@@ -232,6 +327,7 @@ public sealed class CompiledWorldPlan
     /// <paramref name="id"/> is empty, or <paramref name="generator"/> names another generation definition.
     /// </exception>
     /// <exception cref="KeyNotFoundException">The world contains no exemplar with the supplied identity.</exception>
+    /// <exception cref="WorldGenerationException">The exemplar's identity cannot be resolved.</exception>
     public Generated<T> GenerateExemplar<T>(
         string id,
         long seed,
@@ -240,7 +336,9 @@ public sealed class CompiledWorldPlan
         var exemplar = GetExemplar(id);
         var population = GetPopulation(exemplar.PopulationId);
         population.ValidateGenerator(generator);
-        return generator.Generate(seed, population.Scope, exemplar.SequenceIndex);
+        var generated = generator.Generate(seed, population.Scope, exemplar.SequenceIndex);
+        population.ResolveIdentity(new(generated.Observation, generated.Replay));
+        return generated;
     }
 }
 
@@ -354,6 +452,9 @@ public static class WorldCompiler
                 usable = false;
             }
 
+            if (!ValidateIdentity(population.EntityIdentity, location, diagnostics))
+                usable = false;
+
             var generation = GenerationCompiler.Compile(population.Generation);
             foreach (var diagnostic in generation.Validation.Diagnostics)
             {
@@ -442,7 +543,11 @@ public static class WorldCompiler
             var normalizedGeneration = GenerationDefinitionDocument.Normalize(item.Generation);
             var normalizedPopulation = item.Population.Generation == normalizedGeneration
                 ? item.Population
-                : new(item.Population.Id, item.Population.Count, normalizedGeneration);
+                : new(
+                    item.Population.Id,
+                    item.Population.Count,
+                    item.Population.EntityIdentity,
+                    normalizedGeneration);
             var normalizedGenerationPlan = ReferenceEquals(normalizedGeneration, item.Generation.Definition)
                 ? item.Generation
                 : GenerationCompiler.Compile(normalizedGeneration).Plan
@@ -467,6 +572,55 @@ public static class WorldCompiler
             definition,
             new CompiledWorldPlan(normalizedWorld, compiledPopulations, exemplars, fingerprint),
             validation);
+    }
+
+    static bool ValidateIdentity(
+        WorldEntityIdentityPolicy identity,
+        string populationLocation,
+        ICollection<DocumentValidationDiagnostic> diagnostics)
+    {
+        switch (identity.Source)
+        {
+            case WorldEntityIdentitySource.PopulationSequence:
+                if (identity.ObservationField is null)
+                    return true;
+
+                Add(
+                    diagnostics,
+                    code: "simulation.world.entityIdentityFieldUnexpected",
+                    message: "A population-sequence identity policy cannot declare an observation field.",
+                    location: $"{populationLocation}/entityIdentity/observationField");
+                return false;
+
+            case WorldEntityIdentitySource.UniqueObservationField:
+                if (identity.ObservationField is not { } path)
+                {
+                    Add(
+                        diagnostics,
+                        code: "simulation.world.entityIdentityFieldMissing",
+                        message: "A unique-observation-field identity policy requires an observation field path.",
+                        location: $"{populationLocation}/entityIdentity/observationField");
+                    return false;
+                }
+
+                if (WorldEntityIdentityPolicy.IsValidFieldPath(path))
+                    return true;
+
+                Add(
+                    diagnostics,
+                    code: "simulation.world.entityIdentityFieldInvalid",
+                    message: "An entity identity field path must contain non-empty field segments and no collection navigation.",
+                    location: $"{populationLocation}/entityIdentity/observationField");
+                return false;
+
+            default:
+                Add(
+                    diagnostics,
+                    code: "simulation.world.entityIdentitySourceInvalid",
+                    message: $"World entity identity source '{identity.Source}' is unsupported.",
+                    location: $"{populationLocation}/entityIdentity/source");
+                return false;
+        }
     }
 
     static string PrefixLocation(string prefix, string? location) =>
@@ -510,6 +664,20 @@ static class WorldCanonicalizer
         {
             writer.Append(population.Definition.Id);
             writer.Append(population.Definition.Count);
+            writer.Append((int)population.Definition.EntityIdentity.Source);
+            if (population.Definition.EntityIdentity.ObservationField is { } identityField)
+            {
+                writer.Append(identityField.Segments.Length);
+                foreach (var segment in identityField.Segments)
+                {
+                    writer.Append((int)segment.Kind);
+                    writer.Append(segment.Segment ?? string.Empty);
+                }
+            }
+            else
+            {
+                writer.Append(0);
+            }
             writer.Append(population.GenerationPlan.Definition.Id);
             writer.Append(population.GenerationPlan.Definition.Revision);
             writer.Append(population.GenerationPlan.FingerprintAlgorithm);

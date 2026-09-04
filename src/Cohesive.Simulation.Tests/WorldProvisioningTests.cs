@@ -174,7 +174,7 @@ public sealed class WorldProvisioningTests
         RecordingSink sink = new(
             "demo/broken",
             static _ => new(
-                new WorldProvisioningBatchId("csimbatch2_wrong"),
+                new WorldProvisioningBatchId("csimbatch3_wrong"),
                 WorldProvisioningBatchDisposition.Committed));
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>

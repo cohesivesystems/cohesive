@@ -15,11 +15,31 @@ public sealed record WorldPopulationDefinition
     /// <exception cref="ArgumentNullException"><paramref name="generation"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="id"/> is empty or white-space.</exception>
     /// <remarks>A negative <paramref name="count"/> is retained for structured compiler diagnostics.</remarks>
-    [JsonConstructor]
     public WorldPopulationDefinition(string id, int count, GenerationDefinition generation)
+        : this(id, count, WorldEntityIdentityPolicy.PopulationSequence, generation)
+    {
+    }
+
+    /// <summary>Creates a world population definition with an explicit entity identity policy.</summary>
+    /// <param name="id">Stable population identity within the owning world.</param>
+    /// <param name="count">Number of initial observations in the population.</param>
+    /// <param name="entityIdentity">Portable policy assigning identity to generated members.</param>
+    /// <param name="generation">Canonical generation semantics for one population member.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="entityIdentity"/> or <paramref name="generation"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="id"/> is empty or white-space.</exception>
+    /// <remarks>A negative <paramref name="count"/> is retained for structured compiler diagnostics.</remarks>
+    [JsonConstructor]
+    public WorldPopulationDefinition(
+        string id,
+        int count,
+        WorldEntityIdentityPolicy entityIdentity,
+        GenerationDefinition generation)
     {
         Id = Guard.RequireNotNullOrWhiteSpace(id);
         Count = count;
+        EntityIdentity = Guard.RequireNotNull(entityIdentity);
         Generation = Guard.RequireNotNull(generation);
     }
 
@@ -28,6 +48,9 @@ public sealed record WorldPopulationDefinition
 
     /// <summary>Gets the declared number of initial observations.</summary>
     public int Count { get; }
+
+    /// <summary>Gets the portable policy assigning identity to generated population members.</summary>
+    public WorldEntityIdentityPolicy EntityIdentity { get; }
 
     /// <summary>Gets the canonical generation semantics for one population member.</summary>
     public GenerationDefinition Generation { get; }

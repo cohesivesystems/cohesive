@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Cohesive.Model;
 using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Worlds;
 
@@ -184,7 +185,168 @@ public sealed class WorldDefinitionTests
             population.GenerationPlan,
             generated.Replay.ToToken());
 
-        Assert.Equal(generated, replayed);
+        Assert.Equal(generated.Generated, replayed);
+    }
+
+    [Fact]
+    public void PopulationSequenceIdentity_IsStableAcrossSeedsAndCarriedByGeneratedItems()
+    {
+        var population = Simulation.DefineWorld("world/identity", "r1", world => world
+                .Population("customers", count: 2, CustomerGeneration()))
+            .Compile()
+            .GetPopulation("customers");
+
+        var first = population.Generate(seed: 41);
+        var second = population.Generate(seed: 42);
+
+        Assert.Equal(
+            first.Select(static item => item.EntityId),
+            second.Select(static item => item.EntityId));
+        Assert.Equal(
+            WorldEntitySequenceIdentityConvention.Create(population.Scope, sequenceIndex: 0),
+            first[0].EntityId);
+        Assert.NotEqual(first[0].Replay, second[0].Replay);
+    }
+
+    [Fact]
+    public void UniqueObservationFieldIdentity_ResolvesDuringPureWorldGeneration()
+    {
+        var population = Simulation.DefineWorld("world/external-identity", "r1", world => world
+                .Population(
+                    "customers",
+                    count: 1,
+                    WorldEntityIdentityPolicy.FromUniqueObservationField("Name"),
+                    ConstantCustomerGeneration("customer-42")))
+            .Compile()
+            .GetPopulation("customers");
+
+        var generated = Assert.Single(population.Generate(seed: 42));
+
+        Assert.Equal(new EntityId("customer-42"), generated.EntityId);
+        Assert.Equal("customer-42", generated.Observation.GetField("Name").GetString());
+    }
+
+    [Fact]
+    public void DuplicateUniqueObservationFieldIdentity_FailsWithStructuredGenerationEvidence()
+    {
+        var customers = ConstantCustomerGeneration("duplicate");
+        var population = Simulation.DefineWorld("world/duplicate-identity", "r1", world => world
+                .Population(
+                    "customers",
+                    count: 2,
+                    WorldEntityIdentityPolicy.FromUniqueObservationField("Name"),
+                    customers))
+            .Compile()
+            .GetPopulation("customers");
+
+        var exception = Assert.Throws<WorldGenerationException>(() => population.Generate(seed: 42));
+
+        var diagnostic = Assert.Single(exception.Validation.Diagnostics);
+        Assert.Equal("simulation.world.entityIdentityDuplicate", diagnostic.Code);
+        Assert.Equal("/populations/customers/items/1/entityId", diagnostic.Location);
+        Assert.Equal("world-generation", diagnostic.Evidence?.Stage);
+        Assert.Throws<WorldGenerationException>(() => population.Generate(seed: 42, customers.Compile()));
+    }
+
+    [Fact]
+    public void InvalidUniqueObservationFieldValues_FailWithStructuredGenerationEvidence()
+    {
+        var missing = Simulation.DefineWorld("world/missing-identity", "r1", world => world
+                .Population(
+                    "customers",
+                    count: 1,
+                    WorldEntityIdentityPolicy.FromUniqueObservationField("Missing"),
+                    ConstantCustomerGeneration("customer-42")))
+            .Compile()
+            .GetPopulation("customers");
+        var empty = Simulation.DefineWorld("world/empty-identity", "r1", world => world
+                .Population(
+                    "customers",
+                    count: 1,
+                    WorldEntityIdentityPolicy.FromUniqueObservationField("Name"),
+                    ConstantCustomerGeneration(string.Empty)))
+            .Compile()
+            .GetPopulation("customers");
+        var unsupported = Simulation.DefineWorld("world/unsupported-identity", "r1", world => world
+                .Population(
+                    "customers/with~key",
+                    count: 1,
+                    WorldEntityIdentityPolicy.FromUniqueObservationField("Key"),
+                    NestedIdentityGeneration()))
+            .Compile()
+            .GetPopulation("customers/with~key");
+
+        AssertIdentityFailure(
+            missing,
+            "simulation.world.entityIdentityValueMissing",
+            "/populations/customers/items/0/entityId");
+        AssertIdentityFailure(
+            empty,
+            "simulation.world.entityIdentityValueInvalid",
+            "/populations/customers/items/0/entityId");
+        AssertIdentityFailure(
+            unsupported,
+            "simulation.world.entityIdentityValueInvalid",
+            "/populations/customers~1with~0key/items/0/entityId");
+        Assert.Throws<WorldGenerationException>(() => unsupported.Generate(
+            seed: 42,
+            generator: NestedIdentityGeneration().Compile()));
+    }
+
+    [Fact]
+    public void IdentityPolicy_IsFingerprintSignificantAndInvalidCombinationsProduceDiagnostics()
+    {
+        var generation = ConstantCustomerGeneration("customer-42").Definition;
+        var sequence = new WorldDefinition(
+            "world/identity-policy",
+            "r1",
+            [new("customers", 1, WorldEntityIdentityPolicy.PopulationSequence, generation)]);
+        var unique = new WorldDefinition(
+            "world/identity-policy",
+            "r1",
+            [new(
+                "customers",
+                1,
+                WorldEntityIdentityPolicy.FromUniqueObservationField("Name"),
+                generation)]);
+        var unexpectedField = new WorldDefinition(
+            "world/invalid-sequence-identity",
+            "r1",
+            [new(
+                "customers",
+                1,
+                new(WorldEntityIdentitySource.PopulationSequence, FieldPath.FromField("Name")),
+                generation)]);
+        var missingField = new WorldDefinition(
+            "world/invalid-unique-identity",
+            "r1",
+            [new(
+                "customers",
+                1,
+                new(WorldEntityIdentitySource.UniqueObservationField),
+                generation)]);
+        var unsupportedSource = new WorldDefinition(
+            "world/unsupported-identity-source",
+            "r1",
+            [new(
+                "customers",
+                1,
+                new((WorldEntityIdentitySource)int.MaxValue),
+                generation)]);
+
+        Assert.NotEqual(sequence.Compile().Fingerprint, unique.Compile().Fingerprint);
+        AssertDiagnostic(
+            unexpectedField.CompileResult(),
+            "simulation.world.entityIdentityFieldUnexpected",
+            "/populations/0/entityIdentity/observationField");
+        AssertDiagnostic(
+            missingField.CompileResult(),
+            "simulation.world.entityIdentityFieldMissing",
+            "/populations/0/entityIdentity/observationField");
+        AssertDiagnostic(
+            unsupportedSource.CompileResult(),
+            "simulation.world.entityIdentitySourceInvalid",
+            "/populations/0/entityIdentity/source");
     }
 
     [Fact]
@@ -290,6 +452,18 @@ public sealed class WorldDefinitionTests
             diagnostic.Code == code && diagnostic.Location == location);
     }
 
+    static void AssertIdentityFailure(
+        CompiledWorldPopulation population,
+        string code,
+        string location)
+    {
+        var exception = Assert.Throws<WorldGenerationException>(() => population.Generate(seed: 42));
+        var diagnostic = Assert.Single(exception.Validation.Diagnostics);
+        Assert.Equal(code, diagnostic.Code);
+        Assert.Equal(location, diagnostic.Location);
+        Assert.Equal("world-generation", diagnostic.Evidence?.Stage);
+    }
+
     static WorldDefinition DemoWorld(IReadOnlyList<string> order)
     {
         var customers = CustomerGeneration();
@@ -320,6 +494,15 @@ public sealed class WorldDefinitionTests
                 Gen.Weighted("Grace", weight: 1d)))
             .Member(value => value.Age, Gen.Int32(minimum: 18, maximum: 90)));
 
+    static PocoGenerationDefinition<WorldCustomer> ConstantCustomerGeneration(string name) =>
+        Simulation.Define<WorldCustomer>(customer => customer
+            .Member(value => value.Name, Gen.Constant(name))
+            .Member(value => value.Age, Gen.Constant(42)));
+
+    static PocoGenerationDefinition<WorldNestedIdentity> NestedIdentityGeneration() =>
+        Simulation.Define<WorldNestedIdentity>(value => value
+            .Member(item => item.Key, Gen.Constant(new WorldIdentityKey("nested"))));
+
     static PocoGenerationDefinition<WorldOrder> OrderGeneration() =>
         Simulation.Define<WorldOrder>(order => order
             .Member(value => value.Number, Gen.Int32(minimum: 1, maximum: 1_000_000))
@@ -343,4 +526,8 @@ public sealed class WorldDefinitionTests
     public sealed record WorldCustomer(string Name, int Age);
 
     public sealed record WorldOrder(int Number, bool Expedited);
+
+    public sealed record WorldNestedIdentity(WorldIdentityKey Key);
+
+    public sealed record WorldIdentityKey(string Value);
 }

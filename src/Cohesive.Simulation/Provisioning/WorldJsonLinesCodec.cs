@@ -3,11 +3,11 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
-using Cohesive.Simulation.Generation;
+using Cohesive.Simulation.Worlds;
 
 namespace Cohesive.Simulation.Provisioning;
 
-internal readonly record struct WorldJsonLinesV3Record(
+internal readonly record struct WorldJsonLinesRecord(
     string Format,
     string RunId,
     string BatchId,
@@ -31,6 +31,7 @@ internal readonly record struct WorldJsonLinesV3Record(
     long BatchStartSequenceIndex,
     int BatchItemCount,
     long SequenceIndex,
+    string EntityId,
     ImmutableArray<string> Exemplars,
     string DefinitionId,
     string DefinitionRevision,
@@ -40,7 +41,7 @@ internal readonly record struct WorldJsonLinesV3Record(
     string ReplayToken,
     ReadOnlyMemory<byte> ObservationUtf8);
 
-internal sealed class WorldJsonLinesV3CodecException(
+internal sealed class WorldJsonLinesCodecException(
     string code,
     string? propertyName,
     string detail,
@@ -52,9 +53,9 @@ internal sealed class WorldJsonLinesV3CodecException(
     public string? PropertyName { get; } = propertyName;
 }
 
-internal static class WorldJsonLinesV3Codec
+internal static class WorldJsonLinesCodec
 {
-    public const string Format = "cohesive-simulation-world-item/v3";
+    public const string Format = "cohesive-simulation-world-item/v4";
 
     public const string FormatProperty = "format";
     public const string RunIdProperty = "runId";
@@ -80,6 +81,7 @@ internal static class WorldJsonLinesV3Codec
     public const string BatchStartSequenceIndexProperty = "batchStartSequenceIndex";
     public const string BatchItemCountProperty = "batchItemCount";
     public const string SequenceIndexProperty = "sequenceIndex";
+    public const string EntityIdProperty = "entityId";
     public const string ExemplarsProperty = "exemplars";
     public const string DefinitionIdProperty = "definitionId";
     public const string DefinitionRevisionProperty = "definitionRevision";
@@ -126,6 +128,7 @@ internal static class WorldJsonLinesV3Codec
         BatchStartSequenceIndexProperty,
         BatchItemCountProperty,
         SequenceIndexProperty,
+        EntityIdProperty,
         ExemplarsProperty,
         DefinitionIdProperty,
         DefinitionRevisionProperty,
@@ -139,7 +142,7 @@ internal static class WorldJsonLinesV3Codec
     public static void WriteRecord(
         IBufferWriter<byte> output,
         WorldProvisioningBatch batch,
-        GeneratedObservation item,
+        GeneratedWorldItem item,
         ReadOnlyMemory<byte> observationUtf8)
     {
         ImmutableArray<string> exemplarIds;
@@ -186,6 +189,7 @@ internal static class WorldJsonLinesV3Codec
                 BatchStartSequenceIndex: batch.StartSequenceIndex,
                 BatchItemCount: batch.Items.Length,
                 SequenceIndex: item.Replay.SequenceIndex,
+                EntityId: item.EntityId.Value,
                 Exemplars: exemplarIds,
                 DefinitionId: item.Replay.DefinitionId,
                 DefinitionRevision: item.Replay.DefinitionRevision,
@@ -196,7 +200,7 @@ internal static class WorldJsonLinesV3Codec
                 ObservationUtf8: observationUtf8));
     }
 
-    public static void WriteRecord(IBufferWriter<byte> output, in WorldJsonLinesV3Record record)
+    public static void WriteRecord(IBufferWriter<byte> output, in WorldJsonLinesRecord record)
     {
         using Utf8JsonWriter writer = new(output);
         writer.WriteStartObject();
@@ -227,6 +231,7 @@ internal static class WorldJsonLinesV3Codec
         writer.WriteNumber(BatchStartSequenceIndexProperty, record.BatchStartSequenceIndex);
         writer.WriteNumber(BatchItemCountProperty, record.BatchItemCount);
         writer.WriteNumber(SequenceIndexProperty, record.SequenceIndex);
+        writer.WriteString(EntityIdProperty, record.EntityId);
         writer.WriteStartArray(ExemplarsProperty);
         foreach (var exemplar in record.Exemplars)
         {
@@ -245,7 +250,7 @@ internal static class WorldJsonLinesV3Codec
         writer.WriteEndObject();
     }
 
-    public static WorldJsonLinesV3Record ReadRecord(string json)
+    public static WorldJsonLinesRecord ReadRecord(string json)
     {
         JsonDocument document;
         try
@@ -254,7 +259,7 @@ internal static class WorldJsonLinesV3Codec
         }
         catch (JsonException exception)
         {
-            throw new WorldJsonLinesV3CodecException(
+            throw new WorldJsonLinesCodecException(
                 JsonInvalidCode,
                 propertyName: null,
                 $"The record is not valid JSON: {exception.Message}",
@@ -293,6 +298,7 @@ internal static class WorldJsonLinesV3Codec
                 BatchStartSequenceIndex: ReadInt64(root, BatchStartSequenceIndexProperty),
                 BatchItemCount: ReadInt32(root, BatchItemCountProperty),
                 SequenceIndex: ReadInt64(root, SequenceIndexProperty),
+                EntityId: ReadString(root, EntityIdProperty),
                 Exemplars: ReadStringArray(root, ExemplarsProperty),
                 DefinitionId: ReadString(root, DefinitionIdProperty),
                 DefinitionRevision: ReadString(root, DefinitionRevisionProperty),
@@ -304,7 +310,7 @@ internal static class WorldJsonLinesV3Codec
         }
     }
 
-    public static bool HasCanonicalEncoding(string json, in WorldJsonLinesV3Record record)
+    public static bool HasCanonicalEncoding(string json, in WorldJsonLinesRecord record)
     {
         ArrayBufferWriter<byte> canonical = new();
         WriteRecord(canonical, record);
@@ -316,7 +322,7 @@ internal static class WorldJsonLinesV3Codec
     {
         if (root.ValueKind != JsonValueKind.Object)
         {
-            throw new WorldJsonLinesV3CodecException(
+            throw new WorldJsonLinesCodecException(
                 RecordInvalidCode,
                 propertyName: null,
                 "Each record must be a JSON object.");
@@ -328,14 +334,14 @@ internal static class WorldJsonLinesV3Codec
             var propertyIndex = FindPropertyIndex(property.Name);
             if (propertyIndex < 0)
             {
-                throw new WorldJsonLinesV3CodecException(
+                throw new WorldJsonLinesCodecException(
                     PropertyUnknownCode,
                     property.Name,
-                    "The property is not part of the v3 contract.");
+                    "The property is not part of the v4 contract.");
             }
             if (seen[propertyIndex])
             {
-                throw new WorldJsonLinesV3CodecException(
+                throw new WorldJsonLinesCodecException(
                     PropertyDuplicateCode,
                     property.Name,
                     "The property occurs more than once.");
@@ -347,7 +353,7 @@ internal static class WorldJsonLinesV3Codec
         {
             if (!seen[index])
             {
-                throw new WorldJsonLinesV3CodecException(
+                throw new WorldJsonLinesCodecException(
                     PropertyMissingCode,
                     PropertyOrder[index],
                     "The required property is missing.");
@@ -359,7 +365,7 @@ internal static class WorldJsonLinesV3Codec
         {
             if (!string.Equals(property.Name, PropertyOrder[expectedIndex], StringComparison.Ordinal))
             {
-                throw new WorldJsonLinesV3CodecException(
+                throw new WorldJsonLinesCodecException(
                     PropertyOrderInvalidCode,
                     property.Name,
                     $"Expected canonical property '{PropertyOrder[expectedIndex]}' at ordinal {expectedIndex}.");
@@ -445,6 +451,6 @@ internal static class WorldJsonLinesV3Codec
         return result;
     }
 
-    static WorldJsonLinesV3CodecException InvalidValue(string propertyName, string detail) =>
+    static WorldJsonLinesCodecException InvalidValue(string propertyName, string detail) =>
         new(RecordInvalidCode, propertyName, detail);
 }

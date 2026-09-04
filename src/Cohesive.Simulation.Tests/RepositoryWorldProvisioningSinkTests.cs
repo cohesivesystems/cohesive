@@ -16,11 +16,12 @@ public sealed class RepositoryWorldProvisioningSinkTests
     {
         var entity = CustomerEntity();
         var repository = new InMemoryEntityOutboxRepository(entity, EntityPartitionKeyPolicy.ObservationId);
-        var plan = CustomerWorld(entity, count: 1, externalId: "customer-42").Compile();
-        var sink = RepositorySink(
-            repository,
-            WorldEntityIdentityPolicy.FromUniqueObservationField("ExternalId"),
-            stateVersion: 7);
+        var plan = CustomerWorld(
+            entity,
+            count: 1,
+            externalId: "customer-42",
+            entityIdentity: WorldEntityIdentityPolicy.FromUniqueObservationField("ExternalId")).Compile();
+        var sink = RepositorySink(repository, stateVersion: 7);
 
         var result = await WorldProvisioner.ProvisionAsync(plan, rootSeed: 42, sink);
         var snapshot = await repository.TryGet(
@@ -44,7 +45,7 @@ public sealed class RepositoryWorldProvisioningSinkTests
         var repository = new InMemoryEntityOutboxRepository(entity, EntityPartitionKeyPolicy.ObservationId);
         var plan = CustomerWorld(entity, count: 2, externalId: "ignored-by-sequence-policy").Compile();
         var population = plan.GetPopulation("customers");
-        var sink = RepositorySink(repository, WorldEntityIdentityPolicy.PopulationSequence);
+        var sink = RepositorySink(repository);
 
         await WorldProvisioner.ProvisionAsync(plan, rootSeed: 41, sink);
         await WorldProvisioner.ProvisionAsync(plan, rootSeed: 42, sink);
@@ -64,23 +65,27 @@ public sealed class RepositoryWorldProvisioningSinkTests
     }
 
     [Fact]
-    public async Task DuplicateResolvedEntityIdentitiesAcrossBatches_RejectBeforeConflictingWrite()
+    public async Task DuplicateResolvedEntityIdentitiesAcrossBatches_FailWorldGenerationBeforeConflictingWrite()
     {
         var entity = CustomerEntity();
         var repository = new InMemoryEntityOutboxRepository(entity, EntityPartitionKeyPolicy.ObservationId);
-        var plan = CustomerWorld(entity, count: 2, externalId: "duplicate").Compile();
-        var sink = RepositorySink(
-            repository,
-            WorldEntityIdentityPolicy.FromUniqueObservationField("ExternalId"));
+        var plan = CustomerWorld(
+            entity,
+            count: 2,
+            externalId: "duplicate",
+            entityIdentity: WorldEntityIdentityPolicy.FromUniqueObservationField("ExternalId")).Compile();
+        var sink = RepositorySink(repository);
 
-        var exception = await Assert.ThrowsAsync<WorldProvisioningRejectedException>(() =>
+        var exception = await Assert.ThrowsAsync<WorldGenerationException>(() =>
             WorldProvisioner.ProvisionAsync(
                 plan,
                 rootSeed: 42,
                 sink,
                 new(batchSize: 1)));
 
-        Assert.Contains("both sequence indices", exception.Receipt.Detail, StringComparison.Ordinal);
+        Assert.Contains(
+            exception.Validation.Diagnostics,
+            static diagnostic => diagnostic.Code == "simulation.world.entityIdentityDuplicate");
         var firstCommitted = await repository.TryGet(
             OperationContext.Create(),
             "duplicate",
@@ -96,8 +101,7 @@ public sealed class RepositoryWorldProvisioningSinkTests
         CountingRepository repository = new(entity);
         var binding = new RepositoryWorldPopulationBinding(
             "orders",
-            repository,
-            WorldEntityIdentityPolicy.PopulationSequence);
+            repository);
         var sink = new RepositoryWorldProvisioningSink(
             "demo/repositories",
             OperationContext.Create(),
@@ -120,7 +124,7 @@ public sealed class RepositoryWorldProvisioningSinkTests
         var generatedEntity = CustomerEntity();
         var repositoryEntity = AlternateEntity();
         CountingRepository repository = new(repositoryEntity);
-        var sink = RepositorySink(repository, WorldEntityIdentityPolicy.PopulationSequence);
+        var sink = RepositorySink(repository);
 
         var exception = await Assert.ThrowsAsync<WorldProvisioningRejectedException>(() =>
             WorldProvisioner.ProvisionAsync(
@@ -140,7 +144,6 @@ public sealed class RepositoryWorldProvisioningSinkTests
         CountingRepository nonAtomic = new(entity);
         var atomicSink = RepositorySink(
             nonAtomic,
-            WorldEntityIdentityPolicy.PopulationSequence,
             atomicity: EntityBatchAtomicity.SamePartition);
         CountingRepository bounded = new(
             entity,
@@ -149,7 +152,7 @@ public sealed class RepositoryWorldProvisioningSinkTests
                 SupportsSamePartitionAtomicity: false,
                 SupportsAllOrNothingAtomicity: false,
                 MaxItemsPerBatch: 1));
-        var boundedSink = RepositorySink(bounded, WorldEntityIdentityPolicy.PopulationSequence);
+        var boundedSink = RepositorySink(bounded);
         var plan = CustomerWorld(entity, count: 2, externalId: "customer").Compile();
 
         var atomicity = await Assert.ThrowsAsync<WorldProvisioningRejectedException>(() =>
@@ -169,7 +172,7 @@ public sealed class RepositoryWorldProvisioningSinkTests
         var entity = CustomerEntity();
         var expected = new IOException("repository outcome unknown");
         CountingRepository repository = new(entity, writeFailure: expected);
-        var sink = RepositorySink(repository, WorldEntityIdentityPolicy.PopulationSequence);
+        var sink = RepositorySink(repository);
 
         var observed = await Assert.ThrowsAsync<IOException>(() =>
             WorldProvisioner.ProvisionAsync(
@@ -182,24 +185,21 @@ public sealed class RepositoryWorldProvisioningSinkTests
     }
 
     [Fact]
-    public void TargetIdentity_IsOrderIndependentAndCoversBindingPolicy()
+    public void TargetIdentity_IsOrderIndependentAndCoversRepositoryBindingPolicy()
     {
         var entity = CustomerEntity();
         CountingRepository repository = new(entity);
         RepositoryWorldPopulationBinding customers = new(
             "customers",
             repository,
-            WorldEntityIdentityPolicy.PopulationSequence,
             stateVersion: 0);
         RepositoryWorldPopulationBinding orders = new(
             "orders",
             repository,
-            WorldEntityIdentityPolicy.FromUniqueObservationField("ExternalId"),
             stateVersion: 0);
         RepositoryWorldPopulationBinding revisedCustomers = new(
             "customers",
             repository,
-            WorldEntityIdentityPolicy.PopulationSequence,
             stateVersion: 1);
 
         var first = RepositoryWorldProvisioningTargetConvention.Create(
@@ -221,18 +221,18 @@ public sealed class RepositoryWorldProvisioningSinkTests
 
     static RepositoryWorldProvisioningSink RepositorySink(
         IEntityRepository repository,
-        WorldEntityIdentityPolicy identity,
         long stateVersion = 0,
         EntityBatchAtomicity atomicity = EntityBatchAtomicity.None) =>
         new(
             "demo/repositories",
             OperationContext.Create(),
-            [new("customers", repository, identity, stateVersion, atomicity)]);
+            [new("customers", repository, stateVersion, atomicity)]);
 
     static WorldDefinition CustomerWorld(
         EntityDefinition entity,
         int count,
-        string externalId)
+        string externalId,
+        WorldEntityIdentityPolicy? entityIdentity = null)
     {
         var stateShape = entity.StateShape;
         GenerationDefinition generation = new(
@@ -256,7 +256,7 @@ public sealed class RepositoryWorldProvisioningSinkTests
         return new(
             "world/repository-demo",
             "r1",
-            [new("customers", count, generation)]);
+            [new("customers", count, entityIdentity ?? WorldEntityIdentityPolicy.PopulationSequence, generation)]);
     }
 
     static EntityDefinition CustomerEntity() => new(
