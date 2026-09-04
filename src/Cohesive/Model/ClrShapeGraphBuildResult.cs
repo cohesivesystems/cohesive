@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Linq.Expressions;
 using System.Reflection;
 
 namespace Cohesive.Model;
@@ -89,6 +90,80 @@ public sealed class ClrShapeGraphBuildResult
     /// CLR type is not supported by CLR shape inference.
     /// </exception>
     public TypeRef GetTypeRef(Type clrType) => ClrShapeGraphBuilder.ResolveTypeRef(clrType, TypeIds);
+
+    /// <summary>
+    /// Gets the exact graph-scoped root shape inferred for a CLR type.
+    /// </summary>
+    /// <typeparam name="T">CLR root type registered when this result was built.</typeparam>
+    /// <returns>The graph object and effective shape identity associated with <typeparamref name="T"/>.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// <typeparamref name="T"/> was not registered as a root shape in this build.
+    /// </exception>
+    public GraphShapeId GetShape<T>()
+    {
+        var clrType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        if (!ShapeIds.TryGetValue(clrType, out var shapeId))
+        {
+            throw new InvalidOperationException(
+                $"CLR type '{clrType.FullName}' was not registered as a root shape in graph '{Graph.Id.Value}'.");
+        }
+
+        return new(Graph, shapeId);
+    }
+
+    /// <summary>
+    /// Resolves a typed CLR member selector through the effective metadata captured by this build.
+    /// </summary>
+    /// <typeparam name="TRoot">CLR root type from which the selector starts.</typeparam>
+    /// <typeparam name="TValue">CLR value type returned by the selected member path.</typeparam>
+    /// <param name="selector">Direct or nested readable property selector rooted at its lambda parameter.</param>
+    /// <returns>The effective canonical field path selected by this build.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="selector"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="selector"/> is not a readable property chain rooted at its lambda parameter.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// A selected property was not discovered by this CLR shape build.
+    /// </exception>
+    public FieldPath ResolveMemberPath<TRoot, TValue>(Expression<Func<TRoot, TValue>> selector)
+    {
+        ArgumentNullException.ThrowIfNull(selector);
+        Expression current = selector.Body;
+        while (current is UnaryExpression
+            {
+                NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked
+            } conversion)
+        {
+            current = conversion.Operand;
+        }
+
+        List<PropertyInfo> reversed = [];
+        while (current is MemberExpression member)
+        {
+            if (member.Member is not PropertyInfo property)
+            {
+                throw new ArgumentException(
+                    "A semantic field selector must use readable CLR properties.",
+                    nameof(selector));
+            }
+
+            reversed.Add(property);
+            current = member.Expression
+                ?? throw new ArgumentException(
+                    "A semantic field selector cannot use a static member.",
+                    nameof(selector));
+        }
+
+        if (!ReferenceEquals(current, selector.Parameters[0]) || reversed.Count == 0)
+        {
+            throw new ArgumentException(
+                "A semantic field selector must be a property chain rooted at its lambda parameter.",
+                nameof(selector));
+        }
+
+        reversed.Reverse();
+        return ResolveMemberPath(typeof(TRoot), reversed);
+    }
 
     /// <summary>
     /// Resolves an ordered CLR property chain to the effective semantic field path selected by this build.

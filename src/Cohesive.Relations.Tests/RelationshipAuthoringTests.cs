@@ -1,7 +1,9 @@
 using System.Collections;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Relations.Tests;
 
@@ -56,6 +58,25 @@ public sealed class RelationshipAuthoringTests
 
         Assert.Equal(FieldPath.FromField("customer_id"), typed.SourceReference);
         Assert.Equal(direct, typed);
+    }
+
+    [Fact]
+    public void TypedBuilder_UsesTheExactClrShapeGraphMetadataSnapshot()
+    {
+        var shapes = new ClrShapeGraphBuilder()
+            .AddMetadataProvider(new SystemTextJsonClrShapeMetadataProvider(new JsonSerializerOptions()))
+            .AddShape<Load>()
+            .AddShape<Customer>()
+            .BuildResult(DomainGraphId);
+
+        var typed = Relationship
+            .From<Load>(shapes)
+            .Reference(static load => load.CustomerId)
+            .To(shapes.GetShape<Customer>());
+
+        Assert.Equal(shapes.GetShape<Load>().QualifiedId, typed.SourceShape);
+        Assert.Equal(shapes.GetShape<Customer>().QualifiedId, typed.TargetShape);
+        Assert.Equal(FieldPath.FromField("customer_id"), typed.SourceReference);
     }
 
     [Fact]

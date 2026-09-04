@@ -1,6 +1,6 @@
-using System.Collections.Immutable;
 using System.Text.Json.Nodes;
 using Cohesive.Model;
+using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
 using Cohesive.Simulation.Generation;
@@ -11,10 +11,6 @@ namespace Cohesive.Simulation.Relations.Tests;
 public sealed class RelationshipWorldTests
 {
     static readonly GraphId GraphId = new("freight/v1");
-    static readonly ShapeId CarrierShapeId = new("Carrier");
-    static readonly ShapeId LoadShapeId = new("Load");
-    static readonly QualifiedShapeId CarrierQualifiedShapeId = new(GraphId, CarrierShapeId);
-    static readonly QualifiedShapeId LoadQualifiedShapeId = new(GraphId, LoadShapeId);
     static readonly RelationshipId CarrierRelationshipId = new("load-carrier");
 
     [Fact]
@@ -350,38 +346,33 @@ public sealed class RelationshipWorldTests
         FieldPath? sourceReference = null,
         bool includeExemplar = false)
     {
-        var graph = CreateGraph(referencePresence, referenceNullability);
-        var relationship = new RelationshipDefinition(
-            CarrierRelationshipId,
-            LoadQualifiedShapeId,
-            sourceReference ?? FieldPath.FromField("CarrierId"),
-            CarrierQualifiedShapeId,
-            ObservationIdentityRelationshipTargetKey.Instance,
-            uniqueness);
+        var shapes = CreateGraph(referencePresence, referenceNullability);
+        var carrierShape = shapes.GetShape<TestCarrier>();
+        var loadShape = shapes.GetShape<TestLoad>();
+        var relationship = sourceReference is null
+            ? Relationship.From<TestLoad>(shapes)
+                .Reference(load => load.CarrierId)
+                .To(carrierShape, CarrierRelationshipId, uniqueness)
+            : new(
+                CarrierRelationshipId,
+                loadShape,
+                sourceReference.Value,
+                carrierShape,
+                ObservationIdentityRelationshipTargetKey.Instance,
+                uniqueness);
         var catalog = RelationshipCatalogDocument.FromCatalog(new([relationship]));
-        var carriers = new GenerationDefinition(
-            "generation/carriers",
-            "r1",
-            graph,
-            new(
-                CarrierShapeId,
-                [new(new("Name"), new ConstantGenerationNode(new ScalarTypeRef(ScalarTypeKind.String), ObservationValue.FromString("Carrier")))]));
-        ImmutableArray<RecordGenerationMember> loadMembers = generateReferenceField
-            ?
-            [
-                new(new("Number"), new Int32GenerationNode(1, 10_000)),
-                new(
-                    new("CarrierId"),
-                    new ConstantGenerationNode(
-                        new EntityReferenceTypeRef(new("Carrier")),
-                        ObservationValue.FromString("duplicate-authority")))
-            ]
-            : [new(new("Number"), new Int32GenerationNode(1, 10_000))];
-        var loads = new GenerationDefinition(
-            "generation/loads",
-            "r1",
-            graph,
-            new(LoadShapeId, loadMembers));
+        var carriers = Simulation.Define<TestCarrier>(shapes, carrier => carrier
+            .Member(value => value.Name, Gen.Constant("Carrier")));
+        var loads = Simulation.Define<TestLoad>(shapes, load =>
+        {
+            load.Member(value => value.Number, Gen.Int32(minimum: 1, maximum: 10_000));
+            if (generateReferenceField)
+            {
+                load.Member(
+                    value => value.CarrierId,
+                    Gen.EntityReference<TestCarrier>("duplicate-authority"));
+            }
+        });
         return SimulationRelations.DefineWorld(
             "world/freight",
             "r1",
@@ -396,50 +387,37 @@ public sealed class RelationshipWorldTests
                     .Population("loads", loadCount, loads)
                     .Relationship("loads", CarrierRelationshipId, "carriers", selection);
                 if (includeExemplar)
+                {
                     world.Exemplar("load-for-ui", "loads", sequenceIndex: 1);
+                }
             });
     }
 
-    static ShapeGraph CreateGraph(
+    static ClrShapeGraphBuildResult CreateGraph(
         FieldPresence referencePresence = FieldPresence.Required,
-        FieldNullability referenceNullability = FieldNullability.NonNullable) => new(
-        GraphId,
-        [
-            new Shape(
-                CarrierShapeId,
-                [new(new("Name"), new ScalarTypeRef(ScalarTypeKind.String))],
-                role: ShapeRoles.Entity),
-            new Shape(
-                LoadShapeId,
-                [
-                    new(new("Number"), new ScalarTypeRef(ScalarTypeKind.Int32)),
-                    new(
-                        new("CarrierId"),
-                        new EntityReferenceTypeRef(new("Carrier")),
-                        presence: referencePresence,
-                        nullability: referenceNullability,
-                        role: FieldRole.Reference)
-                ],
-                role: ShapeRoles.Entity)
-        ]);
+        FieldNullability referenceNullability = FieldNullability.NonNullable) =>
+        new ClrShapeGraphBuilder()
+            .AddShape<TestCarrier>(ShapeRoles.Entity)
+            .AddShape<TestLoad>(ShapeRoles.Entity)
+            .AddEntityReference<TestLoad, TestCarrier>(
+                load => load.CarrierId,
+                presence: referencePresence,
+                nullability: referenceNullability)
+            .BuildResult(GraphId);
 
-    static GenerationDefinition CreateAuditGeneration()
-    {
-        var shapeId = new ShapeId("Audit");
-        var graph = new ShapeGraph(
-            new("audit/v1"),
-            [new Shape(shapeId, [new(new("Code"), new ScalarTypeRef(ScalarTypeKind.String))])]);
-        return new(
-            "generation/audit",
-            "r1",
-            graph,
-            new(
-                shapeId,
-                [new(new("Code"), new ConstantGenerationNode(new ScalarTypeRef(ScalarTypeKind.String), ObservationValue.FromString("ok")))]));
-    }
+    static GenerationDefinition CreateAuditGeneration() =>
+        Simulation.Define<TestAudit>(audit => audit
+                .Member(value => value.Code, Gen.Constant("ok")))
+            .Definition;
 
     static void AssertDiagnostic(RelationshipWorldCompilationResult result, string code) =>
         Assert.Contains(result.Validation.Diagnostics, diagnostic => diagnostic.Code == code);
 
+    [ShapeDefinition("Carrier", ShapeRoles.Entity)]
+    sealed record TestCarrier(string Name);
+
+    [ShapeDefinition("Load", ShapeRoles.Entity)]
     sealed record TestLoad(int Number, string CarrierId);
+
+    sealed record TestAudit(string Code);
 }

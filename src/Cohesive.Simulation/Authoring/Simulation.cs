@@ -30,6 +30,37 @@ public static partial class Simulation
         configure(builder);
         return builder.Build();
     }
+
+    /// <summary>Defines deterministic generation against one exact CLR-derived shape-graph snapshot.</summary>
+    /// <typeparam name="T">CLR root type registered in <paramref name="shapes"/>.</typeparam>
+    /// <param name="shapes">Immutable CLR shape build result that remains the output-shape authority.</param>
+    /// <param name="configure">Authoring callback that explicitly binds locally generated semantic members.</param>
+    /// <returns>
+    /// A typed authoring projection containing provider-neutral generator IR over the exact supplied shape graph.
+    /// </returns>
+    /// <remarks>
+    /// The supplied graph may contain members omitted from <paramref name="configure"/> when an owning composition,
+    /// such as a relationship world, supplies them. Standalone generation still fails closed until every shape member
+    /// is generated or declared external by that composition. The callback and CLR metadata do not survive into
+    /// canonical IR.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="shapes"/> or <paramref name="configure"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// <typeparamref name="T"/> is not a root of <paramref name="shapes"/>, or a selected member is absent from its
+    /// effective CLR metadata.
+    /// </exception>
+    public static PocoGenerationDefinition<T> Define<T>(
+        ClrShapeGraphBuildResult shapes,
+        Action<PocoGeneratorBuilder<T>> configure)
+    {
+        ArgumentNullException.ThrowIfNull(shapes);
+        ArgumentNullException.ThrowIfNull(configure);
+        PocoGeneratorBuilder<T> builder = new(shapes);
+        configure(builder);
+        return builder.Build();
+    }
 }
 
 /// <summary>Typed authoring projection of one provider-neutral field generator.</summary>
@@ -111,6 +142,20 @@ public static class Gen
             valueType: TypeMapper.Map(typeof(TValue), nullability: null),
             value: ObservationValue.FromObject(value)));
 
+    /// <summary>Creates an exact entity-reference generator using a CLR-derived target entity type.</summary>
+    /// <typeparam name="TTarget">CLR entity type addressed by <paramref name="entityId"/>.</typeparam>
+    /// <param name="entityId">Exact target observation identity emitted by the generator.</param>
+    /// <returns>A typed string-valued authoring projection with canonical entity-reference semantics.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="entityId"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="entityId"/> is empty or white-space.</exception>
+    public static Generator<string> EntityReference<TTarget>(string entityId) where TTarget : notnull
+    {
+        var identity = new EntityId(entityId);
+        return new(new ConstantGenerationNode(
+            valueType: new EntityReferenceTypeRef(EntityTypeName.From<TTarget>()),
+            value: ObservationValue.FromString(identity.Value)));
+    }
+
     /// <summary>Creates a uniform inclusive Int32 generator.</summary>
     /// <param name="minimum">Inclusive minimum value.</param>
     /// <param name="maximum">Inclusive maximum value.</param>
@@ -167,10 +212,17 @@ public sealed class PocoGeneratorBuilder<T>
 {
     readonly List<RecordGenerationBinding> recordBindings = [];
     readonly List<PocoMemberBinding> memberBindings = [];
+    readonly ClrShapeGraphBuildResult? clrShapes;
 
     /// <summary>Creates an empty typed generator builder.</summary>
     public PocoGeneratorBuilder()
     {
+    }
+
+    internal PocoGeneratorBuilder(ClrShapeGraphBuildResult clrShapes)
+    {
+        this.clrShapes = Guard.RequireNotNull(clrShapes);
+        _ = clrShapes.GetShape<T>();
     }
 
     /// <summary>Declares a structured source sampled exactly once for each generated output record.</summary>
@@ -204,40 +256,51 @@ public sealed class PocoGeneratorBuilder<T>
         ArgumentNullException.ThrowIfNull(member);
         ArgumentNullException.ThrowIfNull(generator);
         var property = ResolveProperty(member);
-        var identity = DefaultClrTypeRefMapper.GetSerializedMemberName(property);
+        var identity = ResolveFieldIdentity(property);
         memberBindings.Add(new(property, new(identity), generator.Node));
         return this;
     }
 
     internal PocoGenerationDefinition<T> Build()
     {
-        var shapeId = ClrShapeIdentityConvention.GetShapeId(typeof(T));
+        var outputShape = clrShapes?.GetShape<T>();
+        var shapeId = outputShape?.ShapeId ?? ClrShapeIdentityConvention.GetShapeId(typeof(T));
         var members = memberBindings
             .Select(static binding => new RecordGenerationMember(binding.Identity, binding.Generator))
             .ToImmutableArray();
         var root = new RecordGenerationNode(shapeId, [.. recordBindings], members);
 
-        Dictionary<string, FieldDefinition> fieldsByIdentity = new(StringComparer.Ordinal);
-        foreach (var binding in memberBindings)
+        ShapeGraph graph;
+        if (outputShape is { } suppliedOutputShape)
         {
-            fieldsByIdentity.TryAdd(
-                binding.Identity.Value,
-                new FieldDefinition(
-                    name: binding.Identity,
-                    type: binding.Generator.ValueType,
-                    cardinality: FieldCardinality.Single,
-                    presence: FieldPresence.Required,
-                    nullability: FieldNullability.NonNullable));
+            graph = suppliedOutputShape.Graph;
+        }
+        else
+        {
+            Dictionary<string, FieldDefinition> fieldsByIdentity = new(StringComparer.Ordinal);
+            foreach (var binding in memberBindings)
+            {
+                fieldsByIdentity.TryAdd(
+                    binding.Identity.Value,
+                    new FieldDefinition(
+                        name: binding.Identity,
+                        type: binding.Generator.ValueType,
+                        cardinality: FieldCardinality.Single,
+                        presence: FieldPresence.Required,
+                        nullability: FieldNullability.NonNullable));
+            }
+
+            var shape = new Shape(
+                shapeId,
+                [.. fieldsByIdentity.Values.OrderBy(static field => field.Name.Value, StringComparer.Ordinal)]);
+            var shapeFingerprint = GenerationCanonicalizer.ComputeShapeFingerprint(shapeId, members);
+            var generatedClrTypeId = ClrShapeIdentityConvention.GetTypeId(typeof(T)).Value;
+            graph = new(
+                new GraphId($"simulation:shape:{generatedClrTypeId}:{shapeFingerprint}"),
+                [shape]);
         }
 
-        var shape = new Shape(
-            shapeId,
-            [.. fieldsByIdentity.Values.OrderBy(static field => field.Name.Value, StringComparer.Ordinal)]);
-        var shapeFingerprint = GenerationCanonicalizer.ComputeShapeFingerprint(shapeId, members);
         var clrTypeId = ClrShapeIdentityConvention.GetTypeId(typeof(T)).Value;
-        var graph = new ShapeGraph(
-            new GraphId($"simulation:shape:{clrTypeId}:{shapeFingerprint}"),
-            [shape]);
         var definitionId = $"simulation:definition:{clrTypeId}";
         var provisional = new GenerationDefinition(
             id: definitionId,
@@ -250,7 +313,36 @@ public sealed class PocoGeneratorBuilder<T>
             revision: revision,
             shapeGraph: graph,
             root: root);
-        return new(definition, [.. memberBindings], explicitMaterializer: null);
+        return new(
+            definition,
+            [.. memberBindings],
+            explicitMaterializer: null,
+            clrShapes);
+    }
+
+    string ResolveFieldIdentity(PropertyInfo property)
+    {
+        if (clrShapes is null)
+        {
+            return DefaultClrTypeRefMapper.GetSerializedMemberName(property);
+        }
+
+        if (clrShapes.FieldNames.TryGetValue(property, out var exact))
+        {
+            return exact.Value;
+        }
+
+        foreach (var pair in clrShapes.FieldNames)
+        {
+            if (ShapeTypeInspector.IsSameProperty(pair.Key, property))
+            {
+                return pair.Value.Value;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"CLR property '{property.DeclaringType?.FullName}.{property.Name}' is absent from shape graph "
+            + $"'{clrShapes.Graph.Id.Value}'.");
     }
 
     static PropertyInfo ResolveProperty<TValue>(Expression<Func<T, TValue>> selector)
@@ -284,15 +376,18 @@ public sealed class PocoGenerationDefinition<T>
 {
     readonly ImmutableArray<PocoMemberBinding> bindings;
     readonly ObservationMaterializer<T>? explicitMaterializer;
+    readonly ClrShapeGraphBuildResult? clrShapes;
 
     internal PocoGenerationDefinition(
         GenerationDefinition definition,
         ImmutableArray<PocoMemberBinding> bindings,
-        ObservationMaterializer<T>? explicitMaterializer)
+        ObservationMaterializer<T>? explicitMaterializer,
+        ClrShapeGraphBuildResult? clrShapes)
     {
         Definition = definition;
         this.bindings = bindings;
         this.explicitMaterializer = explicitMaterializer;
+        this.clrShapes = clrShapes;
     }
 
     /// <summary>Gets the canonical provider-neutral generation definition.</summary>
@@ -310,7 +405,7 @@ public sealed class PocoGenerationDefinition<T>
     /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="materializer"/> is <see langword="null"/>.</exception>
     public PocoGenerationDefinition<T> WithMaterializer(ObservationMaterializer<T> materializer) =>
-        new(Definition, bindings, Guard.RequireNotNull(materializer));
+        new(Definition, bindings, Guard.RequireNotNull(materializer), clrShapes);
 
     /// <summary>Attempts typed compilation and retains all structured diagnostics.</summary>
     /// <returns>A result containing a compiled typed generator only when every invariant is satisfied.</returns>
@@ -334,10 +429,18 @@ public sealed class PocoGenerationDefinition<T>
         {
             try
             {
-                materializer = ObservationMaterializer.For<T>(OutputShape)
-                    .MapAll(DefaultClrTypeRefMapper.GetSerializedMemberName)
-                    .WithMissingFieldBehavior(ObservationMissingFieldBehavior.Throw)
-                    .Compile();
+                var materializerBuilder = ObservationMaterializer.For<T>(OutputShape)
+                    .WithMissingFieldBehavior(ObservationMissingFieldBehavior.Throw);
+                if (clrShapes is null)
+                {
+                    materializerBuilder.MapAll(DefaultClrTypeRefMapper.GetSerializedMemberName);
+                }
+                else
+                {
+                    materializerBuilder.WithClrShapeMetadata(clrShapes);
+                }
+
+                materializer = materializerBuilder.Compile();
             }
             catch (Exception exception) when (exception is ArgumentException
                                               or InvalidOperationException

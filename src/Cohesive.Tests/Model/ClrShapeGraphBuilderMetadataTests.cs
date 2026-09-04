@@ -1,7 +1,7 @@
+using System.Collections;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
-using System.Collections;
 
 namespace Cohesive.Tests.Model;
 
@@ -148,6 +148,46 @@ public sealed class ClrShapeGraphBuilderMetadataTests
     }
 
     [Fact]
+    public void Build_EntityReferenceDeclarationProjectsTypedReferenceAndIndependentPresenceMetadata()
+    {
+        var result = new ClrShapeGraphBuilder()
+            .AddShape<ReferenceCarrier>(ShapeRoles.Entity)
+            .AddShape<ReferenceLoad>(ShapeRoles.Entity)
+            .AddEntityReference<ReferenceLoad, ReferenceCarrier>(
+                load => load.CarrierId,
+                presence: FieldPresence.Optional,
+                nullability: FieldNullability.NonNullable)
+            .BuildResult(new("graph.entity-reference.test"));
+
+        var load = result.GetShape<ReferenceLoad>().Graph.GetShape(
+            result.GetShape<ReferenceLoad>().ShapeId);
+        var carrier = result.GetShape<ReferenceCarrier>().Graph.GetShape(
+            result.GetShape<ReferenceCarrier>().ShapeId);
+        var reference = load.GetField(nameof(ReferenceLoad.CarrierId));
+
+        Assert.Equal(FieldRole.Reference, reference.Role);
+        Assert.Equal(FieldPresence.Optional, reference.Presence);
+        Assert.Equal(FieldNullability.NonNullable, reference.Nullability);
+        Assert.Equal(
+            EntityTypeName.From<ReferenceCarrier>(),
+            Assert.IsType<EntityReferenceTypeRef>(reference.Type).Entity);
+        Assert.Equal(ShapeRoles.Entity, carrier.Role);
+        Assert.Equal(EntityTypeName.From<ReferenceCarrier>(), carrier.EntityType);
+    }
+
+    [Fact]
+    public void Build_EntityReferenceRequiresBothClrEndpointsAsRootShapes()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() => new ClrShapeGraphBuilder()
+            .AddShape<ReferenceLoad>(ShapeRoles.Entity)
+            .AddEntityReference<ReferenceLoad, ReferenceCarrier>(load => load.CarrierId)
+            .Build());
+
+        Assert.Contains(nameof(ReferenceCarrier), exception.Message, StringComparison.Ordinal);
+        Assert.Contains("root shape", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Build_RejectsMultipleDistinctEnumerableElementContracts()
     {
         var exception = Assert.Throws<InvalidOperationException>(() => new ClrShapeGraphBuilder()
@@ -210,6 +250,10 @@ public sealed class ClrShapeGraphBuilderMetadataTests
         [property: JsonIgnore] string AlwaysIgnored,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Conditional,
         string Visible);
+
+    sealed record ReferenceCarrier(string Name);
+
+    sealed record ReferenceLoad(int Number, string CarrierId);
 
     sealed record AmbiguousEnumerableEnvelope(AmbiguousEnumerable Items);
 
