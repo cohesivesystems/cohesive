@@ -1,7 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
-using System.Reflection;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Physical;
 
@@ -119,7 +118,7 @@ public sealed class RelationQueryPlacedInput<T> : RelationQueryPlacedInput
     /// <exception cref="ArgumentException"><paramref name="selector"/> is not a rooted readable-property chain.</exception>
     /// <exception cref="InvalidOperationException">The CLR metadata profile cannot resolve the selected path.</exception>
     public FieldPath ResolveFieldPath<TValue>(Expression<Func<T, TValue>> selector) =>
-        ClrShape.ResolveMemberPath(ReadProperties<TValue>(selector, nameof(selector)));
+        FieldPath.Capture(selector, ClrShape.ResolveMemberPath);
 
     /// <summary>Resolves a typed CLR property selector to its exact demanded field contract.</summary>
     /// <typeparam name="TValue">CLR value selected by the property chain.</typeparam>
@@ -160,54 +159,6 @@ public sealed class RelationQueryPlacedInput<T> : RelationQueryPlacedInput
         where TElement : notnull
     {
         _ = GetField(ResolveFieldPath(collectionSelector));
-        return ClrShape.ResolveMemberPath(
-            typeof(TElement),
-            ReadProperties<TElement, TValue>(elementSelector, nameof(elementSelector)));
-    }
-
-    internal static IReadOnlyList<PropertyInfo> ReadProperties<TValue>(
-        Expression<Func<T, TValue>> selector,
-        string parameterName) =>
-        ReadProperties<T, TValue>(selector, parameterName);
-
-    static IReadOnlyList<PropertyInfo> ReadProperties<TRoot, TValue>(
-        Expression<Func<TRoot, TValue>> selector,
-        string parameterName)
-    {
-        ArgumentNullException.ThrowIfNull(selector);
-        Expression current = selector.Body;
-        while (current is UnaryExpression
-            {
-                NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked
-            } conversion
-               && (conversion.Type == typeof(object)
-                   || conversion.Type == conversion.Operand.Type
-                   || conversion.Type.IsAssignableFrom(conversion.Operand.Type)))
-        {
-            current = conversion.Operand;
-        }
-
-        List<PropertyInfo> reversed = [];
-        while (current is MemberExpression member)
-        {
-            if (member.Member is not PropertyInfo property || property.GetMethod is null)
-            {
-                throw new ArgumentException("A semantic field selector must use readable CLR properties.", parameterName);
-            }
-
-            reversed.Add(property);
-            current = member.Expression
-                ?? throw new ArgumentException("A semantic field selector cannot use a static member.", parameterName);
-        }
-
-        if (!ReferenceEquals(current, selector.Parameters[0]) || reversed.Count == 0)
-        {
-            throw new ArgumentException(
-                "A semantic field selector must be a direct or nested property chain rooted at the selector parameter.",
-                parameterName);
-        }
-
-        reversed.Reverse();
-        return reversed;
+        return FieldPath.Capture(elementSelector, ClrShape.ResolveMemberPath);
     }
 }

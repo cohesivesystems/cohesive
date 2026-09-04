@@ -12,20 +12,6 @@ using Cohesive.Relations.IR;
 
 namespace Cohesive.Relations.Authoring;
 
-/// <summary>Resolves one complete CLR member chain to its canonical field path.</summary>
-/// <param name="rootType">CLR type at which <paramref name="members"/> is rooted.</param>
-/// <param name="members">Ordered CLR member chain from the root value to the selected value.</param>
-/// <returns>The canonical field path represented by the complete member chain.</returns>
-/// <exception cref="ArgumentNullException">
-/// <paramref name="rootType"/> or <paramref name="members"/> is <see langword="null"/>.
-/// </exception>
-/// <exception cref="ArgumentException">The member chain is invalid for the selected metadata profile.</exception>
-/// <exception cref="InvalidOperationException">The selected metadata profile cannot resolve the member chain.</exception>
-/// <exception cref="NotSupportedException">The metadata profile does not support a member in the chain.</exception>
-public delegate FieldPath RelationQueryExpressionMemberPathResolver(
-    Type rootType,
-    IReadOnlyList<PropertyInfo> members);
-
 /// <summary>Immutable canonical value and source attribution lowered from one C# value expression.</summary>
 public sealed record RelationQueryExpressionLowering
 {
@@ -99,7 +85,7 @@ public sealed class RelationQueryExpressionLowerer
     /// <summary>Stable producer identity used for source attribution emitted by this translator.</summary>
     public const string Producer = "cohesive.relations.csharp-expression/v1";
 
-    readonly RelationQueryExpressionMemberPathResolver memberPathResolver;
+    readonly ClrMemberPathResolver memberPathResolver;
     readonly Func<Type, TypeRef> literalTypeResolver;
     readonly RelationQueryExpressionAuthoring? expectedParameterOwner;
     static readonly RelationQueryClrAuthoringContext DefaultLiteralTypeContext = new();
@@ -113,13 +99,13 @@ public sealed class RelationQueryExpressionLowerer
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="memberPathResolver"/> is <see langword="null"/>.</exception>
     public RelationQueryExpressionLowerer(
-        RelationQueryExpressionMemberPathResolver memberPathResolver)
+        ClrMemberPathResolver memberPathResolver)
         : this(memberPathResolver, expectedParameterOwner: null)
     {
     }
 
     internal RelationQueryExpressionLowerer(
-        RelationQueryExpressionMemberPathResolver memberPathResolver,
+        ClrMemberPathResolver memberPathResolver,
         RelationQueryExpressionAuthoring? expectedParameterOwner)
     {
         this.memberPathResolver = Guard.RequireNotNull(memberPathResolver);
@@ -2054,7 +2040,7 @@ public sealed class RelationQueryExpressionLowerer
         IReadOnlyList<PropertyInfo> members,
         string expressionPath,
         string sourceReference,
-        RelationQueryExpressionMemberPathResolver? scopedResolver = null)
+        ClrMemberPathResolver? scopedResolver = null)
     {
         try
         {
@@ -2624,7 +2610,7 @@ public sealed class RelationQueryExpressionLowerer
         return false;
     }
 
-    static RelationQueryExpressionMemberPathResolver? CreateCurrentItemMemberPathResolver(
+    static ClrMemberPathResolver? CreateCurrentItemMemberPathResolver(
         Expression sequence,
         RootScope scope,
         string sourceReference,
@@ -3354,13 +3340,13 @@ public sealed class RelationQueryExpressionLowerer
         ValueBindingId Binding,
         Type RootType,
         bool IsProvablyNonNull,
-        RelationQueryExpressionMemberPathResolver? MemberPathResolver,
+        ClrMemberPathResolver? MemberPathResolver,
         bool UsesImportedMapping)
     {
         public static ParameterTarget ForBinding(
             ValueBindingId binding,
             Type rootType,
-            RelationQueryExpressionMemberPathResolver? memberPathResolver,
+            ClrMemberPathResolver? memberPathResolver,
             bool usesImportedMapping) =>
             new(
                 ParameterTargetKind.Binding,
@@ -3373,7 +3359,7 @@ public sealed class RelationQueryExpressionLowerer
         public static ParameterTarget ForCurrentItem(
             Type rootType,
             bool isProvablyNonNull,
-            RelationQueryExpressionMemberPathResolver? memberPathResolver,
+            ClrMemberPathResolver? memberPathResolver,
             bool usesImportedMapping) =>
             new(
                 ParameterTargetKind.CurrentItem,
@@ -3425,7 +3411,7 @@ public sealed class RelationQueryExpressionLowerer
         public RootScope WithCurrentItem(
             ParameterExpression parameter,
             bool isProvablyNonNull,
-            RelationQueryExpressionMemberPathResolver? memberPathResolver,
+            ClrMemberPathResolver? memberPathResolver,
             bool usesImportedMapping)
         {
             Dictionary<ParameterExpression, ParameterTarget> nested =

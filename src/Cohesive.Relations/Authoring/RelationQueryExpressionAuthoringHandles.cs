@@ -53,7 +53,7 @@ public abstract class RelationQueryExpressionValueBinding
         RelationQueryBindingHandle structural,
         TypeRef type,
         QualifiedShapeId? shape,
-        RelationQueryExpressionMemberPathResolver? memberPathResolver,
+        ClrMemberPathResolver? memberPathResolver,
         Func<Type, TypeRef>? typeResolver,
         bool usesImportedMapping)
     {
@@ -68,7 +68,7 @@ public abstract class RelationQueryExpressionValueBinding
 
     internal RelationQueryExpressionAuthoring Owner { get; }
 
-    internal RelationQueryExpressionMemberPathResolver? MemberPathResolver { get; }
+    internal ClrMemberPathResolver? MemberPathResolver { get; }
 
     internal Func<Type, TypeRef>? TypeResolver { get; }
 
@@ -108,7 +108,7 @@ public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpres
         RelationQueryBindingHandle structural,
         TypeRef type,
         QualifiedShapeId? shape,
-        RelationQueryExpressionMemberPathResolver? memberPathResolver = null,
+        ClrMemberPathResolver? memberPathResolver = null,
         Func<Type, TypeRef>? typeResolver = null,
         bool usesImportedMapping = false)
         : base(owner, structural, type, shape, memberPathResolver, typeResolver, usesImportedMapping)

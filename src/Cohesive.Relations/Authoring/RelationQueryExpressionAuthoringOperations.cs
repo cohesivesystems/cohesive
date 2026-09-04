@@ -600,7 +600,7 @@ public sealed partial class RelationQueryExpressionAuthoring
         }
 
         QualifiedShapeId? itemShape = null;
-        RelationQueryExpressionMemberPathResolver? itemMemberPathResolver = null;
+        ClrMemberPathResolver? itemMemberPathResolver = null;
         Func<Type, TypeRef>? itemTypeResolver = null;
         var usesImportedMapping = false;
         TypeRef itemType;

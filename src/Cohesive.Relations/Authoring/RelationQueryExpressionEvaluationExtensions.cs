@@ -1,5 +1,4 @@
 using System.Linq.Expressions;
-using System.Reflection;
 using Cohesive.Relations.Compilation;
 
 namespace Cohesive.Relations.Authoring;
@@ -203,7 +202,7 @@ public static class RelationQueryExpressionEvaluationExtensions
             result.Id,
             fields.Select(field => new RelationQueryFieldReference(
                 result.Shape,
-                ResolveSelector(result.Owner, field, nameof(fields)))));
+                ResolveSelector(result.Owner, field))));
     }
 
     /// <summary>Selects every field emitted by a typed aggregation result.</summary>
@@ -269,44 +268,12 @@ public static class RelationQueryExpressionEvaluationExtensions
             result.Id,
             fields.Select(field => new RelationQueryFieldReference(
                 result.Shape,
-                ResolveSelector(result.Owner, field, nameof(fields)))));
+                ResolveSelector(result.Owner, field))));
     }
 
     static FieldPath ResolveSelector<T>(
         RelationQueryExpressionAuthoring owner,
-        Expression<Func<T, object?>> selector,
-        string parameterName)
+        Expression<Func<T, object?>> selector)
         where T : notnull
-    {
-        ArgumentNullException.ThrowIfNull(selector);
-        Expression current = selector.Body;
-        while (current is UnaryExpression
-            {
-                NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked
-            } conversion
-               && conversion.Type == typeof(object))
-        {
-            current = conversion.Operand;
-        }
-
-        List<PropertyInfo> reversed = [];
-        while (current is MemberExpression member)
-        {
-            if (member.Member is not PropertyInfo property)
-                throw new ArgumentException("A selected result field must use readable CLR properties.", parameterName);
-            reversed.Add(property);
-            current = member.Expression
-                ?? throw new ArgumentException("A selected result field cannot use a static member.", parameterName);
-        }
-
-        if (!ReferenceEquals(current, selector.Parameters[0]) || reversed.Count == 0)
-        {
-            throw new ArgumentException(
-                "A selected result field must be a direct or nested property chain rooted at the selector parameter.",
-                parameterName);
-        }
-
-        reversed.Reverse();
-        return owner.ResolveMemberPath(typeof(T), reversed);
-    }
+        => FieldPath.Capture(selector, owner.ResolveMemberPath);
 }

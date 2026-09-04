@@ -6,6 +6,20 @@ using System.Text.Json.Serialization;
 
 namespace Cohesive.Model;
 
+/// <summary>Resolves one complete CLR property chain to its canonical semantic field path.</summary>
+/// <param name="rootType">CLR type at which <paramref name="members"/> is rooted.</param>
+/// <param name="members">Ordered readable-property chain from the root value to the selected value.</param>
+/// <returns>The canonical semantic field path represented by the complete property chain.</returns>
+/// <exception cref="ArgumentNullException">
+/// <paramref name="rootType"/> or <paramref name="members"/> is <see langword="null"/>.
+/// </exception>
+/// <exception cref="ArgumentException">The property chain is invalid for the selected metadata profile.</exception>
+/// <exception cref="InvalidOperationException">The selected metadata profile cannot resolve the property chain.</exception>
+/// <exception cref="NotSupportedException">The metadata profile does not support a property in the chain.</exception>
+public delegate FieldPath ClrMemberPathResolver(
+    Type rootType,
+    IReadOnlyList<PropertyInfo> members);
+
 /// <summary>
 /// Strongly typed path to a nested field.
 /// </summary>
@@ -27,7 +41,7 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
     /// The default field separator.
     /// </summary>
     public const char Separator = '.';
-    
+
     /// <summary>
     /// Ordered path segments.
     /// </summary>
@@ -39,54 +53,154 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
     public static FieldPath FromField(string field) => new([FieldPathSegment.ForField(field)]);
 
     /// <summary>
-    /// Captures a field path from a CLR member selector rooted at the lambda parameter.
+    /// Captures a convention-named field path from a CLR member selector rooted at the lambda parameter.
     /// </summary>
+    /// <typeparam name="TRecord">CLR record type at which the selector is rooted.</typeparam>
+    /// <param name="selector">Member-path selector to capture.</param>
+    /// <returns>
+    /// A field path whose CLR members use their <see cref="JsonPropertyNameAttribute"/> name when present
+    /// and otherwise their CLR member name.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="selector"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="selector"/> is not a supported member path rooted at its lambda parameter.
+    /// </exception>
     public static FieldPath Capture<TRecord>(Expression<Func<TRecord, object?>> selector)
     {
         ArgumentNullException.ThrowIfNull(selector);
+        return CaptureCore(selector, typeof(TRecord), resolver: null);
+    }
 
-        List<FieldPathSegment> reversedSegments = [];
+    /// <summary>
+    /// Captures a CLR property selector and resolves it through an authoritative semantic member-path mapping.
+    /// </summary>
+    /// <typeparam name="TRoot">CLR record type at which the selector is rooted.</typeparam>
+    /// <typeparam name="TValue">CLR value type returned by the selected property chain.</typeparam>
+    /// <param name="selector">Direct or nested readable-property selector rooted at its lambda parameter.</param>
+    /// <param name="resolver">Resolver for the complete ordered CLR property chain.</param>
+    /// <returns>The canonical semantic field path returned by <paramref name="resolver"/>.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="selector"/> or <paramref name="resolver"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="selector"/> is not a readable-property chain rooted at its lambda parameter, or
+    /// <paramref name="resolver"/> rejects the chain for its selected metadata profile.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="resolver"/> cannot resolve the chain or returns an empty or uninitialized field path.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// <paramref name="resolver"/> does not support a property in the chain.
+    /// </exception>
+    public static FieldPath Capture<TRoot, TValue>(
+        Expression<Func<TRoot, TValue>> selector,
+        ClrMemberPathResolver resolver)
+    {
+        ArgumentNullException.ThrowIfNull(selector);
+        ArgumentNullException.ThrowIfNull(resolver);
+        return CaptureCore(selector, typeof(TRoot), resolver);
+    }
+
+    static FieldPath CaptureCore(
+        LambdaExpression selector,
+        Type rootType,
+        ClrMemberPathResolver? resolver)
+    {
+        var usesSemanticResolver = resolver is not null;
+        List<FieldPathSegment>? reversedSegments = usesSemanticResolver ? null : [];
+        List<PropertyInfo>? reversedProperties = usesSemanticResolver ? [] : null;
+
         var current = StripConvert(selector.Body);
         while (true)
         {
             current = StripConvert(current);
             switch (current)
             {
-                case MemberExpression member when member.Expression is not null && TryCreateFieldSegment(member.Member, out var fieldSegment):
-                    reversedSegments.Add(fieldSegment);
+                case MemberExpression member when member.Expression is not null:
+                    if (usesSemanticResolver)
+                    {
+                        if (member.Member is not PropertyInfo { GetMethod: not null } property)
+                        {
+                            throw new ArgumentException(
+                                "A semantic field selector must use readable CLR properties.",
+                                nameof(selector));
+                        }
+
+                        reversedProperties!.Add(property);
+                    }
+                    else
+                    {
+                        if (!TryCreateFieldSegment(member.Member, out var fieldSegment))
+                        {
+                            throw new ArgumentException(
+                                "Field selector must use CLR fields or properties.",
+                                nameof(selector));
+                        }
+
+                        reversedSegments!.Add(fieldSegment);
+                    }
+
                     current = member.Expression;
                     continue;
-                case BinaryExpression binary when binary.NodeType == ExpressionType.ArrayIndex && IsCollectionType(binary.Left.Type):
-                    reversedSegments.Add(FieldPathSegment.Element());
+                case BinaryExpression binary when !usesSemanticResolver
+                    && binary.NodeType == ExpressionType.ArrayIndex
+                    && IsCollectionType(binary.Left.Type):
+                    reversedSegments!.Add(FieldPathSegment.Element());
                     current = binary.Left;
                     continue;
-                case IndexExpression index when index.Object is not null && TryCreateStringKeySegment(index.Object, index.Arguments, out var stringKeySegment):
-                    reversedSegments.Add(stringKeySegment);
+                case IndexExpression index when !usesSemanticResolver
+                    && index.Object is not null
+                    && TryCreateStringKeySegment(index.Object, index.Arguments, out var stringKeySegment):
+                    reversedSegments!.Add(stringKeySegment);
                     current = index.Object;
                     continue;
-                case IndexExpression index when index.Object is not null && index.Arguments.Count == 1 && IsCollectionType(index.Object.Type):
-                    reversedSegments.Add(FieldPathSegment.Element());
+                case IndexExpression index when !usesSemanticResolver
+                    && index.Object is not null
+                    && index.Arguments.Count == 1
+                    && IsCollectionType(index.Object.Type):
+                    reversedSegments!.Add(FieldPathSegment.Element());
                     current = index.Object;
                     continue;
-                case MethodCallExpression call when TryCreateStringKeySegment(call.Object, call.Arguments, out var methodStringKeySegment):
-                    reversedSegments.Add(methodStringKeySegment);
+                case MethodCallExpression call when !usesSemanticResolver
+                    && TryCreateStringKeySegment(call.Object, call.Arguments, out var methodStringKeySegment):
+                    reversedSegments!.Add(methodStringKeySegment);
                     current = call.Object!;
                     continue;
-                case MethodCallExpression call when IsCollectionIndexerCall(call):
-                    reversedSegments.Add(FieldPathSegment.Element());
+                case MethodCallExpression call when !usesSemanticResolver && IsCollectionIndexerCall(call):
+                    reversedSegments!.Add(FieldPathSegment.Element());
                     current = call.Object!;
                     continue;
                 case ParameterExpression parameter when ReferenceEquals(parameter, selector.Parameters[0]):
-                    if (reversedSegments.Count == 0)
+                    if (usesSemanticResolver)
+                    {
+                        if (reversedProperties!.Count == 0)
+                            throw new ArgumentException("Field selector must reference a property path.", nameof(selector));
+
+                        reversedProperties.Reverse();
+                        var resolved = resolver!(rootType, reversedProperties);
+                        if (resolved.Segments.IsDefaultOrEmpty)
+                        {
+                            throw new InvalidOperationException(
+                                "The CLR member-path resolver returned an empty or uninitialized field path.");
+                        }
+
+                        return resolved;
+                    }
+
+                    if (reversedSegments!.Count == 0)
                         throw new ArgumentException("Field selector must reference a member path.", nameof(selector));
 
                     reversedSegments.Reverse();
-                    return new([..reversedSegments]);
+                    return new([.. reversedSegments]);
                 default:
-                    throw new ArgumentException("Field selector must be a member path rooted at the lambda parameter.", nameof(selector));
+                    throw new ArgumentException(
+                        usesSemanticResolver
+                            ? "A semantic field selector must be a direct or nested readable-property chain rooted at its lambda parameter."
+                            : "Field selector must be a member path rooted at the lambda parameter.",
+                        nameof(selector));
             }
         }
-        
+
         static bool TryCreateFieldSegment(MemberInfo member, out FieldPathSegment segment)
         {
             switch (member)
@@ -142,7 +256,7 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
             && string.Equals(call.Method.Name, "get_Item", StringComparison.Ordinal)
             && IsCollectionType(call.Object.Type);
 
-        static bool IsCollectionType(Type type) => 
+        static bool IsCollectionType(Type type) =>
             type != typeof(string) && typeof(IEnumerable).IsAssignableFrom(type);
 
         static Expression StripConvert(Expression expression)
@@ -153,7 +267,7 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
             return current;
         }
     }
-    
+
     /// <summary>
     /// Parses dotted path text into a typed field path.
     /// </summary>
@@ -165,11 +279,11 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
             .SelectMany(ParseSegment);
         return new([.. tokens]);
     }
-    
+
     /// <summary>
     /// Appends a path segment and returns a new path.
     /// </summary>
-    public FieldPath Append(FieldPathSegment segment) => new([..Segments, segment]);
+    public FieldPath Append(FieldPathSegment segment) => new([.. Segments, segment]);
 
     /// <summary>
     /// Returns true when the terminal segment matches <paramref name="segment"/>.
@@ -273,7 +387,7 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
 
         return true;
     }
-    
+
     /// <inheritdoc />
     public override int GetHashCode()
     {
@@ -282,14 +396,14 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
             hash.Add(segment);
         return hash.ToHashCode();
     }
-    
+
     /// <summary>
     /// Determines whether the complete path string is equal to the given string.
     /// </summary>
     /// <param name="str"></param>
     /// <param name="comparison"></param>
     /// <returns></returns>
-    public bool Matches(string? str, StringComparison comparison = StringComparison.Ordinal) => 
+    public bool Matches(string? str, StringComparison comparison = StringComparison.Ordinal) =>
         string.Equals(ToString(), str, comparison);
 
     /// <summary>
@@ -304,7 +418,7 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
         ToString(ref builder, separator);
         return builder.ToString();
     }
-    
+
     /// <summary>
     /// Formats the path as a string using the specified separator.
     /// </summary>
@@ -314,17 +428,17 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
     {
         for (var i = 0; i < Segments.Length; i++)
         {
-            if (i > 0) 
+            if (i > 0)
                 builder.Append(separator);
             Segments[i].WriteString(ref builder);
         }
     }
-    
+
     /// <summary>
     /// Formats the path as a string using the default separator <see cref="Separator"/>.
     /// </summary>
     /// <returns>A concatenated string representing the field path</returns>
-    public override string ToString() => 
+    public override string ToString() =>
         ToString(Separator);
 
     int GetFormattedLength()
@@ -334,7 +448,7 @@ public readonly record struct FieldPath : IEquatable<FieldPath>
             length += segment.GetFormattedLength();
         return length;
     }
-    
+
     static IEnumerable<FieldPathSegment> ParseSegment(string token)
     {
         if (string.Equals(token, "[]", StringComparison.Ordinal))
@@ -408,7 +522,7 @@ public readonly record struct FieldPathSegment : IEquatable<FieldPathSegment>
     /// Creates a direct field segment from token text.
     /// </summary>
     public static FieldPathSegment ForField(string segment) => new(SegmentKind.Field, segment);
-    
+
     /// <summary>
     /// Creates an element navigation segment.
     /// </summary>

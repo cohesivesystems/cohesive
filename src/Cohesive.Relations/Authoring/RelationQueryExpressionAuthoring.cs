@@ -1271,44 +1271,8 @@ public sealed partial class RelationQueryExpressionAuthoring
         return shape;
     }
 
-    internal FieldPath ResolveSelectorPath<T, TValue>(
-        Expression<Func<T, TValue>> selector,
-        string parameterName)
-    {
-        ArgumentNullException.ThrowIfNull(selector);
-        Expression current = selector.Body;
-        while (current is UnaryExpression
-            {
-                NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked
-            } conversion
-               && (conversion.Type == typeof(object) || conversion.Type == conversion.Operand.Type))
-        {
-            current = conversion.Operand;
-        }
-
-        List<PropertyInfo> reversed = [];
-        while (current is MemberExpression member)
-        {
-            if (member.Member is not PropertyInfo property)
-            {
-                throw new ArgumentException("A semantic field selector must use readable CLR properties.", parameterName);
-            }
-
-            reversed.Add(property);
-            current = member.Expression
-                ?? throw new ArgumentException("A semantic field selector cannot use a static member.", parameterName);
-        }
-
-        if (!ReferenceEquals(current, selector.Parameters[0]) || reversed.Count == 0)
-        {
-            throw new ArgumentException(
-                "A semantic field selector must be a direct or nested property chain rooted at the selector parameter.",
-                parameterName);
-        }
-
-        reversed.Reverse();
-        return ResolveMemberPath(typeof(T), reversed);
-    }
+    internal FieldPath ResolveSelectorPath<T, TValue>(Expression<Func<T, TValue>> selector) =>
+        FieldPath.Capture(selector, ResolveMemberPath);
 
     internal static RelationQueryAuthoringSource Source(
         string reference,
@@ -1327,7 +1291,7 @@ public sealed partial class RelationQueryExpressionAuthoring
         ArgumentNullException.ThrowIfNull(sourceReference);
         sourceShape = clr.Shape<TSource>();
         targetShape = clr.Shape<TTarget>();
-        var path = ResolveSelectorPath(sourceReference, nameof(sourceReference));
+        var path = ResolveSelectorPath(sourceReference);
         if (path.Segments.Length != 1)
         {
             throw new ArgumentException(

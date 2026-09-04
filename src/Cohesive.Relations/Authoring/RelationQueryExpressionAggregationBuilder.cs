@@ -75,7 +75,7 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
             .LowerValue(key, handles, reference + "/key")
             .RequireValue();
         groupings.Add(new(
-            owner.ResolveSelectorPath(target, nameof(target)),
+            owner.ResolveSelectorPath(target),
             lowered.Value,
             assignmentSource: RelationQueryExpressionAuthoring.Source(reference, "Expression-authored grouping."),
             keySource: lowered.Source));
@@ -125,7 +125,7 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
         RequireCountTarget<TTarget>(nameof(target));
         var reference = assignmentSourceReference ?? $"{sourceReference}/aggregates/{aggregates.Count}";
         aggregates.Add(new(
-            owner.ResolveSelectorPath(target, nameof(target)),
+            owner.ResolveSelectorPath(target),
             AggregateOperator.Count,
             assignmentSource: RelationQueryExpressionAuthoring.Source(reference, "Expression-authored count.")));
         return this;
@@ -163,7 +163,7 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
             .LowerValue(filter, handles, reference + "/filter")
             .RequireValue();
         aggregates.Add(new(
-            owner.ResolveSelectorPath(target, nameof(target)),
+            owner.ResolveSelectorPath(target),
             AggregateOperator.Count,
             filter: loweredFilter.Value,
             assignmentSource: RelationQueryExpressionAuthoring.Source(reference, "Expression-authored filtered count."),
@@ -203,7 +203,7 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
             .LowerValue(value, handles, reference + "/value")
             .RequireValue();
         aggregates.Add(new(
-            owner.ResolveSelectorPath(target, nameof(target)),
+            owner.ResolveSelectorPath(target),
             AggregateOperator.Count,
             loweredValue.Value,
             assignmentSource: RelationQueryExpressionAuthoring.Source(
@@ -282,7 +282,7 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
         }
 
         aggregates.Add(new(
-            owner.ResolveSelectorPath(target, nameof(target)),
+            owner.ResolveSelectorPath(target),
             operation,
             loweredValue.Value,
             loweredFilter?.Value,

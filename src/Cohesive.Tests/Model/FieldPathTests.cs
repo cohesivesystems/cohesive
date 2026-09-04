@@ -9,7 +9,7 @@ public sealed class FieldPathTests
 
         Assert.Equal("source.Customer.lineItem.[]", path.ToString());
     }
-    
+
     [Fact]
     public void Equals_UsesSegmentSequenceValueSemantics()
     {
@@ -163,6 +163,49 @@ public sealed class FieldPathTests
             FieldPath.Parse("Storage.Default.ConnectionString"),
             FieldPath.Capture<FieldPathDictionaryCaptureDto>(static dto => dto.Storage!["Default"].ConnectionString)
             );
+    }
+
+    [Fact]
+    public void Capture_WithResolver_DelegatesTheCompleteReadablePropertyChain()
+    {
+        Type? capturedRoot = null;
+        string[] capturedMembers = [];
+
+        var path = FieldPath.Capture(
+            static (FieldPathCaptureDto dto) => dto.Details.Name,
+            (rootType, members) =>
+            {
+                capturedRoot = rootType;
+                capturedMembers = [.. members.Select(static member => member.Name)];
+                return FieldPath.Parse("payload.legal_name");
+            });
+
+        Assert.Equal(typeof(FieldPathCaptureDto), capturedRoot);
+        Assert.Equal(["Details", "Name"], capturedMembers);
+        Assert.Equal(FieldPath.Parse("payload.legal_name"), path);
+    }
+
+    [Fact]
+    public void Capture_WithResolver_RejectsNonPropertyPathComponentsBeforeResolution()
+    {
+        var called = false;
+
+        Assert.Throws<ArgumentException>(() => FieldPath.Capture(
+            static (FieldPathCaptureDto dto) => dto.Details.Tags[0],
+            (_, _) =>
+            {
+                called = true;
+                return FieldPath.Parse("ignored");
+            }));
+        Assert.False(called);
+    }
+
+    [Fact]
+    public void Capture_WithResolver_RejectsAnEmptyResolvedPath()
+    {
+        Assert.Throws<InvalidOperationException>(() => FieldPath.Capture(
+            static (FieldPathCaptureDto dto) => dto.Id,
+            static (_, _) => default));
     }
 
     sealed record FieldPathCaptureDto(string Id, string Status, FieldPathCaptureDetailsDto Details);

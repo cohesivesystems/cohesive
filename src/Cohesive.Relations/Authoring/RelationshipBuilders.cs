@@ -58,7 +58,7 @@ public sealed class RelationshipFromBuilder<TSource> where TSource : notnull
         ArgumentNullException.ThrowIfNull(sourceReference);
         if (clrShapes is not null)
         {
-            return new(sourceShape, clrShapes.ResolveMemberPath(sourceReference));
+            return new(sourceShape, FieldPath.Capture(sourceReference, clrShapes.ResolveMemberPath));
         }
 
         var boxedSelector = Expression.Lambda<Func<TSource, object?>>(

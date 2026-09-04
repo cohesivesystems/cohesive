@@ -1365,7 +1365,7 @@ public sealed class RelationQueryPlacementInputBuilder<T> : RelationQueryPlaceme
         Expression<Func<T, TValue>> selector,
         string? sourceSelector = null)
     {
-        var path = TypedDeclaration.Shape.ResolveMemberPath(RelationQueryPlacedInput<T>.ReadProperties(selector, nameof(selector)));
+        var path = FieldPath.Capture(selector, TypedDeclaration.Shape.ResolveMemberPath);
         TypedDeclaration.SetIdentity(
             sourceSelector is null
                 ? path.ToString()
@@ -1386,7 +1386,7 @@ public sealed class RelationQueryPlacementInputBuilder<T> : RelationQueryPlaceme
         Expression<Func<T, TValue>> selector,
         string sourceSelector)
     {
-        var path = TypedDeclaration.Shape.ResolveMemberPath(RelationQueryPlacedInput<T>.ReadProperties(selector, nameof(selector)));
+        var path = FieldPath.Capture(selector, TypedDeclaration.Shape.ResolveMemberPath);
         TypedDeclaration.AddField(
             path,
             RelationQueryPlacementBuilder.RequireSelector(sourceSelector, nameof(sourceSelector)));
@@ -1407,7 +1407,7 @@ public sealed class RelationQueryPlacementInputBuilder<T> : RelationQueryPlaceme
         Expression<Func<T, TValue>> selector,
         string? sourceSelector = null)
     {
-        var path = TypedDeclaration.Shape.ResolveMemberPath(RelationQueryPlacedInput<T>.ReadProperties(selector, nameof(selector)));
+        var path = FieldPath.Capture(selector, TypedDeclaration.Shape.ResolveMemberPath);
         TypedDeclaration.SetRelationshipKey(
             sourceSelector is null
                 ? path.ToString()
@@ -1430,8 +1430,7 @@ public sealed class RelationQueryPlacementInputBuilder<T> : RelationQueryPlaceme
         Expression<Func<T, TValue>> selector,
         string? sourceSelector = null)
     {
-        var path = TypedDeclaration.Shape.ResolveMemberPath(
-            RelationQueryPlacedInput<T>.ReadProperties(selector, nameof(selector)));
+        var path = FieldPath.Capture(selector, TypedDeclaration.Shape.ResolveMemberPath);
         TypedDeclaration.SetPartition(sourceSelector is null
             ? path.ToString()
             : RelationQueryPlacementBuilder.RequireSelector(sourceSelector, nameof(sourceSelector)));

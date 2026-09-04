@@ -214,9 +214,9 @@ public sealed class CoreObservationMaterializationTests
         Assert.Equal(new JsonNamedCustomer("Ada", 7), result);
         Assert.Equal(
             "legal_name",
-            metadata.ResolveMemberPath(
-                typeof(JsonNamedCustomer),
-                [typeof(JsonNamedCustomer).GetProperty(nameof(JsonNamedCustomer.Name))!])
+            FieldPath.Capture(
+                static (JsonNamedCustomer customer) => customer.Name,
+                metadata.ResolveMemberPath)
                 .Segments[0]
                 .Segment);
     }
