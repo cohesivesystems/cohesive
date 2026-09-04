@@ -32,13 +32,35 @@ var document = Infrastructure.Define(
     });
 ```
 
-`Infrastructure.Define` returns an immutable, normalized, fingerprinted document. Compilers match its requirements
-against one coherent target variant, elaborate binding obligations, assign lifecycle ownership, and retain the exact
-capability evidence used by the realization.
+`Infrastructure.Define` returns an immutable, normalized, fingerprinted document. A target adapter declares its
+physical construction families as an `InfrastructureTargetFacilityManifest`: facilities group exact leaf capability
+evidence, while the capability profile remains the sole authority for guarantees, composition rules, and operating
+boundaries. `InfrastructureTargetCompiler` then selects one facility per logical node, resolves attributable
+conventions, elaborates binding obligations, and proves capability closure without an application-specific compiler.
+
+```csharp
+var target = InfrastructureTargetFacilities.Define(
+    id: new("azure-pulumi/facilities/v1"),
+    profileId: new("azure-pulumi/capabilities/v1"),
+    target: new("pulumi-azure-native/3.16.0"),
+    variant: new("development"),
+    supportedDefinitionSchemaVersions: [InfrastructureDefinitionDocument.CurrentSchemaVersion],
+    configure: facilities =>
+    {
+        facilities.Workload(new("azure/app-service")).Provides(AppServiceEvidence.Https);
+        facilities.Resource(new("azure/blob-storage")).Provides(BlobEvidence.ObjectStorage);
+    });
+
+var plan = InfrastructureTargetCompiler.Compile(document, target, ShippingBindings.Profile);
+```
+
+The fluent builder is only an authoring projection. It materializes the same immutable, serializable, fingerprinted
+manifest that direct IR, imported documents, generated catalogs, and agent tooling can produce.
 
 ## What this package provides
 
 - Portable workload, resource, binding, requirement, and lifecycle semantics.
+- Declarative target-facility manifests and generic facility selection.
 - Deterministic convention resolution with attributable effective configuration.
 - Capability closure and boundary-acceptance diagnostics.
 - Exact physical placement and evidence-witness documents.

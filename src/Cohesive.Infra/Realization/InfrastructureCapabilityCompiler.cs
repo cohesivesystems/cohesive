@@ -468,7 +468,13 @@ public static class InfrastructureCapabilityCompiler
         InfrastructureCapabilityProfile profile,
         InfrastructureCapabilityVariantId variant,
         InfrastructureBindingElaborationProfile bindingElaborationProfile) =>
-        CompileCore(definition, profile, variant, bindingElaborationProfile, boundaryAcceptancePolicy: null);
+        CompileCore(
+            definition,
+            profile,
+            variant,
+            bindingElaborationProfile,
+            boundaryAcceptancePolicy: null,
+            selectedEvidence: null);
 
     /// <summary>
     /// Compiles exact declared and binding-induced requirements using attributable boundary-acceptance policy.
@@ -489,7 +495,32 @@ public static class InfrastructureCapabilityCompiler
         InfrastructureBoundaryAcceptancePolicy boundaryAcceptancePolicy)
     {
         ArgumentNullException.ThrowIfNull(boundaryAcceptancePolicy);
-        return CompileCore(definition, profile, variant, bindingElaborationProfile, boundaryAcceptancePolicy);
+        return CompileCore(
+            definition,
+            profile,
+            variant,
+            bindingElaborationProfile,
+            boundaryAcceptancePolicy,
+            selectedEvidence: null);
+    }
+
+    internal static InfrastructureCapabilityClosureReport CompileWithEvidenceSelection(
+        InfrastructureDefinitionDocument definition,
+        InfrastructureCapabilityProfile profile,
+        InfrastructureCapabilityVariantId variant,
+        InfrastructureBindingElaborationProfile bindingElaborationProfile,
+        ImmutableArray<InfrastructureCapabilityEvidenceId> selectedEvidence,
+        InfrastructureBoundaryAcceptancePolicy? boundaryAcceptancePolicy)
+    {
+        if (selectedEvidence.IsDefault)
+            throw new ArgumentException("Selected capability evidence cannot be default.", nameof(selectedEvidence));
+        return CompileCore(
+            definition,
+            profile,
+            variant,
+            bindingElaborationProfile,
+            boundaryAcceptancePolicy,
+            selectedEvidence.ToHashSet());
     }
 
     static InfrastructureCapabilityClosureReport CompileCore(
@@ -497,7 +528,8 @@ public static class InfrastructureCapabilityCompiler
         InfrastructureCapabilityProfile profile,
         InfrastructureCapabilityVariantId variant,
         InfrastructureBindingElaborationProfile bindingElaborationProfile,
-        InfrastructureBoundaryAcceptancePolicy? boundaryAcceptancePolicy)
+        InfrastructureBoundaryAcceptancePolicy? boundaryAcceptancePolicy,
+        IReadOnlySet<InfrastructureCapabilityEvidenceId>? selectedEvidence)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(profile);
@@ -579,6 +611,14 @@ public static class InfrastructureCapabilityCompiler
         }
 
         var selected = profile.FindVariant(variant);
+        if (selected is not null && selectedEvidence is not null)
+        {
+            selected = new(
+                selected.Id,
+                selected.Evidence.Where(evidence => selectedEvidence.Contains(evidence.Id)).ToImmutableArray(),
+                selected.Rules,
+                selected.OperatingBoundaries);
+        }
         if (selected is null)
         {
             diagnostics.Add(new(
