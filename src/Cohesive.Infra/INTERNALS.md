@@ -78,6 +78,20 @@ those witnesses must cover the physical workload and resource identities owned b
 cover both endpoints. Auxiliary physical identities may also be retained for composed strategies. Missing, stale,
 unexpected, unavailable, or incorrectly scoped evidence fails closed with structured diagnostics.
 
+`InfrastructureTargetDeploymentManifest` is the portable declaration boundary between target facilities and exact
+physical identities. It fences one definition and facility manifest, then attributes every logical workload and
+resource to a target facility, physical identity, source evidence, and—for resources—lifecycle authority. Its fluent
+builder is only a producer of immutable, serializable, fingerprinted IR.
+
+`InfrastructureTargetDeploymentCompiler` owns the corresponding computation. Exact deployment declarations become
+explicit facility-selection policy; canonical resource lifecycle intent determines managed versus referenced
+disposition; workload and resource declarations become placements and lifecycle bindings; and selected facility
+evidence becomes demand-scoped physical witnesses. When a composed proof uses an auxiliary facility outside the
+demand's logical endpoints, the compiler attributes that evidence to the declared physical resources for the owning
+facility rather than falsely claiming that every proof component applies to every subject. Missing declarations,
+unknown nodes, incompatible facilities, unavailable capabilities, and incomplete physical coverage remain structured
+diagnostics. Applications and lifecycle stacks consume this result; they do not reimplement the assessment.
+
 Physical witnesses still are not construction recipes or execution receipts. Backend adapters must extend the exact
 definition/profile/realization fence with compiler version, emitted-artifact fingerprint, preview, and backend receipts
 before claiming deployment authority. A stale, partially matched, or merely capability-closed plan is not deployment

@@ -41,6 +41,25 @@ public readonly record struct InfrastructureTargetFacilityManifestId
     public override string ToString() => Value;
 }
 
+/// <summary>Stable, versioned identity of an infrastructure target-deployment manifest.</summary>
+[JsonConverter(typeof(SingleValueWrapperJsonConverter))]
+public readonly record struct InfrastructureTargetDeploymentManifestId
+{
+    /// <summary>Creates a target-deployment manifest identity.</summary>
+    /// <param name="value">Stable identity that changes when physical deployment declarations change.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    [JsonConstructor]
+    public InfrastructureTargetDeploymentManifestId(string value) => Value = Guard.RequireNotNullOrWhiteSpace(value);
+
+    /// <summary>Raw stable target-deployment manifest identity.</summary>
+    public string Value { get; }
+
+    /// <summary>Returns the raw target-deployment manifest identity.</summary>
+    /// <returns>The value supplied at construction.</returns>
+    public override string ToString() => Value;
+}
+
 /// <summary>Stable target-local identity of one selectable infrastructure facility.</summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct InfrastructureTargetFacilityId

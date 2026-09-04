@@ -57,10 +57,42 @@ var plan = InfrastructureTargetCompiler.Compile(document, target, ShippingBindin
 The fluent builder is only an authoring projection. It materializes the same immutable, serializable, fingerprinted
 manifest that direct IR, imported documents, generated catalogs, and agent tooling can produce.
 
+A lifecycle adapter can additionally declare the exact physical deployment without implementing an application-side
+compiler. `InfrastructureTargetDeployments.Define` materializes a portable deployment manifest; the shared compiler
+then selects facilities, derives lifecycle dispositions from canonical resource intent, places workloads, constructs
+demand-scoped capability witnesses, and reports mismatches:
+
+```csharp
+var deployment = InfrastructureTargetDeployments.Define(
+    id: new("shipping/azure-pulumi/development/v1"),
+    definition: document,
+    targetFacilities: target,
+    configure: physical =>
+    {
+        physical.Workload(
+            ShippingNodes.Api,
+            AzureFacilities.AppService,
+            AzureResources.AppService("shipping-api"),
+            [PulumiSources.Stack]);
+        physical.Resource(
+            ShippingNodes.State,
+            AzureFacilities.BlobStorage,
+            AzureResources.Container("shipping", "state"),
+            new("pulumi/shipping/development"),
+            [PulumiSources.Stack]);
+    });
+
+var realization = InfrastructureTargetDeploymentCompiler.Compile(ShippingInfrastructure.Current, deployment);
+```
+
+Application declarations contain no requirement-discharge or witness-construction algorithm. Provider naming and
+artifact discovery belong to the adapter; all callbacks are discarded after materializing canonical IR.
+
 ## What this package provides
 
 - Portable workload, resource, binding, requirement, and lifecycle semantics.
 - Declarative target-facility manifests and generic facility selection.
+- Declarative target-deployment manifests and shared physical-realization compilation.
 - Deterministic convention resolution with attributable effective configuration.
 - Capability closure and boundary-acceptance diagnostics.
 - Exact physical placement and evidence-witness documents.
