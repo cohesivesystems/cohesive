@@ -190,7 +190,7 @@ public sealed class CorrelatedRecordGenerationTests
             projected[GenerationDefinitionWireNames.GeneratorDiscriminator]!.GetValue<string>());
         Assert.Equal("field", projected["expression"]!["$expr"]!.GetValue<string>());
         Assert.Equal("route", projected["expression"]!["binding"]!.GetValue<string>());
-        Assert.Equal("9f28804b4edd3b90f9daffb5e2d9605085f124596e61d569826e16067abf3766", plan.Fingerprint);
+        Assert.Equal("d686bcfa22fb8ca3a0c839a7af2cc6f5e3056148b8301e18763e92394b15391a", plan.Fingerprint);
         Assert.Equal(json, GenerationDefinitionJsonSerializer.Serialize(
             GenerationDefinitionJsonSerializer.Deserialize(json)));
     }

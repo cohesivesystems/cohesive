@@ -18,7 +18,7 @@ public sealed record WorldDefinitionFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current world-definition fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-simulation-world/v4-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-simulation-world/v5-c14n/v1";
 
     /// <summary>Creates world-definition fingerprint metadata.</summary>
     /// <param name="algorithm">Hash-algorithm identity.</param>
@@ -52,7 +52,7 @@ public sealed record WorldDefinitionFingerprint
 public sealed record WorldDefinitionDocument
 {
     /// <summary>Current portable world-definition document schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-simulation-world/v4";
+    public const string CurrentSchemaVersion = "cohesive-simulation-world/v5";
 
     /// <summary>Creates or restores one portable world-definition document.</summary>
     /// <param name="schemaVersion">Exact portable world-definition schema.</param>

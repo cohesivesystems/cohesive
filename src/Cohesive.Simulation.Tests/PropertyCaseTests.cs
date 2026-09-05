@@ -27,7 +27,7 @@ public sealed class PropertyCaseTests
         Assert.NotEmpty(counterexample.Replay.ShrinkChoices);
         var token = counterexample.Replay.ToToken();
         var tokenFingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
-        Assert.Equal("6caf32a56f2fa5d3a9a90ce76ddddc1bc54cf2962dff55e3fc1305d2ec5f396e", tokenFingerprint);
+        Assert.Equal("7ac3e1c88dc9179186a3949261c6eed0963afd5fc2e22bcc7c9ca380008b00b7", tokenFingerprint);
         Assert.StartsWith("csimpc1.", token, StringComparison.Ordinal);
         Assert.Equal(counterexample.Replay, PropertyCaseReplayEvidence.ParseToken(token));
         Assert.Equal(minimal, generator.ReplayPropertyCase(token));

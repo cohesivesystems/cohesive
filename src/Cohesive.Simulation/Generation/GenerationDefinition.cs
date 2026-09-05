@@ -22,6 +22,9 @@ public static class GenerationDefinitionWireNames
     /// <summary>Discriminator for a finite weighted categorical generator.</summary>
     public const string WeightedCategorical = "weightedCategorical";
 
+    /// <summary>Discriminator for a retained finite generation catalog.</summary>
+    public const string Catalog = "catalog";
+
     /// <summary>Discriminator for a portable expression over sampled value bindings.</summary>
     public const string Expression = "expression";
 }
@@ -36,6 +39,7 @@ public static class GenerationDefinitionWireNames
 [JsonDerivedType(typeof(Int32GenerationNode), GenerationDefinitionWireNames.Int32)]
 [JsonDerivedType(typeof(BernoulliGenerationNode), GenerationDefinitionWireNames.Bernoulli)]
 [JsonDerivedType(typeof(WeightedCategoricalGenerationNode), GenerationDefinitionWireNames.WeightedCategorical)]
+[JsonDerivedType(typeof(CatalogGenerationNode), GenerationDefinitionWireNames.Catalog)]
 [JsonDerivedType(typeof(ExpressionGenerationNode), GenerationDefinitionWireNames.Expression)]
 public abstract record ValueGeneratorNode
 {
@@ -150,6 +154,27 @@ public sealed record WeightedCategoricalGenerationNode : ValueGeneratorNode
 
     /// <summary>Gets categorical options in authoring order.</summary>
     public ImmutableArray<WeightedCategoricalOption> Options { get; }
+}
+
+/// <summary>Produces one value from an exact fingerprinted finite generation catalog.</summary>
+/// <remarks>
+/// The retained catalog values are the executable authority. Its provenance explains the external adapter, provider,
+/// locale, and source inputs without retaining provider objects or requiring the provider at interpretation time.
+/// </remarks>
+public sealed record CatalogGenerationNode : ValueGeneratorNode
+{
+    /// <summary>Creates a retained-catalog generator.</summary>
+    /// <param name="catalog">Exact validated catalog document to sample.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="catalog"/> is <see langword="null"/>.</exception>
+    [JsonConstructor]
+    public CatalogGenerationNode(GenerationCatalogDocument catalog) =>
+        Catalog = Guard.RequireNotNull(catalog);
+
+    /// <inheritdoc />
+    public override TypeRef ValueType => Catalog.Definition.ValueType;
+
+    /// <summary>Gets the exact portable catalog document governing sampled values.</summary>
+    public GenerationCatalogDocument Catalog { get; }
 }
 
 /// <summary>Produces a value by evaluating a portable core expression over sampled record bindings.</summary>

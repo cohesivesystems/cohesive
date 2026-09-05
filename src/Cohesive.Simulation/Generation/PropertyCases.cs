@@ -941,6 +941,15 @@ public static class ReferencePropertyCaseInterpreter
                 }
                 yield break;
 
+            case CatalogGenerationNode catalog:
+                HashSet<ObservationValue> catalogValues = [];
+                foreach (var entry in catalog.Catalog.Definition.Entries)
+                {
+                    if (catalogValues.Add(entry.Value))
+                        yield return entry.Value;
+                }
+                yield break;
+
             default:
                 throw new NotSupportedException(
                     $"Reference property shrinking does not support binding source '{generator.GetType().Name}'.");
@@ -987,6 +996,19 @@ public static class ReferencePropertyCaseInterpreter
                 }
                 throw new InvalidOperationException(
                     "A generated categorical value must equal one of the compiled generator's options.");
+
+            case CatalogGenerationNode catalog:
+                HashSet<ObservationValue> catalogValues = [];
+                foreach (var entry in catalog.Catalog.Definition.Entries)
+                {
+                    if (entry.Value.Equals(current))
+                        yield break;
+
+                    if (catalogValues.Add(entry.Value))
+                        yield return entry.Value;
+                }
+                throw new InvalidOperationException(
+                    "A generated catalog value must equal one of the retained catalog's entries.");
 
             case ExpressionGenerationNode:
                 yield break;
