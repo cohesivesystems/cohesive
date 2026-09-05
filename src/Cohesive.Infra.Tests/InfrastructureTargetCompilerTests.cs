@@ -42,8 +42,11 @@ public sealed class InfrastructureTargetCompilerTests
                 target.Resource(ObjectStore).Provides(storage);
             });
 
-        Assert.Equal(direct, fluent);
         Assert.Equal(direct.Fingerprint, fluent.Fingerprint);
+        Assert.Equal(direct.ToReference(), fluent.ToReference());
+        Assert.True(direct.Facilities.SequenceEqual(fluent.Facilities));
+        Assert.Empty(direct.SourceMap.Entries);
+        Assert.Equal(4, fluent.SourceMap.Entries.Length);
     }
 
     [Fact]
@@ -105,6 +108,14 @@ public sealed class InfrastructureTargetCompilerTests
         Assert.Equal(worker.Value, diagnostic.Evidence?.Subject);
         Assert.Equal(gpu.Value, diagnostic.Evidence?.Expected);
         Assert.NotEmpty(diagnostic.Evidence!.ResolutionOptions);
+        Assert.Contains(
+            diagnostic.Evidence.SourceReferences,
+            static reference => reference.StartsWith("csharp://", StringComparison.Ordinal));
+        Assert.Contains(
+            diagnostic.Evidence.SourceReferences,
+            static reference => reference.StartsWith(
+                "infrastructure-target-facility-manifest://",
+                StringComparison.Ordinal));
         Assert.Throws<KeyNotFoundException>(() => plan.FindDecision(worker));
     }
 

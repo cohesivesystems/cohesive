@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Cohesive.Infra.Realization;
 using Cohesive.Model;
 
 namespace Cohesive.Infra.Tests;
@@ -42,5 +43,38 @@ public sealed class SourceReferenceTests
         Assert.Equal<SourceReference>([first, second], SourceReference.NormalizeSet([second, first]));
         Assert.Throws<ArgumentException>(() => SourceReference.NormalizeSet([first, first]));
         Assert.Throws<ArgumentException>(() => SourceReference.NormalizeSet([], requireNonEmpty: true));
+    }
+
+    [Fact]
+    public void Infrastructure_identifiers_project_to_typed_source_references()
+    {
+        Assert.Equal(
+            "infrastructure-target://pulumi-azure-native/3.16.0",
+            InfrastructureSourceReferences.Target(new("pulumi-azure-native/3.16.0")).Value);
+        Assert.Equal(
+            "infrastructure-lifecycle-authority://pulumi/shipping/development",
+            InfrastructureSourceReferences.LifecycleAuthority(new("pulumi/shipping/development")).Value);
+        Assert.Equal(
+            "infrastructure-node://workloads/api",
+            InfrastructureSourceReferences.Node(new("workloads/api")).Value);
+    }
+
+    [Fact]
+    public void Infrastructure_source_maps_normalize_and_resolve_exact_semantic_subjects()
+    {
+        var api = InfrastructureSourceReferences.Node(new("workloads/api"));
+        var state = InfrastructureSourceReferences.Node(new("resources/state"));
+        SourceReference first = new("csharp://manifest/Stack.cs#Define:L20");
+        SourceReference second = new("spec://deployment/production");
+        var map = new InfrastructureSourceMap(
+        [
+            new(api, second),
+            new(state, first),
+            new(api, first)
+        ]);
+
+        Assert.Equal<SourceReference>([first, second], map.Resolve(api));
+        Assert.Equal(state, map.Entries[0].Subject);
+        Assert.Throws<ArgumentException>(() => new InfrastructureSourceMap([new(api, first), new(api, first)]));
     }
 }

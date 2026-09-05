@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Cohesive.Model;
 using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Worlds;
@@ -176,6 +177,131 @@ public sealed record WorldProvisioningOptions
     public int BatchSize { get; }
 }
 
+/// <summary>One interpreter-neutral generated item delivered through a provisioning batch.</summary>
+/// <remarks>
+/// This is the common sink boundary for core and optional world interpreters. The observation is authoritative output;
+/// the remaining properties retain the exact coordinates needed to verify its interpreter-specific replay.
+/// </remarks>
+public sealed class WorldProvisioningItem
+{
+    internal WorldProvisioningItem(
+        EntityId entityId,
+        Observation observation,
+        long sequenceIndex,
+        string definitionId,
+        string definitionRevision,
+        string definitionFingerprint,
+        string interpreter,
+        string entropyAlgorithm,
+        string replayToken)
+    {
+        if (string.IsNullOrWhiteSpace(entityId.Value))
+            throw new ArgumentException("A provisioned world item requires an entity identity.", nameof(entityId));
+        if (sequenceIndex < 0)
+            throw new ArgumentOutOfRangeException(nameof(sequenceIndex), sequenceIndex, "Sequence index cannot be negative.");
+
+        EntityId = entityId;
+        Observation = Guard.RequireNotNull(observation);
+        SequenceIndex = sequenceIndex;
+        DefinitionId = Guard.RequireNotNullOrWhiteSpace(definitionId);
+        DefinitionRevision = Guard.RequireNotNullOrWhiteSpace(definitionRevision);
+        DefinitionFingerprint = Guard.RequireNotNullOrWhiteSpace(definitionFingerprint);
+        Interpreter = Guard.RequireNotNullOrWhiteSpace(interpreter);
+        EntropyAlgorithm = Guard.RequireNotNullOrWhiteSpace(entropyAlgorithm);
+        ReplayToken = Guard.RequireNotNullOrWhiteSpace(replayToken);
+    }
+
+    /// <summary>Gets the canonical population entity identity.</summary>
+    public EntityId EntityId { get; }
+
+    /// <summary>Gets the complete authoritative core observation.</summary>
+    public Observation Observation { get; }
+
+    /// <summary>Gets the zero-based population sequence index.</summary>
+    public long SequenceIndex { get; }
+
+    /// <summary>Gets the stable local generation-definition identity.</summary>
+    public string DefinitionId { get; }
+
+    /// <summary>Gets the exact local generation-definition revision.</summary>
+    public string DefinitionRevision { get; }
+
+    /// <summary>Gets the fingerprint of exact local generation semantics.</summary>
+    public string DefinitionFingerprint { get; }
+
+    /// <summary>Gets the exact world-interpreter identity and version.</summary>
+    public string Interpreter { get; }
+
+    /// <summary>Gets the exact addressable entropy-algorithm identity and version.</summary>
+    public string EntropyAlgorithm { get; }
+
+    /// <summary>Gets opaque canonical interpreter-specific replay evidence.</summary>
+    public string ReplayToken { get; }
+}
+
+internal sealed class WorldArtifactInterpreterPopulation
+{
+    readonly Func<long, IEnumerable<WorldProvisioningItem>> enumerate;
+
+    public WorldArtifactInterpreterPopulation(
+        string id,
+        int count,
+        GenerationScope scope,
+        Func<long, IEnumerable<WorldProvisioningItem>> enumerate)
+    {
+        Id = Guard.RequireNotNullOrWhiteSpace(id);
+        if (count < 0)
+            throw new ArgumentOutOfRangeException(nameof(count), count, "A population count cannot be negative.");
+        GenerationScope.Validate(scope, nameof(scope));
+        this.enumerate = Guard.RequireNotNull(enumerate);
+        Count = count;
+        Scope = scope;
+    }
+
+    public string Id { get; }
+
+    public int Count { get; }
+
+    public GenerationScope Scope { get; }
+
+    public IEnumerable<WorldProvisioningItem> Enumerate(long rootSeed) => enumerate(rootSeed);
+}
+
+internal sealed class WorldArtifactInterpreterPlan
+{
+    public WorldArtifactInterpreterPlan(
+        WorldArtifactManifest artifact,
+        ImmutableArray<WorldArtifactInterpreterPopulation> populations)
+    {
+        Artifact = Guard.RequireNotNull(artifact);
+        Populations = populations.IsDefault ? [] : populations;
+        if (Artifact.Populations.Length != Populations.Length)
+        {
+            throw new ArgumentException(
+                "Interpreter population count does not match the retained artifact manifest.",
+                nameof(populations));
+        }
+
+        for (var index = 0; index < Populations.Length; index++)
+        {
+            var expected = Artifact.Populations[index];
+            var actual = Populations[index];
+            if (!string.Equals(expected.Id, actual.Id, StringComparison.Ordinal)
+                || expected.Count != actual.Count
+                || expected.Scope != actual.Scope)
+            {
+                throw new ArgumentException(
+                    $"Interpreter population '{actual.Id}' does not match artifact population '{expected.Id}'.",
+                    nameof(populations));
+            }
+        }
+    }
+
+    public WorldArtifactManifest Artifact { get; }
+
+    public ImmutableArray<WorldArtifactInterpreterPopulation> Populations { get; }
+}
+
 /// <summary>One deterministic contiguous batch delivered to a provisioning sink.</summary>
 public sealed class WorldProvisioningBatch
 {
@@ -184,26 +310,28 @@ public sealed class WorldProvisioningBatch
         WorldProvisioningRunId runId,
         string targetId,
         WorldArtifactManifest artifact,
-        CompiledWorldPopulation population,
+        string populationId,
+        int populationCount,
+        GenerationScope populationScope,
         int batchSize,
         int ordinal,
         long startSequenceIndex,
-        ImmutableArray<GeneratedWorldItem> items)
+        ImmutableArray<WorldProvisioningItem> items)
     {
         Id = id;
         RunId = runId;
         TargetId = targetId;
         Artifact = artifact;
-        PopulationId = population.Definition.Id;
-        PopulationCount = population.Definition.Count;
-        PopulationScope = population.Scope;
+        PopulationId = populationId;
+        PopulationCount = populationCount;
+        PopulationScope = populationScope;
         BatchSize = batchSize;
         Ordinal = ordinal;
         StartSequenceIndex = startSequenceIndex;
         Items = items;
         Exemplars = SelectExemplars(
             artifact.Exemplars,
-            population.Definition.Id,
+            populationId,
             startSequenceIndex,
             items.Length);
     }
@@ -224,10 +352,10 @@ public sealed class WorldProvisioningBatch
     public WorldArtifactId ArtifactId => Artifact.ArtifactId;
 
     /// <summary>Gets the stable logical world identity.</summary>
-    public string WorldId => Artifact.World.Definition.Id;
+    public string WorldId => Artifact.World.Id;
 
     /// <summary>Gets the exact authored world revision.</summary>
-    public string WorldRevision => Artifact.World.Definition.Revision;
+    public string WorldRevision => Artifact.World.Revision;
 
     /// <summary>Gets the exact compiled world fingerprint.</summary>
     public string WorldFingerprint => Artifact.World.Fingerprint.Value;
@@ -260,7 +388,7 @@ public sealed class WorldProvisioningBatch
     public long StartSequenceIndex { get; }
 
     /// <summary>Gets generated world items in ascending contiguous sequence-index order.</summary>
-    public ImmutableArray<GeneratedWorldItem> Items { get; }
+    public ImmutableArray<WorldProvisioningItem> Items { get; }
 
     /// <summary>Gets exemplar declarations whose exact generated members occur in this batch.</summary>
     /// <remarks>Declarations retain stable exemplar identity order and do not duplicate generated observations.</remarks>
@@ -345,7 +473,7 @@ public sealed record WorldProvisioningBatchReceipt
 /// <remarks>
 /// Calls are sequential and ordered by population identity, then sequence index. A successful receipt must name the
 /// supplied batch and asserts an outcome for the complete batch. A sink exception leaves the outcome unknown; the
-/// reference provisioner preserves that exception and never retries automatically. Durable adapters should use
+/// provisioner preserves that exception and never retries automatically. Durable adapters should use
 /// <see cref="WorldProvisioningBatch.Id"/> as an idempotency key and return
 /// <see cref="WorldProvisioningBatchDisposition.AlreadyCommitted"/> after verifying a prior exact commit.
 /// </remarks>
@@ -421,10 +549,10 @@ public sealed class WorldProvisioningResult
     public WorldArtifactId ArtifactId => Artifact.ArtifactId;
 
     /// <summary>Gets the stable logical world identity.</summary>
-    public string WorldId => Artifact.World.Definition.Id;
+    public string WorldId => Artifact.World.Id;
 
     /// <summary>Gets the exact authored world revision.</summary>
-    public string WorldRevision => Artifact.World.Definition.Revision;
+    public string WorldRevision => Artifact.World.Revision;
 
     /// <summary>Gets the exact compiled world fingerprint.</summary>
     public string WorldFingerprint => Artifact.World.Fingerprint.Value;
@@ -527,9 +655,9 @@ public static class WorldProvisioner
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(world);
+        var artifact = WorldArtifactManifest.FromWorld(world, rootSeed);
         return ProvisionAsync(
-            world,
-            WorldArtifactManifest.FromWorld(world, rootSeed),
+            CreateReferencePlan(world, artifact),
             sink,
             options,
             cancellationToken);
@@ -562,28 +690,26 @@ public static class WorldProvisioner
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(artifact);
+        RequireReferenceCompatibility(artifact);
         return ProvisionAsync(
-            artifact.World.Compile(),
-            artifact,
+            CreateReferencePlan(artifact.GetCoreWorld().Compile(), artifact),
             sink,
             options,
             cancellationToken);
     }
 
-    static Task<WorldProvisioningResult> ProvisionAsync(
-        CompiledWorldPlan world,
-        WorldArtifactManifest artifact,
+    internal static Task<WorldProvisioningResult> ProvisionAsync(
+        WorldArtifactInterpreterPlan plan,
         IWorldProvisioningSink sink,
         WorldProvisioningOptions? options,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(sink);
-        RequireReferenceCompatibility(artifact);
         var targetId = Guard.RequireNotNullOrWhiteSpace(sink.TargetId);
         options ??= new();
         return ProvisionCoreAsync(
-            world,
-            artifact,
+            plan,
             sink,
             targetId,
             options,
@@ -608,47 +734,73 @@ public static class WorldProvisioner
         }
     }
 
-    static async Task<WorldProvisioningResult> ProvisionCoreAsync(
+    internal static WorldArtifactInterpreterPlan CreateReferencePlan(
         CompiledWorldPlan world,
-        WorldArtifactManifest artifact,
+        WorldArtifactManifest artifact)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(artifact);
+        var populations = ImmutableArray.CreateBuilder<WorldArtifactInterpreterPopulation>(world.Populations.Length);
+        foreach (var population in world.Populations)
+        {
+            populations.Add(new(
+                population.Definition.Id,
+                population.Definition.Count,
+                population.Scope,
+                rootSeed => EnumerateReferencePopulation(population, rootSeed)));
+        }
+
+        return new(artifact, populations.MoveToImmutable());
+    }
+
+    static async Task<WorldProvisioningResult> ProvisionCoreAsync(
+        WorldArtifactInterpreterPlan plan,
         IWorldProvisioningSink sink,
         string targetId,
         WorldProvisioningOptions options,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var artifact = plan.Artifact;
         var runId = WorldProvisioningIdentityConvention.CreateRunId(
             artifact,
             targetId,
             options.BatchSize);
-        var populationResults = ImmutableArray.CreateBuilder<WorldProvisionedPopulation>(world.Populations.Length);
+        var populationResults = ImmutableArray.CreateBuilder<WorldProvisionedPopulation>(plan.Populations.Length);
 
-        foreach (var population in world.Populations)
+        for (var populationIndex = 0; populationIndex < plan.Populations.Length; populationIndex++)
         {
+            var population = plan.Populations[populationIndex];
+            var populationEvidence = artifact.Populations[populationIndex];
             var batchCount = 0;
             var alreadyCommittedCount = 0;
             using var populationItems = population.Enumerate(artifact.RootSeed).GetEnumerator();
-            for (long start = 0; start < population.Definition.Count; start += options.BatchSize)
+            for (long start = 0; start < population.Count; start += options.BatchSize)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var itemCount = (int)Math.Min(options.BatchSize, population.Definition.Count - start);
-                var items = ImmutableArray.CreateBuilder<GeneratedWorldItem>(itemCount);
+                var itemCount = (int)Math.Min(options.BatchSize, population.Count - start);
+                var items = ImmutableArray.CreateBuilder<WorldProvisioningItem>(itemCount);
                 for (var offset = 0; offset < itemCount; offset++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     if (!populationItems.MoveNext())
                     {
                         throw new InvalidOperationException(
-                            $"Population '{population.Definition.Id}' ended before its declared count "
-                            + $"'{population.Definition.Count}'.");
+                            $"Population '{population.Id}' ended before its declared count '{population.Count}'.");
                     }
 
-                    items.Add(populationItems.Current);
+                    var item = populationItems.Current;
+                    ValidateInterpreterItem(
+                        artifact,
+                        populationEvidence,
+                        expectedSequenceIndex: start + offset,
+                        item);
+                    items.Add(item);
                 }
 
                 var batchId = WorldProvisioningIdentityConvention.CreateBatchId(
                     runId,
-                    population.Definition.Id,
+                    population.Id,
                     population.Scope,
                     batchOrdinal: batchCount,
                     startSequenceIndex: start,
@@ -658,7 +810,9 @@ public static class WorldProvisioner
                     runId,
                     targetId,
                     artifact,
-                    population,
+                    population.Id,
+                    population.Count,
+                    population.Scope,
                     options.BatchSize,
                     ordinal: batchCount,
                     startSequenceIndex: start,
@@ -680,8 +834,8 @@ public static class WorldProvisioner
             }
 
             populationResults.Add(new(
-                population.Definition.Id,
-                population.Definition.Count,
+                population.Id,
+                population.Count,
                 batchCount,
                 alreadyCommittedCount));
         }
@@ -692,5 +846,48 @@ public static class WorldProvisioner
             artifact,
             options.BatchSize,
             populationResults.MoveToImmutable());
+    }
+
+    static void ValidateInterpreterItem(
+        WorldArtifactManifest artifact,
+        WorldArtifactPopulationManifest population,
+        long expectedSequenceIndex,
+        WorldProvisioningItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        if (item.SequenceIndex != expectedSequenceIndex
+            || !string.Equals(item.DefinitionId, population.GenerationId, StringComparison.Ordinal)
+            || !string.Equals(item.DefinitionRevision, population.GenerationRevision, StringComparison.Ordinal)
+            || !string.Equals(
+                item.DefinitionFingerprint,
+                population.GenerationFingerprint.Value,
+                StringComparison.Ordinal)
+            || !string.Equals(item.Interpreter, artifact.Interpreter, StringComparison.Ordinal)
+            || !string.Equals(item.EntropyAlgorithm, artifact.EntropyAlgorithm, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Interpreter output for population '{population.Id}' sequence '{expectedSequenceIndex}' does not "
+                + "match the retained artifact coordinates.");
+        }
+    }
+
+    static IEnumerable<WorldProvisioningItem> EnumerateReferencePopulation(
+        CompiledWorldPopulation population,
+        long rootSeed)
+    {
+        foreach (var item in population.Enumerate(rootSeed))
+        {
+            var replay = item.Replay;
+            yield return new(
+                item.EntityId,
+                item.Observation,
+                replay.SequenceIndex,
+                replay.DefinitionId,
+                replay.DefinitionRevision,
+                replay.DefinitionFingerprint,
+                replay.Interpreter,
+                replay.EntropyAlgorithm,
+                replay.ToToken());
+        }
     }
 }

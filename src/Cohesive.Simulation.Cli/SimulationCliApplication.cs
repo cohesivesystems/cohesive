@@ -1,5 +1,6 @@
 using System.Text;
 using Cohesive.Cli;
+using Cohesive.Simulation.Relations;
 using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Worlds;
@@ -44,6 +45,7 @@ static class SimulationCliApplication
         app.Command<WorldManifestCliOptions>(
                 "manifest",
                 "Create and retain a verified world-artifact manifest.")
+            .Validate((Func<WorldManifestCliOptions, IReadOnlyList<string>>)ValidateManifestOptions)
             .OnExecute((CliCommandContext<WorldManifestCliOptions> context) =>
                 CreateManifestAsync(context, standardInput, standardOutput));
         app.Command<WorldProvisionCliOptions>(
@@ -58,6 +60,15 @@ static class SimulationCliApplication
         return app;
     }
 
+    static IReadOnlyList<string> ValidateManifestOptions(WorldManifestCliOptions options)
+    {
+        var coreWorld = !string.IsNullOrWhiteSpace(options.WorldPath);
+        var relationshipWorld = !string.IsNullOrWhiteSpace(options.RelationshipWorldPath);
+        return coreWorld != relationshipWorld
+            ? []
+            : ["Specify exactly one of '--world' or '--relationship-world'."];
+    }
+
     static async Task<int> CreateManifestAsync(
         CliCommandContext<WorldManifestCliOptions> context,
         Stream standardInput,
@@ -67,13 +78,18 @@ static class SimulationCliApplication
         {
             var options = NormalizePaths(context.Configuration);
             var worldJson = await ReadJsonAsync(
-                    options.WorldPath,
+                    options.InputPath,
                     options.ReadsStandardInput,
                     standardInput,
                     context.CancellationToken)
                 .ConfigureAwait(false);
-            var world = WorldDefinitionJsonSerializer.Deserialize(worldJson);
-            var manifest = WorldArtifactManifest.FromWorld(world, options.RootSeed);
+            var manifest = options.IsRelationshipWorld
+                ? RelationshipWorldArtifact.FromWorld(
+                    RelationshipWorldDefinitionJsonSerializer.Deserialize(worldJson),
+                    options.RootSeed)
+                : WorldArtifactManifest.FromWorld(
+                    WorldDefinitionJsonSerializer.Deserialize(worldJson),
+                    options.RootSeed);
             var canonicalManifest = WorldArtifactManifestJsonSerializer.GetCanonicalBytes(manifest);
             await WriteOutputAsync(
                     options.OutputPath,
@@ -139,7 +155,12 @@ static class SimulationCliApplication
     static WorldManifestCliOptions NormalizePaths(WorldManifestCliOptions options) =>
         options with
         {
-            WorldPath = NormalizePath(options.WorldPath, "--world"),
+            WorldPath = options.IsRelationshipWorld
+                ? string.Empty
+                : NormalizePath(options.WorldPath, "--world"),
+            RelationshipWorldPath = options.IsRelationshipWorld
+                ? NormalizePath(options.RelationshipWorldPath, "--relationship-world")
+                : string.Empty,
             OutputPath = NormalizePath(options.OutputPath, "--out")
         };
 
@@ -239,10 +260,20 @@ static class SimulationCliApplication
         CancellationToken cancellationToken)
     {
         WorldJsonLinesSink sink = new(options.TargetId, output);
-        return WorldProvisioner.ProvisionAsync(
-            manifest,
-            sink,
-            new(options.BatchSize),
-            cancellationToken);
+        var optionsValue = new WorldProvisioningOptions(options.BatchSize);
+        return string.Equals(
+                manifest.Interpreter,
+                RelationshipWorldInterpreter.Identity,
+                StringComparison.Ordinal)
+            ? RelationshipWorldProvisioner.ProvisionAsync(
+                manifest,
+                sink,
+                optionsValue,
+                cancellationToken)
+            : WorldProvisioner.ProvisionAsync(
+                manifest,
+                sink,
+                optionsValue,
+                cancellationToken);
     }
 }

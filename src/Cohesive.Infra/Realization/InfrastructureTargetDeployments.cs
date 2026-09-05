@@ -246,6 +246,7 @@ public sealed record InfrastructureTargetDeploymentManifest
     /// <param name="workloads">Declared workload deployments.</param>
     /// <param name="resources">Declared resource deployments.</param>
     /// <param name="fingerprint">Persisted exact fingerprint, or <see langword="null"/> to compute it.</param>
+    /// <param name="sourceMap">Optional non-semantic producer attribution.</param>
     /// <exception cref="ArgumentNullException">A reference argument is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">The schema, identity, deployment collection, facility, or fingerprint is invalid.</exception>
     [JsonConstructor]
@@ -256,7 +257,8 @@ public sealed record InfrastructureTargetDeploymentManifest
         InfrastructureTargetFacilityManifest targetFacilities,
         ImmutableArray<InfrastructureTargetWorkloadDeployment> workloads = default,
         ImmutableArray<InfrastructureTargetResourceDeployment> resources = default,
-        InfrastructureTargetDeploymentManifestFingerprint? fingerprint = null)
+        InfrastructureTargetDeploymentManifestFingerprint? fingerprint = null,
+        InfrastructureSourceMap? sourceMap = null)
     {
         SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
         if (!string.Equals(SchemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
@@ -273,6 +275,7 @@ public sealed record InfrastructureTargetDeploymentManifest
         TargetFacilities = Guard.RequireNotNull(targetFacilities);
         Workloads = NormalizeWorkloads(workloads);
         Resources = NormalizeResources(resources);
+        SourceMap = sourceMap ?? InfrastructureSourceMap.Empty;
         ValidateFacilities();
 
         var computed = InfrastructureTargetDeploymentFingerprinting.Compute(
@@ -307,6 +310,9 @@ public sealed record InfrastructureTargetDeploymentManifest
 
     /// <summary>Deterministic fingerprint of the complete declaration.</summary>
     public InfrastructureTargetDeploymentManifestFingerprint Fingerprint { get; }
+
+    /// <summary>Non-semantic producer attribution excluded from <see cref="Fingerprint"/>.</summary>
+    public InfrastructureSourceMap SourceMap { get; }
 
     /// <summary>Creates an exact payload-free reference to this manifest.</summary>
     /// <returns>The schema, identity, definition, target-facility, and fingerprint fence.</returns>
@@ -367,7 +373,8 @@ public sealed record InfrastructureTargetDeploymentManifest
         && TargetFacilities == other.TargetFacilities
         && Workloads.SequenceEqual(other.Workloads)
         && Resources.SequenceEqual(other.Resources)
-        && Fingerprint == other.Fingerprint;
+        && Fingerprint == other.Fingerprint
+        && SourceMap == other.SourceMap;
 
     /// <summary>Returns a structural hash code for this manifest.</summary>
     /// <returns>A hash code derived from every field.</returns>
@@ -383,6 +390,7 @@ public sealed record InfrastructureTargetDeploymentManifest
         foreach (var resource in Resources)
             hash.Add(resource);
         hash.Add(Fingerprint);
+        hash.Add(SourceMap);
         return hash.ToHashCode();
     }
 
@@ -655,17 +663,29 @@ public static class InfrastructureTargetDeploymentCompiler
         foreach (var deployment in manifest.Workloads)
         {
             if (!workloads.Contains(deployment.Workload))
-                diagnostics.Add(Unknown(deployment.Workload, InfrastructureNodeKind.Workload, deployment.SourceReferences));
+            {
+                diagnostics.Add(Unknown(
+                    deployment.Workload,
+                    InfrastructureNodeKind.Workload,
+                    deployment.SourceReferences,
+                    manifest.SourceMap));
+            }
         }
         foreach (var deployment in manifest.Resources)
         {
             if (!resources.Contains(deployment.Resource))
-                diagnostics.Add(Unknown(deployment.Resource, InfrastructureNodeKind.Resource, deployment.SourceReferences));
+            {
+                diagnostics.Add(Unknown(
+                    deployment.Resource,
+                    InfrastructureNodeKind.Resource,
+                    deployment.SourceReferences,
+                    manifest.SourceMap));
+            }
         }
         foreach (var workload in workloads.Where(workload => !declaredWorkloads.Contains(workload)))
-            diagnostics.Add(Missing(workload, InfrastructureNodeKind.Workload));
+            diagnostics.Add(Missing(workload, InfrastructureNodeKind.Workload, manifest));
         foreach (var resource in resources.Where(resource => !declaredResources.Contains(resource)))
-            diagnostics.Add(Missing(resource, InfrastructureNodeKind.Resource));
+            diagnostics.Add(Missing(resource, InfrastructureNodeKind.Resource, manifest));
 
         return DocumentValidationDiagnostics.Normalize(diagnostics.ToImmutable());
     }
@@ -673,7 +693,8 @@ public static class InfrastructureTargetDeploymentCompiler
     static DocumentValidationDiagnostic Unknown(
         InfrastructureNodeId node,
         InfrastructureNodeKind kind,
-        ImmutableArray<SourceReference> sources) => new(
+        ImmutableArray<SourceReference> sources,
+        InfrastructureSourceMap sourceMap) => new(
         DiagnosticCodes.NodeUnknown,
         DiagnosticSeverity.Error,
         $"Target deployment declaration '{node.Value}' is not a canonical {kind.ToString().ToLowerInvariant()}.",
@@ -681,12 +702,21 @@ public static class InfrastructureTargetDeploymentCompiler
         Evidence: new(
             stage: Stage,
             subject: node.Value,
-            sourceReferences: [.. sources.Select(static source => source.Value)],
+            sourceReferences:
+            [
+                .. sources
+                    .Concat(sourceMap.Resolve(InfrastructureSourceReferences.Node(node)))
+                    .Select(static source => source.Value)
+                    .Distinct()
+            ],
             resolutionOptions: ["Remove the stale deployment or bind it to an exact canonical node."],
             expected: $"a canonical {kind.ToString().ToLowerInvariant()} identity",
             observed: "unknown or wrong-kind node"));
 
-    static DocumentValidationDiagnostic Missing(InfrastructureNodeId node, InfrastructureNodeKind kind) => new(
+    static DocumentValidationDiagnostic Missing(
+        InfrastructureNodeId node,
+        InfrastructureNodeKind kind,
+        InfrastructureTargetDeploymentManifest manifest) => new(
         kind == InfrastructureNodeKind.Workload ? DiagnosticCodes.WorkloadMissing : DiagnosticCodes.ResourceMissing,
         DiagnosticSeverity.Error,
         $"Canonical {kind.ToString().ToLowerInvariant()} '{node.Value}' has no target deployment declaration.",
@@ -694,6 +724,7 @@ public static class InfrastructureTargetDeploymentCompiler
         Evidence: new(
             stage: Stage,
             subject: node.Value,
+            sourceReferences: [InfrastructureSourceReferences.TargetDeploymentManifest(manifest.ToReference()).Value],
             resolutionOptions: ["Declare an exact physical deployment through the selected target adapter."],
             expected: "one attributable physical deployment",
             observed: "no deployment declaration"));

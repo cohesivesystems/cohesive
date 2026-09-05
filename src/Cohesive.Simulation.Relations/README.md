@@ -86,7 +86,7 @@ Target references use the target population's canonical `WorldEntityIdentityPoli
 fields. Generation and compact `csimwr1.` replay tokens are deterministic from the root seed and semantic addresses.
 Unrelated world populations and world-revision labels do not perturb an existing population's replay coordinates.
 
-## Portable definition
+## Portable definition and retained artifacts
 
 Persist a self-validating relationship world with `RelationshipWorldDefinitionJsonSerializer`:
 
@@ -100,6 +100,26 @@ The strict current-version document embeds the exact fingerprint-pinned relation
 definition, normalizes non-semantic declaration order, rejects unknown or duplicate properties, and recomputes its
 fingerprint on read.
 
-This first package slice exposes generation and portable definition APIs. Core `WorldArtifactManifest`, JSON Lines,
-CLI, and provisioning currently accept `WorldDefinition`; a later bridge must extend those retained-artifact paths
-without weakening their fail-closed manifest authority.
+Retain that complete authority through provisioning and JSON Lines rather than reconstructing the relationship world
+from the core world:
+
+```csharp
+using Cohesive.Simulation.Artifacts;
+using Cohesive.Simulation.Provisioning;
+
+WorldArtifactManifest artifact = RelationshipWorldArtifact.FromWorld(restored, rootSeed: 42);
+
+await using var output = File.Create("freight-demo.jsonl");
+var sink = new WorldJsonLinesSink("demo/freight", output);
+await RelationshipWorldProvisioner.ProvisionAsync(artifact, sink);
+
+output.Position = 0;
+await RelationshipWorldJsonLinesVerifier.VerifyAsync(artifact, output);
+```
+
+The core manifest envelope embeds and fingerprints the exact relationship-world document while remaining independent
+of the optional Relations assembly. The Relations package validates that document, proves its indexed world,
+population, generation, and exemplar projections, and supplies the relationship interpreter behind the shared bounded
+provisioning and JSONL seams. Calling the core-only provisioner with a relationship artifact fails closed. For scripts,
+`cohesive-sim manifest --relationship-world ...` creates the same retained artifact and `cohesive-sim provision`
+dispatches from its pinned interpreter identity.
