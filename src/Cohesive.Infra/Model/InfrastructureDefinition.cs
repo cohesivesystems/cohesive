@@ -263,9 +263,68 @@ public sealed record InfrastructureBindingDefinition
     }
 }
 
+/// <summary>One provider-neutral prerequisite for admitting an infrastructure node as ready.</summary>
+public sealed record InfrastructureReadinessDependency
+{
+    /// <summary>Creates an infrastructure readiness dependency.</summary>
+    /// <param name="id">Stable definition-local dependency identity.</param>
+    /// <param name="subject">Node whose readiness is gated.</param>
+    /// <param name="dependency">Node that must be ready before the subject is ready.</param>
+    /// <exception cref="ArgumentException">An identity is default or the dependency is self-referential.</exception>
+    [JsonConstructor]
+    public InfrastructureReadinessDependency(
+        InfrastructureReadinessDependencyId id,
+        InfrastructureNodeId subject,
+        InfrastructureNodeId dependency)
+    {
+        if (string.IsNullOrWhiteSpace(id.Value))
+            throw new ArgumentException("An infrastructure readiness dependency requires a stable identity.", nameof(id));
+        if (string.IsNullOrWhiteSpace(subject.Value))
+            throw new ArgumentException("An infrastructure readiness dependency requires a subject node.", nameof(subject));
+        if (string.IsNullOrWhiteSpace(dependency.Value))
+            throw new ArgumentException("An infrastructure readiness dependency requires a dependency node.", nameof(dependency));
+        if (subject == dependency)
+            throw new ArgumentException("An infrastructure node cannot require itself to be ready.", nameof(dependency));
+
+        Id = id;
+        Subject = subject;
+        Dependency = dependency;
+    }
+
+    /// <summary>Stable definition-local dependency identity.</summary>
+    public InfrastructureReadinessDependencyId Id { get; }
+
+    /// <summary>Node whose readiness is gated.</summary>
+    public InfrastructureNodeId Subject { get; }
+
+    /// <summary>Node that must be ready before the subject is ready.</summary>
+    public InfrastructureNodeId Dependency { get; }
+
+    /// <summary>Derives the conventional stable identity for one exact directed readiness dependency.</summary>
+    /// <param name="subject">Node whose readiness is gated.</param>
+    /// <param name="dependency">Node that must be ready before the subject is ready.</param>
+    /// <returns>An identity derived only from the exact subject and dependency semantic slot.</returns>
+    /// <exception cref="ArgumentException">An identity is default or the dependency is self-referential.</exception>
+    public static InfrastructureReadinessDependencyId DeriveId(
+        InfrastructureNodeId subject,
+        InfrastructureNodeId dependency)
+    {
+        if (string.IsNullOrWhiteSpace(subject.Value))
+            throw new ArgumentException("A conventional readiness dependency requires a subject node.", nameof(subject));
+        if (string.IsNullOrWhiteSpace(dependency.Value))
+            throw new ArgumentException("A conventional readiness dependency requires a dependency node.", nameof(dependency));
+        if (subject == dependency)
+            throw new ArgumentException("An infrastructure node cannot require itself to be ready.", nameof(dependency));
+
+        return new(
+            $"readiness/{Uri.EscapeDataString(subject.Value)}/requires/{Uri.EscapeDataString(dependency.Value)}");
+    }
+}
+
 /// <summary>Canonical provider-neutral desired infrastructure topology.</summary>
 /// <remarks>
-/// Workload, resource, binding, and requirement collection order is non-semantic and normalized by stable identity.
+/// Workload, resource, binding, readiness-dependency, and requirement collection order is non-semantic and normalized
+/// by stable identity.
 /// Concrete provider resources, deployment handles, generated programs, and observed state are interpretations of this
 /// definition and do not belong in this IR.
 /// </remarks>
@@ -277,10 +336,12 @@ public sealed record InfrastructureDefinition
     /// <param name="workloads">Executable workload nodes.</param>
     /// <param name="resources">Logical resource nodes.</param>
     /// <param name="bindings">Directed contracts between declared nodes.</param>
+    /// <param name="readinessDependencies">Directed prerequisites that gate node readiness.</param>
     /// <exception cref="ArgumentException">
     /// An identity is default; no node is declared; a collection contains nulls or duplicate identities; a node identity
     /// is reused across node families; a requirement identity is reused across nodes; a binding repeats the same
-    /// source, target, and contract; or a binding references an undeclared node.
+    /// source, target, and contract; a binding or readiness dependency references an undeclared node; a readiness slot
+    /// repeats; or the readiness graph contains a cycle.
     /// </exception>
     [JsonConstructor]
     public InfrastructureDefinition(
@@ -288,7 +349,8 @@ public sealed record InfrastructureDefinition
         InfrastructureRevisionId revision,
         ImmutableArray<InfrastructureWorkloadDefinition> workloads = default,
         ImmutableArray<InfrastructureResourceDefinition> resources = default,
-        ImmutableArray<InfrastructureBindingDefinition> bindings = default)
+        ImmutableArray<InfrastructureBindingDefinition> bindings = default,
+        ImmutableArray<InfrastructureReadinessDependency> readinessDependencies = default)
     {
         if (string.IsNullOrWhiteSpace(id.Value))
             throw new ArgumentException("An infrastructure definition requires a stable identity.", nameof(id));
@@ -312,6 +374,11 @@ public sealed record InfrastructureDefinition
             static binding => binding.Id.Value,
             "Infrastructure binding identities cannot repeat.",
             nameof(bindings));
+        ReadinessDependencies = InfrastructureModelCollections.NormalizeReferenceValues(
+            readinessDependencies,
+            static dependency => dependency.Id.Value,
+            "Infrastructure readiness-dependency identities cannot repeat.",
+            nameof(readinessDependencies));
 
         if (Workloads.IsDefaultOrEmpty && Resources.IsDefaultOrEmpty)
             throw new ArgumentException("An infrastructure definition requires at least one workload or resource node.");
@@ -356,6 +423,25 @@ public sealed record InfrastructureDefinition
                     nameof(bindings));
             }
         }
+
+        HashSet<(InfrastructureNodeId Subject, InfrastructureNodeId Dependency)> readinessSlots = [];
+        foreach (var dependency in ReadinessDependencies)
+        {
+            if (!nodes.Contains(dependency.Subject) || !nodes.Contains(dependency.Dependency))
+            {
+                throw new ArgumentException(
+                    $"Infrastructure readiness dependency '{dependency.Id.Value}' references an undeclared subject or dependency node.",
+                    nameof(readinessDependencies));
+            }
+            if (!readinessSlots.Add((dependency.Subject, dependency.Dependency)))
+            {
+                throw new ArgumentException(
+                    $"Infrastructure readiness dependency '{dependency.Id.Value}' duplicates an existing subject and dependency.",
+                    nameof(readinessDependencies));
+            }
+        }
+
+        ValidateAcyclicReadiness(nodes, nameof(readinessDependencies));
     }
 
     /// <summary>Stable identity shared by semantic revisions.</summary>
@@ -372,6 +458,9 @@ public sealed record InfrastructureDefinition
 
     /// <summary>Bindings in deterministic identity order.</summary>
     public ImmutableArray<InfrastructureBindingDefinition> Bindings { get; }
+
+    /// <summary>Readiness prerequisites in deterministic dependency-identity order.</summary>
+    public ImmutableArray<InfrastructureReadinessDependency> ReadinessDependencies { get; }
 
     /// <summary>Gets the declared semantic kind of one infrastructure node.</summary>
     /// <param name="node">Stable node identity to inspect.</param>
@@ -391,7 +480,7 @@ public sealed record InfrastructureDefinition
 
     /// <summary>Compares normalized infrastructure definitions structurally.</summary>
     /// <param name="other">Other infrastructure definition.</param>
-    /// <returns><see langword="true"/> when identity, revision, nodes, requirements, and bindings are equal.</returns>
+    /// <returns><see langword="true"/> when identity, revision, nodes, requirements, bindings, and readiness dependencies are equal.</returns>
     public bool Equals(InfrastructureDefinition? other) =>
         ReferenceEquals(this, other)
         || other is not null
@@ -399,7 +488,8 @@ public sealed record InfrastructureDefinition
         && Revision == other.Revision
         && Workloads.SequenceEqual(other.Workloads)
         && Resources.SequenceEqual(other.Resources)
-        && Bindings.SequenceEqual(other.Bindings);
+        && Bindings.SequenceEqual(other.Bindings)
+        && ReadinessDependencies.SequenceEqual(other.ReadinessDependencies);
 
     /// <summary>Returns a structural hash code for the normalized infrastructure definition.</summary>
     /// <returns>A hash derived from every canonical definition field.</returns>
@@ -414,7 +504,38 @@ public sealed record InfrastructureDefinition
             hash.Add(resource);
         foreach (var binding in Bindings)
             hash.Add(binding);
+        foreach (var dependency in ReadinessDependencies)
+            hash.Add(dependency);
         return hash.ToHashCode();
+    }
+
+    void ValidateAcyclicReadiness(IEnumerable<InfrastructureNodeId> nodes, string parameterName)
+    {
+        var dependencies = ReadinessDependencies
+            .GroupBy(static dependency => dependency.Subject)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.Select(static dependency => dependency.Dependency).ToImmutableArray());
+        HashSet<InfrastructureNodeId> complete = [];
+        HashSet<InfrastructureNodeId> active = [];
+        foreach (var node in nodes)
+            Visit(node);
+
+        void Visit(InfrastructureNodeId node)
+        {
+            if (complete.Contains(node) || !dependencies.TryGetValue(node, out var required))
+                return;
+            if (!active.Add(node))
+            {
+                throw new ArgumentException(
+                    $"Infrastructure readiness dependency graph contains a cycle through node '{node.Value}'.",
+                    parameterName);
+            }
+            foreach (var dependency in required)
+                Visit(dependency);
+            active.Remove(node);
+            complete.Add(node);
+        }
     }
 }
 

@@ -212,6 +212,7 @@ public sealed class InfrastructureLocalRealizationTests
         Assert.True(directProject.IsValid);
         Assert.Equal(directProject.Fingerprint, fluentProject.Fingerprint);
 
+        var readinessRealization = WorkloadRealization(projectSource.Reference, includeReadiness: true);
         var topology = InfrastructureLocal.Define(local => local
             .Service(new("resource/scheduler"), new("physical/scheduler"), "mcr.microsoft.com/dts/dts-emulator@sha256:abc", scheduler => scheduler
                 .Endpoint(
@@ -236,15 +237,14 @@ public sealed class InfrastructureLocalRealizationTests
                         role: InfrastructureLocalEndpointRole.Data,
                         hostPort: new(Subject, new("api-port")))
                     .HttpHealth(new("https"), "/health")
-                    .HealthTiming(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2), retries: 30)
-                    .DependsOn(new("physical/scheduler"))));
+                    .HealthTiming(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2), retries: 30)));
         var configuration = Configuration(
             (ProjectName, "ari-local"),
             (new("scheduler-port"), "8082"),
             (new("api-port"), "7443"));
 
         var document = InfrastructureLocalRealizationCompiler.Compile(
-            realization,
+            readinessRealization,
             Environment(InfrastructureLocalDataLifetime.Persistent),
             topology,
             [configuration]);
@@ -253,6 +253,8 @@ public sealed class InfrastructureLocalRealizationTests
             JsonOptions);
 
         Assert.True(document.IsValid);
+        Assert.True(document.Topology.Services.Single(service => service.Node == new InfrastructureNodeId("workload/api"))
+            .ReadyDependencies.SequenceEqual([new InfrastructurePhysicalResourceId("physical/scheduler")]));
         var project = Assert.IsType<InfrastructureLocalProjectSource>(document.Topology.Services.Single(service => service.Node == new InfrastructureNodeId("workload/api")).Source);
         Assert.Equal("ari/training-api", project.Id.Value);
         Assert.Equal("src/Ari.Training.Api/Ari.Training.Api.csproj", project.ProjectPath.Value);
@@ -425,14 +427,25 @@ public sealed class InfrastructureLocalRealizationTests
         return InfrastructureRealizationCompiler.Compile(closure, lifecycle);
     }
 
-    static InfrastructureRealization WorkloadRealization(SourceReference? projectReference = null)
+    static InfrastructureRealization WorkloadRealization(
+        SourceReference? projectReference = null,
+        bool includeReadiness = false)
     {
         var placementReference = projectReference ?? new SourceReference("fixture://local-workload-tests/v1");
         var definition = InfrastructureDefinitionDocument.FromDefinition(new(
             id: new("local-workload-tests"),
             revision: new("v1"),
             workloads: [new(new("workload/api"))],
-            resources: [new(new("resource/scheduler"), InfrastructureResourceLifecycle.Ephemeral)]));
+            resources: [new(new("resource/scheduler"), InfrastructureResourceLifecycle.Ephemeral)],
+            readinessDependencies: includeReadiness
+                ?
+                [
+                    new(
+                        InfrastructureReadinessDependency.DeriveId(new("workload/api"), new("resource/scheduler")),
+                        new("workload/api"),
+                        new("resource/scheduler"))
+                ]
+                : []));
         InfrastructureCapabilityVariantId variant = new("local");
         var profile = new InfrastructureCapabilityProfile(
             schemaVersion: InfrastructureCapabilityProfile.CurrentSchemaVersion,

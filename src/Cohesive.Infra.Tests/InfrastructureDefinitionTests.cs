@@ -1,5 +1,3 @@
-using Cohesive.Infra;
-
 namespace Cohesive.Infra.Tests;
 
 public sealed class InfrastructureDefinitionTests
@@ -55,6 +53,12 @@ public sealed class InfrastructureDefinitionTests
                 new(workerSchedulerBinding, worker, scheduler, processClient),
                 new(workerInboxBinding, worker, inbox, eventPublication),
                 new(apiInboxBinding, api, inbox, eventPublication)
+            ],
+            readinessDependencies:
+            [
+                new(InfrastructureReadinessDependency.DeriveId(worker, scheduler), worker, scheduler),
+                new(InfrastructureReadinessDependency.DeriveId(api, inbox), api, inbox),
+                new(InfrastructureReadinessDependency.DeriveId(worker, inbox), worker, inbox)
             ]);
         var directDocument = InfrastructureDefinitionDocument.FromDefinition(directDefinition);
 
@@ -67,10 +71,13 @@ public sealed class InfrastructureDefinitionTests
                 .Persistent()
                 .Requires(inboxStorageRequirement, durableStorage);
             var apiWorkload = infrastructure.Workload(api)
-                .Requires(apiInboxRequirement, receivesEvents);
+                .Requires(apiInboxRequirement, receivesEvents)
+                .RequiresReady(inboxResource);
             var workerWorkload = infrastructure.Workload(worker)
                 .Requires(workerInboxRequirement, receivesEvents)
-                .Requires(workerSchedulerRequirement, durableScheduling);
+                .Requires(workerSchedulerRequirement, durableScheduling)
+                .RequiresReady(inboxResource)
+                .RequiresReady(schedulerResource);
 
             infrastructure.Bind(apiInboxBinding, apiWorkload).To(inboxResource).As(eventPublication);
             infrastructure.Bind(workerInboxBinding, workerWorkload).To(inboxResource).As(eventPublication);
@@ -86,6 +93,13 @@ public sealed class InfrastructureDefinitionTests
         Assert.Equal(
             ["bindings/api/inbox", "bindings/worker/inbox", "bindings/worker/scheduler"],
             fluentDocument.Definition.Bindings.Select(static value => value.Id.Value));
+        Assert.Equal(
+            [
+                "readiness/api/requires/domain-event-inbox",
+                "readiness/worker/requires/domain-event-inbox",
+                "readiness/worker/requires/durable-scheduler"
+            ],
+            fluentDocument.Definition.ReadinessDependencies.Select(static value => value.Id.Value));
         Assert.Equal(
             ["requirements/worker/inbox", "requirements/worker/scheduler"],
             fluentDocument.Definition.Workloads[1].Requirements.Select(static value => value.Id.Value));
@@ -191,6 +205,42 @@ public sealed class InfrastructureDefinitionTests
             [
                 new(new("bindings/api/store/one"), api, store, contract),
                 new(new("bindings/api/store/two"), api, store, contract)
+            ]));
+    }
+
+    [Fact]
+    public void Definition_rejects_unknown_duplicate_and_cyclic_readiness_dependencies()
+    {
+        InfrastructureNodeId api = new("api");
+        InfrastructureNodeId worker = new("worker");
+        InfrastructureNodeId state = new("state");
+
+        Assert.Throws<ArgumentException>(() => new InfrastructureDefinition(
+            new("unknown-readiness"),
+            new("v1"),
+            workloads: [new(api)],
+            readinessDependencies:
+            [
+                new(InfrastructureReadinessDependency.DeriveId(api, state), api, state)
+            ]));
+        Assert.Throws<ArgumentException>(() => new InfrastructureDefinition(
+            new("duplicate-readiness"),
+            new("v1"),
+            workloads: [new(api)],
+            resources: [new(state, InfrastructureResourceLifecycle.Persistent)],
+            readinessDependencies:
+            [
+                new(new("readiness/one"), api, state),
+                new(new("readiness/two"), api, state)
+            ]));
+        Assert.Throws<ArgumentException>(() => new InfrastructureDefinition(
+            new("cyclic-readiness"),
+            new("v1"),
+            workloads: [new(api), new(worker)],
+            readinessDependencies:
+            [
+                new(InfrastructureReadinessDependency.DeriveId(api, worker), api, worker),
+                new(InfrastructureReadinessDependency.DeriveId(worker, api), worker, api)
             ]));
     }
 }
