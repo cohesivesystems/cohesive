@@ -8,8 +8,10 @@ namespace Cohesive.Infra.Tests;
 public sealed class InfrastructureReadinessTests
 {
     static readonly InfrastructureNodeId Api = new("workload/api");
+    static readonly InfrastructureNodeId Worker = new("workload/worker");
     static readonly InfrastructureNodeId State = new("resource/state");
     static readonly InfrastructurePhysicalResourceId ApiPhysical = new("aspire/project/ari-api");
+    static readonly InfrastructurePhysicalResourceId WorkerPhysical = new("aspire/project/ari-worker");
     static readonly InfrastructurePhysicalResourceId StatePhysical = new("aspire/container/cosmos");
     static readonly SourceReference AspireSource = SourceReference.Create("aspire", "app-host/ari");
     static readonly DateTimeOffset ObservedAt = new(2026, 9, 5, 12, 0, 0, TimeSpan.Zero);
@@ -68,6 +70,62 @@ public sealed class InfrastructureReadinessTests
         Assert.Contains(
             assessment.Diagnostics,
             static diagnostic => diagnostic.Code == InfrastructureReadinessEvaluator.DiagnosticCodes.DependencyUnknown);
+    }
+
+    [Fact]
+    public void Transitive_dependency_failure_propagates_through_each_exact_obligation()
+    {
+        var assessment = InfrastructureReadinessEvaluator.Assess(
+            TransitiveRealization(),
+            [
+                Observation(ApiPhysical, ExecutionHealthStatus.Healthy, ExecutionReadinessStatus.Ready),
+                Observation(WorkerPhysical, ExecutionHealthStatus.Healthy, ExecutionReadinessStatus.Ready),
+                Observation(StatePhysical, ExecutionHealthStatus.Unhealthy, ExecutionReadinessStatus.NotReady)
+            ]);
+
+        var worker = Assert.IsType<InfrastructureReadinessDecision>(assessment.FindDecision(Worker));
+        var api = Assert.IsType<InfrastructureReadinessDecision>(assessment.FindDecision(Api));
+        Assert.Equal(ExecutionReadinessStatus.NotReady, worker.EffectiveReadiness);
+        Assert.True(worker.BlockingDependencies.SequenceEqual([StatePhysical]));
+        Assert.Equal(ExecutionReadinessStatus.NotReady, api.EffectiveReadiness);
+        Assert.True(api.BlockingDependencies.SequenceEqual([WorkerPhysical]));
+        Assert.Equal(
+            2,
+            assessment.Diagnostics.Count(
+                static diagnostic => diagnostic.Code == InfrastructureReadinessEvaluator.DiagnosticCodes.DependencyNotReady));
+    }
+
+    [Fact]
+    public void Readiness_assessment_fails_closed_when_an_obligation_cannot_be_physically_lowered()
+    {
+        var definition = Infrastructure.Define(new("incomplete-readiness"), new("v1"), infrastructure =>
+        {
+            var worker = infrastructure.Workload(Worker);
+            infrastructure.Workload(Api).RequiresReady(worker);
+        });
+        InfrastructureCapabilityVariantId variant = new("local");
+        var profile = Profile(definition, variant, new("profiles/incomplete-readiness/v1"));
+        var closure = InfrastructureCapabilityCompiler.Compile(definition, profile, variant);
+        var realization = InfrastructureRealizationCompiler.Compile(
+            closure,
+            new InfrastructureLifecyclePlan(definition),
+            [new(Api, ApiPhysical, new("local"), [AspireSource])]);
+
+        var assessment = InfrastructureReadinessEvaluator.Assess(
+            realization,
+            [Observation(ApiPhysical, ExecutionHealthStatus.Healthy, ExecutionReadinessStatus.Ready)]);
+
+        Assert.False(realization.IsReadinessObligationComplete);
+        Assert.Empty(realization.ReadinessObligations);
+        Assert.False(assessment.IsReady);
+        Assert.Equal(ExecutionReadinessStatus.NotReady, assessment.FindDecision(Api)!.EffectiveReadiness);
+        Assert.Null(assessment.FindDecision(Worker));
+        Assert.Contains(
+            assessment.Diagnostics,
+            static diagnostic => diagnostic.Code == InfrastructureReadinessEvaluator.DiagnosticCodes.RealizationIncomplete);
+        Assert.Contains(
+            assessment.Diagnostics,
+            static diagnostic => diagnostic.Code == InfrastructureReadinessEvaluator.DiagnosticCodes.PhysicalSubjectMissing);
     }
 
     [Fact]
@@ -155,6 +213,46 @@ public sealed class InfrastructureReadinessTests
             lifecycle,
             [new(Api, ApiPhysical, new("local"), [AspireSource])]);
     }
+
+    static InfrastructureRealization TransitiveRealization()
+    {
+        var definition = Infrastructure.Define(new("ari-transitive-readiness"), new("v1"), infrastructure =>
+        {
+            var state = infrastructure.Resource(State).Persistent();
+            var worker = infrastructure.Workload(Worker).RequiresReady(state);
+            infrastructure.Workload(Api).RequiresReady(worker);
+        });
+        InfrastructureCapabilityVariantId variant = new("local");
+        var profile = Profile(definition, variant, new("profiles/transitive-readiness/v1"));
+        var closure = InfrastructureCapabilityCompiler.Compile(definition, profile, variant);
+        var lifecycle = new InfrastructureLifecyclePlan(
+            definition,
+            [
+                new(
+                    State,
+                    StatePhysical,
+                    new("local"),
+                    new("local/ari"),
+                    InfrastructureLifecycleDisposition.Managed)
+            ]);
+        return InfrastructureRealizationCompiler.Compile(
+            closure,
+            lifecycle,
+            [
+                new(Api, ApiPhysical, new("local"), [AspireSource]),
+                new(Worker, WorkerPhysical, new("local"), [AspireSource])
+            ]);
+    }
+
+    static InfrastructureCapabilityProfile Profile(
+        InfrastructureDefinitionDocument definition,
+        InfrastructureCapabilityVariantId variant,
+        InfrastructureCapabilityProfileId id) => new(
+            InfrastructureCapabilityProfile.CurrentSchemaVersion,
+            id,
+            new("local"),
+            [definition.SchemaVersion],
+            [new(variant)]);
 
     static InfrastructureResourceObservation Observation(
         InfrastructurePhysicalResourceId physicalResource,

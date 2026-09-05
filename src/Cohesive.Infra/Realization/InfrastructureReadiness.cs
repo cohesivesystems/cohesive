@@ -87,7 +87,9 @@ static class InfrastructureReadinessObligationCompiler
                 dependency.Dependency,
                 required));
         }
-        return obligations.MoveToImmutable();
+        return obligations.Count == definition.ReadinessDependencies.Length
+            ? obligations.MoveToImmutable()
+            : obligations.ToImmutable();
     }
 
     internal static Dictionary<InfrastructureNodeId, InfrastructurePhysicalResourceId> PhysicalResources(

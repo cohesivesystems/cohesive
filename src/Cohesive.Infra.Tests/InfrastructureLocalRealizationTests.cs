@@ -164,6 +164,58 @@ public sealed class InfrastructureLocalRealizationTests
     }
 
     [Fact]
+    public void Local_only_ready_dependency_is_a_non_blocking_migration_warning()
+    {
+        var topology = InfrastructureLocal.Define(local => local
+            .Service(new("resource/scheduler"), new("physical/scheduler"), "scheduler:1.0", scheduler => scheduler
+                .CommandHealth("scheduler-health")
+                .HealthTiming(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1), retries: 3))
+            .ContainerService(
+                new("workload/api"),
+                new("physical/api"),
+                "api:1.0",
+                api => api.DependsOn(new("physical/scheduler"))));
+
+        var document = InfrastructureLocalRealizationCompiler.Compile(
+            WorkloadRealization(),
+            Environment(InfrastructureLocalDataLifetime.Persistent),
+            topology,
+            [Configuration((ProjectName, "ari-local"))]);
+
+        Assert.True(document.IsValid);
+        var diagnostic = Assert.Single(
+            document.Diagnostics,
+            static diagnostic => diagnostic.Code ==
+                InfrastructureLocalRealizationCompiler.DiagnosticCodes.ReadinessDependencyNotCanonical);
+        Assert.Equal(DiagnosticSeverity.Warning, diagnostic.Severity);
+        Assert.True(document.Topology.Services.Single(service => service.Node == new InfrastructureNodeId("workload/api"))
+            .ReadyDependencies.SequenceEqual([new InfrastructurePhysicalResourceId("physical/scheduler")]));
+    }
+
+    [Fact]
+    public void Canonical_ready_dependency_requires_local_health_evidence()
+    {
+        var topology = InfrastructureLocal.Define(local => local
+            .Service(new("resource/scheduler"), new("physical/scheduler"), "scheduler:1.0")
+            .ContainerService(new("workload/api"), new("physical/api"), "api:1.0"));
+
+        var document = InfrastructureLocalRealizationCompiler.Compile(
+            WorkloadRealization(includeReadiness: true),
+            Environment(InfrastructureLocalDataLifetime.Persistent),
+            topology,
+            [Configuration((ProjectName, "ari-local"))]);
+
+        Assert.False(document.IsValid);
+        var diagnostic = Assert.Single(
+            document.Diagnostics,
+            static diagnostic => diagnostic.Code ==
+                InfrastructureLocalRealizationCompiler.DiagnosticCodes.DependencyHealthMissing);
+        Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
+        Assert.True(document.Topology.Services.Single(service => service.Node == new InfrastructureNodeId("workload/api"))
+            .ReadyDependencies.SequenceEqual([new InfrastructurePhysicalResourceId("physical/scheduler")]));
+    }
+
+    [Fact]
     public void Fluent_health_authoring_requires_both_probes_and_timing()
     {
         Assert.Throws<InvalidOperationException>(() => InfrastructureLocal.Define(local => local

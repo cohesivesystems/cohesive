@@ -101,6 +101,12 @@ their exact physical placements. Local compilation projects those obligations in
 Docker Compose and Aspire, so application code does not repeat physical dependency strings. Aspire continues to own
 local orchestration and realizes the relationship as `WaitFor` plus adapter health checks.
 
+Adoption note: topology-level `DependsOn(...)` and direct `ReadyDependencies` remain honored as explicit local
+compatibility overrides. When no matching canonical obligation exists, local compilation emits the warning
+`infra.local.readiness.notCanonical` without invalidating the local realization. Migrate an edge to semantic
+`RequiresReady(...)` only when the application's readiness actually depends on it. A local startup-order preference is
+not the same guarantee and should not be promoted into the canonical definition merely to silence the warning.
+
 Adapters can normalize current backend evidence into `InfrastructureResourceObservation` values. The pure
 `InfrastructureReadinessEvaluator` compares those observations with the exact realization and returns a fingerprinted
 assessment with one decision per physicalized logical node. Missing and unknown evidence fail closed, an unhealthy

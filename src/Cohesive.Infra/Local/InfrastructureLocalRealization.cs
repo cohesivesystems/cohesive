@@ -472,7 +472,8 @@ public static class InfrastructureLocalRealizationCompiler
                             "Remove the local dependency when it is only start ordering rather than semantic readiness."
                         ],
                         expected: "an exact readiness obligation in the fenced realization",
-                        observed: $"{service.PhysicalResource.Value} requires {dependency.Value}");
+                        observed: $"{service.PhysicalResource.Value} requires {dependency.Value}",
+                        severity: DiagnosticSeverity.Warning);
                 }
                 if (!serviceIds.Contains(dependency))
                     Add(diagnostics, DiagnosticCodes.ReferenceUnknown, $"Ready dependency '{dependency.Value}' is not a service.", $"/topology/services/{service.PhysicalResource.Value}/readyDependencies", dependency.Value);
@@ -688,9 +689,10 @@ public static class InfrastructureLocalRealizationCompiler
         ImmutableArray<string> sourceReferences = default,
         ImmutableArray<string> resolutionOptions = default,
         string? expected = null,
-        string? observed = null) => diagnostics.Add(new(
+        string? observed = null,
+        DiagnosticSeverity severity = DiagnosticSeverity.Error) => diagnostics.Add(new(
             Code: code,
-            Severity: DiagnosticSeverity.Error,
+            Severity: severity,
             Message: message,
             Location: location,
             SchemaLocation: subject,
