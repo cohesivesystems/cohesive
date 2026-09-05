@@ -262,11 +262,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
             .ConfigureAwait(false);
         if (retained is null)
             return EntityTransitionOperationResult.NotFound();
-        return retained.Request.Fingerprint == request.Fingerprint
-            ? EntityTransitionOperationResult.Replayed(retained)
-            : IdentityConflict(
-                "The Process operation occurrence is retained for another Transition, subject, or input.",
-                "/request");
+        return retained.Replay(request);
     }
 
     /// <inheritdoc />
@@ -292,12 +288,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
         var retained = await TryReadTransitionReceipt(context, receiptId, partitionKey!).ConfigureAwait(false)
             ?? throw new InvalidOperationException(
                 $"Cosmos Transition creation index '{index.Id}' references absent receipt '{receiptId}'.");
-        return retained.Request.IntentFingerprint == request.IntentFingerprint
-            ? EntityTransitionOperationResult.Replayed(retained)
-            : IdentityConflict(
-                $"Entity subject '{request.Subject.EntityType.Value}:{request.Subject.EntityId.Value}' is retained "
-                + "for another authority-scoped creation Transition intent.",
-                "/request/intentFingerprint");
+        return retained.ReplayCreation(request);
     }
 
     /// <inheritdoc />
@@ -788,11 +779,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
             .ConfigureAwait(false);
         if (retained is not null)
         {
-            return retained.Commit.Fingerprint == commit.Fingerprint
-                ? EntityTransitionOperationResult.Replayed(retained)
-                : IdentityConflict(
-                    "The Process operation occurrence is retained with different canonical commit content.",
-                    "/commit");
+            return retained.Replay(commit);
         }
 
         if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent)

@@ -369,6 +369,49 @@ public sealed record EntityTransitionOperationReceipt
     /// <summary>UTC physical commit observation.</summary>
     public DateTimeOffset CommittedAtUtc { get; }
 
+    /// <summary>Matches an exact operation request against this immutable receipt.</summary>
+    /// <param name="request">Requested occurrence and canonical semantic input.</param>
+    /// <returns>The original receipt on an exact match, otherwise structured identity-conflict evidence.</returns>
+    /// <exception cref="ArgumentNullException">The request is null.</exception>
+    public EntityTransitionOperationResult Replay(EntityTransitionOperationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return Request.Fingerprint == request.Fingerprint
+            ? EntityTransitionOperationResult.Replayed(this)
+            : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
+                "The Process operation occurrence is retained for another Transition, subject, or input.", "/request");
+    }
+
+    /// <summary>Matches an exact operation and its complete commit content against this receipt.</summary>
+    /// <param name="commit">Candidate state, result, guarantees, and provenance to compare.</param>
+    /// <returns>The original receipt on an exact match, otherwise structured identity-conflict evidence.</returns>
+    /// <exception cref="ArgumentNullException">The commit is null.</exception>
+    public EntityTransitionOperationResult Replay(EntityTransitionOperationCommit commit)
+    {
+        ArgumentNullException.ThrowIfNull(commit);
+        var request = Replay(commit.Request);
+        if (request.Disposition != EntityTransitionOperationDisposition.Replayed) return request;
+        return Commit.Fingerprint == commit.Fingerprint ? request
+            : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
+                "The Process operation occurrence is retained with another candidate state or normalized result.", "/commit");
+    }
+
+    /// <summary>Matches authority-scoped creation intent independently of a replacement Process attempt.</summary>
+    /// <param name="request">Candidate creation intent; the occurrence is not compared.</param>
+    /// <returns>The original receipt on an exact intent match, otherwise structured identity-conflict evidence.</returns>
+    /// <exception cref="ArgumentNullException">The request is null.</exception>
+    /// <exception cref="InvalidOperationException">This receipt does not represent an absent-subject creation.</exception>
+    public EntityTransitionOperationResult ReplayCreation(EntityTransitionOperationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (Commit.SubjectCondition != EntityTransitionSubjectCondition.MustBeAbsent)
+            throw new InvalidOperationException("Only an absent-subject creation receipt can match creation intent.");
+        return Request.IntentFingerprint == request.IntentFingerprint
+            ? EntityTransitionOperationResult.Replayed(this)
+            : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
+                "The entity subject is retained for another authority-scoped creation Transition intent.", "/request/intentFingerprint");
+    }
+
     /// <summary>Exact replay lookup identity.</summary>
     public EntityTransitionOperationRequest Request => Commit.Request;
 

@@ -174,6 +174,13 @@ public sealed class SqliteEntityRepository : IEntityRepository
         return Task.FromResult(new EntityBatchWriteResult(snapshots.MoveToImmutable(), request.Atomicity));
     }
 
+    internal bool Exists(SqliteConnection connection, SqliteTransaction transaction, string id)
+    {
+        using var command = CreateReadCommand(connection, transaction, id, partition: null);
+        using var reader = command.ExecuteReader();
+        return reader.Read();
+    }
+
     SqliteCommand CreateReadCommand(SqliteConnection connection, SqliteTransaction? transaction, string id, string? partition)
     {
         var template = partition is null ? sql.ReadByIdentity : sql.ReadByIdentityAndPartition;
@@ -191,7 +198,7 @@ public sealed class SqliteEntityRepository : IEntityRepository
         return command;
     }
 
-    EntitySnapshot UpsertCore(OperationContext context, SqliteConnection connection, SqliteTransaction transaction,
+    internal EntitySnapshot UpsertCore(OperationContext context, SqliteConnection connection, SqliteTransaction transaction,
         EntityWriteRequest write, string partition)
     {
         context.ThrowIfCancellationRequested();
@@ -242,7 +249,7 @@ public sealed class SqliteEntityRepository : IEntityRepository
         return new(write.Entity, partition, token);
     }
 
-    string ValidateWrite(EntityWriteRequest write)
+    internal string ValidateWrite(EntityWriteRequest write)
     {
         ArgumentNullException.ThrowIfNull(write);
         ArgumentNullException.ThrowIfNull(write.Entity);
