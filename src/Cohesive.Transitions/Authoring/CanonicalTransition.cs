@@ -91,7 +91,7 @@ public static class TransitionAuthoringIdentities
 /// <typeparam name="TInput">CLR type projected into the portable invocation-input contract.</typeparam>
 /// <typeparam name="TOutcome">CLR type projected into the portable outcome contract.</typeparam>
 public sealed class Transition<TEntity, TInput, TOutcome>
-    where TEntity : Entity
+    where TEntity : notnull
 {
     internal Transition(
         ExecutionDefinitionDocument document,
@@ -157,6 +157,8 @@ public static class TransitionAuthoring
     /// <param name="sourceFile">Compiler-supplied source file for non-semantic source attribution.</param>
     /// <param name="sourceLine">Compiler-supplied source line for non-semantic source attribution.</param>
     /// <param name="sourceMember">Compiler-supplied source member for non-semantic source attribution.</param>
+    /// <param name="typeRefMapper">Optional resolved CLR value contracts used consistently for input, locals, and outcomes.</param>
+    /// <param name="memberPathResolver">Optional state-member mapping into the supplied inline observation contract. Nested named types require an explicit whole-value update.</param>
     /// <returns>A typed handle containing only the canonical document and its validation result.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="entityShape"/>, <paramref name="metadata"/>, or <paramref name="configure"/> is
@@ -184,8 +186,10 @@ public static class TransitionAuthoring
         Action<TransitionBuilder<TEntity, TInput, TOutcome>> configure,
         [CallerFilePath] string sourceFile = "",
         [CallerLineNumber] int sourceLine = 0,
-        [CallerMemberName] string sourceMember = "")
-        where TEntity : Entity
+        [CallerMemberName] string sourceMember = "",
+        IClrTypeRefMapper? typeRefMapper = null,
+        ClrMemberPathResolver? memberPathResolver = null)
+        where TEntity : notnull
     {
         ArgumentNullException.ThrowIfNull(entityShape);
         ArgumentNullException.ThrowIfNull(metadata);
@@ -198,7 +202,8 @@ public static class TransitionAuthoring
         var context = new TransitionAuthoringContext<TEntity, TInput, TOutcome>(
             entityShape,
             metadata,
-            new DefaultClrTypeRefMapper());
+            typeRefMapper ?? new DefaultClrTypeRefMapper(),
+            memberPathResolver);
         var rootSource = context.Source(sourceFile, sourceLine, sourceMember, "Transition root body");
         var builder = new TransitionBuilder<TEntity, TInput, TOutcome>(context);
         configure(builder);

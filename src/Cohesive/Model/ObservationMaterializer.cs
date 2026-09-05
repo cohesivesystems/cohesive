@@ -109,7 +109,7 @@ public static class ObservationMaterializer
     /// <summary>Creates a configurable materializer builder for an exact graph-scoped shape.</summary>
     /// <typeparam name="T">CLR target type.</typeparam>
     /// <param name="shape">Exact graph and shape accepted by the compiled materializer.</param>
-    /// <returns>A builder using deterministic CLR property-name conventions.</returns>
+    /// <returns>A builder using explicit JSON property names when declared, otherwise CLR property names.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="shape"/> is default.</exception>
     public static ObservationMaterializerBuilder<T> For<T>(GraphShapeId shape)
     {
@@ -120,7 +120,7 @@ public static class ObservationMaterializer
     /// <summary>Creates a configurable materializer builder from an already resolved qualified shape identity.</summary>
     /// <typeparam name="T">CLR target type.</typeparam>
     /// <param name="shapeId">Exact graph-qualified shape accepted by the compiled materializer.</param>
-    /// <returns>A builder using deterministic CLR property-name conventions.</returns>
+    /// <returns>A builder using explicit JSON property names when declared, otherwise CLR property names.</returns>
     /// <remarks>
     /// Use this overload when a compiler or physical interpreter has already resolved and validated shape evidence.
     /// The materializer binds that identity but does not require or retain a mutable graph object.
@@ -140,7 +140,7 @@ public static class ObservationMaterializer
     /// <typeparam name="T">CLR target type.</typeparam>
     /// <param name="observation">Observation providing qualified shape evidence.</param>
     /// <returns>
-    /// A process-wide reusable materializer using CLR property names, web JSON conversion with string enums, and
+    /// A process-wide reusable materializer using explicit JSON property names (otherwise CLR names), web JSON conversion with string enums, and
     /// optional-member defaults.
     /// </returns>
     /// <remarks>
@@ -160,7 +160,7 @@ public static class ObservationMaterializer
     /// <typeparam name="T">CLR target type.</typeparam>
     /// <param name="reader">Physical reader providing qualified shape evidence.</param>
     /// <returns>
-    /// A process-wide reusable materializer using CLR property names, web JSON conversion with string enums, and
+    /// A process-wide reusable materializer using explicit JSON property names (otherwise CLR names), web JSON conversion with string enums, and
     /// optional-member defaults.
     /// </returns>
     /// <remarks>
@@ -189,7 +189,7 @@ public sealed class ObservationMaterializerBuilder<T>
     ObservationMissingFieldBehavior missingFieldBehavior =
         ObservationMissingFieldBehavior.UseDefaultForOptionalMembers;
     ClrShapeGraphBuildResult? clrShapeMetadata;
-    Func<PropertyInfo, string> implicitFieldIdentity = static property => property.Name;
+    Func<PropertyInfo, string> implicitFieldIdentity = Authoring.DefaultClrTypeRefMapper.GetSerializedMemberName;
 
     internal ObservationMaterializerBuilder(QualifiedShapeId shapeId) => this.shapeId = shapeId;
 
