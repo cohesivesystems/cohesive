@@ -80,25 +80,57 @@ public static class EntityRepositoryMappingExtensions
             EntityBatchAtomicity atomicity = EntityBatchAtomicity.None,
             Func<TEntity, string>? selectEntityId = null,
             Func<TEntity, long>? selectVersion = null) where TEntity : notnull
+            => MapBatch(repository, context, entities, atomicity,
+                entity => CreateWriteRequest(repository, entity, expectedConcurrencyToken: null, selectEntityId, selectVersion));
+
+        /// <summary>Maps typed candidates and their per-write concurrency fences into one canonical batch.</summary>
+        /// <typeparam name="TEntity">CLR candidate type.</typeparam>
+        /// <param name="context">Operation context and cancellation.</param>
+        /// <param name="request">Typed writes, per-write storage tokens, and required native atomicity.</param>
+        /// <param name="selectEntityId">Optional identity selector.</param>
+        /// <param name="selectVersion">Optional semantic-version selector, independent of storage tokens.</param>
+        /// <returns>The native batch result in input order.</returns>
+        /// <exception cref="ArgumentNullException">A required argument, write, or candidate is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">The atomicity enum is unknown.</exception>
+        /// <exception cref="NotSupportedException">The requested batch guarantees or item count are unsupported.</exception>
+        /// <exception cref="SemanticRuleViolationException">A candidate violates the entity definition.</exception>
+        /// <exception cref="InvalidOperationException">Mapping cannot resolve a valid identity or version.</exception>
+        /// <exception cref="ObservationConcurrencyConflictException">An expected token is stale or its target is absent.</exception>
+        /// <exception cref="OperationCanceledException">Cancellation is observed during mapping or by the repository.</exception>
+        public Task<EntityBatchWriteResult> UpsertBatch<TEntity>(OperationContext context,
+            EntityBatchWriteRequest<TEntity> request,
+            Func<TEntity, string>? selectEntityId = null,
+            Func<TEntity, long>? selectVersion = null) where TEntity : notnull
         {
-            ArgumentNullException.ThrowIfNull(repository);
-            ArgumentNullException.ThrowIfNull(context);
-            ArgumentNullException.ThrowIfNull(entities);
-            context.ThrowIfCancellationRequested();
-            if (!Enum.IsDefined(atomicity))
-                throw new ArgumentOutOfRangeException(nameof(atomicity), atomicity, "Unknown entity batch atomicity.");
-            var capabilities = repository.BatchCapabilities;
-            if (!capabilities.SupportsAtomicity(atomicity)
-                || capabilities.MaxItemsPerBatch is { } maximum && entities.Count > maximum)
-                throw new NotSupportedException($"Repository '{repository.EntityType}' cannot satisfy the requested batch atomicity or item limit.");
-            var writes = new EntityWriteRequest[entities.Count];
-            for (var index = 0; index < writes.Length; index++)
+            ArgumentNullException.ThrowIfNull(request);
+            return MapBatch(repository, context, request.Writes, request.Atomicity, write =>
             {
-                context.ThrowIfCancellationRequested();
-                writes[index] = CreateWriteRequest(repository, entities[index], expectedConcurrencyToken: null, selectEntityId, selectVersion);
-            }
-            return repository.UpsertBatch(context, new EntityBatchWriteRequest(writes, atomicity));
+                ArgumentNullException.ThrowIfNull(write);
+                return CreateWriteRequest(repository, write.Entity, write.ExpectedConcurrencyToken, selectEntityId, selectVersion);
+            });
         }
+    }
+
+    static Task<EntityBatchWriteResult> MapBatch<TItem>(IEntityRepository repository, OperationContext context,
+        IReadOnlyList<TItem> items, EntityBatchAtomicity atomicity, Func<TItem, EntityWriteRequest> map)
+    {
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(items);
+        context.ThrowIfCancellationRequested();
+        if (!Enum.IsDefined(atomicity))
+            throw new ArgumentOutOfRangeException(nameof(atomicity), atomicity, "Unknown entity batch atomicity.");
+        var capabilities = repository.BatchCapabilities;
+        if (!capabilities.SupportsAtomicity(atomicity)
+            || capabilities.MaxItemsPerBatch is { } maximum && items.Count > maximum)
+            throw new NotSupportedException($"Repository '{repository.EntityType}' cannot satisfy the requested batch atomicity or item limit.");
+        var writes = new EntityWriteRequest[items.Count];
+        for (var index = 0; index < writes.Length; index++)
+        {
+            context.ThrowIfCancellationRequested();
+            writes[index] = map(items[index]);
+        }
+        return repository.UpsertBatch(context, new EntityBatchWriteRequest(writes, atomicity));
     }
 
     static EntityWriteRequest CreateWriteRequest<TEntity>(IEntityRepository repository, TEntity entity,

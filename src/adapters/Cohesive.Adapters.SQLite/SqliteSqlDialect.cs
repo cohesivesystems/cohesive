@@ -39,7 +39,8 @@ public sealed class SqliteSqlDialect : SqlDialect
     /// <inheritdoc />
     public override void Require(SqlFeature feature)
     {
-        if (feature is not (SqlFeature.Returning or SqlFeature.OnConflict or SqlFeature.AggregateFilter))
+        if (feature is not (SqlFeature.Returning or SqlFeature.OnConflict or SqlFeature.AggregateFilter
+            or SqlFeature.DistinctComparison or SqlFeature.RightJoin or SqlFeature.FullJoin))
             throw Unsupported(feature.ToString());
     }
     SqlConstructionException Unsupported(string construct) => new(Name, construct,

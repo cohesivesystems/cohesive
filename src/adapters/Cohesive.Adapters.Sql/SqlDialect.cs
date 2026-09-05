@@ -18,7 +18,13 @@ public enum SqlFeature
     /// <summary>Aggregate-local filtering.</summary>
     AggregateFilter,
     /// <summary>Offset pagination without a limit clause.</summary>
-    OffsetWithoutLimit
+    OffsetWithoutLimit,
+    /// <summary>Null-safe equality and inequality using IS [NOT] DISTINCT FROM.</summary>
+    DistinctComparison,
+    /// <summary>Right outer joins.</summary>
+    RightJoin,
+    /// <summary>Full outer joins.</summary>
+    FullJoin
 }
 
 /// <summary>Adapter-owned policy for rendering and binding shared SQL construction artifacts.</summary>

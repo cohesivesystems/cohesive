@@ -72,18 +72,7 @@ public sealed class SqliteEntityRepository : IEntityRepository
         var partition = options?.PartitionKey;
         if (partition is not null) SqliteScalarCodec.RequireText(partition);
         using var connection = database.OpenConnection(context.CancellationToken);
-        var template = partition is null ? sql.ReadByIdentity : sql.ReadByIdentityAndPartition;
-        using var command = database.CreateCommand(connection, null, template.Text);
-        foreach (var slot in template.Parameters)
-            command.Parameters.Add(new SqliteParameter(slot.Placeholder, SqliteType.Text)
-            {
-                Value = slot.Binding switch
-                {
-                    IdentityBinding => id,
-                    PartitionBinding => partition!,
-                    _ => throw new InvalidOperationException($"Unknown SQLite read parameter binding '{slot.Binding}'.")
-                }
-            });
+        using var command = CreateReadCommand(connection, transaction: null, id, partition);
         using var reader = command.ExecuteReader();
         if (!reader.Read())
         {
@@ -125,19 +114,19 @@ public sealed class SqliteEntityRepository : IEntityRepository
         return Task.FromResult(snapshot);
     }
 
-    /// <summary>Writes candidates in request order under one native transaction, including across logical partitions.</summary>
+    /// <summary>Writes candidates in request order with independent commits or the requested atomic transaction.</summary>
     /// <param name="context">Operation cancellation and attribution context.</param>
-    /// <param name="request">Ordered candidates and requested atomicity. None is also executed atomically.</param>
+    /// <param name="request">Ordered candidates and required atomicity; None commits each write independently.</param>
     /// <returns>Committed snapshots in request order and the requested atomicity contract.</returns>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">Writes, keys, tokens, or scalar representations are invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The requested atomicity enum is unknown.</exception>
     /// <exception cref="NotSupportedException">The batch exceeds the limit or SamePartition spans multiple partitions.</exception>
     /// <exception cref="SemanticRuleViolationException">A candidate does not satisfy its canonical entity shape.</exception>
-    /// <exception cref="ObservationConcurrencyConflictException">Any expected token fails, rolling back the whole batch.</exception>
+    /// <exception cref="ObservationConcurrencyConflictException">An expected token fails; atomic batches roll back, while earlier None writes remain.</exception>
     /// <exception cref="InvalidOperationException">An identity is inconsistent, a stored shape differs, or runtime profile is unavailable.</exception>
-    /// <exception cref="OperationCanceledException">Cancellation is observed before commit; all writes roll back.</exception>
-    /// <exception cref="SqliteException">SQL, locking, storage, or commit fails; all uncommitted writes roll back.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation is observed before commit; None batches may retain earlier committed writes.</exception>
+    /// <exception cref="SqliteException">SQL, locking, storage, or commit fails; uncommitted writes roll back, while earlier None writes remain.</exception>
     public Task<EntityBatchWriteResult> UpsertBatch(OperationContext context, EntityBatchWriteRequest request)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -161,13 +150,45 @@ public sealed class SqliteEntityRepository : IEntityRepository
         }
         if (writes.Length == 0) return Task.FromResult(new EntityBatchWriteResult([], request.Atomicity));
         using var connection = database.OpenConnection(context.CancellationToken);
-        using var transaction = connection.BeginTransaction(deferred: false);
+        using var transaction = request.Atomicity == EntityBatchAtomicity.None
+            ? null : connection.BeginTransaction(deferred: false);
         var snapshots = ImmutableArray.CreateBuilder<EntitySnapshot>(writes.Length);
         for (var index = 0; index < writes.Length; index++)
-            snapshots.Add(UpsertCore(context, connection, transaction, writes[index], partitions[index]));
-        context.ThrowIfCancellationRequested();
-        transaction.Commit();
+        {
+            if (transaction is not null)
+            {
+                snapshots.Add(UpsertCore(context, connection, transaction, writes[index], partitions[index]));
+                continue;
+            }
+            using var itemTransaction = connection.BeginTransaction(deferred: false);
+            var snapshot = UpsertCore(context, connection, itemTransaction, writes[index], partitions[index]);
+            context.ThrowIfCancellationRequested();
+            itemTransaction.Commit();
+            snapshots.Add(snapshot);
+        }
+        if (transaction is not null)
+        {
+            context.ThrowIfCancellationRequested();
+            transaction.Commit();
+        }
         return Task.FromResult(new EntityBatchWriteResult(snapshots.MoveToImmutable(), request.Atomicity));
+    }
+
+    SqliteCommand CreateReadCommand(SqliteConnection connection, SqliteTransaction? transaction, string id, string? partition)
+    {
+        var template = partition is null ? sql.ReadByIdentity : sql.ReadByIdentityAndPartition;
+        var command = database.CreateCommand(connection, transaction, template.Text);
+        foreach (var slot in template.Parameters)
+            command.Parameters.Add(new SqliteParameter(slot.Placeholder, SqliteType.Text)
+            {
+                Value = slot.Binding switch
+                {
+                    IdentityBinding => id,
+                    PartitionBinding => partition!,
+                    _ => throw new InvalidOperationException($"Unknown SQLite read parameter binding '{slot.Binding}'.")
+                }
+            });
+        return command;
     }
 
     EntitySnapshot UpsertCore(OperationContext context, SqliteConnection connection, SqliteTransaction transaction,
@@ -206,8 +227,17 @@ public sealed class SqliteEntityRepository : IEntityRepository
         var written = command.ExecuteScalar();
         if (written is not string storedToken || storedToken != token.Value)
         {
-            if (write.ExpectedConcurrencyToken is not null) throw Conflict(write.Entity.EntityId.Value, "compare-and-swap target is absent or changed");
-            throw new InvalidOperationException($"Observation '{EntityType}:{write.Entity.EntityId.Value}' belongs to a different stored shape revision.");
+            if (write.ExpectedConcurrencyToken is not null)
+            {
+                // Diagnose the failed predicate under the same immediate transaction, without a racing reread.
+                using var read = CreateReadCommand(connection, transaction, write.Entity.EntityId.Value, partition);
+                using var reader = read.ExecuteReader();
+                if (reader.Read() && (reader.GetString(Mapping.Bindings.Length + 2) != graph
+                    || reader.GetString(Mapping.Bindings.Length + 3) != shape))
+                    throw ShapeMismatch(write.Entity.EntityId.Value);
+                throw Conflict(write.Entity.EntityId.Value, "compare-and-swap target is absent or changed");
+            }
+            throw ShapeMismatch(write.Entity.EntityId.Value);
         }
         return new(write.Entity, partition, token);
     }
@@ -247,6 +277,9 @@ public sealed class SqliteEntityRepository : IEntityRepository
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
         return new(new(new(identity), reader.GetInt64(count), observation), partition, new(token), fields);
     }
+
+    InvalidOperationException ShapeMismatch(string id) =>
+        new($"Observation '{EntityType}:{id}' belongs to a different stored shape revision.");
 
     ObservationConcurrencyConflictException Conflict(string id, string reason) =>
         new($"Observation '{EntityType}:{id}' failed optimistic concurrency validation: {reason}.");

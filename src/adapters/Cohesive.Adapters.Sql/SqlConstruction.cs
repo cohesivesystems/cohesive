@@ -745,6 +745,8 @@ public abstract record SqlExpression
     {
         internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
         {
+            if (Operator is SqlBinaryOperator.IsDistinctFrom or SqlBinaryOperator.IsNotDistinctFrom)
+                context.Dialect.Require(SqlFeature.DistinctComparison);
             builder.Append('(');
             Left.WriteTo(context, builder);
             builder.Append(' ').Append(SqlOperators.Text(Operator)).Append(' ');
@@ -1393,6 +1395,8 @@ public sealed class SqlSelectQuery
 
         foreach (var join in joins)
         {
+            if (join.Kind == SqlJoinKind.Right) context.Dialect.Require(SqlFeature.RightJoin);
+            if (join.Kind == SqlJoinKind.Full) context.Dialect.Require(SqlFeature.FullJoin);
             builder.Append(' ').Append(SqlOperators.Text(join.Kind)).Append(' ');
             join.Source.WriteTo(context, builder);
             if (join.Predicate is not null)

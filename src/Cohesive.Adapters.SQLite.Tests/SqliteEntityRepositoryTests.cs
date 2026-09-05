@@ -90,6 +90,54 @@ public sealed class SqliteEntityRepositoryTests
     }
 
     [Theory]
+    [InlineData(EntityBatchAtomicity.None, true)]
+    [InlineData(EntityBatchAtomicity.SamePartition, false)]
+    [InlineData(EntityBatchAtomicity.AllOrNothing, false)]
+    public async Task NoneRetainsEarlierCommitsWhileAtomicBatchesRollBack(EntityBatchAtomicity atomicity, bool firstSurvives)
+    {
+        using var file = new DatabaseFixture();
+        var repository = Repository(file);
+        await Assert.ThrowsAsync<ObservationConcurrencyConflictException>(() => repository.UpsertBatch(Context, new(
+            [Write(repository, "first"), Write(repository, "absent") with { ExpectedConcurrencyToken = new("stale") }],
+            atomicity)));
+        Assert.Equal(firstSurvives, await repository.TryGet(Context, "first") is not null);
+        Assert.Null(await repository.TryGet(Context, "absent"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TypedBatchesCarryPerWriteCasThroughBothFacades(bool useOutboxFacade)
+    {
+        using var file = new DatabaseFixture();
+        var mapping = new SqliteEntityRepositoryMapping(ObjectEntityDefinition.For<StoredRun>(new("run-control")),
+            identityField: "run_id", partitionField: nameof(StoredRun.Tenant));
+        new SqliteSchema("runs", [mapping.InitialMigration]).Apply(file.Database);
+        var native = new SqliteEntityRepository(file.Database, mapping);
+        IEntityRepository<StoredRun> typed = new TypedEntityRepository<StoredRun>(native,
+            selectEntityId: static run => run.Code, selectVersion: static run => run.Revision);
+        if (useOutboxFacade) typed = new TypedEntityOutboxRepository<StoredRun>(typed, new OutboxStub(native));
+        StoredRun first = new("first", "tenant", 1, 10m);
+        StoredRun second = new("second", "tenant", 1, 20m);
+        var initial = await typed.UpsertBatch(Context, [first, second], EntityBatchAtomicity.AllOrNothing);
+        EntityWriteRequest<StoredRun>[] writes =
+        [
+            new(first with { Revision = 2, Price = 11m }, initial[0].ConcurrencyToken),
+            new(second with { Revision = 2, Price = 21m }, initial[1].ConcurrencyToken)
+        ];
+        var committed = await typed.UpsertBatch(Context, new EntityBatchWriteRequest<StoredRun>(writes, EntityBatchAtomicity.AllOrNothing));
+        Assert.Equal([2L, 2L], committed.Select(snapshot => snapshot.Entity.Version));
+        Assert.Equal(writes[0].Entity, await typed.TryGetEntity(Context, "first"));
+        await Assert.ThrowsAsync<ObservationConcurrencyConflictException>(() => typed.UpsertBatch(Context,
+            new EntityBatchWriteRequest<StoredRun>(
+            [
+                new(first with { Revision = 3 }, committed[0].ConcurrencyToken),
+                new(second with { Revision = 3 }, initial[1].ConcurrencyToken)
+            ], EntityBatchAtomicity.AllOrNothing)));
+        Assert.Equal(committed[0].ConcurrencyToken, (await native.TryGet(Context, "first"))!.ConcurrencyToken);
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(2)]
@@ -157,7 +205,7 @@ public sealed class SqliteEntityRepositoryTests
     }
 
     [Fact]
-    public async Task ShapeRevisionMismatchCannotBeReadOrUnconditionallyOverwritten()
+    public async Task ShapeRevisionMismatchIsDistinctFromConcurrencyForAllWrites()
     {
         using var file = new DatabaseFixture();
         var repository = Repository(file);
@@ -166,6 +214,11 @@ public sealed class SqliteEntityRepositoryTests
         var other = new SqliteEntityRepository(file.Database, new(otherDefinition, identityField: "id", partitionField: "tenant", tableName: "orders"));
         await Assert.ThrowsAsync<InvalidOperationException>(() => other.TryGet(Context, "one"));
         await Assert.ThrowsAsync<InvalidOperationException>(() => other.Upsert(Context, Write(other, "one")));
+        var shapeError = await Assert.ThrowsAsync<InvalidOperationException>(() => other.Upsert(Context,
+            Write(other, "one") with { ExpectedConcurrencyToken = original.ConcurrencyToken }));
+        Assert.Contains("different stored shape revision", shapeError.Message);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => other.Upsert(Context,
+            Write(other, "one") with { ExpectedConcurrencyToken = new("stale") }));
         await Assert.ThrowsAsync<SemanticRuleViolationException>(() => other.Upsert(Context, Write(repository, "two")));
         Assert.Equal(original.ConcurrencyToken, (await repository.TryGet(Context, "one"))!.ConcurrencyToken);
     }

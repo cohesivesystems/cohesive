@@ -21,6 +21,21 @@ public sealed class TypedRepositoryBatchTests
     }
 
     [Fact]
+    public async Task DefaultTypedInterfaceRetainsPerCandidateConcurrencyTokens()
+    {
+        var native = new NativeRepository();
+        IEntityRepository<Record> repository = native;
+        var request = new EntityBatchWriteRequest<Record>(
+            [new(new("first", 8), new("opaque:first")), new(new("second", 3))],
+            EntityBatchAtomicity.AllOrNothing);
+        var result = await repository.UpsertBatch(OperationContext.Create(), request);
+        Assert.Equal(1, native.BatchCalls);
+        Assert.Equal(new EntityConcurrencyToken("opaque:first"), native.LastBatch!.Writes[0].ExpectedConcurrencyToken);
+        Assert.Null(native.LastBatch.Writes[1].ExpectedConcurrencyToken);
+        Assert.Equal(["first", "second"], result.Select(item => item.Entity.EntityId.Value));
+    }
+
+    [Fact]
     public async Task TypedDispatchRejectsNativeLimitsWithoutSplittingTheBatch()
     {
         var native = new NativeRepository();
