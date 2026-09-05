@@ -63,6 +63,8 @@ then selects facilities, derives lifecycle dispositions from canonical resource 
 demand-scoped capability witnesses, and reports mismatches:
 
 ```csharp
+InfrastructureLifecycleAuthorityId pulumiState = new("pulumi/shipping/development");
+var targetEvidence = InfrastructureSourceReferences.Target(target.Profile.Target);
 var deployment = InfrastructureTargetDeployments.Define(
     id: new("shipping/azure-pulumi/development/v1"),
     definition: document,
@@ -73,13 +75,13 @@ var deployment = InfrastructureTargetDeployments.Define(
             ShippingNodes.Api,
             AzureFacilities.AppService,
             AzureResources.AppService("shipping-api"),
-            [PulumiSources.Stack]);
+            [targetEvidence]);
         physical.Resource(
             ShippingNodes.State,
             AzureFacilities.BlobStorage,
             AzureResources.Container("shipping", "state"),
-            new("pulumi/shipping/development"),
-            [PulumiSources.Stack]);
+            pulumiState,
+            [InfrastructureSourceReferences.LifecycleAuthority(pulumiState)]);
     });
 
 var realization = InfrastructureTargetDeploymentCompiler.Compile(ShippingInfrastructure.Current, deployment);
@@ -87,6 +89,10 @@ var realization = InfrastructureTargetDeploymentCompiler.Compile(ShippingInfrast
 
 Application declarations contain no requirement-discharge or witness-construction algorithm. Provider naming and
 artifact discovery belong to the adapter; all callbacks are discarded after materializing canonical IR.
+Fluent facility and deployment authoring also captures C# call sites in a portable source map. Source maps support
+diagnostics and inspection but are excluded from semantic fingerprints, so moving equivalent declarations between
+files does not change their canonical identity. Explicit source references remain semantic evidence and should be
+projected from typed target, facility, lifecycle, or artifact identities instead of handwritten repository paths.
 
 ## What this package provides
 

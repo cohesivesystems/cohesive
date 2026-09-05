@@ -34,8 +34,18 @@ public sealed class InfrastructureTargetDeploymentCompilerTests
 
         var fluent = Deployment(semantic, facilities);
 
-        Assert.Equal(direct, fluent);
         Assert.Equal(direct.Fingerprint, fluent.Fingerprint);
+        Assert.Equal(direct.ToReference(), fluent.ToReference());
+        Assert.True(direct.Workloads.SequenceEqual(fluent.Workloads));
+        Assert.True(direct.Resources.SequenceEqual(fluent.Resources));
+        Assert.Empty(direct.SourceMap.Entries);
+        Assert.Equal(2, fluent.SourceMap.Entries.Length);
+        Assert.All(fluent.SourceMap.Entries, static entry =>
+        {
+            Assert.StartsWith("csharp://", entry.Source.Value, StringComparison.Ordinal);
+            Assert.DoesNotContain("/private/", entry.Source.Value, StringComparison.Ordinal);
+            Assert.DoesNotContain(":\\", entry.Source.Value, StringComparison.Ordinal);
+        });
     }
 
     [Fact]
@@ -228,15 +238,82 @@ public sealed class InfrastructureTargetDeploymentCompilerTests
         var semantic = Semantic();
         var manifest = Deployment(semantic, Facilities());
         var options = StrictDocumentJson.CreateOptions();
+        var json = JsonSerializer.Serialize(manifest, options);
 
         var restored = Assert.IsType<InfrastructureTargetDeploymentManifest>(
             JsonSerializer.Deserialize<InfrastructureTargetDeploymentManifest>(
-                JsonSerializer.Serialize(manifest, options),
+                json,
                 options));
 
+        Assert.DoesNotContain("/private/", json, StringComparison.Ordinal);
+        Assert.DoesNotContain(":\\", json, StringComparison.Ordinal);
         Assert.Equal(manifest, restored);
         Assert.Equal(manifest.Fingerprint, restored.Fingerprint);
         Assert.Equal(manifest.ToReference(), restored.ToReference());
+    }
+
+    [Fact]
+    public void Authoring_provenance_is_persisted_but_excluded_from_semantic_fingerprints()
+    {
+        var semantic = Semantic();
+        var facilities = Facilities();
+        var first = new InfrastructureTargetDeploymentManifest(
+            InfrastructureTargetDeploymentManifest.CurrentSchemaVersion,
+            new("test/deployments/source-map/v1"),
+            semantic.Definition.ToReference(),
+            facilities,
+            [new(Api, AppService, ApiPhysical, [Source])],
+            [new(State, ObjectStore, StatePhysical, Authority, [Source])],
+            sourceMap: new(
+            [
+                new(
+                    InfrastructureSourceReferences.Node(Api),
+                    SourceReference.Create("csharp", "test/deployments/source-map/v1#First:L10"))
+            ]));
+        var moved = new InfrastructureTargetDeploymentManifest(
+            InfrastructureTargetDeploymentManifest.CurrentSchemaVersion,
+            first.Id,
+            first.Definition,
+            facilities,
+            first.Workloads,
+            first.Resources,
+            sourceMap: new(
+            [
+                new(
+                    InfrastructureSourceReferences.Node(Api),
+                    SourceReference.Create("csharp", "test/deployments/source-map/v1#Moved:L200"))
+            ]));
+
+        Assert.NotEqual(first, moved);
+        Assert.Equal(first.Fingerprint, moved.Fingerprint);
+        Assert.Equal(first.ToReference(), moved.ToReference());
+    }
+
+    [Fact]
+    public void Unknown_deployments_report_semantic_evidence_and_automatic_authoring_provenance()
+    {
+        var semantic = Semantic();
+        var facilities = Facilities();
+        InfrastructureNodeId stale = new("workloads/stale");
+        var manifest = InfrastructureTargetDeployments.Define(
+            new("test/deployments/stale/v1"),
+            semantic.Definition,
+            facilities,
+            deployment =>
+            {
+                deployment.Workload(stale, AppService, new("test/app-service/sites/stale"), [Source]);
+                deployment.Resource(State, ObjectStore, StatePhysical, Authority, [Source]);
+            });
+
+        var plan = InfrastructureTargetDeploymentCompiler.Compile(semantic, manifest);
+
+        var diagnostic = Assert.Single(
+            plan.Diagnostics,
+            static item => item.Code == InfrastructureTargetDeploymentCompiler.DiagnosticCodes.NodeUnknown);
+        Assert.Contains(Source.Value, diagnostic.Evidence!.SourceReferences);
+        Assert.Contains(
+            diagnostic.Evidence.SourceReferences,
+            static reference => reference.StartsWith("csharp://", StringComparison.Ordinal));
     }
 
     static InfrastructureAuthoringResult Semantic() => Infrastructure.Define(

@@ -179,6 +179,7 @@ public sealed record InfrastructureTargetFacilityManifest
     /// <param name="variant">Coherent profile variant whose evidence is grouped into facilities.</param>
     /// <param name="facilities">Selectable target facilities.</param>
     /// <param name="fingerprint">Persisted exact fingerprint, or <see langword="null"/> to compute it.</param>
+    /// <param name="sourceMap">Optional non-semantic producer attribution.</param>
     /// <exception cref="ArgumentNullException">A reference argument is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// The schema, identity, variant, facility collection, evidence ownership, or fingerprint is invalid.
@@ -190,7 +191,8 @@ public sealed record InfrastructureTargetFacilityManifest
         InfrastructureCapabilityProfile profile,
         InfrastructureCapabilityVariantId variant,
         ImmutableArray<InfrastructureTargetFacility> facilities,
-        InfrastructureTargetFacilityManifestFingerprint? fingerprint = null)
+        InfrastructureTargetFacilityManifestFingerprint? fingerprint = null,
+        InfrastructureSourceMap? sourceMap = null)
     {
         SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
         if (!string.Equals(SchemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
@@ -208,6 +210,7 @@ public sealed record InfrastructureTargetFacilityManifest
         Profile = Guard.RequireNotNull(profile);
         Variant = variant;
         Facilities = NormalizeFacilities(facilities);
+        SourceMap = sourceMap ?? InfrastructureSourceMap.Empty;
         ValidateEvidenceOwnership();
 
         var computed = InfrastructureTargetFacilityManifestFingerprinting.Compute(
@@ -243,6 +246,9 @@ public sealed record InfrastructureTargetFacilityManifest
     /// <summary>Deterministic fingerprint of the exact profile fence and facility grouping.</summary>
     public InfrastructureTargetFacilityManifestFingerprint Fingerprint { get; }
 
+    /// <summary>Non-semantic producer attribution excluded from <see cref="Fingerprint"/>.</summary>
+    public InfrastructureSourceMap SourceMap { get; }
+
     /// <summary>Creates an exact payload-free reference to this manifest.</summary>
     /// <returns>The schema, identity, profile, variant, and fingerprint fence.</returns>
     public InfrastructureTargetFacilityManifestReference ToReference() =>
@@ -259,7 +265,8 @@ public sealed record InfrastructureTargetFacilityManifest
         && Profile == other.Profile
         && Variant == other.Variant
         && Facilities.SequenceEqual(other.Facilities)
-        && Fingerprint == other.Fingerprint;
+        && Fingerprint == other.Fingerprint
+        && SourceMap == other.SourceMap;
 
     /// <summary>Returns a structural hash code for this manifest.</summary>
     /// <returns>A hash code derived from every semantic field.</returns>
@@ -273,6 +280,7 @@ public sealed record InfrastructureTargetFacilityManifest
         foreach (var facility in Facilities)
             hash.Add(facility);
         hash.Add(Fingerprint);
+        hash.Add(SourceMap);
         return hash.ToHashCode();
     }
 
