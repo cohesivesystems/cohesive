@@ -80,7 +80,7 @@ The typed request lowers to the existing canonical `EntityWriteRequest`; it does
 
 Real-file tests cover competing CAS writers, stale/missing targets, repeated identities, late batch failure, partition ambiguity, reopen persistence, scalar validation, physical naming, shape revisions, and native dispatch through typed facades. Shared regressions cover required nullable values versus absence in flat, nested, and collection observations, including warm validation allocation checks.
 
-Atomic outbox/receipt commits remain COH-88. Optional/structured field realization, relation compilation, and Ito's temporal market-data publication/query rules remain separate work. Specialized code can share transactions through `SqliteDatabase`; this repository owns its transactions and does not expose uncommitted snapshots as committed results.
+For atomic state, envelope, and retained operation commits, use [SqliteEntityOutboxRepository](OUTBOX.md) over this same mapping. Optional/structured field realization, relation compilation, and Ito's temporal market-data publication/query rules remain separate work. Specialized code can share transactions through `SqliteDatabase`; this repository owns its transactions and does not expose uncommitted snapshots as committed results.
 
 ## SQL construction and ordinal observations
 

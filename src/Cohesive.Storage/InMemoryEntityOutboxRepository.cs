@@ -253,7 +253,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         {
             return Task.FromResult(
                 transitionOperationReceipts.TryGetValue(request.Operation, out var retained)
-                    ? ReplayOrRequestConflict(request, retained)
+                    ? retained.Replay(request)
                     : EntityTransitionOperationResult.NotFound());
         }
     }
@@ -276,7 +276,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         {
             return Task.FromResult(
                 creationTransitionOperationReceiptsBySubject.TryGetValue(request.Subject.EntityId.Value, out var retained)
-                    ? ReplayOrCreationIntentConflict(request, retained)
+                    ? retained.ReplayCreation(request)
                     : EntityTransitionOperationResult.NotFound());
         }
     }
@@ -302,7 +302,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         lock (gate)
         {
             if (transitionOperationReceipts.TryGetValue(commit.Request.Operation, out var retained))
-                return Task.FromResult(ReplayOrCommitConflict(commit, retained));
+                return Task.FromResult(retained.Replay(commit));
             if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
                 && creationTransitionOperationReceiptsBySubject.TryGetValue(
                     commit.Request.Subject.EntityId.Value,
@@ -319,7 +319,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         {
             if (transitionOperationReceipts.TryGetValue(commit.Request.Operation, out var retained))
             {
-                result = ReplayOrCommitConflict(commit, retained);
+                result = retained.Replay(commit);
             }
             else if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
                 && creationTransitionOperationReceiptsBySubject.TryGetValue(
@@ -395,30 +395,11 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         return snapshot;
     }
 
-    static EntityTransitionOperationResult ReplayOrRequestConflict(
-        EntityTransitionOperationRequest request,
-        EntityTransitionOperationReceipt retained) =>
-        retained.Request.Fingerprint == request.Fingerprint
-            ? EntityTransitionOperationResult.Replayed(retained)
-            : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
-                "The Process operation occurrence is retained for another Transition, subject, or input.",
-                "/request");
-
-    static EntityTransitionOperationResult ReplayOrCreationIntentConflict(
-        EntityTransitionOperationRequest request,
-        EntityTransitionOperationReceipt retained) =>
-        retained.Request.IntentFingerprint == request.IntentFingerprint
-            ? EntityTransitionOperationResult.Replayed(retained)
-            : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
-                $"Entity subject '{request.Subject.EntityType.Value}:{request.Subject.EntityId.Value}' is retained "
-                + "for another authority-scoped creation Transition intent.",
-                "/request/intentFingerprint");
-
     static EntityTransitionOperationResult ReplayOrCreationCommitConflict(
         EntityTransitionOperationCommit commit,
         EntityTransitionOperationReceipt retained)
     {
-        var request = ReplayOrCreationIntentConflict(commit.Request, retained);
+        var request = retained.ReplayCreation(commit.Request);
         if (request.Disposition != EntityTransitionOperationDisposition.Replayed)
         {
             return request;
@@ -429,23 +410,6 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
             ? request
             : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
                 "The authority-scoped creation Transition intent is retained with another candidate state or typed outcome.",
-                "/commit");
-    }
-
-    static EntityTransitionOperationResult ReplayOrCommitConflict(
-        EntityTransitionOperationCommit commit,
-        EntityTransitionOperationReceipt retained)
-    {
-        if (retained.Request.Fingerprint != commit.Request.Fingerprint)
-        {
-            return EntityTransitionOperationRepositoryExtensions.IdentityConflict(
-                "The Process operation occurrence is retained for another Transition, subject, or input.",
-                "/request");
-        }
-        return retained.Commit.Fingerprint == commit.Fingerprint
-            ? EntityTransitionOperationResult.Replayed(retained)
-            : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
-                "The Process operation occurrence is retained with another candidate state or normalized result.",
                 "/commit");
     }
 

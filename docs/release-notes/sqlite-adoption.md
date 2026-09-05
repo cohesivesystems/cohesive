@@ -32,3 +32,11 @@ Relations IR.
   stale or missing concurrency targets.
 - Shared SQL explicitly gates `IS [NOT] DISTINCT FROM`, right outer joins, and full outer joins. Postgres and the
   adapter's required modern SQLite profile advertise them; dialects without these facilities reject construction.
+
+## Atomic SQLite outbox and Transition receipts
+
+`SqliteEntityOutboxRepository` adds atomic state/envelope commits and Process operation receipts over the existing
+entity mapping. Exact retries recover the original committed snapshot and token after later entity mutations.
+Direct envelopes are exposed through a bounded commit cursor; Process envelopes remain handoff evidence for the
+Process outbox. Auxiliary migrations must be applied explicitly. Automatic dispatch, delivery acknowledgment, and
+retention pruning are not included. See the [outbox contract](../../src/adapters/Cohesive.Adapters.SQLite/OUTBOX.md).
