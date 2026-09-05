@@ -693,7 +693,7 @@ public sealed record InfrastructureLocalService
     /// <param name="mounts">Volume mounts.</param>
     /// <param name="fileMounts">Generated-file mounts.</param>
     /// <param name="health">Complete health and readiness policy.</param>
-    /// <param name="readyDependencies">Services that must become ready first.</param>
+    /// <param name="readyDependencies">Exact services that must become ready first; canonical obligations are projected during local compilation.</param>
     /// <param name="stopGracePeriod">Grace period before forced termination.</param>
     /// <exception cref="ArgumentException">An identity is default or a collection is malformed.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="stopGracePeriod"/> is negative.</exception>
@@ -734,7 +734,7 @@ public sealed record InfrastructureLocalService
     /// <param name="mounts">Volume mounts.</param>
     /// <param name="fileMounts">Generated-file mounts.</param>
     /// <param name="health">Complete health and readiness policy.</param>
-    /// <param name="readyDependencies">Services that must become ready first.</param>
+    /// <param name="readyDependencies">Exact services that must become ready first; canonical obligations are projected during local compilation.</param>
     /// <param name="stopGracePeriod">Grace period before forced termination.</param>
     /// <exception cref="ArgumentException">An identity is default or a collection is malformed.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="stopGracePeriod"/> is negative.</exception>
@@ -799,7 +799,7 @@ public sealed record InfrastructureLocalService
     /// <summary>Complete health and readiness policy, when the service exposes one.</summary>
     public InfrastructureLocalHealthPolicy? Health { get; }
 
-    /// <summary>Physical services that must become ready first.</summary>
+    /// <summary>Physical services that must become ready first, including canonical obligations projected by local compilation.</summary>
     public ImmutableArray<InfrastructurePhysicalResourceId> ReadyDependencies { get; }
 
     /// <summary>Optional grace period before forced termination.</summary>

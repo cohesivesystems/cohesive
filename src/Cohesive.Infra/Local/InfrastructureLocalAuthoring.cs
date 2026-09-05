@@ -300,7 +300,12 @@ public sealed class InfrastructureLocalServiceBuilder
         return this;
     }
 
-    /// <summary>Adds a ready-service dependency.</summary>
+    /// <summary>Repeats a canonical ready-service dependency by exact physical identity.</summary>
+    /// <remarks>
+    /// Local compilation automatically projects canonical <c>RequiresReady(...)</c> declarations. This method is
+    /// retained as a compatibility override for direct topology equivalence; local compilation warns when the dependency
+    /// is absent from the canonical definition.
+    /// </remarks>
     /// <param name="service">Physical service identity.</param>
     /// <returns>This builder.</returns>
     public InfrastructureLocalServiceBuilder DependsOn(InfrastructurePhysicalResourceId service)

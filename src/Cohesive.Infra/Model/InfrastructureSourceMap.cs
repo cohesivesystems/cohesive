@@ -141,6 +141,20 @@ public static class InfrastructureSourceReferences
     public static SourceReference Node(InfrastructureNodeId node) =>
         Create("infrastructure-node", node.Value, nameof(node));
 
+    /// <summary>Projects a canonical readiness-dependency identity.</summary>
+    /// <param name="dependency">Canonical readiness dependency.</param>
+    /// <returns>A canonical infrastructure-readiness-dependency reference.</returns>
+    /// <exception cref="ArgumentException"><paramref name="dependency"/> is default or cannot form a source reference.</exception>
+    public static SourceReference ReadinessDependency(InfrastructureReadinessDependencyId dependency) =>
+        Create("infrastructure-readiness-dependency", dependency.Value, nameof(dependency));
+
+    /// <summary>Projects an exact physical-resource identity.</summary>
+    /// <param name="physicalResource">Exact physical resource.</param>
+    /// <returns>A canonical infrastructure-physical-resource reference.</returns>
+    /// <exception cref="ArgumentException"><paramref name="physicalResource"/> is default or cannot form a source reference.</exception>
+    public static SourceReference PhysicalResource(InfrastructurePhysicalResourceId physicalResource) =>
+        Create("infrastructure-physical-resource", physicalResource.Value, nameof(physicalResource));
+
     /// <summary>Projects an interpretation-target identity.</summary>
     /// <param name="target">Canonical infrastructure target.</param>
     /// <returns>A canonical infrastructure-target reference.</returns>

@@ -29,10 +29,11 @@ Infra keeps four related authorities distinct:
 | Artifact | Authority | Not authority for |
 | --- | --- | --- |
 | Application IR | Application behavior and the storage, execution, identity, API, and process guarantees it induces | Vendor resources or deployment mechanics |
-| `InfrastructureDefinition` | In this slice, portable workloads, logical resources, capability requirements, directed contract bindings, and resource lifecycle intent | A selected provider topology |
+| `InfrastructureDefinition` | Portable workloads, logical resources, capability requirements, directed contract bindings, readiness dependencies, and resource lifecycle intent | A selected provider topology |
 | `InfrastructureTargetFacilityManifest` | A target adapter's selectable physical construction families and the exact capability evidence each family owns | Application topology, environment policy, or deployment execution |
 | `InfrastructureTargetFacilityPlan` | One exact definition's facility selections, attributable effective configuration, and capability closure | Provider naming, emitted artifacts, backend state, or deployment receipts |
-| `InfrastructureRealization` | One exact definition's capability closure, physical placements, lifecycle partition, and demand-scoped evidence witnesses | Deployment readiness, backend execution state, or the original application semantics |
+| `InfrastructureRealization` | One exact definition's capability closure, physical placements, lifecycle partition, demand-scoped evidence witnesses, and physically lowered readiness obligations | Current runtime readiness, backend execution state, or the original application semantics |
+| `InfrastructureReadinessAssessment` | Deterministic readiness decisions from one exact realization and attributable observations | Observation collection, lifecycle mutation, or capability proof |
 | Backend state and observations | Backend-native identities, receipts, outputs, drift, and time-indexed operational evidence | An implicit rewrite of the definition or realization |
 
 The normal flow is:
@@ -45,9 +46,11 @@ application definitions and explicit Infra authoring
     -> exact binding elaboration and attributable obligation derivation
     -> capability proof against one coherent target variant
     -> exact workload placements and demand-scoped physical evidence witnesses
+    -> exact physical readiness obligations
     -> InfrastructureRealization
     -> lifecycle-backend projection
     -> backend state, receipts, outputs, and observations
+    -> InfrastructureReadinessAssessment
 ```
 
 Backends may be replaced, state may be imported, and a deployed estate may drift without changing canonical meaning.
@@ -64,7 +67,9 @@ guarantee, or Identity authorization rule into a second independently maintained
 
 An `InfrastructureRealization` joins an `InfrastructureCapabilityClosureReport` to an
 `InfrastructureLifecyclePlan`, workload placements, and capability-evidence witnesses for the same exact fingerprinted
-definition. The closure report identifies the selected exactly fingerprinted profile, target, and coherent variant and
+definition. Canonical readiness dependencies are lowered through those same placements into exact physical
+`InfrastructureReadinessObligation` values; they are not re-authored by applications or adapters. The closure report
+identifies the selected exactly fingerprinted profile, target, and coherent variant and
 retains one evidence-backed, unavailable, or unknown planning decision for every declared node requirement and every
 successfully elaborated binding obligation. Its exact `InfrastructureBindingElaborationReport` is both compiler state
 and a machine-readable explanation path from binding to selected rule, induced requirements, capability decisions, or
@@ -96,6 +101,31 @@ Physical witnesses still are not construction recipes or execution receipts. Bac
 definition/profile/realization fence with compiler version, emitted-artifact fingerprint, preview, and backend receipts
 before claiming deployment authority. A stale, partially matched, or merely capability-closed plan is not deployment
 authority.
+
+## Readiness obligations and observations
+
+Readiness intent belongs to `InfrastructureDefinition`, separately from a binding contract or a capability proof. A
+directed `InfrastructureReadinessDependency` means that its subject cannot be admitted as ready until the named
+dependency is ready. The fluent `RequiresReady(...)` methods are typed authoring projections of that relation. The
+definition normalizes dependency identities, rejects unknown nodes and duplicate semantic slots, and rejects cycles.
+
+`InfrastructureRealizationCompiler` uses the existing workload placements and resource lifecycle bindings to lower
+each logical dependency to one exact physical obligation. The local compiler projects those obligations into its
+construction topology, where existing Docker Compose and Aspire interpretations realize them using their own health
+and wait mechanisms. A local-only ready dependency absent from canonical intent is a structured diagnostic, preventing
+an AppHost or Compose file from becoming a second application topology.
+
+Current state remains separate, attributable evidence. Adapters produce `InfrastructureResourceObservation` values
+using the shared execution health and readiness statuses, exact physical identities, UTC observation time, typed
+source references, and optional adapter diagnostics. `InfrastructureReadinessEvaluator` performs no I/O: it derives
+one effective node decision, propagates not-ready and unknown dependency state, and emits normalized diagnostics with
+the exact semantic dependency, physical resources, expected and observed states, sources, and repair options. Missing
+evidence is unknown and fails closed. An incomplete capability or physical realization is diagnosed independently and
+cannot become ready merely because a runtime endpoint is exposed or a provider reports favorable health.
+
+The assessment is fingerprinted for deterministic serialization and comparison, but it is time-indexed evidence—not
+new infrastructure intent. Live Aspire, Pulumi, Terraform, or provider observation collection remains adapter work;
+future `cohesive status` tooling can consume the common assessment without reimplementing readiness meaning.
 
 ## Bindings are primary semantics
 
@@ -251,7 +281,7 @@ target-neutral local construction topology to one exact `InfrastructureRealizati
 policy, and the existing four-tier `InfrastructureConventionResolution`. The topology describes executable services
 constructed from either pinned container images or repository-relative .NET projects, endpoint exposure and UI roles,
 external secret references, generated non-secret configuration files,
-volumes, readiness dependencies, complete health policies with probe timing, graceful termination, and application-owned
+volumes, physically projected readiness dependencies, complete health policies with probe timing, graceful termination, and application-owned
 harness operations.
 
 Interactive and isolated-test environments are explicit profiles. Interactive environments retain managed data across
@@ -264,7 +294,7 @@ are never effective configuration values in the local IR.
 The local compiler validates the construction topology before an adapter performs I/O: resource services must match
 managed lifecycle bindings, workload services must match exact workload placements, repository projects may attach
 only to workloads, images must be pinned, referenced settings/endpoints/volumes/files/services must exist, loopback
-ports must be valid and unique, readiness must be acyclic and backed by dependency health, likely secret environment
+ports must be valid and unique, readiness must agree with canonical physically lowered obligations and be backed by dependency health, likely secret environment
 values must be external references, and destructive operations must remain inside the selected lifecycle authority.
 Capability mismatches are portable `DocumentValidationDiagnostic` values with exact source references, expected and
 observed states, related locations, and actionable resolution paths. A successful local document is still not an

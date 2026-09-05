@@ -12,7 +12,7 @@ public sealed record InfrastructureRealizationFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current realization fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-infra-realization/v1-c14n/v3";
+    public const string CurrentCanonicalization = "cohesive-infra-realization/v1-c14n/v4";
 
     /// <summary>Creates realization fingerprint metadata.</summary>
     /// <param name="algorithm">Stable digest algorithm identity.</param>
@@ -97,6 +97,7 @@ public sealed record InfrastructureRealization
     /// <param name="capabilityClosure">Exact target-strategy capability-closure report.</param>
     /// <param name="lifecycle">Physical resource identities and lifecycle ownership partition.</param>
     /// <param name="workloadPlacements">Selected physical deployment resources for logical workloads.</param>
+    /// <param name="readinessObligations">Canonical readiness dependencies lowered to exact physical resources.</param>
     /// <param name="capabilityWitnesses">Demand-scoped applicability witnesses for selected capability evidence.</param>
     /// <param name="witnessDecisions">One derived physical-applicability decision per exact capability demand.</param>
     /// <param name="diagnostics">Structured witness diagnostics in deterministic order.</param>
@@ -113,6 +114,7 @@ public sealed record InfrastructureRealization
         InfrastructureCapabilityClosureReport capabilityClosure,
         InfrastructureLifecyclePlan lifecycle,
         ImmutableArray<InfrastructureWorkloadPlacement> workloadPlacements,
+        ImmutableArray<InfrastructureReadinessObligation> readinessObligations,
         ImmutableArray<InfrastructureCapabilityEvidenceWitness> capabilityWitnesses,
         ImmutableArray<InfrastructureCapabilityWitnessDecision> witnessDecisions,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics,
@@ -128,6 +130,7 @@ public sealed record InfrastructureRealization
         }
 
         WorkloadPlacements = InfrastructureCapabilityWitnessCollections.NormalizePlacements(workloadPlacements);
+        ReadinessObligations = InfrastructureReadinessObligationCompiler.Normalize(readinessObligations);
         CapabilityWitnesses = InfrastructureCapabilityWitnessCollections.NormalizeWitnesses(capabilityWitnesses);
         WitnessDecisions = InfrastructureCapabilityWitnessCollections.NormalizeDecisions(witnessDecisions);
         Diagnostics = DocumentValidationDiagnostics.Normalize(diagnostics);
@@ -142,10 +145,22 @@ public sealed record InfrastructureRealization
         if (!Diagnostics.SequenceEqual(evaluation.Diagnostics))
             throw new ArgumentException("Capability-witness diagnostics do not match the exact realization inputs.", nameof(diagnostics));
 
+        var expectedReadiness = InfrastructureReadinessObligationCompiler.Compile(
+            CapabilityClosure.Definition.Definition,
+            Lifecycle,
+            WorkloadPlacements);
+        if (!ReadinessObligations.SequenceEqual(expectedReadiness))
+        {
+            throw new ArgumentException(
+                "Readiness obligations do not match the canonical definition and exact physical placements.",
+                nameof(readinessObligations));
+        }
+
         var computed = InfrastructureRealizationFingerprinting.Compute(
             CapabilityClosure,
             Lifecycle,
             WorkloadPlacements,
+            ReadinessObligations,
             CapabilityWitnesses,
             WitnessDecisions);
         if (fingerprint is not null && fingerprint != computed)
@@ -161,6 +176,9 @@ public sealed record InfrastructureRealization
 
     /// <summary>Selected physical workload deployment resources in workload-identity order.</summary>
     public ImmutableArray<InfrastructureWorkloadPlacement> WorkloadPlacements { get; }
+
+    /// <summary>Canonical readiness dependencies lowered to exact physical resources.</summary>
+    public ImmutableArray<InfrastructureReadinessObligation> ReadinessObligations { get; }
 
     /// <summary>Demand-scoped applicability witnesses in requirement-then-evidence order.</summary>
     public ImmutableArray<InfrastructureCapabilityEvidenceWitness> CapabilityWitnesses { get; }
@@ -181,6 +199,11 @@ public sealed record InfrastructureRealization
         CapabilityClosure.IsClosed
         && WitnessDecisions.All(static decision => decision.IsComplete)
         && !Diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+
+    /// <summary>Whether every canonical readiness dependency has an exact physical obligation.</summary>
+    [JsonIgnore]
+    public bool IsReadinessObligationComplete =>
+        ReadinessObligations.Length == CapabilityClosure.Definition.Definition.ReadinessDependencies.Length;
 
     /// <summary>Projects a payload-free exact reference to this realization.</summary>
     /// <returns>The exact definition, profile, target, variant, and fingerprint fence.</returns>
@@ -217,6 +240,7 @@ public sealed record InfrastructureRealization
         && CapabilityClosure == other.CapabilityClosure
         && Lifecycle == other.Lifecycle
         && WorkloadPlacements.SequenceEqual(other.WorkloadPlacements)
+        && ReadinessObligations.SequenceEqual(other.ReadinessObligations)
         && CapabilityWitnesses.SequenceEqual(other.CapabilityWitnesses)
         && WitnessDecisions.SequenceEqual(other.WitnessDecisions)
         && Diagnostics.SequenceEqual(other.Diagnostics)
@@ -230,6 +254,7 @@ public sealed record InfrastructureRealization
         hash.Add(CapabilityClosure);
         hash.Add(Lifecycle);
         Add(ref hash, WorkloadPlacements);
+        Add(ref hash, ReadinessObligations);
         Add(ref hash, CapabilityWitnesses);
         Add(ref hash, WitnessDecisions);
         Add(ref hash, Diagnostics);

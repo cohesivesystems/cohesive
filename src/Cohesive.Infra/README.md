@@ -26,6 +26,8 @@ var document = Infrastructure.Define(
             .Requires(ShippingCapabilities.DocumentAuthority)
             .Requires(ShippingCapabilities.ChangeFeed);
 
+        api.RequiresReady(state);
+
         infra.Bind(new("binding/api-state"), api)
             .To(state)
             .As(ShippingContracts.RepositoryReadWrite);
@@ -94,6 +96,23 @@ diagnostics and inspection but are excluded from semantic fingerprints, so movin
 files does not change their canonical identity. Explicit source references remain semantic evidence and should be
 projected from typed target, facility, lifecycle, or artifact identities instead of handwritten repository paths.
 
+Canonical `RequiresReady(...)` declarations are lowered by `InfrastructureRealizationCompiler` from logical nodes to
+their exact physical placements. Local compilation projects those obligations into the existing topology consumed by
+Docker Compose and Aspire, so application code does not repeat physical dependency strings. Aspire continues to own
+local orchestration and realizes the relationship as `WaitFor` plus adapter health checks.
+
+Adoption note: topology-level `DependsOn(...)` and direct `ReadyDependencies` remain honored as explicit local
+compatibility overrides. When no matching canonical obligation exists, local compilation emits the warning
+`infra.local.readiness.notCanonical` without invalidating the local realization. Migrate an edge to semantic
+`RequiresReady(...)` only when the application's readiness actually depends on it. A local startup-order preference is
+not the same guarantee and should not be promoted into the canonical definition merely to silence the warning.
+
+Adapters can normalize current backend evidence into `InfrastructureResourceObservation` values. The pure
+`InfrastructureReadinessEvaluator` compares those observations with the exact realization and returns a fingerprinted
+assessment with one decision per physicalized logical node. Missing and unknown evidence fail closed, an unhealthy
+dependency blocks its subject even when that subject exposes an endpoint, and an incomplete capability realization
+cannot be made ready by favorable runtime health.
+
 ## What this package provides
 
 - Portable workload, resource, binding, requirement, and lifecycle semantics.
@@ -102,6 +121,7 @@ projected from typed target, facility, lifecycle, or artifact identities instead
 - Deterministic convention resolution with attributable effective configuration.
 - Capability closure and boundary-acceptance diagnostics.
 - Exact physical placement and evidence-witness documents.
+- Exact physical readiness obligations and attributable observation assessment.
 - Lifecycle ownership rules for managed, shared, and externally managed resources.
 - Local construction realization used by Docker Compose and Aspire projections.
 
@@ -111,8 +131,9 @@ The package is a zero-third-party-dependency semantic core. It does not referenc
 AWS, GCP, Kubernetes, or their SDKs. Provider emitters, deployment runners, observation importers, and drift readers
 belong in dedicated adapters.
 
-A successful realization proves semantic coverage for the selected target. It is not by itself a deployment receipt,
-readiness signal, cost estimate, or observation of current backend state.
+A successful realization proves semantic coverage and compiles readiness obligations for the selected target. It is
+not by itself a deployment receipt, readiness signal, cost estimate, or observation of current backend state; an
+assessment requires separately attributable observations from an adapter.
 
 ## Continue
 

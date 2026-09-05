@@ -98,17 +98,17 @@ public static class FreightMaterializationInfrastructure
 
     /// <summary>Creates the canonical portable infrastructure definition.</summary>
     /// <returns>Exact current-version infrastructure definition document.</returns>
-    public static InfrastructureDefinitionDocument CreateDefinition() => InfrastructureDefinitionDocument.FromDefinition(new(
-        id: new("materialization-harness"),
-        revision: new("local-infrastructure-v1"),
-        resources:
-        [
-            new(PostgresResource, InfrastructureResourceLifecycle.Persistent),
-            new(CosmosResource, InfrastructureResourceLifecycle.Persistent),
-            new(ElasticsearchResource, InfrastructureResourceLifecycle.Persistent),
-            new(PgAdminResource, InfrastructureResourceLifecycle.Ephemeral),
-            new(KibanaResource, InfrastructureResourceLifecycle.Ephemeral)
-        ]));
+    public static InfrastructureDefinitionDocument CreateDefinition() => Infrastructure.Define(
+        new("materialization-harness"),
+        new("local-infrastructure-v2"),
+        infrastructure =>
+        {
+            var postgres = infrastructure.Resource(PostgresResource).Persistent();
+            _ = infrastructure.Resource(CosmosResource).Persistent();
+            var elasticsearch = infrastructure.Resource(ElasticsearchResource).Persistent();
+            infrastructure.Resource(PgAdminResource).Ephemeral().RequiresReady(postgres);
+            infrastructure.Resource(KibanaResource).Ephemeral().RequiresReady(elasticsearch);
+        });
 
     /// <summary>Creates the exact capability-qualified physical realization used by local adapters.</summary>
     /// <returns>Capability-witness-complete realization for every harness service.</returns>
@@ -195,7 +195,6 @@ public static class FreightMaterializationInfrastructure
             .FileMount(file: new("pgadmin-servers"), targetPath: "/pgadmin4/servers.json")
             .HttpHealth(endpoint: new("ui"), path: "/misc/ping")
             .HealthTiming(interval: TimeSpan.FromSeconds(5), timeout: TimeSpan.FromSeconds(5), retries: 60, startPeriod: TimeSpan.FromSeconds(20))
-            .DependsOn(PostgresService)
             .StopGrace(TimeSpan.FromSeconds(30)))
         .Service(resource: KibanaResource, physicalResource: KibanaService, image: "docker.elastic.co/kibana/kibana:8.19.13", configure: kibana => kibana
             .Environment("ELASTICSEARCH_HOSTS", new InfrastructureLocalEndpointValue(service: ElasticsearchService, endpoint: new("http"), address: InfrastructureLocalEndpointAddress.ServiceNetwork, format: InfrastructureLocalEndpointValueFormat.JsonUriArray))
@@ -206,7 +205,6 @@ public static class FreightMaterializationInfrastructure
             .Endpoint(id: new("ui"), scheme: "http", containerPort: 5601, exposure: InfrastructureLocalEndpointExposure.HostLoopback, role: InfrastructureLocalEndpointRole.UserInterface, hostPort: Configuration(Settings.KibanaPort))
             .HttpHealth(endpoint: new("ui"), path: "/api/status")
             .HealthTiming(interval: TimeSpan.FromSeconds(5), timeout: TimeSpan.FromSeconds(5), retries: 60, startPeriod: TimeSpan.FromSeconds(30))
-            .DependsOn(ElasticsearchService)
             .StopGrace(TimeSpan.FromSeconds(30)))
         .Operation(id: new("start"), placement: InfrastructureLocalExecutionPlacement.Host, effect: InfrastructureLocalOperationEffect.EnvironmentMutation, executable: HarnessScript, arguments: ["up"], mutationAuthority: LifecycleAuthority)
         .Operation(id: new("stop"), placement: InfrastructureLocalExecutionPlacement.Host, effect: InfrastructureLocalOperationEffect.EnvironmentMutation, executable: HarnessScript, arguments: ["down"], mutationAuthority: LifecycleAuthority)
