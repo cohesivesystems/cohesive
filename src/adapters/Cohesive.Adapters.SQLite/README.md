@@ -128,3 +128,6 @@ dotnet test src/Cohesive.Adapters.SQLite.Tests/Cohesive.Adapters.SQLite.Tests.cs
 ```
 
 The implementation deliberately retains native transaction ownership instead of introducing another unit-of-work interface. Each repository should reuse connection/command configuration and the scalar catalog; its schema and contract-specific CAS/batch semantics belong in that repository realization. Connections are unpooled and each acquisition verifies the profile; callers should batch a unit of work on one connection. No throughput or latency guarantee is asserted by this initial foundation.
+
+The required native engine profile supports `IS [NOT] DISTINCT FROM` and right/full outer joins. The shared builder
+checks each facility through `SqlFeature` before rendering; these were added in [SQLite 3.39](https://www.sqlite.org/releaselog/3_39_0.html).

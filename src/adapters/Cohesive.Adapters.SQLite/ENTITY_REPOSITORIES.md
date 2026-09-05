@@ -51,7 +51,7 @@ Reads validate the stored graph and shape identities. Unconditional upserts also
 
 `TryGet` returns null for a missing identity or explicit identity/partition pair. An unscoped identity in multiple partitions throws `InvalidOperationException`. Expected semantic version and expected storage token are independent read preconditions; mismatches throw `ObservationConcurrencyConflictException`.
 
-Every successful write generates a fresh opaque UUID token, even when state and semantic version are unchanged. Retain the whole token; do not parse it or derive it from the semantic version. Without an expected token, `Upsert` inserts or replaces a row of the same shape. With a token, SQL conditionally replaces the exact identity/partition/shape/token; stale or missing targets fail without inserting. There is no insert-only/create-if-absent operation. A different partition identifies another row, not a move of the original entity.
+Every successful write generates a fresh opaque UUID token, even when state and semantic version are unchanged. Retain the whole token; do not parse it or derive it from the semantic version. Without an expected token, `Upsert` inserts or replaces a row of the same shape. With a token, SQL conditionally replaces the exact identity/partition/shape/token; stale or missing targets fail without inserting. A stored shape revision mismatch is diagnosed separately as `InvalidOperationException`, including for conditional writes; the diagnostic reread shares the same immediate transaction. There is no insert-only/create-if-absent operation. A different partition identifies another row, not a move of the original entity.
 
 Field selections are validated and retained in `LoadedFields`, including an explicitly empty selection. The repository loads and validates the complete observation before returning it. This follows the existing materializer convention; it does not promise reduced column I/O or physically sparse state. Projection metadata is snapshotted into immutable storage.
 
@@ -59,11 +59,22 @@ Field selections are validated and retained in `LoadedFields`, including an expl
 
 Native capabilities cover same-partition and cross-partition all-or-nothing batches within one repository table/database, with a default maximum of 1,000 writes. Cross-file/distributed transactions are unsupported. `SamePartition` rejects multiple logical partitions; oversize batches are rejected instead of split. Empty batches perform no I/O.
 
-Every batch runs in input order under one immediate transaction, including `None` requests, which receive a stronger physical guarantee. Results retain the requested atomicity and input order. Repeated identities execute sequentially with distinct tokens; a later conditional write must match the token current at its position. A late stale token, SQL failure, shape mismatch, encoding failure, or observed cancellation rolls back all pending writes. Snapshots are returned only after commit.
+Batches run in input order. `SamePartition` and `AllOrNothing` use one immediate transaction; `None` uses one transaction per write on the same connection and preserves earlier commits if a later write fails. Results retain the requested atomicity and input order. Repeated identities execute sequentially with distinct tokens; a later conditional write must match the token current at its position. A late stale token, SQL failure, shape mismatch, encoding failure, or observed cancellation rolls back the active transaction. Snapshots are returned only after the requested batch completes.
 
 Candidate/partition validation precedes acquisition; scalar encoding additionally validates bound values. Caller-owned list entries are snapshotted before acquisition and must not be mutated concurrently during that snapshot. Each operation owns its connection and write transaction. Native operations are synchronous, and task APIs wrap completed results without hidden scheduling, nested commits, or retries. Cancellation is checked before acquisition, during batch preparation, between writes, and before commit. It cannot interrupt native execution or busy retries; cancellation after successful commit does not turn it into a cancellation result.
 
-Typed and typed-outbox facades preserve native capabilities, limits, ordering, and atomicity. Typed batches now use the same identity/version selectors as single writes and invoke one native batch instead of five concurrent single writes. For per-candidate tokens, pass canonical `EntityBatchWriteRequest` values through the raw overload.
+Typed and typed-outbox facades preserve native capabilities, limits, ordering, and atomicity. Typed batches now use the same identity/version selectors as single writes and invoke one native batch instead of five concurrent single writes. Use `EntityWriteRequest<TEntity>` for per-candidate tokens without dropping to canonical observations:
+
+```csharp
+EntityWriteRequest<Run>[] writes =
+[
+    new(updatedRun, expectedConcurrencyToken),
+    new(newRun) // Unconditional write.
+];
+await typed.UpsertBatch(context, new EntityBatchWriteRequest<Run>(writes, EntityBatchAtomicity.AllOrNothing));
+```
+
+The typed request lowers to the existing canonical `EntityWriteRequest`; it does not add a second concurrency model.
 
 ## Verification and follow-up work
 

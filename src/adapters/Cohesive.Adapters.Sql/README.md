@@ -9,6 +9,7 @@ guarantees. Semantic compilers must prove those guarantees against their target 
 identifier escaping, deterministic parameter ordering, and reusable templates. A mutable builder produces an immutable
 query or template. Explicit `SqlDialect` policy controls identifier limits, parameter representability, function names,
 and supported grammar; an unsupported facility raises `SqlConstructionException` with a stable code and resolution.
+Null-safe distinct comparisons and right/full outer joins also require explicit `SqlFeature` support.
 Dialect implementations are trusted, immutable compiler policy. They remain in concrete adapter packages.
 
 ```csharp
@@ -106,3 +107,5 @@ Relations IR. Compiled SQL is executable code; deserialize templates only from t
 
 `SqlFunction.ClockTimestamp` is replaced by
 `SqlExpression.Intrinsic(PostgresSqlDialect.ClockTimestampIntrinsic)`. Its emitted PostgreSQL SQL is unchanged.
+
+See the [SQLite adoption release notes](../../../docs/release-notes/sqlite-adoption.md) for the intentional public API breaks.
