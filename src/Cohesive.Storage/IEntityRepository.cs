@@ -82,15 +82,17 @@ public interface IEntityRepository<TEntity> : IEntityRepository where TEntity : 
     Task<EntitySnapshot> Upsert(OperationContext context, TEntity entity, EntityConcurrencyToken? expectedConcurrencyToken = null);
 
     /// <summary>
-    /// Upserts a batch of observations.
+    /// Maps a typed batch in input order and preserves the repository's native batch capabilities.
     /// </summary>
-    /// <param name="context"></param>
-    /// <param name="writes"></param>
-    /// <returns></returns>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="writes">Complete typed candidates in write order.</param>
+    /// <param name="atomicity">Required atomicity; unsupported guarantees must be rejected.</param>
+    /// <returns>Committed snapshots in the same order as the input candidates.</returns>
     async Task<IReadOnlyList<EntitySnapshot>> UpsertBatch(
         OperationContext context,
-        IReadOnlyList<TEntity> writes) =>
-        await Task.WhenAllThrottled(writes, w => Upsert(context, w), new(maxConcurrency: 5), context.CancellationToken);
+        IReadOnlyList<TEntity> writes,
+        EntityBatchAtomicity atomicity = EntityBatchAtomicity.None) =>
+        (await EntityRepositoryMappingExtensions.UpsertBatch(this, context, writes, atomicity).ConfigureAwait(false)).Snapshots;
 }
 
 /// <summary>

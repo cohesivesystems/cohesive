@@ -3,6 +3,11 @@
 `Cohesive.Storage` defines provider-neutral durability, source acquisition, aggregate storage realization, and
 relation-derived materialization contracts for Cohesive systems.
 
+Typed entity repositories preserve the underlying repository's batch capabilities, item limits, input order, and
+requested atomicity. `UpsertBatch(context, entities, atomicity)` maps ordinary records through the same selectors as
+single writes, then invokes one native batch. Per-candidate concurrency tokens use the canonical
+`EntityBatchWriteRequest` overload. Unsupported atomicity is rejected instead of silently using independent writes.
+
 ## Install
 
 ```bash

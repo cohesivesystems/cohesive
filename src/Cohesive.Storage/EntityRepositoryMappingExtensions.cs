@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Text.Json.Serialization;
 using Cohesive.Transitions.Authoring;
+using Cohesive.Transitions.Model;
 
 namespace Cohesive.Storage;
 
@@ -58,12 +59,55 @@ public static class EntityRepositoryMappingExtensions
             ArgumentNullException.ThrowIfNull(repository);
             ArgumentNullException.ThrowIfNull(context);
             ArgumentNullException.ThrowIfNull(entity);
-            var state = repository.EntityDefinition.CreateState(
-                ResolveEntityId(entity, selectEntityId),
-                entity,
-                ResolveVersion(entity, selectVersion));
-            return repository.Upsert(context, new(Entity: state.Snapshot, ExpectedConcurrencyToken: expectedConcurrencyToken));
+            return repository.Upsert(context, CreateWriteRequest(repository, entity, expectedConcurrencyToken, selectEntityId, selectVersion));
         }
+
+        /// <summary>Maps an ordered typed batch and dispatches it through the repository's native batch contract.</summary>
+        /// <param name="context">Operation context and cancellation.</param>
+        /// <param name="entities">Complete typed candidates in write order.</param>
+        /// <param name="atomicity">Required atomicity, preserved when dispatching the canonical batch.</param>
+        /// <param name="selectEntityId">Optional identity selector; otherwise use existing object-mapping conventions.</param>
+        /// <param name="selectVersion">Optional semantic version selector; otherwise use existing object-mapping conventions.</param>
+        /// <returns>The native batch result, including ordered snapshots and realized atomicity.</returns>
+        /// <exception cref="ArgumentNullException">A required argument or typed candidate is null.</exception>
+        /// <exception cref="OperationCanceledException">Cancellation is observed during mapping or by the underlying repository.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">The atomicity enum is unknown.</exception>
+        /// <exception cref="NotSupportedException">The repository cannot satisfy the requested batch contract.</exception>
+        /// <exception cref="SemanticRuleViolationException">A candidate does not satisfy the entity definition.</exception>
+        /// <exception cref="InvalidOperationException">Object-mapping conventions cannot resolve a valid identity or version.</exception>
+        public Task<EntityBatchWriteResult> UpsertBatch<TEntity>(OperationContext context,
+            IReadOnlyList<TEntity> entities,
+            EntityBatchAtomicity atomicity = EntityBatchAtomicity.None,
+            Func<TEntity, string>? selectEntityId = null,
+            Func<TEntity, long>? selectVersion = null) where TEntity : notnull
+        {
+            ArgumentNullException.ThrowIfNull(repository);
+            ArgumentNullException.ThrowIfNull(context);
+            ArgumentNullException.ThrowIfNull(entities);
+            context.ThrowIfCancellationRequested();
+            if (!Enum.IsDefined(atomicity))
+                throw new ArgumentOutOfRangeException(nameof(atomicity), atomicity, "Unknown entity batch atomicity.");
+            var capabilities = repository.BatchCapabilities;
+            if (!capabilities.SupportsAtomicity(atomicity)
+                || capabilities.MaxItemsPerBatch is { } maximum && entities.Count > maximum)
+                throw new NotSupportedException($"Repository '{repository.EntityType}' cannot satisfy the requested batch atomicity or item limit.");
+            var writes = new EntityWriteRequest[entities.Count];
+            for (var index = 0; index < writes.Length; index++)
+            {
+                context.ThrowIfCancellationRequested();
+                writes[index] = CreateWriteRequest(repository, entities[index], expectedConcurrencyToken: null, selectEntityId, selectVersion);
+            }
+            return repository.UpsertBatch(context, new EntityBatchWriteRequest(writes, atomicity));
+        }
+    }
+
+    static EntityWriteRequest CreateWriteRequest<TEntity>(IEntityRepository repository, TEntity entity,
+        EntityConcurrencyToken? expectedConcurrencyToken, Func<TEntity, string>? selectEntityId,
+        Func<TEntity, long>? selectVersion) where TEntity : notnull
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        var state = repository.EntityDefinition.CreateState(ResolveEntityId(entity, selectEntityId), entity, ResolveVersion(entity, selectVersion));
+        return new(Entity: state.Snapshot, ExpectedConcurrencyToken: expectedConcurrencyToken);
     }
 
     static TEntity Materialize<TEntity>(

@@ -2,6 +2,36 @@ namespace Cohesive.Tests.Model;
 
 public sealed class EntityDefinitionCreateStateTests
 {
+    [Theory]
+    [InlineData(FieldPresence.Required, FieldNullability.Nullable)]
+    [InlineData(FieldPresence.Required, FieldNullability.NonNullable)]
+    [InlineData(FieldPresence.Optional, FieldNullability.Nullable)]
+    [InlineData(FieldPresence.Optional, FieldNullability.NonNullable)]
+    public void PresenceAndNullabilityRemainIndependentAcrossStateConstructionAndValidation(
+        FieldPresence presence, FieldNullability nullability)
+    {
+        var definition = new EntityDefinition(new("nullable-state"),
+            [new(new("value"), new ScalarTypeRef(ScalarTypeKind.String), presence: presence, nullability: nullability)]);
+        Dictionary<string, ObservationValue> suppliedNull = new() { ["value"] = ObservationValue.Null };
+        Dictionary<string, ObservationValue> absent = [];
+        if (nullability == FieldNullability.Nullable)
+        {
+            var state = definition.CreateState("one", suppliedNull);
+            Assert.Equal(ObservationValue.Null, state.Observation.GetField("value"));
+            definition.ValidateObservation(state.Observation);
+            definition.ValidateState(state);
+            Assert.Equal(state.Snapshot, definition.CreateState(state.Snapshot).Snapshot);
+            Assert.True(ValueContract.FromField(definition.Fields[0]).IsSatisfiedByConstant(ObservationValue.Null));
+        }
+        else
+            Assert.Throws<SemanticRuleViolationException>(() => definition.CreateState("one", suppliedNull));
+
+        if (presence == FieldPresence.Required)
+            Assert.Throws<SemanticRuleViolationException>(() => definition.CreateState("one", absent));
+        else
+            Assert.False(definition.CreateState("one", absent).Observation.TryGetField("value", out _));
+    }
+
     [Fact]
     public void InlineStateShapeIdentity_IsDeterministicAndChangesWithShapeSemantics()
     {

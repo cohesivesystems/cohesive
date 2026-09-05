@@ -121,7 +121,7 @@ internal sealed class EntityStateInterpreter
         foreach (var field in requiredFields)
         {
             if (!stateByFieldName.TryGetValue(field.Name.Value, out var value)
-                || value.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)
+                || value.Kind == ObservationValueKind.Undefined)
             {
                 throw new SemanticRuleViolationException($"Entity '{entityId}' is missing required field '{field.Name.Value}'.");
             }
@@ -190,13 +190,16 @@ internal sealed class EntityStateInterpreter
 
     void EnsureFieldValueMatchesType(string entityId, FieldDefinition field, ObservationValue value, string context)
     {
-        if (value.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)
+        if (value.Kind == ObservationValueKind.Undefined)
         {
             if (field.Presence == FieldPresence.Required)
-            {
-                throw new SemanticRuleViolationException($"{context} produced null for required field '{field.Name.Value}' on entity '{entityId}'.");
-            }
-
+                throw new SemanticRuleViolationException($"{context} produced absence for required field '{field.Name.Value}' on entity '{entityId}'.");
+            return;
+        }
+        if (value.Kind == ObservationValueKind.Null)
+        {
+            if (field.Nullability == FieldNullability.NonNullable)
+                throw new SemanticRuleViolationException($"{context} produced null for non-nullable field '{field.Name.Value}' on entity '{entityId}'.");
             return;
         }
 

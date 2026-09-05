@@ -321,7 +321,7 @@ public sealed record EntityDefinition
                 continue;
 
             if (!values.TryGetValue(requiredField.Name.Value, out var value)
-                || value.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)
+                || value.Kind == ObservationValueKind.Undefined)
             {
                 throw new SemanticRuleViolationException($"State for entity type '{Name.Value}' is missing required field '{requiredField.Name.Value}'.");
             }
@@ -346,18 +346,23 @@ public sealed record EntityDefinition
             if (requiredField.Mutability is FieldMutability.Computed)
                 continue;
 
-            if (!observation.TryGetField(requiredField, out var value) || value.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)
+            if (!observation.TryGetField(requiredField, out var value) || value.Kind == ObservationValueKind.Undefined)
                 throw new SemanticRuleViolationException($"State for entity type '{Name.Value}' is missing required field '{requiredField.Name.Value}'.");
         }
     }
 
     void EnsureFieldValueMatchesType(FieldDefinition field, ObservationValue value)
     {
-        if (value.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)
+        if (value.Kind == ObservationValueKind.Undefined)
         {
             if (field.Presence == FieldPresence.Required)
-                throw new SemanticRuleViolationException($"State for entity type '{Name.Value}' contains null for required field '{field.Name.Value}'.");
-
+                throw new SemanticRuleViolationException($"State for entity type '{Name.Value}' is missing required field '{field.Name.Value}'.");
+            return;
+        }
+        if (value.Kind == ObservationValueKind.Null)
+        {
+            if (field.Nullability == FieldNullability.NonNullable)
+                throw new SemanticRuleViolationException($"State for entity type '{Name.Value}' contains null for non-nullable field '{field.Name.Value}'.");
             return;
         }
 

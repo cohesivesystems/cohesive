@@ -14,6 +14,34 @@ public sealed class CoreObservationPerformanceTestCollection
 [Collection(CoreObservationPerformanceTestCollection.Name)]
 public sealed class CoreObservationTests
 {
+    [Theory]
+    [InlineData(1)]
+    [InlineData(128)]
+    [InlineData(4096)]
+    public void RequiredNullableFieldsRemainPresentInNestedAndCollectionValues(int count)
+    {
+        var objectType = new ObjectTypeRef([new("note", new ScalarTypeRef(ScalarTypeKind.String), nullability: FieldNullability.Nullable)]);
+        Shape shape = new(new("nullable-observation"),
+        [
+            new(new("note"), new ScalarTypeRef(ScalarTypeKind.String), nullability: FieldNullability.Nullable),
+            new(new("nested"), objectType),
+            new(new("items"), objectType, cardinality: FieldCardinality.Many)
+        ]);
+        var nested = ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["note"] = ObservationValue.Null });
+        Dictionary<string, ObservationValue> fields = new()
+        {
+            ["note"] = ObservationValue.Null,
+            ["nested"] = nested,
+            ["items"] = ObservationValue.FromArray([.. Enumerable.Repeat(nested, count)])
+        };
+        Assert.True(ObservationValidator.TryValidateAgainstShape(fields, shape, out var error), error);
+        fields["nested"] = ObservationValue.FromObject(new Dictionary<string, ObservationValue>());
+        Assert.False(ObservationValidator.TryValidateAgainstShape(fields, shape, out _));
+        fields["nested"] = nested;
+        fields.Remove("note");
+        Assert.False(ObservationValidator.TryValidateAgainstShape(fields, shape, out _));
+    }
+
     [Fact]
     public void Create_CapturesQualifiedShapeAndValidatedFields()
     {
