@@ -228,7 +228,7 @@ public sealed class PostgresSqlConstructionTests
             deduplicatedInsert.Text);
 
         var clock = new SqlSelectBuilder()
-            .Select(SqlExpression.Function(SqlFunction.ClockTimestamp), "provider_now")
+            .Select(SqlExpression.Intrinsic(PostgresSqlDialect.ClockTimestampIntrinsic), "provider_now")
             .BuildTemplate(PostgresSqlDialect.Instance);
         Assert.Equal("SELECT CLOCK_TIMESTAMP() AS \"provider_now\"", clock.Text);
 

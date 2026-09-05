@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace Cohesive.Adapters.Sql;
 
 /// <summary>SQL grammar facilities whose availability is decided by the concrete adapter.</summary>
@@ -49,6 +51,24 @@ public abstract class SqlDialect
     /// <param name="feature">Requested target grammar facility.</param>
     /// <exception cref="SqlConstructionException">The facility is unavailable in this profile.</exception>
     public abstract void Require(SqlFeature feature);
+
+    /// <summary>Renders an adapter-owned intrinsic expression; the default policy rejects every identity.</summary>
+    /// <param name="intrinsic">Stable construct identity supplied by <see cref="SqlExpression.Intrinsic"/>.</param>
+    /// <param name="arguments">Immutable, non-null operands in authoring order.</param>
+    /// <param name="writer">Scoped output sharing the containing statement's escaping and parameter allocation.</param>
+    /// <exception cref="SqlConstructionException">The construct is unsupported by this dialect.</exception>
+    /// <exception cref="ArgumentException">The construct has invalid arity or violates target constraints.</exception>
+    /// <remarks>
+    /// Overrides must validate the identity and operands, emit one complete expression, and reject unknown identities.
+    /// Emit only compiler-owned grammar as syntax; operands go through the writer. Implementations must be deterministic
+    /// and must version <see cref="Name"/> when changing emitted or binding contracts. No renderer is retained in the
+    /// expression or compiled template. This extends expression syntax, not statement grammar or portable query semantics.
+    /// </remarks>
+    public virtual void WriteIntrinsic(
+        string intrinsic,
+        ImmutableArray<SqlExpression> arguments,
+        SqlExpressionWriter writer) =>
+        throw new SqlConstructionException(Name, intrinsic, "Use a dialect that supports this intrinsic or lower it to supported expressions.");
 }
 
 /// <summary>Structured failure when a SQL construction cannot preserve its requested target contract.</summary>

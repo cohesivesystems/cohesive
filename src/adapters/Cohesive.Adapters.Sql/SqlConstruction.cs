@@ -93,10 +93,7 @@ public enum SqlFunction
     Left = 4,
 
     /// <summary>Returns the one-based position of a text substring, or zero when absent.</summary>
-    StringPosition = 5,
-
-    /// <summary>Returns the current wall-clock instant at statement evaluation time.</summary>
-    ClockTimestamp = 6
+    StringPosition = 5
 }
 
 /// <summary>Supported SQL aggregate functions.</summary>
@@ -161,35 +158,6 @@ public enum SqlNullPlacement
 
     /// <summary>Places null values after non-null values.</summary>
     Last = 1
-}
-
-static class SqlUtf8
-{
-    static readonly UTF8Encoding Strict = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-
-    public static Encoder CreateEncoder() => Strict.GetEncoder();
-
-    public static int GetMaximumByteCount(int characterCount) => Strict.GetMaxByteCount(characterCount);
-
-    public static int GetByteCount(string value, string parameterName)
-    {
-        try
-        {
-            return Strict.GetByteCount(value);
-        }
-        catch (EncoderFallbackException exception)
-        {
-            throw new ArgumentException("A SQL UTF-8 value must contain valid Unicode.", parameterName, exception);
-        }
-    }
-
-    public static string RequireText(string value, string parameterName)
-    {
-        if (value.Contains('\0', StringComparison.Ordinal))
-            throw new ArgumentException("A SQL text value cannot contain a zero character.", parameterName);
-        _ = GetByteCount(value, parameterName);
-        return value;
-    }
 }
 
 /// <summary>An injection-safe SQL identifier rendered with double-quote escaping.</summary>
@@ -280,6 +248,18 @@ public sealed record SqlQualifiedTable
     /// <summary>Physical table identifier.</summary>
     public SqlIdentifier TableName { get; }
 
+    /// <summary>Renders this optionally schema-qualified table name using target identifier policy.</summary>
+    /// <param name="dialect">Target policy for exact identifier representation.</param>
+    /// <returns>A name with each identifier individually escaped and double-quoted.</returns>
+    /// <exception cref="ArgumentNullException">The dialect is null.</exception>
+    /// <exception cref="ArgumentException">An identifier is outside the target domain.</exception>
+    public string ToSql(SqlDialect dialect)
+    {
+        var builder = new StringBuilder();
+        WriteTo(new SqlRenderContext(dialect), builder);
+        return builder.ToString();
+    }
+
     internal void WriteTo(SqlRenderContext context, StringBuilder builder)
     {
         if (SchemaName is { } schema)
@@ -341,7 +321,7 @@ public sealed record SqlKeysetTerm
     public SqlNullPlacement NullPlacement { get; }
 }
 
-/// <summary>Closed, injection-safe SQL scalar-expression tree.</summary>
+/// <summary>SQL scalar-expression tree with structured operands and dialect-owned intrinsic extensions.</summary>
 public abstract record SqlExpression
 {
     /// <summary>Initializes a SQL expression.</summary>
@@ -388,7 +368,13 @@ public abstract record SqlExpression
     public static SqlExpression RuntimeParameter(string binding) =>
         new RuntimeParameterExpression(Guard.RequireNotNullOrWhiteSpace(binding));
 
-    internal static SqlExpression EqualAny(
+    /// <summary>Compares a scalar against a runtime-bound native SQL array using <c>= ANY</c>.</summary>
+    /// <param name="operand">Scalar expression to compare.</param>
+    /// <param name="arrayBinding">Nonempty runtime binding for the native array.</param>
+    /// <returns>A predicate requiring <see cref="SqlFeature.ArrayAny"/> at rendering.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">The binding is empty or white space.</exception>
+    public static SqlExpression EqualAny(
         SqlExpression operand,
         string arrayBinding) =>
         new EqualAnyExpression(
@@ -504,6 +490,25 @@ public abstract record SqlExpression
 
         SqlFunctions.ValidateArity(function, arguments.Length, nameof(arguments));
         return new FunctionExpression(function, [.. arguments]);
+    }
+
+    /// <summary>Creates a named, dialect-owned expression without embedding executable policy or raw SQL.</summary>
+    /// <param name="intrinsic">Stable adapter-owned construct identity, conventionally namespaced and versioned.</param>
+    /// <param name="arguments">Ordered expression operands, copied into immutable storage.</param>
+    /// <returns>An expression resolved by <see cref="SqlDialect.WriteIntrinsic"/> during rendering.</returns>
+    /// <exception cref="ArgumentNullException">The identity, argument array, or an operand is null.</exception>
+    /// <exception cref="ArgumentException">The identity is empty or white space.</exception>
+    /// <remarks>
+    /// The dialect validates identity, arity, and target support before emitting syntax. Unsupported identities
+    /// fail with <see cref="SqlConstructionException"/> at rendering. The identity itself is never emitted as SQL.
+    /// </remarks>
+    public static SqlExpression Intrinsic(string intrinsic, params SqlExpression[] arguments)
+    {
+        Guard.RequireNotNullOrWhiteSpace(intrinsic);
+        ArgumentNullException.ThrowIfNull(arguments);
+        foreach (var argument in arguments)
+            ArgumentNullException.ThrowIfNull(argument, nameof(arguments));
+        return new IntrinsicExpression(intrinsic, [.. arguments]);
     }
 
     /// <summary>Creates a SQL aggregate expression with an optional aggregate-local filter.</summary>
@@ -770,6 +775,14 @@ public abstract record SqlExpression
             WriteExpressions(Arguments, context, builder);
             builder.Append(')');
         }
+    }
+
+    sealed record IntrinsicExpression(
+        string IntrinsicId,
+        ImmutableArray<SqlExpression> Arguments) : SqlExpression
+    {
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder) =>
+            context.Dialect.WriteIntrinsic(IntrinsicId, Arguments, new SqlExpressionWriter(context, builder));
     }
 
     sealed record AggregateExpression(
@@ -1499,7 +1512,17 @@ public sealed class SqlSelectBuilder
         aliases.Add(identifier);
     }
 
-    internal SqlSelectBuilder(
+    /// <summary>Creates a SELECT source by expanding a runtime-bound native SQL array.</summary>
+    /// <param name="arrayBinding">Nonempty runtime binding for the native array.</param>
+    /// <param name="alias">Alias of the expanded source.</param>
+    /// <param name="columnAlias">Alias of its single element column.</param>
+    /// <returns>A mutable builder requiring <see cref="SqlFeature.ArrayUnnest"/> at rendering.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">The binding is empty or white space, or an alias is invalid.</exception>
+    public static SqlSelectBuilder FromArray(string arrayBinding, string alias, string columnAlias) =>
+        new(arrayBinding, alias, columnAlias);
+
+    SqlSelectBuilder(
         string arrayBinding,
         string alias,
         string columnAlias)
@@ -1595,7 +1618,14 @@ public sealed class SqlSelectBuilder
         return this;
     }
 
-    internal SqlSelectBuilder CrossJoinLateral(
+    /// <summary>Adds a correlated derived query as a lateral cross join.</summary>
+    /// <param name="query">Right-side query, which may reference preceding source aliases.</param>
+    /// <param name="alias">Unique right-side source alias.</param>
+    /// <returns>This builder, requiring <see cref="SqlFeature.Lateral"/> at rendering.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">The alias is invalid or repeated.</exception>
+    /// <exception cref="InvalidOperationException">This builder has no FROM source.</exception>
+    public SqlSelectBuilder CrossJoinLateral(
         SqlSelectQuery query,
         string alias)
     {
@@ -1899,7 +1929,6 @@ static class SqlFunctions
     {
         var valid = function switch
         {
-            SqlFunction.ClockTimestamp => count == 0,
             SqlFunction.Length or SqlFunction.Lower or SqlFunction.Upper => count == 1,
             SqlFunction.Right or SqlFunction.Left or SqlFunction.StringPosition => count == 2,
             _ => false

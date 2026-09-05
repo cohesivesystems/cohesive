@@ -1348,7 +1348,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             SqlExpression.Column(CandidateAlias, IdentityAlias),
             identity.ScalarType,
             identity.TextSemantics);
-        var builder = new SqlSelectBuilder(KeysBinding, RequestedAlias, RequestedKeyAlias)
+        var builder = SqlSelectBuilder.FromArray(KeysBinding, RequestedAlias, RequestedKeyAlias)
             .Select(SqlExpression.Column(CandidateAlias, IdentityAlias), IdentityAlias);
         for (var index = 0; index < projection.Length; index++)
         {

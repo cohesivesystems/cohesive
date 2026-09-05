@@ -64,9 +64,9 @@ public sealed class SqliteSqlConstructionTests
         var otherDialect = new SqlCommandTemplate(template.Text, template.Parameters, "postgres/v1");
         Assert.Throws<ArgumentException>(() => otherDialect.Bind(SqliteSqlDialect.Instance, new Dictionary<string, object?> { ["value"] = 5L }));
         var error = Assert.Throws<SqlConstructionException>(() => new SqlSelectBuilder()
-            .Select(SqlExpression.Function(SqlFunction.ClockTimestamp), "now").BuildTemplate(SqliteSqlDialect.Instance));
+            .Select(SqlExpression.Intrinsic("unsupported.clock/v1"), "now").BuildTemplate(SqliteSqlDialect.Instance));
         Assert.Equal("sql.unsupported-construct", error.Code);
-        Assert.Equal("ClockTimestamp", error.Construct);
+        Assert.Equal("unsupported.clock/v1", error.Construct);
         Assert.Equal(SqliteSqlDialect.Instance.Name, error.Dialect);
         Assert.Throws<SqlConstructionException>(() => new SqlSelectBuilder().Select(SqlExpression.Constant(1L), "one")
             .Offset(1).BuildTemplate(SqliteSqlDialect.Instance));

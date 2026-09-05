@@ -1,4 +1,5 @@
 using Cohesive.Adapters.Sql;
+using System.Collections.Immutable;
 
 namespace Cohesive.Adapters.Postgres;
 
@@ -9,6 +10,8 @@ public sealed class PostgresSqlDialect : SqlDialect
     public static PostgresSqlDialect Instance { get; } = new();
     /// <summary>Standard PostgreSQL identifier limit in UTF-8 bytes.</summary>
     public const int StandardMaxUtf8ByteLength = 63;
+    /// <summary>Zero-operand intrinsic for PostgreSQL's wall-clock instant at expression evaluation.</summary>
+    public const string ClockTimestampIntrinsic = "postgres.clock-timestamp/v1";
     private PostgresSqlDialect() { }
     /// <summary>Creates an identifier validated against PostgreSQL's exact name domain.</summary>
     /// <param name="value">Unquoted physical identifier.</param>
@@ -45,7 +48,6 @@ public sealed class PostgresSqlDialect : SqlDialect
     /// <inheritdoc />
     public override string FunctionName(SqlFunction function) => function switch
     {
-        SqlFunction.ClockTimestamp => "CLOCK_TIMESTAMP",
         SqlFunction.Length => "LENGTH",
         SqlFunction.Right => "RIGHT",
         SqlFunction.Lower => "LOWER",
@@ -54,6 +56,22 @@ public sealed class PostgresSqlDialect : SqlDialect
         SqlFunction.StringPosition => "STRPOS",
         _ => throw new ArgumentOutOfRangeException(nameof(function), function, "Unsupported SQL scalar function.")
     };
+
+    /// <inheritdoc />
+    public override void WriteIntrinsic(
+        string intrinsic,
+        ImmutableArray<SqlExpression> arguments,
+        SqlExpressionWriter writer)
+    {
+        if (intrinsic != ClockTimestampIntrinsic)
+        {
+            base.WriteIntrinsic(intrinsic, arguments, writer);
+            return;
+        }
+        if (arguments.IsDefault || arguments.Length != 0)
+            throw new ArgumentException("The PostgreSQL clock timestamp intrinsic accepts no operands.", nameof(arguments));
+        writer.WriteSyntax("CLOCK_TIMESTAMP()");
+    }
 
     /// <inheritdoc />
     public override string FunctionName(SqlAggregateFunction function) => function switch

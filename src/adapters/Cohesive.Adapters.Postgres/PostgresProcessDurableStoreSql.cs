@@ -54,7 +54,7 @@ internal sealed class PostgresProcessDurableStoreSql
             .Value("page_fingerprint", SqlExpression.RuntimeParameter(PageFingerprintBinding))
             .Value("content", SqlExpression.RuntimeParameter(PageContentBinding))
             .Value("content_bytes", SqlExpression.RuntimeParameter(PageBytesBinding))
-            .Value("created_at", SqlExpression.Function(SqlFunction.ClockTimestamp))
+            .Value("created_at", SqlExpression.Intrinsic(PostgresSqlDialect.ClockTimestampIntrinsic))
             .OnConflictDoNothing(["authority_id", "page_fingerprint"])
             .Returning(SqlExpression.UnqualifiedColumn("page_fingerprint"), "page_fingerprint")
             .BuildTemplate(PostgresSqlDialect.Instance);
@@ -67,7 +67,7 @@ internal sealed class PostgresProcessDurableStoreSql
             .Value("aggregate_bytes", SqlExpression.RuntimeParameter(AggregateBytesBinding))
             .Value("page_manifest", SqlExpression.RuntimeParameter(PageManifestBinding))
             .Value("page_count", SqlExpression.RuntimeParameter(PageCountBinding))
-            .Value("updated_at", SqlExpression.Function(SqlFunction.ClockTimestamp))
+            .Value("updated_at", SqlExpression.Intrinsic(PostgresSqlDialect.ClockTimestampIntrinsic))
             .OnConflictDoNothing(["authority_id", "instance_id"])
             .Returning(SqlExpression.UnqualifiedColumn("physical_revision"), "physical_revision")
             .BuildTemplate(PostgresSqlDialect.Instance);
@@ -78,14 +78,14 @@ internal sealed class PostgresProcessDurableStoreSql
             .Set("aggregate_bytes", SqlExpression.RuntimeParameter(AggregateBytesBinding))
             .Set("page_manifest", SqlExpression.RuntimeParameter(PageManifestBinding))
             .Set("page_count", SqlExpression.RuntimeParameter(PageCountBinding))
-            .Set("updated_at", SqlExpression.Function(SqlFunction.ClockTimestamp))
+            .Set("updated_at", SqlExpression.Intrinsic(PostgresSqlDialect.ClockTimestampIntrinsic))
             .Where(Equal(tableAlias: null, "authority_id", AuthorityBinding))
             .Where(Equal(tableAlias: null, "instance_id", InstanceBinding))
             .Where(Equal(tableAlias: null, "physical_revision", ExpectedRevisionBinding))
             .Returning(SqlExpression.UnqualifiedColumn("physical_revision"), "physical_revision")
             .BuildTemplate(PostgresSqlDialect.Instance);
         providerNow = new SqlSelectBuilder()
-            .Select(SqlExpression.Function(SqlFunction.ClockTimestamp), "provider_now")
+            .Select(SqlExpression.Intrinsic(PostgresSqlDialect.ClockTimestampIntrinsic), "provider_now")
             .BuildTemplate(PostgresSqlDialect.Instance);
     }
 

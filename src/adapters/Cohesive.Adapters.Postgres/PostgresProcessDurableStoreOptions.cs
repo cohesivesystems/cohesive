@@ -1,5 +1,4 @@
 using Cohesive.Adapters.Sql;
-using System.Text;
 
 namespace Cohesive.Adapters.Postgres;
 
@@ -90,18 +89,10 @@ public sealed record PostgresProcessDurableStoreOptions
         Table = qualifiedTable.TableName.Value;
         InstanceTable = instanceTable.TableName.Value;
         PageTable = pageTable.TableName.Value;
-        StringBuilder schemaSql = new();
-        qualifiedTable.SchemaName.Value.WriteQuoted(new SqlRenderContext(PostgresSqlDialect.Instance), schemaSql);
-        QualifiedSchema = schemaSql.ToString();
-        StringBuilder sql = new();
-        qualifiedTable.WriteTo(new SqlRenderContext(PostgresSqlDialect.Instance), sql);
-        QualifiedTable = sql.ToString();
-        StringBuilder instanceSql = new();
-        instanceTable.WriteTo(new SqlRenderContext(PostgresSqlDialect.Instance), instanceSql);
-        QualifiedInstanceTable = instanceSql.ToString();
-        StringBuilder pageSql = new();
-        pageTable.WriteTo(new SqlRenderContext(PostgresSqlDialect.Instance), pageSql);
-        QualifiedPageTable = pageSql.ToString();
+        QualifiedSchema = qualifiedTable.SchemaName.Value.ToSql(PostgresSqlDialect.Instance);
+        QualifiedTable = qualifiedTable.ToSql(PostgresSqlDialect.Instance);
+        QualifiedInstanceTable = instanceTable.ToSql(PostgresSqlDialect.Instance);
+        QualifiedPageTable = pageTable.ToSql(PostgresSqlDialect.Instance);
         Instances = instanceTable;
         Pages = pageTable;
         MinimumPageBytes = minimumPageBytes;
