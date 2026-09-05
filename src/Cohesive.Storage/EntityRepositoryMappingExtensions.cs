@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Text.Json.Serialization;
 using Cohesive.Transitions.Authoring;
+using Cohesive.Transitions.Model;
 
 namespace Cohesive.Storage;
 
@@ -58,12 +59,87 @@ public static class EntityRepositoryMappingExtensions
             ArgumentNullException.ThrowIfNull(repository);
             ArgumentNullException.ThrowIfNull(context);
             ArgumentNullException.ThrowIfNull(entity);
-            var state = repository.EntityDefinition.CreateState(
-                ResolveEntityId(entity, selectEntityId),
-                entity,
-                ResolveVersion(entity, selectVersion));
-            return repository.Upsert(context, new(Entity: state.Snapshot, ExpectedConcurrencyToken: expectedConcurrencyToken));
+            return repository.Upsert(context, CreateWriteRequest(repository, entity, expectedConcurrencyToken, selectEntityId, selectVersion));
         }
+
+        /// <summary>Maps an ordered typed batch and dispatches it through the repository's native batch contract.</summary>
+        /// <param name="context">Operation context and cancellation.</param>
+        /// <param name="entities">Complete typed candidates in write order.</param>
+        /// <param name="atomicity">Required atomicity, preserved when dispatching the canonical batch.</param>
+        /// <param name="selectEntityId">Optional identity selector; otherwise use existing object-mapping conventions.</param>
+        /// <param name="selectVersion">Optional semantic version selector; otherwise use existing object-mapping conventions.</param>
+        /// <returns>The native batch result, including ordered snapshots and realized atomicity.</returns>
+        /// <exception cref="ArgumentNullException">A required argument or typed candidate is null.</exception>
+        /// <exception cref="OperationCanceledException">Cancellation is observed during mapping or by the underlying repository.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">The atomicity enum is unknown.</exception>
+        /// <exception cref="NotSupportedException">The repository cannot satisfy the requested batch contract.</exception>
+        /// <exception cref="SemanticRuleViolationException">A candidate does not satisfy the entity definition.</exception>
+        /// <exception cref="InvalidOperationException">Object-mapping conventions cannot resolve a valid identity or version.</exception>
+        public Task<EntityBatchWriteResult> UpsertBatch<TEntity>(OperationContext context,
+            IReadOnlyList<TEntity> entities,
+            EntityBatchAtomicity atomicity = EntityBatchAtomicity.None,
+            Func<TEntity, string>? selectEntityId = null,
+            Func<TEntity, long>? selectVersion = null) where TEntity : notnull
+            => MapBatch(repository, context, entities, atomicity,
+                entity => CreateWriteRequest(repository, entity, expectedConcurrencyToken: null, selectEntityId, selectVersion));
+
+        /// <summary>Maps typed candidates and their per-write concurrency fences into one canonical batch.</summary>
+        /// <typeparam name="TEntity">CLR candidate type.</typeparam>
+        /// <param name="context">Operation context and cancellation.</param>
+        /// <param name="request">Typed writes, per-write storage tokens, and required native atomicity.</param>
+        /// <param name="selectEntityId">Optional identity selector.</param>
+        /// <param name="selectVersion">Optional semantic-version selector, independent of storage tokens.</param>
+        /// <returns>The native batch result in input order.</returns>
+        /// <exception cref="ArgumentNullException">A required argument, write, or candidate is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">The atomicity enum is unknown.</exception>
+        /// <exception cref="NotSupportedException">The requested batch guarantees or item count are unsupported.</exception>
+        /// <exception cref="SemanticRuleViolationException">A candidate violates the entity definition.</exception>
+        /// <exception cref="InvalidOperationException">Mapping cannot resolve a valid identity or version.</exception>
+        /// <exception cref="ObservationConcurrencyConflictException">An expected token is stale or its target is absent.</exception>
+        /// <exception cref="OperationCanceledException">Cancellation is observed during mapping or by the repository.</exception>
+        public Task<EntityBatchWriteResult> UpsertBatch<TEntity>(OperationContext context,
+            EntityBatchWriteRequest<TEntity> request,
+            Func<TEntity, string>? selectEntityId = null,
+            Func<TEntity, long>? selectVersion = null) where TEntity : notnull
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            return MapBatch(repository, context, request.Writes, request.Atomicity, write =>
+            {
+                ArgumentNullException.ThrowIfNull(write);
+                return CreateWriteRequest(repository, write.Entity, write.ExpectedConcurrencyToken, selectEntityId, selectVersion);
+            });
+        }
+    }
+
+    static Task<EntityBatchWriteResult> MapBatch<TItem>(IEntityRepository repository, OperationContext context,
+        IReadOnlyList<TItem> items, EntityBatchAtomicity atomicity, Func<TItem, EntityWriteRequest> map)
+    {
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(items);
+        context.ThrowIfCancellationRequested();
+        if (!Enum.IsDefined(atomicity))
+            throw new ArgumentOutOfRangeException(nameof(atomicity), atomicity, "Unknown entity batch atomicity.");
+        var capabilities = repository.BatchCapabilities;
+        if (!capabilities.SupportsAtomicity(atomicity)
+            || capabilities.MaxItemsPerBatch is { } maximum && items.Count > maximum)
+            throw new NotSupportedException($"Repository '{repository.EntityType}' cannot satisfy the requested batch atomicity or item limit.");
+        var writes = new EntityWriteRequest[items.Count];
+        for (var index = 0; index < writes.Length; index++)
+        {
+            context.ThrowIfCancellationRequested();
+            writes[index] = map(items[index]);
+        }
+        return repository.UpsertBatch(context, new EntityBatchWriteRequest(writes, atomicity));
+    }
+
+    static EntityWriteRequest CreateWriteRequest<TEntity>(IEntityRepository repository, TEntity entity,
+        EntityConcurrencyToken? expectedConcurrencyToken, Func<TEntity, string>? selectEntityId,
+        Func<TEntity, long>? selectVersion) where TEntity : notnull
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        var state = repository.EntityDefinition.CreateState(ResolveEntityId(entity, selectEntityId), entity, ResolveVersion(entity, selectVersion));
+        return new(Entity: state.Snapshot, ExpectedConcurrencyToken: expectedConcurrencyToken);
     }
 
     static TEntity Materialize<TEntity>(

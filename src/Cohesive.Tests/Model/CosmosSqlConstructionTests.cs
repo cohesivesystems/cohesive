@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using Cohesive.Adapters.Cosmos;
 
@@ -65,9 +66,9 @@ public sealed class CosmosSqlConstructionTests
             + "WHERE ((c[\"tenantId\"] = @p0) AND (c[\"status\"] = @p1))",
             template.Text);
         Assert.Equal(2, template.Parameters.Length);
-        Assert.Equal(CosmosSqlParameterBindingKind.Runtime, template.Parameters[0].Kind);
+        Assert.Equal(SqlParameterBindingKind.Runtime, template.Parameters[0].Kind);
         Assert.Equal("tenant", template.Parameters[0].Binding);
-        Assert.Equal(CosmosSqlParameterBindingKind.Constant, template.Parameters[1].Kind);
+        Assert.Equal(SqlParameterBindingKind.Constant, template.Parameters[1].Kind);
 
         var statement = template.Bind(new Dictionary<string, object?>
         {
@@ -119,7 +120,7 @@ public sealed class CosmosSqlConstructionTests
         Assert.Equal(first.Text, second.Text);
         Assert.True(first.Parameters.SequenceEqual(second.Parameters));
         Assert.Equal(
-            [CosmosSqlParameterBindingKind.Runtime, CosmosSqlParameterBindingKind.Constant],
+            [SqlParameterBindingKind.Runtime, SqlParameterBindingKind.Constant],
             first.Parameters.Select(static parameter => parameter.Kind));
 
         var statement = first.Bind(new Dictionary<string, object?>

@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Json;
@@ -128,7 +129,7 @@ public sealed record PostgresRelationQuerySelectedField
         Input = input;
         Field = field;
         PlacementBinding = placementBinding;
-        ColumnName = new PostgresSqlIdentifier(columnName).Value;
+        ColumnName = PostgresSqlDialect.Identifier(columnName).Value;
     }
 
     /// <summary>Exact compiled field-input identity.</summary>
@@ -169,7 +170,7 @@ public sealed record PostgresRelationQueryResultFieldBinding
         QueryAssignmentId? assignment = null,
         ImmutableArray<ValueBindingId> presenceDependencies = default)
     {
-        Alias = new PostgresSqlIdentifier(alias).Value;
+        Alias = PostgresSqlDialect.Identifier(alias).Value;
         if (string.IsNullOrWhiteSpace(field.Shape.GraphId.Value)
             || string.IsNullOrWhiteSpace(field.Shape.ShapeId.Value)
             || field.Path.Segments.IsDefaultOrEmpty)
@@ -239,7 +240,7 @@ public sealed record PostgresRelationQueryPresenceBinding
         if (string.IsNullOrWhiteSpace(placementBinding.Value))
             throw new ArgumentException("Presence metadata requires placement attribution.", nameof(placementBinding));
         Binding = binding;
-        Alias = new PostgresSqlIdentifier(alias).Value;
+        Alias = PostgresSqlDialect.Identifier(alias).Value;
         PlacementBinding = placementBinding;
     }
 
@@ -341,7 +342,7 @@ public sealed record PostgresRelationQueryInvariantBinding
     public PostgresRelationQueryInvariantBinding(string name, string alias)
     {
         Name = Guard.RequireNotNullOrWhiteSpace(name);
-        Alias = new PostgresSqlIdentifier(alias).Value;
+        Alias = PostgresSqlDialect.Identifier(alias).Value;
     }
 
     /// <summary>Canonical invariant name.</summary>
@@ -368,7 +369,7 @@ public sealed record PostgresRelationQueryRelationKeyBinding
         ValueContract valueContract,
         PostgresRelationQueryValueEncoding encoding)
     {
-        Alias = new PostgresSqlIdentifier(alias).Value;
+        Alias = PostgresSqlDialect.Identifier(alias).Value;
         ValueContract = Guard.RequireNotNull(valueContract);
         if (ValueContract.Cardinality != FieldCardinality.Single)
             throw new ArgumentException("A PostgreSQL relation key must be single-valued.", nameof(valueContract));
@@ -632,7 +633,7 @@ public sealed record PostgresRelationQueryLoweringDecision
 public sealed class PostgresRelationQueryCompiledArtifact
 {
     /// <summary>Current persisted PostgreSQL native-artifact schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive.relations.postgres-artifact/v3";
+    public const string CurrentSchemaVersion = "cohesive.relations.postgres-artifact/v4";
 
     /// <summary>Creates or rehydrates one validated PostgreSQL native artifact.</summary>
     /// <param name="schemaVersion">Persisted artifact schema version.</param>
@@ -659,7 +660,7 @@ public sealed class PostgresRelationQueryCompiledArtifact
     public PostgresRelationQueryCompiledArtifact(
         string schemaVersion,
         RelationQueryNativeResultBranch branch,
-        PostgresSqlCommandTemplate statement,
+        SqlCommandTemplate statement,
         PostgresRelationQueryStorageBinding storageBinding,
         ImmutableArray<PostgresRelationQuerySelectedField> selectedFields,
         ImmutableArray<PostgresRelationQueryResultFieldBinding> resultFields,
@@ -678,6 +679,11 @@ public sealed class PostgresRelationQueryCompiledArtifact
         SchemaVersion = CurrentSchemaVersion;
         Branch = Guard.RequireNotNull(branch);
         Statement = Guard.RequireNotNull(statement);
+        if (Statement.Dialect != PostgresSqlDialect.Instance.Name)
+            throw new ArgumentException("A PostgreSQL artifact requires a PostgreSQL command template.", nameof(statement));
+        foreach (var slot in Statement.Parameters)
+            if (slot.Kind == SqlParameterBindingKind.Constant)
+                PostgresSqlDialect.Instance.ValidateParameter(slot.ConstantValue);
         StorageBinding = Guard.RequireNotNull(storageBinding);
         SelectedFields = Normalize(selectedFields, static field => field.Input.Value, nameof(selectedFields));
         ResultFields = NormalizePreservingOrder(resultFields, static field => field.Alias, nameof(resultFields));
@@ -737,7 +743,7 @@ public sealed class PostgresRelationQueryCompiledArtifact
     public RelationQueryNativeResultBranch Branch { get; }
 
     /// <summary>Reusable low-level PostgreSQL command template.</summary>
-    public PostgresSqlCommandTemplate Statement { get; }
+    public SqlCommandTemplate Statement { get; }
 
     /// <summary>Exact multi-table PostgreSQL storage binding used by compilation.</summary>
     public PostgresRelationQueryStorageBinding StorageBinding { get; }
@@ -785,7 +791,7 @@ public sealed class PostgresRelationQueryCompiledArtifact
     /// <exception cref="ArgumentException">
     /// An unknown parameter is supplied, a required parameter is absent, or a value violates its compiled contract.
     /// </exception>
-    public PostgresSqlStatement Bind(IReadOnlyDictionary<QueryParameterId, ObservationValue> parameters)
+    public SqlStatement Bind(IReadOnlyDictionary<QueryParameterId, ObservationValue> parameters)
     {
         ArgumentNullException.ThrowIfNull(parameters);
         if (!SuppliedFields.IsDefaultOrEmpty)
@@ -814,7 +820,7 @@ public sealed class PostgresRelationQueryCompiledArtifact
     /// An unknown or required value is absent, a value violates its compiled semantic contract, or a value has no
     /// exact CLR representation for its PostgreSQL encoding.
     /// </exception>
-    public PostgresSqlStatement Bind(
+    public SqlStatement Bind(
         IReadOnlyDictionary<RelationQueryInputId, ObservationValue> suppliedFields,
         IReadOnlyDictionary<QueryParameterId, ObservationValue> parameters)
     {
@@ -898,7 +904,7 @@ public sealed class PostgresRelationQueryCompiledArtifact
                 PostgresRelationQueryValueConverter.Convert(value, binding.Encoding, binding.Parameter.Value));
         }
 
-        return Statement.Bind(values);
+        return Statement.Bind(PostgresSqlDialect.Instance, values);
     }
 
     static void ValidateRuntimeOrderingDomain(
@@ -1053,12 +1059,12 @@ public sealed class PostgresRelationQueryCompiledArtifact
     }
 
     static void ValidateRuntimeBindings(
-        PostgresSqlCommandTemplate statement,
+        SqlCommandTemplate statement,
         ImmutableArray<PostgresRelationQuerySuppliedFieldBinding> suppliedFields,
         ImmutableArray<PostgresRelationQueryParameterBinding> parameters)
     {
         var runtimeSlots = statement.Parameters
-            .Where(static slot => slot.Kind == PostgresSqlParameterBindingKind.Runtime)
+            .Where(static slot => slot.Kind == SqlParameterBindingKind.Runtime)
             .ToDictionary(static slot => slot.Position);
         var metadata = suppliedFields
             .Select(static field => (field.Position, Binding: field.RuntimeBinding))

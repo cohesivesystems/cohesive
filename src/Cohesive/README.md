@@ -74,3 +74,12 @@ Related application blocks include
 [`Cohesive.Relations`](../Cohesive.Relations/README.md),
 [`Cohesive.Transitions`](../Cohesive.Transitions/README.md), and
 [`Cohesive.Processes`](../Cohesive.Processes/README.md).
+
+### Ordinal observation construction
+
+`Observation.Create(shape, layout, immutableValues)` retains an `ImmutableArray<ObservationValue>` in a shared
+`ObservationLayout`; the span overload snapshots caller-owned values. Layouts belong to the exact graph instance and
+shape from which they were compiled. Each slot is one canonical field: `Undefined` means absent, while `Null` remains
+present. Full shape validation still runs. Name-based `Fields` is an immutable view over the same vector, and canonical
+serialization, equality, and fingerprints are independent of physical field order. The field view also implements
+`IOrdinalObservationFieldReader`, allowing a materializer compiled against that layout to read directly by ordinal.

@@ -1,4 +1,4 @@
-using System.Text;
+using Cohesive.Adapters.Sql;
 
 namespace Cohesive.Adapters.Postgres;
 
@@ -82,25 +82,17 @@ public sealed record PostgresProcessDurableStoreOptions
         }
 
         AuthorityId = Guard.RequireNotNullOrWhiteSpace(authorityId);
-        var qualifiedTable = new PostgresSqlQualifiedTable(schema, table);
-        var instanceTable = new PostgresSqlQualifiedTable(schema, $"{table}_instances");
-        var pageTable = new PostgresSqlQualifiedTable(schema, $"{table}_pages");
+        var qualifiedTable = new SqlQualifiedTable(schema, table);
+        var instanceTable = new SqlQualifiedTable(schema, $"{table}_instances");
+        var pageTable = new SqlQualifiedTable(schema, $"{table}_pages");
         Schema = qualifiedTable.SchemaName!.Value.Value;
         Table = qualifiedTable.TableName.Value;
         InstanceTable = instanceTable.TableName.Value;
         PageTable = pageTable.TableName.Value;
-        StringBuilder schemaSql = new();
-        qualifiedTable.SchemaName.Value.WriteQuoted(schemaSql);
-        QualifiedSchema = schemaSql.ToString();
-        StringBuilder sql = new();
-        qualifiedTable.WriteTo(sql);
-        QualifiedTable = sql.ToString();
-        StringBuilder instanceSql = new();
-        instanceTable.WriteTo(instanceSql);
-        QualifiedInstanceTable = instanceSql.ToString();
-        StringBuilder pageSql = new();
-        pageTable.WriteTo(pageSql);
-        QualifiedPageTable = pageSql.ToString();
+        QualifiedSchema = qualifiedTable.SchemaName.Value.ToSql(PostgresSqlDialect.Instance);
+        QualifiedTable = qualifiedTable.ToSql(PostgresSqlDialect.Instance);
+        QualifiedInstanceTable = instanceTable.ToSql(PostgresSqlDialect.Instance);
+        QualifiedPageTable = pageTable.ToSql(PostgresSqlDialect.Instance);
         Instances = instanceTable;
         Pages = pageTable;
         MinimumPageBytes = minimumPageBytes;
@@ -144,7 +136,7 @@ public sealed record PostgresProcessDurableStoreOptions
 
     internal string QualifiedPageTable { get; }
 
-    internal PostgresSqlQualifiedTable Instances { get; }
+    internal SqlQualifiedTable Instances { get; }
 
-    internal PostgresSqlQualifiedTable Pages { get; }
+    internal SqlQualifiedTable Pages { get; }
 }

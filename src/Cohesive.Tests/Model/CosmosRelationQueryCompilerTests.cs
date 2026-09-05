@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Json;
@@ -1769,7 +1770,7 @@ public sealed class CosmosRelationQueryCompilerTests
             artifact.Statement.Text);
         var parameter = Assert.Single(artifact.Statement.Parameters);
         Assert.Equal("@p0", parameter.Name);
-        Assert.Equal(CosmosSqlParameterBindingKind.Constant, parameter.Kind);
+        Assert.Equal(SqlParameterBindingKind.Constant, parameter.Kind);
         Assert.Null(parameter.Binding);
         Assert.Equal(expectedConstant, parameter.ConstantValue);
     }

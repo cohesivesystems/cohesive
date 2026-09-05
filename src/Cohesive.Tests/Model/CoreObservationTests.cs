@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using CoreObservation = Cohesive.Model.Observation;
@@ -14,6 +15,34 @@ public sealed class CoreObservationPerformanceTestCollection
 [Collection(CoreObservationPerformanceTestCollection.Name)]
 public sealed class CoreObservationTests
 {
+    [Theory]
+    [InlineData(1)]
+    [InlineData(128)]
+    [InlineData(4096)]
+    public void RequiredNullableFieldsRemainPresentInNestedAndCollectionValues(int count)
+    {
+        var objectType = new ObjectTypeRef([new("note", new ScalarTypeRef(ScalarTypeKind.String), nullability: FieldNullability.Nullable)]);
+        Shape shape = new(new("nullable-observation"),
+        [
+            new(new("note"), new ScalarTypeRef(ScalarTypeKind.String), nullability: FieldNullability.Nullable),
+            new(new("nested"), objectType),
+            new(new("items"), objectType, cardinality: FieldCardinality.Many)
+        ]);
+        var nested = ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["note"] = ObservationValue.Null });
+        Dictionary<string, ObservationValue> fields = new()
+        {
+            ["note"] = ObservationValue.Null,
+            ["nested"] = nested,
+            ["items"] = ObservationValue.FromArray([.. Enumerable.Repeat(nested, count)])
+        };
+        Assert.True(ObservationValidator.TryValidateAgainstShape(fields, shape, out var error), error);
+        fields["nested"] = ObservationValue.FromObject(new Dictionary<string, ObservationValue>());
+        Assert.False(ObservationValidator.TryValidateAgainstShape(fields, shape, out _));
+        fields["nested"] = nested;
+        fields.Remove("note");
+        Assert.False(ObservationValidator.TryValidateAgainstShape(fields, shape, out _));
+    }
+
     [Fact]
     public void Create_CapturesQualifiedShapeAndValidatedFields()
     {
@@ -323,6 +352,76 @@ public sealed class CoreObservationTests
 
         Assert.Contains("requires at least one segment", exception.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void OrdinalStoragePreservesCanonicalSemanticsAndOwnsMutableInput()
+    {
+        var shape = Shape(CreateGraph());
+        var fields = ValidFields();
+        var layout = ObservationLayout.Create(shape, fields.Keys.Reverse());
+        var values = layout.FieldIdentities.Select(name => fields[name]).ToArray();
+        var expected = CoreObservation.Create(shape, fields);
+        var actual = CoreObservation.Create(shape, layout, values.AsSpan());
+        values[0] = ObservationValue.Undefined;
+        Assert.Equal(expected, actual);
+        Assert.Equal(expected.GetHashCode(), actual.GetHashCode());
+        Assert.Equal(expected.ToCanonicalJsonUtf8(), actual.ToCanonicalJsonUtf8());
+        Assert.Equal(expected.ComputeFingerprint(), actual.ComputeFingerprint());
+        Assert.Same(actual.Fields, ObservationValue.FromObject(actual.Fields).Fields);
+        var reader = Assert.IsAssignableFrom<IOrdinalObservationFieldReader>(actual.Fields);
+        Assert.Same(layout, reader.Layout);
+        var materializer = ObservationMaterializer.For<OrdinalCustomer>(shape).Map("name", value => value.Name).Compile(layout);
+        Assert.Equal("Ada", materializer.Materialize(actual).Name);
+        var otherShape = Shape(CreateGraph("rebased"));
+        var rebased = CoreObservation.Create(otherShape, actual.Value);
+        var rebasedMaterializer = ObservationMaterializer.For<OrdinalCustomer>(otherShape).Map("name", value => value.Name).Compile();
+        Assert.Equal("Ada", rebasedMaterializer.Materialize(rebased).Name);
+        Assert.Throws<InvalidOperationException>(() => materializer.Materialize(rebased));
+        Assert.True(reader.TryGetField(layout.GetOrdinal("name"), out var name));
+        Assert.Equal("Ada", name.GetRequiredString());
+        Assert.False(reader.TryGetField(-1, out _));
+        Assert.False(reader.TryGetField(layout.Count, out _));
+        Assert.Throws<ArgumentException>(() => CoreObservation.Create(shape, layout, values.AsSpan(1)));
+        Assert.Throws<ArgumentException>(() => CoreObservation.Create(Shape(CreateGraph("other")), layout, values.AsSpan()));
+        Assert.Throws<ArgumentException>(() => CoreObservation.Create(shape, layout, default(ImmutableArray<ObservationValue>)));
+        Assert.Throws<ArgumentException>(() => CoreObservation.Create(Shape(CreateGraph()), layout, values.AsSpan()));
+        values[layout.GetOrdinal("name")] = ObservationValue.Undefined;
+        Assert.Throws<ArgumentException>(() => CoreObservation.Create(shape, layout, values.AsSpan()));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(63)]
+    [InlineData(64)]
+    [InlineData(65)]
+    [InlineData(4096)]
+    public void OrdinalPresenceAndAllocationRemainBounded(int count)
+    {
+        var definitions = ImmutableArray.CreateBuilder<FieldDefinition>(count);
+        var values = ImmutableArray.CreateBuilder<ObservationValue>(count);
+        for (var index = 0; index < count; index++)
+        {
+            definitions.Add(new(new("field" + index), new ScalarTypeRef(ScalarTypeKind.String),
+                presence: FieldPresence.Optional, nullability: FieldNullability.Nullable));
+            values.Add(index % 2 == 0 ? ObservationValue.Null : ObservationValue.Undefined);
+        }
+        Shape definition = new(new("ordinal-presence"), definitions.MoveToImmutable());
+        ShapeGraph graph = new(new("ordinal-presence-graph"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var layout = ObservationLayout.Create(shape);
+        var immutable = values.MoveToImmutable();
+        var allocated = MeasureAllocations(() => CoreObservation.Create(shape, layout, immutable), 100, out var observation);
+        Assert.True(allocated <= 128 * 100, $"Unexpected per-field working allocation: {allocated / 100} bytes per observation.");
+        Assert.Equal((count + 1) / 2, observation.Fields.Count);
+        Assert.True(observation.TryGetField("field0", out var first));
+        Assert.Equal(ObservationValue.Null, first);
+        if (count > 1) Assert.False(observation.TryGetField("field1", out _));
+        var keyed = CoreObservation.Create(shape, observation.Fields.ToDictionary());
+        Assert.Equal(keyed.ToCanonicalJsonUtf8(), observation.ToCanonicalJsonUtf8());
+        Assert.Equal(keyed.ComputeFingerprint(), observation.ComputeFingerprint());
+    }
+
+    public sealed record OrdinalCustomer(string Name);
 
     static ShapeGraph CreateGraph(string graphId = "customer-graph-v1")
     {

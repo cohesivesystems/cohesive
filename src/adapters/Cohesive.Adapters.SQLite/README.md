@@ -1,6 +1,6 @@
 # Cohesive.Adapters.SQLite
 
-Shared SQLite infrastructure for entity repositories and specialized repositories such as Ito's market-data store. This increment supplies connections, command binding, exact scalar encodings, and module migrations. Entity repositories, compare-and-swap batches, outbox/receipt persistence, and relation compilation are subsequent increments.
+Shared SQLite infrastructure for entity repositories and specialized repositories such as Ito's market-data store. The adapter supplies connections, command binding, exact scalar encodings, module migrations, and [entity repositories with optimistic concurrency and atomic batches](ENTITY_REPOSITORIES.md). Outbox/receipt persistence and relation compilation remain subsequent increments.
 
 The adapter uses `Microsoft.Data.Sqlite`. Core `ValueContract`, `ObservationValue`, and storage realization contracts remain the semantic authorities. SQLite-specific policy and native connection/transaction types stay in this adapter.
 
@@ -128,3 +128,6 @@ dotnet test src/Cohesive.Adapters.SQLite.Tests/Cohesive.Adapters.SQLite.Tests.cs
 ```
 
 The implementation deliberately retains native transaction ownership instead of introducing another unit-of-work interface. Each repository should reuse connection/command configuration and the scalar catalog; its schema and contract-specific CAS/batch semantics belong in that repository realization. Connections are unpooled and each acquisition verifies the profile; callers should batch a unit of work on one connection. No throughput or latency guarantee is asserted by this initial foundation.
+
+The required native engine profile supports `IS [NOT] DISTINCT FROM` and right/full outer joins. The shared builder
+checks each facility through `SqlFeature` before rendering; these were added in [SQLite 3.39](https://www.sqlite.org/releaselog/3_39_0.html).

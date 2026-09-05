@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -146,9 +147,9 @@ public sealed class PostgresRelationQueryCompilerTests
             statement.Parameters,
             static parameter => Equals(parameter.Value, "customer-1"));
         Assert.Equal(fixture.Storage.Fingerprint, artifact.StorageBinding.Fingerprint);
-        Assert.Equal("cohesive.relations.postgres-artifact/v3", artifact.SchemaVersion);
+        Assert.Equal("cohesive.relations.postgres-artifact/v4", artifact.SchemaVersion);
         Assert.Equal(
-            "cohesive.relations.postgres-artifact/v3-c14n/v1",
+            "cohesive.relations.postgres-artifact/v4-c14n/v1",
             artifact.Fingerprint.Canonicalization);
         Assert.Equal(fixture.Plan.Provenance.DefinitionFingerprint, artifact.Provenance.Plan.DefinitionFingerprint);
         Assert.Equal(fixture.Placement.Placement.Fingerprint, artifact.Provenance.Placement);
@@ -748,7 +749,7 @@ public sealed class PostgresRelationQueryCompilerTests
 
         Assert.Contains(
             aggregation.Statement.Parameters,
-            static slot => slot.Constant?.Kind == PostgresSqlConstantKind.Decimal);
+            static slot => slot.Constant?.Kind == SqlConstantKind.Decimal);
         foreach (var artifact in first.Artifacts)
         {
             var json = PostgresRelationQueryArtifactJsonSerializer.Serialize(artifact, indented: false);
@@ -898,7 +899,7 @@ public sealed class PostgresRelationQueryCompilerTests
         Assert.Equal(
             2,
             artifact.Statement.Parameters.Count(static slot =>
-                slot.Constant is { Kind: PostgresSqlConstantKind.Boolean, Value: "true" }));
+                slot.Constant is { Kind: SqlConstantKind.Boolean, Value: "true" }));
 
         var customerName = Assert.Single(
             artifact.ResultFields,

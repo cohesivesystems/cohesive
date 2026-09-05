@@ -253,6 +253,8 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     {
         if (fields is null)
             return null;
+        if (fields is OrdinalObservationFields)
+            return fields;
         if (fields.Count == 0)
             return EmptyObjectValues;
         if (fields is ImmutableDictionary<string, ObservationValue> immutable
@@ -467,6 +469,15 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     }
 
     internal static ObservationValue FromOwnedObject(Dictionary<string, ObservationValue> values) => new(values);
+
+    internal static ObservationValue FromOrdinalFields(OrdinalObservationFields fields) => new(fields);
+
+    ObservationValue(OrdinalObservationFields fields)
+    {
+        Kind = ObservationValueKind.Object;
+        scalar = default;
+        reference = fields;
+    }
 
     /// <summary>
     /// Creates an array observation value and copies the provided items.

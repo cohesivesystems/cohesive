@@ -197,7 +197,7 @@ test asserts a single artifact, a single statement, exact selected semantic fiel
 stage.
 
 The compiler and standalone SQL builder deliberately remain provider-neutral: a native artifact binds to
-`PostgresSqlStatement.Text` and ordered CLR parameter values, and the application still owns dispatch of that native
+`SqlStatement.Text` and ordered CLR parameter values, and the application still owns dispatch of that native
 statement. The single adapter package also provides a separate Npgsql-backed canonical source path. See the
 [PostgreSQL adapter guide](https://github.com/cohesivesystems/cohesive/blob/main/src/adapters/Cohesive.Adapters.Postgres/README.md)
 for complete placement, storage binding, standalone SQL construction, temporal domains, and runtime responsibilities.

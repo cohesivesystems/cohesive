@@ -15,19 +15,19 @@ The standalone builder quotes identifiers and parameterizes values. It is useful
 the canonical compiler:
 
 ```csharp
-var template = new PostgresSqlSelectBuilder(
-        new PostgresSqlQualifiedTable("transport", "loads"),
+var template = new SqlSelectBuilder(
+        new SqlQualifiedTable("transport", "loads"),
         "l")
-    .Select(PostgresSqlExpression.Column("l", "id"), "id")
-    .Where(PostgresSqlExpression.Binary(
-        PostgresSqlBinaryOperator.Equal,
-        PostgresSqlExpression.Column("l", "status"),
-        PostgresSqlExpression.RuntimeParameter("status")))
-    .OrderBy(PostgresSqlExpression.Column("l", "id"))
+    .Select(SqlExpression.Column("l", "id"), "id")
+    .Where(SqlExpression.Binary(
+        SqlBinaryOperator.Equal,
+        SqlExpression.Column("l", "status"),
+        SqlExpression.RuntimeParameter("status")))
+    .OrderBy(SqlExpression.Column("l", "id"))
     .Limit(100)
-    .BuildTemplate();
+    .BuildTemplate(PostgresSqlDialect.Instance);
 
-var statement = template.Bind(new Dictionary<string, object?>
+var statement = template.Bind(PostgresSqlDialect.Instance, new Dictionary<string, object?>
 {
     ["status"] = "Open"
 });

@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Text;
 using Cohesive.Adapters.Postgres;
 
@@ -64,14 +65,14 @@ public sealed class PostgresRelationQuerySqlNamingTests
         var unicode = first.Allocate(longUnicode, "field:long-unicode", "field");
         var repeatedAscii = first.Allocate(longAscii, "field:long-ascii", "field");
 
-        Assert.True(Encoding.UTF8.GetByteCount(ascii) <= PostgresSqlIdentifier.StandardMaxUtf8ByteLength);
-        Assert.True(Encoding.UTF8.GetByteCount(unicode) <= PostgresSqlIdentifier.StandardMaxUtf8ByteLength);
-        Assert.True(Encoding.UTF8.GetByteCount(repeatedAscii) <= PostgresSqlIdentifier.StandardMaxUtf8ByteLength);
+        Assert.True(Encoding.UTF8.GetByteCount(ascii) <= PostgresSqlDialect.StandardMaxUtf8ByteLength);
+        Assert.True(Encoding.UTF8.GetByteCount(unicode) <= PostgresSqlDialect.StandardMaxUtf8ByteLength);
+        Assert.True(Encoding.UTF8.GetByteCount(repeatedAscii) <= PostgresSqlDialect.StandardMaxUtf8ByteLength);
         Assert.NotEqual(ascii, repeatedAscii);
         Assert.Equal(ascii, second.Allocate(longAscii, "field:long-ascii", "field"));
         Assert.Equal(unicode, second.Allocate(longUnicode, "field:long-unicode", "field"));
-        _ = new PostgresSqlIdentifier(ascii);
-        _ = new PostgresSqlIdentifier(unicode);
+        _ = new SqlIdentifier(ascii);
+        _ = new SqlIdentifier(unicode);
     }
 
     [Fact]

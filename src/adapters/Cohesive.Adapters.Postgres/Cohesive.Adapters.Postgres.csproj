@@ -7,6 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../Cohesive.Adapters.Sql/Cohesive.Adapters.Sql.csproj" />
     <PackageReference Include="Npgsql" Version="10.0.3" />
 
     <ProjectReference Include="..\..\Cohesive.Relations\Cohesive.Relations.csproj" />

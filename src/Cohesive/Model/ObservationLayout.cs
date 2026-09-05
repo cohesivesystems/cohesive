@@ -31,12 +31,13 @@ public sealed class ObservationLayout
     readonly ImmutableArray<JsonEncodedText> jsonPropertyNamesByOrdinal;
 
     ObservationLayout(
-        QualifiedShapeId shapeId,
+        GraphShapeId shapeId,
         Shape shape,
         ImmutableArray<string> fieldIdentities,
         ImmutableArray<FieldDefinition> fieldDefinitions)
     {
-        ShapeId = shapeId;
+        ShapeId = shapeId.QualifiedId;
+        Graph = shapeId.Graph;
         this.fieldIdentities = fieldIdentities;
         this.fieldDefinitions = fieldDefinitions;
         ordinalByFieldIdentity = new(fieldIdentities.Length, StringComparer.Ordinal);
@@ -88,6 +89,8 @@ public sealed class ObservationLayout
 
     /// <summary>Gets the number of field ordinals in this layout.</summary>
     public int Count => fieldIdentities.Length;
+
+    internal ShapeGraph Graph { get; }
 
     internal ReadOnlySpan<int> CanonicalJsonOrdinals => canonicalJsonOrdinals.AsSpan();
 
@@ -177,7 +180,7 @@ public sealed class ObservationLayout
         }
 
         return new(
-            shape.QualifiedId,
+            shape,
             definition,
             identities.MoveToImmutable(),
             fields.MoveToImmutable());
@@ -223,7 +226,7 @@ public sealed class ObservationLayout
         }
 
         return new(
-            shape.QualifiedId,
+            shape,
             definition,
             identities.ToImmutable(),
             fields.ToImmutable());

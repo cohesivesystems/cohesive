@@ -5,6 +5,28 @@ namespace Cohesive.Tests.Model;
 public sealed class ObservationValidatorTests
 {
     [Fact]
+    public void RequiredNullableOrdinalValidationDoesNotAllocateAfterWarmup()
+    {
+        Shape definition = new(new("required-nullable"),
+            [new(new("note"), new ScalarTypeRef(ScalarTypeKind.String), nullability: FieldNullability.Nullable)]);
+        GraphShapeId shape = new(new ShapeGraph(new("nullable/v1"), [definition]), definition.Id);
+        var layout = ObservationLayout.Create(shape, ["note"]);
+        ObservationValue[] values = [ObservationValue.Null];
+        ulong[] present = [1];
+        for (var iteration = 0; iteration < 100; iteration++)
+            _ = ObservationValidator.TryValidateAgainstShape(shape, layout, values, present, out _);
+        var valid = true;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var iteration = 0; iteration < 1_000; iteration++)
+            valid &= ObservationValidator.TryValidateAgainstShape(shape, layout, values, present, out _);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(valid);
+        Assert.Equal(0, allocated);
+        present[0] = 0;
+        Assert.False(ObservationValidator.TryValidateAgainstShape(shape, layout, values, present, out _));
+    }
+
+    [Fact]
     public void TryValidateAgainstShape_OrdinalBuffers_PreservesDiagnosticsAndDoesNotAllocateAfterWarmup()
     {
         const int Iterations = 1_000;

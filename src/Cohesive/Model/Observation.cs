@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -103,6 +104,53 @@ public sealed class Observation : IEquatable<Observation>, IObservationFieldRead
 
         return new(shape.QualifiedId, value);
     }
+
+    /// <summary>Creates a validated observation retaining immutable values in a shared physical field layout.</summary>
+    /// <param name="shape">Exact graph and shape governing the observation.</param>
+    /// <param name="layout">Shared layout whose ordinals identify the supplied values.</param>
+    /// <param name="valuesByOrdinal">Immutable values, one per layout slot; Undefined means absent and Null means present.</param>
+    /// <returns>An observation retaining the immutable values and layout without building a per-observation name index.</returns>
+    /// <exception cref="ArgumentNullException">The shape is default or the layout is null.</exception>
+    /// <exception cref="ArgumentException">Values are default, lengths or shape identities differ, or fields violate the shape.</exception>
+    public static Observation Create(GraphShapeId shape, ObservationLayout layout, ImmutableArray<ObservationValue> valuesByOrdinal)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        if (valuesByOrdinal.IsDefault)
+            throw new ArgumentException("Ordinal values must be initialized.", nameof(valuesByOrdinal));
+        var wordCount = (valuesByOrdinal.Length + 63) / 64;
+        ulong[]? rented = null;
+        Span<ulong> presence = wordCount <= 64
+            ? stackalloc ulong[wordCount]
+            : (rented = ArrayPool<ulong>.Shared.Rent(wordCount)).AsSpan(0, wordCount);
+        presence.Clear();
+        var count = 0;
+        for (var ordinal = 0; ordinal < valuesByOrdinal.Length; ordinal++)
+        {
+            if (valuesByOrdinal[ordinal].Kind == ObservationValueKind.Undefined) continue;
+            presence[ordinal / 64] |= 1UL << (ordinal % 64);
+            count++;
+        }
+        try
+        {
+            if (!ObservationValidator.TryValidateAgainstShape(shape, layout, valuesByOrdinal.AsSpan(), presence, out var error))
+                throw new ArgumentException($"Observed value does not adhere to shape '{shape.QualifiedId}': {error}", nameof(valuesByOrdinal));
+            return new(shape.QualifiedId, ObservationValue.FromOrdinalFields(new(layout, valuesByOrdinal, count)));
+        }
+        finally
+        {
+            if (rented is not null) ArrayPool<ulong>.Shared.Return(rented);
+        }
+    }
+
+    /// <summary>Creates a validated observation by snapshotting caller-owned ordinal values.</summary>
+    /// <param name="shape">Exact graph and shape governing the observation.</param>
+    /// <param name="layout">Shared physical field layout.</param>
+    /// <param name="valuesByOrdinal">Values to snapshot; Undefined means absent and Null means present.</param>
+    /// <returns>An immutable observation independent of subsequent changes to the supplied buffer.</returns>
+    /// <exception cref="ArgumentNullException">The shape is default or the layout is null.</exception>
+    /// <exception cref="ArgumentException">Lengths or shape identities differ, or fields violate the shape.</exception>
+    public static Observation Create(GraphShapeId shape, ObservationLayout layout, ReadOnlySpan<ObservationValue> valuesByOrdinal) =>
+        Create(shape, layout, ImmutableArray.Create(valuesByOrdinal));
 
     /// <summary>Creates and validates an observation from canonical field values.</summary>
     /// <param name="shape">Exact graph and shape that govern the fields.</param>

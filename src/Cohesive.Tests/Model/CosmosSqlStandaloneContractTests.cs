@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using Cohesive.Adapters.Cosmos;
 
@@ -31,9 +32,9 @@ public sealed class CosmosSqlStandaloneContractTests
         Assert.Equal(["@p0", "@p1", "@p2"], template.Parameters.Select(static slot => slot.Name));
         Assert.Equal(
             [
-                CosmosSqlParameterBindingKind.Constant,
-                CosmosSqlParameterBindingKind.Runtime,
-                CosmosSqlParameterBindingKind.Constant
+                SqlParameterBindingKind.Constant,
+                SqlParameterBindingKind.Runtime,
+                SqlParameterBindingKind.Constant
             ],
             template.Parameters.Select(static slot => slot.Kind));
 

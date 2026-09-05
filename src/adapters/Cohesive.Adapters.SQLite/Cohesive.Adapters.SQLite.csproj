@@ -5,7 +5,11 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../Cohesive.Adapters.Sql/Cohesive.Adapters.Sql.csproj" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <ProjectReference Include="../../Cohesive.Storage/Cohesive.Storage.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="ENTITY_REPOSITORIES.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 </Project>

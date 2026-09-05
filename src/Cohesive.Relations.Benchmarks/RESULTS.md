@@ -1,5 +1,61 @@
 # Cohesive Benchmark Results
 
+## 2026-09-05: ordinal observation storage (COH-87)
+
+Measured on the working revision of `codex/coh-87-sqlite-entity-repositories` implementing shared SQL construction
+and ordinal observation storage. This is a short development run, not a service throughput or tail-latency guarantee.
+The command used BenchmarkDotNet 0.15.8 with one launch, one warmup iteration, and three measured iterations:
+
+```sh
+dotnet run --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj -c Release -- \
+  --filter '*ObservationOrdinalStorageBenchmarks*' --job short --warmupCount 1 --iterationCount 3 --launchCount 1
+```
+
+The boundary starts with already-decoded field values and a cached layout. `DictionaryRow` reproduces the previous
+repository's per-row dictionary construction followed by the defensive observation snapshot. `OrdinalRow` builds
+one immutable vector and transfers it into the observation. `RetainImmutableRow` measures the core factory when that
+immutable vector already exists. All paths perform shape validation; setup checks exact canonical byte equality.
+Database I/O and scalar decoding are excluded. Nested/array payloads are already immutable and shared in all paths.
+Flat rows contain 16 scalars; nested rows contain a 16-field object; array rows contain 64 scalar items; wide rows
+contain 4,096 scalars. Shape/layout creation and initial validation are outside the measured warm operations.
+
+The retained vector accounts for the size-dependent allocation in `OrdinalRow`. `RetainImmutableRow` allocates
+104 bytes for observation/view objects, independent of these field counts; the warmed presence bitmap uses bounded
+stack space or a returned pooled buffer. Core tests enforce a <=128-byte per-observation construction budget with
+immutable input and presence-boundary fixtures. A name-based dictionary view exposes the same immutable vector,
+without allocating a per-row name index. Timing uncertainty for this short run is shown below.
+
+```
+
+BenchmarkDotNet v0.15.8, macOS Tahoe 26.6.2 (25G83) [Darwin 25.6.0]
+Apple M5 Max, 1 CPU, 18 logical and 18 physical cores
+.NET SDK 10.0.201
+  [Host]     : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+  Job-FGEKWY : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+
+IterationCount=3  LaunchCount=1  WarmupCount=1
+
+```
+| Method             | Scenario | Mean          | Error          | StdDev       | Ratio | RatioSD | Gen0     | Gen1     | Gen2     | Allocated | Alloc Ratio |
+|------------------- |--------- |--------------:|---------------:|-------------:|------:|--------:|---------:|---------:|---------:|----------:|------------:|
+| **DictionaryRow**      | **array**    |     **331.59 ns** |      **34.116 ns** |     **1.870 ns** |  **1.00** |    **0.01** |   **0.0887** |        **-** |        **-** |     **744 B** |        **1.00** |
+| OrdinalRow         | array    |     270.77 ns |       7.216 ns |     0.396 ns |  0.82 |    0.00 |   0.0267 |        - |        - |     224 B |        0.30 |
+| RetainImmutableRow | array    |     260.72 ns |       5.990 ns |     0.328 ns |  0.79 |    0.00 |   0.0124 |        - |        - |     104 B |        0.14 |
+|                    |          |               |                |              |       |         |          |          |          |           |             |
+| **DictionaryRow**      | **flat**     |     **444.29 ns** |      **34.049 ns** |     **1.866 ns** |  **1.00** |    **0.01** |   **0.2627** |   **0.0019** |        **-** |    **2200 B** |        **1.00** |
+| OrdinalRow         | flat     |     131.02 ns |      11.822 ns |     0.648 ns |  0.29 |    0.00 |   0.0801 |        - |        - |     672 B |        0.31 |
+| RetainImmutableRow | flat     |      85.69 ns |       3.061 ns |     0.168 ns |  0.19 |    0.00 |   0.0124 |        - |        - |     104 B |        0.05 |
+|                    |          |               |                |              |       |         |          |          |          |           |             |
+| **DictionaryRow**      | **nested**   |     **320.33 ns** |     **419.867 ns** |    **23.014 ns** |  **1.00** |    **0.09** |   **0.0887** |        **-** |        **-** |     **744 B** |        **1.00** |
+| OrdinalRow         | nested   |     252.15 ns |     102.851 ns |     5.638 ns |  0.79 |    0.05 |   0.0267 |        - |        - |     224 B |        0.30 |
+| RetainImmutableRow | nested   |     240.06 ns |     137.614 ns |     7.543 ns |  0.75 |    0.05 |   0.0124 |        - |        - |     104 B |        0.14 |
+|                    |          |               |                |              |       |         |          |          |          |           |             |
+| **DictionaryRow**      | **wide**     | **214,499.27 ns** | **113,539.697 ns** | **6,223.494 ns** |  **1.00** |    **0.04** | **142.8223** | **142.8223** | **142.8223** |  **506168 B** |       **1.000** |
+| OrdinalRow         | wide     |  46,136.20 ns |   2,140.210 ns |   117.312 ns |  0.22 |    0.01 |  41.6260 |  41.6260 |  41.6260 |  131288 B |       0.259 |
+| RetainImmutableRow | wide     |  23,448.36 ns |      23.359 ns |     1.280 ns |  0.11 |    0.00 |        - |        - |        - |     104 B |       0.000 |
+
+
+
 ## Conclusions
 
 - The allocation-light observation validator reduces successful validation from 6.27–20.23 KB to 0 B and from

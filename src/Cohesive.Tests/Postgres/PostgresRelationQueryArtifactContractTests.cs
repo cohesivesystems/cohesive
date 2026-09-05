@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Model;
 using Cohesive.Model.Expressions;
@@ -28,7 +29,7 @@ public sealed class PostgresRelationQueryArtifactContractTests
             contract,
             PostgresRelationQueryValueEncoding.Numeric));
         Assert.Throws<ArgumentException>(() => new PostgresRelationQueryResultFieldBinding(
-            new string('a', PostgresSqlIdentifier.StandardMaxUtf8ByteLength + 1),
+            new string('a', PostgresSqlDialect.StandardMaxUtf8ByteLength + 1),
             ValueField,
             contract,
             PostgresRelationQueryValueEncoding.Text));
@@ -47,7 +48,7 @@ public sealed class PostgresRelationQueryArtifactContractTests
             new RelationQueryInputId("field:value"),
             ValueField,
             new RelationQuerySourcePlacementBindingId("placement:row"),
-            new string('a', PostgresSqlIdentifier.StandardMaxUtf8ByteLength + 1)));
+            new string('a', PostgresSqlDialect.StandardMaxUtf8ByteLength + 1)));
     }
 
     [Fact]

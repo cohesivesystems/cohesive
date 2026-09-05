@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
@@ -943,31 +944,31 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         }
 
         var identityExpression = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-            PostgresSqlExpression.Column(SourceAlias, identity.ColumnName),
+            SqlExpression.Column(SourceAlias, identity.ColumnName),
             identity.ScalarType,
             identity.TextSemantics);
-        var builder = new PostgresSqlSelectBuilder(
-                new PostgresSqlQualifiedTable(table.SchemaName, table.TableName),
+        var builder = new SqlSelectBuilder(
+                new SqlQualifiedTable(table.SchemaName, table.TableName),
                 SourceAlias)
-            .Select(PostgresSqlExpression.Column(SourceAlias, identity.ColumnName), IdentityAlias);
+            .Select(SqlExpression.Column(SourceAlias, identity.ColumnName), IdentityAlias);
         for (var index = 0; index < projection.Length; index++)
         {
             var item = projection[index];
             builder.Select(
-                PostgresSqlExpression.Column(SourceAlias, item.ColumnName),
+                SqlExpression.Column(SourceAlias, item.ColumnName),
                 $"_field{index.ToString(CultureInfo.InvariantCulture)}");
         }
 
         if (partition is not null)
         {
             var partitionExpression = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-                PostgresSqlExpression.Column(SourceAlias, partition.Binding.ColumnName),
+                SqlExpression.Column(SourceAlias, partition.Binding.ColumnName),
                 partition.Binding.ScalarType,
                 partition.Binding.TextSemantics);
-            builder.Where(PostgresSqlExpression.Binary(
-                PostgresSqlBinaryOperator.Equal,
+            builder.Where(SqlExpression.Binary(
+                SqlBinaryOperator.Equal,
                 partitionExpression,
-                PostgresSqlExpression.RuntimeParameter(PartitionBinding)));
+                SqlExpression.RuntimeParameter(PartitionBinding)));
         }
 
         ImmutableArray<object> parsedKeys = [];
@@ -985,27 +986,27 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         {
             var columnName = relationship?.ColumnName ?? identity.ColumnName;
             var operand = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-                PostgresSqlExpression.Column(SourceAlias, columnName),
+                SqlExpression.Column(SourceAlias, columnName),
                 scalarType,
                 keyText);
-            builder.Where(PostgresSqlExpression.EqualAny(operand, KeysBinding));
+            builder.Where(SqlExpression.EqualAny(operand, KeysBinding));
         }
         if (afterIdentity is not null)
         {
-            builder.Where(PostgresSqlExpression.KeysetAfter(
+            builder.Where(SqlExpression.KeysetAfter(
             [
                 new(
                     identityExpression,
-                    PostgresSqlExpression.RuntimeParameter(AfterBinding),
-                    PostgresSqlSortDirection.Ascending,
-                    PostgresSqlNullPlacement.Last)
+                    SqlExpression.RuntimeParameter(AfterBinding),
+                    SqlSortDirection.Ascending,
+                    SqlNullPlacement.Last)
             ]));
         }
 
         var template = builder
             .OrderBy(identityExpression)
             .Limit(probeLimit)
-            .BuildTemplate();
+            .BuildTemplate(PostgresSqlDialect.Instance);
         var parameters = ImmutableArray.CreateBuilder<PostgresNpgsqlParameter>(template.Parameters.Length);
         foreach (var parameter in template.Parameters)
         {
@@ -1069,36 +1070,36 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         }
 
         var rootIdentity = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-            PostgresSqlExpression.Column(SourceAlias, identity.ColumnName),
+            SqlExpression.Column(SourceAlias, identity.ColumnName),
             identity.ScalarType,
             identity.TextSemantics);
         var rootPartition = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-            PostgresSqlExpression.Column(SourceAlias, partition.Binding.ColumnName),
+            SqlExpression.Column(SourceAlias, partition.Binding.ColumnName),
             partition.Binding.ScalarType,
             partition.Binding.TextSemantics);
-        var rootPage = new PostgresSqlSelectBuilder(
-                new PostgresSqlQualifiedTable(table.SchemaName, table.TableName),
+        var rootPage = new SqlSelectBuilder(
+                new SqlQualifiedTable(table.SchemaName, table.TableName),
                 SourceAlias)
-            .Select(PostgresSqlExpression.Column(SourceAlias, identity.ColumnName), IdentityAlias)
+            .Select(SqlExpression.Column(SourceAlias, identity.ColumnName), IdentityAlias)
             .Select(
-                PostgresSqlExpression.Column(SourceAlias, partition.Binding.ColumnName),
+                SqlExpression.Column(SourceAlias, partition.Binding.ColumnName),
                 RootPartitionAlias);
         for (var index = 0; index < projection.Length; index++)
         {
             rootPage.Select(
-                PostgresSqlExpression.Column(SourceAlias, projection[index].ColumnName),
+                SqlExpression.Column(SourceAlias, projection[index].ColumnName),
                 $"_field{index.ToString(CultureInfo.InvariantCulture)}");
         }
-        rootPage.Where(PostgresSqlExpression.Binary(
-            PostgresSqlBinaryOperator.Equal,
+        rootPage.Where(SqlExpression.Binary(
+            SqlBinaryOperator.Equal,
             rootPartition,
-            PostgresSqlExpression.RuntimeParameter(PartitionBinding)));
+            SqlExpression.RuntimeParameter(PartitionBinding)));
 
         ImmutableArray<object> parsedKeys = [];
         PostgresRelationQueryScalarType? keyType = null;
         PostgresRelationQueryTextSemantics? keyText = null;
         string? keyColumn = null;
-        PostgresSqlExpression? collectionPredicate = null;
+        SqlExpression? collectionPredicate = null;
         switch (request.Constraint)
         {
             case RelationQueryIdentityBatchLookup lookup:
@@ -1125,34 +1126,34 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
                 keyType = element.ScalarType;
                 keyText = element.TextSemantics;
                 var occurrenceParent = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-                    PostgresSqlExpression.Column(OccurrenceAlias, owned.ParentRoot.ColumnName),
+                    SqlExpression.Column(OccurrenceAlias, owned.ParentRoot.ColumnName),
                     owned.ParentRoot.ScalarType,
                     owned.ParentRoot.TextSemantics);
                 var occurrencePartition = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-                    PostgresSqlExpression.Column(OccurrenceAlias, owned.Partition.ColumnName),
+                    SqlExpression.Column(OccurrenceAlias, owned.Partition.ColumnName),
                     owned.Partition.ScalarType,
                     owned.Partition.TextSemantics);
                 var occurrenceReference = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-                    PostgresSqlExpression.Column(OccurrenceAlias, element.ColumnName),
+                    SqlExpression.Column(OccurrenceAlias, element.ColumnName),
                     element.ScalarType,
                     element.TextSemantics);
-                var occurrenceQuery = new PostgresSqlSelectBuilder(
-                        new PostgresSqlQualifiedTable(owned.SchemaName, owned.TableName),
+                var occurrenceQuery = new SqlSelectBuilder(
+                        new SqlQualifiedTable(owned.SchemaName, owned.TableName),
                         OccurrenceAlias)
                     .Select(
-                        PostgresSqlExpression.Column(OccurrenceAlias, owned.ParentRoot.ColumnName),
+                        SqlExpression.Column(OccurrenceAlias, owned.ParentRoot.ColumnName),
                         "_exists")
-                    .Where(PostgresSqlExpression.Binary(
-                        PostgresSqlBinaryOperator.Equal,
+                    .Where(SqlExpression.Binary(
+                        SqlBinaryOperator.Equal,
                         occurrenceParent,
                         rootIdentity))
-                    .Where(PostgresSqlExpression.Binary(
-                        PostgresSqlBinaryOperator.Equal,
+                    .Where(SqlExpression.Binary(
+                        SqlBinaryOperator.Equal,
                         occurrencePartition,
                         rootPartition))
-                    .Where(PostgresSqlExpression.EqualAny(occurrenceReference, KeysBinding))
+                    .Where(SqlExpression.EqualAny(occurrenceReference, KeysBinding))
                     .BuildQuery();
-                collectionPredicate = PostgresSqlExpression.Exists(occurrenceQuery);
+                collectionPredicate = SqlExpression.Exists(occurrenceQuery);
                 break;
         }
         if (collectionPredicate is not null)
@@ -1162,21 +1163,21 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         else if (keyType is { } scalarType)
         {
             var keyExpression = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-                PostgresSqlExpression.Column(SourceAlias, keyColumn!),
+                SqlExpression.Column(SourceAlias, keyColumn!),
                 scalarType,
                 keyText);
-            rootPage.Where(PostgresSqlExpression.EqualAny(keyExpression, KeysBinding));
+            rootPage.Where(SqlExpression.EqualAny(keyExpression, KeysBinding));
         }
 
         if (afterIdentity is not null)
         {
-            rootPage.Where(PostgresSqlExpression.KeysetAfter(
+            rootPage.Where(SqlExpression.KeysetAfter(
             [
                 new(
                     rootIdentity,
-                    PostgresSqlExpression.RuntimeParameter(AfterBinding),
-                    PostgresSqlSortDirection.Ascending,
-                    PostgresSqlNullPlacement.Last)
+                    SqlExpression.RuntimeParameter(AfterBinding),
+                    SqlSortDirection.Ascending,
+                    SqlNullPlacement.Last)
             ]));
         }
         var boundedRoots = rootPage
@@ -1185,47 +1186,47 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             .BuildQuery();
 
         var pageIdentity = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-            PostgresSqlExpression.Column(RootPageAlias, IdentityAlias),
+            SqlExpression.Column(RootPageAlias, IdentityAlias),
             identity.ScalarType,
             identity.TextSemantics);
         var componentParent = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-            PostgresSqlExpression.Column(ComponentAlias, owned.ParentRoot.ColumnName),
+            SqlExpression.Column(ComponentAlias, owned.ParentRoot.ColumnName),
             owned.ParentRoot.ScalarType,
             owned.ParentRoot.TextSemantics);
         var pagePartition = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-            PostgresSqlExpression.Column(RootPageAlias, RootPartitionAlias),
+            SqlExpression.Column(RootPageAlias, RootPartitionAlias),
             partition.Binding.ScalarType,
             partition.Binding.TextSemantics);
         var componentPartition = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-            PostgresSqlExpression.Column(ComponentAlias, owned.Partition.ColumnName),
+            SqlExpression.Column(ComponentAlias, owned.Partition.ColumnName),
             owned.Partition.ScalarType,
             owned.Partition.TextSemantics);
-        var join = PostgresSqlExpression.Binary(
-            PostgresSqlBinaryOperator.And,
-            PostgresSqlExpression.Binary(
-                PostgresSqlBinaryOperator.Equal,
+        var join = SqlExpression.Binary(
+            SqlBinaryOperator.And,
+            SqlExpression.Binary(
+                SqlBinaryOperator.Equal,
                 pageIdentity,
                 componentParent),
-            PostgresSqlExpression.Binary(
-                PostgresSqlBinaryOperator.Equal,
+            SqlExpression.Binary(
+                SqlBinaryOperator.Equal,
                 pagePartition,
                 componentPartition));
-        var builder = new PostgresSqlSelectBuilder(boundedRoots, RootPageAlias)
-            .Select(PostgresSqlExpression.Column(RootPageAlias, IdentityAlias), IdentityAlias);
+        var builder = new SqlSelectBuilder(boundedRoots, RootPageAlias)
+            .Select(SqlExpression.Column(RootPageAlias, IdentityAlias), IdentityAlias);
         for (var index = 0; index < projection.Length; index++)
         {
             var alias = $"_field{index.ToString(CultureInfo.InvariantCulture)}";
-            builder.Select(PostgresSqlExpression.Column(RootPageAlias, alias), alias);
+            builder.Select(SqlExpression.Column(RootPageAlias, alias), alias);
         }
         builder.Join(
-            new PostgresSqlQualifiedTable(owned.SchemaName, owned.TableName),
+            new SqlQualifiedTable(owned.SchemaName, owned.TableName),
             ComponentAlias,
-            PostgresSqlJoinKind.Left,
+            SqlJoinKind.Left,
             join);
         for (var index = 0; index < owned.Fields.Length; index++)
         {
             builder.Select(
-                PostgresSqlExpression.Column(ComponentAlias, owned.Fields[index].ColumnName),
+                SqlExpression.Column(ComponentAlias, owned.Fields[index].ColumnName),
                 $"_owned{index.ToString(CultureInfo.InvariantCulture)}");
         }
 
@@ -1234,14 +1235,14 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         var statement = builder
             .OrderBy(pageIdentity)
             .OrderBy(PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-                PostgresSqlExpression.Column(ComponentAlias, ordinal.ColumnName),
+                SqlExpression.Column(ComponentAlias, ordinal.ColumnName),
                 ordinal.ScalarType,
                 ordinal.TextSemantics))
             .OrderBy(PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-                PostgresSqlExpression.Column(ComponentAlias, localIdentity.ColumnName),
+                SqlExpression.Column(ComponentAlias, localIdentity.ColumnName),
                 localIdentity.ScalarType,
                 localIdentity.TextSemantics))
-            .BuildTemplate();
+            .BuildTemplate(PostgresSqlDialect.Instance);
         var parameters = ImmutableArray.CreateBuilder<PostgresNpgsqlParameter>(statement.Parameters.Length);
         foreach (var parameter in statement.Parameters)
         {
@@ -1287,55 +1288,55 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
         long maximumResultBytes)
     {
         var identityExpression = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-            PostgresSqlExpression.Column(SourceAlias, identity.ColumnName),
+            SqlExpression.Column(SourceAlias, identity.ColumnName),
             identity.ScalarType,
             identity.TextSemantics);
         var relationshipExpression = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-            PostgresSqlExpression.Column(SourceAlias, relationship.ColumnName),
+            SqlExpression.Column(SourceAlias, relationship.ColumnName),
             relationship.ScalarType,
             relationship.TextSemantics);
         var requestedKeyExpression = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-            PostgresSqlExpression.Column(RequestedAlias, RequestedKeyAlias),
+            SqlExpression.Column(RequestedAlias, RequestedKeyAlias),
             relationship.ScalarType,
             relationship.TextSemantics);
-        var candidateBuilder = new PostgresSqlSelectBuilder(
-                new PostgresSqlQualifiedTable(table.SchemaName, table.TableName),
+        var candidateBuilder = new SqlSelectBuilder(
+                new SqlQualifiedTable(table.SchemaName, table.TableName),
                 SourceAlias)
-            .Select(PostgresSqlExpression.Column(SourceAlias, identity.ColumnName), IdentityAlias);
+            .Select(SqlExpression.Column(SourceAlias, identity.ColumnName), IdentityAlias);
         for (var index = 0; index < projection.Length; index++)
         {
             candidateBuilder.Select(
-                PostgresSqlExpression.Column(SourceAlias, projection[index].ColumnName),
+                SqlExpression.Column(SourceAlias, projection[index].ColumnName),
                 $"_field{index.ToString(CultureInfo.InvariantCulture)}");
         }
         candidateBuilder
             .Select(
-                PostgresSqlExpression.Column(SourceAlias, relationship.ColumnName),
+                SqlExpression.Column(SourceAlias, relationship.ColumnName),
                 RelationshipAlias)
-            .Where(PostgresSqlExpression.Binary(
-                PostgresSqlBinaryOperator.Equal,
+            .Where(SqlExpression.Binary(
+                SqlBinaryOperator.Equal,
                 relationshipExpression,
                 requestedKeyExpression));
         if (partition is not null)
         {
             var partitionExpression = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-                PostgresSqlExpression.Column(SourceAlias, partition.Binding.ColumnName),
+                SqlExpression.Column(SourceAlias, partition.Binding.ColumnName),
                 partition.Binding.ScalarType,
                 partition.Binding.TextSemantics);
-            candidateBuilder.Where(PostgresSqlExpression.Binary(
-                PostgresSqlBinaryOperator.Equal,
+            candidateBuilder.Where(SqlExpression.Binary(
+                SqlBinaryOperator.Equal,
                 partitionExpression,
-                PostgresSqlExpression.RuntimeParameter(PartitionBinding)));
+                SqlExpression.RuntimeParameter(PartitionBinding)));
         }
         if (afterIdentity is not null)
         {
-            candidateBuilder.Where(PostgresSqlExpression.KeysetAfter(
+            candidateBuilder.Where(SqlExpression.KeysetAfter(
             [
                 new(
                     identityExpression,
-                    PostgresSqlExpression.RuntimeParameter(AfterBinding),
-                    PostgresSqlSortDirection.Ascending,
-                    PostgresSqlNullPlacement.Last)
+                    SqlExpression.RuntimeParameter(AfterBinding),
+                    SqlSortDirection.Ascending,
+                    SqlNullPlacement.Last)
             ]));
         }
         var candidates = candidateBuilder
@@ -1344,25 +1345,25 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             .BuildQuery();
 
         var outerIdentity = PostgresRelationQueryScalarCatalog.ApplyTextCollation(
-            PostgresSqlExpression.Column(CandidateAlias, IdentityAlias),
+            SqlExpression.Column(CandidateAlias, IdentityAlias),
             identity.ScalarType,
             identity.TextSemantics);
-        var builder = new PostgresSqlSelectBuilder(KeysBinding, RequestedAlias, RequestedKeyAlias)
-            .Select(PostgresSqlExpression.Column(CandidateAlias, IdentityAlias), IdentityAlias);
+        var builder = SqlSelectBuilder.FromArray(KeysBinding, RequestedAlias, RequestedKeyAlias)
+            .Select(SqlExpression.Column(CandidateAlias, IdentityAlias), IdentityAlias);
         for (var index = 0; index < projection.Length; index++)
         {
             builder.Select(
-                PostgresSqlExpression.Column(
+                SqlExpression.Column(
                     CandidateAlias,
                     $"_field{index.ToString(CultureInfo.InvariantCulture)}"),
                 $"_field{index.ToString(CultureInfo.InvariantCulture)}");
         }
         var template = builder
-            .Select(PostgresSqlExpression.Column(CandidateAlias, RelationshipAlias), RelationshipAlias)
+            .Select(SqlExpression.Column(CandidateAlias, RelationshipAlias), RelationshipAlias)
             .CrossJoinLateral(candidates, CandidateAlias)
             .OrderBy(outerIdentity)
             .Limit(probeLimit)
-            .BuildTemplate();
+            .BuildTemplate(PostgresSqlDialect.Instance);
         var parameters = ImmutableArray.CreateBuilder<PostgresNpgsqlParameter>(template.Parameters.Length);
         foreach (var parameter in template.Parameters)
         {
@@ -1851,7 +1852,7 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             int byteCount;
             try
             {
-                byteCount = PostgresSqlUtf8.GetByteCount(key, nameof(keys));
+                byteCount = SqlUtf8.GetByteCount(key, nameof(keys));
             }
             catch (ArgumentException)
             {

@@ -99,7 +99,7 @@ host instances addressing the same revision converge to one applied command and 
 Persisted content is size-bounded and fingerprint-checked on every access; mismatched content fails closed.
 
 Construct both adapters with a caller-owned `NpgsqlDataSource` and `PostgresMaterializationStateStoreOptions`, then call
-`EnsureCreatedAsync` explicitly during bootstrap. The options reuse `PostgresSqlQualifiedTable` for validated,
+`EnsureCreatedAsync` explicitly during bootstrap. The options reuse `SqlQualifiedTable` for validated,
 injection-safe schema and table identifiers. `AuthorityId` must identify one logical runtime authority; reusing it with
 another backend-pool document is rejected during canonical restoration.
 
@@ -126,19 +126,19 @@ rebuilding the SQL tree.
 ```csharp
 using Cohesive.Adapters.Postgres;
 
-var template = new PostgresSqlSelectBuilder(
-        new PostgresSqlQualifiedTable("transport", "loads"),
+var template = new SqlSelectBuilder(
+        new SqlQualifiedTable("transport", "loads"),
         "l")
-    .Select(PostgresSqlExpression.Column("l", "id"), "id")
-    .Where(PostgresSqlExpression.Binary(
-        PostgresSqlBinaryOperator.Equal,
-        PostgresSqlExpression.Column("l", "status"),
-        PostgresSqlExpression.RuntimeParameter("status")))
-    .OrderBy(PostgresSqlExpression.Column("l", "id"))
+    .Select(SqlExpression.Column("l", "id"), "id")
+    .Where(SqlExpression.Binary(
+        SqlBinaryOperator.Equal,
+        SqlExpression.Column("l", "status"),
+        SqlExpression.RuntimeParameter("status")))
+    .OrderBy(SqlExpression.Column("l", "id"))
     .Limit(100)
-    .BuildTemplate();
+    .BuildTemplate(PostgresSqlDialect.Instance);
 
-var statement = template.Bind(new Dictionary<string, object?>
+var statement = template.Bind(PostgresSqlDialect.Instance, new Dictionary<string, object?>
 {
     ["status"] = "Open"
 });
@@ -149,10 +149,10 @@ var statement = template.Bind(new Dictionary<string, object?>
 // statement.Parameters[0].Value: "Open"
 ```
 
-`PostgresSqlSelectBuilder` also composes derived-table joins, aggregate `FILTER` clauses, explicit null placement,
-offset paging, and null-aware structural keyset predicates. `PostgresSqlInsertBuilder` supports parameterized inserts,
+`SqlSelectBuilder` also composes derived-table joins, aggregate `FILTER` clauses, explicit null placement,
+offset paging, and null-aware structural keyset predicates. `SqlInsertBuilder` supports parameterized inserts,
 `ON CONFLICT DO UPDATE` from `EXCLUDED` values, and conflict-retaining `ON CONFLICT DO NOTHING`, while
-`PostgresSqlUpdateBuilder` requires at least one predicate so an unrestricted update cannot be produced accidentally.
+`SqlUpdateBuilder` requires at least one predicate so an unrestricted update cannot be produced accidentally.
 Both mutation builders use the same safe identifiers, expression tree, deterministic positional parameters, and
 immutable command templates as the select builder.
 
@@ -742,7 +742,7 @@ Store artifacts in a trusted location or authenticate them with an application-o
 rehydration. Invocation values remain positional parameters and never become SQL text.
 
 `PostgresRelationQueryCompiler` and the standalone builder continue to return a provider-neutral
-`PostgresSqlStatement` containing quoted SQL text and ordered CLR parameter values. The package does not yet provide a
+`SqlStatement` containing quoted SQL text and ordered CLR parameter values. The package does not yet provide a
 native-artifact executor that automatically dispatches that statement. Its direct Npgsql dependency is instead used by
 the bounded canonical source reader and materialization source, where the exact storage binding supplies explicit
 PostgreSQL parameter and result types. A supplied relation root remains an explicit plan input, not an implicit table

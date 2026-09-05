@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Text.Json.Serialization;
 
 namespace Cohesive.Adapters.Postgres;
@@ -171,7 +172,7 @@ public sealed record PostgresLogicalReplicationBinding
     internal static string RequireSlotName(string value, string parameterName)
     {
         value = Guard.RequireNotNullOrWhiteSpace(value, parameterName);
-        if (value.Length > PostgresSqlIdentifier.StandardMaxUtf8ByteLength
+        if (value.Length > PostgresSqlDialect.StandardMaxUtf8ByteLength
             || value.Any(static character => character is not (>= 'a' and <= 'z')
                 && character is not (>= '0' and <= '9')
                 && character != '_'))

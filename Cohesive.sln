@@ -142,6 +142,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.SQLite", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.SQLite.Tests", "src\Cohesive.Adapters.SQLite.Tests\Cohesive.Adapters.SQLite.Tests.csproj", "{D68C2730-1162-40FE-B20C-7718D7F1C993}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Sql", "src\adapters\Cohesive.Adapters.Sql\Cohesive.Adapters.Sql.csproj", "{7D300DAA-195E-45B4-8615-CABF63A8228D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -944,6 +946,18 @@ Global
 		{D68C2730-1162-40FE-B20C-7718D7F1C993}.Release|x64.Build.0 = Release|Any CPU
 		{D68C2730-1162-40FE-B20C-7718D7F1C993}.Release|x86.ActiveCfg = Release|Any CPU
 		{D68C2730-1162-40FE-B20C-7718D7F1C993}.Release|x86.Build.0 = Release|Any CPU
+		{7D300DAA-195E-45B4-8615-CABF63A8228D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7D300DAA-195E-45B4-8615-CABF63A8228D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7D300DAA-195E-45B4-8615-CABF63A8228D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{7D300DAA-195E-45B4-8615-CABF63A8228D}.Debug|x64.Build.0 = Debug|Any CPU
+		{7D300DAA-195E-45B4-8615-CABF63A8228D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{7D300DAA-195E-45B4-8615-CABF63A8228D}.Debug|x86.Build.0 = Debug|Any CPU
+		{7D300DAA-195E-45B4-8615-CABF63A8228D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7D300DAA-195E-45B4-8615-CABF63A8228D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7D300DAA-195E-45B4-8615-CABF63A8228D}.Release|x64.ActiveCfg = Release|Any CPU
+		{7D300DAA-195E-45B4-8615-CABF63A8228D}.Release|x64.Build.0 = Release|Any CPU
+		{7D300DAA-195E-45B4-8615-CABF63A8228D}.Release|x86.ActiveCfg = Release|Any CPU
+		{7D300DAA-195E-45B4-8615-CABF63A8228D}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -984,5 +998,6 @@ Global
 		{22008EAD-70F9-43E7-8483-33509F3B4250} = {5751A714-1C63-4459-AE6F-B239AFE570E4}
 		{F51D0607-5D7A-441C-8012-58C07CBC56AC} = {E43C7668-D288-496F-90C4-887287F717D4}
 		{D68C2730-1162-40FE-B20C-7718D7F1C993} = {5751A714-1C63-4459-AE6F-B239AFE570E4}
+		{7D300DAA-195E-45B4-8615-CABF63A8228D} = {E43C7668-D288-496F-90C4-887287F717D4}
 	EndGlobalSection
 EndGlobal

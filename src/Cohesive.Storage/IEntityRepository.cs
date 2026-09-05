@@ -82,15 +82,33 @@ public interface IEntityRepository<TEntity> : IEntityRepository where TEntity : 
     Task<EntitySnapshot> Upsert(OperationContext context, TEntity entity, EntityConcurrencyToken? expectedConcurrencyToken = null);
 
     /// <summary>
-    /// Upserts a batch of observations.
+    /// Maps a typed batch in input order and preserves the repository's native batch capabilities.
     /// </summary>
-    /// <param name="context"></param>
-    /// <param name="writes"></param>
-    /// <returns></returns>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="writes">Complete typed candidates in write order.</param>
+    /// <param name="atomicity">Required atomicity; unsupported guarantees must be rejected.</param>
+    /// <returns>Committed snapshots in the same order as the input candidates.</returns>
     async Task<IReadOnlyList<EntitySnapshot>> UpsertBatch(
         OperationContext context,
-        IReadOnlyList<TEntity> writes) =>
-        await Task.WhenAllThrottled(writes, w => Upsert(context, w), new(maxConcurrency: 5), context.CancellationToken);
+        IReadOnlyList<TEntity> writes,
+        EntityBatchAtomicity atomicity = EntityBatchAtomicity.None) =>
+        (await EntityRepositoryMappingExtensions.UpsertBatch(this, context, writes, atomicity).ConfigureAwait(false)).Snapshots;
+
+    /// <summary>Maps typed candidates and their per-write concurrency fences into one native batch.</summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="request">Typed writes, their concurrency fences, and required atomicity.</param>
+    /// <returns>Committed snapshots in input order.</returns>
+    /// <exception cref="ArgumentNullException">The context, request, writes, or a candidate is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The atomicity enum is unknown.</exception>
+    /// <exception cref="NotSupportedException">The requested batch guarantees or item count are unsupported.</exception>
+    /// <exception cref="SemanticRuleViolationException">A candidate violates the entity definition.</exception>
+    /// <exception cref="InvalidOperationException">Mapping cannot resolve a valid identity or version.</exception>
+    /// <exception cref="ObservationConcurrencyConflictException">An expected token is stale or its target is absent.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation is observed before a write commits.</exception>
+    async Task<IReadOnlyList<EntitySnapshot>> UpsertBatch(
+        OperationContext context,
+        EntityBatchWriteRequest<TEntity> request) =>
+        (await EntityRepositoryMappingExtensions.UpsertBatch(this, context, request).ConfigureAwait(false)).Snapshots;
 }
 
 /// <summary>
@@ -135,6 +153,14 @@ public sealed record EntityWriteRequest(
     EntityObservationSnapshot Entity,
     EntityConcurrencyToken? ExpectedConcurrencyToken = null
 );
+
+/// <summary>A typed authoring projection of an entity write, including its independent storage concurrency fence.</summary>
+/// <typeparam name="TEntity">CLR candidate type mapped into the repository's canonical entity definition.</typeparam>
+/// <param name="Entity">Complete typed candidate; must not be null.</param>
+/// <param name="ExpectedConcurrencyToken">Opaque expected storage token, or null for an unconditional write.</param>
+public sealed record EntityWriteRequest<TEntity>(
+    TEntity Entity,
+    EntityConcurrencyToken? ExpectedConcurrencyToken = null) where TEntity : notnull;
 
 /// <summary>
 /// Requested atomicity semantics for a batch entity write.
@@ -194,6 +220,14 @@ public sealed record EntityBatchWriteRequest(
     IReadOnlyList<EntityWriteRequest> Writes,
     EntityBatchAtomicity Atomicity = EntityBatchAtomicity.None
     );
+
+/// <summary>A typed authoring projection of an ordered canonical batch write request.</summary>
+/// <typeparam name="TEntity">CLR candidate type.</typeparam>
+/// <param name="Writes">Ordered typed writes and their per-candidate storage fences; must not be null.</param>
+/// <param name="Atomicity">Required batch atomicity, forwarded unchanged after mapping.</param>
+public sealed record EntityBatchWriteRequest<TEntity>(
+    IReadOnlyList<EntityWriteRequest<TEntity>> Writes,
+    EntityBatchAtomicity Atomicity = EntityBatchAtomicity.None) where TEntity : notnull;
 
 /// <summary>
 /// Result of a batch write against one logical entity repository.

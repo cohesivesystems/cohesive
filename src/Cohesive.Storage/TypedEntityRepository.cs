@@ -3,6 +3,10 @@ using Cohesive.Transitions.Model;
 namespace Cohesive.Storage;
 
 /// <summary>Represents a typed entity repository.</summary>
+/// <param name="repository">Underlying canonical repository whose capabilities and batch behavior are preserved.</param>
+/// <param name="selectEntityId">Optional typed identity selector.</param>
+/// <param name="selectVersion">Optional typed semantic-version selector.</param>
+/// <param name="configureMaterializer">Optional materializer configuration.</param>
 public sealed class TypedEntityRepository<TEntity>(
     IEntityRepository repository,
     Func<TEntity, string>? selectEntityId = null,
@@ -15,6 +19,40 @@ public sealed class TypedEntityRepository<TEntity>(
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => repository.EntityType;
+
+    /// <summary>Gets the underlying repository's native batching guarantees and limits.</summary>
+    public EntityBatchCapabilities BatchCapabilities => repository.BatchCapabilities;
+
+    /// <summary>Forwards an ordered canonical batch without replacing its native transaction semantics.</summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="request">Ordered writes and required atomicity.</param>
+    /// <returns>The underlying repository's batch result.</returns>
+    public Task<EntityBatchWriteResult> UpsertBatch(OperationContext context, EntityBatchWriteRequest request) =>
+        repository.UpsertBatch(context, request);
+
+    /// <summary>Maps an ordered typed batch using this facade's selectors and the underlying native batch boundary.</summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="writes">Complete typed candidates in write order.</param>
+    /// <param name="atomicity">Required atomicity forwarded unchanged to the native repository.</param>
+    /// <returns>Committed snapshots in input order.</returns>
+    public async Task<IReadOnlyList<EntitySnapshot>> UpsertBatch(OperationContext context, IReadOnlyList<TEntity> writes,
+        EntityBatchAtomicity atomicity = EntityBatchAtomicity.None) =>
+        (await repository.UpsertBatch(context, writes, atomicity, selectEntityId, selectVersion).ConfigureAwait(false)).Snapshots;
+
+    /// <summary>Maps typed candidates and their concurrency fences using this facade's selectors.</summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="request">Typed writes, per-write storage tokens, and required native atomicity.</param>
+    /// <returns>Committed snapshots in input order.</returns>
+    /// <exception cref="ArgumentNullException">The context, request, writes, or a candidate is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The atomicity enum is unknown.</exception>
+    /// <exception cref="NotSupportedException">The requested batch guarantees or item count are unsupported.</exception>
+    /// <exception cref="SemanticRuleViolationException">A candidate violates the entity definition.</exception>
+    /// <exception cref="InvalidOperationException">Mapping cannot resolve a valid identity or version.</exception>
+    /// <exception cref="ObservationConcurrencyConflictException">An expected token is stale or its target is absent.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation is observed during mapping or by the repository.</exception>
+    public async Task<IReadOnlyList<EntitySnapshot>> UpsertBatch(OperationContext context,
+        EntityBatchWriteRequest<TEntity> request) =>
+        (await repository.UpsertBatch(context, request, selectEntityId, selectVersion).ConfigureAwait(false)).Snapshots;
 
     /// <summary>Gets atomic Process Transition operation capabilities.</summary>
     public EntityTransitionOperationCapabilities TransitionOperationCapabilities =>
@@ -72,6 +110,8 @@ public sealed class TypedEntityRepository<TEntity>(
 }
 
 /// <summary>Represents a typed entity outbox repository.</summary>
+/// <param name="repository">Typed repository supplying ordinary reads/writes and native batch behavior.</param>
+/// <param name="outboxRepository">Repository supplying atomic outbox and retained-operation behavior.</param>
 public sealed class TypedEntityOutboxRepository<TEntity>(
     IEntityRepository<TEntity> repository,
     IEntityOutboxRepository outboxRepository
@@ -82,6 +122,38 @@ public sealed class TypedEntityOutboxRepository<TEntity>(
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => repository.EntityType;
+
+    /// <summary>Gets ordinary batch guarantees from the repository that owns those writes.</summary>
+    public EntityBatchCapabilities BatchCapabilities => repository.BatchCapabilities;
+
+    /// <summary>Forwards a canonical batch to the repository that owns ordinary writes.</summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="request">Ordered writes and required atomicity.</param>
+    /// <returns>The underlying native batch result.</returns>
+    public Task<EntityBatchWriteResult> UpsertBatch(OperationContext context, EntityBatchWriteRequest request) =>
+        repository.UpsertBatch(context, request);
+
+    /// <summary>Forwards typed batches, including custom mapping selectors and requested atomicity.</summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="writes">Complete typed candidates in input order.</param>
+    /// <param name="atomicity">Required ordinary-write atomicity.</param>
+    /// <returns>Committed snapshots in input order.</returns>
+    public Task<IReadOnlyList<EntitySnapshot>> UpsertBatch(OperationContext context, IReadOnlyList<TEntity> writes,
+        EntityBatchAtomicity atomicity = EntityBatchAtomicity.None) => repository.UpsertBatch(context, writes, atomicity);
+
+    /// <summary>Forwards typed candidates and their concurrency fences through the configured typed facade.</summary>
+    /// <param name="context">Operation context and cancellation.</param>
+    /// <param name="request">Typed writes, per-write storage tokens, and required native atomicity.</param>
+    /// <returns>Committed snapshots in input order.</returns>
+    /// <exception cref="ArgumentNullException">The context, request, writes, or a candidate is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The atomicity enum is unknown.</exception>
+    /// <exception cref="NotSupportedException">The requested batch guarantees or item count are unsupported.</exception>
+    /// <exception cref="SemanticRuleViolationException">A candidate violates the entity definition.</exception>
+    /// <exception cref="InvalidOperationException">Mapping cannot resolve a valid identity or version.</exception>
+    /// <exception cref="ObservationConcurrencyConflictException">An expected token is stale or its target is absent.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation is observed during mapping or by the repository.</exception>
+    public Task<IReadOnlyList<EntitySnapshot>> UpsertBatch(OperationContext context,
+        EntityBatchWriteRequest<TEntity> request) => repository.UpsertBatch(context, request);
 
     /// <summary>Gets atomic Process Transition operation capabilities.</summary>
     public EntityTransitionOperationCapabilities TransitionOperationCapabilities =>

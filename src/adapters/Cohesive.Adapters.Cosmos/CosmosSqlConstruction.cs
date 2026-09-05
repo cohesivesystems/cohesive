@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
@@ -117,16 +118,6 @@ public enum CosmosSqlAggregateFunction
     Average = 4
 }
 
-/// <summary>Source from which a command-template parameter receives its value.</summary>
-public enum CosmosSqlParameterBindingKind
-{
-    /// <summary>The parameter value was captured while the query was constructed.</summary>
-    Constant = 0,
-
-    /// <summary>The parameter value must be supplied when the template is bound.</summary>
-    Runtime = 1
-}
-
 /// <summary>One concrete, ordered Cosmos SQL parameter.</summary>
 public sealed record CosmosSqlParameter
 {
@@ -155,21 +146,21 @@ public sealed record CosmosSqlParameterSlot
 {
     internal CosmosSqlParameterSlot(
         string name,
-        CosmosSqlParameterBindingKind kind,
+        SqlParameterBindingKind kind,
         string? binding,
         object? constantValue)
     {
         Name = CosmosSqlNames.RequireParameterName(name, nameof(name));
         if (!Enum.IsDefined(kind))
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported Cosmos SQL parameter binding kind.");
-        if (kind == CosmosSqlParameterBindingKind.Runtime && string.IsNullOrWhiteSpace(binding))
+        if (kind == SqlParameterBindingKind.Runtime && string.IsNullOrWhiteSpace(binding))
             throw new ArgumentException("A runtime parameter slot requires a binding name.", nameof(binding));
-        if (kind == CosmosSqlParameterBindingKind.Constant && binding is not null)
+        if (kind == SqlParameterBindingKind.Constant && binding is not null)
             throw new ArgumentException("A constant parameter slot cannot declare a runtime binding.", nameof(binding));
 
         Kind = kind;
         Binding = binding;
-        ConstantValue = kind == CosmosSqlParameterBindingKind.Constant
+        ConstantValue = kind == SqlParameterBindingKind.Constant
             ? CosmosSqlParameterValues.Normalize(constantValue)
             : null;
     }
@@ -178,7 +169,7 @@ public sealed record CosmosSqlParameterSlot
     public string Name { get; }
 
     /// <summary>Source from which the parameter receives its value.</summary>
-    public CosmosSqlParameterBindingKind Kind { get; }
+    public SqlParameterBindingKind Kind { get; }
 
     /// <summary>Runtime binding name, or <see langword="null"/> for a captured constant.</summary>
     public string? Binding { get; }
@@ -200,7 +191,7 @@ public sealed class CosmosSqlCommandTemplate
             throw new ArgumentException("Cosmos SQL parameter slots cannot contain null entries.", nameof(parameters));
         if (Parameters.GroupBy(static parameter => parameter.Name, StringComparer.Ordinal).Any(static group => group.Count() > 1))
             throw new ArgumentException("Cosmos SQL parameter slots cannot repeat a parameter name.", nameof(parameters));
-        if (Parameters.Where(static parameter => parameter.Kind == CosmosSqlParameterBindingKind.Runtime)
+        if (Parameters.Where(static parameter => parameter.Kind == SqlParameterBindingKind.Runtime)
             .GroupBy(static parameter => parameter.Binding, StringComparer.Ordinal)
             .Any(static group => group.Count() > 1))
         {
@@ -227,7 +218,7 @@ public sealed class CosmosSqlCommandTemplate
     {
         runtimeParameters ??= EmptyRuntimeParameters.Instance;
         var expectedBindings = Parameters
-            .Where(static parameter => parameter.Kind == CosmosSqlParameterBindingKind.Runtime)
+            .Where(static parameter => parameter.Kind == SqlParameterBindingKind.Runtime)
             .Select(static parameter => parameter.Binding!)
             .ToHashSet(StringComparer.Ordinal);
         var unknown = runtimeParameters.Keys
@@ -245,7 +236,7 @@ public sealed class CosmosSqlCommandTemplate
         foreach (var slot in Parameters)
         {
             object? value;
-            if (slot.Kind == CosmosSqlParameterBindingKind.Constant)
+            if (slot.Kind == SqlParameterBindingKind.Constant)
             {
                 value = slot.ConstantValue;
             }
@@ -1135,14 +1126,13 @@ public sealed class CosmosSqlBuilder
 
 sealed class CosmosSqlRenderContext
 {
-    readonly ImmutableArray<CosmosSqlParameterSlot>.Builder parameters = ImmutableArray.CreateBuilder<CosmosSqlParameterSlot>();
-    readonly Dictionary<string, string> runtimeNames = new(StringComparer.Ordinal);
+    readonly SqlParameterSlots<CosmosSqlParameterSlot> parameters = new();
     readonly HashSet<string> usedAliases = new(StringComparer.Ordinal);
     readonly Dictionary<CosmosSqlExpression, string> activeCollectionItemAliases = new(
         ReferenceEqualityComparer.Instance);
     int nextCollectionAlias;
 
-    public ImmutableArray<CosmosSqlParameterSlot> Parameters => parameters.ToImmutable();
+    public ImmutableArray<CosmosSqlParameterSlot> Parameters => parameters.Snapshot();
 
     public void ReserveAlias(string alias)
     {
@@ -1181,24 +1171,14 @@ sealed class CosmosSqlRenderContext
             throw new InvalidOperationException("A Cosmos SQL collection item is not active in this render scope.");
     }
 
-    public string AddConstant(object? value)
-    {
-        var name = NextName();
-        parameters.Add(new(name, CosmosSqlParameterBindingKind.Constant, binding: null, value));
-        return name;
-    }
+    public string AddConstant(object? value) => Name(parameters.AddConstant(position =>
+        new(Name(position), SqlParameterBindingKind.Constant, binding: null, value)));
 
-    public string AddRuntime(string binding)
-    {
-        if (runtimeNames.TryGetValue(binding, out var existing))
-            return existing;
-        var name = NextName();
-        runtimeNames.Add(binding, name);
-        parameters.Add(new(name, CosmosSqlParameterBindingKind.Runtime, binding, constantValue: null));
-        return name;
-    }
+    public string AddRuntime(string binding) => Name(parameters.GetOrAddRuntime(binding, position =>
+        new(Name(position), SqlParameterBindingKind.Runtime, binding, constantValue: null)));
 
-    string NextName() => $"@p{parameters.Count.ToString(CultureInfo.InvariantCulture)}";
+    static string Name(int position) => $"@p{position.ToString(CultureInfo.InvariantCulture)}";
+
 }
 
 static class CosmosSqlNames

@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Globalization;
 using System.Net;
 using System.Net.Security;
@@ -387,7 +388,7 @@ static class Program
             string identityField,
             string identityColumn,
             params (string Field, string Column, PostgresRelationQueryScalarType Scalar)[] fields) => new(
-            new PostgresSqlQualifiedTable(PostgresSchema, table),
+            new SqlQualifiedTable(PostgresSchema, table),
             [
                 new(identityField, identityColumn, PostgresRelationQueryScalarType.Text),
                 .. fields.Select(static field => new PostgresEntityRepositoryFieldBinding(
@@ -743,7 +744,7 @@ static class Program
             string itemPrefix) => new(
             definition,
             container,
-            itemIdSelector: observation => $"{itemPrefix}/{observation.Id}",
+            itemIdSelector: observation => $"{itemPrefix}/{observation.EntityId.Value}",
             partitionKeyPolicy: partition);
     }
 

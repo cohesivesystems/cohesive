@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Security.Cryptography;
@@ -23,7 +24,7 @@ public sealed class PostgresRelationQueryCompiler
     const string CompilerProfileSetting = "compilerProfile";
 
     /// <summary>Versioned identity of this concrete compiler implementation and semantic profile.</summary>
-    public const string CompilerProfile = "cohesive.adapters.postgres.sql/compiler-v1";
+    public const string CompilerProfile = "cohesive.adapters.postgres.sql/compiler-v2";
 
     /// <summary>Creates a canonical PostgreSQL relation/query compiler.</summary>
     public PostgresRelationQueryCompiler()
@@ -947,7 +948,7 @@ public sealed class PostgresRelationQueryCompiler
 
             var scope = CompileNode(branch.Node);
             var terminal = CompileTerminal(scope);
-            var statement = terminal.Query.ToCommandTemplate();
+            var statement = terminal.Query.ToCommandTemplate(PostgresSqlDialect.Instance);
             var supplied = CreateSuppliedBindings(statement);
             var parameterBindings = CreateParameterBindings(statement);
             var selected = CreateSelectedFields();
@@ -1057,7 +1058,7 @@ public sealed class PostgresRelationQueryCompiler
                 : storageBinding.ResolveTable(contract.Input.Id);
             string? sourceAlias = null;
             var builder = table is null
-                ? new PostgresSqlSelectBuilder()
+                ? new SqlSelectBuilder()
                 : CreatePhysicalBuilder(table, out sourceAlias);
             Dictionary<FieldKey, ScopedValue> values = [];
             Dictionary<ValueBindingId, ScopedIdentity> identities = [];
@@ -1084,7 +1085,7 @@ public sealed class PostgresRelationQueryCompiler
                     }
                     var encoding = ResolveEncoding(valueContract, source.Id);
                     var runtimeBinding = SuppliedPrefix + field.Input.Id.Value;
-                    builder.Select(PostgresSqlExpression.RuntimeParameter(runtimeBinding), alias);
+                    builder.Select(SqlExpression.RuntimeParameter(runtimeBinding), alias);
                     value = new(alias, valueContract, encoding, Text: null,
                         PostgresRelationQueryOrderingCapability.None, field.Input.Id, Placement: null,
                         RuntimeTextBinding: encoding == PostgresRelationQueryValueEncoding.Text
@@ -1095,7 +1096,7 @@ public sealed class PostgresRelationQueryCompiler
                 {
                     var physical = ResolveField(table, field.Input.Id, source.Id);
                     ValidatePhysicalValue(valueContract, physical, source.Id, field.Input.Id);
-                    builder.Select(PostgresSqlExpression.Column(sourceAlias!, physical.ColumnName), alias);
+                    builder.Select(SqlExpression.Column(sourceAlias!, physical.ColumnName), alias);
                     value = new(alias, valueContract, Convert(physical.ScalarType), physical.TextSemantics,
                         physical.Ordering, field.Input.Id, table.PlacementBinding);
                 }
@@ -1167,7 +1168,7 @@ public sealed class PostgresRelationQueryCompiler
                 rightKey = ResolveReference(right, rightEnvironment, contract.Result, contract.Input.Id, traversal.Id);
             }
             var predicate = CompileEquality(leftKey, rightKey, traversal.Id, nullSafe: false);
-            var builder = new PostgresSqlSelectBuilder(left.Query, leftAlias);
+            var builder = new SqlSelectBuilder(left.Query, leftAlias);
             builder.Join(right.Query, rightAlias, ConvertJoin(contract.JoinKind, traversal.Id), predicate.Expression);
             var combined = ProjectCombined(builder, left, leftEnvironment, right, rightEnvironment);
             if (contract.JoinKind == JoinKind.Left)
@@ -1191,8 +1192,8 @@ public sealed class PostgresRelationQueryCompiler
             PostgresRelationQueryTableBinding table)
         {
             var tableAlias = RelationAlias(table.TableName);
-            var builder = new PostgresSqlSelectBuilder(
-                new PostgresSqlQualifiedTable(table.SchemaName, table.TableName),
+            var builder = new SqlSelectBuilder(
+                new SqlQualifiedTable(table.SchemaName, table.TableName),
                 tableAlias);
             Dictionary<FieldKey, ScopedValue> values = [];
             Dictionary<ValueBindingId, ScopedIdentity> identities = [];
@@ -1203,7 +1204,7 @@ public sealed class PostgresRelationQueryCompiler
                 var valueContract = RequireValueContract(field.Input);
                 ValidatePhysicalValue(valueContract, physical, contract.Input.Traversal, field.Input.Id);
                 var alias = ValueAlias(field.Input.Field.Shape, field.Input.Field.Path);
-                builder.Select(PostgresSqlExpression.Column(tableAlias, physical.ColumnName), alias);
+                builder.Select(SqlExpression.Column(tableAlias, physical.ColumnName), alias);
                 values.Add(new(field.Input.Binding, field.Input.Field.Path), new(
                     alias,
                     valueContract,
@@ -1227,7 +1228,7 @@ public sealed class PostgresRelationQueryCompiler
             var site = execution.ExpressionSites.Single(static site => site.Kind == RelationQueryExpressionSiteKind.FilterPredicate);
             var predicate = CompileExpression(filter.Predicate, site, environment, requireNonNull: true);
             RequireBoolean(predicate, execution.Id, "filter predicate");
-            var builder = new PostgresSqlSelectBuilder(input.Query, alias);
+            var builder = new SqlSelectBuilder(input.Query, alias);
             PassThrough(builder, input, environment);
             builder.Where(predicate.Expression);
             ApplyOrder(builder, input, alias);
@@ -1241,7 +1242,7 @@ public sealed class PostgresRelationQueryCompiler
             var input = CompileUnaryInput(execution);
             var alias = RelationAlias($"{ShapeAlias(project.ResultShape)}_input");
             var environment = CreateEnvironment(input, alias);
-            var builder = new PostgresSqlSelectBuilder(input.Query, alias);
+            var builder = new SqlSelectBuilder(input.Query, alias);
             Dictionary<FieldKey, ScopedValue> values = [];
             foreach (var assignment in execution.ProjectionAssignments.Where(assignment =>
                          IsOutputPathDemanded(project.ResultBinding, assignment.Definition.Target)))
@@ -1260,12 +1261,12 @@ public sealed class PostgresRelationQueryCompiler
             Dictionary<ValueBindingId, OuterPresence> outerPresence = [];
             foreach (var presence in input.OuterPresence)
             {
-                builder.Select(PostgresSqlExpression.Column(alias, presence.Value.Alias), presence.Value.Alias);
+                builder.Select(SqlExpression.Column(alias, presence.Value.Alias), presence.Value.Alias);
                 outerPresence.Add(presence.Key, presence.Value);
             }
             foreach (var ordering in input.Orderings)
             {
-                builder.Select(PostgresSqlExpression.Column(alias, ordering.Alias), ordering.Alias);
+                builder.Select(SqlExpression.Column(alias, ordering.Alias), ordering.Alias);
             }
             ApplyOrder(builder, input, alias);
             if (values.Count == 0)
@@ -1305,7 +1306,7 @@ public sealed class PostgresRelationQueryCompiler
                 site.Kind == RelationQueryExpressionSiteKind.JoinPredicate);
             var predicate = CompileExpression(join.Predicate, site, environment, requireNonNull: true);
             RequireBoolean(predicate, join.Id, "join predicate");
-            var builder = new PostgresSqlSelectBuilder(left.Query, leftAlias);
+            var builder = new SqlSelectBuilder(left.Query, leftAlias);
             builder.Join(right.Query, rightAlias, ConvertJoin(join.Kind, join.Id), predicate.Expression);
             var combined = ProjectCombined(builder, left, leftEnvironment, right, rightEnvironment);
             if (join.Kind == JoinKind.Left)
@@ -1345,11 +1346,11 @@ public sealed class PostgresRelationQueryCompiler
                 requireNonNull: true);
             RequireBoolean(correlation, temporal.Id, "temporal correlation");
             var temporalPredicate = CompileTemporalPredicate(prepared, environment, temporal.Id);
-            var predicate = PostgresSqlExpression.Binary(
-                PostgresSqlBinaryOperator.And,
+            var predicate = SqlExpression.Binary(
+                SqlBinaryOperator.And,
                 correlation.Expression,
                 temporalPredicate);
-            var builder = new PostgresSqlSelectBuilder(left.Query, leftAlias);
+            var builder = new SqlSelectBuilder(left.Query, leftAlias);
             builder.Join(right.Query, rightAlias, ConvertJoin(temporal.Kind, temporal.Id), predicate);
             var combined = ProjectCombined(builder, left, leftEnvironment, right, rightEnvironment);
             if (temporal.Kind == JoinKind.Left)
@@ -1386,7 +1387,7 @@ public sealed class PostgresRelationQueryCompiler
             }
             var alias = RelationAlias("distinct_input");
             var environment = CreateEnvironment(input, alias);
-            var builder = new PostgresSqlSelectBuilder(input.Query, alias);
+            var builder = new SqlSelectBuilder(input.Query, alias);
             foreach (var value in input.Values.OrderBy(static pair => pair.Key, FieldKeyComparer.Instance))
             {
                 var distinctValue = RequireEqualitySemantics(environment.Values[value.Key], distinct.Id);
@@ -1406,7 +1407,7 @@ public sealed class PostgresRelationQueryCompiler
             var input = CompileUnaryInput(execution);
             var alias = RelationAlias($"{ShapeAlias(aggregate.ResultShape)}_input");
             var environment = CreateEnvironment(input, alias);
-            var builder = new PostgresSqlSelectBuilder(input.Query, alias);
+            var builder = new SqlSelectBuilder(input.Query, alias);
             Dictionary<FieldKey, ScopedValue> values = [];
             // Every grouping participates in row partitioning even when its projected target is not demanded.
             // Dropping an unselected grouping would turn per-key aggregates into one global aggregate.
@@ -1456,7 +1457,7 @@ public sealed class PostgresRelationQueryCompiler
             var input = CompileUnaryInput(execution);
             var alias = RelationAlias("ordered_rows");
             var environment = CreateEnvironment(input, alias);
-            var builder = new PostgresSqlSelectBuilder(input.Query, alias);
+            var builder = new SqlSelectBuilder(input.Query, alias);
             PassThrough(builder, input, environment);
             List<ScopedOrder> orderings = [];
             for (var index = 0; index < order.Orderings.Length; index++)
@@ -1468,11 +1469,11 @@ public sealed class PostgresRelationQueryCompiler
                 var keyAlias = ValueAlias("__order", ExpressionAlias(definition.Key, "expression"));
                 builder.Select(compiled.Expression, keyAlias);
                 var direction = definition.Direction == QuerySortDirection.Ascending
-                    ? PostgresSqlSortDirection.Ascending
-                    : PostgresSqlSortDirection.Descending;
+                    ? SqlSortDirection.Ascending
+                    : SqlSortDirection.Descending;
                 var nulls = definition.NullPlacement == QueryNullPlacement.First
-                    ? PostgresSqlNullPlacement.First
-                    : PostgresSqlNullPlacement.Last;
+                    ? SqlNullPlacement.First
+                    : SqlNullPlacement.Last;
                 builder.OrderBy(compiled.Expression, direction, nulls);
                 orderings.Add(new(keyAlias, direction, nulls, compiled));
             }
@@ -1501,11 +1502,11 @@ public sealed class PostgresRelationQueryCompiler
 
             var alias = RelationAlias("paged_rows");
             var environment = CreateEnvironment(input, alias);
-            var builder = new PostgresSqlSelectBuilder(input.Query, alias);
+            var builder = new SqlSelectBuilder(input.Query, alias);
             PassThrough(builder, input, environment);
             foreach (var ordering in input.Orderings)
             {
-                builder.OrderBy(PostgresSqlExpression.Column(alias, ordering.Alias), ordering.Direction, ordering.NullPlacement);
+                builder.OrderBy(SqlExpression.Column(alias, ordering.Alias), ordering.Direction, ordering.NullPlacement);
             }
             switch (page.Page)
             {
@@ -1537,7 +1538,7 @@ public sealed class PostgresRelationQueryCompiler
                         throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.PagingUnstable,
                             "Keyset continuation expressions must align exactly with ordered keys.", page.Id);
                     }
-                    var terms = ImmutableArray.CreateBuilder<PostgresSqlKeysetTerm>(input.Orderings.Length);
+                    var terms = ImmutableArray.CreateBuilder<SqlKeysetTerm>(input.Orderings.Length);
                     for (var index = 0; index < input.Orderings.Length; index++)
                     {
                         var ordering = input.Orderings[index];
@@ -1547,7 +1548,7 @@ public sealed class PostgresRelationQueryCompiler
                             environment,
                             requireNonNull: false);
                         var key = new CompiledExpression(
-                            PostgresSqlExpression.Column(alias, ordering.Alias),
+                            SqlExpression.Column(alias, ordering.Alias),
                             ordering.Expression.Contract,
                             ordering.Expression.Encoding,
                             ordering.Expression.Text,
@@ -1560,7 +1561,7 @@ public sealed class PostgresRelationQueryCompiler
                         (key, continuation) = PrepareComparison(key, continuation, page.Id, ordering: true);
                         terms.Add(new(key.Expression, continuation.Expression, ordering.Direction, ordering.NullPlacement));
                     }
-                    builder.Where(PostgresSqlExpression.KeysetAfter(terms.MoveToImmutable()));
+                    builder.Where(SqlExpression.KeysetAfter(terms.MoveToImmutable()));
                     builder.Limit(keyset.Limit);
                     paging = new(PostgresRelationQueryPagingKind.Keyset, keyset.Limit, 0,
                         StableOrderingInputs(input.Orderings, page.Id));
@@ -1616,7 +1617,7 @@ public sealed class PostgresRelationQueryCompiler
         {
             var alias = RelationAlias($"{ShapeAlias(branch.Shape)}_result");
             var environment = CreateEnvironment(scope, alias);
-            var builder = new PostgresSqlSelectBuilder(scope.Query, alias);
+            var builder = new SqlSelectBuilder(scope.Query, alias);
             var resultFields = ImmutableArray.CreateBuilder<PostgresRelationQueryResultFieldBinding>();
             foreach (var field in branch.Fields)
             {
@@ -1643,7 +1644,7 @@ public sealed class PostgresRelationQueryCompiler
             foreach (var item in scope.OuterPresence.OrderBy(static pair => pair.Key.Value, StringComparer.Ordinal))
             {
                 var resultAlias = ResultAlias("__presence", BindingAlias(item.Key));
-                builder.Select(PostgresSqlExpression.Column(alias, item.Value.Alias), resultAlias);
+                builder.Select(SqlExpression.Column(alias, item.Value.Alias), resultAlias);
                 presence.Add(new(item.Key, resultAlias, item.Value.Placement));
             }
 
@@ -1678,7 +1679,7 @@ public sealed class PostgresRelationQueryCompiler
 
             if (resultFields.Count == 0 && presence.Count == 0 && relationKey is null && invariants.Count == 0)
             {
-                builder.Select(PostgresSqlExpression.Constant(true), ResultAlias("__row"));
+                builder.Select(SqlExpression.Constant(true), ResultAlias("__row"));
             }
 
             ApplyOrder(builder, scope, alias);
@@ -1710,7 +1711,7 @@ public sealed class PostgresRelationQueryCompiler
                         node);
                 }
             }
-            PostgresSqlExpression? filter = null;
+            SqlExpression? filter = null;
             if (assignment.FilterSite is { } filterSite)
             {
                 var compiledFilter = CompileExpression(
@@ -1722,8 +1723,8 @@ public sealed class PostgresRelationQueryCompiler
             return operation switch
             {
                 AggregateOperator.Count => new(
-                    PostgresSqlExpression.Aggregate(
-                        PostgresSqlAggregateFunction.Count,
+                    SqlExpression.Aggregate(
+                        SqlAggregateFunction.Count,
                         value?.Expression,
                         filter),
                     resultContract,
@@ -1735,10 +1736,10 @@ public sealed class PostgresRelationQueryCompiler
                     assignment.Definition.Id),
                 AggregateOperator.Sum => CompileSum(value!.Value, filter, resultContract, assignment.Definition.Id, node),
                 AggregateOperator.Min => CompileNullableAggregate(
-                    PostgresSqlAggregateFunction.Minimum, value!.Value, filter, resultContract,
+                    SqlAggregateFunction.Minimum, value!.Value, filter, resultContract,
                     assignment.Definition.Id, node, groupedInputIsNonEmpty && filter is null),
                 AggregateOperator.Max => CompileNullableAggregate(
-                    PostgresSqlAggregateFunction.Maximum, value!.Value, filter, resultContract,
+                    SqlAggregateFunction.Maximum, value!.Value, filter, resultContract,
                     assignment.Definition.Id, node, groupedInputIsNonEmpty && filter is null),
                 AggregateOperator.Average => CompileAverage(value!.Value, filter, resultContract,
                     assignment.Definition.Id, node, groupedInputIsNonEmpty && filter is null),
@@ -1749,7 +1750,7 @@ public sealed class PostgresRelationQueryCompiler
 
         CompiledExpression CompileSum(
             CompiledExpression value,
-            PostgresSqlExpression? filter,
+            SqlExpression? filter,
             ValueContract contract,
             QueryAssignmentId assignment,
             QueryNodeId node)
@@ -1766,15 +1767,15 @@ public sealed class PostgresRelationQueryCompiler
                 PostgresRelationQueryDecimalAggregateGuarantee.SumIntermediateRange,
                 node,
                 "sum");
-            var sum = PostgresSqlExpression.Aggregate(PostgresSqlAggregateFunction.Sum, value.Expression, filter);
-            return new(PostgresSqlExpression.Coalesce(sum, PostgresSqlExpression.Constant(0m)), contract,
+            var sum = SqlExpression.Aggregate(SqlAggregateFunction.Sum, value.Expression, filter);
+            return new(SqlExpression.Coalesce(sum, SqlExpression.Constant(0m)), contract,
                 PostgresRelationQueryValueEncoding.Numeric, null, PostgresRelationQueryOrderingCapability.None,
                 null, null, assignment);
         }
 
         CompiledExpression CompileAverage(
             CompiledExpression value,
-            PostgresSqlExpression? filter,
+            SqlExpression? filter,
             ValueContract contract,
             QueryAssignmentId assignment,
             QueryNodeId node,
@@ -1794,15 +1795,15 @@ public sealed class PostgresRelationQueryCompiler
                 | PostgresRelationQueryDecimalAggregateGuarantee.AverageRounding,
                 node,
                 "average");
-            return new(PostgresSqlExpression.Aggregate(PostgresSqlAggregateFunction.Average, value.Expression, filter), contract,
+            return new(SqlExpression.Aggregate(SqlAggregateFunction.Average, value.Expression, filter), contract,
                 PostgresRelationQueryValueEncoding.Numeric, null, PostgresRelationQueryOrderingCapability.None,
                 null, null, assignment);
         }
 
         CompiledExpression CompileNullableAggregate(
-            PostgresSqlAggregateFunction function,
+            SqlAggregateFunction function,
             CompiledExpression value,
-            PostgresSqlExpression? filter,
+            SqlExpression? filter,
             ValueContract contract,
             QueryAssignmentId assignment,
             QueryNodeId node,
@@ -1822,9 +1823,9 @@ public sealed class PostgresRelationQueryCompiler
             RequireAggregateAbsence(
                 contract,
                 node,
-                function == PostgresSqlAggregateFunction.Minimum ? "minimum" : "maximum",
+                function == SqlAggregateFunction.Minimum ? "minimum" : "maximum",
                 groupedInputIsNonEmpty);
-            return new(PostgresSqlExpression.Aggregate(function, value.Expression, filter), contract, value.Encoding,
+            return new(SqlExpression.Aggregate(function, value.Expression, filter), contract, value.Encoding,
                 value.Text, PostgresRelationQueryOrderingCapability.None, null, null, assignment);
         }
 
@@ -2008,7 +2009,7 @@ public sealed class PostgresRelationQueryCompiler
                 ? FieldNullability.Nullable
                 : FieldNullability.NonNullable);
 
-        PostgresSqlExpression CompileTemporalPredicate(
+        SqlExpression CompileTemporalPredicate(
             RelationQueryTemporalJoinExecution temporal,
             Environment environment,
             QueryNodeId node)
@@ -2020,7 +2021,7 @@ public sealed class PostgresRelationQueryCompiler
                         interval.Lower.IsStructurallyUnbounded
                         && interval.Upper.IsStructurallyUnbounded))
                 {
-                    return PostgresSqlExpression.Constant(true);
+                    return SqlExpression.Constant(true);
                 }
                 throw Fail(
                     PostgresRelationQueryCompilationDiagnosticCodes.TemporalJoinUnsupported,
@@ -2036,7 +2037,7 @@ public sealed class PostgresRelationQueryCompiler
             };
         }
 
-        PostgresSqlExpression CompilePointInInterval(
+        SqlExpression CompilePointInInterval(
             RelationQueryTemporalJoinExecution temporal,
             Environment environment,
             QueryNodeId node)
@@ -2053,7 +2054,7 @@ public sealed class PostgresRelationQueryCompiler
                 ComparePointToUpper(point, upper, interval.Upper, node));
         }
 
-        PostgresSqlExpression CompileIntervalOverlap(
+        SqlExpression CompileIntervalOverlap(
             RelationQueryTemporalJoinExecution temporal,
             Environment environment,
             QueryNodeId node)
@@ -2073,7 +2074,7 @@ public sealed class PostgresRelationQueryCompiler
             return AndBounds(AndBounds(first, second), AndBounds(leftNonEmpty, rightNonEmpty));
         }
 
-        PostgresSqlExpression? CompileIntervalNonEmpty(
+        SqlExpression? CompileIntervalNonEmpty(
             RelationQueryTemporalIntervalExecution interval,
             CompiledExpression? lower,
             CompiledExpression? upper,
@@ -2097,8 +2098,8 @@ public sealed class PostgresRelationQueryCompiler
 
             var comparison = lowerDefinition.Inclusion == TemporalBoundaryInclusion.Inclusive
                              && upperDefinition.Inclusion == TemporalBoundaryInclusion.Inclusive
-                ? PostgresSqlBinaryOperator.LessThanOrEqual
-                : PostgresSqlBinaryOperator.LessThan;
+                ? SqlBinaryOperator.LessThanOrEqual
+                : SqlBinaryOperator.LessThan;
             return CompareTemporal(
                 lower.Value,
                 upper.Value,
@@ -2204,7 +2205,7 @@ public sealed class PostgresRelationQueryCompiler
             }
         }
 
-        PostgresSqlExpression? ComparePointToLower(
+        SqlExpression? ComparePointToLower(
             CompiledExpression point,
             CompiledExpression? lower,
             RelationQueryTemporalBoundExecution definition,
@@ -2216,12 +2217,12 @@ public sealed class PostgresRelationQueryCompiler
             }
 
             var op = ((ExpressionTemporalIntervalBound)definition.Definition).Inclusion == TemporalBoundaryInclusion.Inclusive
-                ? PostgresSqlBinaryOperator.GreaterThanOrEqual
-                : PostgresSqlBinaryOperator.GreaterThan;
+                ? SqlBinaryOperator.GreaterThanOrEqual
+                : SqlBinaryOperator.GreaterThan;
             return CompareTemporal(point, lower.Value, op, leftBound: null, definition, node);
         }
 
-        PostgresSqlExpression? ComparePointToUpper(
+        SqlExpression? ComparePointToUpper(
             CompiledExpression point,
             CompiledExpression? upper,
             RelationQueryTemporalBoundExecution definition,
@@ -2233,12 +2234,12 @@ public sealed class PostgresRelationQueryCompiler
             }
 
             var op = ((ExpressionTemporalIntervalBound)definition.Definition).Inclusion == TemporalBoundaryInclusion.Inclusive
-                ? PostgresSqlBinaryOperator.LessThanOrEqual
-                : PostgresSqlBinaryOperator.LessThan;
+                ? SqlBinaryOperator.LessThanOrEqual
+                : SqlBinaryOperator.LessThan;
             return CompareTemporal(point, upper.Value, op, leftBound: null, definition, node);
         }
 
-        PostgresSqlExpression? CompareUpperToLower(
+        SqlExpression? CompareUpperToLower(
             CompiledExpression? upper,
             RelationQueryTemporalBoundExecution upperDefinition,
             CompiledExpression? lower,
@@ -2257,45 +2258,45 @@ public sealed class PostgresRelationQueryCompiler
             return CompareTemporal(
                 upper.Value,
                 lower.Value,
-                inclusive ? PostgresSqlBinaryOperator.GreaterThanOrEqual : PostgresSqlBinaryOperator.GreaterThan,
+                inclusive ? SqlBinaryOperator.GreaterThanOrEqual : SqlBinaryOperator.GreaterThan,
                 upperDefinition,
                 lowerDefinition,
                 node);
         }
 
-        PostgresSqlExpression CompareTemporal(
+        SqlExpression CompareTemporal(
             CompiledExpression left,
             CompiledExpression right,
-            PostgresSqlBinaryOperator @operator,
+            SqlBinaryOperator @operator,
             RelationQueryTemporalBoundExecution? leftBound,
             RelationQueryTemporalBoundExecution? rightBound,
             QueryNodeId node)
         {
             (left, right) = PrepareComparison(left, right, node, ordering: true);
-            var result = PostgresSqlExpression.Binary(@operator, left.Expression, right.Expression);
+            var result = SqlExpression.Binary(@operator, left.Expression, right.Expression);
             if (rightBound?.Definition is ExpressionTemporalIntervalBound
                 { NullBehavior: TemporalNullBoundBehavior.Unbounded })
             {
-                result = PostgresSqlExpression.Binary(
-                    PostgresSqlBinaryOperator.Or,
-                    PostgresSqlExpression.IsNull(right.Expression),
+                result = SqlExpression.Binary(
+                    SqlBinaryOperator.Or,
+                    SqlExpression.IsNull(right.Expression),
                     result);
             }
             if (leftBound?.Definition is ExpressionTemporalIntervalBound
                 { NullBehavior: TemporalNullBoundBehavior.Unbounded })
             {
-                result = PostgresSqlExpression.Binary(
-                    PostgresSqlBinaryOperator.Or,
-                    PostgresSqlExpression.IsNull(left.Expression),
+                result = SqlExpression.Binary(
+                    SqlBinaryOperator.Or,
+                    SqlExpression.IsNull(left.Expression),
                     result);
             }
             return result;
         }
 
-        static PostgresSqlExpression AndBounds(PostgresSqlExpression? left, PostgresSqlExpression? right) =>
-            left is null ? right ?? PostgresSqlExpression.Constant(true)
+        static SqlExpression AndBounds(SqlExpression? left, SqlExpression? right) =>
+            left is null ? right ?? SqlExpression.Constant(true)
             : right is null ? left
-            : PostgresSqlExpression.Binary(PostgresSqlBinaryOperator.And, left, right);
+            : SqlExpression.Binary(SqlBinaryOperator.And, left, right);
 
         CompiledExpression CompileExpression(
             Expr expression,
@@ -2389,7 +2390,7 @@ public sealed class PostgresRelationQueryCompiler
                     contract.Input.Id);
             }
             return new(
-                PostgresSqlExpression.RuntimeParameter(ParameterPrefix + id.Value),
+                SqlExpression.RuntimeParameter(ParameterPrefix + id.Value),
                 contract.ValueContract,
                 ResolveEncoding(contract.ValueContract, site.Node ?? branch.Node),
                 null,
@@ -2413,7 +2414,7 @@ public sealed class PostgresRelationQueryCompiler
             var converted = value.Kind == ObservationValueKind.Null
                 ? null
                 : PostgresRelationQueryValueConverter.Convert(value, encoding, site.Analysis.Site.Id.Value);
-            return new(PostgresSqlExpression.Constant(converted), contract, encoding, null,
+            return new(SqlExpression.Constant(converted), contract, encoding, null,
                 PostgresRelationQueryOrderingCapability.None, null, null, null,
                 ConstantText: encoding == PostgresRelationQueryValueEncoding.Text
                               && value.Kind == ObservationValueKind.String
@@ -2430,7 +2431,7 @@ public sealed class PostgresRelationQueryCompiler
         {
             var operand = CompileExpression(unary.Operand, site, environment, requireNonNull: true);
             RequireBoolean(operand, site.Node ?? branch.Node, "Boolean negation");
-            return new(PostgresSqlExpression.Unary(PostgresSqlUnaryOperator.Not, operand.Expression),
+            return new(SqlExpression.Unary(SqlUnaryOperator.Not, operand.Expression),
                 RequireKnown(site, site.Node ?? branch.Node, "Boolean negation"),
                 PostgresRelationQueryValueEncoding.Boolean, null,
                 PostgresRelationQueryOrderingCapability.None, null, null, null,
@@ -2455,10 +2456,10 @@ public sealed class PostgresRelationQueryCompiler
                     equalityRight,
                     node,
                     ordering: false);
-                return new(PostgresSqlExpression.Binary(
+                return new(SqlExpression.Binary(
                         binary.Operator == BinaryOperator.Eq
-                            ? PostgresSqlBinaryOperator.IsNotDistinctFrom
-                            : PostgresSqlBinaryOperator.IsDistinctFrom,
+                            ? SqlBinaryOperator.IsNotDistinctFrom
+                            : SqlBinaryOperator.IsDistinctFrom,
                         equalityLeft.Expression,
                         equalityRight.Expression),
                     RequireKnown(site, node, "equality result"),
@@ -2479,8 +2480,8 @@ public sealed class PostgresRelationQueryCompiler
             {
                 RequireBoolean(left, node, "Boolean binary operand");
                 RequireBoolean(right, node, "Boolean binary operand");
-                return new(PostgresSqlExpression.Binary(
-                    binary.Operator == BinaryOperator.And ? PostgresSqlBinaryOperator.And : PostgresSqlBinaryOperator.Or,
+                return new(SqlExpression.Binary(
+                    binary.Operator == BinaryOperator.And ? SqlBinaryOperator.And : SqlBinaryOperator.Or,
                     left.Expression,
                     right.Expression),
                     RequireKnown(site, node, "Boolean binary result"),
@@ -2492,7 +2493,7 @@ public sealed class PostgresRelationQueryCompiler
             {
                 var ordering = binary.Operator is not (BinaryOperator.Eq or BinaryOperator.Ne);
                 (left, right) = PrepareComparison(left, right, node, ordering);
-                return new(PostgresSqlExpression.Binary(Convert(binary.Operator), left.Expression, right.Expression),
+                return new(SqlExpression.Binary(Convert(binary.Operator), left.Expression, right.Expression),
                     RequireKnown(site, node, "comparison result"),
                     PostgresRelationQueryValueEncoding.Boolean, null,
                     PostgresRelationQueryOrderingCapability.None, null, null, null,
@@ -2573,7 +2574,7 @@ public sealed class PostgresRelationQueryCompiler
                     "Conditional branches have different outer-presence dependencies and require branch-sensitive presence metadata.",
                     site.Node ?? branch.Node);
             }
-            return new(PostgresSqlExpression.Conditional(test.Expression, whenTrue.Expression, whenFalse.Expression),
+            return new(SqlExpression.Conditional(test.Expression, whenTrue.Expression, whenFalse.Expression),
                 RequireKnown(site, site.Node ?? branch.Node, "conditional result"), whenTrue.Encoding,
                 CompatibleText(whenTrue.Text, whenFalse.Text),
                 whenTrue.Ordering & whenFalse.Ordering & PostgresRelationQueryOrderingCapability.Exact,
@@ -2615,11 +2616,11 @@ public sealed class PostgresRelationQueryCompiler
             }
 
             (value, suffix) = PrepareComparison(value, suffix, site.Node ?? branch.Node, ordering: false);
-            var right = PostgresSqlExpression.Function(
-                PostgresSqlFunction.Right,
+            var right = SqlExpression.Function(
+                SqlFunction.Right,
                 value.Expression,
-                PostgresSqlExpression.Function(PostgresSqlFunction.Length, suffix.Expression));
-            return new(PostgresSqlExpression.Binary(PostgresSqlBinaryOperator.Equal, right, suffix.Expression),
+                SqlExpression.Function(SqlFunction.Length, suffix.Expression));
+            return new(SqlExpression.Binary(SqlBinaryOperator.Equal, right, suffix.Expression),
                 RequireKnown(site, site.Node ?? branch.Node, "EndsWith result"),
                 PostgresRelationQueryValueEncoding.Boolean, null,
                 PostgresRelationQueryOrderingCapability.None, null, null, null,
@@ -2635,11 +2636,11 @@ public sealed class PostgresRelationQueryCompiler
             var prefix = CompileExpression(call.Arguments[1], site, environment, requireNonNull: true);
             RequireTextOperands(value, prefix, site.Node ?? branch.Node, "StartsWith");
             (value, prefix) = PrepareComparison(value, prefix, site.Node ?? branch.Node, ordering: false);
-            var left = PostgresSqlExpression.Function(
-                PostgresSqlFunction.Left,
+            var left = SqlExpression.Function(
+                SqlFunction.Left,
                 value.Expression,
-                PostgresSqlExpression.Function(PostgresSqlFunction.Length, prefix.Expression));
-            return new(PostgresSqlExpression.Binary(PostgresSqlBinaryOperator.Equal, left, prefix.Expression),
+                SqlExpression.Function(SqlFunction.Length, prefix.Expression));
+            return new(SqlExpression.Binary(SqlBinaryOperator.Equal, left, prefix.Expression),
                 RequireKnown(site, site.Node ?? branch.Node, "StartsWith result"),
                 PostgresRelationQueryValueEncoding.Boolean, null,
                 PostgresRelationQueryOrderingCapability.None, null, null, null,
@@ -2655,14 +2656,14 @@ public sealed class PostgresRelationQueryCompiler
             var substring = CompileExpression(call.Arguments[1], site, environment, requireNonNull: true);
             RequireTextOperands(value, substring, site.Node ?? branch.Node, "TextContains");
             (value, substring) = PrepareComparison(value, substring, site.Node ?? branch.Node, ordering: false);
-            var position = PostgresSqlExpression.Function(
-                PostgresSqlFunction.StringPosition,
+            var position = SqlExpression.Function(
+                SqlFunction.StringPosition,
                 value.Expression,
                 substring.Expression);
-            return new(PostgresSqlExpression.Binary(
-                    PostgresSqlBinaryOperator.GreaterThan,
+            return new(SqlExpression.Binary(
+                    SqlBinaryOperator.GreaterThan,
                     position,
-                    PostgresSqlExpression.Constant(0)),
+                    SqlExpression.Constant(0)),
                 RequireKnown(site, site.Node ?? branch.Node, "TextContains result"),
                 PostgresRelationQueryValueEncoding.Boolean, null,
                 PostgresRelationQueryOrderingCapability.None, null, null, null,
@@ -2722,8 +2723,8 @@ public sealed class PostgresRelationQueryCompiler
                 RequireOrderingDomain(right, orderingDomain, node);
             }
             return (
-                left with { Expression = PostgresSqlExpression.Collate(left.Expression, evidence.Collation), Text = evidence },
-                right with { Expression = PostgresSqlExpression.Collate(right.Expression, evidence.Collation), Text = evidence });
+                left with { Expression = SqlExpression.Collate(left.Expression, evidence.Collation), Text = evidence },
+                right with { Expression = SqlExpression.Collate(right.Expression, evidence.Collation), Text = evidence });
         }
 
         static PostgresRelationQueryTextSemantics ChooseTextEvidence(
@@ -2812,8 +2813,8 @@ public sealed class PostgresRelationQueryCompiler
             bool nullSafe)
         {
             (left, right) = PrepareComparison(left, right, node, ordering: false);
-            return new(PostgresSqlExpression.Binary(
-                nullSafe ? PostgresSqlBinaryOperator.IsNotDistinctFrom : PostgresSqlBinaryOperator.Equal,
+            return new(SqlExpression.Binary(
+                nullSafe ? SqlBinaryOperator.IsNotDistinctFrom : SqlBinaryOperator.Equal,
                 left.Expression,
                 right.Expression),
                 BooleanContract,
@@ -2839,7 +2840,7 @@ public sealed class PostgresRelationQueryCompiler
             {
                 var evidence = ChooseTextEvidence(value.Text, value.Text, ordering: true, node);
                 RequireOrderingDomain(value, evidence.OrderingDomain!, node);
-                value = value with { Expression = PostgresSqlExpression.Collate(value.Expression, evidence.Collation) };
+                value = value with { Expression = SqlExpression.Collate(value.Expression, evidence.Collation) };
             }
             if (value.SourceInput is not null
                 && !value.Ordering.HasFlag(PostgresRelationQueryOrderingCapability.Exact))
@@ -2861,7 +2862,7 @@ public sealed class PostgresRelationQueryCompiler
             var evidence = ChooseTextEvidence(value.Text, value.Text, ordering: false, node);
             return value with
             {
-                Expression = PostgresSqlExpression.Collate(value.Expression, evidence.Collation),
+                Expression = SqlExpression.Collate(value.Expression, evidence.Collation),
                 Text = evidence
             };
         }
@@ -2981,7 +2982,7 @@ public sealed class PostgresRelationQueryCompiler
         }
 
         CombinedScope ProjectCombined(
-            PostgresSqlSelectBuilder builder,
+            SqlSelectBuilder builder,
             Scope left,
             Environment leftEnvironment,
             Scope right,
@@ -3008,7 +3009,7 @@ public sealed class PostgresRelationQueryCompiler
 
             var sourceAlias = RelationAlias("outer_rows");
             var environment = CreateEnvironment(scope, sourceAlias);
-            var builder = new PostgresSqlSelectBuilder(scope.Query, sourceAlias);
+            var builder = new SqlSelectBuilder(scope.Query, sourceAlias);
             PassThrough(builder, scope, environment);
             Dictionary<ValueBindingId, OuterPresence> markers = new(scope.OuterPresence);
             foreach (var binding in missing)
@@ -3028,7 +3029,7 @@ public sealed class PostgresRelationQueryCompiler
                         node);
                 }
                 var markerAlias = ValueAlias("__presence", BindingAlias(binding));
-                builder.Select(PostgresSqlExpression.Constant(true), markerAlias);
+                builder.Select(SqlExpression.Constant(true), markerAlias);
                 markers.Add(binding, new(markerAlias, placements[0]));
             }
             ApplyOrder(builder, scope, sourceAlias);
@@ -3048,7 +3049,7 @@ public sealed class PostgresRelationQueryCompiler
         {
             foreach (var existing in right.OuterPresence)
             {
-                var qualified = PostgresSqlExpression.Column(
+                var qualified = SqlExpression.Column(
                     rightEnvironment.SourceAliasFor(existing.Value.Alias), existing.Value.Alias);
                 combined.OuterPresence[existing.Key] = existing.Value with { Expression = qualified };
                 combined.AddPresenceDependency(existing.Key);
@@ -3113,7 +3114,7 @@ public sealed class PostgresRelationQueryCompiler
         }
 
         void AddPhysicalInternals(
-            PostgresSqlSelectBuilder builder,
+            SqlSelectBuilder builder,
             string tableAlias,
             PostgresRelationQueryTableBinding table,
             ValueBindingId binding,
@@ -3129,7 +3130,7 @@ public sealed class PostgresRelationQueryCompiler
                     : ValueAlias(table.Shape, identity.SemanticPath);
                 if (selectedIdentity.Alias is null)
                 {
-                    builder.Select(PostgresSqlExpression.Column(tableAlias, identity.ColumnName), alias);
+                    builder.Select(SqlExpression.Column(tableAlias, identity.ColumnName), alias);
                 }
 
                 identities.Add(binding, new(alias, table.PlacementBinding,
@@ -3146,7 +3147,7 @@ public sealed class PostgresRelationQueryCompiler
                     : ValueAlias(table.Shape, reference.SemanticPath);
                 if (selectedReference.Alias is null)
                 {
-                    builder.Select(PostgresSqlExpression.Column(tableAlias, reference.ColumnName), alias);
+                    builder.Select(SqlExpression.Column(tableAlias, reference.ColumnName), alias);
                 }
 
                 references.Add(new(binding, reference.Input), new(
@@ -3179,18 +3180,18 @@ public sealed class PostgresRelationQueryCompiler
         }
 
         static void EnsureProjection(
-            PostgresSqlSelectBuilder builder,
+            SqlSelectBuilder builder,
             IReadOnlyDictionary<FieldKey, ScopedValue> values,
             IReadOnlyDictionary<ValueBindingId, ScopedIdentity> identities,
             IReadOnlyDictionary<RelationshipKey, ScopedValue> references)
         {
             if (values.Count == 0 && identities.Count == 0 && references.Count == 0)
             {
-                builder.Select(PostgresSqlExpression.Constant(true), "__row");
+                builder.Select(SqlExpression.Constant(true), "__row");
             }
         }
 
-        static void PassThrough(PostgresSqlSelectBuilder builder, Scope scope, Environment environment)
+        static void PassThrough(SqlSelectBuilder builder, Scope scope, Environment environment)
         {
             HashSet<string> selectedAliases = new(StringComparer.Ordinal);
             foreach (var pair in scope.Values.OrderBy(static pair => pair.Key, FieldKeyComparer.Instance))
@@ -3219,7 +3220,7 @@ public sealed class PostgresRelationQueryCompiler
                 if (selectedAliases.Add(pair.Value.Alias))
                 {
                     builder.Select(
-                        PostgresSqlExpression.Column(environment.SourceAliasFor(pair.Value.Alias), pair.Value.Alias),
+                        SqlExpression.Column(environment.SourceAliasFor(pair.Value.Alias), pair.Value.Alias),
                         pair.Value.Alias);
                 }
             }
@@ -3228,30 +3229,30 @@ public sealed class PostgresRelationQueryCompiler
                 if (selectedAliases.Add(ordering.Alias))
                 {
                     builder.Select(
-                        PostgresSqlExpression.Column(environment.SourceAliasFor(ordering.Alias), ordering.Alias),
+                        SqlExpression.Column(environment.SourceAliasFor(ordering.Alias), ordering.Alias),
                         ordering.Alias);
                 }
             }
         }
 
         static void ApplyOrder(
-            PostgresSqlSelectBuilder builder,
+            SqlSelectBuilder builder,
             Scope scope,
             string sourceAlias)
         {
             foreach (var ordering in scope.Orderings)
             {
-                builder.OrderBy(PostgresSqlExpression.Column(sourceAlias, ordering.Alias),
+                builder.OrderBy(SqlExpression.Column(sourceAlias, ordering.Alias),
                     ordering.Direction, ordering.NullPlacement);
             }
         }
 
-        PostgresSqlSelectBuilder CreatePhysicalBuilder(
+        SqlSelectBuilder CreatePhysicalBuilder(
             PostgresRelationQueryTableBinding table,
             out string alias)
         {
             alias = RelationAlias(table.TableName);
-            return new(new PostgresSqlQualifiedTable(table.SchemaName, table.TableName), alias);
+            return new(new SqlQualifiedTable(table.SchemaName, table.TableName), alias);
         }
 
         PostgresRelationQueryTableBinding ResolveTable(RelationQueryInputId input, QueryNodeId node)
@@ -3359,12 +3360,12 @@ public sealed class PostgresRelationQueryCompiler
         }
 
         ImmutableArray<PostgresRelationQuerySuppliedFieldBinding> CreateSuppliedBindings(
-            PostgresSqlCommandTemplate statement)
+            SqlCommandTemplate statement)
         {
             var contracts = selectedFieldContracts.ToDictionary(static field => field.Input.Id);
             var result = ImmutableArray.CreateBuilder<PostgresRelationQuerySuppliedFieldBinding>();
             foreach (var slot in statement.Parameters.Where(static parameter =>
-                         parameter.Kind == PostgresSqlParameterBindingKind.Runtime
+                         parameter.Kind == SqlParameterBindingKind.Runtime
                          && parameter.Binding!.StartsWith(SuppliedPrefix, StringComparison.Ordinal)))
             {
                 RelationQueryInputId input = new(slot.Binding![SuppliedPrefix.Length..]);
@@ -3382,11 +3383,11 @@ public sealed class PostgresRelationQueryCompiler
             return result.ToImmutable();
         }
 
-        ImmutableArray<PostgresRelationQueryParameterBinding> CreateParameterBindings(PostgresSqlCommandTemplate statement)
+        ImmutableArray<PostgresRelationQueryParameterBinding> CreateParameterBindings(SqlCommandTemplate statement)
         {
             var result = ImmutableArray.CreateBuilder<PostgresRelationQueryParameterBinding>();
             foreach (var slot in statement.Parameters.Where(static parameter =>
-                         parameter.Kind == PostgresSqlParameterBindingKind.Runtime
+                         parameter.Kind == SqlParameterBindingKind.Runtime
                          && parameter.Binding!.StartsWith(ParameterPrefix, StringComparison.Ordinal)))
             {
                 QueryParameterId parameter = new(slot.Binding![ParameterPrefix.Length..]);
@@ -3466,25 +3467,25 @@ public sealed class PostgresRelationQueryCompiler
         static PostgresRelationQueryValueEncoding Convert(PostgresRelationQueryScalarType scalar) =>
             PostgresRelationQueryScalarCatalog.ToValueEncoding(scalar);
 
-        static PostgresSqlJoinKind ConvertJoin(JoinKind kind, QueryNodeId node) => kind switch
+        static SqlJoinKind ConvertJoin(JoinKind kind, QueryNodeId node) => kind switch
         {
-            JoinKind.Inner => PostgresSqlJoinKind.Inner,
-            JoinKind.Left => PostgresSqlJoinKind.Left,
+            JoinKind.Inner => SqlJoinKind.Inner,
+            JoinKind.Left => SqlJoinKind.Left,
             _ => throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.JoinUnsupported,
                 $"The current PostgreSQL compiler supports inner and left joins, not '{kind}'.", node)
         };
 
-        static PostgresSqlBinaryOperator Convert(BinaryOperator @operator) => @operator switch
+        static SqlBinaryOperator Convert(BinaryOperator @operator) => @operator switch
         {
-            BinaryOperator.Eq => PostgresSqlBinaryOperator.Equal,
-            BinaryOperator.Ne => PostgresSqlBinaryOperator.NotEqual,
-            BinaryOperator.Gt => PostgresSqlBinaryOperator.GreaterThan,
-            BinaryOperator.Ge => PostgresSqlBinaryOperator.GreaterThanOrEqual,
-            BinaryOperator.Lt => PostgresSqlBinaryOperator.LessThan,
-            BinaryOperator.Le => PostgresSqlBinaryOperator.LessThanOrEqual,
-            BinaryOperator.Add => PostgresSqlBinaryOperator.Add,
-            BinaryOperator.Sub => PostgresSqlBinaryOperator.Subtract,
-            BinaryOperator.Mul => PostgresSqlBinaryOperator.Multiply,
+            BinaryOperator.Eq => SqlBinaryOperator.Equal,
+            BinaryOperator.Ne => SqlBinaryOperator.NotEqual,
+            BinaryOperator.Gt => SqlBinaryOperator.GreaterThan,
+            BinaryOperator.Ge => SqlBinaryOperator.GreaterThanOrEqual,
+            BinaryOperator.Lt => SqlBinaryOperator.LessThan,
+            BinaryOperator.Le => SqlBinaryOperator.LessThanOrEqual,
+            BinaryOperator.Add => SqlBinaryOperator.Add,
+            BinaryOperator.Sub => SqlBinaryOperator.Subtract,
+            BinaryOperator.Mul => SqlBinaryOperator.Multiply,
             _ => throw new ArgumentOutOfRangeException(nameof(@operator), @operator, "Unsupported PostgreSQL operator.")
         };
 
@@ -3694,7 +3695,7 @@ public sealed class PostgresRelationQueryCompiler
     bool IsNullTextConstant = false)
     {
         public CompiledExpression Qualify(string sourceAlias) => new(
-            PostgresSqlExpression.Column(sourceAlias, Alias), Contract, Encoding, Text, Ordering, SourceInput,
+            SqlExpression.Column(sourceAlias, Alias), Contract, Encoding, Text, Ordering, SourceInput,
             Placement, Assignment, PresenceDependencies, RuntimeTextBinding, ConstantText, IsNullTextConstant);
     }
 
@@ -3714,10 +3715,10 @@ public sealed class PostgresRelationQueryCompiler
     readonly record struct OuterPresence(
         string Alias,
         RelationQuerySourcePlacementBindingId Placement,
-        PostgresSqlExpression? Expression = null);
+        SqlExpression? Expression = null);
 
     readonly record struct CompiledExpression(
-        PostgresSqlExpression Expression,
+        SqlExpression Expression,
         ValueContract Contract,
         PostgresRelationQueryValueEncoding Encoding,
         PostgresRelationQueryTextSemantics? Text,
@@ -3737,26 +3738,26 @@ public sealed class PostgresRelationQueryCompiler
 
     readonly record struct ScopedOrder(
         string Alias,
-        PostgresSqlSortDirection Direction,
-        PostgresSqlNullPlacement NullPlacement,
+        SqlSortDirection Direction,
+        SqlNullPlacement NullPlacement,
         CompiledExpression Expression);
 
     sealed class Scope(
-        PostgresSqlSelectQuery query,
+        SqlSelectQuery query,
         IReadOnlyDictionary<FieldKey, ScopedValue> values,
         IReadOnlyDictionary<ValueBindingId, ScopedIdentity> identities,
         IReadOnlyDictionary<RelationshipKey, ScopedValue> references,
         IReadOnlyDictionary<ValueBindingId, OuterPresence> outerPresence,
         ImmutableArray<ScopedOrder> orderings)
     {
-        public PostgresSqlSelectQuery Query { get; } = query;
+        public SqlSelectQuery Query { get; } = query;
         public IReadOnlyDictionary<FieldKey, ScopedValue> Values { get; } = values;
         public IReadOnlyDictionary<ValueBindingId, ScopedIdentity> Identities { get; } = identities;
         public IReadOnlyDictionary<RelationshipKey, ScopedValue> References { get; } = references;
         public IReadOnlyDictionary<ValueBindingId, OuterPresence> OuterPresence { get; } = outerPresence;
         public ImmutableArray<ScopedOrder> Orderings { get; } = orderings;
 
-        public Scope WithQuery(PostgresSqlSelectQuery replacement, ImmutableArray<ScopedOrder>? orderings = null) =>
+        public Scope WithQuery(SqlSelectQuery replacement, ImmutableArray<ScopedOrder>? orderings = null) =>
             new(replacement, Values, Identities, References, OuterPresence, orderings ?? Orderings);
     }
 
@@ -3809,7 +3810,7 @@ public sealed class PostgresRelationQueryCompiler
             }
         }
 
-        public void Add(PostgresSqlSelectBuilder builder, Scope scope, Environment environment)
+        public void Add(SqlSelectBuilder builder, Scope scope, Environment environment)
         {
             foreach (var pair in scope.Values)
             {
@@ -3841,7 +3842,7 @@ public sealed class PostgresRelationQueryCompiler
             foreach (var pair in scope.OuterPresence)
             {
                 var expression = pair.Value.Expression
-                                 ?? PostgresSqlExpression.Column(environment.SourceAliasFor(pair.Value.Alias), pair.Value.Alias);
+                                 ?? SqlExpression.Column(environment.SourceAliasFor(pair.Value.Alias), pair.Value.Alias);
                 if (selectedAliases.Add(pair.Value.Alias))
                 {
                     builder.Select(expression, pair.Value.Alias);
@@ -3851,19 +3852,19 @@ public sealed class PostgresRelationQueryCompiler
             }
         }
 
-        public Scope Build(PostgresSqlSelectQuery query) =>
+        public Scope Build(SqlSelectQuery query) =>
             new(query, Values, Identities, References, OuterPresence, []);
     }
 
     readonly record struct TerminalResult(
-        PostgresSqlSelectQuery Query,
+        SqlSelectQuery Query,
         ImmutableArray<PostgresRelationQueryResultFieldBinding> ResultFields,
         ImmutableArray<PostgresRelationQueryPresenceBinding> Presence,
         PostgresRelationQueryRelationKeyBinding? RelationKey,
         ImmutableArray<PostgresRelationQueryInvariantBinding> Invariants);
 
     readonly record struct PreparedBranch(
-        PostgresSqlCommandTemplate Statement,
+        SqlCommandTemplate Statement,
         ImmutableArray<PostgresRelationQuerySelectedField> SelectedFields,
         TerminalResult Terminal,
         ImmutableArray<PostgresRelationQuerySuppliedFieldBinding> SuppliedFields,
@@ -3873,12 +3874,12 @@ public sealed class PostgresRelationQueryCompiler
 static class PostgresRelationQueryArtifactFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.postgres-artifact/v3-c14n/v1";
+    const string Canonicalization = "cohesive.relations.postgres-artifact/v4-c14n/v1";
 
     public static PostgresRelationQueryArtifactFingerprint Compute(
         string schemaVersion,
         RelationQueryNativeResultBranch branch,
-        PostgresSqlCommandTemplate statement,
+        SqlCommandTemplate statement,
         PostgresRelationQueryStorageBinding storageBinding,
         ImmutableArray<PostgresRelationQuerySelectedField> selectedFields,
         ImmutableArray<PostgresRelationQueryResultFieldBinding> resultFields,

@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
@@ -697,7 +698,7 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
         }
         foreach (var key in keys)
         {
-            if (PostgresSqlUtf8.GetByteCount(key, parameterName) <= reader.Policy.MaximumKeyBytes)
+            if (SqlUtf8.GetByteCount(key, parameterName) <= reader.Policy.MaximumKeyBytes)
                 continue;
             throw new ArgumentException(
                 "The PostgreSQL materialization read exceeds its key batch or key byte bound.",

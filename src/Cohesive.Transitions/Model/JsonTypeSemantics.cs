@@ -70,7 +70,7 @@ static class JsonTypeSemantics
                         continue;
                     }
 
-                    if (fieldValue is null && field.Presence == FieldPresence.Required)
+                    if (fieldValue is null && field.Nullability == FieldNullability.NonNullable)
                         return false;
 
                     if (fieldValue is not null && !MatchesType(type: field.Type, value: fieldValue))

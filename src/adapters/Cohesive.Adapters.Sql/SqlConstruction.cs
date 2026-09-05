@@ -3,10 +3,10 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json.Serialization;
 
-namespace Cohesive.Adapters.Postgres;
+namespace Cohesive.Adapters.Sql;
 
-/// <summary>How one PostgreSQL command-template parameter obtains its value.</summary>
-public enum PostgresSqlParameterBindingKind
+/// <summary>How one SQL command-template parameter obtains its value.</summary>
+public enum SqlParameterBindingKind
 {
     /// <summary>The parameter value is captured by the immutable SQL expression tree.</summary>
     Constant = 0,
@@ -15,8 +15,8 @@ public enum PostgresSqlParameterBindingKind
     Runtime = 1
 }
 
-/// <summary>Supported PostgreSQL binary operators.</summary>
-public enum PostgresSqlBinaryOperator
+/// <summary>Supported SQL binary operators.</summary>
+public enum SqlBinaryOperator
 {
     /// <summary>SQL equality.</summary>
     Equal = 0,
@@ -54,7 +54,7 @@ public enum PostgresSqlBinaryOperator
     /// <summary>Numeric division.</summary>
     Divide = 11,
 
-    /// <summary>PostgreSQL pattern matching with SQL <c>LIKE</c> semantics.</summary>
+    /// <summary>SQL pattern matching with SQL <c>LIKE</c> semantics.</summary>
     Like = 12,
 
     /// <summary>Null-safe equality using <c>IS NOT DISTINCT FROM</c>.</summary>
@@ -64,8 +64,8 @@ public enum PostgresSqlBinaryOperator
     IsDistinctFrom = 14
 }
 
-/// <summary>Supported PostgreSQL unary operators.</summary>
-public enum PostgresSqlUnaryOperator
+/// <summary>Supported SQL unary operators.</summary>
+public enum SqlUnaryOperator
 {
     /// <summary>Boolean negation.</summary>
     Not = 0,
@@ -74,8 +74,8 @@ public enum PostgresSqlUnaryOperator
     Negate = 1
 }
 
-/// <summary>Supported PostgreSQL scalar functions.</summary>
-public enum PostgresSqlFunction
+/// <summary>Supported SQL scalar functions.</summary>
+public enum SqlFunction
 {
     /// <summary>Returns the number of characters in a text value.</summary>
     Length = 0,
@@ -83,24 +83,21 @@ public enum PostgresSqlFunction
     /// <summary>Returns a requested number of characters from the right side of a text value.</summary>
     Right = 1,
 
-    /// <summary>Converts text to lower case according to the effective PostgreSQL collation.</summary>
+    /// <summary>Converts text to lower case according to the effective SQL collation.</summary>
     Lower = 2,
 
-    /// <summary>Converts text to upper case according to the effective PostgreSQL collation.</summary>
+    /// <summary>Converts text to upper case according to the effective SQL collation.</summary>
     Upper = 3,
 
     /// <summary>Returns a requested number of characters from the left side of a text value.</summary>
     Left = 4,
 
     /// <summary>Returns the one-based position of a text substring, or zero when absent.</summary>
-    StringPosition = 5,
-
-    /// <summary>Returns the current wall-clock instant at statement evaluation time.</summary>
-    ClockTimestamp = 6
+    StringPosition = 5
 }
 
-/// <summary>Supported PostgreSQL aggregate functions.</summary>
-public enum PostgresSqlAggregateFunction
+/// <summary>Supported SQL aggregate functions.</summary>
+public enum SqlAggregateFunction
 {
     /// <summary>Counts input rows or non-null operand values.</summary>
     Count = 0,
@@ -124,8 +121,8 @@ public enum PostgresSqlAggregateFunction
     BooleanAnd = 6
 }
 
-/// <summary>PostgreSQL join syntax emitted by <see cref="PostgresSqlSelectBuilder"/>.</summary>
-public enum PostgresSqlJoinKind
+/// <summary>SQL join syntax emitted by <see cref="SqlSelectBuilder"/>.</summary>
+public enum SqlJoinKind
 {
     /// <summary>Retains only matching left and right rows.</summary>
     Inner = 0,
@@ -143,8 +140,8 @@ public enum PostgresSqlJoinKind
     Cross = 4
 }
 
-/// <summary>Direction of one PostgreSQL ordering term.</summary>
-public enum PostgresSqlSortDirection
+/// <summary>Direction of one SQL ordering term.</summary>
+public enum SqlSortDirection
 {
     /// <summary>Orders lower values before higher values.</summary>
     Ascending = 0,
@@ -153,8 +150,8 @@ public enum PostgresSqlSortDirection
     Descending = 1
 }
 
-/// <summary>Placement of SQL nulls within one PostgreSQL ordering term.</summary>
-public enum PostgresSqlNullPlacement
+/// <summary>Placement of SQL nulls within one SQL ordering term.</summary>
+public enum SqlNullPlacement
 {
     /// <summary>Places null values before non-null values.</summary>
     First = 0,
@@ -163,69 +160,29 @@ public enum PostgresSqlNullPlacement
     Last = 1
 }
 
-static class PostgresSqlUtf8
+/// <summary>An injection-safe SQL identifier rendered with double-quote escaping.</summary>
+public readonly record struct SqlIdentifier
 {
-    static readonly UTF8Encoding Strict = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-
-    public static Encoder CreateEncoder() => Strict.GetEncoder();
-
-    public static int GetMaximumByteCount(int characterCount) => Strict.GetMaxByteCount(characterCount);
-
-    public static int GetByteCount(string value, string parameterName)
-    {
-        try
-        {
-            return Strict.GetByteCount(value);
-        }
-        catch (EncoderFallbackException exception)
-        {
-            throw new ArgumentException("A PostgreSQL UTF-8 value must contain valid Unicode.", parameterName, exception);
-        }
-    }
-
-    public static string RequireText(string value, string parameterName)
-    {
-        if (value.Contains('\0', StringComparison.Ordinal))
-            throw new ArgumentException("A PostgreSQL text value cannot contain a zero character.", parameterName);
-        _ = GetByteCount(value, parameterName);
-        return value;
-    }
-}
-
-/// <summary>An injection-safe PostgreSQL identifier rendered with double-quote escaping.</summary>
-public readonly record struct PostgresSqlIdentifier
-{
-    /// <summary>Standard PostgreSQL identifier limit in UTF-8 bytes.</summary>
-    public const int StandardMaxUtf8ByteLength = 63;
-
-    /// <summary>Creates a PostgreSQL identifier.</summary>
+    /// <summary>Creates a SQL identifier.</summary>
     /// <param name="value">Unquoted identifier value.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// <paramref name="value"/> is empty, contains the zero character, or exceeds the standard PostgreSQL
-    /// identifier limit of <see cref="StandardMaxUtf8ByteLength"/> UTF-8 bytes, or is not valid Unicode.
+    /// <paramref name="value"/> is empty, contains the zero character, or is not valid Unicode. Target length limits are checked when rendering.
     /// </exception>
-    public PostgresSqlIdentifier(string value)
+    public SqlIdentifier(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
         if (value.Length == 0)
         {
-            throw new ArgumentException("A PostgreSQL identifier cannot be empty.", nameof(value));
+            throw new ArgumentException("A SQL identifier cannot be empty.", nameof(value));
         }
 
         if (value.Contains('\0', StringComparison.Ordinal))
         {
-            throw new ArgumentException("A PostgreSQL identifier cannot contain a zero character.", nameof(value));
+            throw new ArgumentException("A SQL identifier cannot contain a zero character.", nameof(value));
         }
 
-        var utf8Length = PostgresSqlUtf8.GetByteCount(value, nameof(value));
-
-        if (utf8Length > StandardMaxUtf8ByteLength)
-        {
-            throw new ArgumentException(
-                $"A PostgreSQL identifier cannot exceed {StandardMaxUtf8ByteLength.ToString(CultureInfo.InvariantCulture)} UTF-8 bytes.",
-                nameof(value));
-        }
+        _ = SqlUtf8.GetByteCount(value, nameof(value));
 
         Value = value;
     }
@@ -237,58 +194,86 @@ public readonly record struct PostgresSqlIdentifier
     /// <returns>The unquoted identifier value.</returns>
     public override string ToString() => Value;
 
-    internal void WriteQuoted(StringBuilder builder) =>
+    /// <summary>Renders this identifier as one safely quoted target token.</summary>
+    /// <param name="dialect">Target policy used to validate exact identifier representation.</param>
+    /// <returns>One escaped double-quoted SQL identifier.</returns>
+    /// <exception cref="ArgumentNullException">The dialect is null.</exception>
+    /// <exception cref="ArgumentException">The identifier is default or outside the target domain.</exception>
+    public string ToSql(SqlDialect dialect)
+    {
+        var builder = new StringBuilder();
+        WriteQuoted(new SqlRenderContext(dialect), builder);
+        return builder.ToString();
+    }
+
+    internal void WriteQuoted(SqlRenderContext context, StringBuilder builder)
+    {
+        if (Value is null) throw new ArgumentException("A default SQL identifier cannot be rendered.");
+        context.Dialect.ValidateIdentifier(this);
         builder.Append('"').Append(Value.Replace("\"", "\"\"", StringComparison.Ordinal)).Append('"');
+    }
 }
 
-/// <summary>An injection-safe optionally schema-qualified PostgreSQL table name.</summary>
-public sealed record PostgresSqlQualifiedTable
+/// <summary>An injection-safe optionally schema-qualified SQL table name.</summary>
+public sealed record SqlQualifiedTable
 {
-    /// <summary>Creates an unqualified PostgreSQL table name.</summary>
+    /// <summary>Creates an unqualified SQL table name.</summary>
     /// <param name="tableName">Physical table identifier.</param>
     /// <exception cref="ArgumentNullException"><paramref name="tableName"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="tableName"/> is not a supported PostgreSQL identifier.</exception>
-    public PostgresSqlQualifiedTable(string tableName)
-        : this(schemaName: null, new PostgresSqlIdentifier(tableName))
+    /// <exception cref="ArgumentException"><paramref name="tableName"/> is not a supported SQL identifier.</exception>
+    public SqlQualifiedTable(string tableName)
+        : this(schemaName: null, new SqlIdentifier(tableName))
     {
     }
 
-    /// <summary>Creates a schema-qualified PostgreSQL table name.</summary>
+    /// <summary>Creates a schema-qualified SQL table name.</summary>
     /// <param name="schemaName">Physical schema identifier.</param>
     /// <param name="tableName">Physical table identifier.</param>
     /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException">A parameter is not a supported PostgreSQL identifier.</exception>
-    public PostgresSqlQualifiedTable(string schemaName, string tableName)
-        : this(new PostgresSqlIdentifier(schemaName), new PostgresSqlIdentifier(tableName))
+    /// <exception cref="ArgumentException">A parameter is not a supported SQL identifier.</exception>
+    public SqlQualifiedTable(string schemaName, string tableName)
+        : this(new SqlIdentifier(schemaName), new SqlIdentifier(tableName))
     {
     }
 
-    PostgresSqlQualifiedTable(PostgresSqlIdentifier? schemaName, PostgresSqlIdentifier tableName)
+    SqlQualifiedTable(SqlIdentifier? schemaName, SqlIdentifier tableName)
     {
         SchemaName = schemaName;
         TableName = tableName;
     }
 
     /// <summary>Optional physical schema identifier.</summary>
-    public PostgresSqlIdentifier? SchemaName { get; }
+    public SqlIdentifier? SchemaName { get; }
 
     /// <summary>Physical table identifier.</summary>
-    public PostgresSqlIdentifier TableName { get; }
+    public SqlIdentifier TableName { get; }
 
-    internal void WriteTo(StringBuilder builder)
+    /// <summary>Renders this optionally schema-qualified table name using target identifier policy.</summary>
+    /// <param name="dialect">Target policy for exact identifier representation.</param>
+    /// <returns>A name with each identifier individually escaped and double-quoted.</returns>
+    /// <exception cref="ArgumentNullException">The dialect is null.</exception>
+    /// <exception cref="ArgumentException">An identifier is outside the target domain.</exception>
+    public string ToSql(SqlDialect dialect)
+    {
+        var builder = new StringBuilder();
+        WriteTo(new SqlRenderContext(dialect), builder);
+        return builder.ToString();
+    }
+
+    internal void WriteTo(SqlRenderContext context, StringBuilder builder)
     {
         if (SchemaName is { } schema)
         {
-            schema.WriteQuoted(builder);
+            schema.WriteQuoted(context, builder);
             builder.Append('.');
         }
 
-        TableName.WriteQuoted(builder);
+        TableName.WriteQuoted(context, builder);
     }
 }
 
 /// <summary>One key and continuation value participating in structural keyset pagination.</summary>
-public sealed record PostgresSqlKeysetTerm
+public sealed record SqlKeysetTerm
 {
     /// <summary>Creates one keyset comparison term.</summary>
     /// <param name="key">Expression evaluated for the candidate row.</param>
@@ -301,22 +286,22 @@ public sealed record PostgresSqlKeysetTerm
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="direction"/> or <paramref name="nullPlacement"/> is unsupported.
     /// </exception>
-    public PostgresSqlKeysetTerm(
-        PostgresSqlExpression key,
-        PostgresSqlExpression continuation,
-        PostgresSqlSortDirection direction = PostgresSqlSortDirection.Ascending,
-        PostgresSqlNullPlacement nullPlacement = PostgresSqlNullPlacement.Last)
+    public SqlKeysetTerm(
+        SqlExpression key,
+        SqlExpression continuation,
+        SqlSortDirection direction = SqlSortDirection.Ascending,
+        SqlNullPlacement nullPlacement = SqlNullPlacement.Last)
     {
         Key = Guard.RequireNotNull(key);
         Continuation = Guard.RequireNotNull(continuation);
         if (!Enum.IsDefined(direction))
         {
-            throw new ArgumentOutOfRangeException(nameof(direction), direction, "Unsupported PostgreSQL sort direction.");
+            throw new ArgumentOutOfRangeException(nameof(direction), direction, "Unsupported SQL sort direction.");
         }
 
         if (!Enum.IsDefined(nullPlacement))
         {
-            throw new ArgumentOutOfRangeException(nameof(nullPlacement), nullPlacement, "Unsupported PostgreSQL null placement.");
+            throw new ArgumentOutOfRangeException(nameof(nullPlacement), nullPlacement, "Unsupported SQL null placement.");
         }
 
         Direction = direction;
@@ -324,23 +309,23 @@ public sealed record PostgresSqlKeysetTerm
     }
 
     /// <summary>Expression evaluated for the candidate row.</summary>
-    public PostgresSqlExpression Key { get; }
+    public SqlExpression Key { get; }
 
     /// <summary>Expression containing the preceding page's final key value.</summary>
-    public PostgresSqlExpression Continuation { get; }
+    public SqlExpression Continuation { get; }
 
     /// <summary>Ordering direction applied to this key.</summary>
-    public PostgresSqlSortDirection Direction { get; }
+    public SqlSortDirection Direction { get; }
 
     /// <summary>Explicit null placement applied to this key.</summary>
-    public PostgresSqlNullPlacement NullPlacement { get; }
+    public SqlNullPlacement NullPlacement { get; }
 }
 
-/// <summary>Closed, injection-safe PostgreSQL scalar-expression tree.</summary>
-public abstract record PostgresSqlExpression
+/// <summary>SQL scalar-expression tree with structured operands and dialect-owned intrinsic extensions.</summary>
+public abstract record SqlExpression
 {
-    /// <summary>Initializes a PostgreSQL expression.</summary>
-    private protected PostgresSqlExpression()
+    /// <summary>Initializes a SQL expression.</summary>
+    private protected SqlExpression()
     {
     }
 
@@ -349,42 +334,48 @@ public abstract record PostgresSqlExpression
     /// <param name="columnName">Physical column identifier.</param>
     /// <returns>A qualified column expression.</returns>
     /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException">A parameter is not a supported PostgreSQL identifier.</exception>
-    public static PostgresSqlExpression Column(string sourceAlias, string columnName) =>
+    /// <exception cref="ArgumentException">A parameter is not a supported SQL identifier.</exception>
+    public static SqlExpression Column(string sourceAlias, string columnName) =>
         new ColumnExpression(new(sourceAlias), new(columnName));
 
     /// <summary>Creates an unqualified column reference.</summary>
     /// <param name="columnName">Physical column identifier.</param>
     /// <returns>An unqualified column expression.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="columnName"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="columnName"/> is not a supported PostgreSQL identifier.</exception>
-    public static PostgresSqlExpression UnqualifiedColumn(string columnName) =>
+    /// <exception cref="ArgumentException"><paramref name="columnName"/> is not a supported SQL identifier.</exception>
+    public static SqlExpression UnqualifiedColumn(string columnName) =>
         new ColumnExpression(SourceAlias: null, new(columnName));
 
     /// <summary>Creates a parameterized constant expression.</summary>
     /// <param name="value">
     /// Provider-neutral parameter value: <see langword="null"/>, Boolean, 32- or 64-bit integer, decimal, string,
-    /// UUID, date, unspecified-kind microsecond-aligned civil timestamp, UTC microsecond-aligned instant, or bytes.
+    /// UUID, date, unspecified-kind civil timestamp, offset timestamp, or bytes.
     /// Mutable byte arrays are captured immediately.
     /// </param>
     /// <returns>An expression whose value is retained by the command template.</returns>
     /// <exception cref="ArgumentException">
     /// <paramref name="value"/> has an unsupported CLR type or timestamp kind, alignment, or offset, or a string is
-    /// outside the exact PostgreSQL UTF-8 text domain.
+    /// outside the exact SQL UTF-8 text domain.
     /// </exception>
-    public static PostgresSqlExpression Constant(object? value) =>
-        new ConstantExpression(PostgresSqlConstant.Capture(value));
+    public static SqlExpression Constant(object? value) =>
+        new ConstantExpression(SqlConstant.Capture(value));
 
     /// <summary>Creates a runtime-bound parameter expression.</summary>
-    /// <param name="binding">Stable application binding used by <see cref="PostgresSqlCommandTemplate.Bind(IReadOnlyDictionary{string, object?})"/>.</param>
+    /// <param name="binding">Stable application binding used by <see cref="SqlCommandTemplate.Bind(SqlDialect, IReadOnlyDictionary{string, object?})"/>.</param>
     /// <returns>An expression rendered as a deterministically allocated positional parameter.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="binding"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="binding"/> is empty or white space.</exception>
-    public static PostgresSqlExpression RuntimeParameter(string binding) =>
+    public static SqlExpression RuntimeParameter(string binding) =>
         new RuntimeParameterExpression(Guard.RequireNotNullOrWhiteSpace(binding));
 
-    internal static PostgresSqlExpression EqualAny(
-        PostgresSqlExpression operand,
+    /// <summary>Compares a scalar against a runtime-bound native SQL array using <c>= ANY</c>.</summary>
+    /// <param name="operand">Scalar expression to compare.</param>
+    /// <param name="arrayBinding">Nonempty runtime binding for the native array.</param>
+    /// <returns>A predicate requiring <see cref="SqlFeature.ArrayAny"/> at rendering.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">The binding is empty or white space.</exception>
+    public static SqlExpression EqualAny(
+        SqlExpression operand,
         string arrayBinding) =>
         new EqualAnyExpression(
             Guard.RequireNotNull(operand),
@@ -394,68 +385,68 @@ public abstract record PostgresSqlExpression
     /// <param name="query">Subquery whose row existence determines the predicate value.</param>
     /// <returns>A parenthesized <c>EXISTS</c> expression sharing the containing statement's parameter bindings.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="query"/> is <see langword="null"/>.</exception>
-    public static PostgresSqlExpression Exists(PostgresSqlSelectQuery query) =>
+    public static SqlExpression Exists(SqlSelectQuery query) =>
         new ExistsExpression(Guard.RequireNotNull(query));
 
-    /// <summary>Applies one explicitly selected PostgreSQL collation to an expression.</summary>
+    /// <summary>Applies one explicitly selected SQL collation to an expression.</summary>
     /// <param name="operand">Text expression to collate.</param>
-    /// <param name="collation">PostgreSQL collation identifier.</param>
+    /// <param name="collation">SQL collation identifier.</param>
     /// <returns>An expression rendered with a safely quoted <c>COLLATE</c> clause.</returns>
     /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="collation"/> is not a supported identifier or is schema-qualified. This profile accepts
     /// one unqualified collation identifier so quoting cannot change qualification semantics.
     /// </exception>
-    public static PostgresSqlExpression Collate(PostgresSqlExpression operand, string collation) =>
+    public static SqlExpression Collate(SqlExpression operand, string collation) =>
         new CollateExpression(Guard.RequireNotNull(operand), RequireUnqualifiedCollation(collation));
 
-    static PostgresSqlIdentifier RequireUnqualifiedCollation(string collation)
+    static SqlIdentifier RequireUnqualifiedCollation(string collation)
     {
-        var identifier = new PostgresSqlIdentifier(collation);
+        var identifier = new SqlIdentifier(collation);
         if (collation.Contains('.', StringComparison.Ordinal))
         {
             throw new ArgumentException(
-                "A PostgreSQL collation must be an unqualified identifier in this SQL construction profile.",
+                "A SQL collation must be an unqualified identifier in this SQL construction profile.",
                 nameof(collation));
         }
         return identifier;
     }
 
     /// <summary>Creates a unary expression.</summary>
-    /// <param name="operator">Closed PostgreSQL unary operator.</param>
+    /// <param name="operator">Closed SQL unary operator.</param>
     /// <param name="operand">Operand expression.</param>
-    /// <returns>A unary PostgreSQL expression.</returns>
+    /// <returns>A unary SQL expression.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="operand"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="operator"/> is unsupported.</exception>
-    public static PostgresSqlExpression Unary(
-        PostgresSqlUnaryOperator @operator,
-        PostgresSqlExpression operand)
+    public static SqlExpression Unary(
+        SqlUnaryOperator @operator,
+        SqlExpression operand)
     {
         if (!Enum.IsDefined(@operator))
         {
-            throw new ArgumentOutOfRangeException(nameof(@operator), @operator, "Unsupported PostgreSQL unary operator.");
+            throw new ArgumentOutOfRangeException(nameof(@operator), @operator, "Unsupported SQL unary operator.");
         }
 
         return new UnaryExpression(@operator, Guard.RequireNotNull(operand));
     }
 
     /// <summary>Creates a binary expression.</summary>
-    /// <param name="operator">Closed PostgreSQL binary operator.</param>
+    /// <param name="operator">Closed SQL binary operator.</param>
     /// <param name="left">Left operand.</param>
     /// <param name="right">Right operand.</param>
-    /// <returns>A binary PostgreSQL expression.</returns>
+    /// <returns>A binary SQL expression.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="left"/> or <paramref name="right"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="operator"/> is unsupported.</exception>
-    public static PostgresSqlExpression Binary(
-        PostgresSqlBinaryOperator @operator,
-        PostgresSqlExpression left,
-        PostgresSqlExpression right)
+    public static SqlExpression Binary(
+        SqlBinaryOperator @operator,
+        SqlExpression left,
+        SqlExpression right)
     {
         if (!Enum.IsDefined(@operator))
         {
-            throw new ArgumentOutOfRangeException(nameof(@operator), @operator, "Unsupported PostgreSQL binary operator.");
+            throw new ArgumentOutOfRangeException(nameof(@operator), @operator, "Unsupported SQL binary operator.");
         }
 
         return new BinaryExpression(@operator, Guard.RequireNotNull(left), Guard.RequireNotNull(right));
@@ -465,48 +456,67 @@ public abstract record PostgresSqlExpression
     /// <param name="operand">Value tested for null.</param>
     /// <returns>A Boolean null-test expression.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="operand"/> is <see langword="null"/>.</exception>
-    public static PostgresSqlExpression IsNull(PostgresSqlExpression operand) =>
+    public static SqlExpression IsNull(SqlExpression operand) =>
         new NullTestExpression(Guard.RequireNotNull(operand), NullExpected: true);
 
     /// <summary>Creates an SQL <c>IS NOT NULL</c> predicate.</summary>
     /// <param name="operand">Value tested for non-null presence.</param>
     /// <returns>A Boolean non-null-test expression.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="operand"/> is <see langword="null"/>.</exception>
-    public static PostgresSqlExpression IsNotNull(PostgresSqlExpression operand) =>
+    public static SqlExpression IsNotNull(SqlExpression operand) =>
         new NullTestExpression(Guard.RequireNotNull(operand), NullExpected: false);
 
-    /// <summary>Creates a closed PostgreSQL scalar-function call.</summary>
+    /// <summary>Creates a closed SQL scalar-function call.</summary>
     /// <param name="function">Supported scalar function.</param>
     /// <param name="arguments">Function arguments.</param>
     /// <returns>A scalar-function expression.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="arguments"/> or an argument is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">The argument count does not match the selected function.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="function"/> is unsupported.</exception>
-    public static PostgresSqlExpression Function(
-        PostgresSqlFunction function,
-        params PostgresSqlExpression[] arguments)
+    public static SqlExpression Function(
+        SqlFunction function,
+        params SqlExpression[] arguments)
     {
         if (!Enum.IsDefined(function))
         {
-            throw new ArgumentOutOfRangeException(nameof(function), function, "Unsupported PostgreSQL scalar function.");
+            throw new ArgumentOutOfRangeException(nameof(function), function, "Unsupported SQL scalar function.");
         }
 
         ArgumentNullException.ThrowIfNull(arguments);
         if (arguments.Any(static argument => argument is null))
         {
-            throw new ArgumentNullException(nameof(arguments), "PostgreSQL function arguments cannot contain null entries.");
+            throw new ArgumentNullException(nameof(arguments), "SQL function arguments cannot contain null entries.");
         }
 
-        PostgresSqlFunctions.ValidateArity(function, arguments.Length, nameof(arguments));
+        SqlFunctions.ValidateArity(function, arguments.Length, nameof(arguments));
         return new FunctionExpression(function, [.. arguments]);
     }
 
-    /// <summary>Creates a PostgreSQL aggregate expression with an optional aggregate-local filter.</summary>
+    /// <summary>Creates a named, dialect-owned expression without embedding executable policy or raw SQL.</summary>
+    /// <param name="intrinsic">Stable adapter-owned construct identity, conventionally namespaced and versioned.</param>
+    /// <param name="arguments">Ordered expression operands, copied into immutable storage.</param>
+    /// <returns>An expression resolved by <see cref="SqlDialect.WriteIntrinsic"/> during rendering.</returns>
+    /// <exception cref="ArgumentNullException">The identity, argument array, or an operand is null.</exception>
+    /// <exception cref="ArgumentException">The identity is empty or white space.</exception>
+    /// <remarks>
+    /// The dialect validates identity, arity, and target support before emitting syntax. Unsupported identities
+    /// fail with <see cref="SqlConstructionException"/> at rendering. The identity itself is never emitted as SQL.
+    /// </remarks>
+    public static SqlExpression Intrinsic(string intrinsic, params SqlExpression[] arguments)
+    {
+        Guard.RequireNotNullOrWhiteSpace(intrinsic);
+        ArgumentNullException.ThrowIfNull(arguments);
+        foreach (var argument in arguments)
+            ArgumentNullException.ThrowIfNull(argument, nameof(arguments));
+        return new IntrinsicExpression(intrinsic, [.. arguments]);
+    }
+
+    /// <summary>Creates a SQL aggregate expression with an optional aggregate-local filter.</summary>
     /// <param name="function">Supported aggregate function.</param>
     /// <param name="operand">
     /// Aggregate operand, or <see langword="null"/> only to request <c>COUNT(*)</c>.
     /// </param>
-    /// <param name="filter">Optional predicate emitted through PostgreSQL's aggregate <c>FILTER</c> clause.</param>
+    /// <param name="filter">Optional predicate emitted through SQL's aggregate <c>FILTER</c> clause.</param>
     /// <param name="distinct">Whether duplicate operand values are removed before aggregation.</param>
     /// <returns>An aggregate expression.</returns>
     /// <exception cref="ArgumentException">
@@ -514,18 +524,18 @@ public abstract record PostgresSqlExpression
     /// <paramref name="distinct"/> is true for <c>COUNT(*)</c>.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="function"/> is unsupported.</exception>
-    public static PostgresSqlExpression Aggregate(
-        PostgresSqlAggregateFunction function,
-        PostgresSqlExpression? operand = null,
-        PostgresSqlExpression? filter = null,
+    public static SqlExpression Aggregate(
+        SqlAggregateFunction function,
+        SqlExpression? operand = null,
+        SqlExpression? filter = null,
         bool distinct = false)
     {
         if (!Enum.IsDefined(function))
         {
-            throw new ArgumentOutOfRangeException(nameof(function), function, "Unsupported PostgreSQL aggregate function.");
+            throw new ArgumentOutOfRangeException(nameof(function), function, "Unsupported SQL aggregate function.");
         }
 
-        if (operand is null && function != PostgresSqlAggregateFunction.Count)
+        if (operand is null && function != SqlAggregateFunction.Count)
         {
             throw new ArgumentException("Only COUNT may omit its aggregate operand.", nameof(operand));
         }
@@ -544,10 +554,10 @@ public abstract record PostgresSqlExpression
     /// <param name="whenFalse">Value returned otherwise.</param>
     /// <returns>A <c>CASE WHEN</c> expression.</returns>
     /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
-    public static PostgresSqlExpression Conditional(
-        PostgresSqlExpression test,
-        PostgresSqlExpression whenTrue,
-        PostgresSqlExpression whenFalse) =>
+    public static SqlExpression Conditional(
+        SqlExpression test,
+        SqlExpression whenTrue,
+        SqlExpression whenFalse) =>
         new ConditionalExpression(
             Guard.RequireNotNull(test),
             Guard.RequireNotNull(whenTrue),
@@ -558,7 +568,7 @@ public abstract record PostgresSqlExpression
     /// <returns>A coalescing expression.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="values"/> or an entry is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">Fewer than two values are supplied.</exception>
-    public static PostgresSqlExpression Coalesce(params PostgresSqlExpression[] values)
+    public static SqlExpression Coalesce(params SqlExpression[] values)
     {
         ArgumentNullException.ThrowIfNull(values);
         if (values.Length < 2)
@@ -585,7 +595,7 @@ public abstract record PostgresSqlExpression
     /// <paramref name="terms"/> is default or empty, contains a <see langword="null"/> entry, or contains an
     /// unsupported enum value.
     /// </exception>
-    public static PostgresSqlExpression KeysetAfter(ImmutableArray<PostgresSqlKeysetTerm> terms)
+    public static SqlExpression KeysetAfter(ImmutableArray<SqlKeysetTerm> terms)
     {
         var normalized = terms.IsDefault ? [] : terms;
         if (normalized.IsDefaultOrEmpty)
@@ -598,102 +608,103 @@ public abstract record PostgresSqlExpression
             throw new ArgumentException("Keyset terms cannot contain null entries.", nameof(terms));
         }
 
-        PostgresSqlExpression? predicate = null;
-        PostgresSqlExpression? equalPrefix = null;
+        SqlExpression? predicate = null;
+        SqlExpression? equalPrefix = null;
         foreach (var term in normalized)
         {
             var after = AfterTerm(term);
             var branch = equalPrefix is null
                 ? after
-                : Binary(PostgresSqlBinaryOperator.And, equalPrefix, after);
+                : Binary(SqlBinaryOperator.And, equalPrefix, after);
             predicate = predicate is null
                 ? branch
-                : Binary(PostgresSqlBinaryOperator.Or, predicate, branch);
+                : Binary(SqlBinaryOperator.Or, predicate, branch);
 
             var equal = Binary(
-                PostgresSqlBinaryOperator.IsNotDistinctFrom,
+                SqlBinaryOperator.IsNotDistinctFrom,
                 term.Key,
                 term.Continuation);
             equalPrefix = equalPrefix is null
                 ? equal
-                : Binary(PostgresSqlBinaryOperator.And, equalPrefix, equal);
+                : Binary(SqlBinaryOperator.And, equalPrefix, equal);
         }
 
         return predicate!;
     }
 
-    static PostgresSqlExpression AfterTerm(PostgresSqlKeysetTerm term)
+    static SqlExpression AfterTerm(SqlKeysetTerm term)
     {
         var concreteComparison = Binary(
-            term.Direction == PostgresSqlSortDirection.Ascending
-                ? PostgresSqlBinaryOperator.GreaterThan
-                : PostgresSqlBinaryOperator.LessThan,
+            term.Direction == SqlSortDirection.Ascending
+                ? SqlBinaryOperator.GreaterThan
+                : SqlBinaryOperator.LessThan,
             term.Key,
             term.Continuation);
         var bothConcrete = Binary(
-            PostgresSqlBinaryOperator.And,
+            SqlBinaryOperator.And,
             IsNotNull(term.Key),
             Binary(
-                PostgresSqlBinaryOperator.And,
+                SqlBinaryOperator.And,
                 IsNotNull(term.Continuation),
                 concreteComparison));
-        var crossesNullBoundary = term.NullPlacement == PostgresSqlNullPlacement.First
+        var crossesNullBoundary = term.NullPlacement == SqlNullPlacement.First
             ? Binary(
-                PostgresSqlBinaryOperator.And,
+                SqlBinaryOperator.And,
                 IsNull(term.Continuation),
                 IsNotNull(term.Key))
             : Binary(
-                PostgresSqlBinaryOperator.And,
+                SqlBinaryOperator.And,
                 IsNotNull(term.Continuation),
                 IsNull(term.Key));
-        return Binary(PostgresSqlBinaryOperator.Or, crossesNullBoundary, bothConcrete);
+        return Binary(SqlBinaryOperator.Or, crossesNullBoundary, bothConcrete);
     }
 
-    internal abstract void WriteTo(PostgresSqlRenderContext context, StringBuilder builder);
+    internal abstract void WriteTo(SqlRenderContext context, StringBuilder builder);
 
     sealed record ColumnExpression(
-        PostgresSqlIdentifier? SourceAlias,
-        PostgresSqlIdentifier ColumnName) : PostgresSqlExpression
+        SqlIdentifier? SourceAlias,
+        SqlIdentifier ColumnName) : SqlExpression
     {
-        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
         {
             if (SourceAlias is { } alias)
             {
-                alias.WriteQuoted(builder);
+                alias.WriteQuoted(context, builder);
                 builder.Append('.');
             }
 
-            ColumnName.WriteQuoted(builder);
+            ColumnName.WriteQuoted(context, builder);
         }
     }
 
-    sealed record ConstantExpression(PostgresSqlConstant Value) : PostgresSqlExpression
+    sealed record ConstantExpression(SqlConstant Value) : SqlExpression
     {
-        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder) =>
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder) =>
             builder.Append(context.AddConstant(Value));
     }
 
-    sealed record RuntimeParameterExpression(string Binding) : PostgresSqlExpression
+    sealed record RuntimeParameterExpression(string Binding) : SqlExpression
     {
-        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder) =>
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder) =>
             builder.Append(context.AddRuntime(Binding));
     }
 
     sealed record EqualAnyExpression(
-        PostgresSqlExpression Operand,
-        string ArrayBinding) : PostgresSqlExpression
+        SqlExpression Operand,
+        string ArrayBinding) : SqlExpression
     {
-        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
         {
             builder.Append('(');
             Operand.WriteTo(context, builder);
+            context.Dialect.Require(SqlFeature.ArrayAny);
             builder.Append(" = ANY(").Append(context.AddRuntime(ArrayBinding)).Append("))");
         }
     }
 
-    sealed record ExistsExpression(PostgresSqlSelectQuery Query) : PostgresSqlExpression
+    sealed record ExistsExpression(SqlSelectQuery Query) : SqlExpression
     {
-        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
         {
             builder.Append("EXISTS (");
             Query.WriteTo(context, builder);
@@ -702,51 +713,53 @@ public abstract record PostgresSqlExpression
     }
 
     sealed record CollateExpression(
-        PostgresSqlExpression Operand,
-        PostgresSqlIdentifier Collation) : PostgresSqlExpression
+        SqlExpression Operand,
+        SqlIdentifier Collation) : SqlExpression
     {
-        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
         {
             builder.Append('(');
             Operand.WriteTo(context, builder);
             builder.Append(" COLLATE ");
-            Collation.WriteQuoted(builder);
+            Collation.WriteQuoted(context, builder);
             builder.Append(')');
         }
     }
 
     sealed record UnaryExpression(
-        PostgresSqlUnaryOperator Operator,
-        PostgresSqlExpression Operand) : PostgresSqlExpression
+        SqlUnaryOperator Operator,
+        SqlExpression Operand) : SqlExpression
     {
-        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
         {
-            builder.Append('(').Append(PostgresSqlOperators.Text(Operator));
+            builder.Append('(').Append(SqlOperators.Text(Operator));
             Operand.WriteTo(context, builder);
             builder.Append(')');
         }
     }
 
     sealed record BinaryExpression(
-        PostgresSqlBinaryOperator Operator,
-        PostgresSqlExpression Left,
-        PostgresSqlExpression Right) : PostgresSqlExpression
+        SqlBinaryOperator Operator,
+        SqlExpression Left,
+        SqlExpression Right) : SqlExpression
     {
-        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
         {
+            if (Operator is SqlBinaryOperator.IsDistinctFrom or SqlBinaryOperator.IsNotDistinctFrom)
+                context.Dialect.Require(SqlFeature.DistinctComparison);
             builder.Append('(');
             Left.WriteTo(context, builder);
-            builder.Append(' ').Append(PostgresSqlOperators.Text(Operator)).Append(' ');
+            builder.Append(' ').Append(SqlOperators.Text(Operator)).Append(' ');
             Right.WriteTo(context, builder);
             builder.Append(')');
         }
     }
 
     sealed record NullTestExpression(
-        PostgresSqlExpression Operand,
-        bool NullExpected) : PostgresSqlExpression
+        SqlExpression Operand,
+        bool NullExpected) : SqlExpression
     {
-        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
         {
             builder.Append('(');
             Operand.WriteTo(context, builder);
@@ -755,26 +768,34 @@ public abstract record PostgresSqlExpression
     }
 
     sealed record FunctionExpression(
-        PostgresSqlFunction FunctionKind,
-        ImmutableArray<PostgresSqlExpression> Arguments) : PostgresSqlExpression
+        SqlFunction FunctionKind,
+        ImmutableArray<SqlExpression> Arguments) : SqlExpression
     {
-        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
         {
-            builder.Append(PostgresSqlFunctions.Name(FunctionKind)).Append('(');
+            builder.Append(context.Dialect.FunctionName(FunctionKind)).Append('(');
             WriteExpressions(Arguments, context, builder);
             builder.Append(')');
         }
     }
 
-    sealed record AggregateExpression(
-        PostgresSqlAggregateFunction FunctionKind,
-        PostgresSqlExpression? Operand,
-        PostgresSqlExpression? Filter,
-        bool Distinct) : PostgresSqlExpression
+    sealed record IntrinsicExpression(
+        string IntrinsicId,
+        ImmutableArray<SqlExpression> Arguments) : SqlExpression
     {
-        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder) =>
+            context.Dialect.WriteIntrinsic(IntrinsicId, Arguments, new SqlExpressionWriter(context, builder));
+    }
+
+    sealed record AggregateExpression(
+        SqlAggregateFunction FunctionKind,
+        SqlExpression? Operand,
+        SqlExpression? Filter,
+        bool Distinct) : SqlExpression
+    {
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
         {
-            builder.Append(PostgresSqlFunctions.Name(FunctionKind)).Append('(');
+            builder.Append(context.Dialect.FunctionName(FunctionKind)).Append('(');
             if (Distinct)
             {
                 builder.Append("DISTINCT ");
@@ -792,6 +813,7 @@ public abstract record PostgresSqlExpression
             builder.Append(')');
             if (Filter is not null)
             {
+                context.Dialect.Require(SqlFeature.AggregateFilter);
                 builder.Append(" FILTER (WHERE ");
                 Filter.WriteTo(context, builder);
                 builder.Append(')');
@@ -800,11 +822,11 @@ public abstract record PostgresSqlExpression
     }
 
     sealed record ConditionalExpression(
-        PostgresSqlExpression Test,
-        PostgresSqlExpression WhenTrue,
-        PostgresSqlExpression WhenFalse) : PostgresSqlExpression
+        SqlExpression Test,
+        SqlExpression WhenTrue,
+        SqlExpression WhenFalse) : SqlExpression
     {
-        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
         {
             builder.Append("(CASE WHEN ");
             Test.WriteTo(context, builder);
@@ -817,9 +839,9 @@ public abstract record PostgresSqlExpression
     }
 
     sealed record CoalesceExpression(
-        ImmutableArray<PostgresSqlExpression> Values) : PostgresSqlExpression
+        ImmutableArray<SqlExpression> Values) : SqlExpression
     {
-        internal override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
         {
             builder.Append("COALESCE(");
             WriteExpressions(Values, context, builder);
@@ -828,8 +850,8 @@ public abstract record PostgresSqlExpression
     }
 
     static void WriteExpressions(
-        ImmutableArray<PostgresSqlExpression> expressions,
-        PostgresSqlRenderContext context,
+        ImmutableArray<SqlExpression> expressions,
+        SqlRenderContext context,
         StringBuilder builder)
     {
         for (var index = 0; index < expressions.Length; index++)
@@ -844,9 +866,9 @@ public abstract record PostgresSqlExpression
     }
 }
 
-/// <summary>Portable type tag for one captured PostgreSQL command-template constant.</summary>
+/// <summary>Portable type tag for one captured SQL command-template constant.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum PostgresSqlConstantKind
+public enum SqlConstantKind
 {
     /// <summary>SQL null.</summary>
     Null = 0,
@@ -875,15 +897,15 @@ public enum PostgresSqlConstantKind
     /// <summary>Civil timestamp without a time zone.</summary>
     Timestamp = 8,
 
-    /// <summary>Finite UTC timestamp represented with an explicit zero offset.</summary>
+    /// <summary>Timestamp retaining its exact offset and tick precision.</summary>
     TimestampWithTimeZone = 9,
 
     /// <summary>Byte sequence.</summary>
-    Bytea = 10
+    Bytes = 10
 }
 
-/// <summary>Tagged portable representation of one captured PostgreSQL parameter value.</summary>
-public sealed record PostgresSqlConstant
+/// <summary>Tagged portable representation of one captured SQL parameter value.</summary>
+public sealed record SqlConstant
 {
     /// <summary>Creates and validates a tagged portable constant.</summary>
     /// <param name="kind">Portable scalar kind.</param>
@@ -891,11 +913,11 @@ public sealed record PostgresSqlConstant
     /// <exception cref="ArgumentException">The value is absent, malformed, or conflicts with <paramref name="kind"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
     [JsonConstructor]
-    public PostgresSqlConstant(PostgresSqlConstantKind kind, string? value)
+    public SqlConstant(SqlConstantKind kind, string? value)
     {
         if (!Enum.IsDefined(kind))
-            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported PostgreSQL constant kind.");
-        if (kind == PostgresSqlConstantKind.Null != (value is null))
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported SQL constant kind.");
+        if (kind == SqlConstantKind.Null != (value is null))
             throw new ArgumentException("Only a tagged SQL null may omit its portable value.", nameof(value));
         Kind = kind;
         Value = value;
@@ -903,43 +925,29 @@ public sealed record PostgresSqlConstant
     }
 
     /// <summary>Portable scalar kind.</summary>
-    public PostgresSqlConstantKind Kind { get; }
+    public SqlConstantKind Kind { get; }
 
     /// <summary>Invariant string representation, or <see langword="null"/> for SQL null.</summary>
     public string? Value { get; }
 
-    internal static PostgresSqlConstant Capture(object? value)
+    internal static SqlConstant Capture(object? value)
     {
-        if (value is DateTime timestamp && (timestamp.Kind != DateTimeKind.Unspecified || timestamp.Ticks % 10 != 0))
-        {
-            throw new ArgumentException(
-                "A PostgreSQL civil timestamp constant must be unspecified-kind and microsecond-aligned.",
-                nameof(value));
-        }
-        if (value is DateTimeOffset instant
-            && (instant.Offset != TimeSpan.Zero || instant.Ticks % 10 != 0))
-        {
-            throw new ArgumentException(
-                "A PostgreSQL instant constant must be UTC and microsecond-aligned.",
-                nameof(value));
-        }
-
         return value switch
         {
-            null => new(PostgresSqlConstantKind.Null, null),
-            bool item => new(PostgresSqlConstantKind.Boolean, item ? "true" : "false"),
-            int item => new(PostgresSqlConstantKind.Int32, item.ToString(CultureInfo.InvariantCulture)),
-            long item => new(PostgresSqlConstantKind.Int64, item.ToString(CultureInfo.InvariantCulture)),
-            decimal item => new(PostgresSqlConstantKind.Decimal, item.ToString(CultureInfo.InvariantCulture)),
-            string item => new(PostgresSqlConstantKind.String, PostgresSqlUtf8.RequireText(item, nameof(value))),
-            Guid item => new(PostgresSqlConstantKind.Uuid, item.ToString("D", CultureInfo.InvariantCulture)),
-            DateOnly item => new(PostgresSqlConstantKind.Date, item.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
-            DateTime item => new(PostgresSqlConstantKind.Timestamp, item.ToString("O", CultureInfo.InvariantCulture)),
+            null => new(SqlConstantKind.Null, null),
+            bool item => new(SqlConstantKind.Boolean, item ? "true" : "false"),
+            int item => new(SqlConstantKind.Int32, item.ToString(CultureInfo.InvariantCulture)),
+            long item => new(SqlConstantKind.Int64, item.ToString(CultureInfo.InvariantCulture)),
+            decimal item => new(SqlConstantKind.Decimal, item.ToString(CultureInfo.InvariantCulture)),
+            string item => new(SqlConstantKind.String, SqlUtf8.RequireText(item, nameof(value))),
+            Guid item => new(SqlConstantKind.Uuid, item.ToString("D", CultureInfo.InvariantCulture)),
+            DateOnly item => new(SqlConstantKind.Date, item.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
+            DateTime item => new(SqlConstantKind.Timestamp, item.ToString("O", CultureInfo.InvariantCulture)),
             DateTimeOffset item =>
-                new(PostgresSqlConstantKind.TimestampWithTimeZone, item.ToString("O", CultureInfo.InvariantCulture)),
-            byte[] item => new(PostgresSqlConstantKind.Bytea, Convert.ToBase64String(item)),
+                new(SqlConstantKind.TimestampWithTimeZone, item.ToString("O", CultureInfo.InvariantCulture)),
+            byte[] item => new(SqlConstantKind.Bytes, Convert.ToBase64String(item)),
             _ => throw new ArgumentException(
-                $"CLR value type '{value.GetType().FullName}' has no portable PostgreSQL command-template constant encoding.",
+                $"CLR value type '{value.GetType().FullName}' has no portable SQL command-template constant encoding.",
                 nameof(value))
         };
     }
@@ -953,7 +961,7 @@ public sealed record PostgresSqlConstant
         catch (ArgumentException exception)
         {
             throw new ArgumentException(
-                "A PostgreSQL runtime parameter must use a supported, exact provider-neutral CLR value.",
+                "A SQL runtime parameter must use a supported, exact provider-neutral CLR value.",
                 nameof(value),
                 exception);
         }
@@ -965,24 +973,24 @@ public sealed record PostgresSqlConstant
         {
             return Kind switch
             {
-                PostgresSqlConstantKind.Null when Value is null => null,
-                PostgresSqlConstantKind.Boolean => bool.Parse(Value!),
-                PostgresSqlConstantKind.Int32 => int.Parse(Value!, NumberStyles.Integer, CultureInfo.InvariantCulture),
-                PostgresSqlConstantKind.Int64 => long.Parse(Value!, NumberStyles.Integer, CultureInfo.InvariantCulture),
-                PostgresSqlConstantKind.Decimal => decimal.Parse(Value!, NumberStyles.Number, CultureInfo.InvariantCulture),
-                PostgresSqlConstantKind.String => PostgresSqlUtf8.RequireText(Value!, nameof(Value)),
-                PostgresSqlConstantKind.Uuid => Guid.ParseExact(Value!, "D"),
-                PostgresSqlConstantKind.Date => DateOnly.ParseExact(Value!, "yyyy-MM-dd", CultureInfo.InvariantCulture),
-                PostgresSqlConstantKind.Timestamp => RequireCivilTimestamp(Value!),
-                PostgresSqlConstantKind.TimestampWithTimeZone => RequireInstantTimestamp(Value!),
-                PostgresSqlConstantKind.Bytea => Convert.FromBase64String(Value!),
-                _ => throw new ArgumentOutOfRangeException(nameof(Kind), Kind, "Unsupported PostgreSQL constant kind.")
+                SqlConstantKind.Null when Value is null => null,
+                SqlConstantKind.Boolean => bool.Parse(Value!),
+                SqlConstantKind.Int32 => int.Parse(Value!, NumberStyles.Integer, CultureInfo.InvariantCulture),
+                SqlConstantKind.Int64 => long.Parse(Value!, NumberStyles.Integer, CultureInfo.InvariantCulture),
+                SqlConstantKind.Decimal => decimal.Parse(Value!, NumberStyles.Number, CultureInfo.InvariantCulture),
+                SqlConstantKind.String => SqlUtf8.RequireText(Value!, nameof(Value)),
+                SqlConstantKind.Uuid => Guid.ParseExact(Value!, "D"),
+                SqlConstantKind.Date => DateOnly.ParseExact(Value!, "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                SqlConstantKind.Timestamp => RequireCivilTimestamp(Value!),
+                SqlConstantKind.TimestampWithTimeZone => RequireInstantTimestamp(Value!),
+                SqlConstantKind.Bytes => Convert.FromBase64String(Value!),
+                _ => throw new ArgumentOutOfRangeException(nameof(Kind), Kind, "Unsupported SQL constant kind.")
             };
         }
         catch (Exception exception) when (exception is FormatException or OverflowException)
         {
             throw new ArgumentException(
-                $"Portable PostgreSQL constant '{Kind}' has a malformed value.",
+                $"Portable SQL constant '{Kind}' has a malformed value.",
                 nameof(Value),
                 exception);
         }
@@ -991,10 +999,10 @@ public sealed record PostgresSqlConstant
     static DateTime RequireCivilTimestamp(string value)
     {
         var parsed = DateTime.ParseExact(value, "O", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
-        if (parsed.Kind != DateTimeKind.Unspecified || parsed.Ticks % 10 != 0)
+        if (parsed.Kind != DateTimeKind.Unspecified)
         {
             throw new FormatException(
-                "A PostgreSQL civil timestamp must have DateTimeKind.Unspecified and microsecond-aligned ticks.");
+                "A SQL civil timestamp must have DateTimeKind.Unspecified.");
         }
         return parsed;
     }
@@ -1006,57 +1014,53 @@ public sealed record PostgresSqlConstant
             "O",
             CultureInfo.InvariantCulture,
             DateTimeStyles.RoundtripKind);
-        if (parsed.Offset != TimeSpan.Zero || parsed.Ticks % 10 != 0)
-        {
-            throw new FormatException("A PostgreSQL instant must be UTC and microsecond-aligned.");
-        }
         return parsed;
     }
 }
 
-/// <summary>One deterministically allocated parameter slot in a PostgreSQL command template.</summary>
-public sealed record PostgresSqlParameterSlot
+/// <summary>One deterministically allocated parameter slot in a SQL command template.</summary>
+public sealed record SqlParameterSlot
 {
-    internal PostgresSqlParameterSlot(
+    internal SqlParameterSlot(
         int position,
-        PostgresSqlParameterBindingKind kind,
+        SqlParameterBindingKind kind,
         string? binding,
         object? constantValue)
         : this(
             position,
             kind,
             binding,
-            kind == PostgresSqlParameterBindingKind.Constant
-                ? PostgresSqlConstant.Capture(constantValue)
+            kind == SqlParameterBindingKind.Constant
+                ? SqlConstant.Capture(constantValue)
                 : null)
     {
     }
 
-    /// <summary>Creates and validates one persisted PostgreSQL parameter slot.</summary>
-    /// <param name="position">One-based PostgreSQL parameter position.</param>
+    /// <summary>Creates and validates one persisted SQL parameter slot.</summary>
+    /// <param name="position">One-based SQL parameter position.</param>
     /// <param name="kind">Captured-constant or runtime-binding kind.</param>
     /// <param name="binding">Runtime binding identity, or <see langword="null"/> for a constant.</param>
     /// <param name="constant">Tagged captured constant, or <see langword="null"/> for a runtime slot.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="position"/> is not positive or <paramref name="kind"/> is unsupported.</exception>
     /// <exception cref="ArgumentException">Binding and constant metadata conflict with <paramref name="kind"/>.</exception>
     [JsonConstructor]
-    public PostgresSqlParameterSlot(
+    public SqlParameterSlot(
         int position,
-        PostgresSqlParameterBindingKind kind,
+        SqlParameterBindingKind kind,
         string? binding,
-        PostgresSqlConstant? constant)
+        SqlConstant? constant)
     {
         if (position <= 0)
-            throw new ArgumentOutOfRangeException(nameof(position), position, "A PostgreSQL parameter position must be positive.");
+            throw new ArgumentOutOfRangeException(nameof(position), position, "A SQL parameter position must be positive.");
         if (!Enum.IsDefined(kind))
-            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported PostgreSQL parameter-binding kind.");
-        if (kind == PostgresSqlParameterBindingKind.Runtime
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported SQL parameter-binding kind.");
+        if (kind == SqlParameterBindingKind.Runtime
             && string.IsNullOrWhiteSpace(binding))
-            throw new ArgumentException("A runtime PostgreSQL parameter requires a binding identity.", nameof(binding));
-        if (kind == PostgresSqlParameterBindingKind.Constant != (constant is not null)
-            || kind == PostgresSqlParameterBindingKind.Constant && binding is not null)
+            throw new ArgumentException("A runtime SQL parameter requires a binding identity.", nameof(binding));
+        if (kind == SqlParameterBindingKind.Constant != (constant is not null)
+            || kind == SqlParameterBindingKind.Constant && binding is not null)
         {
-            throw new ArgumentException("PostgreSQL parameter constant metadata conflicts with its binding kind.", nameof(constant));
+            throw new ArgumentException("SQL parameter constant metadata conflicts with its binding kind.", nameof(constant));
         }
         Position = position;
         Kind = kind;
@@ -1064,7 +1068,7 @@ public sealed record PostgresSqlParameterSlot
         Constant = constant;
     }
 
-    /// <summary>One-based PostgreSQL positional-parameter position.</summary>
+    /// <summary>One-based SQL positional-parameter position.</summary>
     public int Position { get; }
 
     /// <summary>Rendered positional placeholder such as <c>$1</c>.</summary>
@@ -1072,25 +1076,25 @@ public sealed record PostgresSqlParameterSlot
     public string Placeholder => $"${Position.ToString(CultureInfo.InvariantCulture)}";
 
     /// <summary>How the slot obtains its value.</summary>
-    public PostgresSqlParameterBindingKind Kind { get; }
+    public SqlParameterBindingKind Kind { get; }
 
     /// <summary>Runtime binding identity, or <see langword="null"/> for a captured constant.</summary>
     public string? Binding { get; }
 
     /// <summary>Tagged captured constant, or <see langword="null"/> for a runtime slot.</summary>
-    public PostgresSqlConstant? Constant { get; }
+    public SqlConstant? Constant { get; }
 
     /// <summary>Provider-neutral captured CLR value; meaningful only for a constant slot.</summary>
     [JsonIgnore]
     public object? ConstantValue => Constant?.ToClrValue();
 }
 
-/// <summary>One concrete ordered value bound to a PostgreSQL positional parameter.</summary>
-public sealed class PostgresSqlParameter
+/// <summary>One concrete ordered value bound to a SQL positional parameter.</summary>
+public sealed class SqlParameter
 {
     readonly object? value;
 
-    internal PostgresSqlParameter(int position, string? binding, object? value)
+    internal SqlParameter(int position, string? binding, object? value)
     {
         Position = position;
         Binding = binding;
@@ -1114,40 +1118,47 @@ public sealed class PostgresSqlParameter
 }
 
 /// <summary>
-/// Immutable normalized PostgreSQL SQL and deterministic parameter-slot metadata. Templates produced by the closed
+/// Immutable normalized SQL and deterministic parameter-slot metadata. Templates produced by the closed
 /// construction API are injection-safe. Rehydrated command text is executable code and must come from a trusted
 /// artifact source.
 /// </summary>
-public sealed class PostgresSqlCommandTemplate
+public sealed class SqlCommandTemplate
 {
-    /// <summary>Creates and validates a persisted immutable PostgreSQL command template.</summary>
-    /// <param name="text">Trusted PostgreSQL text containing positional placeholders.</param>
+    /// <summary>Creates and validates a persisted immutable SQL command template.</summary>
+    /// <param name="text">Trusted SQL text containing positional placeholders.</param>
     /// <param name="parameters">Parameter slots in exact one-based position order.</param>
+    /// <param name="dialect">Stable identity of the target construction profile.</param>
     /// <exception cref="ArgumentNullException"><paramref name="text"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">Text is empty or parameter slots are null, repeated, or non-contiguous.</exception>
     [JsonConstructor]
-    internal PostgresSqlCommandTemplate(string text, ImmutableArray<PostgresSqlParameterSlot> parameters)
+    internal SqlCommandTemplate(string text, ImmutableArray<SqlParameterSlot> parameters, string dialect)
     {
         Text = Guard.RequireNotNullOrWhiteSpace(text);
+        Dialect = Guard.RequireNotNullOrWhiteSpace(dialect);
         var normalized = parameters.IsDefault ? [] : parameters;
         if (normalized.Any(static parameter => parameter is null))
-            throw new ArgumentException("PostgreSQL command-template parameters cannot contain null entries.", nameof(parameters));
+            throw new ArgumentException("SQL command-template parameters cannot contain null entries.", nameof(parameters));
+        if (normalized.Where(static slot => slot.Kind == SqlParameterBindingKind.Runtime).GroupBy(static slot => slot.Binding, StringComparer.Ordinal).Any(static group => group.Count() != 1))
+            throw new ArgumentException("A runtime binding must occupy exactly one parameter slot.", nameof(parameters));
         if (normalized.Select(static parameter => parameter.Position)
             .SequenceEqual(Enumerable.Range(1, normalized.Length)) is false)
         {
             throw new ArgumentException(
-                "PostgreSQL command-template parameters must occupy contiguous one-based positions.",
+                "SQL command-template parameters must occupy contiguous one-based positions.",
                 nameof(parameters));
         }
         ValidatePlaceholders(Text, normalized.Length);
         Parameters = normalized;
     }
 
-    /// <summary>PostgreSQL command text using positional placeholders.</summary>
+    /// <summary>Identity of the dialect that produced this template.</summary>
+    public string Dialect { get; }
+
+    /// <summary>SQL command text using positional placeholders.</summary>
     public string Text { get; }
 
     /// <summary>Parameter slots in one-based placeholder order.</summary>
-    public ImmutableArray<PostgresSqlParameterSlot> Parameters { get; }
+    public ImmutableArray<SqlParameterSlot> Parameters { get; }
 
     static void ValidatePlaceholders(string text, int slotCount)
     {
@@ -1175,7 +1186,7 @@ public sealed class PostgresSqlCommandTemplate
 
             var start = ++index;
             if (text[start] == '0')
-                throw new ArgumentException("PostgreSQL placeholders must use canonical positive positions.", nameof(text));
+                throw new ArgumentException("SQL placeholders must use canonical positive positions.", nameof(text));
             var position = 0;
             while (index < text.Length && char.IsAsciiDigit(text[index]))
             {
@@ -1185,7 +1196,7 @@ public sealed class PostgresSqlCommandTemplate
                 }
                 catch (OverflowException exception)
                 {
-                    throw new ArgumentException("A PostgreSQL placeholder position is too large.", nameof(text), exception);
+                    throw new ArgumentException("A SQL placeholder position is too large.", nameof(text), exception);
                 }
                 index++;
             }
@@ -1194,41 +1205,46 @@ public sealed class PostgresSqlCommandTemplate
         }
 
         if (inQuotedIdentifier)
-            throw new ArgumentException("PostgreSQL command text contains an unterminated quoted identifier.", nameof(text));
+            throw new ArgumentException("SQL command text contains an unterminated quoted identifier.", nameof(text));
 
         if (!positions.SetEquals(Enumerable.Range(1, slotCount)))
         {
             throw new ArgumentException(
-                "PostgreSQL command text placeholders must correspond exactly to declared parameter slots.",
+                "SQL command text placeholders must correspond exactly to declared parameter slots.",
                 nameof(text));
         }
     }
 
     /// <summary>Binds a command template that has no runtime parameters.</summary>
+    /// <param name="dialect">Explicit adapter-owned construction and parameter policy.</param>
+    /// <exception cref="SqlConstructionException">A requested construct is unsupported by the dialect.</exception>
     /// <returns>A concrete immutable SQL statement containing captured constant values.</returns>
     /// <exception cref="ArgumentException">The template contains at least one runtime parameter.</exception>
-    public PostgresSqlStatement Bind() => Bind(EmptyRuntimeParameters.Instance);
+    public SqlStatement Bind(SqlDialect dialect) => Bind(dialect, EmptyRuntimeParameters.Instance);
 
     /// <summary>Binds runtime values without rebuilding or reparsing the SQL tree.</summary>
-    /// <param name="runtimeParameters">Values keyed by the bindings supplied to <see cref="PostgresSqlExpression.RuntimeParameter"/>.</param>
+    /// <param name="dialect">Exact target policy whose identity must match the compiled template.</param>
+    /// <param name="runtimeParameters">Values keyed by the bindings supplied to <see cref="SqlExpression.RuntimeParameter"/>.</param>
     /// <returns>A concrete immutable SQL statement with ordered positional values.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="runtimeParameters"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// A required binding is absent, an unknown binding is supplied, or a value is outside the exact provider-neutral
-    /// PostgreSQL value domain.
+    /// SQL value domain.
     /// </exception>
-    public PostgresSqlStatement Bind(IReadOnlyDictionary<string, object?> runtimeParameters)
+    public SqlStatement Bind(SqlDialect dialect, IReadOnlyDictionary<string, object?> runtimeParameters)
     {
         ArgumentNullException.ThrowIfNull(runtimeParameters);
+        ArgumentNullException.ThrowIfNull(dialect);
+        if (dialect.Name != Dialect) throw new ArgumentException("The binding dialect differs from the compiled template.", nameof(dialect));
         var expected = Parameters
-            .Where(static slot => slot.Kind == PostgresSqlParameterBindingKind.Runtime)
+            .Where(static slot => slot.Kind == SqlParameterBindingKind.Runtime)
             .Select(static slot => slot.Binding!)
             .ToHashSet(StringComparer.Ordinal);
         var unknown = runtimeParameters.Keys.Where(binding => !expected.Contains(binding)).ToArray();
         if (unknown.Length != 0)
         {
             throw new ArgumentException(
-                $"The invocation contains unknown PostgreSQL parameter binding(s): {string.Join(", ", unknown.Order(StringComparer.Ordinal))}.",
+                $"The invocation contains unknown SQL parameter binding(s): {string.Join(", ", unknown.Order(StringComparer.Ordinal))}.",
                 nameof(runtimeParameters));
         }
 
@@ -1236,16 +1252,17 @@ public sealed class PostgresSqlCommandTemplate
         if (missing.Length != 0)
         {
             throw new ArgumentException(
-                $"The invocation is missing PostgreSQL parameter binding(s): {string.Join(", ", missing.Order(StringComparer.Ordinal))}.",
+                $"The invocation is missing SQL parameter binding(s): {string.Join(", ", missing.Order(StringComparer.Ordinal))}.",
                 nameof(runtimeParameters));
         }
 
-        var values = ImmutableArray.CreateBuilder<PostgresSqlParameter>(Parameters.Length);
+        var values = ImmutableArray.CreateBuilder<SqlParameter>(Parameters.Length);
         foreach (var slot in Parameters)
         {
-            var value = slot.Kind == PostgresSqlParameterBindingKind.Constant
+            var value = slot.Kind == SqlParameterBindingKind.Constant
                 ? slot.ConstantValue
-                : PostgresSqlConstant.NormalizeRuntimeValue(runtimeParameters[slot.Binding!]);
+                : SqlConstant.NormalizeRuntimeValue(runtimeParameters[slot.Binding!]);
+            dialect.ValidateParameter(value);
             values.Add(new(
                 slot.Position,
                 slot.Binding,
@@ -1257,25 +1274,28 @@ public sealed class PostgresSqlCommandTemplate
 
     /// <summary>Binds runtime values from a strongly typed value dictionary.</summary>
     /// <typeparam name="TValue">Provider-neutral value type supplied by the caller.</typeparam>
+    /// <param name="dialect">Exact target policy whose identity must match the compiled template.</param>
     /// <param name="runtimeParameters">
-    /// Values keyed by the bindings supplied to <see cref="PostgresSqlExpression.RuntimeParameter"/>.
+    /// Values keyed by the bindings supplied to <see cref="SqlExpression.RuntimeParameter"/>.
     /// </param>
     /// <returns>A concrete immutable SQL statement with boxed values in positional order.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="runtimeParameters"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// A required binding is absent, an unknown binding is supplied, or a value is outside the exact provider-neutral
-    /// PostgreSQL value domain.
+    /// SQL value domain.
     /// </exception>
-    public PostgresSqlStatement Bind<TValue>(IReadOnlyDictionary<string, TValue> runtimeParameters)
+    public SqlStatement Bind<TValue>(SqlDialect dialect, IReadOnlyDictionary<string, TValue> runtimeParameters)
     {
         ArgumentNullException.ThrowIfNull(runtimeParameters);
+        ArgumentNullException.ThrowIfNull(dialect);
+        if (dialect.Name != Dialect) throw new ArgumentException("The binding dialect differs from the compiled template.", nameof(dialect));
         Dictionary<string, object?> boxed = new(runtimeParameters.Count, StringComparer.Ordinal);
         foreach (var pair in runtimeParameters)
         {
             boxed.Add(pair.Key, pair.Value);
         }
 
-        return Bind(boxed);
+        return Bind(dialect, boxed);
     }
 
     sealed class EmptyRuntimeParameters : Dictionary<string, object?>
@@ -1284,42 +1304,42 @@ public sealed class PostgresSqlCommandTemplate
     }
 }
 
-/// <summary>Immutable PostgreSQL SQL and concrete ordered positional values.</summary>
-public sealed class PostgresSqlStatement
+/// <summary>Immutable SQL and concrete ordered positional values.</summary>
+public sealed class SqlStatement
 {
-    internal PostgresSqlStatement(string text, ImmutableArray<PostgresSqlParameter> parameters)
+    internal SqlStatement(string text, ImmutableArray<SqlParameter> parameters)
     {
         Text = text;
         Parameters = parameters;
     }
 
-    /// <summary>PostgreSQL SQL text using positional placeholders.</summary>
+    /// <summary>SQL text using positional placeholders.</summary>
     public string Text { get; }
 
     /// <summary>Concrete parameter values in placeholder order.</summary>
-    public ImmutableArray<PostgresSqlParameter> Parameters { get; }
+    public ImmutableArray<SqlParameter> Parameters { get; }
 }
 
-/// <summary>Immutable PostgreSQL SELECT tree that may be rendered directly or used as a derived table.</summary>
-public sealed class PostgresSqlSelectQuery
+/// <summary>Immutable SQL SELECT tree that may be rendered directly or used as a derived table.</summary>
+public sealed class SqlSelectQuery
 {
-    readonly PostgresSqlFromItem? from;
-    readonly ImmutableArray<PostgresSqlSelectItem> selections;
-    readonly ImmutableArray<PostgresSqlJoinItem> joins;
-    readonly ImmutableArray<PostgresSqlExpression> predicates;
-    readonly ImmutableArray<PostgresSqlExpression> groupings;
-    readonly ImmutableArray<PostgresSqlOrderItem> orderings;
+    readonly SqlFromItem? from;
+    readonly ImmutableArray<SqlSelectItem> selections;
+    readonly ImmutableArray<SqlJoinItem> joins;
+    readonly ImmutableArray<SqlExpression> predicates;
+    readonly ImmutableArray<SqlExpression> groupings;
+    readonly ImmutableArray<SqlOrderItem> orderings;
     readonly bool distinct;
     readonly int? limit;
     readonly int? offset;
 
-    internal PostgresSqlSelectQuery(
-        PostgresSqlFromItem? from,
-        ImmutableArray<PostgresSqlSelectItem> selections,
-        ImmutableArray<PostgresSqlJoinItem> joins,
-        ImmutableArray<PostgresSqlExpression> predicates,
-        ImmutableArray<PostgresSqlExpression> groupings,
-        ImmutableArray<PostgresSqlOrderItem> orderings,
+    internal SqlSelectQuery(
+        SqlFromItem? from,
+        ImmutableArray<SqlSelectItem> selections,
+        ImmutableArray<SqlJoinItem> joins,
+        ImmutableArray<SqlExpression> predicates,
+        ImmutableArray<SqlExpression> groupings,
+        ImmutableArray<SqlOrderItem> orderings,
         bool distinct,
         int? limit,
         int? offset)
@@ -1336,16 +1356,18 @@ public sealed class PostgresSqlSelectQuery
     }
 
     /// <summary>Renders this immutable query into a reusable command template.</summary>
+    /// <param name="dialect">Explicit adapter-owned construction and parameter policy.</param>
+    /// <exception cref="SqlConstructionException">A requested construct is unsupported by the dialect.</exception>
     /// <returns>Normalized SQL and deterministic positional-parameter slots.</returns>
-    public PostgresSqlCommandTemplate ToCommandTemplate()
+    public SqlCommandTemplate ToCommandTemplate(SqlDialect dialect)
     {
-        PostgresSqlRenderContext context = new();
+        SqlRenderContext context = new(dialect);
         StringBuilder builder = new();
         WriteTo(context, builder);
-        return new(builder.ToString(), context.Parameters);
+        return new(builder.ToString(), context.Parameters, dialect.Name);
     }
 
-    internal void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+    internal void WriteTo(SqlRenderContext context, StringBuilder builder)
     {
         builder.Append("SELECT ");
         if (distinct)
@@ -1362,7 +1384,7 @@ public sealed class PostgresSqlSelectQuery
 
             selections[index].Expression.WriteTo(context, builder);
             builder.Append(" AS ");
-            selections[index].Alias.WriteQuoted(builder);
+            selections[index].Alias.WriteQuoted(context, builder);
         }
 
         if (from is not null)
@@ -1373,7 +1395,9 @@ public sealed class PostgresSqlSelectQuery
 
         foreach (var join in joins)
         {
-            builder.Append(' ').Append(PostgresSqlOperators.Text(join.Kind)).Append(' ');
+            if (join.Kind == SqlJoinKind.Right) context.Dialect.Require(SqlFeature.RightJoin);
+            if (join.Kind == SqlJoinKind.Full) context.Dialect.Require(SqlFeature.FullJoin);
+            builder.Append(' ').Append(SqlOperators.Text(join.Kind)).Append(' ');
             join.Source.WriteTo(context, builder);
             if (join.Predicate is not null)
             {
@@ -1406,8 +1430,8 @@ public sealed class PostgresSqlSelectQuery
 
                 var ordering = orderings[index];
                 ordering.Expression.WriteTo(context, builder);
-                builder.Append(ordering.Direction == PostgresSqlSortDirection.Ascending ? " ASC" : " DESC");
-                builder.Append(ordering.NullPlacement == PostgresSqlNullPlacement.First
+                builder.Append(ordering.Direction == SqlSortDirection.Ascending ? " ASC" : " DESC");
+                builder.Append(ordering.NullPlacement == SqlNullPlacement.First
                     ? " NULLS FIRST"
                     : " NULLS LAST");
             }
@@ -1420,13 +1444,14 @@ public sealed class PostgresSqlSelectQuery
 
         if (offset is { } pageOffset)
         {
+            if (limit is null) context.Dialect.Require(SqlFeature.OffsetWithoutLimit);
             builder.Append(" OFFSET ").Append(pageOffset.ToString(CultureInfo.InvariantCulture));
         }
     }
 
     static void WriteExpressionList(
-        ImmutableArray<PostgresSqlExpression> expressions,
-        PostgresSqlRenderContext context,
+        ImmutableArray<SqlExpression> expressions,
+        SqlRenderContext context,
         StringBuilder builder,
         string separator)
     {
@@ -1442,17 +1467,17 @@ public sealed class PostgresSqlSelectQuery
     }
 }
 
-/// <summary>Mutable, single-threaded builder for an injection-safe PostgreSQL SELECT tree.</summary>
-public sealed class PostgresSqlSelectBuilder
+/// <summary>Mutable, single-threaded builder for an injection-safe SQL SELECT tree.</summary>
+public sealed class SqlSelectBuilder
 {
-    readonly PostgresSqlFromItem? from;
-    readonly List<PostgresSqlSelectItem> selections = [];
-    readonly List<PostgresSqlJoinItem> joins = [];
-    readonly List<PostgresSqlExpression> predicates = [];
-    readonly List<PostgresSqlExpression> groupings = [];
-    readonly List<PostgresSqlOrderItem> orderings = [];
-    readonly HashSet<PostgresSqlIdentifier> aliases = [];
-    readonly HashSet<PostgresSqlIdentifier> selectionAliases = [];
+    readonly SqlFromItem? from;
+    readonly List<SqlSelectItem> selections = [];
+    readonly List<SqlJoinItem> joins = [];
+    readonly List<SqlExpression> predicates = [];
+    readonly List<SqlExpression> groupings = [];
+    readonly List<SqlOrderItem> orderings = [];
+    readonly HashSet<SqlIdentifier> aliases = [];
+    readonly HashSet<SqlIdentifier> selectionAliases = [];
     bool distinct;
     int? limit;
     int? offset;
@@ -1461,7 +1486,7 @@ public sealed class PostgresSqlSelectBuilder
     /// Creates a SELECT builder without a <c>FROM</c> source, suitable for projecting supplied runtime inputs as one
     /// derived row.
     /// </summary>
-    public PostgresSqlSelectBuilder()
+    public SqlSelectBuilder()
     {
     }
 
@@ -1469,12 +1494,12 @@ public sealed class PostgresSqlSelectBuilder
     /// <param name="table">Injection-safe physical table name.</param>
     /// <param name="alias">Alias used to qualify columns from the table.</param>
     /// <exception cref="ArgumentNullException"><paramref name="table"/> or <paramref name="alias"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="alias"/> is not a supported PostgreSQL identifier.</exception>
-    public PostgresSqlSelectBuilder(PostgresSqlQualifiedTable table, string alias)
+    /// <exception cref="ArgumentException"><paramref name="alias"/> is not a supported SQL identifier.</exception>
+    public SqlSelectBuilder(SqlQualifiedTable table, string alias)
     {
         ArgumentNullException.ThrowIfNull(table);
-        var identifier = new PostgresSqlIdentifier(alias);
-        from = new PostgresSqlTableFromItem(table, identifier);
+        var identifier = new SqlIdentifier(alias);
+        from = new SqlTableFromItem(table, identifier);
         aliases.Add(identifier);
     }
 
@@ -1482,23 +1507,33 @@ public sealed class PostgresSqlSelectBuilder
     /// <param name="query">Inner query used as the derived table.</param>
     /// <param name="alias">Alias used to qualify columns projected by the derived table.</param>
     /// <exception cref="ArgumentNullException"><paramref name="query"/> or <paramref name="alias"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="alias"/> is not a supported PostgreSQL identifier.</exception>
-    public PostgresSqlSelectBuilder(PostgresSqlSelectQuery query, string alias)
+    /// <exception cref="ArgumentException"><paramref name="alias"/> is not a supported SQL identifier.</exception>
+    public SqlSelectBuilder(SqlSelectQuery query, string alias)
     {
         ArgumentNullException.ThrowIfNull(query);
-        var identifier = new PostgresSqlIdentifier(alias);
-        from = new PostgresSqlDerivedFromItem(query, identifier);
+        var identifier = new SqlIdentifier(alias);
+        from = new SqlDerivedFromItem(query, identifier);
         aliases.Add(identifier);
     }
 
-    internal PostgresSqlSelectBuilder(
+    /// <summary>Creates a SELECT source by expanding a runtime-bound native SQL array.</summary>
+    /// <param name="arrayBinding">Nonempty runtime binding for the native array.</param>
+    /// <param name="alias">Alias of the expanded source.</param>
+    /// <param name="columnAlias">Alias of its single element column.</param>
+    /// <returns>A mutable builder requiring <see cref="SqlFeature.ArrayUnnest"/> at rendering.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">The binding is empty or white space, or an alias is invalid.</exception>
+    public static SqlSelectBuilder FromArray(string arrayBinding, string alias, string columnAlias) =>
+        new(arrayBinding, alias, columnAlias);
+
+    SqlSelectBuilder(
         string arrayBinding,
         string alias,
         string columnAlias)
     {
-        var identifier = new PostgresSqlIdentifier(alias);
-        from = new PostgresSqlArrayUnnestFromItem(
-            PostgresSqlExpression.RuntimeParameter(arrayBinding),
+        var identifier = new SqlIdentifier(alias);
+        from = new SqlArrayUnnestFromItem(
+            SqlExpression.RuntimeParameter(arrayBinding),
             identifier,
             new(columnAlias));
         aliases.Add(identifier);
@@ -1510,13 +1545,13 @@ public sealed class PostgresSqlSelectBuilder
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="expression"/> or <paramref name="alias"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="alias"/> is invalid or duplicates another projection alias.</exception>
-    public PostgresSqlSelectBuilder Select(PostgresSqlExpression expression, string alias)
+    public SqlSelectBuilder Select(SqlExpression expression, string alias)
     {
         ArgumentNullException.ThrowIfNull(expression);
-        var identifier = new PostgresSqlIdentifier(alias);
+        var identifier = new SqlIdentifier(alias);
         if (!selectionAliases.Add(identifier))
         {
-            throw new ArgumentException($"PostgreSQL projection alias '{alias}' is already present.", nameof(alias));
+            throw new ArgumentException($"SQL projection alias '{alias}' is already present.", nameof(alias));
         }
 
         selections.Add(new(expression, identifier));
@@ -1525,7 +1560,7 @@ public sealed class PostgresSqlSelectBuilder
 
     /// <summary>Requests whole-projection duplicate elimination.</summary>
     /// <returns>This builder.</returns>
-    public PostgresSqlSelectBuilder Distinct()
+    public SqlSelectBuilder Distinct()
     {
         distinct = true;
         return this;
@@ -1535,7 +1570,7 @@ public sealed class PostgresSqlSelectBuilder
     /// <param name="predicate">Boolean predicate.</param>
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="predicate"/> is <see langword="null"/>.</exception>
-    public PostgresSqlSelectBuilder Where(PostgresSqlExpression predicate)
+    public SqlSelectBuilder Where(SqlExpression predicate)
     {
         predicates.Add(Guard.RequireNotNull(predicate));
         return this;
@@ -1551,16 +1586,16 @@ public sealed class PostgresSqlSelectBuilder
     /// <exception cref="ArgumentException">The alias is invalid or repeated, or predicate presence conflicts with <paramref name="kind"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
     /// <exception cref="InvalidOperationException">This builder was created without a <c>FROM</c> source.</exception>
-    public PostgresSqlSelectBuilder Join(
-        PostgresSqlQualifiedTable table,
+    public SqlSelectBuilder Join(
+        SqlQualifiedTable table,
         string alias,
-        PostgresSqlJoinKind kind,
-        PostgresSqlExpression? predicate = null)
+        SqlJoinKind kind,
+        SqlExpression? predicate = null)
     {
         ArgumentNullException.ThrowIfNull(table);
         RequireFromForJoin();
         ValidateJoin(kind, predicate);
-        joins.Add(new(new PostgresSqlTableFromItem(table, RequireNewAlias(alias)), kind, predicate));
+        joins.Add(new(new SqlTableFromItem(table, RequireNewAlias(alias)), kind, predicate));
         return this;
     }
 
@@ -1574,28 +1609,35 @@ public sealed class PostgresSqlSelectBuilder
     /// <exception cref="ArgumentException">The alias is invalid or repeated, or predicate presence conflicts with <paramref name="kind"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
     /// <exception cref="InvalidOperationException">This builder was created without a <c>FROM</c> source.</exception>
-    public PostgresSqlSelectBuilder Join(
-        PostgresSqlSelectQuery query,
+    public SqlSelectBuilder Join(
+        SqlSelectQuery query,
         string alias,
-        PostgresSqlJoinKind kind,
-        PostgresSqlExpression? predicate = null)
+        SqlJoinKind kind,
+        SqlExpression? predicate = null)
     {
         ArgumentNullException.ThrowIfNull(query);
         RequireFromForJoin();
         ValidateJoin(kind, predicate);
-        joins.Add(new(new PostgresSqlDerivedFromItem(query, RequireNewAlias(alias)), kind, predicate));
+        joins.Add(new(new SqlDerivedFromItem(query, RequireNewAlias(alias)), kind, predicate));
         return this;
     }
 
-    internal PostgresSqlSelectBuilder CrossJoinLateral(
-        PostgresSqlSelectQuery query,
+    /// <summary>Adds a correlated derived query as a lateral cross join.</summary>
+    /// <param name="query">Right-side query, which may reference preceding source aliases.</param>
+    /// <param name="alias">Unique right-side source alias.</param>
+    /// <returns>This builder, requiring <see cref="SqlFeature.Lateral"/> at rendering.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">The alias is invalid or repeated.</exception>
+    /// <exception cref="InvalidOperationException">This builder has no FROM source.</exception>
+    public SqlSelectBuilder CrossJoinLateral(
+        SqlSelectQuery query,
         string alias)
     {
         ArgumentNullException.ThrowIfNull(query);
         RequireFromForJoin();
         joins.Add(new(
-            new PostgresSqlLateralDerivedFromItem(query, RequireNewAlias(alias)),
-            PostgresSqlJoinKind.Cross,
+            new SqlLateralDerivedFromItem(query, RequireNewAlias(alias)),
+            SqlJoinKind.Cross,
             Predicate: null));
         return this;
     }
@@ -1604,7 +1646,7 @@ public sealed class PostgresSqlSelectBuilder
     /// <param name="expression">Grouping expression.</param>
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="expression"/> is <see langword="null"/>.</exception>
-    public PostgresSqlSelectBuilder GroupBy(PostgresSqlExpression expression)
+    public SqlSelectBuilder GroupBy(SqlExpression expression)
     {
         groupings.Add(Guard.RequireNotNull(expression));
         return this;
@@ -1619,20 +1661,20 @@ public sealed class PostgresSqlSelectBuilder
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="direction"/> or <paramref name="nullPlacement"/> is unsupported.
     /// </exception>
-    public PostgresSqlSelectBuilder OrderBy(
-        PostgresSqlExpression expression,
-        PostgresSqlSortDirection direction = PostgresSqlSortDirection.Ascending,
-        PostgresSqlNullPlacement nullPlacement = PostgresSqlNullPlacement.Last)
+    public SqlSelectBuilder OrderBy(
+        SqlExpression expression,
+        SqlSortDirection direction = SqlSortDirection.Ascending,
+        SqlNullPlacement nullPlacement = SqlNullPlacement.Last)
     {
         ArgumentNullException.ThrowIfNull(expression);
         if (!Enum.IsDefined(direction))
         {
-            throw new ArgumentOutOfRangeException(nameof(direction), direction, "Unsupported PostgreSQL sort direction.");
+            throw new ArgumentOutOfRangeException(nameof(direction), direction, "Unsupported SQL sort direction.");
         }
 
         if (!Enum.IsDefined(nullPlacement))
         {
-            throw new ArgumentOutOfRangeException(nameof(nullPlacement), nullPlacement, "Unsupported PostgreSQL null placement.");
+            throw new ArgumentOutOfRangeException(nameof(nullPlacement), nullPlacement, "Unsupported SQL null placement.");
         }
 
         orderings.Add(new(expression, direction, nullPlacement));
@@ -1643,11 +1685,11 @@ public sealed class PostgresSqlSelectBuilder
     /// <param name="value">Positive row limit.</param>
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="value"/> is not positive.</exception>
-    public PostgresSqlSelectBuilder Limit(int value)
+    public SqlSelectBuilder Limit(int value)
     {
         if (value <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(value), value, "A PostgreSQL row limit must be positive.");
+            throw new ArgumentOutOfRangeException(nameof(value), value, "A SQL row limit must be positive.");
         }
 
         limit = value;
@@ -1658,11 +1700,11 @@ public sealed class PostgresSqlSelectBuilder
     /// <param name="value">Non-negative row offset.</param>
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="value"/> is negative.</exception>
-    public PostgresSqlSelectBuilder Offset(int value)
+    public SqlSelectBuilder Offset(int value)
     {
         if (value < 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(value), value, "A PostgreSQL row offset cannot be negative.");
+            throw new ArgumentOutOfRangeException(nameof(value), value, "A SQL row offset cannot be negative.");
         }
 
         offset = value;
@@ -1674,17 +1716,17 @@ public sealed class PostgresSqlSelectBuilder
     /// <param name="limit">Positive maximum number of rows returned.</param>
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="offset"/> is negative or <paramref name="limit"/> is not positive.</exception>
-    public PostgresSqlSelectBuilder OffsetLimit(int offset, int limit) =>
+    public SqlSelectBuilder OffsetLimit(int offset, int limit) =>
         Offset(offset).Limit(limit);
 
     /// <summary>Builds an immutable SELECT tree suitable for direct rendering or derived-table composition.</summary>
     /// <returns>An immutable snapshot of the builder.</returns>
     /// <exception cref="InvalidOperationException">No projection has been configured.</exception>
-    public PostgresSqlSelectQuery BuildQuery()
+    public SqlSelectQuery BuildQuery()
     {
         if (selections.Count == 0)
         {
-            throw new InvalidOperationException("A PostgreSQL SELECT query requires at least one projected expression.");
+            throw new InvalidOperationException("A SQL SELECT query requires at least one projected expression.");
         }
 
         return new(
@@ -1699,27 +1741,31 @@ public sealed class PostgresSqlSelectBuilder
             offset);
     }
 
-    /// <summary>Builds an immutable reusable PostgreSQL command template.</summary>
+    /// <summary>Builds an immutable reusable SQL command template.</summary>
+    /// <param name="dialect">Explicit adapter-owned construction and parameter policy.</param>
+    /// <exception cref="SqlConstructionException">A requested construct is unsupported by the dialect.</exception>
     /// <returns>Normalized SQL and deterministic positional-parameter slots.</returns>
     /// <exception cref="InvalidOperationException">No projection has been configured.</exception>
-    public PostgresSqlCommandTemplate BuildTemplate() => BuildQuery().ToCommandTemplate();
+    public SqlCommandTemplate BuildTemplate(SqlDialect dialect) => BuildQuery().ToCommandTemplate(dialect);
 
     /// <summary>Builds a concrete statement when the query contains no runtime-bound parameters.</summary>
+    /// <param name="dialect">Explicit adapter-owned construction and parameter policy.</param>
+    /// <exception cref="SqlConstructionException">A requested construct is unsupported by the dialect.</exception>
     /// <returns>Normalized SQL and ordered captured constant values.</returns>
     /// <exception cref="ArgumentException">The query contains a runtime-bound parameter.</exception>
     /// <exception cref="InvalidOperationException">No projection has been configured.</exception>
-    public PostgresSqlStatement Build() => BuildTemplate().Bind();
+    public SqlStatement Build(SqlDialect dialect) => BuildTemplate(dialect).Bind(dialect);
 
     static void ValidateJoin(
-        PostgresSqlJoinKind kind,
-        PostgresSqlExpression? predicate)
+        SqlJoinKind kind,
+        SqlExpression? predicate)
     {
         if (!Enum.IsDefined(kind))
         {
-            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported PostgreSQL join kind.");
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported SQL join kind.");
         }
 
-        if (kind == PostgresSqlJoinKind.Cross != (predicate is null))
+        if (kind == SqlJoinKind.Cross != (predicate is null))
         {
             throw new ArgumentException(
                 "A cross join prohibits a predicate and every other join kind requires one.",
@@ -1732,206 +1778,169 @@ public sealed class PostgresSqlSelectBuilder
         if (from is null)
         {
             throw new InvalidOperationException(
-                "A PostgreSQL SELECT without a FROM source cannot contain joins; wrap it as a derived source first.");
+                "A SQL SELECT without a FROM source cannot contain joins; wrap it as a derived source first.");
         }
     }
 
-    PostgresSqlIdentifier RequireNewAlias(string alias)
+    SqlIdentifier RequireNewAlias(string alias)
     {
-        var identifier = new PostgresSqlIdentifier(alias);
+        var identifier = new SqlIdentifier(alias);
         if (!aliases.Add(identifier))
         {
-            throw new ArgumentException($"PostgreSQL source alias '{alias}' is already present.", nameof(alias));
+            throw new ArgumentException($"SQL source alias '{alias}' is already present.", nameof(alias));
         }
 
         return identifier;
     }
 }
 
-internal abstract record PostgresSqlFromItem(PostgresSqlIdentifier Alias)
+internal abstract record SqlFromItem(SqlIdentifier Alias)
 {
-    public abstract void WriteTo(PostgresSqlRenderContext context, StringBuilder builder);
+    public abstract void WriteTo(SqlRenderContext context, StringBuilder builder);
 }
 
-internal sealed record PostgresSqlTableFromItem(
-    PostgresSqlQualifiedTable Table,
-    PostgresSqlIdentifier SourceAlias) : PostgresSqlFromItem(SourceAlias)
+internal sealed record SqlTableFromItem(
+    SqlQualifiedTable Table,
+    SqlIdentifier SourceAlias) : SqlFromItem(SourceAlias)
 {
-    public override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+    public override void WriteTo(SqlRenderContext context, StringBuilder builder)
     {
-        Table.WriteTo(builder);
+        Table.WriteTo(context, builder);
         builder.Append(" AS ");
-        Alias.WriteQuoted(builder);
+        Alias.WriteQuoted(context, builder);
     }
 }
 
-internal sealed record PostgresSqlDerivedFromItem(
-    PostgresSqlSelectQuery Query,
-    PostgresSqlIdentifier SourceAlias) : PostgresSqlFromItem(SourceAlias)
+internal sealed record SqlDerivedFromItem(
+    SqlSelectQuery Query,
+    SqlIdentifier SourceAlias) : SqlFromItem(SourceAlias)
 {
-    public override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+    public override void WriteTo(SqlRenderContext context, StringBuilder builder)
     {
         builder.Append('(');
         Query.WriteTo(context, builder);
         builder.Append(") AS ");
-        Alias.WriteQuoted(builder);
+        Alias.WriteQuoted(context, builder);
     }
 }
 
-internal sealed record PostgresSqlLateralDerivedFromItem(
-    PostgresSqlSelectQuery Query,
-    PostgresSqlIdentifier SourceAlias) : PostgresSqlFromItem(SourceAlias)
+internal sealed record SqlLateralDerivedFromItem(
+    SqlSelectQuery Query,
+    SqlIdentifier SourceAlias) : SqlFromItem(SourceAlias)
 {
-    public override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+    public override void WriteTo(SqlRenderContext context, StringBuilder builder)
     {
+        context.Dialect.Require(SqlFeature.Lateral);
         builder.Append("LATERAL (");
         Query.WriteTo(context, builder);
         builder.Append(") AS ");
-        Alias.WriteQuoted(builder);
+        Alias.WriteQuoted(context, builder);
     }
 }
 
-internal sealed record PostgresSqlArrayUnnestFromItem(
-    PostgresSqlExpression Array,
-    PostgresSqlIdentifier SourceAlias,
-    PostgresSqlIdentifier ColumnAlias) : PostgresSqlFromItem(SourceAlias)
+internal sealed record SqlArrayUnnestFromItem(
+    SqlExpression Array,
+    SqlIdentifier SourceAlias,
+    SqlIdentifier ColumnAlias) : SqlFromItem(SourceAlias)
 {
-    public override void WriteTo(PostgresSqlRenderContext context, StringBuilder builder)
+    public override void WriteTo(SqlRenderContext context, StringBuilder builder)
     {
+        context.Dialect.Require(SqlFeature.ArrayUnnest);
         builder.Append("unnest(");
         Array.WriteTo(context, builder);
         builder.Append(") AS ");
-        Alias.WriteQuoted(builder);
+        Alias.WriteQuoted(context, builder);
         builder.Append('(');
-        ColumnAlias.WriteQuoted(builder);
+        ColumnAlias.WriteQuoted(context, builder);
         builder.Append(')');
     }
 }
 
-internal sealed record PostgresSqlSelectItem(
-    PostgresSqlExpression Expression,
-    PostgresSqlIdentifier Alias);
+internal sealed record SqlSelectItem(
+    SqlExpression Expression,
+    SqlIdentifier Alias);
 
-internal sealed record PostgresSqlJoinItem(
-    PostgresSqlFromItem Source,
-    PostgresSqlJoinKind Kind,
-    PostgresSqlExpression? Predicate);
+internal sealed record SqlJoinItem(
+    SqlFromItem Source,
+    SqlJoinKind Kind,
+    SqlExpression? Predicate);
 
-internal sealed record PostgresSqlOrderItem(
-    PostgresSqlExpression Expression,
-    PostgresSqlSortDirection Direction,
-    PostgresSqlNullPlacement NullPlacement);
+internal sealed record SqlOrderItem(
+    SqlExpression Expression,
+    SqlSortDirection Direction,
+    SqlNullPlacement NullPlacement);
 
-internal sealed class PostgresSqlRenderContext
+internal sealed class SqlRenderContext(SqlDialect dialect)
 {
-    readonly ImmutableArray<PostgresSqlParameterSlot>.Builder parameters =
-        ImmutableArray.CreateBuilder<PostgresSqlParameterSlot>();
-    readonly Dictionary<string, int> runtimePositions = new(StringComparer.Ordinal);
-
-    public ImmutableArray<PostgresSqlParameterSlot> Parameters => parameters.ToImmutable();
-
-    public string AddConstant(PostgresSqlConstant value)
+    internal SqlDialect Dialect { get; } = dialect ?? throw new ArgumentNullException(nameof(dialect));
+    readonly SqlParameterSlots<SqlParameterSlot> parameters = new();
+    public ImmutableArray<SqlParameterSlot> Parameters => parameters.Snapshot();
+    public string AddConstant(SqlConstant value)
     {
-        var position = parameters.Count + 1;
-        parameters.Add(new(position, PostgresSqlParameterBindingKind.Constant, binding: null, value));
-        return Placeholder(position);
+        Dialect.ValidateParameter(value.ToClrValue());
+        return Placeholder(parameters.AddConstant(position =>
+            new(position + 1, SqlParameterBindingKind.Constant, binding: null, value)) + 1);
     }
-
-    public string AddRuntime(string binding)
-    {
-        if (runtimePositions.TryGetValue(binding, out var existing))
-        {
-            return Placeholder(existing);
-        }
-
-        var position = parameters.Count + 1;
-        runtimePositions.Add(binding, position);
-        parameters.Add(new(position, PostgresSqlParameterBindingKind.Runtime, binding, constantValue: null));
-        return Placeholder(position);
-    }
+    public string AddRuntime(string binding) => Placeholder(parameters.GetOrAddRuntime(binding, position =>
+        new(position + 1, SqlParameterBindingKind.Runtime, binding, constantValue: null)) + 1);
 
     static string Placeholder(int position) => $"${position.ToString(CultureInfo.InvariantCulture)}";
 }
 
-internal static class PostgresSqlOperators
+internal static class SqlOperators
 {
-    public static string Text(PostgresSqlBinaryOperator @operator) => @operator switch
+    public static string Text(SqlBinaryOperator @operator) => @operator switch
     {
-        PostgresSqlBinaryOperator.Equal => "=",
-        PostgresSqlBinaryOperator.NotEqual => "<>",
-        PostgresSqlBinaryOperator.GreaterThan => ">",
-        PostgresSqlBinaryOperator.GreaterThanOrEqual => ">=",
-        PostgresSqlBinaryOperator.LessThan => "<",
-        PostgresSqlBinaryOperator.LessThanOrEqual => "<=",
-        PostgresSqlBinaryOperator.And => "AND",
-        PostgresSqlBinaryOperator.Or => "OR",
-        PostgresSqlBinaryOperator.Add => "+",
-        PostgresSqlBinaryOperator.Subtract => "-",
-        PostgresSqlBinaryOperator.Multiply => "*",
-        PostgresSqlBinaryOperator.Divide => "/",
-        PostgresSqlBinaryOperator.Like => "LIKE",
-        PostgresSqlBinaryOperator.IsNotDistinctFrom => "IS NOT DISTINCT FROM",
-        PostgresSqlBinaryOperator.IsDistinctFrom => "IS DISTINCT FROM",
-        _ => throw new ArgumentOutOfRangeException(nameof(@operator), @operator, "Unsupported PostgreSQL binary operator.")
+        SqlBinaryOperator.Equal => "=",
+        SqlBinaryOperator.NotEqual => "<>",
+        SqlBinaryOperator.GreaterThan => ">",
+        SqlBinaryOperator.GreaterThanOrEqual => ">=",
+        SqlBinaryOperator.LessThan => "<",
+        SqlBinaryOperator.LessThanOrEqual => "<=",
+        SqlBinaryOperator.And => "AND",
+        SqlBinaryOperator.Or => "OR",
+        SqlBinaryOperator.Add => "+",
+        SqlBinaryOperator.Subtract => "-",
+        SqlBinaryOperator.Multiply => "*",
+        SqlBinaryOperator.Divide => "/",
+        SqlBinaryOperator.Like => "LIKE",
+        SqlBinaryOperator.IsNotDistinctFrom => "IS NOT DISTINCT FROM",
+        SqlBinaryOperator.IsDistinctFrom => "IS DISTINCT FROM",
+        _ => throw new ArgumentOutOfRangeException(nameof(@operator), @operator, "Unsupported SQL binary operator.")
     };
 
-    public static string Text(PostgresSqlUnaryOperator @operator) => @operator switch
+    public static string Text(SqlUnaryOperator @operator) => @operator switch
     {
-        PostgresSqlUnaryOperator.Not => "NOT ",
-        PostgresSqlUnaryOperator.Negate => "-",
-        _ => throw new ArgumentOutOfRangeException(nameof(@operator), @operator, "Unsupported PostgreSQL unary operator.")
+        SqlUnaryOperator.Not => "NOT ",
+        SqlUnaryOperator.Negate => "-",
+        _ => throw new ArgumentOutOfRangeException(nameof(@operator), @operator, "Unsupported SQL unary operator.")
     };
 
-    public static string Text(PostgresSqlJoinKind kind) => kind switch
+    public static string Text(SqlJoinKind kind) => kind switch
     {
-        PostgresSqlJoinKind.Inner => "INNER JOIN",
-        PostgresSqlJoinKind.Left => "LEFT JOIN",
-        PostgresSqlJoinKind.Right => "RIGHT JOIN",
-        PostgresSqlJoinKind.Full => "FULL JOIN",
-        PostgresSqlJoinKind.Cross => "CROSS JOIN",
-        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported PostgreSQL join kind.")
+        SqlJoinKind.Inner => "INNER JOIN",
+        SqlJoinKind.Left => "LEFT JOIN",
+        SqlJoinKind.Right => "RIGHT JOIN",
+        SqlJoinKind.Full => "FULL JOIN",
+        SqlJoinKind.Cross => "CROSS JOIN",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported SQL join kind.")
     };
 }
 
-static class PostgresSqlFunctions
+static class SqlFunctions
 {
-    public static string Name(PostgresSqlFunction function) => function switch
-    {
-        PostgresSqlFunction.ClockTimestamp => "CLOCK_TIMESTAMP",
-        PostgresSqlFunction.Length => "LENGTH",
-        PostgresSqlFunction.Right => "RIGHT",
-        PostgresSqlFunction.Lower => "LOWER",
-        PostgresSqlFunction.Upper => "UPPER",
-        PostgresSqlFunction.Left => "LEFT",
-        PostgresSqlFunction.StringPosition => "STRPOS",
-        _ => throw new ArgumentOutOfRangeException(nameof(function), function, "Unsupported PostgreSQL scalar function.")
-    };
-
-    public static string Name(PostgresSqlAggregateFunction function) => function switch
-    {
-        PostgresSqlAggregateFunction.Count => "COUNT",
-        PostgresSqlAggregateFunction.Sum => "SUM",
-        PostgresSqlAggregateFunction.Minimum => "MIN",
-        PostgresSqlAggregateFunction.Maximum => "MAX",
-        PostgresSqlAggregateFunction.Average => "AVG",
-        PostgresSqlAggregateFunction.BooleanOr => "BOOL_OR",
-        PostgresSqlAggregateFunction.BooleanAnd => "BOOL_AND",
-        _ => throw new ArgumentOutOfRangeException(nameof(function), function, "Unsupported PostgreSQL aggregate function.")
-    };
-
-    public static void ValidateArity(PostgresSqlFunction function, int count, string parameterName)
+    public static void ValidateArity(SqlFunction function, int count, string parameterName)
     {
         var valid = function switch
         {
-            PostgresSqlFunction.ClockTimestamp => count == 0,
-            PostgresSqlFunction.Length or PostgresSqlFunction.Lower or PostgresSqlFunction.Upper => count == 1,
-            PostgresSqlFunction.Right or PostgresSqlFunction.Left or PostgresSqlFunction.StringPosition => count == 2,
+            SqlFunction.Length or SqlFunction.Lower or SqlFunction.Upper => count == 1,
+            SqlFunction.Right or SqlFunction.Left or SqlFunction.StringPosition => count == 2,
             _ => false
         };
         if (!valid)
         {
             throw new ArgumentException(
-                $"PostgreSQL function '{function}' does not accept {count.ToString(CultureInfo.InvariantCulture)} argument(s).",
+                $"SQL function '{function}' does not accept {count.ToString(CultureInfo.InvariantCulture)} argument(s).",
                 parameterName);
         }
     }

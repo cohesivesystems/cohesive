@@ -74,9 +74,18 @@ public sealed class CliApplicationTests
         app.Command<TrainCommandConfiguration>("train")
             .OnExecute(async (CliCommandContext<TrainCommandConfiguration> context) =>
             {
-                using var registration = context.CancellationToken.Register(cancellationObserved.SetResult);
                 started.SetResult();
-                await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken);
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken);
+                }
+                catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+                {
+                    // Observe cancellation in the handler itself. A separate registration can be disposed
+                    // by this continuation before the cancelling thread reaches that callback.
+                    cancellationObserved.SetResult();
+                    throw;
+                }
                 return 0;
             });
 
@@ -87,7 +96,7 @@ public sealed class CliApplicationTests
         cancellation.Cancel();
 
         await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.NotEqual(0, await invocation);
+        Assert.NotEqual(0, await invocation.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
     [Fact]

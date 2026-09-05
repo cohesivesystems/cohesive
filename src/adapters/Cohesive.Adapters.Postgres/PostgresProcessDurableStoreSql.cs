@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 
 namespace Cohesive.Adapters.Postgres;
@@ -23,69 +24,69 @@ internal sealed class PostgresProcessDurableStoreSql
     const string PageContentBinding = "page-content";
     const string PageBytesBinding = "page-bytes";
 
-    readonly PostgresSqlCommandTemplate loadRoot;
-    readonly PostgresSqlCommandTemplate loadPages;
-    readonly PostgresSqlCommandTemplate findPages;
-    readonly PostgresSqlCommandTemplate insertPage;
-    readonly PostgresSqlCommandTemplate insertRoot;
-    readonly PostgresSqlCommandTemplate updateRoot;
-    readonly PostgresSqlCommandTemplate providerNow;
+    readonly SqlCommandTemplate loadRoot;
+    readonly SqlCommandTemplate loadPages;
+    readonly SqlCommandTemplate findPages;
+    readonly SqlCommandTemplate insertPage;
+    readonly SqlCommandTemplate insertRoot;
+    readonly SqlCommandTemplate updateRoot;
+    readonly SqlCommandTemplate providerNow;
     readonly long maximumAggregateResultBytes;
 
     internal PostgresProcessDurableStoreSql(PostgresProcessDurableStoreOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         maximumAggregateResultBytes = options.MaximumAggregateBytes ?? long.MaxValue;
-        loadRoot = new PostgresSqlSelectBuilder(options.Instances, InstanceAlias)
-            .Select(PostgresSqlExpression.Column(InstanceAlias, "physical_revision"), "physical_revision")
-            .Select(PostgresSqlExpression.Column(InstanceAlias, "storage_format"), "storage_format")
-            .Select(PostgresSqlExpression.Column(InstanceAlias, "aggregate_fingerprint"), "aggregate_fingerprint")
-            .Select(PostgresSqlExpression.Column(InstanceAlias, "aggregate_bytes"), "aggregate_bytes")
-            .Select(PostgresSqlExpression.Column(InstanceAlias, "page_manifest"), "page_manifest")
-            .Select(PostgresSqlExpression.Column(InstanceAlias, "page_count"), "page_count")
+        loadRoot = new SqlSelectBuilder(options.Instances, InstanceAlias)
+            .Select(SqlExpression.Column(InstanceAlias, "physical_revision"), "physical_revision")
+            .Select(SqlExpression.Column(InstanceAlias, "storage_format"), "storage_format")
+            .Select(SqlExpression.Column(InstanceAlias, "aggregate_fingerprint"), "aggregate_fingerprint")
+            .Select(SqlExpression.Column(InstanceAlias, "aggregate_bytes"), "aggregate_bytes")
+            .Select(SqlExpression.Column(InstanceAlias, "page_manifest"), "page_manifest")
+            .Select(SqlExpression.Column(InstanceAlias, "page_count"), "page_count")
             .Where(Equal(InstanceAlias, "authority_id", AuthorityBinding))
             .Where(Equal(InstanceAlias, "instance_id", InstanceBinding))
-            .BuildTemplate();
+            .BuildTemplate(PostgresSqlDialect.Instance);
         loadPages = CreatePageLookup(options, includeContent: true);
         findPages = CreatePageLookup(options, includeContent: false);
-        insertPage = new PostgresSqlInsertBuilder(options.Pages)
-            .Value("authority_id", PostgresSqlExpression.RuntimeParameter(AuthorityBinding))
-            .Value("page_fingerprint", PostgresSqlExpression.RuntimeParameter(PageFingerprintBinding))
-            .Value("content", PostgresSqlExpression.RuntimeParameter(PageContentBinding))
-            .Value("content_bytes", PostgresSqlExpression.RuntimeParameter(PageBytesBinding))
-            .Value("created_at", PostgresSqlExpression.Function(PostgresSqlFunction.ClockTimestamp))
+        insertPage = new SqlInsertBuilder(options.Pages)
+            .Value("authority_id", SqlExpression.RuntimeParameter(AuthorityBinding))
+            .Value("page_fingerprint", SqlExpression.RuntimeParameter(PageFingerprintBinding))
+            .Value("content", SqlExpression.RuntimeParameter(PageContentBinding))
+            .Value("content_bytes", SqlExpression.RuntimeParameter(PageBytesBinding))
+            .Value("created_at", SqlExpression.Intrinsic(PostgresSqlDialect.ClockTimestampIntrinsic))
             .OnConflictDoNothing(["authority_id", "page_fingerprint"])
-            .Returning(PostgresSqlExpression.UnqualifiedColumn("page_fingerprint"), "page_fingerprint")
-            .BuildTemplate();
-        insertRoot = new PostgresSqlInsertBuilder(options.Instances)
-            .Value("authority_id", PostgresSqlExpression.RuntimeParameter(AuthorityBinding))
-            .Value("instance_id", PostgresSqlExpression.RuntimeParameter(InstanceBinding))
-            .Value("physical_revision", PostgresSqlExpression.RuntimeParameter(NextRevisionBinding))
-            .Value("storage_format", PostgresSqlExpression.RuntimeParameter(StorageFormatBinding))
-            .Value("aggregate_fingerprint", PostgresSqlExpression.RuntimeParameter(AggregateFingerprintBinding))
-            .Value("aggregate_bytes", PostgresSqlExpression.RuntimeParameter(AggregateBytesBinding))
-            .Value("page_manifest", PostgresSqlExpression.RuntimeParameter(PageManifestBinding))
-            .Value("page_count", PostgresSqlExpression.RuntimeParameter(PageCountBinding))
-            .Value("updated_at", PostgresSqlExpression.Function(PostgresSqlFunction.ClockTimestamp))
+            .Returning(SqlExpression.UnqualifiedColumn("page_fingerprint"), "page_fingerprint")
+            .BuildTemplate(PostgresSqlDialect.Instance);
+        insertRoot = new SqlInsertBuilder(options.Instances)
+            .Value("authority_id", SqlExpression.RuntimeParameter(AuthorityBinding))
+            .Value("instance_id", SqlExpression.RuntimeParameter(InstanceBinding))
+            .Value("physical_revision", SqlExpression.RuntimeParameter(NextRevisionBinding))
+            .Value("storage_format", SqlExpression.RuntimeParameter(StorageFormatBinding))
+            .Value("aggregate_fingerprint", SqlExpression.RuntimeParameter(AggregateFingerprintBinding))
+            .Value("aggregate_bytes", SqlExpression.RuntimeParameter(AggregateBytesBinding))
+            .Value("page_manifest", SqlExpression.RuntimeParameter(PageManifestBinding))
+            .Value("page_count", SqlExpression.RuntimeParameter(PageCountBinding))
+            .Value("updated_at", SqlExpression.Intrinsic(PostgresSqlDialect.ClockTimestampIntrinsic))
             .OnConflictDoNothing(["authority_id", "instance_id"])
-            .Returning(PostgresSqlExpression.UnqualifiedColumn("physical_revision"), "physical_revision")
-            .BuildTemplate();
-        updateRoot = new PostgresSqlUpdateBuilder(options.Instances)
-            .Set("physical_revision", PostgresSqlExpression.RuntimeParameter(NextRevisionBinding))
-            .Set("storage_format", PostgresSqlExpression.RuntimeParameter(StorageFormatBinding))
-            .Set("aggregate_fingerprint", PostgresSqlExpression.RuntimeParameter(AggregateFingerprintBinding))
-            .Set("aggregate_bytes", PostgresSqlExpression.RuntimeParameter(AggregateBytesBinding))
-            .Set("page_manifest", PostgresSqlExpression.RuntimeParameter(PageManifestBinding))
-            .Set("page_count", PostgresSqlExpression.RuntimeParameter(PageCountBinding))
-            .Set("updated_at", PostgresSqlExpression.Function(PostgresSqlFunction.ClockTimestamp))
+            .Returning(SqlExpression.UnqualifiedColumn("physical_revision"), "physical_revision")
+            .BuildTemplate(PostgresSqlDialect.Instance);
+        updateRoot = new SqlUpdateBuilder(options.Instances)
+            .Set("physical_revision", SqlExpression.RuntimeParameter(NextRevisionBinding))
+            .Set("storage_format", SqlExpression.RuntimeParameter(StorageFormatBinding))
+            .Set("aggregate_fingerprint", SqlExpression.RuntimeParameter(AggregateFingerprintBinding))
+            .Set("aggregate_bytes", SqlExpression.RuntimeParameter(AggregateBytesBinding))
+            .Set("page_manifest", SqlExpression.RuntimeParameter(PageManifestBinding))
+            .Set("page_count", SqlExpression.RuntimeParameter(PageCountBinding))
+            .Set("updated_at", SqlExpression.Intrinsic(PostgresSqlDialect.ClockTimestampIntrinsic))
             .Where(Equal(tableAlias: null, "authority_id", AuthorityBinding))
             .Where(Equal(tableAlias: null, "instance_id", InstanceBinding))
             .Where(Equal(tableAlias: null, "physical_revision", ExpectedRevisionBinding))
-            .Returning(PostgresSqlExpression.UnqualifiedColumn("physical_revision"), "physical_revision")
-            .BuildTemplate();
-        providerNow = new PostgresSqlSelectBuilder()
-            .Select(PostgresSqlExpression.Function(PostgresSqlFunction.ClockTimestamp), "provider_now")
-            .BuildTemplate();
+            .Returning(SqlExpression.UnqualifiedColumn("physical_revision"), "physical_revision")
+            .BuildTemplate(PostgresSqlDialect.Instance);
+        providerNow = new SqlSelectBuilder()
+            .Select(SqlExpression.Intrinsic(PostgresSqlDialect.ClockTimestampIntrinsic), "provider_now")
+            .BuildTemplate(PostgresSqlDialect.Instance);
     }
 
     internal PostgresNpgsqlCommand LoadRoot(string authority, string instance) => Command(
@@ -153,28 +154,28 @@ internal sealed class PostgresProcessDurableStoreSql
 
     internal string ProviderNowSql => providerNow.Text;
 
-    static PostgresSqlCommandTemplate CreatePageLookup(
+    static SqlCommandTemplate CreatePageLookup(
         PostgresProcessDurableStoreOptions options,
         bool includeContent)
     {
-        var builder = new PostgresSqlSelectBuilder(options.Pages, PageAlias)
-            .Select(PostgresSqlExpression.Column(PageAlias, "page_fingerprint"), "page_fingerprint");
+        var builder = new SqlSelectBuilder(options.Pages, PageAlias)
+            .Select(SqlExpression.Column(PageAlias, "page_fingerprint"), "page_fingerprint");
         if (includeContent)
         {
-            builder.Select(PostgresSqlExpression.Column(PageAlias, "content"), "content");
-            builder.Select(PostgresSqlExpression.Column(PageAlias, "content_bytes"), "content_bytes");
+            builder.Select(SqlExpression.Column(PageAlias, "content"), "content");
+            builder.Select(SqlExpression.Column(PageAlias, "content_bytes"), "content_bytes");
         }
         return builder
             .Where(Equal(PageAlias, "authority_id", AuthorityBinding))
-            .Where(PostgresSqlExpression.EqualAny(
-                PostgresSqlExpression.Column(PageAlias, "page_fingerprint"),
+            .Where(SqlExpression.EqualAny(
+                SqlExpression.Column(PageAlias, "page_fingerprint"),
                 PageFingerprintsBinding))
-            .OrderBy(PostgresSqlExpression.Column(PageAlias, "page_fingerprint"))
-            .BuildTemplate();
+            .OrderBy(SqlExpression.Column(PageAlias, "page_fingerprint"))
+            .BuildTemplate(PostgresSqlDialect.Instance);
     }
 
     PostgresNpgsqlCommand PageLookup(
-        PostgresSqlCommandTemplate template,
+        SqlCommandTemplate template,
         string authority,
         ImmutableArray<string> fingerprints,
         bool includeContent) => Command(
@@ -198,7 +199,7 @@ internal sealed class PostgresProcessDurableStoreSql
         maximumResultBytes: includeContent ? maximumAggregateResultBytes : MaximumRootResultBytes);
 
     static PostgresNpgsqlCommand StoreRoot(
-        PostgresSqlCommandTemplate template,
+        SqlCommandTemplate template,
         string authority,
         string instance,
         long? expectedRevision,
@@ -230,7 +231,7 @@ internal sealed class PostgresProcessDurableStoreSql
     }
 
     static PostgresNpgsqlCommand Command(
-        PostgresSqlCommandTemplate template,
+        SqlCommandTemplate template,
         IReadOnlyDictionary<string, PostgresNpgsqlParameter> parameters,
         ImmutableArray<PostgresRelationQueryScalarType> resultTypes,
         long maximumResultBytes)
@@ -260,14 +261,14 @@ internal sealed class PostgresProcessDurableStoreSql
     static PostgresNpgsqlParameter Text(string value) =>
         new(value, PostgresRelationQueryScalarType.Text, IsArray: false);
 
-    static PostgresSqlExpression Equal(string? tableAlias, string column, string binding)
+    static SqlExpression Equal(string? tableAlias, string column, string binding)
     {
         var left = tableAlias is null
-            ? PostgresSqlExpression.UnqualifiedColumn(column)
-            : PostgresSqlExpression.Column(tableAlias, column);
-        return PostgresSqlExpression.Binary(
-            @operator: PostgresSqlBinaryOperator.Equal,
+            ? SqlExpression.UnqualifiedColumn(column)
+            : SqlExpression.Column(tableAlias, column);
+        return SqlExpression.Binary(
+            @operator: SqlBinaryOperator.Equal,
             left: left,
-            right: PostgresSqlExpression.RuntimeParameter(binding));
+            right: SqlExpression.RuntimeParameter(binding));
     }
 }
