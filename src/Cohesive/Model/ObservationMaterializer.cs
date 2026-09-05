@@ -69,7 +69,8 @@ public sealed class ObservationMaterializer<T>
     public T Materialize(Observation observation)
     {
         ArgumentNullException.ThrowIfNull(observation);
-        return Materialize((IObservationFieldReader)observation);
+        return Materialize(observation.Fields is IOrdinalObservationFieldReader ordinalReader && ordinalReader.ShapeId == observation.ShapeId
+            ? ordinalReader : observation);
     }
 
     /// <summary>Materializes a CLR value directly from a physical reader governed by <see cref="ShapeId"/>.</summary>

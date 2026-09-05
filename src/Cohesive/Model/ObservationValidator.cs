@@ -98,7 +98,7 @@ public static class ObservationValidator
     /// <paramref name="shape"/> is default or <paramref name="layout"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// The layout belongs to another shape, the value or bitmap length is invalid, or the bitmap contains presence
+    /// The layout belongs to another graph instance or shape, the value or bitmap length is invalid, or the bitmap contains presence
     /// bits outside the layout.
     /// </exception>
     public static bool TryValidateAgainstShape(
@@ -110,10 +110,10 @@ public static class ObservationValidator
     {
         ArgumentNullException.ThrowIfNull(shape.Graph);
         ArgumentNullException.ThrowIfNull(layout);
-        if (layout.ShapeId != shape.QualifiedId)
+        if (layout.ShapeId != shape.QualifiedId || !ReferenceEquals(layout.Graph, shape.Graph))
         {
             throw new ArgumentException(
-                $"Observation layout shape '{layout.ShapeId}' does not match supplied shape '{shape.QualifiedId}'.",
+                $"Observation layout must belong to the exact graph instance and shape '{shape.QualifiedId}'; received '{layout.ShapeId}'.",
                 nameof(layout));
         }
         if (valuesByOrdinal.Length != layout.Count)
