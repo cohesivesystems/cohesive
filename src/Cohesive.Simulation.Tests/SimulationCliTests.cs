@@ -149,7 +149,7 @@ public sealed class SimulationCliTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.Output);
-        Assert.Contains("cannot both read", result.Error, StringComparison.Ordinal);
+        Assert.Contains("Only one of '--manifest' and '--jsonl' can read", result.Error, StringComparison.Ordinal);
     }
 
     [Fact]

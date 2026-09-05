@@ -43,7 +43,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
     /// <summary>
     /// Effective expression-based configuration parameter overrides registered for the command.
     /// </summary>
-    public IReadOnlyList<ConfigurationParameterOption> Options => 
+    public IReadOnlyList<ConfigurationParameterOption> Options =>
         new ReadOnlyCollection<ConfigurationParameterOption>(parameterOptions.Options.ToList());
 
     /// <summary>
@@ -127,11 +127,31 @@ public sealed class CliCommandBuilder<TConfiguration>(
         var command = new CliCommandBuilder<TSubConfiguration>(name: name, description: description, applyRegisteredPipelines: applyRegisteredPipelines);
         applyRegisteredPipelines?.Invoke(command);
         subcommands.Add(command);
-        if (validate is not null) 
+        if (validate is not null)
+        {
             command.Validate(validate);
-        if (execute is not null) 
+        }
+
+        if (execute is not null)
+        {
             command.OnExecute(execute);
+        }
+
         return command;
+    }
+
+    /// <summary>
+    /// Sets a command handler whose parameters are resolved through the CLI binding pipeline.
+    /// </summary>
+    /// <typeparam name="TResult">Handler result type supported by the CLI execution pipeline.</typeparam>
+    /// <param name="execute">Typed command-context handler.</param>
+    /// <returns>The current builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="execute"/> is <see langword="null"/>.</exception>
+    public CliCommandBuilder<TConfiguration> OnExecute<TResult>(
+        Func<CliCommandContext<TConfiguration>, TResult> execute)
+    {
+        ArgumentNullException.ThrowIfNull(execute);
+        return OnExecute((Delegate)execute);
     }
 
     /// <summary>
@@ -139,6 +159,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
     /// </summary>
     /// <param name="execute">Command handler delegate.</param>
     /// <returns>The current builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="execute"/> is <see langword="null"/>.</exception>
     public CliCommandBuilder<TConfiguration> OnExecute(Delegate execute)
     {
         dynamicHandler = Guard.RequireNotNull(execute);
@@ -159,7 +180,9 @@ public sealed class CliCommandBuilder<TConfiguration>(
         foreach (var arg in arguments)
         {
             if (!descriptorsByPath.TryGetValue(arg.Path, out var descriptor))
+            {
                 throw new InvalidOperationException($"CLI argument '{arg.Path}' does not map to a bindable configuration property.");
+            }
 
             var cmdArgument = CreateArgument(arg, descriptor);
             command.Arguments.Add(cmdArgument);
@@ -174,7 +197,9 @@ public sealed class CliCommandBuilder<TConfiguration>(
         }
 
         foreach (var subcommand in subcommands)
+        {
             command.Subcommands.Add(subcommand.BuildCommand(application, options));
+        }
 
         if (handler is not null)
         {
@@ -203,7 +228,15 @@ public sealed class CliCommandBuilder<TConfiguration>(
         {
             var configuration = BuildConfiguration(application, bindings, parseResult);
             var parameters = ConfigurationParameterParser.Parse(configuration, parameterOptions);
-            var context = new CliCommandContext<TConfiguration>(parameters, configuration, parseResult, ct, output, serviceProvider: null);
+            var context = new CliCommandContext<TConfiguration>(
+                parameters,
+                configuration,
+                parseResult,
+                ct,
+                output,
+                application.StandardInput,
+                application.StandardOutput,
+                serviceProvider: null);
             var pipeline = BuildExecutionPipeline();
             return handler is null ? 0 : await pipeline(context).ConfigureAwait(false);
         }
@@ -211,7 +244,10 @@ public sealed class CliCommandBuilder<TConfiguration>(
         {
             output.WriteErrorLine(ex.Message);
             foreach (var detail in ex.Errors)
+            {
                 output.WriteErrorLine($"  - {detail}");
+            }
+
             return 1;
         }
     }
@@ -243,9 +279,13 @@ public sealed class CliCommandBuilder<TConfiguration>(
         configureConfiguration?.Invoke(builder);
 
         if (application.EnvironmentVariablePrefix is null)
+        {
             builder.AddEnvironmentVariables();
+        }
         else
+        {
             builder.AddEnvironmentVariables(prefix: application.EnvironmentVariablePrefix);
+        }
 
         builder.AddInMemoryCollection(values);
         return builder.Build();
@@ -254,14 +294,18 @@ public sealed class CliCommandBuilder<TConfiguration>(
     static void AddCollectionValues(IDictionary<string, string?> values, string configurationKey, IReadOnlyList<string>? entries)
     {
         if (entries is null)
+        {
             return;
+        }
 
         var index = 0;
         for (var i = 0; i < entries.Count; i++)
         {
             var value = entries[i];
             if (string.IsNullOrWhiteSpace(value))
+            {
                 continue;
+            }
 
             values[$"{configurationKey}:{index++}"] = value;
         }
@@ -270,7 +314,9 @@ public sealed class CliCommandBuilder<TConfiguration>(
     static Option CreateOption(ConfigurationParameterDescriptor descriptor)
     {
         if (IsStringCollectionType(descriptor.ParameterType))
+        {
             return CreateStringCollectionOption(descriptor);
+        }
 
         return CreateScalarOption(descriptor);
     }
@@ -287,7 +333,9 @@ public sealed class CliCommandBuilder<TConfiguration>(
         };
 
         if (descriptor.AllowedValues.Count > 0)
+        {
             option.AcceptOnlyFromAmong([.. descriptor.AllowedValues]);
+        }
 
         return option;
     }
@@ -307,7 +355,9 @@ public sealed class CliCommandBuilder<TConfiguration>(
     static Argument CreateArgument(CliCommandArgument argumentDefinition, ConfigurationParameterDescriptor descriptor)
     {
         if (IsStringCollectionType(descriptor.ParameterType))
+        {
             return CreateStringCollectionArgument(argumentDefinition, descriptor);
+        }
 
         return CreateScalarArgument(argumentDefinition, descriptor);
     }
@@ -327,7 +377,9 @@ public sealed class CliCommandBuilder<TConfiguration>(
         };
 
         if (descriptor.AllowedValues.Count > 0)
-            argument.AcceptOnlyFromAmong([..descriptor.AllowedValues]);
+        {
+            argument.AcceptOnlyFromAmong([.. descriptor.AllowedValues]);
+        }
 
         return argument;
     }
@@ -374,10 +426,14 @@ public sealed class CliCommandBuilder<TConfiguration>(
     {
         var targetType = Nullable.GetUnderlyingType(type) ?? type;
         if (targetType == typeof(string))
+        {
             return false;
+        }
 
         if (targetType.IsArray)
+        {
             return targetType.GetElementType() == typeof(string);
+        }
 
         return targetType.GetInterfaces()
             .Append(targetType)
@@ -392,12 +448,19 @@ public sealed class CliCommandBuilder<TConfiguration>(
     {
         List<string> metadata = [];
         if (required)
+        {
             metadata.Add("required from any configuration source");
+        }
+
         if (allowedValues.Count > 0)
+        {
             metadata.Add($"allowed: {string.Join(", ", allowedValues)}");
+        }
 
         if (metadata.Count == 0)
+        {
             return description;
+        }
 
         return string.IsNullOrWhiteSpace(description) ? $"[{string.Join("; ", metadata)}]" : $"{description} [{string.Join("; ", metadata)}]";
     }
@@ -405,7 +468,9 @@ public sealed class CliCommandBuilder<TConfiguration>(
     static void EnsureUniqueChildName(IEnumerable<CliCommandNode> existing, string name)
     {
         if (existing.Any(command => string.Equals(command.Name, name, StringComparison.OrdinalIgnoreCase)))
+        {
             throw new InvalidOperationException($"A command named '{name}' is already registered at this level.");
+        }
     }
 
     CliCommandExecutionDelegate BuildExecutionPipeline()
@@ -434,7 +499,10 @@ public sealed class CliCommandBuilder<TConfiguration>(
         if (!validation.IsValid)
         {
             foreach (var error in validation.Errors)
+            {
                 context.Output.WriteErrorLine(error);
+            }
+
             return 1;
         }
         return handler is null ? 0 : await handler(context).ConfigureAwait(false);
@@ -447,7 +515,9 @@ public sealed class CliCommandBuilder<TConfiguration>(
         {
             var result = await validator(context).ConfigureAwait(false);
             if (result.IsValid)
+            {
                 continue;
+            }
 
             errors ??= [];
             errors.AddRange(result.Errors);
@@ -456,7 +526,85 @@ public sealed class CliCommandBuilder<TConfiguration>(
         return errors is null ? CliValidationResult.Success : CliValidationResult.Failure(errors);
     }
 
-    /// <summary>Validates the value.</summary>
+    /// <summary>Registers a typed configuration validator without requiring a delegate cast.</summary>
+    /// <typeparam name="TResult">Validator result type supported by the CLI validation pipeline.</typeparam>
+    /// <param name="validate">Validator that receives the bound command configuration.</param>
+    /// <returns>The current builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="validate"/> is <see langword="null"/>.</exception>
+    public CliCommandBuilder<TConfiguration> Validate<TResult>(Func<TConfiguration, TResult> validate)
+    {
+        ArgumentNullException.ThrowIfNull(validate);
+        return Validate((Delegate)validate);
+    }
+
+    /// <summary>Requires exactly one selected string parameter.</summary>
+    /// <param name="parameters">Configuration parameter selectors whose nonempty values indicate selection.</param>
+    /// <returns>The current builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="parameters"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// Fewer than two selectors are supplied, or a selector is null, duplicated, or does not identify a bindable
+    /// configuration parameter.
+    /// </exception>
+    public CliCommandBuilder<TConfiguration> RequireExactlyOne(
+        params Expression<Func<TConfiguration, string?>>[] parameters)
+    {
+        var bindings = CaptureStringParameters(parameters);
+        validators.Add(context =>
+        {
+            var configuration = RequireTypedContext(context).Configuration;
+            var selectedCount = 0;
+            foreach (var binding in bindings)
+            {
+                if (!string.IsNullOrWhiteSpace(binding.Read(configuration)))
+                {
+                    selectedCount++;
+                }
+            }
+
+            return Task.FromResult(selectedCount == 1
+                ? CliValidationResult.Success
+                : CliValidationResult.Failure(
+                    $"Specify exactly one of {FormatOptionNames(bindings)}."));
+        });
+        return this;
+    }
+
+    /// <summary>Allows at most one selected parameter to read from standard input.</summary>
+    /// <param name="parameters">Configuration parameter selectors whose values may select standard input.</param>
+    /// <returns>The current builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="parameters"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// Fewer than two selectors are supplied, or a selector is null, duplicated, or does not identify a bindable
+    /// configuration parameter.
+    /// </exception>
+    public CliCommandBuilder<TConfiguration> AllowStandardInputForAtMostOne(
+        params Expression<Func<TConfiguration, string?>>[] parameters)
+    {
+        var bindings = CaptureStringParameters(parameters);
+        validators.Add(context =>
+        {
+            var configuration = RequireTypedContext(context).Configuration;
+            var selectedCount = 0;
+            foreach (var binding in bindings)
+            {
+                if (CliStandardStreams.IsStandardStreamPath(binding.Read(configuration)))
+                {
+                    selectedCount++;
+                }
+            }
+
+            return Task.FromResult(selectedCount <= 1
+                ? CliValidationResult.Success
+                : CliValidationResult.Failure(
+                    $"Only one of {FormatOptionNames(bindings)} can read from standard input."));
+        });
+        return this;
+    }
+
+    /// <summary>Registers a dynamically bound validator.</summary>
+    /// <param name="validate">Validator whose parameters and result are adapted by the CLI binding pipeline.</param>
+    /// <returns>The current builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="validate"/> is <see langword="null"/>.</exception>
     public CliCommandBuilder<TConfiguration> Validate(Delegate validate)
     {
         dynamicValidators.Add(Guard.RequireNotNull(validate));
@@ -464,40 +612,116 @@ public sealed class CliCommandBuilder<TConfiguration>(
         return this;
     }
 
+    (FieldPath Path, Func<TConfiguration, string?> Read)[] CaptureStringParameters(
+        IReadOnlyList<Expression<Func<TConfiguration, string?>>> parameters)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+        if (parameters.Count < 2)
+        {
+            throw new ArgumentException("At least two configuration parameter selectors are required.", nameof(parameters));
+        }
+
+        var descriptors = ConfigurationParameterParser.Describe(parameterOptions)
+            .Select(static descriptor => descriptor.Path)
+            .ToHashSet();
+        HashSet<FieldPath> selectedPaths = [];
+        var bindings = new (FieldPath Path, Func<TConfiguration, string?> Read)[parameters.Count];
+        for (var index = 0; index < parameters.Count; index++)
+        {
+            var selector = parameters[index]
+                ?? throw new ArgumentException("Configuration parameter selectors cannot contain null.", nameof(parameters));
+            var path = CliExpressionPath.CreateFieldPath(CliExpressionPath.CapturePropertyChain(selector));
+            if (!descriptors.Contains(path))
+            {
+                throw new ArgumentException(
+                    $"Selector '{path}' does not identify a bindable configuration parameter.",
+                    nameof(parameters));
+            }
+
+            if (!selectedPaths.Add(path))
+            {
+                throw new ArgumentException(
+                    $"Configuration parameter selector '{path}' is registered more than once.",
+                    nameof(parameters));
+            }
+
+            bindings[index] = (path, selector.Compile());
+        }
+
+        return bindings;
+    }
+
+    string FormatOptionNames(IReadOnlyList<(FieldPath Path, Func<TConfiguration, string?> Read)> bindings)
+    {
+        var namesByPath = ConfigurationParameterParser.Describe(parameterOptions)
+            .ToDictionary(static descriptor => descriptor.Path, static descriptor => descriptor.CliName);
+        string[] names = new string[bindings.Count];
+        for (var index = 0; index < bindings.Count; index++)
+        {
+            if (!namesByPath.TryGetValue(bindings[index].Path, out var name))
+            {
+                throw new InvalidOperationException(
+                    $"CLI parameter metadata no longer contains '{bindings[index].Path}'.");
+            }
+
+            names[index] = $"'{name}'";
+        }
+
+        return names.Length == 2
+            ? $"{names[0]} and {names[1]}"
+            : $"{string.Join(", ", names[..^1])}, and {names[^1]}";
+    }
+
     internal override void ApplyParameterConfiguration(Type configurationType, Delegate configure)
     {
         if (configurationType == typeof(TConfiguration))
+        {
             ConfigureParameters((Action<ConfigurationParameterOptions<TConfiguration>>)configure);
+        }
 
         foreach (var subcommand in subcommands)
+        {
             subcommand.ApplyParameterConfiguration(configurationType, configure);
+        }
     }
 
     internal override void ApplyExecutionMiddleware(Type configurationType, Delegate invoke)
     {
         if (configurationType == typeof(TConfiguration))
+        {
             Use((Func<CliCommandContext<TConfiguration>, CliCommandExecutionDelegate, Task<int>>)invoke);
+        }
 
         foreach (var subcommand in subcommands)
+        {
             subcommand.ApplyExecutionMiddleware(configurationType, invoke);
+        }
     }
 
     internal override void ApplyValidation(Type configurationType, Delegate validate)
     {
         if (configurationType == typeof(TConfiguration))
+        {
             Validate(validate);
+        }
 
         foreach (var subcommand in subcommands)
+        {
             subcommand.ApplyValidation(configurationType, validate);
+        }
     }
 
     internal override void ApplyDynamicBindingMetadata(Type configurationType, Type contextType, Func<CliValidationServicesScope>? createValidationServicesScope)
     {
         if (configurationType == typeof(TConfiguration))
+        {
             ConfigureDynamicBinding(contextType, createValidationServicesScope);
+        }
 
         foreach (var subcommand in subcommands)
+        {
             subcommand.ApplyDynamicBindingMetadata(configurationType, contextType, createValidationServicesScope);
+        }
     }
 
     internal override IReadOnlyList<CliCommandDescriptor> Describe(string? parentPath = null)
@@ -522,13 +746,19 @@ public sealed class CliCommandBuilder<TConfiguration>(
         var path = string.IsNullOrWhiteSpace(parentPath) ? Name : $"{parentPath} {Name}";
 
         if (dynamicHandler is not null)
+        {
             ValidateDynamicCallable(errors, path, dynamicHandler, kind: "handler");
+        }
 
         foreach (var validator in dynamicValidators)
+        {
             ValidateDynamicCallable(errors, path, validator, kind: "validator");
+        }
 
         foreach (var subcommand in subcommands)
+        {
             errors.AddRange(subcommand.ValidateDynamicHandlers(path));
+        }
 
         return errors;
     }
@@ -582,7 +812,9 @@ public sealed class CliCommandBuilder<TConfiguration>(
         ArgumentNullException.ThrowIfNull(parameterType);
 
         if (parameterType.IsAssignableFrom(effectiveContextType))
+        {
             return true;
+        }
 
         if (parameterType == typeof(CancellationToken)
             || parameterType == typeof(ParseResult)
@@ -594,7 +826,9 @@ public sealed class CliCommandBuilder<TConfiguration>(
         }
 
         if (parameterType.IsAssignableFrom(typeof(TConfiguration)))
+        {
             return true;
+        }
 
         return services?.GetService(parameterType) is not null;
     }
@@ -611,9 +845,9 @@ public abstract class CliCommandNode
     public abstract string Name { get; }
 
     internal abstract Command BuildCommand(CliApplication application, CliInvocationOptions? options);
-    
+
     internal abstract void ApplyParameterConfiguration(Type configurationType, Delegate configure);
-    
+
     internal abstract void ApplyExecutionMiddleware(Type configurationType, Delegate invoke);
 
     internal abstract void ApplyValidation(Type configurationType, Delegate validate);
@@ -646,7 +880,9 @@ static class CliExpressionPath
                     continue;
                 case ParameterExpression parameter when ReferenceEquals(parameter, selector.Parameters[0]):
                     if (reversedProperties.Count == 0)
+                    {
                         throw new ArgumentException("Selector must reference a property path.", nameof(selector));
+                    }
 
                     reversedProperties.Reverse();
                     return reversedProperties;
@@ -661,7 +897,9 @@ static class CliExpressionPath
         var current = expression;
         while (current is UnaryExpression unary
                && unary.NodeType is ExpressionType.Convert or ExpressionType.ConvertChecked or ExpressionType.TypeAs)
+        {
             current = unary.Operand;
+        }
 
         return current;
     }

@@ -12,9 +12,21 @@ namespace Cohesive.Cli;
 /// A <see cref="CliApplication"/> can be used as a console front-end for background jobs while still allowing the
 /// same executable to fall back to ordinary host startup when no registered command name is present in
 /// <c>args[0]</c>. This enables one <c>Program.cs</c> entrypoint to support both command execution and the normal
-/// ASP.NET or worker-service boot path.
+/// ASP.NET or worker-service boot path. Supplied standard streams and writers remain caller-owned and are not
+/// disposed by the application.
 /// </remarks>
-public sealed class CliApplication(string? description = null)
+/// <param name="description">Optional root command description used for generated help.</param>
+/// <param name="standardInput">Raw standard input stream, or <see langword="null"/> to open the process stream.</param>
+/// <param name="standardOutput">Raw standard output stream, or <see langword="null"/> to open the process stream.</param>
+/// <param name="standardError">Standard error writer, or <see langword="null"/> to use <see cref="Console.Error"/>.</param>
+/// <exception cref="ArgumentException">
+/// <paramref name="standardInput"/> is not readable, or <paramref name="standardOutput"/> is not writable.
+/// </exception>
+public sealed class CliApplication(
+    string? description = null,
+    Stream? standardInput = null,
+    Stream? standardOutput = null,
+    TextWriter? standardError = null)
 {
     readonly List<CliCommandNode> commands = [];
     readonly Dictionary<Type, List<Delegate>> parameterPipelines = [];
@@ -22,12 +34,26 @@ public sealed class CliApplication(string? description = null)
     readonly Dictionary<Type, List<Delegate>> validationPipelines = [];
     readonly Dictionary<Type, List<CliDynamicBindingRegistration>> dynamicBindingPipelines = [];
     Action<IConfigurationBuilder>? configureConfiguration;
+    bool useConsoleCancellation;
     string? environmentVariablePrefix;
 
     /// <summary>
     /// Root command description used for generated help.
     /// </summary>
     public string? Description { get; } = description;
+
+    /// <summary>Raw standard input stream available to every command context.</summary>
+    public Stream StandardInput { get; } = RequireReadable(
+        standardInput ?? Console.OpenStandardInput(),
+        nameof(standardInput));
+
+    /// <summary>Raw standard output stream available to every command context.</summary>
+    public Stream StandardOutput { get; } = RequireWritable(
+        standardOutput ?? Console.OpenStandardOutput(),
+        nameof(standardOutput));
+
+    /// <summary>Standard error writer used when an invocation does not override error output.</summary>
+    public TextWriter StandardError { get; } = standardError ?? Console.Error;
 
     /// <summary>
     /// Descriptions of the registered root commands and subcommands.
@@ -54,6 +80,21 @@ public sealed class CliApplication(string? description = null)
     public CliApplication WithEnvironmentVariablePrefix(string? prefix = null)
     {
         environmentVariablePrefix = prefix;
+        return this;
+    }
+
+    /// <summary>
+    /// Cancels command invocations when the process receives <see cref="Console.CancelKeyPress"/>.
+    /// </summary>
+    /// <returns>The current application.</returns>
+    /// <remarks>
+    /// The event handler is attached only for the lifetime of an invocation, prevents immediate process termination,
+    /// and forwards the signal through <see cref="CliCommandContext.CancellationToken"/>. An invocation token supplied
+    /// to <see cref="InvokeAsync(IReadOnlyList{string}, CancellationToken)"/> remains linked to the same context token.
+    /// </remarks>
+    public CliApplication UseConsoleCancellation()
+    {
+        useConsoleCancellation = true;
         return this;
     }
 
@@ -94,6 +135,20 @@ public sealed class CliApplication(string? description = null)
     }
 
     /// <summary>
+    /// Registers a typed configuration validator without requiring a delegate cast.
+    /// </summary>
+    /// <typeparam name="TConfiguration">Configuration type the validator applies to.</typeparam>
+    /// <param name="validate">Validator that receives the bound command configuration.</param>
+    /// <returns>The current application.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="validate"/> is <see langword="null"/>.</exception>
+    public CliApplication Validate<TConfiguration>(
+        Func<TConfiguration, IReadOnlyList<string>> validate)
+    {
+        ArgumentNullException.ThrowIfNull(validate);
+        return Validate<TConfiguration>((Delegate)validate);
+    }
+
+    /// <summary>
     /// Registers a validation delegate that runs before the command handler with configuration type <typeparamref name="TConfiguration"/>.
     /// </summary>
     /// <example>
@@ -105,6 +160,10 @@ public sealed class CliApplication(string? description = null)
     ///     : []
     /// </code>
     /// </example>
+    /// <typeparam name="TConfiguration">Configuration type the validator applies to.</typeparam>
+    /// <param name="validate">Validator whose parameters and result are adapted by the CLI binding pipeline.</param>
+    /// <returns>The current application.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="validate"/> is <see langword="null"/>.</exception>
     public CliApplication Validate<TConfiguration>(Delegate validate)
     {
         ArgumentNullException.ThrowIfNull(validate);
@@ -192,23 +251,58 @@ public sealed class CliApplication(string? description = null)
     /// <param name="options">Optional output and serialization settings for this invocation.</param>
     /// <param name="ct">Cancellation token for parsing and command execution.</param>
     /// <returns>The command exit code.</returns>
-    public Task<int> InvokeAsync(IReadOnlyList<string> args, CliInvocationOptions? options, CancellationToken ct = default)
+    public async Task<int> InvokeAsync(
+        IReadOnlyList<string> args,
+        CliInvocationOptions? options,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(args);
-        var rootCommand = BuildRootCommand(options);
-        var parseResult = rootCommand.Parse(args);
-        var invocationConfiguration = new InvocationConfiguration();
-        if (options?.StandardOutput is not null)
+
+        StreamWriter? standardOutputWriter = null;
+        var effectiveStandardOutput = options?.StandardOutput;
+        if (effectiveStandardOutput is null)
         {
-            invocationConfiguration.Output = options.StandardOutput;
+            standardOutputWriter = CliStandardStreams.OpenUtf8Writer(StandardOutput);
+            effectiveStandardOutput = standardOutputWriter;
         }
 
-        if (options?.ErrorOutput is not null)
+        var effectiveOptions = new CliInvocationOptions
         {
-            invocationConfiguration.Error = options.ErrorOutput;
-        }
+            StandardOutput = effectiveStandardOutput,
+            ErrorOutput = options?.ErrorOutput ?? StandardError,
+            JsonSerializerOptions = options?.JsonSerializerOptions
+        };
 
-        return parseResult.InvokeAsync(invocationConfiguration, ct);
+        try
+        {
+            if (!useConsoleCancellation)
+            {
+                return await InvokeCoreAsync(args, effectiveOptions, ct).ConfigureAwait(false);
+            }
+
+            using CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            ConsoleCancelEventHandler cancel = (_, eventArgs) =>
+            {
+                eventArgs.Cancel = true;
+                cancellation.Cancel();
+            };
+            Console.CancelKeyPress += cancel;
+            try
+            {
+                return await InvokeCoreAsync(args, effectiveOptions, cancellation.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                Console.CancelKeyPress -= cancel;
+            }
+        }
+        finally
+        {
+            if (standardOutputWriter is not null)
+            {
+                await standardOutputWriter.DisposeAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>
@@ -244,6 +338,21 @@ public sealed class CliApplication(string? description = null)
     internal void ApplySharedConfiguration(IConfigurationBuilder builder) => configureConfiguration?.Invoke(builder);
 
     internal string? EnvironmentVariablePrefix => environmentVariablePrefix;
+
+    async Task<int> InvokeCoreAsync(
+        IReadOnlyList<string> args,
+        CliInvocationOptions options,
+        CancellationToken ct)
+    {
+        var rootCommand = BuildRootCommand(options);
+        var parseResult = rootCommand.Parse(args);
+        var invocationConfiguration = new InvocationConfiguration
+        {
+            Output = options.StandardOutput!,
+            Error = options.ErrorOutput!
+        };
+        return await parseResult.InvokeAsync(invocationConfiguration, ct).ConfigureAwait(false);
+    }
 
     internal void RegisterDynamicBinding<TConfiguration>(Type contextType, Func<CliValidationServicesScope>? createValidationServicesScope)
     {
@@ -317,6 +426,26 @@ public sealed class CliApplication(string? description = null)
         {
             throw new InvalidOperationException($"A command named '{name}' is already registered at this level.");
         }
+    }
+
+    static Stream RequireReadable(Stream stream, string parameterName)
+    {
+        if (!stream.CanRead)
+        {
+            throw new ArgumentException("The standard input stream must be readable.", parameterName);
+        }
+
+        return stream;
+    }
+
+    static Stream RequireWritable(Stream stream, string parameterName)
+    {
+        if (!stream.CanWrite)
+        {
+            throw new ArgumentException("The standard output stream must be writable.", parameterName);
+        }
+
+        return stream;
     }
 
     RootCommand BuildRootCommand(CliInvocationOptions? options)

@@ -15,7 +15,15 @@ static class SimulationCliApplication
     const int FailureExitCode = 1;
     const int CancelledExitCode = 130;
 
-    public static async Task<int> RunAsync(
+    public static Task<int> RunAsync(
+        string[] args,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        return InvokeAsync(Create().UseConsoleCancellation(), args, cancellationToken);
+    }
+
+    public static Task<int> RunAsync(
         string[] args,
         Stream standardInput,
         Stream standardOutput,
@@ -27,65 +35,59 @@ static class SimulationCliApplication
         ArgumentNullException.ThrowIfNull(standardOutput);
         ArgumentNullException.ThrowIfNull(standardError);
 
-        using var standardOutputWriter = CliStandardStreams.OpenUtf8Writer(standardOutput);
-        var app = Create(standardInput, standardOutput);
-        IReadOnlyList<string> invocationArgs = args.Length == 0 ? ["--help"] : args;
-        return await app.InvokeAsync(
-                invocationArgs,
-                new()
-                {
-                    StandardOutput = standardOutputWriter,
-                    ErrorOutput = standardError
-                },
-                cancellationToken)
-            .ConfigureAwait(false);
+        return InvokeAsync(
+            Create(standardInput, standardOutput, standardError),
+            args,
+            cancellationToken);
     }
 
-    static CliApplication Create(Stream standardInput, Stream standardOutput)
+    static Task<int> InvokeAsync(
+        CliApplication app,
+        string[] args,
+        CancellationToken cancellationToken)
     {
-        var app = new CliApplication("Create and provision deterministic Cohesive world artifacts.");
+        IReadOnlyList<string> invocationArgs = args.Length == 0 ? ["--help"] : args;
+        return app.InvokeAsync(invocationArgs, cancellationToken);
+    }
+
+    static CliApplication Create(
+        Stream? standardInput = null,
+        Stream? standardOutput = null,
+        TextWriter? standardError = null)
+    {
+        var app = new CliApplication(
+            "Create and provision deterministic Cohesive world artifacts.",
+            standardInput,
+            standardOutput,
+            standardError);
         app.Command<WorldManifestCliOptions>(
                 "manifest",
                 "Create and retain a verified world-artifact manifest.")
-            .Validate((Func<WorldManifestCliOptions, IReadOnlyList<string>>)ValidateManifestOptions)
-            .OnExecute((CliCommandContext<WorldManifestCliOptions> context) =>
-                CreateManifestAsync(context, standardInput, standardOutput));
+            .RequireExactlyOne(
+                options => options.WorldPath,
+                options => options.RelationshipWorldPath)
+            .OnExecute(CreateManifestAsync);
         app.Command<WorldProvisionCliOptions>(
                 "provision",
-                "Provision a retained world-artifact manifest as JSON Lines.")
+                "Provision a retained world-artifact manifest as JSON Lines."
+                )
             .Validate((WorldProvisionCliOptions options) =>
                 options.BatchSize > 0
                     ? []
                     : new[] { $"Batch size '{options.BatchSize}' is not a positive 32-bit integer." })
-            .OnExecute((CliCommandContext<WorldProvisionCliOptions> context) =>
-                ProvisionAsync(context, standardInput, standardOutput));
+            .OnExecute(ProvisionAsync);
         app.Command<WorldVerifyCliOptions>(
                 "verify",
                 "Verify world JSON Lines against an independently retained manifest.")
-            .Validate((Func<WorldVerifyCliOptions, IReadOnlyList<string>>)ValidateVerifyOptions)
-            .OnExecute((CliCommandContext<WorldVerifyCliOptions> context) =>
-                VerifyAsync(context, standardInput));
+            .AllowStandardInputForAtMostOne(
+                options => options.ManifestPath,
+                options => options.JsonLinesPath)
+            .OnExecute(VerifyAsync);
         return app;
     }
 
-    static IReadOnlyList<string> ValidateManifestOptions(WorldManifestCliOptions options)
-    {
-        var coreWorld = !string.IsNullOrWhiteSpace(options.WorldPath);
-        var relationshipWorld = !string.IsNullOrWhiteSpace(options.RelationshipWorldPath);
-        return coreWorld != relationshipWorld
-            ? []
-            : ["Specify exactly one of '--world' or '--relationship-world'."];
-    }
-
-    static IReadOnlyList<string> ValidateVerifyOptions(WorldVerifyCliOptions options) =>
-        options.ReadsManifestStandardInput && options.ReadsJsonLinesStandardInput
-            ? ["Options '--manifest' and '--jsonl' cannot both read from standard input."]
-            : [];
-
     static async Task<int> CreateManifestAsync(
-        CliCommandContext<WorldManifestCliOptions> context,
-        Stream standardInput,
-        Stream standardOutput)
+        CliCommandContext<WorldManifestCliOptions> context)
     {
         try
         {
@@ -93,7 +95,7 @@ static class SimulationCliApplication
             var worldJson = await ReadJsonAsync(
                     options.InputPath,
                     options.ReadsStandardInput,
-                    standardInput,
+                    context.StandardInput,
                     context.CancellationToken)
                 .ConfigureAwait(false);
             var manifest = options.IsRelationshipWorld
@@ -107,7 +109,7 @@ static class SimulationCliApplication
             await WriteOutputAsync(
                     options.OutputPath,
                     options.WritesStandardOutput,
-                    standardOutput,
+                    context.StandardOutput,
                     async (output, cancellationToken) =>
                     {
                         await output.WriteAsync(canonicalManifest, cancellationToken).ConfigureAwait(false);
@@ -130,9 +132,7 @@ static class SimulationCliApplication
     }
 
     static async Task<int> ProvisionAsync(
-        CliCommandContext<WorldProvisionCliOptions> context,
-        Stream standardInput,
-        Stream standardOutput)
+        CliCommandContext<WorldProvisionCliOptions> context)
     {
         try
         {
@@ -140,14 +140,14 @@ static class SimulationCliApplication
             var manifestJson = await ReadJsonAsync(
                     options.ManifestPath,
                     options.ReadsStandardInput,
-                    standardInput,
+                    context.StandardInput,
                     context.CancellationToken)
                 .ConfigureAwait(false);
             var manifest = WorldArtifactManifestJsonSerializer.Deserialize(manifestJson);
             await WriteOutputAsync(
                     options.OutputPath,
                     options.WritesStandardOutput,
-                    standardOutput,
+                    context.StandardOutput,
                     (output, cancellationToken) => ProvisionAsync(manifest, options, output, cancellationToken),
                     context.CancellationToken)
                 .ConfigureAwait(false);
@@ -166,8 +166,7 @@ static class SimulationCliApplication
     }
 
     static async Task<int> VerifyAsync(
-        CliCommandContext<WorldVerifyCliOptions> context,
-        Stream standardInput)
+        CliCommandContext<WorldVerifyCliOptions> context)
     {
         try
         {
@@ -175,7 +174,7 @@ static class SimulationCliApplication
             var manifestJson = await ReadJsonAsync(
                     options.ManifestPath,
                     options.ReadsManifestStandardInput,
-                    standardInput,
+                    context.StandardInput,
                     context.CancellationToken)
                 .ConfigureAwait(false);
             var manifestValidation = WorldArtifactManifestJsonSerializer.TryDeserialize(
@@ -192,7 +191,7 @@ static class SimulationCliApplication
             {
                 validation = await ValidateJsonLinesAsync(
                         manifest,
-                        standardInput,
+                        context.StandardInput,
                         context.CancellationToken)
                     .ConfigureAwait(false);
             }
@@ -282,7 +281,7 @@ static class SimulationCliApplication
 
     static string NormalizePath(string value, string option)
     {
-        if (string.Equals(value, SimulationCliPaths.StandardStream, StringComparison.Ordinal))
+        if (CliStandardStreams.IsStandardStreamPath(value))
         {
             return value;
         }

@@ -10,9 +10,20 @@ namespace Cohesive.Cli;
 /// </remarks>
 public static class CliStandardStreams
 {
+    /// <summary>Conventional path token used to select a standard input or output stream.</summary>
+    public const string StandardStreamPath = "-";
+
     static readonly UTF8Encoding StrictUtf8 = new(
         encoderShouldEmitUTF8Identifier: false,
         throwOnInvalidBytes: true);
+
+    /// <summary>Determines whether a path selects a standard process stream.</summary>
+    /// <param name="path">Path value to inspect.</param>
+    /// <returns><see langword="true"/> when <paramref name="path"/> is <see cref="StandardStreamPath"/>.</returns>
+    public static bool IsStandardStreamPath(string? path) => string.Equals(
+        path,
+        StandardStreamPath,
+        StringComparison.Ordinal);
 
     /// <summary>Opens a BOM-aware strict UTF-8 reader over a caller-owned standard input stream.</summary>
     /// <param name="input">Readable stream containing command input text.</param>
