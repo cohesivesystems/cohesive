@@ -7,12 +7,13 @@ using TransitionBindingIds = Cohesive.Transitions.IR.TransitionBindingIds;
 
 namespace Cohesive.Transitions.Authoring;
 
-internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where TEntity : Entity
+internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where TEntity : notnull
 {
     readonly Dictionary<string, FieldDefinition> fieldByName;
     readonly HashSet<string> parameterNames;
     readonly bool allowCapturedValues;
     readonly IClrTypeRefMapper? typeRefMapper;
+    readonly ClrMemberPathResolver? memberPathResolver;
     ParameterExpression? currentStateParameter;
     ParameterExpression? currentSnapshotParameter;
 
@@ -33,7 +34,8 @@ internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where
         Shape entityShape,
         IReadOnlySet<string> parameterNames,
         bool allowCapturedValues = true,
-        IClrTypeRefMapper? typeRefMapper = null)
+        IClrTypeRefMapper? typeRefMapper = null,
+        ClrMemberPathResolver? memberPathResolver = null)
     {
         ArgumentNullException.ThrowIfNull(argument: entityShape);
         ArgumentNullException.ThrowIfNull(argument: parameterNames);
@@ -41,6 +43,59 @@ internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where
         this.parameterNames = new(parameterNames, StringComparer.Ordinal);
         this.allowCapturedValues = allowCapturedValues;
         this.typeRefMapper = typeRefMapper;
+        this.memberPathResolver = memberPathResolver;
+    }
+
+    public FieldPath TranslatePocoFieldTarget<TValue>(Expression<Func<TEntity, TValue>> selector)
+    {
+        ArgumentNullException.ThrowIfNull(selector);
+        if (typeof(Entity).IsAssignableFrom(typeof(TEntity))
+            || StripConvert(selector.Body) is not MemberExpression member
+            || !TryResolvePocoPath(member, selector.Parameters[0], out var path))
+        {
+            throw new TransitionExpressionTranslationException(
+                "A POCO update target must be a readable property chain rooted at the state parameter.");
+        }
+        return path;
+    }
+
+    bool TryResolvePocoPath(MemberExpression member, ParameterExpression root, out FieldPath path)
+    {
+        path = default;
+        if (typeof(Entity).IsAssignableFrom(typeof(TEntity)))
+            return false;
+        List<PropertyInfo> properties = [];
+        Expression? current = member;
+        while (current is MemberExpression access)
+        {
+            if (access.Member is not PropertyInfo property || property.GetMethod is null || property.GetIndexParameters().Length != 0)
+                return false;
+            properties.Add(property);
+            current = access.Expression is null ? null : StripConvert(access.Expression);
+        }
+        if (!ReferenceEquals(current, root))
+            return false;
+        properties.Reverse();
+        path = memberPathResolver is null
+            ? new([.. properties.Select(static property => FieldPathSegment.ForField(DefaultClrTypeRefMapper.GetSerializedMemberName(property)))])
+            : memberPathResolver(typeof(TEntity), properties);
+
+        if (path.Segments.IsDefaultOrEmpty || !fieldByName.TryGetValue(path.Segments[0].Segment!, out var field))
+            throw new TransitionExpressionTranslationException($"The entity shape does not declare POCO field path '{path}'.");
+        var type = field.Type;
+        var cardinality = field.Cardinality;
+        for (var index = 1; index < path.Segments.Length; index++)
+        {
+            if (cardinality != FieldCardinality.Single || type is not ObjectTypeRef objectType)
+                throw new TransitionExpressionTranslationException($"POCO path '{path}' traverses a collection or non-structural value; select the complete value instead.");
+            var segmentName = path.Segments[index].Segment;
+            var nested = objectType.Fields.FirstOrDefault(candidate => string.Equals(candidate.Name, segmentName, StringComparison.Ordinal));
+            if (nested is null)
+                throw new TransitionExpressionTranslationException($"The entity shape does not declare POCO field path '{path}'.");
+            type = nested.Type;
+            cardinality = nested.Cardinality;
+        }
+        return true;
     }
 
     public Expr Translate(LambdaExpression lambda)
@@ -169,6 +224,7 @@ internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where
                     );
 
             case UnaryExpression unary when unary.NodeType is ExpressionType.Not:
+                RequirePortableOperator(unary.Method);
                 return new UnaryExpr(
                     Operator: UnaryOperator.Not,
                     Operand: Translate(
@@ -245,6 +301,9 @@ internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where
             return countExpr;
         }
 
+        if (TryResolvePocoPath(member, entityParameter, out var statePath))
+            return new FieldExpr(statePath);
+
         if (allowCapturedValues && TryTranslateCapturedConstant(expression: member, out var captured))
             return new ConstantExpr(Value: ToConstant(captured, constantTypeHint ?? member.Type));
 
@@ -260,6 +319,7 @@ internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where
 
     Expr TranslateBinary(BinaryExpression binary, ParameterExpression entityParameter, ParameterExpression parametersParameter)
     {
+        RequirePortableOperator(binary.Method);
         if (binary.NodeType == ExpressionType.Add && IsStringConcatenation(binary))
         {
             return TranslateStringConcatenation(
@@ -650,7 +710,7 @@ internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where
         if (member.Expression is not MemberExpression entityIdMember)
             return false;
 
-        if (!string.Equals(entityIdMember.Member.Name, nameof(EntitySnapshot<TEntity>.EntityId), StringComparison.Ordinal))
+        if (!string.Equals(entityIdMember.Member.Name, nameof(EntitySnapshot<Entity>.EntityId), StringComparison.Ordinal))
             return false;
 
         if (entityIdMember.Member is not PropertyInfo entityIdProperty || entityIdProperty.PropertyType != typeof(EntityId))
@@ -690,7 +750,7 @@ internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where
         if (currentSnapshotParameter is null)
             return false;
 
-        if (!string.Equals(call.Method.Name, nameof(EntitySnapshot<TEntity>.Get), StringComparison.Ordinal))
+        if (!string.Equals(call.Method.Name, nameof(EntitySnapshot<Entity>.Get), StringComparison.Ordinal))
             return false;
 
         if (call.Object is null || call.Arguments.Count != 1)
@@ -877,6 +937,9 @@ internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where
         if (member.Expression is null)
             return false;
 
+        if (!typeof(IEnumerable).IsAssignableFrom(UnwrapSemanticValueType(member.Expression.Type)))
+            return false;
+
         var collectionExpression = StripConvert(member.Expression);
         if (collectionExpression is MemberExpression fieldMember
             && TryResolveEntityFieldReference(fieldMember, entityParameter, out var field)
@@ -914,7 +977,9 @@ internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where
     }
 
     static bool IsSnapshotParameter(ParameterExpression parameter) =>
-        parameter.Type == typeof(EntitySnapshot<TEntity>);
+        parameter.Type.IsGenericType
+        && parameter.Type.GetGenericTypeDefinition() == typeof(EntitySnapshot<>)
+        && parameter.Type.GenericTypeArguments[0] == typeof(TEntity);
 
     bool TryTranslateCountCall(MethodCallExpression call, ParameterExpression entityParameter, ParameterExpression parametersParameter, out Expr expression)
     {
@@ -989,10 +1054,22 @@ internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where
         var current = expression;
         while (current is UnaryExpression unary && unary.NodeType is ExpressionType.Convert or ExpressionType.ConvertChecked or ExpressionType.TypeAs)
         {
+            RequirePortableOperator(unary.Method);
             current = unary.Operand;
         }
 
         return current;
+    }
+
+    static void RequirePortableOperator(MethodInfo? method)
+    {
+        if (!typeof(Entity).IsAssignableFrom(typeof(TEntity))
+            && method?.DeclaringType is { } declaringType
+            && !DefaultClrTypeRefMapper.TryMapScalarTypeKind(declaringType, out _))
+        {
+            throw new TransitionExpressionTranslationException(
+                $"Custom CLR operator '{declaringType.Name}.{method.Name}' has no portable Transition interpretation.");
+        }
     }
 
     static bool TryTranslateCapturedConstant(Expression expression, out object? value)
@@ -1181,18 +1258,21 @@ internal sealed class TransitionExpressionTranslator<TEntity, TParameters> where
             Guid guidValue => ObservationValue.FromString(guidValue.ToString()),
             DateTime dateTimeValue => ObservationValue.FromString(dateTimeValue.ToString("O")),
             DateTimeOffset dateTimeOffsetValue => ObservationValue.FromString(dateTimeOffsetValue.ToString("O")),
-            Enum enumValue => ObservationValue.FromString(enumValue.ToString()),
+            Enum enumValue => ObservationValue.FromString(ToEnumString(enumValue, enumValue.GetType())),
             _ => throw new TransitionExpressionTranslationException($"Constant value type '{value.GetType().Name}' is not supported.")
         };
     }
 
     static string ToEnumString(object value, Type enumType)
     {
-        if (value.GetType().IsEnum)
-            return value.ToString()!;
-
-        var enumValue = Enum.ToObject(enumType, value);
-        return enumValue.ToString()!;
+        var enumValue = value.GetType().IsEnum ? value : Enum.ToObject(enumType, value);
+        var observed = ObservationValue.FromObject(enumValue);
+        if (observed.Kind != ObservationValueKind.String)
+        {
+            throw new TransitionExpressionTranslationException(
+                $"Enum '{enumType.Name}' must project a canonical string member.");
+        }
+        return observed.GetString()!;
     }
 
     static Type? ResolveEnumConstantHint(Expression expression, Expression peerExpression)

@@ -9,7 +9,41 @@ sparse updates, invariants, interactions, machine movements, and typed outcomes.
 dotnet add package Cohesive.Transitions
 ```
 
-## Start with the entity
+## Start with an immutable record
+
+Transition expressions can use ordinary POCO properties without inheriting from `Entity<T>`:
+
+```csharp
+public sealed record RunControl(bool Eligible, string Status);
+public sealed record ApproveRun(bool Approved);
+```
+
+At application startup, resolve the entity shape and author the transition:
+
+```csharp
+var entity = ObjectEntityDefinition.For<RunControl>(new("run-control"));
+var metadata = new TransitionAuthoringMetadata(
+    new("run-control/approve"), new("revision/1"), new("body"),
+    new(new(TransitionAuthoring.Producer), new("example/run-control"), DocumentOrigin.Generated));
+
+var approve = TransitionAuthoring.Create<RunControl, ApproveRun, string>(
+    entity.Shape,
+    metadata,
+    transition => transition
+        .Invariant(new("valid-status"), state => state.Status != "invalid")
+        .Requires(new("eligible"), (state, input) => state.Eligible && input.Approved,
+            (state, input) => "rejected")
+        .Set(new("approve"), state => state.Status, "approved")
+        .Return(new("result"), TransitionOutcomeDisposition.Applied, "approved"));
+```
+
+The shape and the restricted expressions produce the same canonical Transition IR as explicit entities and direct IR
+authoring. Compile the document once and reuse its plan. Invocation expressions read the original observation;
+ordered patches produce a candidate observation, and invariants check that candidate. Neither authoring nor execution
+mutates the record. [POCO authoring and execution](POCO_AUTHORING.md) covers materialization, names, value-object
+contracts, and the supported subset.
+
+## Explicit entity declarations
 
 The C# entity surface discovers fields and produces the canonical observation shape. Ordinary field declarations do
 not require node IDs:

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -11,6 +12,32 @@ namespace Cohesive.Model.Authoring;
 /// </summary>
 public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 {
+    readonly ImmutableDictionary<Type, TypeRef> typeMappings;
+
+    /// <summary>Creates the default portable CLR type projection.</summary>
+    public DefaultClrTypeRefMapper() => typeMappings = ImmutableDictionary<Type, TypeRef>.Empty;
+
+    /// <summary>Creates a projection with explicit portable contracts for selected CLR value types.</summary>
+    /// <param name="typeMappings">Type contracts copied at construction; nullable keys are normalized to their value type.</param>
+    /// <exception cref="ArgumentNullException">The map or one of its values is null.</exception>
+    /// <exception cref="ArgumentException">Two keys identify the same normalized CLR type.</exception>
+    /// <remarks>
+    /// Mappings declare semantics, not converter behavior. Runtime values must independently satisfy the declared
+    /// contract. This mapper retains no serializers, converters, or executable dependencies in the resulting IR.
+    /// </remarks>
+    public DefaultClrTypeRefMapper(IReadOnlyDictionary<Type, TypeRef> typeMappings)
+    {
+        ArgumentNullException.ThrowIfNull(typeMappings);
+        var builder = ImmutableDictionary.CreateBuilder<Type, TypeRef>();
+        foreach (var (type, contract) in typeMappings)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            ArgumentNullException.ThrowIfNull(contract);
+            builder.Add(Nullable.GetUnderlyingType(type) ?? type, contract);
+        }
+        this.typeMappings = builder.ToImmutable();
+    }
+
     /// <summary>
     /// Maps the supplied CLR type to a semantic type reference using available nullability metadata.
     /// </summary>
@@ -30,9 +57,11 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
         return MapInternal(clrType, nullability, []);
     }
 
-    static TypeRef MapInternal(Type clrType, NullabilityInfo? nullability, HashSet<Type> mapPath)
+    TypeRef MapInternal(Type clrType, NullabilityInfo? nullability, HashSet<Type> mapPath)
     {
         var unwrapped = Nullable.GetUnderlyingType(nullableType: clrType) ?? clrType;
+        if (typeMappings.TryGetValue(unwrapped, out var declared))
+            return declared;
         if (TryMapScalarTypeKind(unwrapped, out var scalarKind))
             return new ScalarTypeRef(scalarKind);
 
@@ -59,6 +88,14 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
             }
 
             return new QuantityTypeRef(quantity: unwrapped.Name, baseKind: representationKind);
+        }
+
+        if (unwrapped.IsDefined(typeof(JsonConverterAttribute), inherit: true))
+        {
+            return Opaque(
+                unwrapped,
+                TypeInferenceDiagnosticReasons.UnsupportedValueConverter,
+                "A custom JSON converter requires an explicit portable type mapping; converter behavior cannot be inferred from CLR properties.");
         }
 
         if (TryGetKeyValuePairTypes(
@@ -258,7 +295,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
         return false;
     }
 
-    static bool TryMapJsonSingleValueWrapperType(
+    bool TryMapJsonSingleValueWrapperType(
         Type type,
         NullabilityInfo? nullability,
         HashSet<Type> mapPath,

@@ -158,6 +158,9 @@ public static class TypeInferenceDiagnosticReasons
     /// </summary>
     public const string UnsupportedEnumConverter = "unsupportedEnumConverter";
 
+    /// <summary>A custom JSON converter has no explicitly declared portable value contract.</summary>
+    public const string UnsupportedValueConverter = "unsupportedValueConverter";
+
     /// <summary>Multiple enum members map to the same canonical JSON string.</summary>
     public const string AmbiguousSerializedEnumMember = "ambiguousSerializedEnumMember";
 

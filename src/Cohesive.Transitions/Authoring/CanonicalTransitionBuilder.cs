@@ -57,7 +57,7 @@ public sealed class TransitionLocal<TValue>
 /// <typeparam name="TInput">Typed invocation input.</typeparam>
 /// <typeparam name="TOutcome">Typed Transition outcome.</typeparam>
 public class TransitionSequenceBuilder<TEntity, TInput, TOutcome>
-    where TEntity : Entity
+    where TEntity : notnull
 {
     readonly List<TransitionNode> steps = [];
 
@@ -102,6 +102,276 @@ public class TransitionSequenceBuilder<TEntity, TInput, TOutcome>
             expression);
         Add(node, Context.Source(sourceFile, sourceLine, sourceMember, $"Let '{id.Value}'"));
         return new(Context.Owner, Scope, binding, contract);
+    }
+
+    /// <summary>Adds a Set sparse patch produced by a restricted typed expression.</summary>
+    /// <typeparam name="TValue">CLR value type of the target field.</typeparam>
+    /// <param name="id">Stable update-node identity.</param>
+    /// <param name="field">Direct or nested POCO property selector.</param>
+    /// <param name="value">Pure replacement-value expression.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>This sequence builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="field"/> or <paramref name="value"/> is null.</exception>
+    /// <exception cref="TransitionExpressionTranslationException">A selector or value is outside the portable subset.</exception>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> Set<TValue>(
+        ExecutionNodeId id,
+        Expression<Func<TEntity, TValue>> field,
+        Expression<Func<TEntity, TInput, TValue>> value,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        ArgumentNullException.ThrowIfNull(value);
+        return AddPatch(
+            id,
+            Context.FieldPath(field),
+            new SetTransitionPatch(Context.Translate(value)),
+            Context.Source(sourceFile, sourceLine, sourceMember, $"Set '{id.Value}'"));
+    }
+
+    /// <summary>Adds a Set sparse patch containing a portable constant.</summary>
+    /// <typeparam name="TValue">CLR value type of the target field.</typeparam>
+    /// <param name="id">Stable update-node identity.</param>
+    /// <param name="field">Direct or nested POCO property selector.</param>
+    /// <param name="value">Constant replacement value.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>This sequence builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="field"/> is <see langword="null"/>.</exception>
+    /// <exception cref="NotSupportedException"><paramref name="value"/> cannot be represented portably.</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="value"/> cannot be projected as an observation value.</exception>
+    /// <exception cref="System.Text.Json.JsonException"><paramref name="value"/> contains invalid JSON data.</exception>
+    /// <exception cref="TransitionExpressionTranslationException"><paramref name="field"/> is not a supported POCO property path or is not writable.</exception>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> Set<TValue>(
+        ExecutionNodeId id,
+        Expression<Func<TEntity, TValue>> field,
+        TValue value,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        return AddPatch(
+            id,
+            Context.FieldPath(field),
+            new SetTransitionPatch(Context.Constant(value)),
+            Context.Source(sourceFile, sourceLine, sourceMember, $"Set '{id.Value}'"));
+    }
+
+    /// <summary>Adds a Set sparse patch from a visible typed local.</summary>
+    /// <typeparam name="TValue">CLR value type of the target field and local.</typeparam>
+    /// <param name="id">Stable update-node identity.</param>
+    /// <param name="field">Direct or nested POCO property selector.</param>
+    /// <param name="value">Visible lexical local supplying the replacement value.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>This sequence builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="field"/> or <paramref name="value"/> is null.</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="value"/> is foreign or not lexically visible.</exception>
+    /// <exception cref="TransitionExpressionTranslationException"><paramref name="field"/> is not a supported POCO property path or is not writable.</exception>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> Set<TValue>(
+        ExecutionNodeId id,
+        Expression<Func<TEntity, TValue>> field,
+        TransitionLocal<TValue> value,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        RequireLocal(value);
+        return AddPatch(
+            id,
+            Context.FieldPath(field),
+            new SetTransitionPatch(value.Expression),
+            Context.Source(sourceFile, sourceLine, sourceMember, $"Set '{id.Value}'"));
+    }
+
+    /// <summary>Adds a Remove sparse patch distinct from setting the target to null.</summary>
+    /// <typeparam name="TValue">CLR value type of the target field.</typeparam>
+    /// <param name="id">Stable update-node identity.</param>
+    /// <param name="field">Direct or nested POCO property selector.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>This sequence builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="field"/> is <see langword="null"/>.</exception>
+    /// <exception cref="TransitionExpressionTranslationException"><paramref name="field"/> is not a supported POCO property path or is not writable.</exception>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> Remove<TValue>(
+        ExecutionNodeId id,
+        Expression<Func<TEntity, TValue>> field,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        return AddPatch(
+            id,
+            Context.FieldPath(field),
+            new RemoveTransitionPatch(),
+            Context.Source(sourceFile, sourceLine, sourceMember, $"Remove '{id.Value}'"));
+    }
+
+    /// <summary>Adds a numeric Increment sparse patch.</summary>
+    /// <typeparam name="TValue">CLR numeric value type checked by canonical compilation.</typeparam>
+    /// <param name="id">Stable update-node identity.</param>
+    /// <param name="field">Direct or nested numeric POCO property selector.</param>
+    /// <param name="amount">Pure increment expression.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>This sequence builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="field"/> or <paramref name="amount"/> is null.</exception>
+    /// <exception cref="TransitionExpressionTranslationException">The field selector or <paramref name="amount"/> is outside the portable subset.</exception>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> Increment<TValue>(
+        ExecutionNodeId id,
+        Expression<Func<TEntity, TValue>> field,
+        Expression<Func<TEntity, TInput, TValue>> amount,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        ArgumentNullException.ThrowIfNull(amount);
+        return AddPatch(
+            id,
+            Context.FieldPath(field),
+            new IncrementTransitionPatch(Context.Translate(amount)),
+            Context.Source(sourceFile, sourceLine, sourceMember, $"Increment '{id.Value}'"));
+    }
+
+    /// <summary>Adds one value to a semantic set.</summary>
+    /// <typeparam name="TValue">CLR element type of the set-like collection.</typeparam>
+    /// <param name="id">Stable update-node identity.</param>
+    /// <param name="field">Direct or nested many-valued POCO property selector.</param>
+    /// <param name="value">Pure candidate-element expression.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>This sequence builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="field"/> or <paramref name="value"/> is null.</exception>
+    /// <exception cref="TransitionExpressionTranslationException">A selector or value is outside the portable subset.</exception>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> AddToSet<TValue>(
+        ExecutionNodeId id,
+        Expression<Func<TEntity, IReadOnlyList<TValue>>> field,
+        Expression<Func<TEntity, TInput, TValue>> value,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        ArgumentNullException.ThrowIfNull(value);
+        return AddPatch(
+            id,
+            Context.CollectionFieldPath(field),
+            new AddToSetTransitionPatch(Context.Translate(value)),
+            Context.Source(sourceFile, sourceLine, sourceMember, $"Add-to-set '{id.Value}'"));
+    }
+
+    /// <summary>Appends one value to an ordered collection.</summary>
+    /// <typeparam name="TValue">CLR element type of the ordered collection.</typeparam>
+    /// <param name="id">Stable update-node identity.</param>
+    /// <param name="field">Direct or nested many-valued POCO property selector.</param>
+    /// <param name="value">Pure appended-value expression.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>This sequence builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="field"/> or <paramref name="value"/> is null.</exception>
+    /// <exception cref="TransitionExpressionTranslationException">A selector or value is outside the portable subset.</exception>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> Append<TValue>(
+        ExecutionNodeId id,
+        Expression<Func<TEntity, IReadOnlyList<TValue>>> field,
+        Expression<Func<TEntity, TInput, TValue>> value,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        ArgumentNullException.ThrowIfNull(value);
+        return AddPatch(
+            id,
+            Context.CollectionFieldPath(field),
+            new AppendTransitionPatch(Context.Translate(value)),
+            Context.Source(sourceFile, sourceLine, sourceMember, $"Append '{id.Value}'"));
+    }
+
+    /// <summary>Upserts one owned child selected by semantic identity.</summary>
+    /// <typeparam name="TChild">CLR child value type.</typeparam>
+    /// <typeparam name="TIdentity">CLR child-identity type.</typeparam>
+    /// <param name="id">Stable update-node identity.</param>
+    /// <param name="field">Direct or nested owned-child POCO property selector.</param>
+    /// <param name="identityField">Child-relative identity selector.</param>
+    /// <param name="identity">Pure child-identity expression.</param>
+    /// <param name="value">Pure complete replacement-child expression.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>This sequence builder.</returns>
+    /// <exception cref="ArgumentNullException">A selector or value expression is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="identityField"/> is not a readable property chain.</exception>
+    /// <exception cref="TransitionExpressionTranslationException">An expression is outside the portable subset.</exception>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> UpsertOwnedChild<TChild, TIdentity>(
+        ExecutionNodeId id,
+        Expression<Func<TEntity, IReadOnlyList<TChild>>> field,
+        Expression<Func<TChild, TIdentity>> identityField,
+        Expression<Func<TEntity, TInput, TIdentity>> identity,
+        Expression<Func<TEntity, TInput, TChild>> value,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        ArgumentNullException.ThrowIfNull(identityField);
+        ArgumentNullException.ThrowIfNull(identity);
+        ArgumentNullException.ThrowIfNull(value);
+        return AddPatch(
+            id,
+            Context.CollectionFieldPath(field),
+            new UpsertOwnedChildTransitionPatch(
+                TransitionAuthoringMemberPath.From(identityField),
+                Context.Translate(identity),
+                Context.Translate(value)),
+            Context.Source(sourceFile, sourceLine, sourceMember, $"Owned-child upsert '{id.Value}'"));
+    }
+
+    /// <summary>Removes one owned child selected by semantic identity.</summary>
+    /// <typeparam name="TChild">CLR child value type.</typeparam>
+    /// <typeparam name="TIdentity">CLR child-identity type.</typeparam>
+    /// <param name="id">Stable update-node identity.</param>
+    /// <param name="field">Direct or nested owned-child POCO property selector.</param>
+    /// <param name="identityField">Child-relative identity selector.</param>
+    /// <param name="identity">Pure child-identity expression.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
+    /// <returns>This sequence builder.</returns>
+    /// <exception cref="ArgumentNullException">A selector or identity expression is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="identityField"/> is not a readable property chain.</exception>
+    /// <exception cref="TransitionExpressionTranslationException">The field selector or <paramref name="identity"/> is outside the portable subset.</exception>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> RemoveOwnedChild<TChild, TIdentity>(
+        ExecutionNodeId id,
+        Expression<Func<TEntity, IReadOnlyList<TChild>>> field,
+        Expression<Func<TChild, TIdentity>> identityField,
+        Expression<Func<TEntity, TInput, TIdentity>> identity,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        ArgumentNullException.ThrowIfNull(identityField);
+        ArgumentNullException.ThrowIfNull(identity);
+        return AddPatch(
+            id,
+            Context.CollectionFieldPath(field),
+            new RemoveOwnedChildTransitionPatch(
+                TransitionAuthoringMemberPath.From(identityField),
+                Context.Translate(identity)),
+            Context.Source(sourceFile, sourceLine, sourceMember, $"Owned-child removal '{id.Value}'"));
     }
 
     /// <summary>Adds a Set sparse patch produced by a restricted typed expression.</summary>
@@ -629,7 +899,7 @@ public class TransitionSequenceBuilder<TEntity, TInput, TOutcome>
 /// <typeparam name="TOutcome">Typed Transition outcome.</typeparam>
 public sealed class TransitionBuilder<TEntity, TInput, TOutcome>
     : TransitionSequenceBuilder<TEntity, TInput, TOutcome>
-    where TEntity : Entity
+    where TEntity : notnull
 {
     readonly List<TransitionAdmissionRule> preconditions = [];
     readonly List<TransitionInvariant> invariants = [];
@@ -741,7 +1011,7 @@ public sealed class TransitionBuilder<TEntity, TInput, TOutcome>
 /// <typeparam name="TInput">Typed invocation input.</typeparam>
 /// <typeparam name="TOutcome">Typed Transition outcome.</typeparam>
 public sealed class TransitionChoiceBuilder<TEntity, TInput, TOutcome>
-    where TEntity : Entity
+    where TEntity : notnull
 {
     readonly TransitionAuthoringContext<TEntity, TInput, TOutcome> context;
     readonly TransitionAuthoringScope parentScope;
@@ -844,7 +1114,7 @@ public sealed class TransitionChoiceBuilder<TEntity, TInput, TOutcome>
 /// <typeparam name="TOutcome">Typed Transition outcome.</typeparam>
 /// <typeparam name="TValue">Typed value matched by every case.</typeparam>
 public sealed class TransitionMatchBuilder<TEntity, TInput, TOutcome, TValue>
-    where TEntity : Entity
+    where TEntity : notnull
 {
     readonly TransitionAuthoringContext<TEntity, TInput, TOutcome> context;
     readonly TransitionAuthoringScope parentScope;
@@ -1003,7 +1273,7 @@ internal sealed class TransitionAuthoringScope(TransitionAuthoringScope? parent)
 }
 
 internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
-    where TEntity : Entity
+    where TEntity : notnull
 {
     readonly TransitionExpressionTranslator<TEntity, TInput> translator;
     readonly IClrTypeRefMapper typeRefMapper;
@@ -1015,7 +1285,8 @@ internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
     public TransitionAuthoringContext(
         Shape entityShape,
         TransitionAuthoringMetadata metadata,
-        IClrTypeRefMapper typeRefMapper)
+        IClrTypeRefMapper typeRefMapper,
+        ClrMemberPathResolver? memberPathResolver = null)
     {
         this.entityShape = entityShape;
         this.metadata = metadata;
@@ -1030,7 +1301,8 @@ internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
             entityShape,
             parameterNames,
             allowCapturedValues: false,
-            typeRefMapper: typeRefMapper);
+            typeRefMapper: typeRefMapper,
+            memberPathResolver: memberPathResolver);
     }
 
     public object Owner => this;
@@ -1139,12 +1411,30 @@ internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
             ? (array.ElementType, FieldCardinality.Many)
             : (field.Type, field.Cardinality);
 
+    public FieldPath FieldPath<TValue>(Expression<Func<TEntity, TValue>> field) =>
+        ValidateUpdateTarget(translator.TranslatePocoFieldTarget(field));
+
+    public FieldPath CollectionFieldPath<TValue>(Expression<Func<TEntity, IReadOnlyList<TValue>>> field) =>
+        FieldPath(field);
+
     public FieldPath FieldPath<TValue>(Expression<Func<TEntity, Field<TValue>>> field) =>
-        Cohesive.Model.FieldPath.FromField(translator.TranslateFieldTarget(field));
+        ValidateUpdateTarget(Cohesive.Model.FieldPath.FromField(translator.TranslateFieldTarget(field)));
 
     public FieldPath CollectionFieldPath<TValue>(
         Expression<Func<TEntity, Field<IReadOnlyList<TValue>>>> field) =>
-        Cohesive.Model.FieldPath.FromField(translator.TranslateCollectionFieldTarget(field));
+        ValidateUpdateTarget(Cohesive.Model.FieldPath.FromField(translator.TranslateCollectionFieldTarget(field)));
+
+    FieldPath ValidateUpdateTarget(FieldPath path)
+    {
+        var root = entityShape.Fields.First(field => field.Name.Value == path.Segments[0].Segment);
+        if (root.Role == FieldRole.Identity || root.Mutability == FieldMutability.Computed)
+        {
+            throw new TransitionExpressionTranslationException(
+                $"Field '{root.Name}' is an identity or computed field and cannot be an update target. "
+                + "Initialize identity values through explicit subject creation.");
+        }
+        return path;
+    }
 
     public AuthoredTransitionSource Source(
         string sourceFile,
