@@ -98,6 +98,7 @@ public sealed record AspireLocalApplication
     /// <param name="services">Projected service resource builders by canonical physical identity.</param>
     /// <param name="controlResource">Resource exposing retained operation commands.</param>
     /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="services"/> does not exactly cover the projected physical services.</exception>
     public AspireLocalApplication(
         AspireLocalProjectionDocument projection,
         ImmutableDictionary<InfrastructurePhysicalResourceId, IResourceBuilder<IResource>> services,
@@ -106,6 +107,15 @@ public sealed record AspireLocalApplication
         Projection = Guard.RequireNotNull(projection);
         Services = Guard.RequireNotNull(services);
         ControlResource = Guard.RequireNotNull(controlResource);
+        var projectedServices = Projection.Services
+            .Select(static service => service.Service.PhysicalResource)
+            .ToHashSet();
+        if (Services.Count != projectedServices.Count || !projectedServices.SetEquals(Services.Keys))
+        {
+            throw new ArgumentException(
+                "An applied Aspire application must contain exactly the services in its projection.",
+                nameof(services));
+        }
     }
 
     /// <summary>Exact applied projection.</summary>

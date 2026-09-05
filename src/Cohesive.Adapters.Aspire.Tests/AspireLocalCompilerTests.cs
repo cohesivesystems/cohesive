@@ -4,6 +4,7 @@ using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Cohesive.Adapters.Aspire;
 using Cohesive.Adapters.DockerCompose;
+using Cohesive.Execution;
 using Cohesive.Infra;
 using Cohesive.Infra.Configuration;
 using Cohesive.Infra.Local;
@@ -11,6 +12,7 @@ using Cohesive.Infra.Realization;
 using Cohesive.MaterializationHarness.Model;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Cohesive.Adapters.Aspire.Tests;
 
@@ -294,6 +296,10 @@ public sealed class AspireLocalCompilerTests
         Assert.Equal(
             projection.Operations.SelectMany(static item => item.RequiredResources).Distinct(StringComparer.Ordinal).Count(),
             applied.ControlResource.Resource.Annotations.OfType<WaitAnnotation>().Count());
+        Assert.Throws<ArgumentException>(() => new AspireLocalApplication(
+            projection,
+            ImmutableDictionary<InfrastructurePhysicalResourceId, IResourceBuilder<IResource>>.Empty,
+            applied.ControlResource));
     }
 
     [Fact]
@@ -349,6 +355,203 @@ public sealed class AspireLocalCompilerTests
         Assert.Throws<ArgumentException>(() => JsonSerializer.Deserialize<AspireLocalProjectionDocument>(tampered, options));
     }
 
+    [Fact]
+    public async Task Current_healthy_notifications_become_ordered_attributable_observations_and_a_ready_assessment()
+    {
+        var (app, applied) = CreateAppliedApplication();
+        await using (app)
+        {
+            foreach (var service in applied.Services.Values)
+                await PublishAsync(app.ResourceNotifications, service.Resource, KnownResourceStates.Running, HealthStatus.Healthy);
+
+            var observedAt = new DateTimeOffset(2026, 9, 5, 23, 30, 0, TimeSpan.Zero);
+            var observations = AspireInfrastructureObservations.CaptureCurrent(
+                applied,
+                app.ResourceNotifications,
+                observedAt);
+            var assessment = AspireInfrastructureObservations.AssessCurrent(
+                applied,
+                app.ResourceNotifications,
+                FreightMaterializationInfrastructure.CreatePhysicalRealization(),
+                observedAt);
+
+            Assert.Equal(applied.Services.Count, observations.Length);
+            Assert.Equal(
+                observations.Select(static observation => observation.PhysicalResource.Value).Order(StringComparer.Ordinal),
+                observations.Select(static observation => observation.PhysicalResource.Value));
+            Assert.All(observations, observation =>
+            {
+                Assert.Equal(ExecutionHealthStatus.Healthy, observation.Health);
+                Assert.Equal(ExecutionReadinessStatus.Ready, observation.Readiness);
+                Assert.Equal(observedAt, observation.ObservedAtUtc);
+                Assert.Empty(observation.Diagnostics);
+                Assert.Contains(observation.SourceReferences, reference =>
+                    reference.Value.StartsWith("aspire-resource://", StringComparison.Ordinal));
+                Assert.Contains(observation.SourceReferences, reference =>
+                    reference.Value == $"aspire://{AspireLocalProjectionDocument.CurrentAspireVersion}");
+                Assert.Contains(observation.SourceReferences, reference =>
+                    reference.Value.Contains(applied.Projection.Fingerprint.Value, StringComparison.Ordinal));
+            });
+            Assert.True(assessment.IsReady, string.Join(Environment.NewLine, assessment.Diagnostics.Select(static item => item.Message)));
+            Assert.True(observations.SequenceEqual(assessment.Observations));
+        }
+    }
+
+    [Fact]
+    public async Task Missing_current_notifications_remain_absent_for_canonical_missing_observation_diagnostics()
+    {
+        var (app, applied) = CreateAppliedApplication();
+        await using (app)
+        {
+            var missing = applied.Services.OrderBy(static service => service.Key.Value, StringComparer.Ordinal).Last();
+            foreach (var service in applied.Services.Where(service => service.Key != missing.Key))
+                await PublishAsync(app.ResourceNotifications, service.Value.Resource, KnownResourceStates.Running, HealthStatus.Healthy);
+
+            var assessment = AspireInfrastructureObservations.AssessCurrent(
+                applied,
+                app.ResourceNotifications,
+                FreightMaterializationInfrastructure.CreatePhysicalRealization(),
+                new DateTimeOffset(2026, 9, 5, 23, 31, 0, TimeSpan.Zero));
+
+            Assert.DoesNotContain(assessment.Observations, observation => observation.PhysicalResource == missing.Key);
+            Assert.Contains(assessment.Diagnostics, diagnostic =>
+                diagnostic.Code == InfrastructureReadinessEvaluator.DiagnosticCodes.ObservationMissing
+                && diagnostic.Evidence?.SourceReferences.Contains(
+                    InfrastructureSourceReferences.PhysicalResource(missing.Key).Value,
+                    StringComparer.Ordinal) == true);
+        }
+    }
+
+    [Fact]
+    public async Task Aspire_lifecycle_and_health_evidence_preserve_not_ready_reasons()
+    {
+        var (app, applied) = CreateAppliedApplication();
+        await using (app)
+        {
+            var service = applied.Services.OrderBy(static item => item.Key.Value, StringComparer.Ordinal).First();
+            var observedAt = new DateTimeOffset(2026, 9, 5, 23, 32, 0, TimeSpan.Zero);
+
+            await PublishAsync(app.ResourceNotifications, service.Value.Resource, KnownResourceStates.Starting);
+            var starting = Find(AspireInfrastructureObservations.CaptureCurrent(applied, app.ResourceNotifications, observedAt), service.Key);
+            Assert.Equal(ExecutionHealthStatus.Unknown, starting.Health);
+            Assert.Equal(ExecutionReadinessStatus.NotReady, starting.Readiness);
+            Assert.Contains(starting.Diagnostics, diagnostic => diagnostic.Code == AspireInfrastructureObservations.DiagnosticCodes.ResourceNotReady);
+
+            await PublishAsync(app.ResourceNotifications, service.Value.Resource, KnownResourceStates.FailedToStart);
+            var failed = Find(AspireInfrastructureObservations.CaptureCurrent(applied, app.ResourceNotifications, observedAt), service.Key);
+            Assert.Equal(ExecutionHealthStatus.Unhealthy, failed.Health);
+            Assert.Equal(ExecutionReadinessStatus.NotReady, failed.Readiness);
+
+            await PublishAsync(app.ResourceNotifications, service.Value.Resource, KnownResourceStates.Exited);
+            var exited = Find(AspireInfrastructureObservations.CaptureCurrent(applied, app.ResourceNotifications, observedAt), service.Key);
+            Assert.Equal(ExecutionHealthStatus.Unknown, exited.Health);
+            Assert.Equal(ExecutionReadinessStatus.NotReady, exited.Readiness);
+            Assert.Contains(exited.Diagnostics, diagnostic => diagnostic.Code == AspireInfrastructureObservations.DiagnosticCodes.ResourceNotReady);
+
+            await PublishAsync(app.ResourceNotifications, service.Value.Resource, KnownResourceStates.Running, HealthStatus.Degraded);
+            var degraded = Find(AspireInfrastructureObservations.CaptureCurrent(applied, app.ResourceNotifications, observedAt), service.Key);
+            Assert.Equal(ExecutionHealthStatus.Degraded, degraded.Health);
+            Assert.Equal(ExecutionReadinessStatus.NotReady, degraded.Readiness);
+            Assert.Contains(degraded.Diagnostics, diagnostic =>
+                diagnostic.Code == AspireInfrastructureObservations.DiagnosticCodes.HealthNotReady
+                && diagnostic.Evidence?.Observed?.Contains("adapter-test=Degraded", StringComparison.Ordinal) == true);
+
+            await PublishAsync(app.ResourceNotifications, service.Value.Resource, KnownResourceStates.Running, HealthStatus.Unhealthy);
+            var unhealthy = Find(AspireInfrastructureObservations.CaptureCurrent(applied, app.ResourceNotifications, observedAt), service.Key);
+            Assert.Equal(ExecutionHealthStatus.Unhealthy, unhealthy.Health);
+            Assert.Equal(ExecutionReadinessStatus.NotReady, unhealthy.Readiness);
+        }
+    }
+
+    [Fact]
+    public async Task Missing_and_custom_states_are_observed_as_unknown_with_distinct_diagnostics()
+    {
+        var (app, applied) = CreateAppliedApplication();
+        await using (app)
+        {
+            var service = applied.Services.OrderBy(static item => item.Key.Value, StringComparer.Ordinal).First();
+            var observedAt = new DateTimeOffset(2026, 9, 5, 23, 33, 0, TimeSpan.Zero);
+
+            await PublishAsync(app.ResourceNotifications, service.Value.Resource, state: null);
+            var missing = Find(AspireInfrastructureObservations.CaptureCurrent(applied, app.ResourceNotifications, observedAt), service.Key);
+            Assert.Equal(ExecutionReadinessStatus.Unknown, missing.Readiness);
+            Assert.Contains(missing.Diagnostics, diagnostic =>
+                diagnostic.Code == AspireInfrastructureObservations.DiagnosticCodes.StateMissing
+                && diagnostic.Severity == DiagnosticSeverity.Warning);
+
+            await PublishAsync(app.ResourceNotifications, service.Value.Resource, "Draining");
+            var custom = Find(AspireInfrastructureObservations.CaptureCurrent(applied, app.ResourceNotifications, observedAt), service.Key);
+            Assert.Equal(ExecutionReadinessStatus.Unknown, custom.Readiness);
+            Assert.Contains(custom.Diagnostics, diagnostic =>
+                diagnostic.Code == AspireInfrastructureObservations.DiagnosticCodes.StateUnsupported
+                && diagnostic.Evidence?.Observed == "Draining");
+        }
+    }
+
+    [Fact]
+    public async Task Stale_resource_identity_fails_closed_without_reassigning_the_observation()
+    {
+        var (app, applied) = CreateAppliedApplication();
+        await using (app)
+        {
+            var service = applied.Services.OrderBy(static item => item.Key.Value, StringComparer.Ordinal).First();
+            var identity = Assert.Single(service.Value.Resource.Annotations.OfType<AspireInfraIdentityAnnotation>());
+            service.Value.Resource.Annotations.Remove(identity);
+            service.Value.Resource.Annotations.Add(new AspireInfraIdentityAnnotation(
+                identity.LogicalNode,
+                new InfrastructurePhysicalResourceId("local/stale-resource"),
+                identity.LocalRealization,
+                identity.Projection));
+            await PublishAsync(app.ResourceNotifications, service.Value.Resource, KnownResourceStates.Running, HealthStatus.Healthy);
+
+            var observation = Find(
+                AspireInfrastructureObservations.CaptureCurrent(
+                    applied,
+                    app.ResourceNotifications,
+                    new DateTimeOffset(2026, 9, 5, 23, 34, 0, TimeSpan.Zero)),
+                service.Key);
+
+            Assert.Equal(service.Key, observation.PhysicalResource);
+            Assert.Equal(ExecutionHealthStatus.Unknown, observation.Health);
+            Assert.Equal(ExecutionReadinessStatus.Unknown, observation.Readiness);
+            Assert.Contains(observation.Diagnostics, diagnostic =>
+                diagnostic.Code == AspireInfrastructureObservations.DiagnosticCodes.IdentityMismatch);
+
+            var staleIdentity = Assert.Single(service.Value.Resource.Annotations.OfType<AspireInfraIdentityAnnotation>());
+            service.Value.Resource.Annotations.Remove(staleIdentity);
+            service.Value.Resource.Annotations.Add(new AspireInfraIdentityAnnotation(
+                identity.LogicalNode,
+                service.Key,
+                identity.LocalRealization,
+                new AspireLocalProjectionFingerprint(
+                    AspireLocalProjectionFingerprint.CurrentAlgorithm,
+                    AspireLocalProjectionFingerprint.CurrentCanonicalization,
+                    new string('0', 64))));
+            var staleProjection = Find(
+                AspireInfrastructureObservations.CaptureCurrent(
+                    applied,
+                    app.ResourceNotifications,
+                    new DateTimeOffset(2026, 9, 5, 23, 35, 0, TimeSpan.Zero)),
+                service.Key);
+            Assert.Contains(staleProjection.Diagnostics, diagnostic =>
+                diagnostic.Code == AspireInfrastructureObservations.DiagnosticCodes.IdentityMismatch
+                && diagnostic.Evidence?.Observed?.Contains(new string('0', 64), StringComparison.Ordinal) == true);
+        }
+    }
+
+    [Fact]
+    public void Observation_capture_rejects_non_utc_time_even_when_no_notification_exists()
+    {
+        var (app, applied) = CreateAppliedApplication();
+        using (app)
+        {
+            Assert.Throws<ArgumentException>(() => AspireInfrastructureObservations.CaptureCurrent(
+                applied,
+                app.ResourceNotifications,
+                new DateTimeOffset(2026, 9, 5, 16, 35, 0, TimeSpan.FromHours(-7))));
+        }
+    }
+
     static InfrastructureLocalRealizationDocument InteractiveSource() =>
         FreightMaterializationInfrastructure.CreateLocalRealization(
             environment: FreightMaterializationInfrastructure.InteractiveProfile);
@@ -368,6 +571,41 @@ public sealed class AspireLocalCompilerTests
                 rationale: "Stable Aspire has no command health probe, so the test selects explicit TCP readiness.",
                 sourceReferences: ["linear://ARI-467", "test://aspire-command-health"])
         ]);
+
+    static (DistributedApplication Application, AspireLocalApplication Applied) CreateAppliedApplication()
+    {
+        var projection = Compile(InteractiveSource()).Projection!;
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        {
+            Args = [],
+            AssemblyName = typeof(AspireLocalCompilerTests).Assembly.GetName().Name,
+            ProjectDirectory = FindRepositoryRoot(),
+            DisableDashboard = true
+        });
+        var applied = builder.AddCohesiveLocalInfrastructure(
+            projection,
+            new AspireLocalApplicationOptions(
+                operationWorkingDirectory: FindRepositoryRoot(),
+                resolveSecret: static _ => "test-secret"));
+        return (builder.Build(), applied);
+    }
+
+    static Task PublishAsync(
+        ResourceNotificationService notifications,
+        IResource resource,
+        string? state,
+        HealthStatus? health = null) => notifications.PublishUpdateAsync(
+        resource,
+        snapshot => (snapshot with { State = state }).WithHealthReports(
+            health is null
+                ? []
+                : [new HealthReportSnapshot("adapter-test", health, Description: null, ExceptionText: null)]));
+
+    static InfrastructureResourceObservation Find(
+        ImmutableArray<InfrastructureResourceObservation> observations,
+        InfrastructurePhysicalResourceId physicalResource) => Assert.Single(
+        observations,
+        observation => observation.PhysicalResource == physicalResource);
 
     static InfrastructureLocalRealizationDocument ProjectWorkloadSource()
     {
