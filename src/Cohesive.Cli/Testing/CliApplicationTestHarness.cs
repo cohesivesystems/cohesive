@@ -10,17 +10,18 @@ public static class CliApplicationTestHarness
     {
         ArgumentNullException.ThrowIfNull(app);
         ArgumentNullException.ThrowIfNull(args);
-        using var standardOutput = new StringWriter();
+        await using MemoryStream standardOutput = new();
         using var errorOutput = new StringWriter();
         var exitCode = await app.InvokeAsync(
             args,
-            new()
-            {
-                StandardOutput = standardOutput,
-                ErrorOutput = errorOutput
-            },
+            CommandIo.Null(
+                standardOutput: standardOutput,
+                standardError: errorOutput),
             ct);
-        return new(ExitCode: exitCode, standardOutput.ToString(), errorOutput.ToString());
+        return new(
+            ExitCode: exitCode,
+            StandardOutput: System.Text.Encoding.UTF8.GetString(standardOutput.ToArray()),
+            ErrorOutput: errorOutput.ToString());
     }
 }
 

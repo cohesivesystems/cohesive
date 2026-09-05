@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Cohesive.Cli;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
 using Cohesive.Simulation.Artifacts;
@@ -34,6 +35,26 @@ public sealed class SimulationCliTests
         Assert.Equal("playwright/global-setup", verification.TargetId);
         Assert.Equal(1, verification.BatchSize);
         Assert.Equal(2, verification.ItemCount);
+
+        var cliVerification = await RunVerifyWithJsonLinesStandardInput(
+            manifestOutput.Output,
+            first.Output);
+        using var verificationReport = JsonDocument.Parse(cliVerification.Output);
+        Assert.Equal(0, cliVerification.ExitCode);
+        Assert.Empty(cliVerification.Error);
+        Assert.True(verificationReport.RootElement.GetProperty("isValid").GetBoolean());
+        Assert.Equal(
+            retainedManifest.ArtifactId.Value,
+            verificationReport.RootElement
+                .GetProperty("verification")
+                .GetProperty("artifactId")
+                .GetString());
+        Assert.Equal(
+            2,
+            verificationReport.RootElement
+                .GetProperty("verification")
+                .GetProperty("itemCount")
+                .GetInt64());
 
         var lines = first.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         for (var index = 0; index < lines.Length; index++)
@@ -78,6 +99,58 @@ public sealed class SimulationCliTests
         Assert.Equal(0, provisioned.ExitCode);
         Assert.Empty(provisioned.Error);
         Assert.Equal(2, verification.ItemCount);
+
+        var cliVerification = await RunVerifyWithJsonLinesStandardInput(
+            manifestOutput.Output,
+            provisioned.Output);
+        Assert.Equal(0, cliVerification.ExitCode);
+        Assert.Empty(cliVerification.Error);
+        Assert.Contains(
+            RelationshipWorldInterpreter.Identity,
+            cliVerification.Output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task VerifyCommand_ReturnsStructuredDiagnosticsForInvalidJsonLines()
+    {
+        var manifest = CreateManifestJson(rootSeed: 42);
+        var provisioned = await RunProvisionWithStandardStreams(manifest);
+        var tampered = provisioned.Output.Replace(
+            "\"sequenceIndex\":0",
+            "\"sequenceIndex\":1",
+            StringComparison.Ordinal);
+
+        var result = await RunVerifyWithJsonLinesStandardInput(manifest, tampered);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.Output);
+        using var report = JsonDocument.Parse(result.Error);
+        Assert.False(report.RootElement.GetProperty("isValid").GetBoolean());
+        Assert.Equal(
+            "simulation.worldArtifact.jsonLines.populationMismatch",
+            report.RootElement
+                .GetProperty("diagnostics")[0]
+                .GetProperty("code")
+                .GetString());
+        Assert.Equal(
+            "/lines/0/sequenceIndex",
+            report.RootElement
+                .GetProperty("diagnostics")[0]
+                .GetProperty("location")
+                .GetString());
+    }
+
+    [Fact]
+    public async Task VerifyCommand_RejectsTwoStandardInputSources()
+    {
+        var result = await Run(
+            ["verify", "--manifest", "-", "--jsonl", "-"],
+            string.Empty);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.Output);
+        Assert.Contains("Only one of '--manifest' and '--jsonl' can read", result.Error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -170,16 +243,15 @@ public sealed class SimulationCliTests
             cancellation.Cancel();
             using StringWriter error = new();
 
-            var exitCode = await SimulationCliApplication.RunAsync(
+            var exitCode = await SimulationCliApplication.Create(
+                    CommandIo.Null(standardError: error))
+                .RunAsync(
                 [
                     "provision",
                     "--manifest", manifestPath,
                     "--target", "scripts/demo",
                     "--out", outputPath
                 ],
-                Stream.Null,
-                Stream.Null,
-                error,
                 cancellation.Token);
 
             Assert.Equal(130, exitCode);
@@ -251,6 +323,7 @@ public sealed class SimulationCliTests
     {
         var manifest = await Run(["manifest", "--help"]);
         var provision = await Run(["provision", "--help"]);
+        var verify = await Run(["verify", "--help"]);
 
         Assert.Equal(0, manifest.ExitCode);
         Assert.Contains("Create and retain", manifest.Output, StringComparison.Ordinal);
@@ -267,6 +340,13 @@ public sealed class SimulationCliTests
         Assert.DoesNotContain("--world", provision.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("--seed", provision.Output, StringComparison.Ordinal);
         Assert.Empty(provision.Error);
+
+        Assert.Equal(0, verify.ExitCode);
+        Assert.Contains("Verify world JSON Lines", verify.Output, StringComparison.Ordinal);
+        Assert.Contains("--manifest", verify.Output, StringComparison.Ordinal);
+        Assert.Contains("--jsonl", verify.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("--target", verify.Output, StringComparison.Ordinal);
+        Assert.Empty(verify.Error);
     }
 
     [Fact]
@@ -278,6 +358,7 @@ public sealed class SimulationCliTests
         Assert.Contains("Create and provision deterministic", result.Output, StringComparison.Ordinal);
         Assert.Contains("manifest", result.Output, StringComparison.Ordinal);
         Assert.Contains("provision", result.Output, StringComparison.Ordinal);
+        Assert.Contains("verify", result.Output, StringComparison.Ordinal);
         Assert.Empty(result.Error);
     }
 
@@ -290,11 +371,12 @@ public sealed class SimulationCliTests
             : new(Encoding.UTF8.GetBytes(standardInput));
         await using MemoryStream output = new();
         using StringWriter error = new();
-        var exitCode = await SimulationCliApplication.RunAsync(
-            [.. arguments],
-            input,
-            output,
-            error);
+        var exitCode = await SimulationCliApplication.Create(
+                CommandIo.Null(
+                    standardInput: input,
+                    standardOutput: output,
+                    standardError: error))
+            .RunAsync([.. arguments]);
         return (exitCode, Encoding.UTF8.GetString(output.ToArray()), error.ToString());
     }
 
@@ -320,30 +402,44 @@ public sealed class SimulationCliTests
             ],
             manifestJson);
 
+    static async Task<(int ExitCode, string Output, string Error)> RunVerifyWithJsonLinesStandardInput(
+        string manifestJson,
+        string jsonLines)
+    {
+        var temporaryDirectory = CreateTemporaryDirectory();
+        try
+        {
+            var manifestPath = Path.Combine(temporaryDirectory, "world.manifest.json");
+            await File.WriteAllTextAsync(manifestPath, manifestJson);
+            return await Run(
+                ["verify", "--manifest", manifestPath, "--jsonl", "-"],
+                jsonLines);
+        }
+        finally
+        {
+            Directory.Delete(temporaryDirectory, recursive: true);
+        }
+    }
+
     static async Task<int> RunManifestWithFiles(string worldPath, string manifestPath)
     {
         using StringWriter error = new();
-        return await SimulationCliApplication.RunAsync(
-            ["manifest", "--world", worldPath, "--seed", "42", "--out", manifestPath],
-            Stream.Null,
-            Stream.Null,
-            error);
+        return await SimulationCliApplication.Create(CommandIo.Null(standardError: error))
+            .RunAsync(["manifest", "--world", worldPath, "--seed", "42", "--out", manifestPath]);
     }
 
     static async Task<int> RunProvisionWithFiles(string manifestPath, string outputPath)
     {
         using StringWriter error = new();
-        return await SimulationCliApplication.RunAsync(
+        return await SimulationCliApplication.Create(CommandIo.Null(standardError: error))
+            .RunAsync(
             [
                 "provision",
                 "--manifest", manifestPath,
                 "--target", "scripts/demo",
                 "--out", outputPath,
                 "--batch-size", "1"
-            ],
-            Stream.Null,
-            Stream.Null,
-            error);
+            ]);
     }
 
     static string CreateManifestJson(long rootSeed) =>

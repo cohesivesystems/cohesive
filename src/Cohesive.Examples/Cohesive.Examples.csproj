@@ -7,6 +7,10 @@
     <ProjectReference Include="..\Cohesive.Processes\Cohesive.Processes.csproj" />
     <ProjectReference Include="..\Cohesive.Host\Cohesive.Host.csproj" />
     <ProjectReference Include="..\Cohesive.Storage\Cohesive.Storage.csproj" />
+    <ProjectReference Include="..\Cohesive.Simulation\Cohesive.Simulation.csproj" />
+    <ProjectReference Include="..\Cohesive.Simulation.Relations\Cohesive.Simulation.Relations.csproj" />
+    <ProjectReference Include="..\Cohesive.Simulation.Storage\Cohesive.Simulation.Storage.csproj" />
+    <ProjectReference Include="..\Cohesive.Simulation.Xunit\Cohesive.Simulation.Xunit.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.Cosmos\Cohesive.Adapters.Cosmos.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.DurableTask\Cohesive.Adapters.DurableTask.csproj" />
   </ItemGroup>

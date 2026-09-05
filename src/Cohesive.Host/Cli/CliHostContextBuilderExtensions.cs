@@ -150,7 +150,7 @@ public static class CliHostContextBuilderExtensions
             new ConfigurationBuilder().Build(),
             new RootCommand().Parse([]),
             CancellationToken.None,
-            CliOutput.Null,
+            CommandIo.Null(),
             serviceProvider: null
             );
     }

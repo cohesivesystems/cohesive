@@ -330,9 +330,9 @@ public sealed class InMemoryExecutionControlApiAdapterTests
             PortableDocumentJsonFormatting.Indented);
         var cli = new CliApplication("Execution operations");
         cli.Command<ExplainCommandConfiguration>("explain", "Explain one execution")
-            .OnExecute((CliOutput output) =>
+            .OnExecute((CommandIo io) =>
             {
-                output.WriteLine(expectedJson);
+                io.WriteLine(expectedJson);
                 return 0;
             });
         var cliResult = await CliApplicationTestHarness.InvokeAsync(cli, ["explain"]);

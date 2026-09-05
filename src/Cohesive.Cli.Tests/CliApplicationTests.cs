@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Text;
 using Cohesive.Cli.Testing;
 using Cohesive.Configuration;
 using Microsoft.Extensions.Configuration;
@@ -32,6 +33,106 @@ public sealed class CliApplicationTests
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("Start a training run", result.StandardOutput, StringComparison.Ordinal);
         Assert.Empty(result.ErrorOutput);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ExposesApplicationIoToCommandContext()
+    {
+        await using MemoryStream standardInput = new(Encoding.UTF8.GetBytes("fixture-input"));
+        await using MemoryStream standardOutput = new();
+        using StringWriter standardError = new();
+        var io = CommandIo.Null(
+            standardInput: standardInput,
+            standardOutput: standardOutput,
+            standardError: standardError);
+        var app = new CliApplication(description: "Training jobs", io);
+        app.Command<TrainCommandConfiguration>("train")
+            .OnExecute(async (CliCommandContext<TrainCommandConfiguration> context) =>
+            {
+                Assert.Same(io, context.Io);
+                Assert.Same(standardInput, context.Io.StandardInput);
+                Assert.Same(standardOutput, context.Io.StandardOutput);
+                context.Io.WriteLine(await context.Io.ReadUtf8TextAsync(CommandIo.StandardStreamPath));
+                return 0;
+            });
+
+        var exitCode = await app.InvokeAsync(
+            ["train", "--dataset", "shipments", "--model", "encoder", "--profile", "local"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal($"fixture-input{Environment.NewLine}", Encoding.UTF8.GetString(standardOutput.ToArray()));
+        Assert.Empty(standardError.ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_LinksExplicitInvocationCancellation()
+    {
+        using CancellationTokenSource cancellation = new();
+        TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource cancellationObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var app = new CliApplication("Training jobs");
+        app.Command<TrainCommandConfiguration>("train")
+            .OnExecute(async (CliCommandContext<TrainCommandConfiguration> context) =>
+            {
+                using var registration = context.CancellationToken.Register(cancellationObserved.SetResult);
+                started.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken);
+                return 0;
+            });
+
+        var invocation = app.RunAsync(
+            ["train", "--dataset", "shipments", "--model", "encoder", "--profile", "local"],
+            cancellation.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+
+        await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotEqual(0, await invocation);
+    }
+
+    [Fact]
+    public async Task Validate_AcceptsTypedMethodGroupWithoutDelegateCast()
+    {
+        var handlerCalled = false;
+        var app = new CliApplication("Training jobs");
+        app.Command<TrainCommandConfiguration>("train")
+            .Validate(RejectBlockedDataset)
+            .OnExecute((CliCommandContext<TrainCommandConfiguration> _) =>
+            {
+                handlerCalled = true;
+                return 0;
+            });
+
+        var result = await CliApplicationTestHarness.InvokeAsync(
+            app,
+            ["train", "--dataset", "blocked", "--model", "encoder", "--profile", "local"]);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.False(handlerCalled);
+        Assert.Contains("Dataset 'blocked' is not allowed.", result.ErrorOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AllowStandardInputForAtMostOne_DerivesEffectiveOptionNames()
+    {
+        var app = new CliApplication("Artifact verification");
+        var command = app.Command<InputCommandConfiguration>("verify");
+        command.Map(configuration => configuration.ManifestPath).WithCliName("authority");
+        command.Map(configuration => configuration.JsonLinesPath).WithCliName("records");
+        command
+            .AllowStandardInputForAtMostOne(
+                configuration => configuration.ManifestPath,
+                configuration => configuration.JsonLinesPath)
+            .OnExecute((CliCommandContext<InputCommandConfiguration> _) => 0);
+
+        var result = await CliApplicationTestHarness.InvokeAsync(
+            app,
+            ["verify", "--authority", "-", "--records", "-"]);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("'--authority' and '--records'", result.ErrorOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("--manifest", result.ErrorOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("--jsonl", result.ErrorOutput, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -201,7 +302,7 @@ public sealed class CliApplicationTests
     {
         var handlerCalled = false;
         var app = new CliApplication("Training jobs");
-        app.Validate<TrainCommandConfiguration>((TrainCommandConfiguration config) => config.Dataset == "blocked" ? new[] { "Dataset 'blocked' is not allowed." } : []);
+        app.Validate<TrainCommandConfiguration>(RejectBlockedDataset);
         app.Command<TrainCommandConfiguration>("train", "Start a training run")
             .OnExecute((CliCommandContext<TrainCommandConfiguration> _) =>
             {
@@ -251,6 +352,20 @@ public sealed class CliApplicationTests
         [ConfigurationParameter("projection-ids", CliKey = "projection-ids", Description = "Projection identifiers")]
         public string[] ProjectionIds { get; init; } = [];
     }
+
+    public sealed class InputCommandConfiguration
+    {
+        [ConfigurationParameter("manifest", Required = true)]
+        public string ManifestPath { get; init; } = string.Empty;
+
+        [ConfigurationParameter("jsonl", Required = true)]
+        public string JsonLinesPath { get; init; } = string.Empty;
+    }
+
+    static IReadOnlyList<string> RejectBlockedDataset(TrainCommandConfiguration configuration) =>
+        string.Equals(configuration.Dataset, "blocked", StringComparison.Ordinal)
+            ? ["Dataset 'blocked' is not allowed."]
+            : [];
 
     sealed class TestDependency;
 }

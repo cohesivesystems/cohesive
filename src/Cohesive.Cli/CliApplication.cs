@@ -12,9 +12,13 @@ namespace Cohesive.Cli;
 /// A <see cref="CliApplication"/> can be used as a console front-end for background jobs while still allowing the
 /// same executable to fall back to ordinary host startup when no registered command name is present in
 /// <c>args[0]</c>. This enables one <c>Program.cs</c> entrypoint to support both command execution and the normal
-/// ASP.NET or worker-service boot path.
+/// ASP.NET or worker-service boot path. The supplied I/O environment remains caller-owned.
 /// </remarks>
-public sealed class CliApplication(string? description = null)
+/// <param name="description">Optional root command description used for generated help.</param>
+/// <param name="io">I/O environment, or <see langword="null"/> to use console channels.</param>
+public sealed class CliApplication(
+    string? description = null,
+    CommandIo? io = null)
 {
     readonly List<CliCommandNode> commands = [];
     readonly Dictionary<Type, List<Delegate>> parameterPipelines = [];
@@ -28,6 +32,9 @@ public sealed class CliApplication(string? description = null)
     /// Root command description used for generated help.
     /// </summary>
     public string? Description { get; } = description;
+
+    /// <summary>Gets the default I/O environment shared with command contexts.</summary>
+    public CommandIo Io { get; } = io ?? CommandIo.Console();
 
     /// <summary>
     /// Descriptions of the registered root commands and subcommands.
@@ -94,6 +101,20 @@ public sealed class CliApplication(string? description = null)
     }
 
     /// <summary>
+    /// Registers a typed configuration validator without requiring a delegate cast.
+    /// </summary>
+    /// <typeparam name="TConfiguration">Configuration type the validator applies to.</typeparam>
+    /// <param name="validate">Validator that receives the bound command configuration.</param>
+    /// <returns>The current application.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="validate"/> is <see langword="null"/>.</exception>
+    public CliApplication Validate<TConfiguration>(
+        Func<TConfiguration, IReadOnlyList<string>> validate)
+    {
+        ArgumentNullException.ThrowIfNull(validate);
+        return Validate<TConfiguration>((Delegate)validate);
+    }
+
+    /// <summary>
     /// Registers a validation delegate that runs before the command handler with configuration type <typeparamref name="TConfiguration"/>.
     /// </summary>
     /// <example>
@@ -105,6 +126,10 @@ public sealed class CliApplication(string? description = null)
     ///     : []
     /// </code>
     /// </example>
+    /// <typeparam name="TConfiguration">Configuration type the validator applies to.</typeparam>
+    /// <param name="validate">Validator whose parameters and result are adapted by the CLI binding pipeline.</param>
+    /// <returns>The current application.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="validate"/> is <see langword="null"/>.</exception>
     public CliApplication Validate<TConfiguration>(Delegate validate)
     {
         ArgumentNullException.ThrowIfNull(validate);
@@ -183,32 +208,51 @@ public sealed class CliApplication(string? description = null)
     /// <param name="ct">Cancellation token for async handlers.</param>
     /// <returns>The command exit code.</returns>
     public Task<int> InvokeAsync(IReadOnlyList<string> args, CancellationToken ct = default) =>
-        InvokeAsync(args, options: null, ct);
+        InvokeAsync(args, io: null, ct);
 
     /// <summary>
-    /// Parses and executes the registered command tree using invocation-specific output channels.
+    /// Parses and executes the registered command tree using an invocation-specific I/O environment.
     /// </summary>
     /// <param name="args">Program arguments.</param>
-    /// <param name="options">Optional output and serialization settings for this invocation.</param>
+    /// <param name="io">Optional I/O environment override.</param>
     /// <param name="ct">Cancellation token for parsing and command execution.</param>
     /// <returns>The command exit code.</returns>
-    public Task<int> InvokeAsync(IReadOnlyList<string> args, CliInvocationOptions? options, CancellationToken ct = default)
+    public Task<int> InvokeAsync(
+        IReadOnlyList<string> args,
+        CommandIo? io,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(args);
-        var rootCommand = BuildRootCommand(options);
-        var parseResult = rootCommand.Parse(args);
-        var invocationConfiguration = new InvocationConfiguration();
-        if (options?.StandardOutput is not null)
-        {
-            invocationConfiguration.Output = options.StandardOutput;
-        }
+        return InvokeCoreAsync(args, io ?? Io, ct);
+    }
 
-        if (options?.ErrorOutput is not null)
+    /// <summary>Runs the application as a console entry point.</summary>
+    /// <param name="args">Program arguments; an empty list displays root help.</param>
+    /// <param name="ct">Cancellation token linked with <see cref="Console.CancelKeyPress"/>.</param>
+    /// <returns>The command exit code.</returns>
+    /// <remarks>
+    /// The cancel-key handler is attached only for the lifetime of this call and forwards the signal through
+    /// <see cref="CliCommandContext.CancellationToken"/>.
+    /// </remarks>
+    public async Task<int> RunAsync(IReadOnlyList<string> args, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        IReadOnlyList<string> invocationArgs = args.Count == 0 ? ["--help"] : args;
+        using CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        ConsoleCancelEventHandler cancel = (_, eventArgs) =>
         {
-            invocationConfiguration.Error = options.ErrorOutput;
+            eventArgs.Cancel = true;
+            cancellation.Cancel();
+        };
+        Console.CancelKeyPress += cancel;
+        try
+        {
+            return await InvokeCoreAsync(invocationArgs, Io, cancellation.Token).ConfigureAwait(false);
         }
-
-        return parseResult.InvokeAsync(invocationConfiguration, ct);
+        finally
+        {
+            Console.CancelKeyPress -= cancel;
+        }
     }
 
     /// <summary>
@@ -238,12 +282,27 @@ public sealed class CliApplication(string? description = null)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(runDefaultAsync);
-        return ShouldHandle(args) ? InvokeAsync(args, ct) : runDefaultAsync(args, ct);
+        return ShouldHandle(args) ? RunAsync(args, ct) : runDefaultAsync(args, ct);
     }
 
     internal void ApplySharedConfiguration(IConfigurationBuilder builder) => configureConfiguration?.Invoke(builder);
 
     internal string? EnvironmentVariablePrefix => environmentVariablePrefix;
+
+    async Task<int> InvokeCoreAsync(
+        IReadOnlyList<string> args,
+        CommandIo io,
+        CancellationToken ct)
+    {
+        var rootCommand = BuildRootCommand(io);
+        var parseResult = rootCommand.Parse(args);
+        var invocationConfiguration = new InvocationConfiguration
+        {
+            Output = io.TextOutput,
+            Error = io.StandardError
+        };
+        return await parseResult.InvokeAsync(invocationConfiguration, ct).ConfigureAwait(false);
+    }
 
     internal void RegisterDynamicBinding<TConfiguration>(Type contextType, Func<CliValidationServicesScope>? createValidationServicesScope)
     {
@@ -319,12 +378,12 @@ public sealed class CliApplication(string? description = null)
         }
     }
 
-    RootCommand BuildRootCommand(CliInvocationOptions? options)
+    RootCommand BuildRootCommand(CommandIo io)
     {
         var root = string.IsNullOrWhiteSpace(Description) ? new RootCommand() : new RootCommand(Description);
         foreach (var command in commands)
         {
-            root.Subcommands.Add(command.BuildCommand(this, options));
+            root.Subcommands.Add(command.BuildCommand(this, io));
         }
 
         return root;

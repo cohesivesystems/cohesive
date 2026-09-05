@@ -29,7 +29,10 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Storage` | Entity repository, durable Process state, materialization, Control, and storage adapter contracts. |
 | `Cohesive.AI` | Inference, training, text, vector, ontology, and model registry contracts. |
 | `Cohesive.Simulation` | Provider-neutral deterministic generator IR, addressable entropy, replay evidence, and core-observation POCO generation. |
+| `Cohesive.Simulation.Relations` | Optional relationship-complete worlds with portable inter-population entity references. |
+| `Cohesive.Simulation.Storage` | Optional deterministic world provisioning into Cohesive entity repositories. |
 | `Cohesive.Simulation.Xunit` | Optional xUnit assertion adapter for deterministic property-case results and replayable counterexamples. |
+| `Cohesive.Simulation.Cli` | `cohesive-sim` tool for retained manifests, portable JSONL provisioning, and independent verification. |
 | `Cohesive.Identity` | Identity context and scope resolution helpers. |
 | `Cohesive.Cli` | Reusable typed command composition, configuration binding, validation, invocation, and testing helpers. |
 | `Cohesive.Host` | Generic-host lifecycle, dependency-injection scope, and runtime binding helpers. |

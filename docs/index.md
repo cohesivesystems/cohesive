@@ -4,7 +4,7 @@ status: accepted
 authority: cohesive.documentation-index
 owners: [cohesive-core]
 applies_to: [cohesive]
-last_verified: 2026-08-30
+last_verified: 2026-09-05
 supersedes: []
 ---
 
@@ -144,6 +144,11 @@ The principal package entry points are:
 - [AI](../src/Cohesive.AI/README.md)
 - [Identity](../src/Cohesive.Identity/README.md)
 - [Configuration](../src/Cohesive.Configuration/README.md)
+- [Simulation](../src/Cohesive.Simulation/README.md)
+- [Simulation relationship worlds](../src/Cohesive.Simulation.Relations/README.md)
+- [Simulation repository provisioning](../src/Cohesive.Simulation.Storage/README.md)
+- [Simulation xUnit integration](../src/Cohesive.Simulation.Xunit/README.md)
+- [Simulation CLI tool](../src/Cohesive.Simulation.Cli/README.md)
 - [Host integration](../src/Cohesive.Host/README.md)
 - [Frontend packages](../src/frontend/README.md)
 

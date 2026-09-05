@@ -4,6 +4,14 @@
 `Cohesive.Simulation`. It reports existing `PropertyCaseRunResult` values; it does not own generation, evaluation,
 shrinking, or replay semantics.
 
+## Install
+
+The current alpha targets .NET 10 and xUnit 2:
+
+```bash
+dotnet add package Cohesive.Simulation.Xunit --prerelease
+```
+
 ```csharp
 using Cohesive.Simulation;
 using Cohesive.Simulation.Generation;
@@ -35,3 +43,7 @@ reports retain the exact `csimpc1` replay token. The canonical observation is in
 The assertion accepts only a completed result by design. Keep property callbacks in the runner-neutral check so the
 same result can be inspected by scripts, other test runners, and future assurance tooling without making xUnit a
 second semantic authority.
+
+The runner-neutral result can also be consumed directly by scripts or another test adapter. See the
+[getting-started guide](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/getting-started.md)
+for replay and bounded-run behavior.
