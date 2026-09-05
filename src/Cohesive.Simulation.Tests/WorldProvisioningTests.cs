@@ -46,7 +46,7 @@ public sealed class WorldProvisioningTests
             firstSink.Batches
                 .Where(static batch => batch.PopulationId == "customers")
                 .SelectMany(static batch => batch.Items)
-                .Select(static item => item.Replay.SequenceIndex));
+                .Select(static item => item.SequenceIndex));
         Assert.Equal(5, first.ItemCount);
         Assert.Equal(3, first.BatchCount);
         Assert.Equal(0, first.AlreadyCommittedBatchCount);

@@ -215,9 +215,12 @@ string manifestJson = WorldArtifactManifestJsonSerializer.Serialize(artifact);
 WorldExemplarDefinition customer = artifact.GetExemplar("customer-for-ui");
 ```
 
-The manifest embeds the exact fingerprint-verified world definition, root seed, reference interpreter and entropy
-algorithm, compiled population counts, scopes and identity policies, nested generation coordinates, and exemplar aliases. Its
-content-addressed artifact identity is independent of sink target and batching policy. It does not contain generated
+The manifest embeds an interpreter-neutral envelope around the exact fingerprint-verified world document, root seed,
+interpreter and entropy algorithm, compiled population counts, scopes and identity policies, nested generation
+coordinates, and exemplar aliases. This retains canonical authorities such as a core world or relationship world
+without making core depend on optional semantic packages; core fingerprints the document while the package owning
+the selected interpreter validates its schema and projections before execution. The content-addressed artifact
+identity is independent of sink target and batching policy. It does not contain generated
 observations, so even a very large declared population produces a small manifest and remains suitable for scripts,
 test reports, and agent inspection. Persist the manifest before provisioning when observations cross a process or
 persistence boundary. Concrete framing and storage of streamed observation batches remain separate format and
@@ -270,8 +273,8 @@ token, and the Core canonical observation envelope. The signed 64-bit root seed 
 JavaScript can consume it without numeric precision loss. The sink flushes each acknowledged batch, never closes the
 caller-owned stream, and intentionally does not claim durable deduplication.
 
-`WorldJsonLinesVerifier.VerifyAsync` verifies a complete v3 stream against an independently retained manifest. It
-uses the same internal v3 codec as `WorldJsonLinesSink` and checks canonical record bytes, exact item count and order,
+`WorldJsonLinesVerifier.VerifyAsync` verifies a complete v4 stream against an independently retained manifest. It
+uses the same internal v4 codec as `WorldJsonLinesSink` and checks canonical record bytes, exact item count and order,
 manifest and world provenance, stable target and batching policy, recomputed run and batch identities, exemplar
 aliases, replay evidence, and canonical regenerated observations. Verification holds only one record and regenerated
 observation at a time and exposes completion evidence only after the entire stream passes; malformed, tampered,
@@ -284,9 +287,10 @@ the provider-neutral Simulation package while deriving them into the effective p
 
 Install the optional `Cohesive.Simulation.Cli` .NET tool when a shell script, CI job, or Playwright global setup needs
 to provision a portable world without hosting .NET application code. `cohesive-sim manifest` creates and atomically
-retains the strict artifact manifest from a world and root seed. `cohesive-sim provision` accepts only that verified
-manifest and atomically writes the same versioned JSON Lines contract. This makes the retained manifest the
-cross-process authority rather than reconstructing it opportunistically during provisioning.
+retains the strict artifact manifest from a core world (`--world`) or relationship world (`--relationship-world`) and
+root seed. `cohesive-sim provision` dispatches only from that verified manifest and atomically writes the same
+versioned JSON Lines contract. This makes the retained manifest the cross-process authority rather than reconstructing
+it opportunistically during provisioning.
 
 ## Portable definitions and replay
 

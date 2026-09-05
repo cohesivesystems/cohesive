@@ -12,9 +12,13 @@ sealed record WorldManifestCliOptions
 {
     [ConfigurationParameter(
         "world",
-        Description = "Portable world-definition JSON path, or '-' for standard input.",
-        Required = true)]
+        Description = "Portable core world-definition JSON path, or '-' for standard input.")]
     public string WorldPath { get; init; } = string.Empty;
+
+    [ConfigurationParameter(
+        "relationship-world",
+        Description = "Portable relationship-world JSON path, or '-' for standard input.")]
+    public string RelationshipWorldPath { get; init; } = string.Empty;
 
     [ConfigurationParameter(
         "out",
@@ -27,8 +31,12 @@ sealed record WorldManifestCliOptions
         Required = true)]
     public long RootSeed { get; init; }
 
+    public bool IsRelationshipWorld => !string.IsNullOrEmpty(RelationshipWorldPath);
+
+    public string InputPath => IsRelationshipWorld ? RelationshipWorldPath : WorldPath;
+
     public bool ReadsStandardInput => string.Equals(
-        WorldPath,
+        InputPath,
         SimulationCliPaths.StandardStream,
         StringComparison.Ordinal);
 

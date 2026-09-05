@@ -165,8 +165,15 @@ public sealed class CompiledRelationshipWorldPopulation
     /// </exception>
     public ImmutableArray<GeneratedRelationshipWorldItem> Generate(long seed)
     {
-        RelationshipWorldInterpreter.ValidateTargetIdentities(this, seed);
         var generated = ImmutableArray.CreateBuilder<GeneratedRelationshipWorldItem>(Population.Definition.Count);
+        foreach (var item in Enumerate(seed))
+            generated.Add(item);
+        return generated.MoveToImmutable();
+    }
+
+    internal IEnumerable<GeneratedRelationshipWorldItem> Enumerate(long seed)
+    {
+        RelationshipWorldInterpreter.ValidateTargetIdentities(this, seed);
         var unique = Population.Definition.EntityIdentity.Source == WorldEntityIdentitySource.UniqueObservationField
             ? new HashSet<EntityId>()
             : null;
@@ -209,10 +216,8 @@ public sealed class CompiledRelationshipWorldPopulation
                 }
             }
 
-            generated.Add(item);
+            yield return item;
         }
-
-        return generated.MoveToImmutable();
     }
 
     static WorldGenerationException RelationshipFailure(

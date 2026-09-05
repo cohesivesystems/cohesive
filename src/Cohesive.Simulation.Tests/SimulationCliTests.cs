@@ -1,9 +1,12 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Cohesive.Relations.Model;
+using Cohesive.Relations.Serialization;
 using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Cli;
 using Cohesive.Simulation.Provisioning;
+using Cohesive.Simulation.Relations;
 using Cohesive.Simulation.Worlds;
 
 namespace Cohesive.Simulation.Tests;
@@ -47,6 +50,34 @@ public sealed class SimulationCliTests
                     .EnumerateArray()
                     .Select(static item => item.GetString()));
         }
+    }
+
+    [Fact]
+    public async Task StandardStreams_RetainAndProvisionRelationshipWorldAuthority()
+    {
+        var relationshipWorld = RelationshipWorldDefinitionDocument.FromDefinition(new(
+            DemoWorld(),
+            RelationshipCatalogDocument.FromCatalog(RelationshipCatalog.Empty),
+            []));
+        var worldJson = RelationshipWorldDefinitionJsonSerializer.Serialize(relationshipWorld);
+
+        var manifestOutput = await Run(
+            ["manifest", "--relationship-world", "-", "--seed", "42"],
+            worldJson);
+        var retainedManifest = WorldArtifactManifestJsonSerializer.Deserialize(manifestOutput.Output);
+        var provisioned = await RunProvisionWithStandardStreams(manifestOutput.Output);
+        await using MemoryStream verificationInput = new(Encoding.UTF8.GetBytes(provisioned.Output));
+        var verification = await RelationshipWorldJsonLinesVerifier.VerifyAsync(
+            retainedManifest,
+            verificationInput);
+
+        Assert.Equal(0, manifestOutput.ExitCode);
+        Assert.Empty(manifestOutput.Error);
+        Assert.Equal(RelationshipWorldInterpreter.Identity, retainedManifest.Interpreter);
+        Assert.Equal(RelationshipWorldDefinitionDocument.CurrentSchemaVersion, retainedManifest.World.SchemaVersion);
+        Assert.Equal(0, provisioned.ExitCode);
+        Assert.Empty(provisioned.Error);
+        Assert.Equal(2, verification.ItemCount);
     }
 
     [Fact]
@@ -203,6 +234,19 @@ public sealed class SimulationCliTests
     }
 
     [Fact]
+    public async Task ManifestCommand_RequiresExactlyOneWorldDocumentKind()
+    {
+        var missing = await Run(["manifest", "--seed", "42"]);
+        var conflicting = await Run(
+            ["manifest", "--world", "world.json", "--relationship-world", "relations.json", "--seed", "42"]);
+
+        Assert.Equal(1, missing.ExitCode);
+        Assert.Contains("exactly one", missing.Error, StringComparison.Ordinal);
+        Assert.Equal(1, conflicting.ExitCode);
+        Assert.Contains("exactly one", conflicting.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CommandHelp_SeparatesManifestCreationFromProvisioning()
     {
         var manifest = await Run(["manifest", "--help"]);
@@ -211,6 +255,7 @@ public sealed class SimulationCliTests
         Assert.Equal(0, manifest.ExitCode);
         Assert.Contains("Create and retain", manifest.Output, StringComparison.Ordinal);
         Assert.Contains("--world", manifest.Output, StringComparison.Ordinal);
+        Assert.Contains("--relationship-world", manifest.Output, StringComparison.Ordinal);
         Assert.Contains("--seed", manifest.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("--manifest", manifest.Output, StringComparison.Ordinal);
         Assert.Empty(manifest.Error);
