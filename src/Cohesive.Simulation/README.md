@@ -94,14 +94,15 @@ but the reference provisioner does not invent retries or transactional guarantee
 
 ## Current alpha boundary
 
-Implemented generators are constants, inclusive uniform `Int32`, Bernoulli, weighted categorical, object/member
-composition, and correlated record sampling with typed projections. The same canonical definitions support direct
-examples, bounded sequences, property cases, static populations, named exemplars, relationship-linked worlds,
-repository seeding, and portable artifacts.
+Implemented generators are constants, inclusive uniform `Int32`, Bernoulli, weighted categorical, exact retained
+generation catalogs, object/member composition, and correlated record sampling with typed projections. Catalog
+documents pin values, weights, locale, adapter/provider versions, source references, known deviations, and a semantic
+fingerprint. The same canonical definitions support direct examples, bounded sequences, property cases, static
+populations, named exemplars, relationship-linked worlds, repository seeding, and portable artifacts.
 
 Worlds currently describe static initial state. Virtual time, activity, events, queues, resources, failures, actors,
-actions, scenario traces, Bogus leaf providers, and learned synthesis are later interpretations, not implicit callback
-behavior in this alpha.
+actions, scenario traces, concrete external-provider import/runtime adapters, and learned synthesis are later
+interpretations, not implicit callback behavior in this alpha.
 
 Current portable schemas and replay tokens reject earlier versions rather than silently assigning compatibility
 semantics. See the compatibility guide before retaining artifacts across package upgrades.

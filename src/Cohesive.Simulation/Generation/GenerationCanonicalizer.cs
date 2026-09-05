@@ -85,6 +85,11 @@ static class GenerationCanonicalizer
                 }
                 return;
 
+            case CatalogGenerationNode catalog:
+                writer.Append(GenerationDefinitionWireNames.Catalog);
+                writer.Append(GenerationCatalogJsonSerializer.GetCanonicalBytes(catalog.Catalog));
+                return;
+
             case ExpressionGenerationNode expression:
                 writer.Append(GenerationDefinitionWireNames.Expression);
                 AppendType(writer, expression.ValueType);

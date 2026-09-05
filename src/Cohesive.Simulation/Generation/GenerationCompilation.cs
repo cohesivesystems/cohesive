@@ -396,6 +396,10 @@ public static class GenerationCompiler
                 ValidateCategorical(field, categorical, graph, location, diagnostics);
                 break;
 
+            case CatalogGenerationNode catalog:
+                ValidateCatalog(field, catalog, graph, location, diagnostics);
+                break;
+
             case ExpressionGenerationNode expression when expressionScope is not null:
                 ValidateExpression(expression, expressionScope, location, diagnostics);
                 break;
@@ -501,6 +505,24 @@ public static class GenerationCompiler
                 code: "simulation.generation.categoricalWeightTotalInvalid",
                 message: "Categorical option weights must have a finite positive total.",
                 location: $"{location}/generator/options");
+        }
+    }
+
+    static void ValidateCatalog(
+        FieldDefinition field,
+        CatalogGenerationNode catalog,
+        ShapeGraph graph,
+        string location,
+        ICollection<DocumentValidationDiagnostic> diagnostics)
+    {
+        for (var index = 0; index < catalog.Catalog.Definition.Entries.Length; index++)
+        {
+            ValidateValue(
+                field,
+                catalog.Catalog.Definition.Entries[index].Value,
+                graph,
+                $"{location}/generator/catalog/definition/entries/{index}/value",
+                diagnostics);
         }
     }
 

@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using Cohesive.Model;
+using Cohesive.Model.Authoring;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
 using Cohesive.Simulation;
@@ -13,13 +15,13 @@ using Cohesive.Simulation.Xunit;
 using Xunit.Sdk;
 
 const string ExpectedArtifactId =
-    "csimartifact1_6fe065c4b5cc4bbaae225389937f5626bb607a6da4ddc69420064f0db4c6e084";
+    "csimartifact1_571e3af7ae916eb7d7b55ab04ded535b9fdc779908e207b75cf5506797bb5575";
 const string ExpectedManifestFingerprint =
-    "6fe065c4b5cc4bbaae225389937f5626bb607a6da4ddc69420064f0db4c6e084";
+    "571e3af7ae916eb7d7b55ab04ded535b9fdc779908e207b75cf5506797bb5575";
 const string ExpectedWorldFingerprint =
-    "8abd9cc35964a89cd51052778a2d9e45b8edcfe1ebacd193beb0d8b6e636f76f";
+    "acfd6737bd655c8f96c6da5b3b4e52f1dac83c548fdee666448440015658aa8d";
 const string ExpectedJsonLinesFingerprint =
-    "e51c1638cc9445424a4c1552048232ec3cea8823b37007daba8f9f504f4b3d23";
+    "821688c353089e5809d2a30afec85d6a37efc0ece7f09ea4455fab4a8f0207e3";
 
 if (args is ["emit", string coreWorldPath])
 {
@@ -145,14 +147,34 @@ static void Require(string? actual, string expected, string property)
 static PocoGenerationDefinition<SmokeCustomer> CreateCustomers() =>
     Simulation.Define<SmokeCustomer>(customer =>
     {
-        var identity = customer.SampleRecord("identity", Gen.Categorical(
-            Gen.Weighted(new SmokeIdentity("Ada", "north"), weight: 1d),
-            Gen.Weighted(new SmokeIdentity("Grace", "west"), weight: 1d)));
+        var identity = customer.SampleRecord(
+            "identity",
+            Gen.Catalog<SmokeIdentity>(CreateIdentityCatalog()));
         customer
             .Member(value => value.Name, identity.Project(value => value.Name))
             .Member(value => value.Region, identity.Project(value => value.Region))
             .Member(value => value.Age, Gen.Int32(minimum: 18, maximum: 90));
     });
+
+static GenerationCatalogDocument CreateIdentityCatalog()
+{
+    DefaultClrTypeRefMapper typeMapper = new();
+    return GenerationCatalogDocument.FromDefinition(new(
+        id: "catalog/package-smoke-identities",
+        revision: "r1",
+        valueType: typeMapper.Map(typeof(SmokeIdentity), nullability: null),
+        entries:
+        [
+            new("identity/ada", ObservationValue.FromObject(new SmokeIdentity("Ada", "north"))),
+            new("identity/grace", ObservationValue.FromObject(new SmokeIdentity("Grace", "west")))
+        ],
+        provenance: new(
+            adapter: "cohesive-package-smoke",
+            adapterVersion: "1",
+            provider: "embedded-fixture",
+            providerVersion: "1",
+            sourceReferences: [SourceReference.Repository(new("eng/package-smoke/Cohesive.Simulation.Consumer/Program.cs"))])));
+}
 
 static WorldDefinition CreateWorld(PocoGenerationDefinition<SmokeCustomer> customers) =>
     Simulation.DefineWorld("world/package-smoke", "r1", builder => builder

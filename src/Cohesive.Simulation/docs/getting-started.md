@@ -78,7 +78,35 @@ public sealed record Shipment(string Origin, string Destination, int DistanceMil
 
 The binding is one semantic shrink unit. Counterexample shrinking keeps all projections coherent.
 
-## 5. Check properties
+## 5. Use a retained provider catalog
+
+Provider adapters can import a finite locale or domain catalog into a strict `GenerationCatalogDocument`. The exact
+catalog values become the replay authority; adapter objects and callbacks are no longer needed after import:
+
+```csharp
+GenerationCatalogDocument people = GenerationCatalogJsonSerializer.Deserialize(
+    await File.ReadAllTextAsync("person-profiles.catalog.json"));
+
+var customers = Simulation.Define<Customer>(customer =>
+{
+    var person = customer.SampleRecord(
+        "person",
+        Gen.Catalog<PersonProfile>(people));
+
+    customer
+        .Member(value => value.Name, person.Project(value => value.DisplayName))
+        .Member(value => value.Email, person.Project(value => value.Email));
+});
+
+public sealed record PersonProfile(string DisplayName, string Email);
+public sealed record Customer(string Name, string Email);
+```
+
+The catalog fingerprint covers exact values, weights, portable type, locale, adapter and provider versions, source
+references, and known deviations. This supports deterministic unit, property, and world generation without making an
+external fake-data library a runtime dependency of `Cohesive.Simulation`.
+
+## 6. Check properties
 
 ```csharp
 PropertyCaseRunResult result = generator.CheckProperty(
@@ -99,7 +127,7 @@ if (result.BestCounterexample is { } counterexample)
 Install `Cohesive.Simulation.Xunit` and call `PropertyCaseAssert.Passed(result)` when xUnit should own failure
 reporting.
 
-## 6. Compose a static world
+## 7. Compose a static world
 
 ```csharp
 using Cohesive.Simulation.Worlds;
@@ -119,7 +147,7 @@ An exemplar is a stable alias for one exact population coordinate. It does not d
 unstated predicate. Use `WorldEntityIdentityPolicy.FromUniqueObservationField(...)` when a generated domain field,
 rather than the default population slot, owns entity identity.
 
-## 7. Persist before crossing boundaries
+## 8. Persist before crossing boundaries
 
 `GenerationDefinitionJsonSerializer` and `WorldDefinitionJsonSerializer` create strict fingerprinted documents.
 `WorldArtifactManifest` additionally pins the root seed and interpreter for one exact generation run. Retain that

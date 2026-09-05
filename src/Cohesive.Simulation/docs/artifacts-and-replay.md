@@ -5,17 +5,20 @@ JSONL records, database rows, and test reports are interpretations that retain p
 
 ## Authority chain
 
-1. A `GenerationDefinitionDocument` retains one shaped generator definition.
-2. A `WorldDefinitionDocument` retains bounded populations, entity identity policies, and named exemplars.
-3. A `RelationshipWorldDefinitionDocument` optionally composes a world with a canonical relationship catalog and
+1. A `GenerationCatalogDocument` retains exact weighted values plus locale and producer/provider provenance when an
+   external catalog contributes generation semantics.
+2. A `GenerationDefinitionDocument` embeds any used catalog documents and retains one shaped generator definition.
+3. A `WorldDefinitionDocument` retains bounded populations, entity identity policies, and named exemplars.
+4. A `RelationshipWorldDefinitionDocument` optionally composes a world with a canonical relationship catalog and
    population bindings.
-4. A `WorldArtifactManifest` retains the exact interpreter-owned world document, root seed, interpreter and entropy
+5. A `WorldArtifactManifest` retains the exact interpreter-owned world document, root seed, interpreter and entropy
    identities, and validated population/exemplar projections.
-5. JSONL records cite the manifest, world, generation, run, batch, population, entity, exemplar, and replay
+6. JSONL records cite the manifest, world, generation, run, batch, population, entity, exemplar, and replay
    coordinates that produced them.
 
-The embedded world document is the semantic authority. Indexed manifest fields are validated projections for
-discovery and provenance; they do not become a second world definition.
+The embedded world document, including complete embedded catalog documents, is the semantic authority. Indexed
+manifest fields are validated projections for discovery and provenance; they do not become a second definition or a
+dangling pointer to required catalog content.
 
 ## Create and retain a manifest
 

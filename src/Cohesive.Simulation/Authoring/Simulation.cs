@@ -203,6 +203,32 @@ public static class Gen
             valueType: TypeMapper.Map(typeof(TValue), nullability: null),
             options: canonicalOptions.MoveToImmutable()));
     }
+
+    /// <summary>Creates a typed generator from one exact fingerprinted finite catalog.</summary>
+    /// <typeparam name="TValue">CLR value type represented by the retained catalog.</typeparam>
+    /// <param name="catalog">Validated portable catalog document governing selection and provenance.</param>
+    /// <returns>A typed authoring projection over a canonical retained-catalog node.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="catalog"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The catalog's portable value type differs from the conventional portable type for <typeparamref name="TValue"/>.
+    /// </exception>
+    /// <remarks>
+    /// Provider adapters create the catalog snapshot before this call. Sampling and replay consume only exact retained
+    /// values, so provider objects, callbacks, and ambient random state never enter canonical generation IR.
+    /// </remarks>
+    public static Generator<TValue> Catalog<TValue>(GenerationCatalogDocument catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        var expectedType = TypeMapper.Map(typeof(TValue), nullability: null);
+        if (expectedType != catalog.Definition.ValueType)
+        {
+            throw new ArgumentException(
+                $"Catalog value type '{catalog.Definition.ValueType}' does not match CLR type '{typeof(TValue).FullName}'.",
+                nameof(catalog));
+        }
+
+        return new(new CatalogGenerationNode(catalog));
+    }
 }
 
 /// <summary>Fluent typed producer of one canonical record-generation definition.</summary>

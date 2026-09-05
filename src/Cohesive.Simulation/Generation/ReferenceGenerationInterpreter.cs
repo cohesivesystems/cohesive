@@ -356,6 +356,7 @@ public static class ReferenceGenerationInterpreter
             bernoulli.Probability >= 1d
             || bernoulli.Probability > 0d && ToUnitInterval(AddressableEntropy.Next(seed, address, attempt: 0)) < bernoulli.Probability),
         WeightedCategoricalGenerationNode categorical => GenerateCategorical(categorical, seed, address),
+        CatalogGenerationNode catalog => GenerateCatalog(catalog, seed, address),
         ExpressionGenerationNode expression => EvaluateExpression(expression.Expression, bindings),
         _ => throw new NotSupportedException(
             $"Reference generation interpreter does not support node '{generator.GetType().Name}'.")
@@ -421,21 +422,45 @@ public static class ReferenceGenerationInterpreter
         WeightedCategoricalGenerationNode node,
         long seed,
         EntropyAddress address)
+        => GenerateWeighted(
+            node.Options,
+            static option => option.Weight,
+            static option => option.Value,
+            seed,
+            address);
+
+    static ObservationValue GenerateCatalog(
+        CatalogGenerationNode node,
+        long seed,
+        EntropyAddress address)
+        => GenerateWeighted(
+            node.Catalog.Definition.Entries,
+            static entry => entry.Weight,
+            static entry => entry.Value,
+            seed,
+            address);
+
+    static ObservationValue GenerateWeighted<TEntry>(
+        ImmutableArray<TEntry> entries,
+        Func<TEntry, double> getWeight,
+        Func<TEntry, ObservationValue> getValue,
+        long seed,
+        EntropyAddress address)
     {
         var totalWeight = 0d;
-        foreach (var option in node.Options)
-            totalWeight += option.Weight;
+        foreach (var entry in entries)
+            totalWeight += getWeight(entry);
 
         var threshold = ToUnitInterval(AddressableEntropy.Next(seed, address, attempt: 0)) * totalWeight;
         var cumulative = 0d;
-        for (var index = 0; index < node.Options.Length - 1; index++)
+        for (var index = 0; index < entries.Length - 1; index++)
         {
-            cumulative += node.Options[index].Weight;
+            cumulative += getWeight(entries[index]);
             if (threshold < cumulative)
-                return node.Options[index].Value;
+                return getValue(entries[index]);
         }
 
-        return node.Options[^1].Value;
+        return getValue(entries[^1]);
     }
 
     static double ToUnitInterval(ulong value) =>
