@@ -8,18 +8,17 @@ application-host, storage, transition, process, or relation packages.
 ```csharp
 using Cohesive.Cli;
 
-var app = new CliApplication(description: "Training jobs")
-    .UseConsoleCancellation();
+var app = new CliApplication(description: "Training jobs");
 
 app.Command<TrainCommand>("train", "Start a training run")
     .OnExecute(context =>
     {
         var command = context.Configuration;
-        context.Output.WriteLine($"Training {command.Model} on {command.Dataset}");
+        context.Io.WriteLine($"Training {command.Model} on {command.Dataset}");
         return 0;
     });
 
-return await app.InvokeAsync(args);
+return await app.RunAsync(args);
 ```
 
 Command-line values, environment variables, and registered configuration providers merge through
@@ -28,28 +27,39 @@ validation, middleware, output routing, cancellation, dynamic handler binding, a
 
 ## Standard streams and cancellation
 
-`CliApplication` defaults to the process console and places its raw input and output streams on every
-`CliCommandContext`. Tests and embedded tools can supply caller-owned streams once when creating the application:
+`CommandIo` is the single invocation-scoped authority for raw input and output streams, error output, UTF-8 text
+adaptation, and JSON serialization policy. `CliApplication` defaults to `CommandIo.Console()` and places the same
+instance on every `CliCommandContext`. Tests and embedded tools can use `CommandIo.Null(...)`, overriding only the
+channels they need to feed or capture:
 
 ```csharp
-var app = new CliApplication(
-    description: "Artifact tool",
+var io = CommandIo.Null(
     standardInput: input,
     standardOutput: output,
     standardError: error);
+var app = new CliApplication(description: "Artifact tool", io);
 
 app.Command<ImportCommand>("import")
     .OnExecute(async context =>
     {
-        using var reader = CliStandardStreams.OpenUtf8Reader(context.StandardInput);
-        await ImportAsync(reader, context.StandardOutput, context.CancellationToken);
+        var command = context.Configuration;
+        var manifest = await context.Io.ReadUtf8TextAsync(command.InputPath, context.CancellationToken);
+        await context.Io.WriteOutputAsync(
+            command.OutputPath,
+            (output, cancellationToken) => ExportAsync(manifest, output, cancellationToken),
+            context.CancellationToken);
         return 0;
     });
 ```
 
-`UseConsoleCancellation()` attaches `Console.CancelKeyPress` only while an invocation is active, prevents immediate
-process termination, and cancels the token exposed by the command context. Explicit invocation cancellation remains
-linked to the same token.
+`RunAsync` is the standard console entry point: empty arguments display root help, and `Console.CancelKeyPress` is
+attached only while the application is running. `InvokeAsync` remains the embedding and test entry point and does not
+attach a process signal handler.
+
+`CommandIo.ReadInputAsync` and `ReadUtf8TextAsync` select standard input when the path is `-` and otherwise scope a
+file input stream. `WriteOutputAsync` similarly selects standard output or a file; file destinations are replaced
+atomically after a successful write, while standard output necessarily streams directly. This consolidates path
+routing without pretending the input and output ownership or failure contracts are identical.
 
 ## Validation
 
@@ -73,7 +83,7 @@ app.Command<VerifyCommand>("verify")
     .AllowStandardInputForAtMostOne(command => command.Manifest, command => command.JsonLines);
 ```
 
-The standard-stream marker is owned by `CliStandardStreams.StandardStreamPath`; applications do not need another
+The standard-stream marker is owned by `CommandIo.StandardStreamPath`; applications do not need another
 literal `"-"` constant.
 
 Prefer declaring invocation dependencies as typed handler parameters. Command contexts also expose optional

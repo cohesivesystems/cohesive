@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Cohesive.Cli;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
 using Cohesive.Simulation.Artifacts;
@@ -242,16 +243,15 @@ public sealed class SimulationCliTests
             cancellation.Cancel();
             using StringWriter error = new();
 
-            var exitCode = await SimulationCliApplication.RunAsync(
+            var exitCode = await SimulationCliApplication.Create(
+                    CommandIo.Null(standardError: error))
+                .RunAsync(
                 [
                     "provision",
                     "--manifest", manifestPath,
                     "--target", "scripts/demo",
                     "--out", outputPath
                 ],
-                Stream.Null,
-                Stream.Null,
-                error,
                 cancellation.Token);
 
             Assert.Equal(130, exitCode);
@@ -371,11 +371,12 @@ public sealed class SimulationCliTests
             : new(Encoding.UTF8.GetBytes(standardInput));
         await using MemoryStream output = new();
         using StringWriter error = new();
-        var exitCode = await SimulationCliApplication.RunAsync(
-            [.. arguments],
-            input,
-            output,
-            error);
+        var exitCode = await SimulationCliApplication.Create(
+                CommandIo.Null(
+                    standardInput: input,
+                    standardOutput: output,
+                    standardError: error))
+            .RunAsync([.. arguments]);
         return (exitCode, Encoding.UTF8.GetString(output.ToArray()), error.ToString());
     }
 
@@ -423,27 +424,22 @@ public sealed class SimulationCliTests
     static async Task<int> RunManifestWithFiles(string worldPath, string manifestPath)
     {
         using StringWriter error = new();
-        return await SimulationCliApplication.RunAsync(
-            ["manifest", "--world", worldPath, "--seed", "42", "--out", manifestPath],
-            Stream.Null,
-            Stream.Null,
-            error);
+        return await SimulationCliApplication.Create(CommandIo.Null(standardError: error))
+            .RunAsync(["manifest", "--world", worldPath, "--seed", "42", "--out", manifestPath]);
     }
 
     static async Task<int> RunProvisionWithFiles(string manifestPath, string outputPath)
     {
         using StringWriter error = new();
-        return await SimulationCliApplication.RunAsync(
+        return await SimulationCliApplication.Create(CommandIo.Null(standardError: error))
+            .RunAsync(
             [
                 "provision",
                 "--manifest", manifestPath,
                 "--target", "scripts/demo",
                 "--out", outputPath,
                 "--batch-size", "1"
-            ],
-            Stream.Null,
-            Stream.Null,
-            error);
+            ]);
     }
 
     static string CreateManifestJson(long rootSeed) =>

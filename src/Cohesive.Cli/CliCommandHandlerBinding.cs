@@ -70,8 +70,8 @@ static class CliCommandHandlerBinding
         if (parameterType == typeof(ParseResult))
             return context.ParseResult;
 
-        if (parameterType == typeof(CliOutput))
-            return context.Output;
+        if (parameterType == typeof(CommandIo))
+            return context.Io;
 
         if (parameterType.IsAssignableFrom(typeof(IConfigurationRoot)))
             return context.ConfigurationRoot;

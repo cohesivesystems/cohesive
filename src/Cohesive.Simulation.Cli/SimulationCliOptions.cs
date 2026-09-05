@@ -20,7 +20,7 @@ sealed record WorldManifestCliOptions
     [ConfigurationParameter(
         "out",
         Description = "World-artifact manifest JSON path, or '-' for standard output.")]
-    public string OutputPath { get; init; } = CliStandardStreams.StandardStreamPath;
+    public string OutputPath { get; init; } = CommandIo.StandardStreamPath;
 
     [ConfigurationParameter(
         "seed",
@@ -31,10 +31,6 @@ sealed record WorldManifestCliOptions
     public bool IsRelationshipWorld => !string.IsNullOrEmpty(RelationshipWorldPath);
 
     public string InputPath => IsRelationshipWorld ? RelationshipWorldPath : WorldPath;
-
-    public bool ReadsStandardInput => CliStandardStreams.IsStandardStreamPath(InputPath);
-
-    public bool WritesStandardOutput => CliStandardStreams.IsStandardStreamPath(OutputPath);
 }
 
 sealed record WorldProvisionCliOptions
@@ -48,7 +44,7 @@ sealed record WorldProvisionCliOptions
     [ConfigurationParameter(
         "out",
         Description = "Verified-manifest JSON Lines output path, or '-' for standard output.")]
-    public string OutputPath { get; init; } = CliStandardStreams.StandardStreamPath;
+    public string OutputPath { get; init; } = CommandIo.StandardStreamPath;
 
     [ConfigurationParameter(
         "target",
@@ -60,10 +56,6 @@ sealed record WorldProvisionCliOptions
         "batch-size",
         Description = "Positive provisioning batch size.")]
     public int BatchSize { get; init; } = WorldProvisioningOptions.DefaultBatchSize;
-
-    public bool ReadsStandardInput => CliStandardStreams.IsStandardStreamPath(ManifestPath);
-
-    public bool WritesStandardOutput => CliStandardStreams.IsStandardStreamPath(OutputPath);
 }
 
 sealed record WorldVerifyCliOptions
@@ -79,10 +71,6 @@ sealed record WorldVerifyCliOptions
         Description = "World JSON Lines path to verify, or '-' for standard input.",
         Required = true)]
     public string JsonLinesPath { get; init; } = string.Empty;
-
-    public bool ReadsManifestStandardInput => CliStandardStreams.IsStandardStreamPath(ManifestPath);
-
-    public bool ReadsJsonLinesStandardInput => CliStandardStreams.IsStandardStreamPath(JsonLinesPath);
 }
 
 sealed record WorldVerifyCliEvidence(

@@ -15,23 +15,17 @@ public class CliCommandContext : ICancellationTokenContext, IServiceProvider
     /// <param name="configurationRoot">Fully merged configuration for the invocation.</param>
     /// <param name="parseResult">Parsed command-line input for the invocation.</param>
     /// <param name="cancellationToken">Cancellation token for the invocation.</param>
-    /// <param name="output">Optional output channels; standard process output is used when omitted.</param>
-    /// <param name="standardInput">Optional raw standard input stream; the process stream is opened when omitted.</param>
-    /// <param name="standardOutput">Optional raw standard output stream; the process stream is opened when omitted.</param>
+    /// <param name="io">Optional invocation I/O environment; console channels are used when omitted.</param>
     public CliCommandContext(
         IConfigurationRoot configurationRoot,
         ParseResult parseResult,
         CancellationToken cancellationToken,
-        CliOutput? output = null,
-        Stream? standardInput = null,
-        Stream? standardOutput = null)
+        CommandIo? io = null)
         : this(
             configurationRoot,
             parseResult,
             cancellationToken,
-            output,
-            standardInput ?? Console.OpenStandardInput(),
-            standardOutput ?? Console.OpenStandardOutput(),
+            io ?? CommandIo.Console(),
             serviceProvider: null)
     {
     }
@@ -40,17 +34,13 @@ public class CliCommandContext : ICancellationTokenContext, IServiceProvider
         IConfigurationRoot configurationRoot,
         ParseResult parseResult,
         CancellationToken cancellationToken,
-        CliOutput? output,
-        Stream standardInput,
-        Stream standardOutput,
+        CommandIo io,
         IServiceProvider? serviceProvider)
     {
         ConfigurationRoot = Guard.RequireNotNull(configurationRoot);
         ParseResult = Guard.RequireNotNull(parseResult);
         CancellationToken = cancellationToken;
-        Output = output ?? CliOutput.Standard;
-        StandardInput = Guard.RequireNotNull(standardInput);
-        StandardOutput = Guard.RequireNotNull(standardOutput);
+        Io = Guard.RequireNotNull(io);
         this.serviceProvider = serviceProvider;
     }
 
@@ -61,9 +51,7 @@ public class CliCommandContext : ICancellationTokenContext, IServiceProvider
             configurationRoot: source.ConfigurationRoot,
             parseResult: source.ParseResult,
             cancellationToken: source.CancellationToken,
-            output: source.Output,
-            standardInput: source.StandardInput,
-            standardOutput: source.StandardOutput,
+            io: source.Io,
             serviceProvider: source.serviceProvider
             )
     {
@@ -85,15 +73,9 @@ public class CliCommandContext : ICancellationTokenContext, IServiceProvider
     public CancellationToken CancellationToken { get; }
 
     /// <summary>
-    /// Output channels available to the current invocation.
+    /// Input, output, error, and serialization policy available to the current invocation.
     /// </summary>
-    public CliOutput Output { get; }
-
-    /// <summary>Raw standard input stream configured for the CLI application.</summary>
-    public Stream StandardInput { get; }
-
-    /// <summary>Raw standard output stream configured for the CLI application.</summary>
-    public Stream StandardOutput { get; }
+    public CommandIo Io { get; }
 
     /// <summary>
     /// Resolves a required service from the command invocation context.
@@ -142,25 +124,19 @@ public class CliCommandContext<TConfiguration> : CliCommandContext, ICliTypedCom
     /// <param name="configurationRoot">Fully merged configuration for the invocation.</param>
     /// <param name="parseResult">Parsed command-line input for the invocation.</param>
     /// <param name="cancellationToken">Cancellation token for the invocation.</param>
-    /// <param name="output">Optional output channels; standard process output is used when omitted.</param>
-    /// <param name="standardInput">Optional raw standard input stream; the process stream is opened when omitted.</param>
-    /// <param name="standardOutput">Optional raw standard output stream; the process stream is opened when omitted.</param>
+    /// <param name="io">Optional invocation I/O environment; console channels are used when omitted.</param>
     public CliCommandContext(
         TConfiguration configuration,
         IConfigurationRoot configurationRoot,
         ParseResult parseResult,
         CancellationToken cancellationToken,
-        CliOutput? output = null,
-        Stream? standardInput = null,
-        Stream? standardOutput = null)
+        CommandIo? io = null)
         : this(
             configuration,
             configurationRoot,
             parseResult,
             cancellationToken,
-            output,
-            standardInput ?? Console.OpenStandardInput(),
-            standardOutput ?? Console.OpenStandardOutput(),
+            io ?? CommandIo.Console(),
             serviceProvider: null)
     {
     }
@@ -170,36 +146,13 @@ public class CliCommandContext<TConfiguration> : CliCommandContext, ICliTypedCom
         IConfigurationRoot configurationRoot,
         ParseResult parseResult,
         CancellationToken cancellationToken,
-        CliOutput? output,
-        IServiceProvider? serviceProvider)
-        : this(
-            configuration,
-            configurationRoot,
-            parseResult,
-            cancellationToken,
-            output,
-            Stream.Null,
-            Stream.Null,
-            serviceProvider)
-    {
-    }
-
-    internal CliCommandContext(
-        TConfiguration configuration,
-        IConfigurationRoot configurationRoot,
-        ParseResult parseResult,
-        CancellationToken cancellationToken,
-        CliOutput? output,
-        Stream standardInput,
-        Stream standardOutput,
+        CommandIo io,
         IServiceProvider? serviceProvider)
         : base(
             configurationRoot,
             parseResult,
             cancellationToken,
-            output,
-            standardInput,
-            standardOutput,
+            io,
             serviceProvider)
     {
         Configuration = configuration;
@@ -224,9 +177,7 @@ public class CliCommandContext<TConfiguration> : CliCommandContext, ICliTypedCom
             ConfigurationRoot,
             ParseResult,
             CancellationToken,
-            Output,
-            StandardInput,
-            StandardOutput,
+            Io,
             serviceProvider: sp);
 
     object ICliTypedCommandContext.Configuration => Configuration!;

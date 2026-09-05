@@ -36,23 +36,23 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
-    public async Task InvokeAsync_ExposesApplicationStandardStreamsToCommandContext()
+    public async Task InvokeAsync_ExposesApplicationIoToCommandContext()
     {
         await using MemoryStream standardInput = new(Encoding.UTF8.GetBytes("fixture-input"));
         await using MemoryStream standardOutput = new();
         using StringWriter standardError = new();
-        var app = new CliApplication(
-            description: "Training jobs",
-            standardInput,
-            standardOutput,
-            standardError);
+        var io = CommandIo.Null(
+            standardInput: standardInput,
+            standardOutput: standardOutput,
+            standardError: standardError);
+        var app = new CliApplication(description: "Training jobs", io);
         app.Command<TrainCommandConfiguration>("train")
-            .OnExecute((CliCommandContext<TrainCommandConfiguration> context) =>
+            .OnExecute(async (CliCommandContext<TrainCommandConfiguration> context) =>
             {
-                Assert.Same(standardInput, context.StandardInput);
-                Assert.Same(standardOutput, context.StandardOutput);
-                using var reader = CliStandardStreams.OpenUtf8Reader(context.StandardInput);
-                context.Output.WriteLine(reader.ReadToEnd());
+                Assert.Same(io, context.Io);
+                Assert.Same(standardInput, context.Io.StandardInput);
+                Assert.Same(standardOutput, context.Io.StandardOutput);
+                context.Io.WriteLine(await context.Io.ReadUtf8TextAsync(CommandIo.StandardStreamPath));
                 return 0;
             });
 
@@ -65,13 +65,12 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
-    public async Task UseConsoleCancellation_LinksExplicitInvocationCancellation()
+    public async Task RunAsync_LinksExplicitInvocationCancellation()
     {
         using CancellationTokenSource cancellation = new();
         TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
         TaskCompletionSource cancellationObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        var app = new CliApplication("Training jobs")
-            .UseConsoleCancellation();
+        var app = new CliApplication("Training jobs");
         app.Command<TrainCommandConfiguration>("train")
             .OnExecute(async (CliCommandContext<TrainCommandConfiguration> context) =>
             {
@@ -81,7 +80,7 @@ public sealed class CliApplicationTests
                 return 0;
             });
 
-        var invocation = app.InvokeAsync(
+        var invocation = app.RunAsync(
             ["train", "--dataset", "shipments", "--model", "encoder", "--profile", "local"],
             cancellation.Token);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));

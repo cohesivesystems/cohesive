@@ -12,21 +12,13 @@ namespace Cohesive.Cli;
 /// A <see cref="CliApplication"/> can be used as a console front-end for background jobs while still allowing the
 /// same executable to fall back to ordinary host startup when no registered command name is present in
 /// <c>args[0]</c>. This enables one <c>Program.cs</c> entrypoint to support both command execution and the normal
-/// ASP.NET or worker-service boot path. Supplied standard streams and writers remain caller-owned and are not
-/// disposed by the application.
+/// ASP.NET or worker-service boot path. The supplied I/O environment remains caller-owned.
 /// </remarks>
 /// <param name="description">Optional root command description used for generated help.</param>
-/// <param name="standardInput">Raw standard input stream, or <see langword="null"/> to open the process stream.</param>
-/// <param name="standardOutput">Raw standard output stream, or <see langword="null"/> to open the process stream.</param>
-/// <param name="standardError">Standard error writer, or <see langword="null"/> to use <see cref="Console.Error"/>.</param>
-/// <exception cref="ArgumentException">
-/// <paramref name="standardInput"/> is not readable, or <paramref name="standardOutput"/> is not writable.
-/// </exception>
+/// <param name="io">I/O environment, or <see langword="null"/> to use console channels.</param>
 public sealed class CliApplication(
     string? description = null,
-    Stream? standardInput = null,
-    Stream? standardOutput = null,
-    TextWriter? standardError = null)
+    CommandIo? io = null)
 {
     readonly List<CliCommandNode> commands = [];
     readonly Dictionary<Type, List<Delegate>> parameterPipelines = [];
@@ -34,7 +26,6 @@ public sealed class CliApplication(
     readonly Dictionary<Type, List<Delegate>> validationPipelines = [];
     readonly Dictionary<Type, List<CliDynamicBindingRegistration>> dynamicBindingPipelines = [];
     Action<IConfigurationBuilder>? configureConfiguration;
-    bool useConsoleCancellation;
     string? environmentVariablePrefix;
 
     /// <summary>
@@ -42,18 +33,8 @@ public sealed class CliApplication(
     /// </summary>
     public string? Description { get; } = description;
 
-    /// <summary>Raw standard input stream available to every command context.</summary>
-    public Stream StandardInput { get; } = RequireReadable(
-        standardInput ?? Console.OpenStandardInput(),
-        nameof(standardInput));
-
-    /// <summary>Raw standard output stream available to every command context.</summary>
-    public Stream StandardOutput { get; } = RequireWritable(
-        standardOutput ?? Console.OpenStandardOutput(),
-        nameof(standardOutput));
-
-    /// <summary>Standard error writer used when an invocation does not override error output.</summary>
-    public TextWriter StandardError { get; } = standardError ?? Console.Error;
+    /// <summary>Gets the default I/O environment shared with command contexts.</summary>
+    public CommandIo Io { get; } = io ?? CommandIo.Console();
 
     /// <summary>
     /// Descriptions of the registered root commands and subcommands.
@@ -80,21 +61,6 @@ public sealed class CliApplication(
     public CliApplication WithEnvironmentVariablePrefix(string? prefix = null)
     {
         environmentVariablePrefix = prefix;
-        return this;
-    }
-
-    /// <summary>
-    /// Cancels command invocations when the process receives <see cref="Console.CancelKeyPress"/>.
-    /// </summary>
-    /// <returns>The current application.</returns>
-    /// <remarks>
-    /// The event handler is attached only for the lifetime of an invocation, prevents immediate process termination,
-    /// and forwards the signal through <see cref="CliCommandContext.CancellationToken"/>. An invocation token supplied
-    /// to <see cref="InvokeAsync(IReadOnlyList{string}, CancellationToken)"/> remains linked to the same context token.
-    /// </remarks>
-    public CliApplication UseConsoleCancellation()
-    {
-        useConsoleCancellation = true;
         return this;
     }
 
@@ -242,66 +208,50 @@ public sealed class CliApplication(
     /// <param name="ct">Cancellation token for async handlers.</param>
     /// <returns>The command exit code.</returns>
     public Task<int> InvokeAsync(IReadOnlyList<string> args, CancellationToken ct = default) =>
-        InvokeAsync(args, options: null, ct);
+        InvokeAsync(args, io: null, ct);
 
     /// <summary>
-    /// Parses and executes the registered command tree using invocation-specific output channels.
+    /// Parses and executes the registered command tree using an invocation-specific I/O environment.
     /// </summary>
     /// <param name="args">Program arguments.</param>
-    /// <param name="options">Optional output and serialization settings for this invocation.</param>
+    /// <param name="io">Optional I/O environment override.</param>
     /// <param name="ct">Cancellation token for parsing and command execution.</param>
     /// <returns>The command exit code.</returns>
-    public async Task<int> InvokeAsync(
+    public Task<int> InvokeAsync(
         IReadOnlyList<string> args,
-        CliInvocationOptions? options,
+        CommandIo? io,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(args);
+        return InvokeCoreAsync(args, io ?? Io, ct);
+    }
 
-        StreamWriter? standardOutputWriter = null;
-        var effectiveStandardOutput = options?.StandardOutput;
-        if (effectiveStandardOutput is null)
+    /// <summary>Runs the application as a console entry point.</summary>
+    /// <param name="args">Program arguments; an empty list displays root help.</param>
+    /// <param name="ct">Cancellation token linked with <see cref="Console.CancelKeyPress"/>.</param>
+    /// <returns>The command exit code.</returns>
+    /// <remarks>
+    /// The cancel-key handler is attached only for the lifetime of this call and forwards the signal through
+    /// <see cref="CliCommandContext.CancellationToken"/>.
+    /// </remarks>
+    public async Task<int> RunAsync(IReadOnlyList<string> args, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        IReadOnlyList<string> invocationArgs = args.Count == 0 ? ["--help"] : args;
+        using CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        ConsoleCancelEventHandler cancel = (_, eventArgs) =>
         {
-            standardOutputWriter = CliStandardStreams.OpenUtf8Writer(StandardOutput);
-            effectiveStandardOutput = standardOutputWriter;
-        }
-
-        var effectiveOptions = new CliInvocationOptions
-        {
-            StandardOutput = effectiveStandardOutput,
-            ErrorOutput = options?.ErrorOutput ?? StandardError,
-            JsonSerializerOptions = options?.JsonSerializerOptions
+            eventArgs.Cancel = true;
+            cancellation.Cancel();
         };
-
+        Console.CancelKeyPress += cancel;
         try
         {
-            if (!useConsoleCancellation)
-            {
-                return await InvokeCoreAsync(args, effectiveOptions, ct).ConfigureAwait(false);
-            }
-
-            using CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            ConsoleCancelEventHandler cancel = (_, eventArgs) =>
-            {
-                eventArgs.Cancel = true;
-                cancellation.Cancel();
-            };
-            Console.CancelKeyPress += cancel;
-            try
-            {
-                return await InvokeCoreAsync(args, effectiveOptions, cancellation.Token).ConfigureAwait(false);
-            }
-            finally
-            {
-                Console.CancelKeyPress -= cancel;
-            }
+            return await InvokeCoreAsync(invocationArgs, Io, cancellation.Token).ConfigureAwait(false);
         }
         finally
         {
-            if (standardOutputWriter is not null)
-            {
-                await standardOutputWriter.DisposeAsync().ConfigureAwait(false);
-            }
+            Console.CancelKeyPress -= cancel;
         }
     }
 
@@ -332,7 +282,7 @@ public sealed class CliApplication(
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(runDefaultAsync);
-        return ShouldHandle(args) ? InvokeAsync(args, ct) : runDefaultAsync(args, ct);
+        return ShouldHandle(args) ? RunAsync(args, ct) : runDefaultAsync(args, ct);
     }
 
     internal void ApplySharedConfiguration(IConfigurationBuilder builder) => configureConfiguration?.Invoke(builder);
@@ -341,15 +291,15 @@ public sealed class CliApplication(
 
     async Task<int> InvokeCoreAsync(
         IReadOnlyList<string> args,
-        CliInvocationOptions options,
+        CommandIo io,
         CancellationToken ct)
     {
-        var rootCommand = BuildRootCommand(options);
+        var rootCommand = BuildRootCommand(io);
         var parseResult = rootCommand.Parse(args);
         var invocationConfiguration = new InvocationConfiguration
         {
-            Output = options.StandardOutput!,
-            Error = options.ErrorOutput!
+            Output = io.TextOutput,
+            Error = io.StandardError
         };
         return await parseResult.InvokeAsync(invocationConfiguration, ct).ConfigureAwait(false);
     }
@@ -428,32 +378,12 @@ public sealed class CliApplication(
         }
     }
 
-    static Stream RequireReadable(Stream stream, string parameterName)
-    {
-        if (!stream.CanRead)
-        {
-            throw new ArgumentException("The standard input stream must be readable.", parameterName);
-        }
-
-        return stream;
-    }
-
-    static Stream RequireWritable(Stream stream, string parameterName)
-    {
-        if (!stream.CanWrite)
-        {
-            throw new ArgumentException("The standard output stream must be writable.", parameterName);
-        }
-
-        return stream;
-    }
-
-    RootCommand BuildRootCommand(CliInvocationOptions? options)
+    RootCommand BuildRootCommand(CommandIo io)
     {
         var root = string.IsNullOrWhiteSpace(Description) ? new RootCommand() : new RootCommand(Description);
         foreach (var command in commands)
         {
-            root.Subcommands.Add(command.BuildCommand(this, options));
+            root.Subcommands.Add(command.BuildCommand(this, io));
         }
 
         return root;

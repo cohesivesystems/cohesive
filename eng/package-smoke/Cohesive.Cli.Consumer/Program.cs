@@ -7,26 +7,26 @@ var streamsMatched = false;
 await using MemoryStream standardInput = new(Encoding.UTF8.GetBytes("fixture"));
 await using MemoryStream standardOutput = new();
 using StringWriter standardError = new();
-var app = new CliApplication(
-        description: "Package smoke",
-        standardInput: standardInput,
-        standardOutput: standardOutput,
-        standardError: standardError)
-    .UseConsoleCancellation();
+var io = CommandIo.Null(
+    standardInput: standardInput,
+    standardOutput: standardOutput,
+    standardError: standardError);
+var app = new CliApplication(description: "Package smoke", io);
 app.Command<EchoCommand>("echo", "Echo one value")
     .RequireExactlyOne(command => command.Value, command => command.AlternateValue)
     .Validate(ValidateEcho)
-    .OnExecute((CliCommandContext<EchoCommand> context) =>
+    .OnExecute(async (CliCommandContext<EchoCommand> context) =>
     {
         captured = context.Configuration;
-        streamsMatched = ReferenceEquals(standardInput, context.StandardInput)
-            && ReferenceEquals(standardOutput, context.StandardOutput);
-        using var reader = CliStandardStreams.OpenUtf8Reader(context.StandardInput);
-        context.Output.WriteLine($"{context.Configuration.Value}:{reader.ReadToEnd()}");
+        streamsMatched = ReferenceEquals(io, context.Io)
+            && ReferenceEquals(standardInput, context.Io.StandardInput)
+            && ReferenceEquals(standardOutput, context.Io.StandardOutput);
+        var input = await context.Io.ReadUtf8TextAsync(CommandIo.StandardStreamPath);
+        context.Io.WriteLine($"{context.Configuration.Value}:{input}");
         return 0;
     });
 
-var exitCode = await app.InvokeAsync(["echo", "--value", "ready"]);
+var exitCode = await app.RunAsync(["echo", "--value", "ready"]);
 return exitCode == 0
        && Encoding.UTF8.GetString(standardOutput.ToArray()).Trim() == "ready:fixture"
        && standardError.ToString().Length == 0

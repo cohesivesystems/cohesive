@@ -1,4 +1,3 @@
-using System.Text;
 using Cohesive.Cli;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -15,51 +14,11 @@ static class SimulationCliApplication
     const int FailureExitCode = 1;
     const int CancelledExitCode = 130;
 
-    public static Task<int> RunAsync(
-        string[] args,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(args);
-        return InvokeAsync(Create().UseConsoleCancellation(), args, cancellationToken);
-    }
-
-    public static Task<int> RunAsync(
-        string[] args,
-        Stream standardInput,
-        Stream standardOutput,
-        TextWriter standardError,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(args);
-        ArgumentNullException.ThrowIfNull(standardInput);
-        ArgumentNullException.ThrowIfNull(standardOutput);
-        ArgumentNullException.ThrowIfNull(standardError);
-
-        return InvokeAsync(
-            Create(standardInput, standardOutput, standardError),
-            args,
-            cancellationToken);
-    }
-
-    static Task<int> InvokeAsync(
-        CliApplication app,
-        string[] args,
-        CancellationToken cancellationToken)
-    {
-        IReadOnlyList<string> invocationArgs = args.Length == 0 ? ["--help"] : args;
-        return app.InvokeAsync(invocationArgs, cancellationToken);
-    }
-
-    static CliApplication Create(
-        Stream? standardInput = null,
-        Stream? standardOutput = null,
-        TextWriter? standardError = null)
+    public static CliApplication Create(CommandIo? io = null)
     {
         var app = new CliApplication(
             "Create and provision deterministic Cohesive world artifacts.",
-            standardInput,
-            standardOutput,
-            standardError);
+            io);
         app.Command<WorldManifestCliOptions>(
                 "manifest",
                 "Create and retain a verified world-artifact manifest.")
@@ -86,16 +45,13 @@ static class SimulationCliApplication
         return app;
     }
 
-    static async Task<int> CreateManifestAsync(
-        CliCommandContext<WorldManifestCliOptions> context)
+    static async Task<int> CreateManifestAsync(CliCommandContext<WorldManifestCliOptions> context)
     {
         try
         {
             var options = NormalizePaths(context.Configuration);
-            var worldJson = await ReadJsonAsync(
+            var worldJson = await context.Io.ReadUtf8TextAsync(
                     options.InputPath,
-                    options.ReadsStandardInput,
-                    context.StandardInput,
                     context.CancellationToken)
                 .ConfigureAwait(false);
             var manifest = options.IsRelationshipWorld
@@ -106,10 +62,8 @@ static class SimulationCliApplication
                     WorldDefinitionJsonSerializer.Deserialize(worldJson),
                     options.RootSeed);
             var canonicalManifest = WorldArtifactManifestJsonSerializer.GetCanonicalBytes(manifest);
-            await WriteOutputAsync(
+            await context.Io.WriteOutputAsync(
                     options.OutputPath,
-                    options.WritesStandardOutput,
-                    context.StandardOutput,
                     async (output, cancellationToken) =>
                     {
                         await output.WriteAsync(canonicalManifest, cancellationToken).ConfigureAwait(false);
@@ -121,33 +75,28 @@ static class SimulationCliApplication
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
-            context.Output.WriteErrorLine("Simulation manifest creation was cancelled.");
+            context.Io.WriteErrorLine("Simulation manifest creation was cancelled.");
             return CancelledExitCode;
         }
         catch (Exception exception)
         {
-            context.Output.WriteErrorLine(exception.Message);
+            context.Io.WriteErrorLine(exception.Message);
             return FailureExitCode;
         }
     }
 
-    static async Task<int> ProvisionAsync(
-        CliCommandContext<WorldProvisionCliOptions> context)
+    static async Task<int> ProvisionAsync(CliCommandContext<WorldProvisionCliOptions> context)
     {
         try
         {
             var options = NormalizePaths(context.Configuration);
-            var manifestJson = await ReadJsonAsync(
+            var manifestJson = await context.Io.ReadUtf8TextAsync(
                     options.ManifestPath,
-                    options.ReadsStandardInput,
-                    context.StandardInput,
                     context.CancellationToken)
                 .ConfigureAwait(false);
             var manifest = WorldArtifactManifestJsonSerializer.Deserialize(manifestJson);
-            await WriteOutputAsync(
+            await context.Io.WriteOutputAsync(
                     options.OutputPath,
-                    options.WritesStandardOutput,
-                    context.StandardOutput,
                     (output, cancellationToken) => ProvisionAsync(manifest, options, output, cancellationToken),
                     context.CancellationToken)
                 .ConfigureAwait(false);
@@ -155,26 +104,23 @@ static class SimulationCliApplication
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
-            context.Output.WriteErrorLine("Simulation provisioning was cancelled.");
+            context.Io.WriteErrorLine("Simulation provisioning was cancelled.");
             return CancelledExitCode;
         }
         catch (Exception exception)
         {
-            context.Output.WriteErrorLine(exception.Message);
+            context.Io.WriteErrorLine(exception.Message);
             return FailureExitCode;
         }
     }
 
-    static async Task<int> VerifyAsync(
-        CliCommandContext<WorldVerifyCliOptions> context)
+    static async Task<int> VerifyAsync(CliCommandContext<WorldVerifyCliOptions> context)
     {
         try
         {
             var options = NormalizePaths(context.Configuration);
-            var manifestJson = await ReadJsonAsync(
+            var manifestJson = await context.Io.ReadUtf8TextAsync(
                     options.ManifestPath,
-                    options.ReadsManifestStandardInput,
-                    context.StandardInput,
                     context.CancellationToken)
                 .ConfigureAwait(false);
             var manifestValidation = WorldArtifactManifestJsonSerializer.TryDeserialize(
@@ -186,30 +132,14 @@ static class SimulationCliApplication
                 return FailureExitCode;
             }
 
-            WorldJsonLinesValidationResult validation;
-            if (options.ReadsJsonLinesStandardInput)
-            {
-                validation = await ValidateJsonLinesAsync(
-                        manifest,
-                        context.StandardInput,
-                        context.CancellationToken)
-                    .ConfigureAwait(false);
-            }
-            else
-            {
-                await using FileStream input = new(
+            var validation = await context.Io.ReadInputAsync(
                     options.JsonLinesPath,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.Read,
-                    bufferSize: 4096,
-                    FileOptions.Asynchronous | FileOptions.SequentialScan);
-                validation = await ValidateJsonLinesAsync(
+                    (input, cancellationToken) => ValidateJsonLinesAsync(
                         manifest,
                         input,
-                        context.CancellationToken)
-                    .ConfigureAwait(false);
-            }
+                        cancellationToken),
+                    context.CancellationToken)
+                .ConfigureAwait(false);
 
             if (!validation.IsSuccessful || validation.Verification is null)
             {
@@ -218,7 +148,7 @@ static class SimulationCliApplication
             }
 
             var verification = validation.Verification;
-            context.Output.WriteJson(new WorldVerifyCliReport(
+            context.Io.WriteJson(new WorldVerifyCliReport(
                 WorldVerifyCliReport.CurrentSchemaVersion,
                 IsValid: true,
                 new(
@@ -238,7 +168,7 @@ static class SimulationCliApplication
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
-            context.Output.WriteErrorLine("Simulation verification was cancelled.");
+            context.Io.WriteErrorLine("Simulation verification was cancelled.");
             return CancelledExitCode;
         }
         catch (Exception exception)
@@ -281,7 +211,7 @@ static class SimulationCliApplication
 
     static string NormalizePath(string value, string option)
     {
-        if (CliStandardStreams.IsStandardStreamPath(value))
+        if (CommandIo.IsStandardStreamPath(value))
         {
             return value;
         }
@@ -293,75 +223,6 @@ static class SimulationCliApplication
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
         {
             throw new ArgumentException($"Option '{option}' has invalid path '{value}': {exception.Message}", option, exception);
-        }
-    }
-
-    static async Task<string> ReadJsonAsync(
-        string inputPath,
-        bool readsStandardInput,
-        Stream standardInput,
-        CancellationToken cancellationToken)
-    {
-        if (!readsStandardInput)
-        {
-            return await File.ReadAllTextAsync(inputPath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
-        }
-
-        using var reader = CliStandardStreams.OpenUtf8Reader(standardInput);
-        return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    static async Task WriteOutputAsync(
-        string outputPath,
-        bool writesStandardOutput,
-        Stream standardOutput,
-        Func<Stream, CancellationToken, Task> write,
-        CancellationToken cancellationToken)
-    {
-        if (writesStandardOutput)
-        {
-            await write(standardOutput, cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        var outputDirectory = Path.GetDirectoryName(outputPath)
-            ?? throw new InvalidOperationException($"Output path '{outputPath}' has no parent directory.");
-        Directory.CreateDirectory(outputDirectory);
-        var temporaryPath = Path.Combine(
-            outputDirectory,
-            $".{Path.GetFileName(outputPath)}.{Guid.NewGuid():N}.tmp");
-        try
-        {
-            await using (FileStream temporaryOutput = new(
-                             temporaryPath,
-                             FileMode.CreateNew,
-                             FileAccess.Write,
-                             FileShare.None,
-                             bufferSize: 4096,
-                             FileOptions.Asynchronous | FileOptions.SequentialScan))
-            {
-                await write(temporaryOutput, cancellationToken).ConfigureAwait(false);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            File.Move(temporaryPath, outputPath, overwrite: true);
-        }
-        catch
-        {
-            TryDeleteTemporaryFile(temporaryPath);
-            throw;
-        }
-    }
-
-    static void TryDeleteTemporaryFile(string path)
-    {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            // Preserve the write failure. The uniquely named temporary artifact remains diagnosable.
         }
     }
 
@@ -403,7 +264,7 @@ static class SimulationCliApplication
     static void WriteVerificationFailure(
         CliCommandContext<WorldVerifyCliOptions> context,
         IReadOnlyList<DocumentValidationDiagnostic> diagnostics) =>
-        context.Output.WriteJsonError(new WorldVerifyCliReport(
+        context.Io.WriteJsonError(new WorldVerifyCliReport(
             WorldVerifyCliReport.CurrentSchemaVersion,
             IsValid: false,
             Verification: null,

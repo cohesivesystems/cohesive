@@ -167,7 +167,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
         return this;
     }
 
-    internal override Command BuildCommand(CliApplication application, CliInvocationOptions? options)
+    internal override Command BuildCommand(CliApplication application, CommandIo io)
     {
         ArgumentNullException.ThrowIfNull(application);
 
@@ -198,18 +198,18 @@ public sealed class CliCommandBuilder<TConfiguration>(
 
         foreach (var subcommand in subcommands)
         {
-            command.Subcommands.Add(subcommand.BuildCommand(application, options));
+            command.Subcommands.Add(subcommand.BuildCommand(application, io));
         }
 
         if (handler is not null)
         {
-            command.SetAction((parseResult, ct) => InvokeAsync(application, parseResult, bindings, options, ct));
+            command.SetAction((parseResult, ct) => InvokeAsync(application, parseResult, bindings, io, ct));
         }
         else if (subcommands.Count > 0)
         {
             command.SetAction(parseResult =>
             {
-                CliOutput.Create(parseResult, options).WriteErrorLine($"Command '{Name}' requires a subcommand.");
+                io.WriteErrorLine($"Command '{Name}' requires a subcommand.");
                 return 1;
             });
         }
@@ -221,9 +221,8 @@ public sealed class CliCommandBuilder<TConfiguration>(
         return command;
     }
 
-    async Task<int> InvokeAsync(CliApplication application, ParseResult parseResult, IReadOnlyList<CliSymbolBinding> bindings, CliInvocationOptions? options, CancellationToken ct)
+    async Task<int> InvokeAsync(CliApplication application, ParseResult parseResult, IReadOnlyList<CliSymbolBinding> bindings, CommandIo io, CancellationToken ct)
     {
-        var output = CliOutput.Create(parseResult, options);
         try
         {
             var configuration = BuildConfiguration(application, bindings, parseResult);
@@ -233,19 +232,17 @@ public sealed class CliCommandBuilder<TConfiguration>(
                 configuration,
                 parseResult,
                 ct,
-                output,
-                application.StandardInput,
-                application.StandardOutput,
+                io,
                 serviceProvider: null);
             var pipeline = BuildExecutionPipeline();
             return handler is null ? 0 : await pipeline(context).ConfigureAwait(false);
         }
         catch (ConfigurationParameterParseException ex)
         {
-            output.WriteErrorLine(ex.Message);
+            io.WriteErrorLine(ex.Message);
             foreach (var detail in ex.Errors)
             {
-                output.WriteErrorLine($"  - {detail}");
+                io.WriteErrorLine($"  - {detail}");
             }
 
             return 1;
@@ -500,7 +497,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
         {
             foreach (var error in validation.Errors)
             {
-                context.Output.WriteErrorLine(error);
+                context.Io.WriteErrorLine(error);
             }
 
             return 1;
@@ -587,7 +584,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
             var selectedCount = 0;
             foreach (var binding in bindings)
             {
-                if (CliStandardStreams.IsStandardStreamPath(binding.Read(configuration)))
+                if (CommandIo.IsStandardStreamPath(binding.Read(configuration)))
                 {
                     selectedCount++;
                 }
@@ -818,7 +815,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
 
         if (parameterType == typeof(CancellationToken)
             || parameterType == typeof(ParseResult)
-            || parameterType == typeof(CliOutput)
+            || parameterType == typeof(CommandIo)
             || parameterType == typeof(IConfiguration)
             || typeof(IConfigurationRoot).IsAssignableFrom(parameterType))
         {
@@ -844,7 +841,7 @@ public abstract class CliCommandNode
     /// </summary>
     public abstract string Name { get; }
 
-    internal abstract Command BuildCommand(CliApplication application, CliInvocationOptions? options);
+    internal abstract Command BuildCommand(CliApplication application, CommandIo io);
 
     internal abstract void ApplyParameterConfiguration(Type configurationType, Delegate configure);
 
