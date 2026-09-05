@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
@@ -2736,7 +2737,7 @@ public sealed class CosmosRelationQueryCompiler
             ImmutableArray<CosmosRelationQueryParameterBinding>.Builder result =
                 ImmutableArray.CreateBuilder<CosmosRelationQueryParameterBinding>();
             foreach (var slot in statement.Parameters.Where(static slot =>
-                         slot.Kind == CosmosSqlParameterBindingKind.Runtime))
+                         slot.Kind == SqlParameterBindingKind.Runtime))
             {
                 QueryParameterId parameter = new(slot.Binding!);
                 if (!parameters.TryGetValue(parameter, out var contract))

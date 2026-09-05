@@ -21,6 +21,8 @@ public sealed class SqliteEntityRepositoryTests
         var reopened = new SqliteEntityRepository(new(new(file.Path)), repository.Mapping);
         var loaded = Assert.IsType<EntitySnapshot>(await reopened.TryGet(Context, write.Entity.EntityId.Value));
         Assert.Equal(write.Entity.Observation.ToCanonicalJsonUtf8(), loaded.Entity.Observation.ToCanonicalJsonUtf8());
+        var ordinalReader = Assert.IsAssignableFrom<IOrdinalObservationFieldReader>(loaded.Entity.Observation.Fields);
+        Assert.Same(repository.Mapping.Layout, ordinalReader.Layout);
         Assert.Equal(17, loaded.Entity.Version);
         Assert.Equal(committed.ConcurrencyToken, loaded.ConcurrencyToken);
         Assert.Equal("tenant-a", loaded.PartitionKey);

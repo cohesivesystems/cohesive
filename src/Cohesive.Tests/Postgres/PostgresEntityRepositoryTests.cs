@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Text.Json.Serialization;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Model;
@@ -43,7 +44,7 @@ public sealed class PostgresEntityRepositoryTests
         using var dataSource = DataSource();
         var runtime = Runtime(dataSource);
         var missing = new PostgresEntityRepositoryMapping(
-            new PostgresSqlQualifiedTable("freight_harness", "orders"),
+            new SqlQualifiedTable("freight_harness", "orders"),
             [
                 new("id", "order_id", PostgresRelationQueryScalarType.Text),
                 new("tenantId", "tenant_id", PostgresRelationQueryScalarType.Text)
@@ -197,7 +198,7 @@ public sealed class PostgresEntityRepositoryTests
     }
 
     static PostgresEntityRepositoryMapping OrderMapping(int maximumBatchItems = 64) => new(
-        new PostgresSqlQualifiedTable("freight_harness", "orders"),
+        new SqlQualifiedTable("freight_harness", "orders"),
         [
             new("id", "order_id", PostgresRelationQueryScalarType.Text),
             new("tenantId", "tenant_id", PostgresRelationQueryScalarType.Text),

@@ -1,3 +1,5 @@
+using static Cohesive.Adapters.SQLite.SqliteEntityRepositorySql;
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using Cohesive.Model;
 using Cohesive.Storage;
@@ -17,9 +19,7 @@ namespace Cohesive.Adapters.SQLite;
 public sealed class SqliteEntityRepository : IEntityRepository
 {
     readonly SqliteDatabase database;
-    readonly string select;
-    readonly string insert;
-    readonly string replace;
+    readonly SqliteEntityRepositorySql sql;
     readonly string graph;
     readonly string shape;
 
@@ -34,22 +34,7 @@ public sealed class SqliteEntityRepository : IEntityRepository
         Mapping = mapping ?? throw new ArgumentNullException(nameof(mapping));
         graph = SqliteScalarCodec.RequireText(EntityDefinition.StateShape.QualifiedId.GraphId.Value);
         shape = SqliteScalarCodec.RequireText(EntityDefinition.StateShape.QualifiedId.ShapeId.Value);
-        var columns = string.Join(", ", mapping.Bindings.Select(static binding => binding.QuotedColumn));
-        var parameters = string.Join(", ", mapping.Bindings.Select(static binding => binding.Parameter));
-        var assignments = string.Join(", ", mapping.Bindings.Select(static binding => $"{binding.QuotedColumn} = {binding.Parameter}"));
-        var keys = $"{mapping.Identity.QuotedColumn} = $id AND {mapping.Partition.QuotedColumn} = $partition";
-        var sameShape = $"{GraphColumn} = $graph AND {ShapeColumn} = $shape";
-        var metadata = $"{VersionColumn}, {TokenColumn}, {GraphColumn}, {ShapeColumn}";
-        select = $"SELECT {columns}, {metadata} FROM {mapping.QuotedTable} WHERE {mapping.Identity.QuotedColumn} = $id";
-        insert = $"""
-            INSERT INTO {mapping.QuotedTable} ({columns}, {metadata}) VALUES ({parameters}, $version, $token, $graph, $shape)
-            ON CONFLICT ({mapping.KeyColumns}) DO UPDATE SET {assignments}, {VersionColumn} = $version, {TokenColumn} = $token
-            WHERE {sameShape} RETURNING {TokenColumn};
-            """;
-        replace = $"""
-            UPDATE {mapping.QuotedTable} SET {assignments}, {VersionColumn} = $version, {TokenColumn} = $token
-            WHERE {keys} AND {sameShape} AND {TokenColumn} = $expected RETURNING {TokenColumn};
-            """;
+        sql = SqliteEntityRepositorySql.Create(mapping);
     }
 
     /// <summary>Inspectable immutable physical realization and limits.</summary>
@@ -87,10 +72,18 @@ public sealed class SqliteEntityRepository : IEntityRepository
         var partition = options?.PartitionKey;
         if (partition is not null) SqliteScalarCodec.RequireText(partition);
         using var connection = database.OpenConnection(context.CancellationToken);
-        var sql = partition is null ? select + " LIMIT 2;"
-            : select + $" AND {Mapping.Partition.QuotedColumn} = $partition LIMIT 2;";
-        using var command = database.CreateCommand(connection, null, sql, new SqliteParameter("$id", SqliteType.Text) { Value = id });
-        if (partition is not null) command.Parameters.Add(new SqliteParameter("$partition", SqliteType.Text) { Value = partition });
+        var template = partition is null ? sql.ReadByIdentity : sql.ReadByIdentityAndPartition;
+        using var command = database.CreateCommand(connection, null, template.Text);
+        foreach (var slot in template.Parameters)
+            command.Parameters.Add(new SqliteParameter(slot.Placeholder, SqliteType.Text)
+            {
+                Value = slot.Binding switch
+                {
+                    IdentityBinding => id,
+                    PartitionBinding => partition!,
+                    _ => throw new InvalidOperationException($"Unknown SQLite read parameter binding '{slot.Binding}'.")
+                }
+            });
         using var reader = command.ExecuteReader();
         if (!reader.Read())
         {
@@ -182,19 +175,33 @@ public sealed class SqliteEntityRepository : IEntityRepository
     {
         context.ThrowIfCancellationRequested();
         var token = new EntityConcurrencyToken(Guid.NewGuid().ToString("N"));
-        using var command = database.CreateCommand(connection, transaction, write.ExpectedConcurrencyToken is null ? insert : replace);
-        foreach (var binding in Mapping.Bindings)
-            command.Parameters.Add(SqliteScalarCodec.CreateParameter(binding.Parameter, binding.Contract,
-                write.Entity.Observation.GetField(binding.Field.Name.Value)));
-        command.Parameters.Add(new SqliteParameter("$version", SqliteType.Integer) { Value = write.Entity.Version });
-        command.Parameters.Add(new SqliteParameter("$token", SqliteType.Text) { Value = token.Value });
-        command.Parameters.Add(new SqliteParameter("$graph", SqliteType.Text) { Value = graph });
-        command.Parameters.Add(new SqliteParameter("$shape", SqliteType.Text) { Value = shape });
-        if (write.ExpectedConcurrencyToken is { } expected)
+        var template = write.ExpectedConcurrencyToken is null ? sql.Upsert : sql.Replace;
+        using var command = database.CreateCommand(connection, transaction, template.Text);
+        foreach (var slot in template.Parameters)
         {
-            command.Parameters.Add(new SqliteParameter("$id", SqliteType.Text) { Value = write.Entity.EntityId.Value });
-            command.Parameters.Add(new SqliteParameter("$partition", SqliteType.Text) { Value = partition });
-            command.Parameters.Add(new SqliteParameter("$expected", SqliteType.Text) { Value = expected.Value });
+            if (sql.FieldIndexByBinding.TryGetValue(slot.Binding!, out var index))
+            {
+                var binding = Mapping.Bindings[index];
+                var observation = write.Entity.Observation;
+                var value = observation.Fields is IOrdinalObservationFieldReader ordinalReader
+                    && ReferenceEquals(ordinalReader.Layout, Mapping.Layout)
+                    && ordinalReader.TryGetField(index, out var ordinalValue)
+                        ? ordinalValue : observation.GetField(binding.Field.Name.Value);
+                command.Parameters.Add(SqliteScalarCodec.CreateParameter(slot.Placeholder, binding.Contract, value));
+                continue;
+            }
+            var parameter = slot.Binding switch
+            {
+                VersionBinding => new SqliteParameter(slot.Placeholder, SqliteType.Integer) { Value = write.Entity.Version },
+                TokenBinding => new SqliteParameter(slot.Placeholder, SqliteType.Text) { Value = token.Value },
+                GraphBinding => new SqliteParameter(slot.Placeholder, SqliteType.Text) { Value = graph },
+                ShapeBinding => new SqliteParameter(slot.Placeholder, SqliteType.Text) { Value = shape },
+                IdentityBinding => new SqliteParameter(slot.Placeholder, SqliteType.Text) { Value = write.Entity.EntityId.Value },
+                PartitionBinding => new SqliteParameter(slot.Placeholder, SqliteType.Text) { Value = partition },
+                ExpectedConcurrencyBinding => new SqliteParameter(slot.Placeholder, SqliteType.Text) { Value = write.ExpectedConcurrencyToken!.Value.Value },
+                _ => throw new InvalidOperationException($"Unknown SQLite entity parameter binding '{slot.Binding}'.")
+            };
+            command.Parameters.Add(parameter);
         }
         var written = command.ExecuteScalar();
         if (written is not string storedToken || storedToken != token.Value)
@@ -228,14 +235,13 @@ public sealed class SqliteEntityRepository : IEntityRepository
         var count = Mapping.Bindings.Length;
         if (reader.GetString(count + 2) != graph || reader.GetString(count + 3) != shape)
             throw new InvalidOperationException($"Stored observation does not belong to expected entity shape '{EntityDefinition.StateShape.QualifiedId}'.");
-        var values = new Dictionary<string, ObservationValue>(count, StringComparer.Ordinal);
+        var values = ImmutableArray.CreateBuilder<ObservationValue>(count);
         for (var index = 0; index < count; index++)
-            values.Add(Mapping.Bindings[index].Field.Name.Value,
-                SqliteScalarCodec.Decode(Mapping.Bindings[index].Contract, reader.GetValue(index)));
-        var identity = values[Mapping.IdentityField].GetRequiredString();
-        var partition = values[Mapping.PartitionField].GetRequiredString();
+            values.Add(SqliteScalarCodec.Decode(Mapping.Bindings[index].Contract, reader.GetValue(index)));
+        var identity = values[Mapping.IdentityOrdinal].GetRequiredString();
+        var partition = values[Mapping.PartitionOrdinal].GetRequiredString();
         ArgumentException.ThrowIfNullOrWhiteSpace(partition);
-        var observation = Observation.Create(EntityDefinition.StateShape, values);
+        var observation = Observation.Create(EntityDefinition.StateShape, Mapping.Layout, values.MoveToImmutable());
         EntityDefinition.ValidateObservation(observation);
         var token = reader.GetString(count + 1);
         ArgumentException.ThrowIfNullOrWhiteSpace(token);

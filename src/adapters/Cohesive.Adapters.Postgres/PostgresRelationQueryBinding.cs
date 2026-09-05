@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -1354,7 +1355,7 @@ public sealed class PostgresRelationQueryStorageBinding
         value = Guard.RequireNotNullOrWhiteSpace(value, parameterName);
         try
         {
-            return new PostgresSqlIdentifier(value).Value;
+            return PostgresSqlDialect.Identifier(value).Value;
         }
         catch (ArgumentException exception)
         {

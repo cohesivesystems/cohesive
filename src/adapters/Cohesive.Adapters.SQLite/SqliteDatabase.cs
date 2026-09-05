@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Data;
 using Microsoft.Data.Sqlite;
 
@@ -130,8 +131,6 @@ public sealed class SqliteDatabase
     public static string QuoteIdentifier(string identifier)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(identifier);
-        if (SqliteScalarCodec.RequireText(identifier).Contains('\0'))
-            throw new ArgumentException("SQLite identifiers cannot contain NUL.", nameof(identifier));
-        return $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+        return new SqlIdentifier(identifier).ToSql(SqliteSqlDialect.Instance);
     }
 }

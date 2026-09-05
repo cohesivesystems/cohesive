@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
@@ -2086,7 +2087,7 @@ public sealed class CosmosRelationQueryArtifactExecutorTests
                 : new(Parameter, parameterType);
             ImmutableArray<CosmosSqlParameterSlot> parameterSlots = parameterDefinition is null
                 ? []
-                : [new("@p0", CosmosSqlParameterBindingKind.Runtime, Parameter.Value, constantValue: null)];
+                : [new("@p0", SqlParameterBindingKind.Runtime, Parameter.Value, constantValue: null)];
             ImmutableArray<CosmosRelationQueryParameterBinding> parameterBindings = parameterDefinition is null
                 ? []
                 : [new("@p0", parameterDefinition, parameterDefinition.EffectiveValueContract)];

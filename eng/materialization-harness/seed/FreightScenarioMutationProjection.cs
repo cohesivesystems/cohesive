@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -431,7 +432,7 @@ internal static class FreightScenarioMutationProjection
     internal static async Task<int> ExecutePostgresAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
-        PostgresSqlCommandTemplate template,
+        SqlCommandTemplate template,
         CancellationToken cancellationToken,
         params (string Name, object? Value)[] parameters)
     {
@@ -440,7 +441,7 @@ internal static class FreightScenarioMutationProjection
     }
 
     static NpgsqlCommand CreatePostgresCommand(
-        PostgresSqlCommandTemplate template,
+        SqlCommandTemplate template,
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         params (string Name, object? Value)[] parameters)
@@ -449,7 +450,7 @@ internal static class FreightScenarioMutationProjection
             static parameter => parameter.Name,
             static parameter => parameter.Value,
             StringComparer.Ordinal);
-        var statement = template.Bind(values);
+        var statement = template.Bind(PostgresSqlDialect.Instance, values);
         var command = new NpgsqlCommand(statement.Text, connection, transaction);
         foreach (var parameter in statement.Parameters)
         {
@@ -745,7 +746,7 @@ internal static class FreightScenarioMutationProjection
         internal const string BeforeStateBinding = "before_state";
         internal const string AfterStateBinding = "after_state";
 
-        internal static readonly PostgresSqlCommandTemplate InsertOrder = Insert(
+        internal static readonly SqlCommandTemplate InsertOrder = Insert(
             table: "orders",
             columns:
             [
@@ -758,7 +759,7 @@ internal static class FreightScenarioMutationProjection
                 "observation_version"
             ]);
 
-        internal static readonly PostgresSqlCommandTemplate UpsertOrder = Upsert(
+        internal static readonly SqlCommandTemplate UpsertOrder = Upsert(
             table: "orders",
             columns:
             [
@@ -780,7 +781,7 @@ internal static class FreightScenarioMutationProjection
                 "observation_version"
             ]);
 
-        internal static readonly PostgresSqlCommandTemplate UpdateOrder = Update(
+        internal static readonly SqlCommandTemplate UpdateOrder = Update(
             table: "orders",
             identityColumn: "order_id",
             assignmentColumns:
@@ -792,24 +793,24 @@ internal static class FreightScenarioMutationProjection
                 "observation_version"
             ]);
 
-        internal static readonly PostgresSqlCommandTemplate DeleteOrder = Delete(
+        internal static readonly SqlCommandTemplate DeleteOrder = Delete(
             table: "orders",
             identityColumn: "order_id");
 
-        internal static readonly PostgresSqlCommandTemplate InsertCustomer = Insert(
+        internal static readonly SqlCommandTemplate InsertCustomer = Insert(
             table: "customer_accounts",
             columns: ["tenant_id", "customer_account_id", "display_name", "observation_version"]);
 
-        internal static readonly PostgresSqlCommandTemplate UpdateCustomer = Update(
+        internal static readonly SqlCommandTemplate UpdateCustomer = Update(
             table: "customer_accounts",
             identityColumn: "customer_account_id",
             assignmentColumns: ["display_name", "observation_version"]);
 
-        internal static readonly PostgresSqlCommandTemplate DeleteCustomer = Delete(
+        internal static readonly SqlCommandTemplate DeleteCustomer = Delete(
             table: "customer_accounts",
             identityColumn: "customer_account_id");
 
-        internal static readonly PostgresSqlCommandTemplate InsertStop = Insert(
+        internal static readonly SqlCommandTemplate InsertStop = Insert(
             table: "order_stops",
             columns:
             [
@@ -822,24 +823,24 @@ internal static class FreightScenarioMutationProjection
                 "observation_version"
             ]);
 
-        internal static readonly PostgresSqlCommandTemplate DeleteOrderStops = DeleteOwnedCollection(
+        internal static readonly SqlCommandTemplate DeleteOrderStops = DeleteOwnedCollection(
             table: "order_stops",
             parentIdentityColumn: "order_id");
 
-        internal static readonly PostgresSqlCommandTemplate InsertLocation = Insert(
+        internal static readonly SqlCommandTemplate InsertLocation = Insert(
             table: "locations",
             columns: ["tenant_id", "location_id", "display_name", "city", "region", "observation_version"]);
 
-        internal static readonly PostgresSqlCommandTemplate UpdateLocation = Update(
+        internal static readonly SqlCommandTemplate UpdateLocation = Update(
             table: "locations",
             identityColumn: "location_id",
             assignmentColumns: ["display_name", "city", "region", "observation_version"]);
 
-        internal static readonly PostgresSqlCommandTemplate DeleteLocation = Delete(
+        internal static readonly SqlCommandTemplate DeleteLocation = Delete(
             table: "locations",
             identityColumn: "location_id");
 
-        internal static readonly PostgresSqlCommandTemplate InsertEvidence = Insert(
+        internal static readonly SqlCommandTemplate InsertEvidence = Insert(
             table: "scenario_mutations",
             columns:
             [
@@ -858,12 +859,12 @@ internal static class FreightScenarioMutationProjection
                 AfterStateBinding
             ]);
 
-        internal static readonly PostgresSqlCommandTemplate ReadEvidence = Select(
+        internal static readonly SqlCommandTemplate ReadEvidence = Select(
             table: "scenario_mutations",
             columns: ["fingerprint", "entity_version"],
             predicateColumn: "operation_id");
 
-        internal static readonly PostgresSqlCommandTemplate VerifyEvidence = Select(
+        internal static readonly SqlCommandTemplate VerifyEvidence = Select(
             table: "scenario_mutations",
             columns:
             [
@@ -884,84 +885,84 @@ internal static class FreightScenarioMutationProjection
             predicateColumn: "scenario_id",
             orderColumn: "sequence");
 
-        static PostgresSqlCommandTemplate Insert(string table, IReadOnlyList<string> columns)
+        static SqlCommandTemplate Insert(string table, IReadOnlyList<string> columns)
         {
-            PostgresSqlInsertBuilder builder = new(new PostgresSqlQualifiedTable(PostgresSchema, table));
+            SqlInsertBuilder builder = new(new SqlQualifiedTable(PostgresSchema, table));
             foreach (var column in columns)
-                builder.Value(column, PostgresSqlExpression.RuntimeParameter(column));
-            return builder.BuildTemplate();
+                builder.Value(column, SqlExpression.RuntimeParameter(column));
+            return builder.BuildTemplate(PostgresSqlDialect.Instance);
         }
 
-        static PostgresSqlCommandTemplate Upsert(
+        static SqlCommandTemplate Upsert(
             string table,
             IReadOnlyList<string> columns,
             IReadOnlyList<string> conflictColumns,
             IReadOnlyList<string> updateColumns)
         {
-            PostgresSqlInsertBuilder builder = new(new PostgresSqlQualifiedTable(PostgresSchema, table));
+            SqlInsertBuilder builder = new(new SqlQualifiedTable(PostgresSchema, table));
             foreach (var column in columns)
-                builder.Value(column, PostgresSqlExpression.RuntimeParameter(column));
+                builder.Value(column, SqlExpression.RuntimeParameter(column));
             builder.OnConflictDoUpdate(conflictColumns, updateColumns);
-            return builder.BuildTemplate();
+            return builder.BuildTemplate(PostgresSqlDialect.Instance);
         }
 
-        static PostgresSqlCommandTemplate Update(
+        static SqlCommandTemplate Update(
             string table,
             string identityColumn,
             IReadOnlyList<string> assignmentColumns)
         {
-            PostgresSqlUpdateBuilder builder = new(new PostgresSqlQualifiedTable(PostgresSchema, table));
+            SqlUpdateBuilder builder = new(new SqlQualifiedTable(PostgresSchema, table));
             foreach (var column in assignmentColumns)
-                builder.Set(column, PostgresSqlExpression.RuntimeParameter(column));
+                builder.Set(column, SqlExpression.RuntimeParameter(column));
             AddVersionedIdentityPredicates(predicate => builder.Where(predicate), identityColumn);
-            return builder.BuildTemplate();
+            return builder.BuildTemplate(PostgresSqlDialect.Instance);
         }
 
-        static PostgresSqlCommandTemplate Delete(string table, string identityColumn)
+        static SqlCommandTemplate Delete(string table, string identityColumn)
         {
-            PostgresSqlDeleteBuilder builder = new(new PostgresSqlQualifiedTable(PostgresSchema, table));
+            SqlDeleteBuilder builder = new(new SqlQualifiedTable(PostgresSchema, table));
             AddVersionedIdentityPredicates(predicate => builder.Where(predicate), identityColumn);
-            return builder.BuildTemplate();
+            return builder.BuildTemplate(PostgresSqlDialect.Instance);
         }
 
-        static PostgresSqlCommandTemplate DeleteOwnedCollection(
+        static SqlCommandTemplate DeleteOwnedCollection(
             string table,
             string parentIdentityColumn)
         {
-            PostgresSqlDeleteBuilder builder = new(new PostgresSqlQualifiedTable(PostgresSchema, table));
+            SqlDeleteBuilder builder = new(new SqlQualifiedTable(PostgresSchema, table));
             builder.Where(Equal("tenant_id", "tenant_id"));
             builder.Where(Equal(parentIdentityColumn, parentIdentityColumn));
-            return builder.BuildTemplate();
+            return builder.BuildTemplate(PostgresSqlDialect.Instance);
         }
 
-        static PostgresSqlCommandTemplate Select(
+        static SqlCommandTemplate Select(
             string table,
             IReadOnlyList<string> columns,
             string predicateColumn,
             string? orderColumn = null)
         {
             const string alias = "source";
-            PostgresSqlSelectBuilder builder = new(
-                new PostgresSqlQualifiedTable(PostgresSchema, table),
+            SqlSelectBuilder builder = new(
+                new SqlQualifiedTable(PostgresSchema, table),
                 alias);
             foreach (var column in columns)
-                builder.Select(PostgresSqlExpression.Column(alias, column), column);
-            builder.Where(PostgresSqlExpression.Binary(
-                @operator: PostgresSqlBinaryOperator.Equal,
-                left: PostgresSqlExpression.Column(alias, predicateColumn),
-                right: PostgresSqlExpression.RuntimeParameter(predicateColumn)));
+                builder.Select(SqlExpression.Column(alias, column), column);
+            builder.Where(SqlExpression.Binary(
+                @operator: SqlBinaryOperator.Equal,
+                left: SqlExpression.Column(alias, predicateColumn),
+                right: SqlExpression.RuntimeParameter(predicateColumn)));
             if (orderColumn is not null)
             {
                 builder.OrderBy(
-                    PostgresSqlExpression.Column(alias, orderColumn),
-                    direction: PostgresSqlSortDirection.Ascending,
-                    nullPlacement: PostgresSqlNullPlacement.Last);
+                    SqlExpression.Column(alias, orderColumn),
+                    direction: SqlSortDirection.Ascending,
+                    nullPlacement: SqlNullPlacement.Last);
             }
-            return builder.BuildTemplate();
+            return builder.BuildTemplate(PostgresSqlDialect.Instance);
         }
 
         static void AddVersionedIdentityPredicates(
-            Action<PostgresSqlExpression> add,
+            Action<SqlExpression> add,
             string identityColumn)
         {
             add(Equal("tenant_id", "tenant_id"));
@@ -969,10 +970,10 @@ internal static class FreightScenarioMutationProjection
             add(Equal("observation_version", ExpectedVersionBinding));
         }
 
-        static PostgresSqlExpression Equal(string column, string binding) => PostgresSqlExpression.Binary(
-            @operator: PostgresSqlBinaryOperator.Equal,
-            left: PostgresSqlExpression.UnqualifiedColumn(column),
-            right: PostgresSqlExpression.RuntimeParameter(binding));
+        static SqlExpression Equal(string column, string binding) => SqlExpression.Binary(
+            @operator: SqlBinaryOperator.Equal,
+            left: SqlExpression.UnqualifiedColumn(column),
+            right: SqlExpression.RuntimeParameter(binding));
     }
 
     sealed record PostgresMutationEvidence(string Fingerprint, long Version);

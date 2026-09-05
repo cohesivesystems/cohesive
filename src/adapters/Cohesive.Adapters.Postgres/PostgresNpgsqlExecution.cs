@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Buffers;
 using System.Collections.Immutable;
 using System.Data;
@@ -282,10 +283,10 @@ internal static class PostgresNpgsqlBoundedResult
         List<CharacterSegment> segments = [];
         char[]? current = null;
         var encoded = ArrayPool<byte>.Shared.Rent(
-            PostgresSqlUtf8.GetMaximumByteCount(CharacterSegmentLength));
+            SqlUtf8.GetMaximumByteCount(CharacterSegmentLength));
         var currentLength = 0;
         var totalLength = 0;
-        var encoder = PostgresSqlUtf8.CreateEncoder();
+        var encoder = SqlUtf8.CreateEncoder();
         try
         {
             while (true)
@@ -334,7 +335,7 @@ internal static class PostgresNpgsqlBoundedResult
                 }
             }
 
-            return PostgresSqlUtf8.RequireText(
+            return SqlUtf8.RequireText(
                 string.Create(totalLength, segments, static (destination, sourceSegments) =>
                 {
                     var offset = 0;
@@ -514,7 +515,7 @@ internal static class PostgresRelationQueryScalarCatalog
             PostgresRelationQueryScalarType.Int32 => ParseCanonicalInt32(value, scalarType),
             PostgresRelationQueryScalarType.Int64 => ParseCanonicalInt64(value, scalarType),
             PostgresRelationQueryScalarType.Numeric => ParseCanonicalNumeric(value, scalarType),
-            PostgresRelationQueryScalarType.Text => PostgresSqlUtf8.RequireText(value, nameof(value)),
+            PostgresRelationQueryScalarType.Text => SqlUtf8.RequireText(value, nameof(value)),
             PostgresRelationQueryScalarType.Uuid => ParseCanonicalUuid(value, scalarType),
             PostgresRelationQueryScalarType.Date => ParseCanonicalDate(value, scalarType),
             PostgresRelationQueryScalarType.Timestamp =>
@@ -898,7 +899,7 @@ internal static class PostgresRelationQueryScalarCatalog
                     value,
                     NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint | NumberStyles.AllowExponent,
                     CultureInfo.InvariantCulture),
-                PostgresRelationQueryScalarType.Text => PostgresSqlUtf8.RequireText(value, nameof(value)),
+                PostgresRelationQueryScalarType.Text => SqlUtf8.RequireText(value, nameof(value)),
                 PostgresRelationQueryScalarType.Uuid => Guid.Parse(value),
                 PostgresRelationQueryScalarType.Date => DateOnly.ParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture),
                 PostgresRelationQueryScalarType.Timestamp => RequireCivilTimestamp(
@@ -951,12 +952,12 @@ internal static class PostgresRelationQueryScalarCatalog
         return result;
     }
 
-    internal static PostgresSqlExpression ApplyTextCollation(
-        PostgresSqlExpression expression,
+    internal static SqlExpression ApplyTextCollation(
+        SqlExpression expression,
         PostgresRelationQueryScalarType scalarType,
         PostgresRelationQueryTextSemantics? textSemantics) =>
         scalarType == PostgresRelationQueryScalarType.Text && textSemantics is not null
-            ? PostgresSqlExpression.Collate(expression, textSemantics.Collation)
+            ? SqlExpression.Collate(expression, textSemantics.Collation)
             : expression;
 
     internal static bool SupportsDurableKeyset(PostgresRelationQueryIdentityBinding identity) =>

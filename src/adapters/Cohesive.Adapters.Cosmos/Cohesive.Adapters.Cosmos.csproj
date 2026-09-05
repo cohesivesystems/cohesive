@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../Cohesive.Adapters.Sql/Cohesive.Adapters.Sql.csproj" />
     <PackageReference Include="Azure.Identity" Version="1.17.1" />
     <PackageReference Include="Microsoft.Azure.Cosmos" Version="3.62.0" />
   </ItemGroup>

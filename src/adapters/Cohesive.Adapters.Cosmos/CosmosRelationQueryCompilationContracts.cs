@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Model;
@@ -419,7 +420,7 @@ public sealed class CosmosRelationQueryCompiledArtifact
         Fingerprint = Guard.RequireNotNull(fingerprint);
 
         var runtimeSlots = Statement.Parameters
-            .Where(static slot => slot.Kind == CosmosSqlParameterBindingKind.Runtime)
+            .Where(static slot => slot.Kind == SqlParameterBindingKind.Runtime)
             .Select(static slot => slot.Name)
             .ToHashSet(StringComparer.Ordinal);
         if (!runtimeSlots.SetEquals(Parameters.Select(static parameter => parameter.SqlName)))

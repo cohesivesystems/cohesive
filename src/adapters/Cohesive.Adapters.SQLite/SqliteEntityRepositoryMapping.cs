@@ -73,8 +73,11 @@ public sealed class SqliteEntityRepositoryMapping
                     throw new ArgumentException($"Column override refers to unknown entity field '{name}'.", nameof(columnNames));
         Bindings = bindings.MoveToImmutable();
         FieldColumns = columns.ToImmutable();
+        Layout = ObservationLayout.Create(entityDefinition.StateShape, Bindings.Select(static binding => binding.Field.Name.Value));
         Identity = RequireKey(IdentityField, "identity");
         Partition = RequireKey(PartitionField, "partition");
+        IdentityOrdinal = Layout.GetOrdinal(IdentityField);
+        PartitionOrdinal = Layout.GetOrdinal(PartitionField);
 
         var conventions = ImmutableArray.CreateBuilder<string>();
         if (tableName is null) conventions.Add(nameof(TableName));
@@ -109,6 +112,11 @@ public sealed class SqliteEntityRepositoryMapping
     /// <remarks>No IF NOT EXISTS fallback is used: existing tables need a reviewed adoption/migration plan.</remarks>
     public SqliteMigration InitialMigration { get; }
 
+    /// <summary>Shared observation layout matching database result-column order.</summary>
+    public ObservationLayout Layout { get; }
+
+    internal int IdentityOrdinal { get; }
+    internal int PartitionOrdinal { get; }
     internal string QuotedTable { get; }
     internal ImmutableArray<FieldBinding> Bindings { get; }
     internal FieldBinding Identity { get; }
@@ -144,6 +152,5 @@ public sealed class SqliteEntityRepositoryMapping
         return text.ToString();
     }
 
-    internal sealed record FieldBinding(FieldDefinition Field, ValueContract Contract, string QuotedColumn,
-        string Parameter, Microsoft.Data.Sqlite.SqliteType StorageType);
+    internal sealed record FieldBinding(FieldDefinition Field, ValueContract Contract, string QuotedColumn, string Parameter, Microsoft.Data.Sqlite.SqliteType StorageType);
 }

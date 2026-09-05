@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -108,15 +109,15 @@ internal sealed class PostgresSqlAliasAllocator
     static string Fit(string normalized, string? suffix, string digest)
     {
         if (suffix is null
-            && PostgresSqlUtf8.GetByteCount(normalized, nameof(normalized))
-            <= PostgresSqlIdentifier.StandardMaxUtf8ByteLength)
+            && SqlUtf8.GetByteCount(normalized, nameof(normalized))
+            <= PostgresSqlDialect.StandardMaxUtf8ByteLength)
         {
-            return new PostgresSqlIdentifier(normalized).Value;
+            return PostgresSqlDialect.Identifier(normalized).Value;
         }
 
         var effectiveSuffix = suffix ?? $"__{digest}";
-        var suffixLength = PostgresSqlUtf8.GetByteCount(effectiveSuffix, nameof(suffix));
-        var prefixBudget = PostgresSqlIdentifier.StandardMaxUtf8ByteLength - suffixLength;
+        var suffixLength = SqlUtf8.GetByteCount(effectiveSuffix, nameof(suffix));
+        var prefixBudget = PostgresSqlDialect.StandardMaxUtf8ByteLength - suffixLength;
         if (prefixBudget <= 0)
         {
             throw new InvalidOperationException("PostgreSQL alias suffix exceeds the identifier limit.");
@@ -146,7 +147,7 @@ internal sealed class PostgresSqlAliasAllocator
             prefix.Append("alias");
         }
 
-        return new PostgresSqlIdentifier($"{prefix}{effectiveSuffix}").Value;
+        return PostgresSqlDialect.Identifier($"{prefix}{effectiveSuffix}").Value;
     }
 
     static string Digest(string value) =>

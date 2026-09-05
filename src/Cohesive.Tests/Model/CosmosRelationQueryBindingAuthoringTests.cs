@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Adapters.Cosmos;
@@ -175,7 +176,7 @@ public sealed class CosmosRelationQueryBindingAuthoringTests
         var template = Assert.Single(compilation.Artifacts).Statement;
         Assert.Contains("WHERE (c[\"documentKind\"] = @p0)", template.Text, StringComparison.Ordinal);
         var discriminator = Assert.Single(template.Parameters, static parameter =>
-            parameter.Kind == CosmosSqlParameterBindingKind.Constant
+            parameter.Kind == SqlParameterBindingKind.Constant
             && Equals(parameter.ConstantValue, "entity-v2"));
         Assert.Equal("@p0", discriminator.Name);
 

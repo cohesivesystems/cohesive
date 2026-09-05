@@ -70,3 +70,13 @@ Typed and typed-outbox facades preserve native capabilities, limits, ordering, a
 Real-file tests cover competing CAS writers, stale/missing targets, repeated identities, late batch failure, partition ambiguity, reopen persistence, scalar validation, physical naming, shape revisions, and native dispatch through typed facades. Shared regressions cover required nullable values versus absence in flat, nested, and collection observations, including warm validation allocation checks.
 
 Atomic outbox/receipt commits remain COH-88. Optional/structured field realization, relation compilation, and Ito's temporal market-data publication/query rules remain separate work. Specialized code can share transactions through `SqliteDatabase`; this repository owns its transactions and does not expose uncommitted snapshots as committed results.
+
+## SQL construction and ordinal observations
+
+Repository select, upsert, and conditional-update commands are compiled once through `Cohesive.Adapters.Sql` with
+`SqliteSqlDialect`. Shape guards remain part of the upsert's conflict-update predicate. All values are still encoded
+by `SqliteScalarCodec`; connection ownership, immediate transactions, batch order, and storage tokens are unchanged.
+
+`Mapping.Layout` aligns the selected columns with canonical field identities. Reads decode directly into one immutable
+value vector and retain it in `Observation`, with cached identity/partition ordinals. Name-based field access is a view
+using the shared layout; no per-row field-name dictionary is built. Postgres uses the same core construction path.

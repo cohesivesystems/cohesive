@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Buffers;
 using System.Collections.Immutable;
 using System.Data;
@@ -1905,7 +1906,7 @@ internal sealed class PostgresNpgsqlLogicalReplicationProtocol : IPostgresLogica
 
         static string CreateSnapshotImportSql(string snapshotName)
         {
-            _ = PostgresSqlUtf8.RequireText(snapshotName, nameof(snapshotName));
+            _ = SqlUtf8.RequireText(snapshotName, nameof(snapshotName));
             return string.Concat(
                 "SET TRANSACTION SNAPSHOT '",
                 snapshotName.Replace("'", "''", StringComparison.Ordinal),

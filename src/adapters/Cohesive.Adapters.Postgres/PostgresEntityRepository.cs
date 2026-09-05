@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Globalization;
 using Cohesive.Execution;
@@ -24,7 +25,7 @@ public sealed record PostgresEntityRepositoryFieldBinding
         PostgresRelationQueryScalarType scalarType)
     {
         FieldName = Guard.RequireNotNullOrWhiteSpace(fieldName);
-        Column = new(columnName);
+        Column = PostgresSqlDialect.Identifier(columnName);
         if (!Enum.IsDefined(scalarType))
             throw new ArgumentOutOfRangeException(nameof(scalarType), scalarType, "Unsupported PostgreSQL scalar type.");
         ScalarType = scalarType;
@@ -34,7 +35,7 @@ public sealed record PostgresEntityRepositoryFieldBinding
     public string FieldName { get; }
 
     /// <summary>Physical PostgreSQL column identifier.</summary>
-    public PostgresSqlIdentifier Column { get; }
+    public SqlIdentifier Column { get; }
 
     /// <summary>Exact PostgreSQL scalar encoding.</summary>
     public PostgresRelationQueryScalarType ScalarType { get; }
@@ -64,7 +65,7 @@ public sealed record PostgresEntityRepositoryMapping
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="maximumBatchItems"/> is not positive.</exception>
     public PostgresEntityRepositoryMapping(
-        PostgresSqlQualifiedTable table,
+        SqlQualifiedTable table,
         IReadOnlyList<PostgresEntityRepositoryFieldBinding> fields,
         string identityField,
         string partitionField,
@@ -75,7 +76,7 @@ public sealed record PostgresEntityRepositoryMapping
         ArgumentNullException.ThrowIfNull(fields);
         IdentityField = Guard.RequireNotNullOrWhiteSpace(identityField);
         PartitionField = Guard.RequireNotNullOrWhiteSpace(partitionField);
-        VersionColumn = new(versionColumn);
+        VersionColumn = PostgresSqlDialect.Identifier(versionColumn);
         if (maximumBatchItems <= 0)
             throw new ArgumentOutOfRangeException(nameof(maximumBatchItems), maximumBatchItems, "Maximum batch items must be positive.");
         MaximumBatchItems = maximumBatchItems;
@@ -98,7 +99,7 @@ public sealed record PostgresEntityRepositoryMapping
     }
 
     /// <summary>Physical entity table.</summary>
-    public PostgresSqlQualifiedTable Table { get; }
+    public SqlQualifiedTable Table { get; }
 
     /// <summary>Ordered complete field bindings.</summary>
     public ImmutableArray<PostgresEntityRepositoryFieldBinding> Fields { get; }
@@ -110,7 +111,7 @@ public sealed record PostgresEntityRepositoryMapping
     public string PartitionField { get; }
 
     /// <summary>Column storing the semantic observation version.</summary>
-    public PostgresSqlIdentifier VersionColumn { get; }
+    public SqlIdentifier VersionColumn { get; }
 
     /// <summary>Maximum number of writes accepted in one batch.</summary>
     public int MaximumBatchItems { get; }
@@ -132,6 +133,9 @@ public sealed class PostgresEntityRepository : IEntityRepository
     readonly PostgresNpgsqlRuntimeBinding runtime;
     readonly PostgresEntityRepositoryMapping mapping;
     readonly PostgresEntityRepositorySql sql;
+    readonly ObservationLayout layout;
+    readonly int identityOrdinal;
+    readonly int partitionOrdinal;
 
     /// <summary>Creates a repository for one canonical entity definition and physical table mapping.</summary>
     /// <param name="entityDefinition">Canonical entity definition used to validate every read and write.</param>
@@ -150,6 +154,9 @@ public sealed class PostgresEntityRepository : IEntityRepository
         EntityDefinition = Guard.RequireNotNull(entityDefinition);
         this.runtime = Guard.RequireNotNull(runtime);
         this.mapping = Guard.RequireNotNull(mapping);
+        layout = ObservationLayout.Create(entityDefinition.StateShape, mapping.Fields.Select(static field => field.FieldName));
+        identityOrdinal = layout.GetOrdinal(mapping.IdentityField);
+        partitionOrdinal = layout.GetOrdinal(mapping.PartitionField);
         ValidateMapping(entityDefinition, mapping);
         sql = PostgresEntityRepositorySql.Create(mapping);
         BatchCapabilities = new(
@@ -301,7 +308,7 @@ public sealed class PostgresEntityRepository : IEntityRepository
 
     static void AddReadParameters(
         NpgsqlCommand command,
-        PostgresSqlCommandTemplate template,
+        SqlCommandTemplate template,
         string identity,
         string? partition)
     {
@@ -324,7 +331,7 @@ public sealed class PostgresEntityRepository : IEntityRepository
 
     void AddWriteParameters(
         NpgsqlCommand command,
-        PostgresSqlCommandTemplate template,
+        SqlCommandTemplate template,
         EntityWriteRequest write)
     {
         foreach (var slot in template.Parameters)
@@ -365,24 +372,24 @@ public sealed class PostgresEntityRepository : IEntityRepository
 
     EntitySnapshot ReadSnapshot(NpgsqlDataReader reader, IReadOnlySet<string>? selectedFields)
     {
-        Dictionary<string, ObservationValue> fields = new(mapping.Fields.Length, StringComparer.Ordinal);
+        var fields = ImmutableArray.CreateBuilder<ObservationValue>(mapping.Fields.Length);
         for (var index = 0; index < mapping.Fields.Length; index++)
         {
             if (reader.IsDBNull(index))
             {
-                fields.Add(mapping.Fields[index].FieldName, ObservationValue.Null);
+                fields.Add(ObservationValue.Null);
                 continue;
             }
             var value = ReadPostgresValue(reader, index, mapping.Fields[index].ScalarType);
-            fields.Add(mapping.Fields[index].FieldName, value);
+            fields.Add(value);
         }
 
         var version = reader.GetInt64(mapping.Fields.Length);
         var token = reader.GetFieldValue<uint>(mapping.Fields.Length + 1)
             .ToString(CultureInfo.InvariantCulture);
-        var identity = fields[mapping.IdentityField].GetRequiredString();
-        var partition = fields[mapping.PartitionField].GetRequiredString();
-        var observation = Observation.Create(EntityDefinition.StateShape, fields);
+        var identity = fields[identityOrdinal].GetRequiredString();
+        var partition = fields[partitionOrdinal].GetRequiredString();
+        var observation = Observation.Create(EntityDefinition.StateShape, layout, fields.MoveToImmutable());
         EntityObservationSnapshot complete = new(new(identity), version, observation);
         return CreateValidatedReadSnapshot(
             complete: complete,
@@ -503,7 +510,7 @@ public sealed class PostgresEntityRepository : IEntityRepository
                 PostgresRelationQueryScalarType.Int32 => value.GetInt32(),
                 PostgresRelationQueryScalarType.Int64 => value.GetInt64(),
                 PostgresRelationQueryScalarType.Numeric => value.GetDecimal(),
-                PostgresRelationQueryScalarType.Text => PostgresSqlUtf8.RequireText(value.GetRequiredString(), binding.FieldName),
+                PostgresRelationQueryScalarType.Text => SqlUtf8.RequireText(value.GetRequiredString(), binding.FieldName),
                 PostgresRelationQueryScalarType.Uuid => Guid.ParseExact(value.GetRequiredString(), "D"),
                 PostgresRelationQueryScalarType.Date => value.GetDateOnly(),
                 PostgresRelationQueryScalarType.Timestamp => DateTime.SpecifyKind(
@@ -550,7 +557,7 @@ public sealed class PostgresEntityRepository : IEntityRepository
         command.Parameters.Add(new NpgsqlParameter
         {
             NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Text,
-            Value = PostgresSqlUtf8.RequireText(value, binding)
+            Value = SqlUtf8.RequireText(value, binding)
         });
     }
 
@@ -570,10 +577,10 @@ public sealed class PostgresEntityRepository : IEntityRepository
 }
 
 internal sealed record PostgresEntityRepositorySql(
-    PostgresSqlCommandTemplate ReadByIdentity,
-    PostgresSqlCommandTemplate ReadByIdentityAndPartition,
-    PostgresSqlCommandTemplate Upsert,
-    PostgresSqlCommandTemplate Replace,
+    SqlCommandTemplate ReadByIdentity,
+    SqlCommandTemplate ReadByIdentityAndPartition,
+    SqlCommandTemplate Upsert,
+    SqlCommandTemplate Replace,
     ImmutableDictionary<string, int> FieldIndexByBinding)
 {
     const string SourceAlias = "entity";
@@ -591,16 +598,16 @@ internal sealed record PostgresEntityRepositorySql(
         var readByIdentity = CreateRead(mapping, identity, partition: null);
         var readByIdentityAndPartition = CreateRead(mapping, identity, partition);
 
-        PostgresSqlInsertBuilder insert = new(mapping.Table);
+        SqlInsertBuilder insert = new(mapping.Table);
         for (var index = 0; index < mapping.Fields.Length; index++)
         {
             insert.Value(
                 columnName: mapping.Fields[index].Column.Value,
-                value: PostgresSqlExpression.RuntimeParameter(FieldBinding(index)));
+                value: SqlExpression.RuntimeParameter(FieldBinding(index)));
         }
         insert.Value(
             columnName: mapping.VersionColumn.Value,
-            value: PostgresSqlExpression.RuntimeParameter(ObservationVersionBinding));
+            value: SqlExpression.RuntimeParameter(ObservationVersionBinding));
         var conflictColumns = partition.Column == identity.Column
             ? new[] { partition.Column.Value }
             : [partition.Column.Value, identity.Column.Value];
@@ -612,79 +619,79 @@ internal sealed record PostgresEntityRepositorySql(
                 mapping.VersionColumn.Value
             ]);
         insert.Returning(
-            expression: PostgresSqlExpression.UnqualifiedColumn(ConcurrencyColumn),
+            expression: SqlExpression.UnqualifiedColumn(ConcurrencyColumn),
             alias: ConcurrencyResultAlias);
 
-        PostgresSqlUpdateBuilder replace = new(mapping.Table);
+        SqlUpdateBuilder replace = new(mapping.Table);
         for (var index = 0; index < mapping.Fields.Length; index++)
         {
             replace.Set(
                 columnName: mapping.Fields[index].Column.Value,
-                value: PostgresSqlExpression.RuntimeParameter(FieldBinding(index)));
+                value: SqlExpression.RuntimeParameter(FieldBinding(index)));
         }
         replace.Set(
             columnName: mapping.VersionColumn.Value,
-            value: PostgresSqlExpression.RuntimeParameter(ObservationVersionBinding));
-        replace.Where(PostgresSqlExpression.Binary(
-            @operator: PostgresSqlBinaryOperator.Equal,
-            left: PostgresSqlExpression.UnqualifiedColumn(identity.Column.Value),
-            right: PostgresSqlExpression.RuntimeParameter(FieldBinding(mapping.Fields.IndexOf(identity)))));
+            value: SqlExpression.RuntimeParameter(ObservationVersionBinding));
+        replace.Where(SqlExpression.Binary(
+            @operator: SqlBinaryOperator.Equal,
+            left: SqlExpression.UnqualifiedColumn(identity.Column.Value),
+            right: SqlExpression.RuntimeParameter(FieldBinding(mapping.Fields.IndexOf(identity)))));
         if (partition != identity)
         {
-            replace.Where(PostgresSqlExpression.Binary(
-                @operator: PostgresSqlBinaryOperator.Equal,
-                left: PostgresSqlExpression.UnqualifiedColumn(partition.Column.Value),
-                right: PostgresSqlExpression.RuntimeParameter(FieldBinding(mapping.Fields.IndexOf(partition)))));
+            replace.Where(SqlExpression.Binary(
+                @operator: SqlBinaryOperator.Equal,
+                left: SqlExpression.UnqualifiedColumn(partition.Column.Value),
+                right: SqlExpression.RuntimeParameter(FieldBinding(mapping.Fields.IndexOf(partition)))));
         }
-        replace.Where(PostgresSqlExpression.Binary(
-            @operator: PostgresSqlBinaryOperator.Equal,
-            left: PostgresSqlExpression.UnqualifiedColumn(ConcurrencyColumn),
-            right: PostgresSqlExpression.RuntimeParameter(ExpectedConcurrencyBinding)));
+        replace.Where(SqlExpression.Binary(
+            @operator: SqlBinaryOperator.Equal,
+            left: SqlExpression.UnqualifiedColumn(ConcurrencyColumn),
+            right: SqlExpression.RuntimeParameter(ExpectedConcurrencyBinding)));
         replace.Returning(
-            expression: PostgresSqlExpression.UnqualifiedColumn(ConcurrencyColumn),
+            expression: SqlExpression.UnqualifiedColumn(ConcurrencyColumn),
             alias: ConcurrencyResultAlias);
 
         return new(
             readByIdentity,
             readByIdentityAndPartition,
-            insert.BuildTemplate(),
-            replace.BuildTemplate(),
+            insert.BuildTemplate(PostgresSqlDialect.Instance),
+            replace.BuildTemplate(PostgresSqlDialect.Instance),
             mapping.Fields
                 .Select(static (_, index) => KeyValuePair.Create(FieldBinding(index), index))
                 .ToImmutableDictionary(StringComparer.Ordinal));
     }
 
-    static PostgresSqlCommandTemplate CreateRead(
+    static SqlCommandTemplate CreateRead(
         PostgresEntityRepositoryMapping mapping,
         PostgresEntityRepositoryFieldBinding identity,
         PostgresEntityRepositoryFieldBinding? partition)
     {
         PostgresSqlAliasAllocator aliases = new();
-        PostgresSqlSelectBuilder selected = new(mapping.Table, SourceAlias);
+        SqlSelectBuilder selected = new(mapping.Table, SourceAlias);
         foreach (var field in mapping.Fields)
         {
             selected.Select(
-                expression: PostgresSqlExpression.Column(SourceAlias, field.Column.Value),
+                expression: SqlExpression.Column(SourceAlias, field.Column.Value),
                 alias: aliases.Allocate(field.Column.Value, $"field:{field.FieldName}", "field"));
         }
         selected.Select(
-            expression: PostgresSqlExpression.Column(SourceAlias, mapping.VersionColumn.Value),
+            expression: SqlExpression.Column(SourceAlias, mapping.VersionColumn.Value),
             alias: aliases.Allocate(mapping.VersionColumn.Value, "observation-version", "version"));
         selected.Select(
-            expression: PostgresSqlExpression.Column(SourceAlias, ConcurrencyColumn),
+            expression: SqlExpression.Column(SourceAlias, ConcurrencyColumn),
             alias: aliases.Allocate(ConcurrencyResultAlias, "concurrency-token", "concurrency"));
-        selected.Where(PostgresSqlExpression.Binary(
-            @operator: PostgresSqlBinaryOperator.Equal,
-            left: PostgresSqlExpression.Column(SourceAlias, identity.Column.Value),
-            right: PostgresSqlExpression.RuntimeParameter(IdentityBinding)));
+        selected.Where(SqlExpression.Binary(
+            @operator: SqlBinaryOperator.Equal,
+            left: SqlExpression.Column(SourceAlias, identity.Column.Value),
+            right: SqlExpression.RuntimeParameter(IdentityBinding)));
         if (partition is not null)
         {
-            selected.Where(PostgresSqlExpression.Binary(
-                @operator: PostgresSqlBinaryOperator.Equal,
-                left: PostgresSqlExpression.Column(SourceAlias, partition.Column.Value),
-                right: PostgresSqlExpression.RuntimeParameter(PartitionBinding)));
+            selected.Where(SqlExpression.Binary(
+                @operator: SqlBinaryOperator.Equal,
+                left: SqlExpression.Column(SourceAlias, partition.Column.Value),
+                right: SqlExpression.RuntimeParameter(PartitionBinding)));
         }
-        return selected.Limit(2).BuildTemplate();
+        return selected.Limit(2).BuildTemplate(PostgresSqlDialect.Instance);
     }
 
     internal static string FieldBinding(int index) =>

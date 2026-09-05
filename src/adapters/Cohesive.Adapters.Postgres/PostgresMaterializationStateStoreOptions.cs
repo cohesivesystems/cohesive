@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Sql;
 using System.Text;
 
 namespace Cohesive.Adapters.Postgres;
@@ -39,14 +40,14 @@ public sealed record PostgresMaterializationStateStoreOptions
         }
 
         AuthorityId = Guard.RequireNotNullOrWhiteSpace(authorityId);
-        var qualifiedTable = new PostgresSqlQualifiedTable(schema, table);
+        var qualifiedTable = new SqlQualifiedTable(schema, table);
         Schema = qualifiedTable.SchemaName!.Value.Value;
         Table = qualifiedTable.TableName.Value;
         StringBuilder schemaSql = new();
-        qualifiedTable.SchemaName.Value.WriteQuoted(schemaSql);
+        qualifiedTable.SchemaName.Value.WriteQuoted(new SqlRenderContext(PostgresSqlDialect.Instance), schemaSql);
         QualifiedSchema = schemaSql.ToString();
         StringBuilder sql = new();
-        qualifiedTable.WriteTo(sql);
+        qualifiedTable.WriteTo(new SqlRenderContext(PostgresSqlDialect.Instance), sql);
         QualifiedTable = sql.ToString();
         MaximumDocumentBytes = maximumDocumentBytes;
     }
