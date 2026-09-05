@@ -3,7 +3,6 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
-using Cohesive.Simulation.Worlds;
 
 namespace Cohesive.Simulation.Provisioning;
 
@@ -142,7 +141,7 @@ internal static class WorldJsonLinesCodec
     public static void WriteRecord(
         IBufferWriter<byte> output,
         WorldProvisioningBatch batch,
-        GeneratedWorldItem item,
+        WorldProvisioningItem item,
         ReadOnlyMemory<byte> observationUtf8)
     {
         ImmutableArray<string> exemplarIds;
@@ -155,7 +154,7 @@ internal static class WorldJsonLinesCodec
             var exemplars = ImmutableArray.CreateBuilder<string>();
             foreach (var exemplar in batch.Exemplars)
             {
-                if (exemplar.SequenceIndex == item.Replay.SequenceIndex)
+                if (exemplar.SequenceIndex == item.SequenceIndex)
                 {
                     exemplars.Add(exemplar.Id);
                 }
@@ -188,15 +187,15 @@ internal static class WorldJsonLinesCodec
                 BatchOrdinal: batch.Ordinal,
                 BatchStartSequenceIndex: batch.StartSequenceIndex,
                 BatchItemCount: batch.Items.Length,
-                SequenceIndex: item.Replay.SequenceIndex,
+                SequenceIndex: item.SequenceIndex,
                 EntityId: item.EntityId.Value,
                 Exemplars: exemplarIds,
-                DefinitionId: item.Replay.DefinitionId,
-                DefinitionRevision: item.Replay.DefinitionRevision,
-                DefinitionFingerprint: item.Replay.DefinitionFingerprint,
-                Interpreter: item.Replay.Interpreter,
-                EntropyAlgorithm: item.Replay.EntropyAlgorithm,
-                ReplayToken: item.Replay.ToToken(),
+                DefinitionId: item.DefinitionId,
+                DefinitionRevision: item.DefinitionRevision,
+                DefinitionFingerprint: item.DefinitionFingerprint,
+                Interpreter: item.Interpreter,
+                EntropyAlgorithm: item.EntropyAlgorithm,
+                ReplayToken: item.ReplayToken,
                 ObservationUtf8: observationUtf8));
     }
 

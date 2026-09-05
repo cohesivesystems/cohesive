@@ -8,13 +8,13 @@ using Cohesive.Simulation.Xunit;
 using Xunit.Sdk;
 
 const string ExpectedArtifactId =
-    "csimartifact1_c69391ec785296ac3fda6ba55266fd63dc3f73d9e0f78fab9f139a8aaa302d93";
+    "csimartifact1_6fe065c4b5cc4bbaae225389937f5626bb607a6da4ddc69420064f0db4c6e084";
 const string ExpectedManifestFingerprint =
-    "c69391ec785296ac3fda6ba55266fd63dc3f73d9e0f78fab9f139a8aaa302d93";
+    "6fe065c4b5cc4bbaae225389937f5626bb607a6da4ddc69420064f0db4c6e084";
 const string ExpectedWorldFingerprint =
     "8abd9cc35964a89cd51052778a2d9e45b8edcfe1ebacd193beb0d8b6e636f76f";
 const string ExpectedJsonLinesFingerprint =
-    "3c757045759cef17ccd0ef909d1c3ae3ba9bdce5620e111526bf07070b19768e";
+    "e51c1638cc9445424a4c1552048232ec3cea8823b37007daba8f9f504f4b3d23";
 
 if (args is ["emit", var worldPath])
 {

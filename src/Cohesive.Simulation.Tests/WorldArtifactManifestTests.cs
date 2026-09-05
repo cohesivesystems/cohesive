@@ -28,8 +28,8 @@ public sealed class WorldArtifactManifestTests
             new WorldExemplarDefinition("customer-for-ui", "customers", sequenceIndex: 1),
             restored.GetExemplar("customer-for-ui"));
         Assert.Equal(
-            manifest.World.Compile().GenerateExemplar("customer-for-ui", seed: manifest.RootSeed),
-            restored.World.Compile().GenerateExemplar("customer-for-ui", seed: restored.RootSeed));
+            manifest.GetCoreWorld().Compile().GenerateExemplar("customer-for-ui", seed: manifest.RootSeed),
+            restored.GetCoreWorld().Compile().GenerateExemplar("customer-for-ui", seed: restored.RootSeed));
         Assert.Equal(json, WorldArtifactManifestJsonSerializer.Serialize(restored));
         Assert.Contains("\"rootSeed\":\"-9223372036854775808\"", json, StringComparison.Ordinal);
     }
@@ -87,7 +87,7 @@ public sealed class WorldArtifactManifestTests
                 root["fingerprint"]!["value"] = new string('0', 64)),
             "artifact-id" => Mutate(json, root => root["artifactId"] = "csimartifact1_wrong"),
             "population" => Mutate(json, root => root["populations"]![0]!["count"] = 999),
-            "world-revision" => Mutate(json, root => root["world"]!["definition"]!["revision"] = "r2"),
+            "world-revision" => Mutate(json, root => root["world"]!["document"]!["definition"]!["revision"] = "r2"),
             "unknown" => Mutate(json, root => root["unexpected"] = true),
             "population-order" => Mutate(json, root => Reverse(root, "populations")),
             "exemplar-order" => Mutate(json, root => Reverse(root, "exemplars")),

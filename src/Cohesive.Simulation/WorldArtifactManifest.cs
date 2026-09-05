@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -40,7 +41,7 @@ public sealed record WorldArtifactManifestFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current manifest fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-simulation-world-artifact-manifest/v3-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-simulation-world-artifact-manifest/v4-c14n/v1";
 
     /// <summary>Creates world-artifact manifest fingerprint metadata.</summary>
     /// <param name="algorithm">Hash-algorithm identity.</param>
@@ -64,6 +65,146 @@ public sealed record WorldArtifactManifestFingerprint
 
     /// <summary>Gets the lowercase hexadecimal fingerprint value.</summary>
     public string Value { get; }
+}
+
+/// <summary>Fingerprint coordinates of the exact world definition retained by an artifact.</summary>
+public sealed record WorldArtifactDefinitionFingerprint
+{
+    /// <summary>Creates retained world-definition fingerprint coordinates.</summary>
+    /// <param name="algorithm">Hash-algorithm identity.</param>
+    /// <param name="canonicalization">Canonical semantic-content profile identity.</param>
+    /// <param name="value">Fingerprint value.</param>
+    /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">A parameter is empty or white-space.</exception>
+    [JsonConstructor]
+    public WorldArtifactDefinitionFingerprint(string algorithm, string canonicalization, string value)
+    {
+        Algorithm = Guard.RequireNotNullOrWhiteSpace(algorithm);
+        Canonicalization = Guard.RequireNotNullOrWhiteSpace(canonicalization);
+        Value = Guard.RequireNotNullOrWhiteSpace(value);
+    }
+
+    /// <summary>Gets the hash-algorithm identity.</summary>
+    public string Algorithm { get; }
+
+    /// <summary>Gets the canonical semantic-content profile identity.</summary>
+    public string Canonicalization { get; }
+
+    /// <summary>Gets the fingerprint value.</summary>
+    public string Value { get; }
+}
+
+/// <summary>Interpreter-neutral envelope for the exact canonical world definition retained by an artifact.</summary>
+/// <remarks>
+/// The embedded document is the semantic authority. Identity, revision, schema, and fingerprint are indexed
+/// projections used for discovery and provenance. The package owning the selected artifact interpreter must strictly
+/// deserialize the document and prove those projections before generation or replay.
+/// </remarks>
+public sealed record WorldArtifactDefinition
+{
+    /// <summary>Creates or restores a retained world-definition envelope.</summary>
+    /// <param name="schemaVersion">Exact portable schema of <paramref name="document"/>.</param>
+    /// <param name="id">Stable logical world identity.</param>
+    /// <param name="revision">Exact authored world revision.</param>
+    /// <param name="fingerprint">Fingerprint of the document's exact world semantics.</param>
+    /// <param name="document">Complete canonical interpreter-specific world document.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="fingerprint"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// A coordinate is empty, or <paramref name="document"/> is not an object or contains duplicate properties.
+    /// </exception>
+    /// <exception cref="InvalidOperationException"><paramref name="document"/> has no canonical JSON encoding.</exception>
+    /// <exception cref="JsonException"><paramref name="document"/> contains invalid JSON content.</exception>
+    [JsonConstructor]
+    public WorldArtifactDefinition(
+        string schemaVersion,
+        string id,
+        string revision,
+        WorldArtifactDefinitionFingerprint fingerprint,
+        JsonElement document)
+    {
+        SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
+        Id = Guard.RequireNotNullOrWhiteSpace(id);
+        Revision = Guard.RequireNotNullOrWhiteSpace(revision);
+        Fingerprint = Guard.RequireNotNull(fingerprint);
+        Document = NormalizeDocument(document);
+    }
+
+    /// <summary>Gets the exact portable schema of <see cref="Document"/>.</summary>
+    public string SchemaVersion { get; }
+
+    /// <summary>Gets the stable logical world identity.</summary>
+    public string Id { get; }
+
+    /// <summary>Gets the exact authored world revision.</summary>
+    public string Revision { get; }
+
+    /// <summary>Gets the fingerprint of exact world semantics.</summary>
+    public WorldArtifactDefinitionFingerprint Fingerprint { get; }
+
+    /// <summary>Gets the complete canonical interpreter-specific world document.</summary>
+    public JsonElement Document { get; }
+
+    /// <summary>Creates a retained definition from one strict core world document.</summary>
+    /// <param name="world">Exact fingerprint-verified core world document.</param>
+    /// <returns>An interpreter-neutral retained-definition envelope.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="world"/> is <see langword="null"/>.</exception>
+    /// <exception cref="JsonException"><paramref name="world"/> has no strict JSON representation.</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="world"/> has no canonical JSON representation.</exception>
+    /// <exception cref="NotSupportedException"><paramref name="world"/> contains an unsupported runtime type.</exception>
+    public static WorldArtifactDefinition FromWorld(WorldDefinitionDocument world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        using var document = JsonDocument.Parse(WorldDefinitionJsonSerializer.GetCanonicalBytes(world));
+        return new(
+            world.SchemaVersion,
+            world.Definition.Id,
+            world.Definition.Revision,
+            new(world.Fingerprint.Algorithm, world.Fingerprint.Canonicalization, world.Fingerprint.Value),
+            document.RootElement);
+    }
+
+    /// <summary>Compares envelopes by projected coordinates and normalized document content.</summary>
+    /// <param name="other">Envelope to compare with this value.</param>
+    /// <returns><see langword="true"/> when all retained content is equal; otherwise <see langword="false"/>.</returns>
+    public bool Equals(WorldArtifactDefinition? other) =>
+        ReferenceEquals(this, other)
+        || other is not null
+        && string.Equals(SchemaVersion, other.SchemaVersion, StringComparison.Ordinal)
+        && string.Equals(Id, other.Id, StringComparison.Ordinal)
+        && string.Equals(Revision, other.Revision, StringComparison.Ordinal)
+        && Fingerprint == other.Fingerprint
+        && string.Equals(Document.GetRawText(), other.Document.GetRawText(), StringComparison.Ordinal);
+
+    /// <summary>Returns a structural hash code for the complete retained definition.</summary>
+    /// <returns>A hash code derived from projections and canonical document content.</returns>
+    public override int GetHashCode() => HashCode.Combine(
+        SchemaVersion,
+        Id,
+        Revision,
+        Fingerprint,
+        Document.GetRawText());
+
+    static JsonElement NormalizeDocument(JsonElement document)
+    {
+        if (document.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("A retained world definition must be encoded as a JSON object.", nameof(document));
+        if (StrictDocumentJson.TryFindDuplicateProperty(document, string.Empty, out var duplicateLocation))
+        {
+            throw new ArgumentException(
+                $"A retained world definition cannot contain duplicate properties at '{duplicateLocation}'.",
+                nameof(document));
+        }
+
+        var node = JsonNode.Parse(document.GetRawText())
+            ?? throw new InvalidOperationException("Failed to materialize retained world-definition JSON.");
+        var canonical = CanonicalJsonWriter.GetCanonicalBytes(
+            node,
+            WorldArtifactManifestJsonSerializer.CreateOptions(),
+            static _ => CanonicalJsonArrayOrdering.Sequence,
+            numberSemantics: CanonicalJsonNumberSemantics.ExactDecimalRational);
+        using var canonicalDocument = JsonDocument.Parse(canonical);
+        return canonicalDocument.RootElement.Clone();
+    }
 }
 
 /// <summary>Compiled population coordinates retained by a world-artifact manifest.</summary>
@@ -127,20 +268,20 @@ public sealed record WorldArtifactPopulationManifest
 /// <remarks>
 /// The manifest embeds the canonical world definition needed for replay but does not materialize generated
 /// observations. Concrete artifact-batch framing remains an independent format contract. Population and exemplar
-/// projections are derived evidence and are validated against the embedded world rather than becoming another source
-/// of semantic truth.
+/// projections are derived evidence and are validated by the package owning the selected interpreter rather than
+/// becoming another source of semantic truth.
 /// </remarks>
 public sealed record WorldArtifactManifest
 {
     /// <summary>Current portable world-artifact manifest schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-simulation-world-artifact-manifest/v3";
+    public const string CurrentSchemaVersion = "cohesive-simulation-world-artifact-manifest/v4";
 
     const string ArtifactIdPrefix = "csimartifact1_";
 
     /// <summary>Creates or restores one portable world-artifact manifest.</summary>
     /// <param name="schemaVersion">Exact manifest schema.</param>
     /// <param name="artifactId">Content-addressed identity derived from the manifest fingerprint.</param>
-    /// <param name="world">Exact canonical world definition used for generation.</param>
+    /// <param name="world">Exact interpreter-neutral retained world definition used for generation.</param>
     /// <param name="rootSeed">Deterministic root seed shared by all populations.</param>
     /// <param name="interpreter">Exact generation-interpreter identity and version.</param>
     /// <param name="entropyAlgorithm">Exact addressable entropy-algorithm identity and version.</param>
@@ -160,7 +301,7 @@ public sealed record WorldArtifactManifest
     public WorldArtifactManifest(
         string schemaVersion,
         WorldArtifactId artifactId,
-        WorldDefinitionDocument world,
+        WorldArtifactDefinition world,
         long rootSeed,
         string interpreter,
         string entropyAlgorithm,
@@ -199,8 +340,8 @@ public sealed record WorldArtifactManifest
     /// <summary>Gets the content-addressed artifact identity.</summary>
     public WorldArtifactId ArtifactId { get; }
 
-    /// <summary>Gets the exact canonical world definition used for generation.</summary>
-    public WorldDefinitionDocument World { get; }
+    /// <summary>Gets the exact interpreter-neutral retained world definition used for generation.</summary>
+    public WorldArtifactDefinition World { get; }
 
     /// <summary>Gets the deterministic root seed shared by all populations.</summary>
     [JsonConverter(typeof(StringEncodedInt64JsonConverter))]
@@ -307,39 +448,90 @@ public sealed record WorldArtifactManifest
             : throw new KeyNotFoundException(
                 $"World artifact '{ArtifactId.Value}' contains no exemplar with identity '{id}'.");
 
+    /// <summary>Gets the exact core world document retained by a core-world artifact.</summary>
+    /// <returns>The strict fingerprint-verified core world document embedded by <see cref="World"/>.</returns>
+    /// <exception cref="NotSupportedException">
+    /// The retained world uses a schema other than <see cref="WorldDefinitionDocument.CurrentSchemaVersion"/>.
+    /// </exception>
+    /// <exception cref="JsonException">The retained document is not a valid canonical core world.</exception>
+    public WorldDefinitionDocument GetCoreWorld()
+    {
+        if (!string.Equals(
+                World.SchemaVersion,
+                WorldDefinitionDocument.CurrentSchemaVersion,
+                StringComparison.Ordinal))
+        {
+            throw new NotSupportedException(
+                $"Artifact world schema '{World.SchemaVersion}' is not a core world schema.");
+        }
+
+        return WorldDefinitionJsonSerializer.Deserialize(World.Document.GetRawText());
+    }
+
     static WorldArtifactManifest Create(
         WorldDefinitionDocument document,
         CompiledWorldPlan world,
         long rootSeed,
         string interpreter = ReferenceGenerationInterpreter.Identity,
         string entropyAlgorithm = ReferenceGenerationInterpreter.EntropyAlgorithm)
+        => Create(
+            WorldArtifactDefinition.FromWorld(document),
+            world.Populations,
+            world.Exemplars,
+            rootSeed,
+            interpreter,
+            entropyAlgorithm);
+
+    internal static WorldArtifactManifest FromInterpreterWorld(
+        WorldArtifactDefinition world,
+        ImmutableArray<CompiledWorldPopulation> populations,
+        ImmutableArray<WorldExemplarDefinition> exemplars,
+        long rootSeed,
+        string interpreter,
+        string entropyAlgorithm) =>
+        Create(
+            world,
+            populations,
+            exemplars,
+            rootSeed,
+            Guard.RequireNotNullOrWhiteSpace(interpreter),
+            Guard.RequireNotNullOrWhiteSpace(entropyAlgorithm));
+
+    static WorldArtifactManifest Create(
+        WorldArtifactDefinition world,
+        ImmutableArray<CompiledWorldPopulation> compiledPopulations,
+        ImmutableArray<WorldExemplarDefinition> exemplars,
+        long rootSeed,
+        string interpreter,
+        string entropyAlgorithm)
     {
-        var populations = ProjectPopulations(world);
-        var exemplars = world.Exemplars;
+        ArgumentNullException.ThrowIfNull(world);
+        var populations = ProjectPopulations(compiledPopulations);
+        var normalizedExemplars = NormalizeExemplars(exemplars);
         var fingerprint = ComputeFingerprint(
             CurrentSchemaVersion,
-            document,
+            world,
             rootSeed,
             interpreter,
             entropyAlgorithm,
             populations,
-            exemplars);
+            normalizedExemplars);
         return new(new ManifestState(
             CurrentSchemaVersion,
             CreateArtifactId(fingerprint),
-            document,
+            world,
             rootSeed,
             interpreter,
             entropyAlgorithm,
             populations,
-            exemplars,
+            normalizedExemplars,
             fingerprint));
     }
 
     static ManifestState ValidateAndNormalize(
         string schemaVersion,
         WorldArtifactId artifactId,
-        WorldDefinitionDocument world,
+        WorldArtifactDefinition world,
         long rootSeed,
         string interpreter,
         string entropyAlgorithm,
@@ -361,21 +553,13 @@ public sealed record WorldArtifactManifest
         entropyAlgorithm = Guard.RequireNotNullOrWhiteSpace(entropyAlgorithm);
         ArgumentNullException.ThrowIfNull(fingerprint);
 
-        var plan = world.Compile();
         var normalizedPopulations = NormalizePopulations(populations);
         var normalizedExemplars = NormalizeExemplars(exemplars);
-        if (!normalizedPopulations.SequenceEqual(ProjectPopulations(plan)))
-        {
-            throw new ArgumentException(
-                "World-artifact population evidence does not match the embedded world definition.",
-                nameof(populations));
-        }
-        if (!normalizedExemplars.SequenceEqual(plan.Exemplars))
-        {
-            throw new ArgumentException(
-                "World-artifact exemplar evidence does not match the embedded world definition.",
-                nameof(exemplars));
-        }
+        ValidateOwnedWorldProjections(
+            world,
+            interpreter,
+            normalizedPopulations,
+            normalizedExemplars);
 
         var expectedFingerprint = ComputeFingerprint(
             schemaVersion,
@@ -412,10 +596,61 @@ public sealed record WorldArtifactManifest
             expectedFingerprint);
     }
 
-    static ImmutableArray<WorldArtifactPopulationManifest> ProjectPopulations(CompiledWorldPlan world)
+    static void ValidateOwnedWorldProjections(
+        WorldArtifactDefinition world,
+        string interpreter,
+        ImmutableArray<WorldArtifactPopulationManifest> populations,
+        ImmutableArray<WorldExemplarDefinition> exemplars)
     {
-        var result = ImmutableArray.CreateBuilder<WorldArtifactPopulationManifest>(world.Populations.Length);
-        foreach (var population in world.Populations)
+        if (!string.Equals(interpreter, ReferenceGenerationInterpreter.Identity, StringComparison.Ordinal))
+            return;
+
+        var document = WorldDefinitionJsonSerializer.Deserialize(world.Document.GetRawText());
+        if (!string.Equals(world.SchemaVersion, document.SchemaVersion, StringComparison.Ordinal)
+            || !string.Equals(world.Id, document.Definition.Id, StringComparison.Ordinal)
+            || !string.Equals(world.Revision, document.Definition.Revision, StringComparison.Ordinal)
+            || !string.Equals(world.Fingerprint.Algorithm, document.Fingerprint.Algorithm, StringComparison.Ordinal)
+            || !string.Equals(
+                world.Fingerprint.Canonicalization,
+                document.Fingerprint.Canonicalization,
+                StringComparison.Ordinal)
+            || !string.Equals(world.Fingerprint.Value, document.Fingerprint.Value, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Retained core world projections do not match the embedded world document.",
+                nameof(world));
+        }
+
+        var plan = document.Compile();
+        ValidateWorldProjections(
+            populations,
+            exemplars,
+            plan.Populations,
+            plan.Exemplars,
+            nameof(world));
+    }
+
+    internal static void ValidateWorldProjections(
+        ImmutableArray<WorldArtifactPopulationManifest> retainedPopulations,
+        ImmutableArray<WorldExemplarDefinition> retainedExemplars,
+        ImmutableArray<CompiledWorldPopulation> compiledPopulations,
+        ImmutableArray<WorldExemplarDefinition> compiledExemplars,
+        string parameterName)
+    {
+        if (!retainedPopulations.SequenceEqual(ProjectPopulations(compiledPopulations))
+            || !retainedExemplars.SequenceEqual(compiledExemplars))
+        {
+            throw new ArgumentException(
+                "World-artifact population or exemplar projections do not match the retained world definition.",
+                parameterName);
+        }
+    }
+
+    static ImmutableArray<WorldArtifactPopulationManifest> ProjectPopulations(
+        ImmutableArray<CompiledWorldPopulation> populations)
+    {
+        var result = ImmutableArray.CreateBuilder<WorldArtifactPopulationManifest>(populations.Length);
+        foreach (var population in populations)
         {
             var generation = population.GenerationPlan;
             result.Add(new(
@@ -495,7 +730,7 @@ public sealed record WorldArtifactManifest
 
     static WorldArtifactManifestFingerprint ComputeFingerprint(
         string schemaVersion,
-        WorldDefinitionDocument world,
+        WorldArtifactDefinition world,
         long rootSeed,
         string interpreter,
         string entropyAlgorithm,
@@ -506,11 +741,12 @@ public sealed record WorldArtifactManifest
         writer.Append(WorldArtifactManifestFingerprint.CurrentCanonicalization);
         writer.Append(schemaVersion);
         writer.Append(world.SchemaVersion);
-        writer.Append(world.Definition.Id);
-        writer.Append(world.Definition.Revision);
+        writer.Append(world.Id);
+        writer.Append(world.Revision);
         writer.Append(world.Fingerprint.Algorithm);
         writer.Append(world.Fingerprint.Canonicalization);
         writer.Append(world.Fingerprint.Value);
+        writer.Append(world.Document.GetRawText());
         writer.Append(rootSeed);
         writer.Append(interpreter);
         writer.Append(entropyAlgorithm);
@@ -547,7 +783,7 @@ public sealed record WorldArtifactManifest
     readonly record struct ManifestState(
         string SchemaVersion,
         WorldArtifactId ArtifactId,
-        WorldDefinitionDocument World,
+        WorldArtifactDefinition World,
         long RootSeed,
         string Interpreter,
         string EntropyAlgorithm,

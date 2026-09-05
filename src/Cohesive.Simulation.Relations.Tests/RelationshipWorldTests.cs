@@ -1,9 +1,12 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using Cohesive.Model;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
+using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Generation;
+using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Worlds;
 
 namespace Cohesive.Simulation.Relations.Tests;
@@ -262,6 +265,126 @@ public sealed class RelationshipWorldTests
                 .Select(static item => item.Observation.ToCanonicalJson()),
             restoredPlan.GetPopulation("loads").Generate(seed: 9)
                 .Select(static item => item.Observation.ToCanonicalJson()));
+    }
+
+    [Fact]
+    public void RetainedArtifact_RoundTripsTheExactRelationshipWorldAuthority()
+    {
+        var world = RelationshipWorldDefinitionDocument.FromDefinition(
+            CreateDefinition(carrierCount: 3, loadCount: 4));
+        var artifact = RelationshipWorldArtifact.FromWorld(world, rootSeed: long.MinValue);
+
+        var json = WorldArtifactManifestJsonSerializer.Serialize(artifact);
+        var restored = WorldArtifactManifestJsonSerializer.Deserialize(json);
+        var restoredWorld = RelationshipWorldArtifact.GetWorld(restored);
+
+        Assert.Equal(RelationshipWorldInterpreter.Identity, restored.Interpreter);
+        Assert.Equal(ReferenceGenerationInterpreter.EntropyAlgorithm, restored.EntropyAlgorithm);
+        Assert.Equal(RelationshipWorldDefinitionDocument.CurrentSchemaVersion, restored.World.SchemaVersion);
+        Assert.Equal(
+            RelationshipWorldDefinitionJsonSerializer.Serialize(world),
+            RelationshipWorldDefinitionJsonSerializer.Serialize(restoredWorld));
+        Assert.Equal(json, WorldArtifactManifestJsonSerializer.Serialize(restored));
+        Assert.Equal(artifact.ArtifactId, restored.ArtifactId);
+    }
+
+    [Fact]
+    public void RelationshipSemantics_ParticipateInArtifactIdentityBeyondTheCoreWorld()
+    {
+        var alwaysPresent = RelationshipWorldArtifact.FromWorld(
+            CreateDefinition(carrierCount: 4, loadCount: 4).Compile(),
+            rootSeed: 42);
+        var uniqueReference = RelationshipWorldArtifact.FromWorld(
+            CreateDefinition(
+                    carrierCount: 4,
+                    loadCount: 4,
+                    uniqueness: SourceReferenceUniqueness.GloballyUnique)
+                .Compile(),
+            rootSeed: 42);
+
+        Assert.NotEqual(alwaysPresent.World.Fingerprint, uniqueReference.World.Fingerprint);
+        Assert.NotEqual(alwaysPresent.ArtifactId, uniqueReference.ArtifactId);
+        Assert.NotEqual(alwaysPresent.Fingerprint, uniqueReference.Fingerprint);
+    }
+
+    [Fact]
+    public void RetainedArtifact_RejectsRelationshipWorldTamperingAtTheOuterManifestBoundary()
+    {
+        var artifact = RelationshipWorldArtifact.FromWorld(
+            CreateDefinition(carrierCount: 3, loadCount: 4).Compile(),
+            rootSeed: 42);
+        var root = JsonNode.Parse(WorldArtifactManifestJsonSerializer.Serialize(artifact))!.AsObject();
+        root["world"]!["document"]!["definition"]!["relationshipBindings"]![0]!["selection"]![
+            "presenceProbability"] = 0.5;
+
+        var validation = WorldArtifactManifestJsonSerializer.TryDeserialize(
+            root.ToJsonString(),
+            out var restored);
+
+        Assert.Null(restored);
+        Assert.Contains(
+            validation.Diagnostics,
+            static diagnostic => diagnostic.Code == "simulation.worldArtifact.manifest.contentInvalid");
+    }
+
+    [Fact]
+    public async Task RetainedArtifact_ProvisionsAndVerifiesRelationshipCompleteJsonLines()
+    {
+        var artifact = RelationshipWorldArtifact.FromWorld(
+            CreateDefinition(carrierCount: 3, loadCount: 4, includeExemplar: true).Compile(),
+            rootSeed: 42);
+        await using MemoryStream output = new();
+        WorldJsonLinesSink sink = new("demo/relationship-world", output);
+
+        var provisioned = await RelationshipWorldProvisioner.ProvisionAsync(
+            artifact,
+            sink,
+            new(batchSize: 2));
+        output.Position = 0;
+        var verified = await RelationshipWorldJsonLinesVerifier.VerifyAsync(artifact, output);
+
+        Assert.Same(artifact, provisioned.Artifact);
+        Assert.Equal(7, provisioned.ItemCount);
+        Assert.Equal(provisioned.ItemCount, verified.ItemCount);
+        Assert.Equal(artifact.ArtifactId, verified.ArtifactId);
+        var lines = Encoding.UTF8.GetString(output.ToArray())
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var loadRecords = lines
+            .Select(static line => JsonNode.Parse(line)!.AsObject())
+            .Where(static record => record["populationId"]!.GetValue<string>() == "loads")
+            .ToArray();
+        Assert.Equal(4, loadRecords.Length);
+        Assert.All(loadRecords, static record =>
+        {
+            Assert.Equal(
+                RelationshipWorldInterpreter.Identity,
+                record["interpreter"]!.GetValue<string>());
+            Assert.Contains("\"CarrierId\":", record["observation"]!.ToJsonString(), StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public async Task CoreProvisioner_FailsClosedForRelationshipWorldArtifact()
+    {
+        var artifact = RelationshipWorldArtifact.FromWorld(
+            CreateDefinition(carrierCount: 1, loadCount: 1).Compile(),
+            rootSeed: 42);
+        await using MemoryStream output = new();
+        WorldJsonLinesSink sink = new("demo/wrong-interpreter", output);
+
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            WorldProvisioner.ProvisionAsync(artifact, sink));
+        Assert.Empty(output.ToArray());
+    }
+
+    [Fact]
+    public void RelationshipInterpreter_RejectsACoreWorldArtifact()
+    {
+        var world = Simulation.DefineWorld("world/core-only", "r1", builder => builder
+            .Population("audit", count: 1, CreateAuditGeneration()));
+        var artifact = WorldArtifactManifest.FromWorld(world.Compile(), rootSeed: 42);
+
+        Assert.Throws<NotSupportedException>(() => RelationshipWorldArtifact.GetWorld(artifact));
     }
 
     [Fact]
