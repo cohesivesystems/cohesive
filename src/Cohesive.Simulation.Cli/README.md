@@ -1,15 +1,20 @@
 # Cohesive.Simulation.Cli
 
 `Cohesive.Simulation.Cli` packages the provider-neutral core and relationship-world provisioners as the `cohesive-sim`
-.NET tool. It
-lets shell scripts, CI jobs, demo-environment setup, and Playwright global setup consume the same portable world and
-retained artifact manifest used by .NET tests.
+.NET tool. It lets shell scripts, CI jobs, demo-environment setup, and Playwright global setup consume the same
+portable world and retained artifact manifest used by .NET tests.
+
+## Install
+
+The current alpha targets .NET 10:
+
+```bash
+dotnet tool install Cohesive.Simulation.Cli --global --prerelease
+```
 
 Create the immutable, content-addressed manifest first, then provision only from that retained authority:
 
 ```bash
-dotnet tool install Cohesive.Simulation.Cli --global
-
 cohesive-sim manifest \
   --world demo.world.json \
   --seed 42 \
@@ -19,6 +24,11 @@ cohesive-sim provision \
   --manifest test-results/demo-world.manifest.json \
   --target playwright/global-setup \
   --out test-results/demo-world.jsonl
+
+cohesive-sim verify \
+  --manifest test-results/demo-world.manifest.json \
+  --jsonl test-results/demo-world.jsonl \
+  > test-results/demo-world.verification.json
 ```
 
 `manifest` strictly deserializes and fingerprint-verifies the portable world, compiles it, and writes a canonical
@@ -30,8 +40,8 @@ For a portable relationship world, use `--relationship-world` in place of `--wor
 fingerprint-verified relationship-world document, and `provision` selects the relationship interpreter from the
 manifest rather than from another command-line option.
 
-Both commands use `-` for standard input or standard output. File output is written to a same-directory temporary
-file and moved over the requested path only after the complete command succeeds. In the recommended file workflow,
+Commands use `-` for standard input or standard output where applicable. File output is written to a same-directory
+temporary file and moved over the requested path only after the complete command succeeds. In the recommended file workflow,
 the immutable manifest therefore already exists before JSON Lines generation starts, and a failed or cancelled
 provision preserves the prior complete JSON Lines file. Standard output is inherently streaming and can contain a
 partial batch if its consumer fails.
@@ -42,7 +52,14 @@ batch, population, exemplar, and replay provenance. The artifact ID and manifest
 `--target` and `--batch-size`; run and batch IDs bind that artifact to those execution choices. `--target` is a
 required stable logical destination identity, not a machine-specific filesystem path.
 
-Consumers can verify the entire stream against a separately loaded retained manifest before exposing any item:
+`verify` dispatches from the manifest's interpreter identity and writes a
+`cohesive-simulation-cli-verification/v1` JSON report. Success includes artifact, world, interpreter, target, run,
+batching, and item-count evidence on standard output. Invalid content exits nonzero and writes the same report shape
+with stable structured diagnostics on standard error. Because one process cannot supply two different documents on
+standard input, `--manifest` and `--jsonl` cannot both be `-`.
+
+.NET consumers can also verify the entire stream against a separately loaded retained manifest before exposing any
+item:
 
 ```csharp
 WorldArtifactManifest manifest = WorldArtifactManifestJsonSerializer.Deserialize(manifestJson);
@@ -76,11 +93,22 @@ export default function globalSetup() {
     "--target", "playwright/global-setup",
     "--out", "test-results/demo-world.jsonl",
   ], { stdio: "inherit" });
+
+  execFileSync("cohesive-sim", [
+    "verify",
+    "--manifest", "test-results/demo-world.manifest.json",
+    "--jsonl", "test-results/demo-world.jsonl",
+  ], { stdio: "inherit" });
 }
 ```
 
-The CLI does not invent a second fixture model or storage policy: it dispatches the retained manifest to its pinned
-core or relationship-world interpreter, while repository provisioning remains in the optional
-`Cohesive.Simulation.Storage` package.
+The CLI does not invent a second fixture model or storage policy: `provision` writes verified-manifest JSONL; it does
+not seed an application database. Use an application-owned importer or a .NET seeder with
+`Cohesive.Simulation.Storage` for repository writes. The
+[seeding and Playwright guide](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/seeding-and-playwright.md)
+shows both complete paths.
+
+The tool dispatches the retained manifest to its pinned core or relationship-world interpreter, while repository
+provisioning remains in the optional `Cohesive.Simulation.Storage` package.
 Typed options, validation, generated help, output routing, and invocation behavior come from `Cohesive.Cli`; the tool
 does not maintain a parallel command parser.

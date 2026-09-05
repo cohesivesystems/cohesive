@@ -1,8 +1,10 @@
 using System.Text;
 using Cohesive.Cli;
-using Cohesive.Simulation.Relations;
+using Cohesive.Model;
+using Cohesive.Model.Serialization;
 using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Provisioning;
+using Cohesive.Simulation.Relations;
 using Cohesive.Simulation.Worlds;
 
 namespace Cohesive.Simulation.Cli;
@@ -57,6 +59,12 @@ static class SimulationCliApplication
                     : new[] { $"Batch size '{options.BatchSize}' is not a positive 32-bit integer." })
             .OnExecute((CliCommandContext<WorldProvisionCliOptions> context) =>
                 ProvisionAsync(context, standardInput, standardOutput));
+        app.Command<WorldVerifyCliOptions>(
+                "verify",
+                "Verify world JSON Lines against an independently retained manifest.")
+            .Validate((Func<WorldVerifyCliOptions, IReadOnlyList<string>>)ValidateVerifyOptions)
+            .OnExecute((CliCommandContext<WorldVerifyCliOptions> context) =>
+                VerifyAsync(context, standardInput));
         return app;
     }
 
@@ -68,6 +76,11 @@ static class SimulationCliApplication
             ? []
             : ["Specify exactly one of '--world' or '--relationship-world'."];
     }
+
+    static IReadOnlyList<string> ValidateVerifyOptions(WorldVerifyCliOptions options) =>
+        options.ReadsManifestStandardInput && options.ReadsJsonLinesStandardInput
+            ? ["Options '--manifest' and '--jsonl' cannot both read from standard input."]
+            : [];
 
     static async Task<int> CreateManifestAsync(
         CliCommandContext<WorldManifestCliOptions> context,
@@ -152,6 +165,95 @@ static class SimulationCliApplication
         }
     }
 
+    static async Task<int> VerifyAsync(
+        CliCommandContext<WorldVerifyCliOptions> context,
+        Stream standardInput)
+    {
+        try
+        {
+            var options = NormalizePaths(context.Configuration);
+            var manifestJson = await ReadJsonAsync(
+                    options.ManifestPath,
+                    options.ReadsManifestStandardInput,
+                    standardInput,
+                    context.CancellationToken)
+                .ConfigureAwait(false);
+            var manifestValidation = WorldArtifactManifestJsonSerializer.TryDeserialize(
+                manifestJson,
+                out var manifest);
+            if (!manifestValidation.IsValid || manifest is null)
+            {
+                WriteVerificationFailure(context, manifestValidation.Diagnostics);
+                return FailureExitCode;
+            }
+
+            WorldJsonLinesValidationResult validation;
+            if (options.ReadsJsonLinesStandardInput)
+            {
+                validation = await ValidateJsonLinesAsync(
+                        manifest,
+                        standardInput,
+                        context.CancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await using FileStream input = new(
+                    options.JsonLinesPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read,
+                    bufferSize: 4096,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+                validation = await ValidateJsonLinesAsync(
+                        manifest,
+                        input,
+                        context.CancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (!validation.IsSuccessful || validation.Verification is null)
+            {
+                WriteVerificationFailure(context, validation.Validation.Diagnostics);
+                return FailureExitCode;
+            }
+
+            var verification = validation.Verification;
+            context.Output.WriteJson(new WorldVerifyCliReport(
+                WorldVerifyCliReport.CurrentSchemaVersion,
+                IsValid: true,
+                new(
+                    manifest.ArtifactId.Value,
+                    manifest.Fingerprint.Value,
+                    manifest.World.Id,
+                    manifest.World.Revision,
+                    manifest.World.Fingerprint.Value,
+                    manifest.Interpreter,
+                    manifest.EntropyAlgorithm,
+                    verification.TargetId,
+                    verification.RunId?.Value,
+                    verification.BatchSize,
+                    verification.ItemCount),
+                Diagnostics: []));
+            return SuccessExitCode;
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            context.Output.WriteErrorLine("Simulation verification was cancelled.");
+            return CancelledExitCode;
+        }
+        catch (Exception exception)
+        {
+            WriteVerificationFailure(
+                context,
+                [new(
+                    VerificationFailureCode(exception),
+                    DiagnosticSeverity.Error,
+                    exception.Message)]);
+            return FailureExitCode;
+        }
+    }
+
     static WorldManifestCliOptions NormalizePaths(WorldManifestCliOptions options) =>
         options with
         {
@@ -171,10 +273,19 @@ static class SimulationCliApplication
             OutputPath = NormalizePath(options.OutputPath, "--out")
         };
 
+    static WorldVerifyCliOptions NormalizePaths(WorldVerifyCliOptions options) =>
+        options with
+        {
+            ManifestPath = NormalizePath(options.ManifestPath, "--manifest"),
+            JsonLinesPath = NormalizePath(options.JsonLinesPath, "--jsonl")
+        };
+
     static string NormalizePath(string value, string option)
     {
         if (string.Equals(value, SimulationCliPaths.StandardStream, StringComparison.Ordinal))
+        {
             return value;
+        }
 
         try
         {
@@ -193,7 +304,9 @@ static class SimulationCliApplication
         CancellationToken cancellationToken)
     {
         if (!readsStandardInput)
+        {
             return await File.ReadAllTextAsync(inputPath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+        }
 
         using var reader = CliStandardStreams.OpenUtf8Reader(standardInput);
         return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
@@ -276,4 +389,32 @@ static class SimulationCliApplication
                 optionsValue,
                 cancellationToken);
     }
+
+    static Task<WorldJsonLinesValidationResult> ValidateJsonLinesAsync(
+        WorldArtifactManifest manifest,
+        Stream input,
+        CancellationToken cancellationToken) =>
+        string.Equals(
+            manifest.Interpreter,
+            RelationshipWorldInterpreter.Identity,
+            StringComparison.Ordinal)
+            ? RelationshipWorldJsonLinesVerifier.ValidateAsync(manifest, input, cancellationToken)
+            : WorldJsonLinesVerifier.ValidateAsync(manifest, input, cancellationToken);
+
+    static void WriteVerificationFailure(
+        CliCommandContext<WorldVerifyCliOptions> context,
+        IReadOnlyList<DocumentValidationDiagnostic> diagnostics) =>
+        context.Output.WriteJsonError(new WorldVerifyCliReport(
+            WorldVerifyCliReport.CurrentSchemaVersion,
+            IsValid: false,
+            Verification: null,
+            diagnostics));
+
+    static string VerificationFailureCode(Exception exception) => exception switch
+    {
+        NotSupportedException => "simulation.cli.verify.artifactUnsupported",
+        System.Text.Json.JsonException or ArgumentException => "simulation.cli.verify.artifactInvalid",
+        IOException or UnauthorizedAccessException => "simulation.cli.verify.inputUnavailable",
+        _ => "simulation.cli.verify.failed"
+    };
 }

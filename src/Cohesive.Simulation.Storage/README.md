@@ -4,6 +4,14 @@
 Cohesive entity repositories. It implements `IWorldProvisioningSink` without making repository behavior part of the
 provider-neutral `Cohesive.Simulation` package.
 
+## Install
+
+The current alpha targets .NET 10:
+
+```bash
+dotnet add package Cohesive.Simulation.Storage --prerelease
+```
+
 ## Repository provisioning
 
 Bind each population explicitly to one repository, state version, and requested batch atomicity. Entity identity is
@@ -50,3 +58,7 @@ belong in adapters that can actually guarantee those semantics.
 The sink derives its effective `TargetId` from the logical destination plus normalized population bindings. Changes
 to repository entity identity, qualified shape, state version, or requested atomicity therefore produce a different
 provisioning run identity automatically. World identity-policy changes already change the artifact identity.
+
+The [seeding and Playwright guide](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/seeding-and-playwright.md)
+distinguishes direct repository provisioning from portable JSONL exchange. A complete in-memory repository flow is
+maintained as an [executable example](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Examples/Simulation/SimulationAdoptionExamples.cs).

@@ -44,6 +44,9 @@ jobs:
       - name: Test .NET
         run: dotnet test Cohesive.sln -c Release --no-build
 
+      - name: Validate NuGet package APIs
+        run: bash ./eng/api-check.sh
+
       - name: Install frontend dependencies
         run: corepack pnpm install --frozen-lockfile
 
