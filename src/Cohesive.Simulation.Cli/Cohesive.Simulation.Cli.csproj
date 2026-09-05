@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>cohesive-sim</AssemblyName>
     <PackageId>Cohesive.Simulation.Cli</PackageId>
-    <Description>Command-line provisioning of portable deterministic Cohesive simulation worlds.</Description>
+    <Description>Create, provision, and verify portable deterministic Cohesive simulation artifacts.</Description>
     <PackageTags>cohesive;simulation;synthetic-data;testing;playwright;cli</PackageTags>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>cohesive-sim</ToolCommandName>

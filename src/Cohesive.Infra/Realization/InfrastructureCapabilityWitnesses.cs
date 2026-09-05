@@ -410,6 +410,10 @@ public static class InfrastructureRealizationCompiler
 
         var placements = InfrastructureCapabilityWitnessCollections.NormalizePlacements(workloadPlacements);
         var witnesses = InfrastructureCapabilityWitnessCollections.NormalizeWitnesses(capabilityWitnesses);
+        var readinessObligations = InfrastructureReadinessObligationCompiler.Compile(
+            capabilityClosure.Definition.Definition,
+            lifecycle,
+            placements);
         var evaluation = InfrastructureCapabilityWitnessEvaluator.Evaluate(
             capabilityClosure,
             lifecycle,
@@ -419,6 +423,7 @@ public static class InfrastructureRealizationCompiler
             capabilityClosure,
             lifecycle,
             placements,
+            readinessObligations,
             witnesses,
             evaluation.Decisions,
             evaluation.Diagnostics,
@@ -844,6 +849,7 @@ static class InfrastructureRealizationFingerprinting
         InfrastructureCapabilityClosureReport closure,
         InfrastructureLifecyclePlan lifecycle,
         ImmutableArray<InfrastructureWorkloadPlacement> placements,
+        ImmutableArray<InfrastructureReadinessObligation> readinessObligations,
         ImmutableArray<InfrastructureCapabilityEvidenceWitness> witnesses,
         ImmutableArray<InfrastructureCapabilityWitnessDecision> decisions)
     {
@@ -858,6 +864,7 @@ static class InfrastructureRealizationFingerprinting
                 lifecycle.Definition.ToReference(),
                 lifecycle.Bindings,
                 placements,
+                readinessObligations,
                 witnesses,
                 decisions),
             StrictDocumentJson.CreateOptions());
@@ -877,6 +884,7 @@ static class InfrastructureRealizationFingerprinting
         InfrastructureDefinitionReference Definition,
         ImmutableArray<InfrastructureResourceLifecycleBinding> LifecycleBindings,
         ImmutableArray<InfrastructureWorkloadPlacement> WorkloadPlacements,
+        ImmutableArray<InfrastructureReadinessObligation> ReadinessObligations,
         ImmutableArray<InfrastructureCapabilityEvidenceWitness> CapabilityWitnesses,
         ImmutableArray<InfrastructureCapabilityWitnessDecision> WitnessDecisions);
 }

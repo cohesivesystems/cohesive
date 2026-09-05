@@ -79,6 +79,25 @@ public readonly record struct InfrastructureBindingId
     public override string ToString() => Value;
 }
 
+/// <summary>Stable identity of one directed infrastructure readiness dependency.</summary>
+[JsonConverter(typeof(SingleValueWrapperJsonConverter))]
+public readonly record struct InfrastructureReadinessDependencyId
+{
+    /// <summary>Creates an infrastructure readiness-dependency identity.</summary>
+    /// <param name="value">Stable definition-local readiness-dependency identity.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="value"/> is empty or white-space.</exception>
+    [JsonConstructor]
+    public InfrastructureReadinessDependencyId(string value) => Value = Guard.RequireNotNullOrWhiteSpace(value);
+
+    /// <summary>Raw infrastructure readiness-dependency identity.</summary>
+    public string Value { get; }
+
+    /// <summary>Returns the raw infrastructure readiness-dependency identity.</summary>
+    /// <returns>The value supplied at construction.</returns>
+    public override string ToString() => Value;
+}
+
 /// <summary>Stable identity of one node-owned infrastructure capability requirement.</summary>
 [JsonConverter(typeof(SingleValueWrapperJsonConverter))]
 public readonly record struct InfrastructureRequirementId

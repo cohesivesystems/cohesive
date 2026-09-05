@@ -42,12 +42,55 @@ dotnet tool install Cohesive.Simulation.Cli \
   --out "$work_directory/world.jsonl" \
   --batch-size 1
 
+"$tool_directory/cohesive-sim" verify \
+  --manifest "$work_directory/world.manifest.json" \
+  --jsonl "$work_directory/world.jsonl" \
+  > "$work_directory/world.verification.json"
+
 dotnet run \
   --project "$project" \
   --configuration Release \
   --no-restore \
   --property:CohesivePackageVersion="$version" \
   --property:CohesivePackageFeed="$feed" \
-  -- verify "$work_directory/world.jsonl" "$work_directory/world.manifest.json"
+  -- verify \
+  "$work_directory/world.jsonl" \
+  "$work_directory/world.manifest.json" \
+  "$work_directory/world.verification.json"
 
-echo "Cohesive.Simulation.Cli $version package installed and provisioned a verified portable world artifact."
+dotnet run \
+  --project "$project" \
+  --configuration Release \
+  --no-restore \
+  --property:CohesivePackageVersion="$version" \
+  --property:CohesivePackageFeed="$feed" \
+  -- emit-relationship "$work_directory/relationship.world.json"
+
+"$tool_directory/cohesive-sim" manifest \
+  --relationship-world "$work_directory/relationship.world.json" \
+  --seed 42 \
+  --out "$work_directory/relationship.manifest.json"
+
+"$tool_directory/cohesive-sim" provision \
+  --manifest "$work_directory/relationship.manifest.json" \
+  --target package-smoke/relationship-cli \
+  --out "$work_directory/relationship.jsonl" \
+  --batch-size 1
+
+"$tool_directory/cohesive-sim" verify \
+  --manifest "$work_directory/relationship.manifest.json" \
+  --jsonl "$work_directory/relationship.jsonl" \
+  > "$work_directory/relationship.verification.json"
+
+dotnet run \
+  --project "$project" \
+  --configuration Release \
+  --no-restore \
+  --property:CohesivePackageVersion="$version" \
+  --property:CohesivePackageFeed="$feed" \
+  -- verify-relationship \
+  "$work_directory/relationship.jsonl" \
+  "$work_directory/relationship.manifest.json" \
+  "$work_directory/relationship.verification.json"
+
+echo "Cohesive.Simulation packages $version installed and verified core and relationship-world artifacts."

@@ -16,7 +16,7 @@ public sealed record InfrastructureDefinitionFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current infrastructure definition fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-infrastructure-definition/v1-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-infrastructure-definition/v2-c14n/v1";
 
     /// <summary>Creates infrastructure-definition fingerprint metadata.</summary>
     /// <param name="algorithm">Hash-algorithm identity.</param>
@@ -103,7 +103,7 @@ public sealed record InfrastructureDefinitionReference
 public sealed record InfrastructureDefinitionDocument
 {
     /// <summary>Current portable infrastructure-definition document schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive-infrastructure/v1";
+    public const string CurrentSchemaVersion = "cohesive-infrastructure/v2";
 
     /// <summary>Creates or restores an exactly fingerprinted infrastructure-definition document.</summary>
     /// <param name="schemaVersion">Exact portable infrastructure schema version.</param>
@@ -193,7 +193,8 @@ static class InfrastructureDefinitionFingerprinting
                 definition.Revision,
                 definition.Workloads,
                 definition.Resources,
-                definition.Bindings),
+                definition.Bindings,
+                definition.ReadinessDependencies),
             StrictDocumentJson.CreateOptions());
         return new(
             InfrastructureDefinitionFingerprint.CurrentAlgorithm,
@@ -207,5 +208,6 @@ static class InfrastructureDefinitionFingerprinting
         InfrastructureRevisionId Revision,
         ImmutableArray<InfrastructureWorkloadDefinition> Workloads,
         ImmutableArray<InfrastructureResourceDefinition> Resources,
-        ImmutableArray<InfrastructureBindingDefinition> Bindings);
+        ImmutableArray<InfrastructureBindingDefinition> Bindings,
+        ImmutableArray<InfrastructureReadinessDependency> ReadinessDependencies);
 }

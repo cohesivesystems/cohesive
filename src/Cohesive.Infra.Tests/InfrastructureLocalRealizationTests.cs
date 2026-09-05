@@ -164,6 +164,58 @@ public sealed class InfrastructureLocalRealizationTests
     }
 
     [Fact]
+    public void Local_only_ready_dependency_is_a_non_blocking_migration_warning()
+    {
+        var topology = InfrastructureLocal.Define(local => local
+            .Service(new("resource/scheduler"), new("physical/scheduler"), "scheduler:1.0", scheduler => scheduler
+                .CommandHealth("scheduler-health")
+                .HealthTiming(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1), retries: 3))
+            .ContainerService(
+                new("workload/api"),
+                new("physical/api"),
+                "api:1.0",
+                api => api.DependsOn(new("physical/scheduler"))));
+
+        var document = InfrastructureLocalRealizationCompiler.Compile(
+            WorkloadRealization(),
+            Environment(InfrastructureLocalDataLifetime.Persistent),
+            topology,
+            [Configuration((ProjectName, "ari-local"))]);
+
+        Assert.True(document.IsValid);
+        var diagnostic = Assert.Single(
+            document.Diagnostics,
+            static diagnostic => diagnostic.Code ==
+                InfrastructureLocalRealizationCompiler.DiagnosticCodes.ReadinessDependencyNotCanonical);
+        Assert.Equal(DiagnosticSeverity.Warning, diagnostic.Severity);
+        Assert.True(document.Topology.Services.Single(service => service.Node == new InfrastructureNodeId("workload/api"))
+            .ReadyDependencies.SequenceEqual([new InfrastructurePhysicalResourceId("physical/scheduler")]));
+    }
+
+    [Fact]
+    public void Canonical_ready_dependency_requires_local_health_evidence()
+    {
+        var topology = InfrastructureLocal.Define(local => local
+            .Service(new("resource/scheduler"), new("physical/scheduler"), "scheduler:1.0")
+            .ContainerService(new("workload/api"), new("physical/api"), "api:1.0"));
+
+        var document = InfrastructureLocalRealizationCompiler.Compile(
+            WorkloadRealization(includeReadiness: true),
+            Environment(InfrastructureLocalDataLifetime.Persistent),
+            topology,
+            [Configuration((ProjectName, "ari-local"))]);
+
+        Assert.False(document.IsValid);
+        var diagnostic = Assert.Single(
+            document.Diagnostics,
+            static diagnostic => diagnostic.Code ==
+                InfrastructureLocalRealizationCompiler.DiagnosticCodes.DependencyHealthMissing);
+        Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
+        Assert.True(document.Topology.Services.Single(service => service.Node == new InfrastructureNodeId("workload/api"))
+            .ReadyDependencies.SequenceEqual([new InfrastructurePhysicalResourceId("physical/scheduler")]));
+    }
+
+    [Fact]
     public void Fluent_health_authoring_requires_both_probes_and_timing()
     {
         Assert.Throws<InvalidOperationException>(() => InfrastructureLocal.Define(local => local
@@ -212,6 +264,7 @@ public sealed class InfrastructureLocalRealizationTests
         Assert.True(directProject.IsValid);
         Assert.Equal(directProject.Fingerprint, fluentProject.Fingerprint);
 
+        var readinessRealization = WorkloadRealization(projectSource.Reference, includeReadiness: true);
         var topology = InfrastructureLocal.Define(local => local
             .Service(new("resource/scheduler"), new("physical/scheduler"), "mcr.microsoft.com/dts/dts-emulator@sha256:abc", scheduler => scheduler
                 .Endpoint(
@@ -236,15 +289,14 @@ public sealed class InfrastructureLocalRealizationTests
                         role: InfrastructureLocalEndpointRole.Data,
                         hostPort: new(Subject, new("api-port")))
                     .HttpHealth(new("https"), "/health")
-                    .HealthTiming(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2), retries: 30)
-                    .DependsOn(new("physical/scheduler"))));
+                    .HealthTiming(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2), retries: 30)));
         var configuration = Configuration(
             (ProjectName, "ari-local"),
             (new("scheduler-port"), "8082"),
             (new("api-port"), "7443"));
 
         var document = InfrastructureLocalRealizationCompiler.Compile(
-            realization,
+            readinessRealization,
             Environment(InfrastructureLocalDataLifetime.Persistent),
             topology,
             [configuration]);
@@ -253,6 +305,8 @@ public sealed class InfrastructureLocalRealizationTests
             JsonOptions);
 
         Assert.True(document.IsValid);
+        Assert.True(document.Topology.Services.Single(service => service.Node == new InfrastructureNodeId("workload/api"))
+            .ReadyDependencies.SequenceEqual([new InfrastructurePhysicalResourceId("physical/scheduler")]));
         var project = Assert.IsType<InfrastructureLocalProjectSource>(document.Topology.Services.Single(service => service.Node == new InfrastructureNodeId("workload/api")).Source);
         Assert.Equal("ari/training-api", project.Id.Value);
         Assert.Equal("src/Ari.Training.Api/Ari.Training.Api.csproj", project.ProjectPath.Value);
@@ -425,14 +479,25 @@ public sealed class InfrastructureLocalRealizationTests
         return InfrastructureRealizationCompiler.Compile(closure, lifecycle);
     }
 
-    static InfrastructureRealization WorkloadRealization(SourceReference? projectReference = null)
+    static InfrastructureRealization WorkloadRealization(
+        SourceReference? projectReference = null,
+        bool includeReadiness = false)
     {
         var placementReference = projectReference ?? new SourceReference("fixture://local-workload-tests/v1");
         var definition = InfrastructureDefinitionDocument.FromDefinition(new(
             id: new("local-workload-tests"),
             revision: new("v1"),
             workloads: [new(new("workload/api"))],
-            resources: [new(new("resource/scheduler"), InfrastructureResourceLifecycle.Ephemeral)]));
+            resources: [new(new("resource/scheduler"), InfrastructureResourceLifecycle.Ephemeral)],
+            readinessDependencies: includeReadiness
+                ?
+                [
+                    new(
+                        InfrastructureReadinessDependency.DeriveId(new("workload/api"), new("resource/scheduler")),
+                        new("workload/api"),
+                        new("resource/scheduler"))
+                ]
+                : []));
         InfrastructureCapabilityVariantId variant = new("local");
         var profile = new InfrastructureCapabilityProfile(
             schemaVersion: InfrastructureCapabilityProfile.CurrentSchemaVersion,

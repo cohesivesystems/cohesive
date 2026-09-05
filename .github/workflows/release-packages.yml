@@ -110,6 +110,24 @@ jobs:
             -o artifacts/nuget \
             /p:PackageVersion="${{ steps.version.outputs.version }}"
 
+      - name: Validate NuGet package APIs
+        run: bash ./eng/api-check.sh
+
+      - name: Test generic API package consumer
+        env:
+          COHESIVE_NUGET_LOCAL_FEED: ${{ github.workspace }}/artifacts/nuget
+        run: bash ./eng/test-api-package-consumer.sh "${{ steps.version.outputs.version }}"
+
+      - name: Test CLI package consumer
+        env:
+          COHESIVE_NUGET_LOCAL_FEED: ${{ github.workspace }}/artifacts/nuget
+        run: bash ./eng/test-cli-package-consumer.sh "${{ steps.version.outputs.version }}"
+
+      - name: Test simulation package family
+        env:
+          COHESIVE_NUGET_LOCAL_FEED: ${{ github.workspace }}/artifacts/nuget
+        run: bash ./eng/test-simulation-tool.sh "${{ steps.version.outputs.version }}"
+
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4
         with:

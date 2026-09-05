@@ -107,10 +107,12 @@ public sealed class InfrastructureDefinitionBuilder
     readonly List<InfrastructureWorkloadBuilder> workloads = [];
     readonly List<InfrastructureResourceBuilder> resources = [];
     readonly List<InfrastructureBindingDraft> bindings = [];
+    readonly List<InfrastructureReadinessDependency> readinessDependencies = [];
     readonly Dictionary<InfrastructureBindingContractId, InfrastructureBindingContractHandle> contracts = [];
     readonly HashSet<InfrastructureBindingContractId> usedContracts = [];
     readonly HashSet<InfrastructureNodeId> nodeIds = [];
     readonly HashSet<InfrastructureBindingId> bindingIds = [];
+    readonly HashSet<(InfrastructureNodeId Subject, InfrastructureNodeId Dependency)> readinessSlots = [];
 
     internal InfrastructureDefinitionBuilder(
         InfrastructureDefinitionId id,
@@ -312,7 +314,8 @@ public sealed class InfrastructureDefinitionBuilder
             revision,
             [.. workloads.Select(static workload => workload.Build())],
             [.. resources.Select(static resource => resource.Build())],
-            [.. bindings.Select(static binding => binding.Definition!)]);
+            [.. bindings.Select(static binding => binding.Definition!)],
+            [.. readinessDependencies]);
     }
 
     internal InfrastructureAuthoringResult BuildResult()
@@ -385,6 +388,21 @@ public sealed class InfrastructureDefinitionBuilder
         return CompleteBinding(draft, target, contract.Id);
     }
 
+    internal void RequireReady(InfrastructureNodeId subject, InfrastructureNodeId dependency)
+    {
+        if (!readinessSlots.Add((subject, dependency)))
+        {
+            throw new ArgumentException(
+                $"Infrastructure node '{subject.Value}' already requires '{dependency.Value}' to be ready.",
+                nameof(dependency));
+        }
+
+        readinessDependencies.Add(new(
+            InfrastructureReadinessDependency.DeriveId(subject, dependency),
+            subject,
+            dependency));
+    }
+
     InfrastructureBindingTargetBuilder BeginBinding(
         InfrastructureBindingId? explicitId,
         InfrastructureNodeId source)
@@ -450,6 +468,42 @@ public sealed class InfrastructureWorkloadBuilder
     {
         requirements.Add(new(id, capability));
         return this;
+    }
+
+    /// <summary>Requires another node to be ready before this workload is ready.</summary>
+    /// <param name="dependency">Canonical dependency node.</param>
+    /// <returns>This workload builder.</returns>
+    /// <exception cref="ArgumentException"><paramref name="dependency"/> is default, self-referential, or duplicated.</exception>
+    public InfrastructureWorkloadBuilder RequiresReady(InfrastructureNodeId dependency)
+    {
+        Owner.RequireReady(Id, dependency);
+        return this;
+    }
+
+    /// <summary>Requires another workload from this definition to be ready first.</summary>
+    /// <param name="dependency">Dependency workload.</param>
+    /// <returns>This workload builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="dependency"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="dependency"/> belongs to another definition or is duplicated.</exception>
+    public InfrastructureWorkloadBuilder RequiresReady(InfrastructureWorkloadBuilder dependency)
+    {
+        ArgumentNullException.ThrowIfNull(dependency);
+        if (!ReferenceEquals(dependency.Owner, Owner))
+            throw new ArgumentException("The readiness dependency workload belongs to another infrastructure definition.", nameof(dependency));
+        return RequiresReady(dependency.Id);
+    }
+
+    /// <summary>Requires a resource from this definition to be ready first.</summary>
+    /// <param name="dependency">Dependency resource.</param>
+    /// <returns>This workload builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="dependency"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="dependency"/> belongs to another definition or is duplicated.</exception>
+    public InfrastructureWorkloadBuilder RequiresReady(InfrastructureResourceBuilder dependency)
+    {
+        ArgumentNullException.ThrowIfNull(dependency);
+        if (!ReferenceEquals(dependency.Owner, Owner))
+            throw new ArgumentException("The readiness dependency resource belongs to another infrastructure definition.", nameof(dependency));
+        return RequiresReady(dependency.Id);
     }
 
     internal InfrastructureWorkloadDefinition Build() => new(Id, requirements.ToImmutable());
@@ -534,6 +588,42 @@ public sealed class InfrastructureResourceBuilder
     {
         requirements.Add(new(id, capability));
         return this;
+    }
+
+    /// <summary>Requires another node to be ready before this resource is ready.</summary>
+    /// <param name="dependency">Canonical dependency node.</param>
+    /// <returns>This resource builder.</returns>
+    /// <exception cref="ArgumentException"><paramref name="dependency"/> is default, self-referential, or duplicated.</exception>
+    public InfrastructureResourceBuilder RequiresReady(InfrastructureNodeId dependency)
+    {
+        Owner.RequireReady(Id, dependency);
+        return this;
+    }
+
+    /// <summary>Requires a workload from this definition to be ready first.</summary>
+    /// <param name="dependency">Dependency workload.</param>
+    /// <returns>This resource builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="dependency"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="dependency"/> belongs to another definition or is duplicated.</exception>
+    public InfrastructureResourceBuilder RequiresReady(InfrastructureWorkloadBuilder dependency)
+    {
+        ArgumentNullException.ThrowIfNull(dependency);
+        if (!ReferenceEquals(dependency.Owner, Owner))
+            throw new ArgumentException("The readiness dependency workload belongs to another infrastructure definition.", nameof(dependency));
+        return RequiresReady(dependency.Id);
+    }
+
+    /// <summary>Requires a resource from this definition to be ready first.</summary>
+    /// <param name="dependency">Dependency resource.</param>
+    /// <returns>This resource builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="dependency"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="dependency"/> belongs to another definition or is duplicated.</exception>
+    public InfrastructureResourceBuilder RequiresReady(InfrastructureResourceBuilder dependency)
+    {
+        ArgumentNullException.ThrowIfNull(dependency);
+        if (!ReferenceEquals(dependency.Owner, Owner))
+            throw new ArgumentException("The readiness dependency resource belongs to another infrastructure definition.", nameof(dependency));
+        return RequiresReady(dependency.Id);
     }
 
     internal InfrastructureResourceDefinition Build()

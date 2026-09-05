@@ -4,6 +4,14 @@
 canonical Cohesive relationships. It lets one generated population carry references to actual entity identities in
 another generated population without making `Cohesive.Simulation` depend on the Relations language.
 
+## Install
+
+The current alpha targets .NET 10:
+
+```bash
+dotnet add package Cohesive.Simulation.Relations --prerelease
+```
+
 The linked `RelationshipCatalogDocument` is the sole authority for the source field, endpoint shapes, target key,
 cardinality, and uniqueness guarantee. A `WorldPopulationRelationshipBinding` declares only which world populations
 occupy those endpoints and how often a target is selected. This avoids a second relationship model in simulation.
@@ -123,3 +131,7 @@ population, generation, and exemplar projections, and supplies the relationship 
 provisioning and JSONL seams. Calling the core-only provisioner with a relationship artifact fails closed. For scripts,
 `cohesive-sim manifest --relationship-world ...` creates the same retained artifact and `cohesive-sim provision`
 dispatches from its pinned interpreter identity.
+
+For the complete repository-seeding and browser-fixture flow, see the
+[executable adoption example](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Examples/Simulation/SimulationAdoptionExamples.cs)
+and the [seeding and Playwright guide](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/seeding-and-playwright.md).

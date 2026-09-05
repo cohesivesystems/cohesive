@@ -177,6 +177,8 @@ public static class InfrastructureLocalRealizationCompiler
         public const string IsolationConfigurationRequired = "infra.local.environment.isolationConfigurationRequired";
         /// <summary>A ready dependency has no health policy to establish readiness.</summary>
         public const string DependencyHealthMissing = "infra.local.readiness.dependencyHealthMissing";
+        /// <summary>A local ready dependency is not declared by the canonical infrastructure definition.</summary>
+        public const string ReadinessDependencyNotCanonical = "infra.local.readiness.notCanonical";
     }
 
     /// <summary>Compiles one exact local realization.</summary>
@@ -198,13 +200,14 @@ public static class InfrastructureLocalRealizationCompiler
         ArgumentNullException.ThrowIfNull(configurationProfiles);
 
         var configuration = InfrastructureConventionResolver.Resolve(configurationProfiles);
+        var projectedTopology = ProjectCanonicalReadiness(realization, topology);
         List<DocumentValidationDiagnostic> diagnostics = [];
-        Validate(realization, environment, topology, configuration, diagnostics);
+        Validate(realization, environment, projectedTopology, configuration, diagnostics);
         return new(
             schemaVersion: InfrastructureLocalRealizationDocument.CurrentSchemaVersion,
             realization: realization.ToReference(),
             environment: environment,
-            topology: topology,
+            topology: projectedTopology,
             configuration: configuration,
             diagnostics: [.. diagnostics]);
     }
@@ -234,6 +237,9 @@ public static class InfrastructureLocalRealizationCompiler
         var fileIds = topology.Files.Select(static file => file.Id).ToHashSet();
         var definition = realization.CapabilityClosure.Definition.Definition;
         var diagnosticSources = DiagnosticSources(realization, environment);
+        var canonicalReadiness = realization.ReadinessObligations
+            .Select(static obligation => (obligation.SubjectPhysicalResource, obligation.RequiredPhysicalResource))
+            .ToHashSet();
         Dictionary<int, string> hostPorts = [];
 
         foreach (var file in topology.Files)
@@ -451,6 +457,24 @@ public static class InfrastructureLocalRealizationCompiler
 
             foreach (var dependency in service.ReadyDependencies)
             {
+                if (!canonicalReadiness.Contains((service.PhysicalResource, dependency)))
+                {
+                    Add(
+                        diagnostics,
+                        DiagnosticCodes.ReadinessDependencyNotCanonical,
+                        $"Local readiness dependency '{service.PhysicalResource.Value}' -> '{dependency.Value}' is not declared by the canonical infrastructure definition.",
+                        $"/topology/services/{service.PhysicalResource.Value}/readyDependencies",
+                        service.Node.Value,
+                        sourceReferences: diagnosticSources,
+                        resolutionOptions:
+                        [
+                            "Declare the semantic dependency with RequiresReady(...) in the canonical infrastructure definition.",
+                            "Remove the local dependency when it is only start ordering rather than semantic readiness."
+                        ],
+                        expected: "an exact readiness obligation in the fenced realization",
+                        observed: $"{service.PhysicalResource.Value} requires {dependency.Value}",
+                        severity: DiagnosticSeverity.Warning);
+                }
                 if (!serviceIds.Contains(dependency))
                     Add(diagnostics, DiagnosticCodes.ReferenceUnknown, $"Ready dependency '{dependency.Value}' is not a service.", $"/topology/services/{service.PhysicalResource.Value}/readyDependencies", dependency.Value);
                 else if (topology.Services.Single(candidate => candidate.PhysicalResource == dependency).Health is null)
@@ -573,6 +597,55 @@ public static class InfrastructureLocalRealizationCompiler
         || name.EndsWith("TOKEN", StringComparison.OrdinalIgnoreCase)
         || name.EndsWith("KEY", StringComparison.OrdinalIgnoreCase);
 
+    static InfrastructureLocalTopology ProjectCanonicalReadiness(
+        InfrastructureRealization realization,
+        InfrastructureLocalTopology topology)
+    {
+        var dependenciesBySubject = realization.ReadinessObligations
+            .GroupBy(static obligation => obligation.SubjectPhysicalResource)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.Select(static obligation => obligation.RequiredPhysicalResource));
+        var services = ImmutableArray.CreateBuilder<InfrastructureLocalService>(topology.Services.Length);
+        foreach (var service in topology.Services)
+        {
+            if (!dependenciesBySubject.TryGetValue(service.PhysicalResource, out var canonical))
+            {
+                services.Add(service);
+                continue;
+            }
+
+            var additions = canonical
+                .Where(dependency => dependency != service.PhysicalResource
+                                     && !service.ReadyDependencies.Contains(dependency))
+                .ToImmutableArray();
+            if (additions.IsEmpty)
+            {
+                services.Add(service);
+                continue;
+            }
+
+            services.Add(new(
+                node: service.Node,
+                physicalResource: service.PhysicalResource,
+                source: service.Source,
+                command: service.Command,
+                environment: service.Environment,
+                endpoints: service.Endpoints,
+                mounts: service.Mounts,
+                fileMounts: service.FileMounts,
+                health: service.Health,
+                readyDependencies: [.. service.ReadyDependencies, .. additions],
+                stopGracePeriod: service.StopGracePeriod));
+        }
+
+        return new(
+            services: services.MoveToImmutable(),
+            volumes: topology.Volumes,
+            files: topology.Files,
+            operations: topology.Operations);
+    }
+
     static void ValidateReadiness(
         InfrastructureLocalTopology topology,
         ICollection<DocumentValidationDiagnostic> diagnostics)
@@ -616,9 +689,10 @@ public static class InfrastructureLocalRealizationCompiler
         ImmutableArray<string> sourceReferences = default,
         ImmutableArray<string> resolutionOptions = default,
         string? expected = null,
-        string? observed = null) => diagnostics.Add(new(
+        string? observed = null,
+        DiagnosticSeverity severity = DiagnosticSeverity.Error) => diagnostics.Add(new(
             Code: code,
-            Severity: DiagnosticSeverity.Error,
+            Severity: severity,
             Message: message,
             Location: location,
             SchemaLocation: subject,

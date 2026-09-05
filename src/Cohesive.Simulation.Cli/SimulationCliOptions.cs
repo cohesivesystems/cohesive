@@ -1,12 +1,9 @@
+using Cohesive.Cli;
 using Cohesive.Configuration;
+using Cohesive.Model.Serialization;
 using Cohesive.Simulation.Provisioning;
 
 namespace Cohesive.Simulation.Cli;
-
-static class SimulationCliPaths
-{
-    public const string StandardStream = "-";
-}
 
 sealed record WorldManifestCliOptions
 {
@@ -23,7 +20,7 @@ sealed record WorldManifestCliOptions
     [ConfigurationParameter(
         "out",
         Description = "World-artifact manifest JSON path, or '-' for standard output.")]
-    public string OutputPath { get; init; } = SimulationCliPaths.StandardStream;
+    public string OutputPath { get; init; } = CommandIo.StandardStreamPath;
 
     [ConfigurationParameter(
         "seed",
@@ -34,16 +31,6 @@ sealed record WorldManifestCliOptions
     public bool IsRelationshipWorld => !string.IsNullOrEmpty(RelationshipWorldPath);
 
     public string InputPath => IsRelationshipWorld ? RelationshipWorldPath : WorldPath;
-
-    public bool ReadsStandardInput => string.Equals(
-        InputPath,
-        SimulationCliPaths.StandardStream,
-        StringComparison.Ordinal);
-
-    public bool WritesStandardOutput => string.Equals(
-        OutputPath,
-        SimulationCliPaths.StandardStream,
-        StringComparison.Ordinal);
 }
 
 sealed record WorldProvisionCliOptions
@@ -57,7 +44,7 @@ sealed record WorldProvisionCliOptions
     [ConfigurationParameter(
         "out",
         Description = "Verified-manifest JSON Lines output path, or '-' for standard output.")]
-    public string OutputPath { get; init; } = SimulationCliPaths.StandardStream;
+    public string OutputPath { get; init; } = CommandIo.StandardStreamPath;
 
     [ConfigurationParameter(
         "target",
@@ -69,14 +56,41 @@ sealed record WorldProvisionCliOptions
         "batch-size",
         Description = "Positive provisioning batch size.")]
     public int BatchSize { get; init; } = WorldProvisioningOptions.DefaultBatchSize;
+}
 
-    public bool ReadsStandardInput => string.Equals(
-        ManifestPath,
-        SimulationCliPaths.StandardStream,
-        StringComparison.Ordinal);
+sealed record WorldVerifyCliOptions
+{
+    [ConfigurationParameter(
+        "manifest",
+        Description = "Verified world-artifact manifest JSON path, or '-' for standard input.",
+        Required = true)]
+    public string ManifestPath { get; init; } = string.Empty;
 
-    public bool WritesStandardOutput => string.Equals(
-        OutputPath,
-        SimulationCliPaths.StandardStream,
-        StringComparison.Ordinal);
+    [ConfigurationParameter(
+        "jsonl",
+        Description = "World JSON Lines path to verify, or '-' for standard input.",
+        Required = true)]
+    public string JsonLinesPath { get; init; } = string.Empty;
+}
+
+sealed record WorldVerifyCliEvidence(
+    string ArtifactId,
+    string ArtifactManifestFingerprint,
+    string WorldId,
+    string WorldRevision,
+    string WorldFingerprint,
+    string Interpreter,
+    string EntropyAlgorithm,
+    string? TargetId,
+    string? RunId,
+    int? BatchSize,
+    long ItemCount);
+
+sealed record WorldVerifyCliReport(
+    string SchemaVersion,
+    bool IsValid,
+    WorldVerifyCliEvidence? Verification,
+    IReadOnlyList<DocumentValidationDiagnostic> Diagnostics)
+{
+    public const string CurrentSchemaVersion = "cohesive-simulation-cli-verification/v1";
 }
