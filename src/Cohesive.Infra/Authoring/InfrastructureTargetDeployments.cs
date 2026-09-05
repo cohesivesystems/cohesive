@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using Cohesive.Infra.Realization;
 using Cohesive.Model;
 
@@ -38,6 +39,7 @@ public sealed class InfrastructureTargetDeploymentManifestBuilder
     readonly InfrastructureTargetFacilityManifest targetFacilities;
     readonly List<InfrastructureTargetWorkloadDeployment> workloads = [];
     readonly List<InfrastructureTargetResourceDeployment> resources = [];
+    readonly List<InfrastructureSourceProvenance> sourceMap = [];
 
     internal InfrastructureTargetDeploymentManifestBuilder(
         InfrastructureTargetDeploymentManifestId id,
@@ -54,15 +56,22 @@ public sealed class InfrastructureTargetDeploymentManifestBuilder
     /// <param name="facility">Target facility materializing the workload.</param>
     /// <param name="physicalResource">Exact target-native deployment identity.</param>
     /// <param name="sourceReferences">Attributable adapter, artifact, configuration, or import sources.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for non-semantic attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for non-semantic attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for non-semantic attribution.</param>
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentException">An identity or source-reference collection is invalid or missing.</exception>
     public InfrastructureTargetDeploymentManifestBuilder Workload(
         InfrastructureNodeId workload,
         InfrastructureTargetFacilityId facility,
         InfrastructurePhysicalResourceId physicalResource,
-        ImmutableArray<SourceReference> sourceReferences)
+        ImmutableArray<SourceReference> sourceReferences,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
     {
         workloads.Add(new(workload, facility, physicalResource, sourceReferences));
+        sourceMap.Add(Capture(InfrastructureSourceReferences.Node(workload), sourceFile, sourceLine, sourceMember));
         return this;
     }
 
@@ -72,6 +81,9 @@ public sealed class InfrastructureTargetDeploymentManifestBuilder
     /// <param name="physicalResource">Exact target-native resource identity.</param>
     /// <param name="authority">Backend state scope or external authority that owns the resource lifecycle.</param>
     /// <param name="sourceReferences">Attributable adapter, artifact, configuration, or import sources.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for non-semantic attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for non-semantic attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for non-semantic attribution.</param>
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentException">An identity or source-reference collection is invalid or missing.</exception>
     public InfrastructureTargetDeploymentManifestBuilder Resource(
@@ -79,9 +91,13 @@ public sealed class InfrastructureTargetDeploymentManifestBuilder
         InfrastructureTargetFacilityId facility,
         InfrastructurePhysicalResourceId physicalResource,
         InfrastructureLifecycleAuthorityId authority,
-        ImmutableArray<SourceReference> sourceReferences)
+        ImmutableArray<SourceReference> sourceReferences,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
     {
         resources.Add(new(resource, facility, physicalResource, authority, sourceReferences));
+        sourceMap.Add(Capture(InfrastructureSourceReferences.Node(resource), sourceFile, sourceLine, sourceMember));
         return this;
     }
 
@@ -91,5 +107,17 @@ public sealed class InfrastructureTargetDeploymentManifestBuilder
         definition.ToReference(),
         targetFacilities,
         [.. workloads],
-        [.. resources]);
+        [.. resources],
+        sourceMap: new([.. sourceMap]));
+
+    InfrastructureSourceProvenance Capture(
+        SourceReference subject,
+        string sourceFile,
+        int sourceLine,
+        string sourceMember) => InfrastructureAuthoringSource.Capture(
+            subject,
+            InfrastructureSourceReferences.TargetDeploymentManifest(id),
+            sourceFile,
+            sourceLine,
+            sourceMember);
 }

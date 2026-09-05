@@ -527,10 +527,7 @@ public static class InfrastructureTargetCompiler
                 Evidence: new(
                     stage: Stage,
                     subject: node.Value,
-                    sourceReferences:
-                    [
-                        SourceReference.Create("infrastructure-target-facilities", manifest.Fingerprint.Value).Value
-                    ],
+                    sourceReferences: FacilitySources(manifest, nodeKind, candidates),
                     resolutionOptions:
                     [
                         "Select one of the compatible facilities reported by target planning.",
@@ -560,10 +557,7 @@ public static class InfrastructureTargetCompiler
             Evidence: new(
                 stage: Stage,
                 subject: node.Value,
-                sourceReferences:
-                [
-                    SourceReference.Create("infrastructure-target-facilities", manifest.Fingerprint.Value).Value
-                ],
+                sourceReferences: FacilitySources(manifest, nodeKind, candidates),
                 resolutionOptions: ambiguous
                     ? [
                         "Supply an explicit attributable facility selection through compiler policy.",
@@ -579,6 +573,28 @@ public static class InfrastructureTargetCompiler
                 observed: candidates.IsDefaultOrEmpty
                     ? "no matching target facility"
                     : string.Join(",", candidates.Select(static candidate => candidate.Id.Value)))));
+    }
+
+    static ImmutableArray<string> FacilitySources(
+        InfrastructureTargetFacilityManifest manifest,
+        InfrastructureNodeKind nodeKind,
+        ImmutableArray<InfrastructureTargetFacility> candidates)
+    {
+        var relevant = candidates.IsDefaultOrEmpty
+            ? manifest.Facilities.Where(facility => facility.NodeKind == nodeKind)
+            : candidates;
+        var authoringSources = relevant.SelectMany(facility =>
+            manifest.SourceMap.Resolve(InfrastructureSourceReferences.Facility(facility.Id))
+                .Concat(facility.Evidence.SelectMany(evidence =>
+                    manifest.SourceMap.Resolve(InfrastructureSourceReferences.CapabilityEvidence(evidence)))));
+        return
+        [
+            .. authoringSources
+                .Append(InfrastructureSourceReferences.TargetFacilityManifest(manifest.ToReference()))
+                .Select(static source => source.Value)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+        ];
     }
 
     static HashSet<InfrastructureCapabilityId> ResolvedCapabilities(
