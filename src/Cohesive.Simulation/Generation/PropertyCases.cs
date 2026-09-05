@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Text;
 using System.Text.Json.Serialization;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -1166,60 +1165,13 @@ static class PropertyCaseReplayTokenCodec
 {
     const string Prefix = "csimpc1.";
 
-    public static string Encode(PropertyCaseReplayEvidence evidence)
-    {
-        ArgumentNullException.ThrowIfNull(evidence);
-        var payload = StrictDocumentJson.GetCanonicalBytes(
-            evidence,
-            StrictDocumentJson.CreateOptions());
-        return Prefix + Convert.ToBase64String(payload)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-    }
+    public static string Encode(PropertyCaseReplayEvidence evidence) =>
+        CanonicalReplayTokenCodec.Encode(evidence, Prefix);
 
-    public static PropertyCaseReplayEvidence Decode(string token)
-    {
-        ArgumentNullException.ThrowIfNull(token);
-        if (!token.StartsWith(Prefix, StringComparison.Ordinal) || token.Length == Prefix.Length)
-        {
-            throw new FormatException($"A property-case replay token must use the '{Prefix}' format.");
-        }
-
-        var encoded = token[Prefix.Length..];
-        byte[] payload;
-        try
-        {
-            var paddingLength = (4 - encoded.Length % 4) % 4;
-            var padded = encoded
-                .Replace('-', '+')
-                .Replace('_', '/')
-                .PadRight(encoded.Length + paddingLength, '=');
-            payload = Convert.FromBase64String(padded);
-        }
-        catch (FormatException exception)
-        {
-            throw new FormatException("Property-case replay token payload is not URL-safe Base64.", exception);
-        }
-
-        var json = Encoding.UTF8.GetString(payload);
-        if (!StrictDocumentJson.TryReadCanonicalObject(
-                json,
-                StrictDocumentJson.CreateOptions(),
-                "property-case replay evidence",
-                out PropertyCaseReplayEvidence? evidence,
-                out var error)
-            || evidence is null)
-        {
-            throw new FormatException(
-                $"Property-case replay token payload is invalid at '{error.Location}': {error.Message}");
-        }
-
-        if (!string.Equals(token, Encode(evidence), StringComparison.Ordinal))
-        {
-            throw new FormatException("Property-case replay token is not in canonical current-version form.");
-        }
-
-        return evidence;
-    }
+    public static PropertyCaseReplayEvidence Decode(string token) =>
+        CanonicalReplayTokenCodec.Decode<PropertyCaseReplayEvidence>(
+            token,
+            Prefix,
+            tokenName: "property-case replay token",
+            evidenceContractName: "property-case replay evidence");
 }

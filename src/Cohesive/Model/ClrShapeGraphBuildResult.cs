@@ -91,6 +91,26 @@ public sealed class ClrShapeGraphBuildResult
     public TypeRef GetTypeRef(Type clrType) => ClrShapeGraphBuilder.ResolveTypeRef(clrType, TypeIds);
 
     /// <summary>
+    /// Gets the exact graph-scoped root shape inferred for a CLR type.
+    /// </summary>
+    /// <typeparam name="T">CLR root type registered when this result was built.</typeparam>
+    /// <returns>The graph object and effective shape identity associated with <typeparamref name="T"/>.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// <typeparamref name="T"/> was not registered as a root shape in this build.
+    /// </exception>
+    public GraphShapeId GetShape<T>()
+    {
+        var clrType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        if (!ShapeIds.TryGetValue(clrType, out var shapeId))
+        {
+            throw new InvalidOperationException(
+                $"CLR type '{clrType.FullName}' was not registered as a root shape in graph '{Graph.Id.Value}'.");
+        }
+
+        return new(Graph, shapeId);
+    }
+
+    /// <summary>
     /// Resolves an ordered CLR property chain to the effective semantic field path selected by this build.
     /// </summary>
     /// <param name="rootType">CLR type from which the member chain starts.</param>

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -16,6 +17,7 @@ public sealed class ClrShapeGraphBuilder
     readonly List<RootShapeRegistration> roots = [];
     readonly List<IClrShapeMetadataProvider> metadataProviders = [ClrShapeAttributeMetadataProvider.Instance];
     readonly Dictionary<TypeId, TypeDefinition> contributedNamedTypes = [];
+    readonly List<ClrEntityReferenceRegistration> entityReferences = [];
 
     /// <summary>
     /// Adds a CLR metadata provider used while deriving shapes, named types, and fields.
@@ -95,6 +97,87 @@ public sealed class ClrShapeGraphBuilder
     }
 
     /// <summary>
+    /// Declares that one CLR property carries observation identities for a target CLR entity type.
+    /// </summary>
+    /// <typeparam name="TSource">CLR root type containing the reference property.</typeparam>
+    /// <typeparam name="TTarget">CLR root type represented by the referenced entity identities.</typeparam>
+    /// <param name="sourceReference">Direct readable source property containing target observation identities.</param>
+    /// <param name="presence">
+    /// Optional semantic presence override. When omitted, CLR nullability conventions determine presence.
+    /// </param>
+    /// <param name="nullability">
+    /// Optional semantic nullability override. When omitted, CLR nullability conventions determine nullability.
+    /// </param>
+    /// <returns>This builder for continued configuration.</returns>
+    /// <remarks>
+    /// The declaration projects the source field as a single entity reference with
+    /// <see cref="FieldRole.Reference"/> and marks the target shape as an entity with the CLR-derived
+    /// <see cref="EntityTypeName"/>. Both CLR types must also be registered as root shapes before the graph is built.
+    /// The selector executes only during authoring and does not survive into the portable shape graph.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="sourceReference"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="sourceReference"/> is not one direct readable property rooted at its parameter.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="presence"/> or <paramref name="nullability"/> contains an unsupported value.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The selected property is already registered with different entity-reference semantics.
+    /// </exception>
+    public ClrShapeGraphBuilder AddEntityReference<TSource, TTarget>(
+        Expression<Func<TSource, object?>> sourceReference,
+        FieldPresence? presence = null,
+        FieldNullability? nullability = null)
+        where TSource : notnull
+        where TTarget : notnull
+    {
+        ArgumentNullException.ThrowIfNull(sourceReference);
+        if (presence is { } selectedPresence && !Enum.IsDefined(selectedPresence))
+        {
+            throw new ArgumentOutOfRangeException(nameof(presence), presence, "Unknown field presence.");
+        }
+        if (nullability is { } selectedNullability && !Enum.IsDefined(selectedNullability))
+        {
+            throw new ArgumentOutOfRangeException(nameof(nullability), nullability, "Unknown field nullability.");
+        }
+
+        var property = ResolveDirectProperty(sourceReference);
+        var registration = new ClrEntityReferenceRegistration(
+            SourceType: typeof(TSource),
+            SourceProperty: property,
+            TargetType: typeof(TTarget),
+            TargetEntityType: EntityTypeName.From<TTarget>(),
+            Presence: presence,
+            Nullability: nullability);
+
+        for (var index = 0; index < entityReferences.Count; index++)
+        {
+            var existing = entityReferences[index];
+            if (!ShapeTypeInspector.IsSameProperty(existing.SourceProperty, property))
+            {
+                continue;
+            }
+
+            if (existing.SourceType == registration.SourceType
+                && existing.TargetType == registration.TargetType
+                && existing.TargetEntityType == registration.TargetEntityType
+                && existing.Presence == registration.Presence
+                && existing.Nullability == registration.Nullability)
+            {
+                return this;
+            }
+
+            throw new InvalidOperationException(
+                $"CLR property '{property.DeclaringType?.FullName}.{property.Name}' is already registered "
+                + "with different entity-reference semantics.");
+        }
+
+        entityReferences.Add(registration);
+        return this;
+    }
+
+    /// <summary>
     /// Builds an immutable shape graph for the registered CLR roots.
     /// </summary>
     /// <param name="graphId">
@@ -123,6 +206,7 @@ public sealed class ClrShapeGraphBuilder
     public ClrShapeGraphBuildResult BuildResult(GraphId? graphId = null)
     {
         contributedNamedTypes.Clear();
+        ValidateEntityReferenceRoots();
         var selectedGraphId = graphId ?? GraphId.New();
         Dictionary<Type, ShapeId> shapeIds = [];
         Dictionary<PropertyInfo, FieldName> fieldNames = [];
@@ -560,8 +644,11 @@ public sealed class ClrShapeGraphBuilder
             name: fieldName,
             type: fieldMetadata.TypeRef ?? MapTypeRef(effectiveType, identities),
             cardinality: cardinality,
-            presence: propertyMetadata.IsOptional ? FieldPresence.Optional : FieldPresence.Required,
-            nullability: propertyMetadata.IsOptional ? FieldNullability.Nullable : FieldNullability.NonNullable,
+            presence: fieldMetadata.Presence
+                      ?? (propertyMetadata.IsOptional ? FieldPresence.Optional : FieldPresence.Required),
+            nullability: fieldMetadata.Nullability
+                         ?? (propertyMetadata.IsOptional ? FieldNullability.Nullable : FieldNullability.NonNullable),
+            role: fieldMetadata.FieldRole ?? FieldRole.Data,
             constraints: fieldMetadata.Constraints,
             annotations: fieldMetadata.Annotations
             );
@@ -597,8 +684,11 @@ public sealed class ClrShapeGraphBuilder
             name: fieldName,
             type: fieldMetadata.TypeRef ?? MapTypeRef(effectiveType, identities),
             cardinality: cardinality,
-            presence: propertyMetadata.IsOptional ? FieldPresence.Optional : FieldPresence.Required,
-            nullability: propertyMetadata.IsOptional ? FieldNullability.Nullable : FieldNullability.NonNullable,
+            presence: fieldMetadata.Presence
+                      ?? (propertyMetadata.IsOptional ? FieldPresence.Optional : FieldPresence.Required),
+            nullability: fieldMetadata.Nullability
+                         ?? (propertyMetadata.IsOptional ? FieldNullability.Nullable : FieldNullability.NonNullable),
+            role: fieldMetadata.FieldRole ?? FieldRole.Data,
             constraints: fieldMetadata.Constraints,
             annotations: fieldMetadata.Annotations
             );
@@ -727,8 +817,93 @@ public sealed class ClrShapeGraphBuilder
     {
         var metadata = ClrShapeMetadata.Empty;
         for (var i = 0; i < metadataProviders.Count; i++)
+        {
             metadata = metadata.Merge(metadataProviders[i].GetMetadata(context));
+        }
+
+        for (var index = 0; index < entityReferences.Count; index++)
+        {
+            var reference = entityReferences[index];
+            if (context.Target == ClrShapeMetadataTarget.Shape
+                && context.ClrType == reference.TargetType)
+            {
+                metadata = metadata.Merge(new()
+                {
+                    ShapeRole = ShapeRoles.Entity,
+                    Annotations = AnnotationMap.Create(
+                        ShapeAnnotationKeys.EntityType,
+                        reference.TargetEntityType.Value)
+                });
+            }
+            else if (context.Target == ClrShapeMetadataTarget.Field
+                     && context.Property is { } property
+                     && ShapeTypeInspector.IsSameProperty(property, reference.SourceProperty))
+            {
+                metadata = metadata.Merge(new()
+                {
+                    TypeRef = new EntityReferenceTypeRef(reference.TargetEntityType),
+                    Presence = reference.Presence,
+                    Nullability = reference.Nullability,
+                    FieldRole = FieldRole.Reference
+                });
+            }
+        }
+
         return metadata;
+    }
+
+    void ValidateEntityReferenceRoots()
+    {
+        if (entityReferences.Count == 0)
+        {
+            return;
+        }
+
+        HashSet<Type> rootTypes = [.. roots.Select(static root => root.ClrType)];
+        for (var index = 0; index < entityReferences.Count; index++)
+        {
+            var reference = entityReferences[index];
+            if (!rootTypes.Contains(reference.SourceType))
+            {
+                throw new InvalidOperationException(
+                    $"Entity-reference source CLR type '{reference.SourceType.FullName}' must be registered as a root shape.");
+            }
+
+            if (!rootTypes.Contains(reference.TargetType))
+            {
+                throw new InvalidOperationException(
+                    $"Entity-reference target CLR type '{reference.TargetType.FullName}' must be registered as a root shape.");
+            }
+        }
+    }
+
+    static PropertyInfo ResolveDirectProperty<TSource>(Expression<Func<TSource, object?>> selector)
+    {
+        Expression body = selector.Body;
+        while (body is UnaryExpression
+            {
+                NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked
+            } conversion)
+        {
+            body = conversion.Operand;
+        }
+
+        if (body is not MemberExpression
+            {
+                Member: PropertyInfo property,
+                Expression: ParameterExpression parameter
+            }
+            || !ReferenceEquals(parameter, selector.Parameters[0])
+            || property.GetMethod is null
+            || property.GetMethod.IsStatic
+            || property.GetIndexParameters().Length != 0)
+        {
+            throw new ArgumentException(
+                "An entity-reference selector must be one direct readable instance property access.",
+                nameof(selector));
+        }
+
+        return property;
     }
 
     static string GetSimpleTypeName(Type clrType)
@@ -1034,4 +1209,12 @@ public sealed class ClrShapeGraphBuilder
     readonly record struct JsonPolymorphicCase(Type ClrType, object? Discriminator);
 
     readonly record struct ClrTypeIdentity(TypeId TypeId, ShapeId ShapeId);
+
+    readonly record struct ClrEntityReferenceRegistration(
+        Type SourceType,
+        PropertyInfo SourceProperty,
+        Type TargetType,
+        EntityTypeName TargetEntityType,
+        FieldPresence? Presence,
+        FieldNullability? Nullability);
 }

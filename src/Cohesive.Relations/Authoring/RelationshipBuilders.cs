@@ -32,10 +32,14 @@ public sealed class RelationshipFromBuilder
 public sealed class RelationshipFromBuilder<TSource> where TSource : notnull
 {
     readonly QualifiedShapeId sourceShape;
+    readonly ClrShapeGraphBuildResult? clrShapes;
 
-    internal RelationshipFromBuilder(QualifiedShapeId sourceShape)
+    internal RelationshipFromBuilder(
+        QualifiedShapeId sourceShape,
+        ClrShapeGraphBuildResult? clrShapes = null)
     {
         this.sourceShape = RelationshipAuthoringGuards.RequireQualifiedShape(sourceShape, nameof(sourceShape));
+        this.clrShapes = clrShapes;
     }
 
     /// <summary>
@@ -52,6 +56,11 @@ public sealed class RelationshipFromBuilder<TSource> where TSource : notnull
         Expression<Func<TSource, TReference>> sourceReference)
     {
         ArgumentNullException.ThrowIfNull(sourceReference);
+        if (clrShapes is not null)
+        {
+            return new(sourceShape, FieldPath.Capture(sourceReference, clrShapes.ResolveMemberPath));
+        }
+
         var boxedSelector = Expression.Lambda<Func<TSource, object?>>(
             Expression.Convert(sourceReference.Body, typeof(object)),
             sourceReference.Parameters);

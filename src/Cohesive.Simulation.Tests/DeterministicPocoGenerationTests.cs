@@ -131,6 +131,46 @@ public sealed class DeterministicPocoGenerationTests
     }
 
     [Fact]
+    public void ClrShapeGraphAuthoring_UsesTheExactSharedGraphForGenerationAndMaterialization()
+    {
+        var shapes = new ClrShapeGraphBuilder()
+            .AddMetadataProvider(SharedGraphMetadataProvider.Instance)
+            .AddShape<SharedGraphCustomer>()
+            .BuildResult(new("simulation:test:shared-clr-graph"));
+        var definition = Simulation.Define<SharedGraphCustomer>(shapes, customer => customer
+            .Member(value => value.Name, Gen.Constant("Ada"))
+            .Member(value => value.Age, Gen.Int32(minimum: 18, maximum: 90)));
+
+        var generated = definition.Compile().Generate(seed: 42);
+
+        Assert.Same(shapes.Graph, definition.Definition.ShapeGraph);
+        Assert.Equal(shapes.GetShape<SharedGraphCustomer>().ShapeId, definition.Definition.Root.ShapeId);
+        Assert.Equal("Ada", generated.Value.Name);
+        Assert.InRange(generated.Value.Age, 18, 90);
+        Assert.Equal("Ada", generated.Observation.GetField("display_name").GetString());
+    }
+
+    [Fact]
+    public void ClrShapeGraphAuthoring_RetainsMembersOwnedByAnOuterComposition()
+    {
+        var shapes = new ClrShapeGraphBuilder()
+            .AddShape<SharedGraphLoad>()
+            .BuildResult(new("simulation:test:partial-clr-graph"));
+        var definition = Simulation.Define<SharedGraphLoad>(shapes, load => load
+            .Member(value => value.Number, Gen.Int32(minimum: 1, maximum: 1_000)));
+
+        var result = definition.CompileResult();
+
+        Assert.Same(shapes.Graph, definition.Definition.ShapeGraph);
+        Assert.Equal([nameof(SharedGraphLoad.Number)], definition.Definition.Root.Members.Select(x => x.Identity.Value));
+        Assert.True(shapes.GetShape<SharedGraphLoad>().Graph
+            .GetShape(shapes.GetShape<SharedGraphLoad>().ShapeId)
+            .TryGetField(nameof(SharedGraphLoad.CarrierId), out _));
+        Assert.Contains(result.Validation.Diagnostics, static diagnostic =>
+            diagnostic.Code == "simulation.generation.shapeFieldBindingMissing");
+    }
+
+    [Fact]
     public void ExplicitCoreMaterializer_RemainsALocalClrInterpretation()
     {
         var definition = Simulation.Define<MutableCustomer>(customer => customer
@@ -276,6 +316,22 @@ public sealed class DeterministicPocoGenerationTests
     }
 
     public sealed record Customer(string Name, int Age, bool IsActive);
+
+    sealed record SharedGraphCustomer(string Name, int Age);
+
+    sealed record SharedGraphLoad(int Number, string CarrierId);
+
+    sealed class SharedGraphMetadataProvider : IClrShapeMetadataProvider
+    {
+        public static SharedGraphMetadataProvider Instance { get; } = new();
+
+        public ClrShapeMetadata GetMetadata(ClrShapeMetadataContext context) =>
+            context.Target == ClrShapeMetadataTarget.Field
+            && context.DeclaringType == typeof(SharedGraphCustomer)
+            && context.Property?.Name == nameof(SharedGraphCustomer.Name)
+                ? new() { FieldName = new("display_name") }
+                : ClrShapeMetadata.Empty;
+    }
 
     public sealed class MutableCustomer
     {

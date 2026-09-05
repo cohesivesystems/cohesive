@@ -38,6 +38,21 @@ public sealed record ClrShapeMetadata
     public TypeRef? TypeRef { get; init; }
 
     /// <summary>
+    /// Optional field-presence override.
+    /// </summary>
+    public FieldPresence? Presence { get; init; }
+
+    /// <summary>
+    /// Optional field-nullability override.
+    /// </summary>
+    public FieldNullability? Nullability { get; init; }
+
+    /// <summary>
+    /// Optional semantic field-role override.
+    /// </summary>
+    public FieldRole? FieldRole { get; init; }
+
+    /// <summary>
     /// Additional named types contributed while deriving the current shape, type, or field.
     /// </summary>
     public ImmutableArray<TypeDefinition> NamedTypes { get; init; } = [];
@@ -67,6 +82,9 @@ public sealed record ClrShapeMetadata
             TypeId = later.TypeId ?? TypeId,
             FieldName = later.FieldName ?? FieldName,
             TypeRef = later.TypeRef ?? TypeRef,
+            Presence = later.Presence ?? Presence,
+            Nullability = later.Nullability ?? Nullability,
+            FieldRole = later.FieldRole ?? FieldRole,
             NamedTypes = [.. Normalize(NamedTypes), .. Normalize(later.NamedTypes)],
             Constraints = [.. Normalize(Constraints), .. Normalize(later.Constraints)],
             Annotations = AnnotationMap.Merge(
