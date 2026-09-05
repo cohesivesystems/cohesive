@@ -55,6 +55,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Adapters.OpenApi` | OpenAPI document emission from Cohesive API declarations. |
 | `Cohesive.Adapters.Parquet` | Parquet row and column writing helpers. |
 | `Cohesive.Adapters.Postgres` | PostgreSQL relation/query and materialization integrations plus a durable Process distribution ledger. |
+| [`Cohesive.Adapters.SQLite`](src/adapters/Cohesive.Adapters.SQLite/README.md) | Shared SQLite connections and transactions, exact scalar encodings, and module migrations for local repositories. |
 | `Cohesive.Adapters.TypeScript` | TypeScript emitters for shapes, API clients, constants, and test mocks. |
 
 ## Frontend Packages
