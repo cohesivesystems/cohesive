@@ -13,7 +13,6 @@ namespace Cohesive.Adapters.Aspire;
 public static class AspireLocalCompiler
 {
     const string Stage = "aspire-local-compilation";
-    static readonly SourceReference TargetReference = new("aspire://13.5.2");
 
     /// <summary>Stable adapter diagnostic codes.</summary>
     public static class DiagnosticCodes
@@ -155,7 +154,7 @@ public static class AspireLocalCompiler
             return new(projection: null, diagnostics: [.. diagnostics]);
 
         var endpoints = EndpointMappings(source, effective, serviceNames);
-        var sourceReference = SourceReference.Create("local-realization", source.Fingerprint.Value);
+        var sourceReference = AspireSourceReferences.LocalRealization(source.Fingerprint);
         List<InfrastructureLocalTargetDecision> decisions =
         [
             Decision(
@@ -163,7 +162,7 @@ public static class AspireLocalCompiler
                 kind: CapabilityRealizationKind.Native,
                 rationale: "Aspire/DCP owns the dashboard, health display, resource logs, and OpenTelemetry collection.",
                 boundaries: [],
-                sourceReferences: [sourceReference, TargetReference]),
+                sourceReferences: [sourceReference, AspireSourceReferences.Target]),
             Decision(
                 concern: "local/orchestration-control-plane",
                 kind: CapabilityRealizationKind.Native,
@@ -171,37 +170,37 @@ public static class AspireLocalCompiler
                     ? "DCP generates an ephemeral self-signed TLS identity so AppHost orchestration does not export host private-key material."
                     : "DCP reuses the host ASP.NET Core developer certificate for its local TLS identity.",
                 boundaries: [],
-                sourceReferences: [sourceReference, TargetReference]),
+                sourceReferences: [sourceReference, AspireSourceReferences.Target]),
             Decision(
                 concern: "local/endpoints-and-discovery",
                 kind: CapabilityRealizationKind.Native,
                 rationale: "Canonical endpoints become proxyless Aspire endpoints and derived values use those same endpoint references.",
                 boundaries: [],
-                sourceReferences: [sourceReference, TargetReference]),
+                sourceReferences: [sourceReference, AspireSourceReferences.Target]),
             Decision(
                 concern: "local/health/http",
                 kind: CapabilityRealizationKind.Native,
                 rationale: "Canonical HTTP probes become Aspire endpoint health checks with exact paths and expected status codes.",
                 boundaries: [],
-                sourceReferences: [sourceReference, TargetReference]),
+                sourceReferences: [sourceReference, AspireSourceReferences.Target]),
             Decision(
                 concern: "local/health/timing",
                 kind: CapabilityRealizationKind.Constrained,
                 rationale: "Aspire owns health-check scheduling while the exact canonical timing policy remains inspectable in every service projection.",
                 boundaries: ["Aspire 13.5.2 stable HTTP health APIs do not expose per-resource interval, timeout, retry, or start-period policy."],
-                sourceReferences: [sourceReference, TargetReference]),
+                sourceReferences: [sourceReference, AspireSourceReferences.Target]),
             Decision(
                 concern: "local/operations/host",
                 kind: CapabilityRealizationKind.Constrained,
                 rationale: "Read-only and application-mutation host operations become Aspire process commands visible to UI and API clients.",
                 boundaries: ["Environment mutations are lifecycle-controlled and are retained but not executed as nested harness processes."],
-                sourceReferences: [sourceReference, TargetReference]),
+                sourceReferences: [sourceReference, AspireSourceReferences.Target]),
             Decision(
                 concern: "local/readiness",
                 kind: CapabilityRealizationKind.Native,
                 rationale: "Canonical ready dependencies become Aspire WaitFor relationships.",
                 boundaries: [],
-                sourceReferences: [sourceReference, TargetReference]),
+                sourceReferences: [sourceReference, AspireSourceReferences.Target]),
             Decision(
                 concern: "local/volume-lifetime",
                 kind: CapabilityRealizationKind.Composed,
@@ -209,7 +208,7 @@ public static class AspireLocalCompiler
                     ? "Persistent local data uses deterministic named container volumes retained across ordinary AppHost stops."
                     : "Isolated ephemeral local data uses anonymous container volumes removed with the exact AppHost environment.",
                 boundaries: [],
-                sourceReferences: [sourceReference, TargetReference])
+                sourceReferences: [sourceReference, AspireSourceReferences.Target])
         ];
         if (source.Topology.Services.Any(static service => service.Source is InfrastructureLocalProjectSource))
         {
@@ -218,14 +217,14 @@ public static class AspireLocalCompiler
                 kind: CapabilityRealizationKind.Native,
                 rationale: "Repository-relative .NET project sources become Aspire project resources, resolve from the explicit runtime repository directory, and retain exact Infra workload and physical-placement identity.",
                 boundaries: [],
-                sourceReferences: [sourceReference, TargetReference]));
+                sourceReferences: [sourceReference, AspireSourceReferences.Target]));
         }
         decisions.AddRange(acceptedOverrides.Select(item => Decision(
             concern: $"local/health/command/{item.PhysicalResource.Value}/{item.Executable}",
             kind: CapabilityRealizationKind.Override,
             rationale: item.Rationale,
             boundaries: ["TCP connectivity proves listener readiness, not command-level database acceptance semantics."],
-            sourceReferences: [sourceReference, TargetReference, .. item.SourceReferences])));
+            sourceReferences: [sourceReference, AspireSourceReferences.Target, .. item.SourceReferences])));
 
         var projection = new AspireLocalProjectionDocument(
             schemaVersion: AspireLocalProjectionDocument.CurrentSchemaVersion,
@@ -589,7 +588,7 @@ public static class AspireLocalCompiler
             Evidence: new(
                 stage: Stage,
                 subject: subject,
-                sourceReferences: [AspireLocalProjectionDocument.CurrentCompiler, TargetReference.Value],
+                sourceReferences: [AspireLocalProjectionDocument.CurrentCompiler, AspireSourceReferences.Target.Value],
                 resolutionOptions: [resolution])));
 
     static bool HasErrors(IEnumerable<DocumentValidationDiagnostic> diagnostics) =>

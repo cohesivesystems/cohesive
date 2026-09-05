@@ -383,8 +383,11 @@ public sealed record AspireLocalProjectionFingerprint
 /// <summary>Canonical, inspectable projection of one exact local Infra realization into Aspire.</summary>
 public sealed record AspireLocalProjectionDocument
 {
+    /// <summary>Exact Aspire runtime version targeted by this projection and observation adapter.</summary>
+    public const string CurrentAspireVersion = "13.5.2";
+
     /// <summary>Current Aspire lifecycle-interpreter identity.</summary>
-    public const string CurrentTarget = "aspire/dcp-13.5.2";
+    public const string CurrentTarget = "aspire/dcp-" + CurrentAspireVersion;
 
     /// <summary>Current portable projection schema.</summary>
     public const string CurrentSchemaVersion = "cohesive-aspire-local-projection/v4";
