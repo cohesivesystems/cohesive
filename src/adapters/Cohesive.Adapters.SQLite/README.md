@@ -1,6 +1,6 @@
 # Cohesive.Adapters.SQLite
 
-Shared SQLite infrastructure for entity repositories and specialized repositories such as Ito's market-data store. The adapter supplies connections, command binding, exact scalar encodings, module migrations, [entity repositories with optimistic concurrency and atomic batches](ENTITY_REPOSITORIES.md), and [atomic outbox commits and Transition receipts](OUTBOX.md). Relation compilation remains a subsequent increment.
+Shared SQLite infrastructure for entity repositories and specialized repositories such as Ito's market-data store. The adapter supplies connections, command binding, exact scalar encodings, module migrations, [entity repositories with optimistic concurrency and atomic batches](ENTITY_REPOSITORIES.md), [atomic outbox commits and Transition receipts](OUTBOX.md), and [bounded native Relations row-query compilation](RELATIONS.md).
 
 The adapter uses `Microsoft.Data.Sqlite`. Core `ValueContract`, `ObservationValue`, and storage realization contracts remain the semantic authorities. SQLite-specific policy and native connection/transaction types stay in this adapter.
 

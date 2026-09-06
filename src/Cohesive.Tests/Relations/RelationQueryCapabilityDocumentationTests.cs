@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Cohesive.Adapters.Cosmos;
 using Cohesive.Adapters.Elastic;
 using Cohesive.Adapters.Postgres;
+using Cohesive.Adapters.SQLite;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.Explain;
 using Cohesive.Relations.Realization;
@@ -61,7 +62,8 @@ public sealed class RelationQueryCapabilityDocumentationTests
             ["src", "adapters", "Cohesive.Adapters.Elastic", "README.md"],
             ["src", "adapters", "Cohesive.Adapters.Elastic", "INTERNALS.md"],
             ["src", "adapters", "Cohesive.Adapters.Postgres", "README.md"],
-            ["src", "adapters", "Cohesive.Adapters.Postgres", "INTERNALS.md"]
+            ["src", "adapters", "Cohesive.Adapters.Postgres", "INTERNALS.md"],
+            ["src", "adapters", "Cohesive.Adapters.SQLite", "RELATIONS.md"]
         ];
 
         foreach (var segments in documentationFiles)
@@ -122,7 +124,8 @@ public sealed class RelationQueryCapabilityDocumentationTests
             new("Cosmos entity source", CosmosRelationQuerySourceReader.TargetProfile),
             new("Elasticsearch", ElasticRelationQueryTargetProfile.Default),
             new("PostgreSQL", PostgresRelationQueryTargetProfile.Default),
-            new("PostgreSQL source", PostgresRelationQuerySourceTargetProfile.Default)
+            new("PostgreSQL source", PostgresRelationQuerySourceTargetProfile.Default),
+            new("SQLite native rows", SqliteRelationQueryTargetProfile.Default)
         ];
 
         StringBuilder markdown = new();

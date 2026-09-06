@@ -7,6 +7,74 @@ namespace Cohesive.Adapters.SQLite.Tests;
 
 public sealed class SqliteSqlConstructionTests
 {
+    [Fact]
+    public void IndentedQueriesPreserveParametersQuotedTokensAndNestedExecution()
+    {
+        var value = SqlExpression.RuntimeParameter("value");
+        var child = new SqlSelectBuilder().Select(value, "value  \"$9").Limit(1).BuildQuery();
+        var query = new SqlSelectBuilder(child, "candidate")
+            .Select(SqlExpression.Column("candidate", "value  \"$9"), "value")
+            .Select(SqlExpression.ScalarSubquery(child), "scalar")
+            .Select(SqlExpression.Exists(child), "exists")
+            .Select(SqlExpression.RowNumber([], [new(value)]), "rank")
+            .Select(SqlExpression.Constant(7L), "constant")
+            .Where(SqlExpression.Binary(SqlBinaryOperator.Equal,
+                SqlExpression.Column("candidate", "value  \"$9"), value))
+            .OrderBy(value).BuildQuery();
+        var compact = query.ToCommandTemplate(SqliteSqlDialect.Instance);
+        var formatted = query.ToCommandTemplate(SqliteSqlDialect.Instance, SqlFormatting.Indented);
+        Assert.Equal(JsonSerializer.Serialize(compact.Parameters), JsonSerializer.Serialize(formatted.Parameters));
+        Assert.Equal(formatted.Text, query.ToCommandTemplate(SqliteSqlDialect.Instance, SqlFormatting.Indented).Text);
+        Assert.DoesNotContain("\r", formatted.Text, StringComparison.Ordinal);
+        Assert.Contains("\nFROM (\n    SELECT\n        $1 AS \"value  \"\"$9\"", formatted.Text, StringComparison.Ordinal);
+        Assert.Contains("ROW_NUMBER() OVER (\n        ORDER BY $1 ASC NULLS LAST\n    )", formatted.Text, StringComparison.Ordinal);
+        Assert.Equal(2, formatted.Parameters.Length);
+        var restored = JsonSerializer.Deserialize<SqlCommandTemplate>(JsonSerializer.Serialize(formatted))!;
+        using var file = new DatabaseFixture();
+        using var connection = file.Database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        foreach (var template in new[] { compact, restored })
+        {
+            using var scope = new SqliteCommandScope(file.Database, connection, transaction);
+            using var reader = scope.ExecuteReader(new(template), CancellationToken.None, ("value", 42L));
+            Assert.True(reader.Read());
+            Assert.Equal([42L, 42L, 1L, 1L, 7L], Enumerable.Range(0, 5).Select(reader.GetInt64));
+            Assert.False(reader.Read());
+        }
+        Assert.Throws<ArgumentOutOfRangeException>(() => query.ToCommandTemplate(SqliteSqlDialect.Instance, (SqlFormatting)99));
+    }
+
+    [Fact]
+    public void IndentedSqlHasAStableReviewableLayout()
+    {
+        var source = new SqlSelectBuilder(new SqlQualifiedTable("candidates"), "candidate")
+            .Select(SqlExpression.Column("candidate", "id"), "candidate_id")
+            .Select(SqlExpression.RowNumber([SqlExpression.Column("candidate", "category")],
+                [new(SqlExpression.Column("candidate", "id"))]), "representative_rank").BuildQuery();
+        var template = new SqlSelectBuilder(source, "ranked")
+            .Select(SqlExpression.Column("ranked", "candidate_id"), "candidate_id")
+            .Where(SqlExpression.Binary(SqlBinaryOperator.Equal, SqlExpression.Column("ranked", "representative_rank"),
+                SqlExpression.Constant(1L)))
+            .OrderBy(SqlExpression.Column("ranked", "candidate_id"))
+            .BuildTemplate(SqliteSqlDialect.Instance, SqlFormatting.Indented);
+        Assert.Equal("""
+            SELECT
+                "ranked"."candidate_id" AS "candidate_id"
+            FROM (
+                SELECT
+                    "candidate"."id" AS "candidate_id",
+                    ROW_NUMBER() OVER (
+                        PARTITION BY "candidate"."category"
+                        ORDER BY "candidate"."id" ASC NULLS LAST
+                    ) AS "representative_rank"
+                FROM "candidates" AS "candidate"
+            ) AS "ranked"
+            WHERE ("ranked"."representative_rank" = $1)
+            ORDER BY
+                "ranked"."candidate_id" ASC NULLS LAST
+            """, template.Text);
+    }
+
     [Theory]
     [InlineData(SqlSortDirection.Ascending, SqlNullPlacement.First, 1L)]
     [InlineData(SqlSortDirection.Descending, SqlNullPlacement.First, 1L)]

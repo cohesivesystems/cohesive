@@ -36,6 +36,8 @@ public abstract partial record SqlExpression
         {
             context.Dialect.Require(SqlFeature.RowNumber);
             builder.Append("ROW_NUMBER() OVER (");
+            context.Indentation++;
+            context.LineBreak(builder);
             if (!Partitions.IsEmpty)
             {
                 builder.Append("PARTITION BY ");
@@ -44,7 +46,7 @@ public abstract partial record SqlExpression
                     if (index != 0) builder.Append(", ");
                     Partitions[index].WriteTo(context, builder);
                 }
-                builder.Append(' ');
+                context.Separator(builder);
             }
             builder.Append("ORDER BY ");
             for (var index = 0; index < Orderings.Length; index++)
@@ -52,6 +54,8 @@ public abstract partial record SqlExpression
                 if (index != 0) builder.Append(", ");
                 Orderings[index].WriteTo(context, builder);
             }
+            context.Indentation--;
+            context.LineBreak(builder);
             builder.Append(')');
         }
     }

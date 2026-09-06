@@ -1,25 +1,39 @@
-using Cohesive.Adapters.Sql;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Cohesive.Adapters.Postgres;
+namespace Cohesive.Adapters.Sql;
 
 /// <summary>
-/// Allocates deterministic, human-readable PostgreSQL aliases within one SQL identifier namespace.
+/// Allocates deterministic, human-readable SQL aliases within one SQL identifier namespace.
 /// </summary>
-internal sealed class PostgresSqlAliasAllocator
+public sealed class SqlAliasAllocator
 {
     const int DigestLength = 8;
-    readonly Dictionary<string, string> semanticKeyByAlias = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string> semanticKeyByAlias;
+    readonly int maxUtf8ByteLength;
+
+    /// <summary>Creates a single-threaded allocator for one SQL identifier namespace.</summary>
+    /// <param name="maxUtf8ByteLength">Maximum generated identifier size in UTF-8 bytes, at least 32.</param>
+    /// <param name="identifierComparer">Deterministic target identifier equality; must treat identical strings as equal.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxUtf8ByteLength"/> is less than 32.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="identifierComparer"/> is null.</exception>
+    /// <remarks>Allocation order is significant. Use one allocator per namespace and a deterministic traversal.</remarks>
+    public SqlAliasAllocator(int maxUtf8ByteLength, StringComparer identifierComparer)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxUtf8ByteLength, 32);
+        ArgumentNullException.ThrowIfNull(identifierComparer);
+        this.maxUtf8ByteLength = maxUtf8ByteLength;
+        semanticKeyByAlias = new(identifierComparer);
+    }
 
     /// <summary>Allocates one safe, unique alias from semantic display and identity inputs.</summary>
     /// <param name="preferredName">Human-readable name preferred when it is safe and unique.</param>
     /// <param name="semanticKey">Stable semantic identity used for shortening and collision suffixes.</param>
     /// <param name="fallback">Readable fallback used when the preferred name contains no usable characters.</param>
-    /// <returns>A unique PostgreSQL identifier no longer than the standard 63-byte limit.</returns>
+    /// <returns>A unique, Unicode-valid alias within the configured UTF-8 byte budget; quote it through the SQL builder.</returns>
     /// <exception cref="ArgumentNullException">A parameter is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="fallback"/> is empty or white space.</exception>
+    /// <exception cref="ArgumentException">The preferred name has no usable characters and <paramref name="fallback"/> is empty or white space.</exception>
     public string Allocate(string preferredName, string semanticKey, string fallback)
     {
         ArgumentNullException.ThrowIfNull(preferredName);
@@ -100,27 +114,27 @@ internal sealed class PostgresSqlAliasAllocator
 
         if (string.IsNullOrWhiteSpace(fallback))
         {
-            throw new ArgumentException("A PostgreSQL alias fallback cannot be empty.", nameof(fallback));
+            throw new ArgumentException("A SQL alias fallback cannot be empty.", nameof(fallback));
         }
 
         return Normalize(fallback, "alias");
     }
 
-    static string Fit(string normalized, string? suffix, string digest)
+    string Fit(string normalized, string? suffix, string digest)
     {
         if (suffix is null
             && SqlUtf8.GetByteCount(normalized, nameof(normalized))
-            <= PostgresSqlDialect.StandardMaxUtf8ByteLength)
+            <= maxUtf8ByteLength)
         {
-            return PostgresSqlDialect.Identifier(normalized).Value;
+            return new SqlIdentifier(normalized).Value;
         }
 
         var effectiveSuffix = suffix ?? $"__{digest}";
         var suffixLength = SqlUtf8.GetByteCount(effectiveSuffix, nameof(suffix));
-        var prefixBudget = PostgresSqlDialect.StandardMaxUtf8ByteLength - suffixLength;
+        var prefixBudget = maxUtf8ByteLength - suffixLength;
         if (prefixBudget <= 0)
         {
-            throw new InvalidOperationException("PostgreSQL alias suffix exceeds the identifier limit.");
+            throw new InvalidOperationException("SQL alias suffix exceeds the identifier limit.");
         }
 
         StringBuilder prefix = new();
@@ -147,7 +161,7 @@ internal sealed class PostgresSqlAliasAllocator
             prefix.Append("alias");
         }
 
-        return PostgresSqlDialect.Identifier($"{prefix}{effectiveSuffix}").Value;
+        return new SqlIdentifier($"{prefix}{effectiveSuffix}").Value;
     }
 
     static string Digest(string value) =>

@@ -7,9 +7,25 @@ namespace Cohesive.Tests.Postgres;
 public sealed class PostgresRelationQuerySqlNamingTests
 {
     [Fact]
+    public void SharedAllocatorHonorsCaseSensitivityAndConfiguredByteBudget()
+    {
+        var sensitive = new SqlAliasAllocator(maxUtf8ByteLength: 32, StringComparer.Ordinal);
+        var insensitive = new SqlAliasAllocator(maxUtf8ByteLength: 32, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal("Price", sensitive.Allocate("Price", "field:upper", "field"));
+        Assert.Equal("price", sensitive.Allocate("price", "field:lower", "field"));
+        Assert.Equal("Price", insensitive.Allocate("Price", "field:upper", "field"));
+        var lower = insensitive.Allocate("price", "field:lower", "field");
+        Assert.False(StringComparer.OrdinalIgnoreCase.Equals("Price", lower));
+        var shortened = insensitive.Allocate(new string('界', 100), "long", "field");
+        Assert.InRange(SqlUtf8.GetByteCount(shortened, nameof(shortened)), 1, 32);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SqlAliasAllocator(31, StringComparer.Ordinal));
+        Assert.Throws<ArgumentNullException>(() => new SqlAliasAllocator(32, null!));
+    }
+
+    [Fact]
     public void Allocate_PreservesReadableSemanticNamesAndSanitizesPunctuation()
     {
-        var aliases = new PostgresSqlAliasAllocator();
+        var aliases = new SqlAliasAllocator(PostgresSqlDialect.StandardMaxUtf8ByteLength, StringComparer.Ordinal);
 
         Assert.Equal(
             "LoadSearchDto__customerName",
@@ -29,8 +45,8 @@ public sealed class PostgresRelationQuerySqlNamingTests
     [Fact]
     public void Allocate_DisambiguatesRepeatedAndNormalizationCollidingNamesDeterministically()
     {
-        var first = new PostgresSqlAliasAllocator();
-        var second = new PostgresSqlAliasAllocator();
+        var first = new SqlAliasAllocator(PostgresSqlDialect.StandardMaxUtf8ByteLength, StringComparer.Ordinal);
+        var second = new SqlAliasAllocator(PostgresSqlDialect.StandardMaxUtf8ByteLength, StringComparer.Ordinal);
 
         Assert.Equal("Customer", first.Allocate("Customer", "shape:customer", "rows"));
         Assert.Equal("Customer__2", first.Allocate("Customer", "shape:customer", "rows"));
@@ -56,8 +72,8 @@ public sealed class PostgresRelationQuerySqlNamingTests
     [Fact]
     public void Allocate_ShortensAsciiAndUnicodeAtThePostgresUtf8Boundary()
     {
-        var first = new PostgresSqlAliasAllocator();
-        var second = new PostgresSqlAliasAllocator();
+        var first = new SqlAliasAllocator(PostgresSqlDialect.StandardMaxUtf8ByteLength, StringComparer.Ordinal);
+        var second = new SqlAliasAllocator(PostgresSqlDialect.StandardMaxUtf8ByteLength, StringComparer.Ordinal);
         var longAscii = new string('a', 100);
         var longUnicode = string.Concat(Enumerable.Repeat("顧客", 20));
 
@@ -78,7 +94,7 @@ public sealed class PostgresRelationQuerySqlNamingTests
     [Fact]
     public void Allocate_NormalizesComposedUnicodeAndReplacesInvalidUtf16()
     {
-        var aliases = new PostgresSqlAliasAllocator();
+        var aliases = new SqlAliasAllocator(PostgresSqlDialect.StandardMaxUtf8ByteLength, StringComparer.Ordinal);
 
         Assert.Equal("Café", aliases.Allocate("Cafe\u0301", "field:cafe", "field"));
         Assert.Equal("bad_name", aliases.Allocate("bad\ud800name", "field:invalid", "field"));

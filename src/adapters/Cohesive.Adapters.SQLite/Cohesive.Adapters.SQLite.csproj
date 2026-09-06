@@ -8,9 +8,12 @@
     <ProjectReference Include="../Cohesive.Adapters.Sql/Cohesive.Adapters.Sql.csproj" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <ProjectReference Include="../../Cohesive.Storage/Cohesive.Storage.csproj" />
+    <ProjectReference Include="../../Cohesive.Relations/Cohesive.Relations.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Update="ENTITY_REPOSITORIES.md" Pack="true" PackagePath="/" />
     <None Update="OUTBOX.md" Pack="true" PackagePath="/" />
+    <None Update="RELATIONS.md" Pack="true" PackagePath="/" />
+    <None Update="examples/representative-selection.sql" Pack="true" PackagePath="examples/" />
   </ItemGroup>
 </Project>

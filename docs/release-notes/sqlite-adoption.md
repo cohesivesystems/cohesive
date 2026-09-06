@@ -1,5 +1,24 @@
 # SQLite adoption — unreleased
 
+## Native SQLite Relations row queries
+
+SQLite compiler profile v2 emits deterministically indented SQL with canonical stage/field names and explicit rank,
+presence and identity aliases. Recompile v1 native artifacts to obtain the new text and exact fingerprints; the
+artifact schema and ordinal decoding layout are unchanged. Shared SQL construction adds `SqlFormatting.Indented`
+for SELECT trees and a public `SqlAliasAllocator`, extracted from PostgreSQL with target-owned identifier equality
+and byte budgets. Existing compact overloads and PostgreSQL aliases retain their prior output. See the
+[tested SQL example and explanation](../../src/adapters/Cohesive.Adapters.SQLite/RELATIONS.md#inspecting-generated-sql).
+
+`SqliteRelationQueryCompiler` now compiles source/filter/inner-and-left-join/representative/project/order pipelines
+into reusable SQLite templates with ordinal result decoding. It uses canonical bound-realization proof, exact
+placement/binding fingerprints and shared SQL construction. Winning source provenance and missing/null distinctions
+survive projection and outer joins; post-selection filtering never falls back to a discarded candidate.
+
+The first profile requires declared exact codec encodings, complete tables in one database, unique INTEGER source
+identities and integer order tuples containing every contributing identity. Unsupported domains or incomplete
+evidence fail explicitly. String/composite identity mappings, further comparison-domain evidence and application
+query migration remain follow-up work. See the [native compiler contract](../../src/adapters/Cohesive.Adapters.SQLite/RELATIONS.md).
+
 ## Ordered representative semantics and SQL construction
 
 Relations adds `SelectRepresentativeQueryNode` and structural/typed `SelectRepresentative` authoring. It selects
@@ -11,8 +30,9 @@ This adds a `selectRepresentative` node to the version-one document union and ge
 update exhaustive consumers. The in-memory profile advances to `realization-v3`, so regenerate retained
 realization artifacts against the new profile. Definition fingerprints for documents without the new node are
 unchanged. Shared SQL adds capability-gated `SqlExpression.RowNumber` and public `SqlOrdering`, supported by the
-SQLite and PostgreSQL dialects. Native Relations compilation and application query migration remain follow-up
-work in COH-96; constructing a window alone does not establish canonical representative semantics.
+SQLite and PostgreSQL dialects. The SQLite compiler above establishes a bounded native interpretation; broader
+adoption mappings and application query migration remain follow-up work in COH-96. Constructing a window alone
+does not establish canonical representative semantics.
 
 ## Explicit SQLite pooling and reusable binding plans
 

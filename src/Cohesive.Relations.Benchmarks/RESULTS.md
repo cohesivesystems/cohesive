@@ -1,5 +1,42 @@
 # Cohesive Benchmark Results
 
+## SQLite native representative selection
+
+Measured 2026-09-06 on Apple M5 Max, macOS 26.6.2, .NET SDK 10.0.201/runtime 10.0.5, BenchmarkDotNet 0.15.8,
+Release, one launch, one warmup, five measured iterations, `DOTNET_PROCESSOR_COUNT=2`. Synthetic indexed table,
+ten candidates per key. Both SQL paths decode the same selected fields and contributing source identity through
+the same ordinal reader. Reference execution consumes prebuilt canonical evidence. Compilation, insertion,
+connection acquisition and transaction creation are outside the measured loop.
+
+| Candidates | Handwritten SQL | Compiled SQL | Compiled / handwritten | Compiled allocation | Reference execution |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 57.20 μs | 56.70 μs | 0.99 | 18.12 KB | 243.35 μs |
+| 1,000 | 589.43 μs | 604.40 μs | 1.03 | 177.10 KB | 2,884.18 μs |
+| 10,000 | 6,101.03 μs | 6,036.01 μs | 0.99 | 1,773.20 KB | 36,246.00 μs |
+
+Handwritten allocation was 17.74 / 176.73 / 1,772.82 KB respectively; the compiled path adds approximately
+0.38 KB per call. Reference allocations were 284.59 / 2,654.59 / 26,606.45 KB. These are pipeline measurements,
+not isolated window-function or database throughput numbers. At 10,000 rows the compiled standard deviation was
+19.02 μs; small apparent speed differences from handwritten SQL are not a claim of an inherent speedup.
+
+Before sharing intermediate value/identity columns and eliding constant required-presence columns, the same SQL
+compiler measured 66.21 / 691.30 / 7,540.82 μs (one warmup, three measured iterations). Its contemporaneous direct
+SQL baseline was 58.76 / 622.00 / 6,424.12 μs. Removing those redundant intermediate columns reduced the observed
+11–17% overhead to approximately parity in the final run. Differential outer-join and missing/null tests cover
+the changed representation; explicit presence bits remain wherever absence is possible. The final reader also
+reuses canonical field names, removing 152 bytes of string allocation per winner from both SQL paths.
+
+Benchmark setup verifies use of `candidate_order(KeyPresent, Key COLLATE BINARY, Preference DESC, Id)`.
+The parameter-rebinding test separately verifies an indexed `SEARCH` before window selection. Final result
+ordering can still require a temporary B-tree; this is not a claim that every sort is eliminated. Application
+join shapes, data distributions, payload sizes and concurrency need their own plans and measurements.
+
+```sh
+dotnet build src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj -c Release
+DOTNET_PROCESSOR_COUNT=2 dotnet src/Cohesive.Relations.Benchmarks/bin/Release/net10.0/Cohesive.Relations.Benchmarks.dll \
+  --filter '*SqliteRepresentativeSelectionBenchmarks*' --job short --warmupCount 1 --iterationCount 5 --launchCount 1
+```
+
 ## 2026-09-06: ordered representative reference execution (COH-96)
 
 Working revision of `codex/coh-96-ordered-representatives`; BenchmarkDotNet 0.15.8 ShortRun,
