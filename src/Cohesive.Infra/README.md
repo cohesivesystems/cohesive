@@ -78,6 +78,10 @@ var deployment = InfrastructureTargetDeployments.Define(
             AzureFacilities.AppService,
             AzureResources.AppService("shipping-api"),
             [targetEvidence]);
+        physical.NonParticipatingWorkload(
+            ShippingNodes.Admin,
+            "The API-only development environment does not host the administration workload.",
+            [SourceReference.Create("environment-profile", "shipping/api-only-development")]);
         physical.Resource(
             ShippingNodes.State,
             AzureFacilities.BlobStorage,
@@ -91,6 +95,10 @@ var realization = InfrastructureTargetDeploymentCompiler.Compile(ShippingInfrast
 
 Application declarations contain no requirement-discharge or witness-construction algorithm. Provider naming and
 artifact discovery belong to the adapter; all callbacks are discarded after materializing canonical IR.
+Every canonical workload must be either placed or explicitly declared non-participating with a rationale and sources;
+omission remains an error. Non-participation is physical environment policy, not a second semantic definition and not
+permission to weaken the target's capability closure. Requirements demanded solely by a non-participating workload do
+not need physical witnesses, while a participating binding or readiness edge into that workload fails closed.
 Fluent facility and deployment authoring also captures C# call sites in a portable source map. Source maps support
 diagnostics and inspection but are excluded from semantic fingerprints, so moving equivalent declarations between
 files does not change their canonical identity. Explicit source references remain semantic evidence and should be

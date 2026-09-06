@@ -129,6 +129,161 @@ public sealed class InfrastructureCapabilityWitnessTests
     }
 
     [Fact]
+    public void Explicit_non_participation_completes_a_subset_without_forking_the_definition()
+    {
+        InfrastructureNodeId api = new("workload/api");
+        InfrastructureNodeId admin = new("workload/admin");
+        var apiRequirement = InfrastructureCapabilityRequirement.ForNode(api, DurableStorage);
+        var adminRequirement = InfrastructureCapabilityRequirement.ForNode(admin, DurableStorage);
+        var definition = Definition(workloads:
+        [
+            new(api, [apiRequirement]),
+            new(admin, [adminRequirement])
+        ]);
+        var closure = Closure(definition, NativeProfile(DurableStorage, StorageEvidence));
+        var lifecycle = Lifecycle(definition);
+        InfrastructureWorkloadPlacement placement = new(
+            api,
+            new("physical/apps/api"),
+            new("aspire"),
+            ["aspire://app-host/api"]);
+        InfrastructureWorkloadNonParticipation nonParticipation = new(
+            admin,
+            "The API-only local environment does not host the administration workload.",
+            ["profile://local/api-only"]);
+
+        var realization = InfrastructureRealizationCompiler.Compile(
+            closure,
+            lifecycle,
+            workloadPlacements: [placement],
+            capabilityWitnesses: [Witness(apiRequirement.Id, StorageEvidence, "physical/apps/api")],
+            nonParticipatingWorkloads: [nonParticipation]);
+        var roundTrip = JsonSerializer.Deserialize<InfrastructureRealization>(
+            JsonSerializer.Serialize(realization, JsonOptions),
+            JsonOptions);
+
+        Assert.True(realization.IsCapabilityWitnessComplete);
+        Assert.True(realization.IsReadinessObligationComplete);
+        Assert.Equal(definition, realization.CapabilityClosure.Definition);
+        Assert.Equal(nonParticipation, Assert.Single(realization.NonParticipatingWorkloads));
+        Assert.Equal(nonParticipation, realization.FindNonParticipation(admin));
+        Assert.Null(realization.FindNonParticipation(api));
+        Assert.Equal(apiRequirement.Id, Assert.Single(realization.WitnessDecisions).Requirement);
+        Assert.Null(realization.FindWitnessDecision(adminRequirement.Id));
+        Assert.Equal(realization, roundTrip);
+    }
+
+    [Fact]
+    public void Non_participation_is_explicit_fail_closed_and_cannot_conflict_with_placement()
+    {
+        InfrastructureNodeId api = new("workload/api");
+        InfrastructureNodeId admin = new("workload/admin");
+        var definition = Definition(workloads: [new(api), new(admin)]);
+        var closure = Closure(definition, Profile(new(Variant)));
+        var lifecycle = Lifecycle(definition);
+        InfrastructureWorkloadPlacement apiPlacement = new(
+            api,
+            new("physical/apps/api"),
+            new("aspire"),
+            ["aspire://app-host/api"]);
+        InfrastructureWorkloadPlacement adminPlacement = new(
+            admin,
+            new("physical/apps/admin"),
+            new("aspire"),
+            ["aspire://app-host/admin"]);
+        InfrastructureWorkloadNonParticipation adminExcluded = new(
+            admin,
+            "The API-only profile omits the admin workload.",
+            ["profile://local/api-only"]);
+
+        var omitted = InfrastructureRealizationCompiler.Compile(
+            closure,
+            lifecycle,
+            workloadPlacements: [apiPlacement]);
+        var conflicting = InfrastructureRealizationCompiler.Compile(
+            closure,
+            lifecycle,
+            workloadPlacements: [apiPlacement, adminPlacement],
+            nonParticipatingWorkloads: [adminExcluded]);
+        var stale = InfrastructureRealizationCompiler.Compile(
+            closure,
+            lifecycle,
+            workloadPlacements: [apiPlacement],
+            nonParticipatingWorkloads:
+            [
+                adminExcluded,
+                new(new("workload/removed"), "Stale profile entry.", ["profile://local/api-only"])
+            ]);
+
+        Assert.Contains(
+            omitted.Diagnostics,
+            diagnostic => diagnostic.Code == InfrastructureCapabilityWitnessDiagnosticCodes.WorkloadPlacementMissing
+                          && diagnostic.Evidence?.Subject == admin.Value);
+        Assert.Contains(
+            conflicting.Diagnostics,
+            diagnostic => diagnostic.Code == InfrastructureCapabilityWitnessDiagnosticCodes.WorkloadParticipationConflict
+                          && diagnostic.Evidence?.Subject == admin.Value);
+        Assert.Contains(
+            stale.Diagnostics,
+            diagnostic => diagnostic.Code == InfrastructureCapabilityWitnessDiagnosticCodes.WorkloadNonParticipationUnknown
+                          && diagnostic.Evidence?.Subject == "workload/removed");
+        Assert.Throws<ArgumentException>(() => InfrastructureRealizationCompiler.Compile(
+            closure,
+            lifecycle,
+            workloadPlacements: [apiPlacement],
+            nonParticipatingWorkloads: [adminExcluded, adminExcluded]));
+    }
+
+    [Fact]
+    public void Physical_witnesses_and_readiness_cannot_cross_a_non_participating_workload_boundary()
+    {
+        InfrastructureNodeId api = new("workload/api");
+        InfrastructureNodeId worker = new("workload/worker");
+        InfrastructureNodeId state = new("resource/state");
+        var workerRequirement = InfrastructureCapabilityRequirement.ForNode(worker, DurableStorage);
+        var definition = InfrastructureDefinitionDocument.FromDefinition(new(
+            new("participation-tests"),
+            new("v1"),
+            workloads: [new(api), new(worker, [workerRequirement])],
+            resources: [new(state, InfrastructureResourceLifecycle.Persistent)],
+            readinessDependencies:
+            [
+                new(new("readiness/api/worker"), api, worker),
+                new(new("readiness/worker/state"), worker, state)
+            ]));
+        var closure = Closure(definition, NativeProfile(DurableStorage, StorageEvidence));
+        var lifecycle = Lifecycle(definition, (state, "physical/state"));
+        InfrastructureWorkloadPlacement placement = new(
+            api,
+            new("physical/apps/api"),
+            new("aspire"),
+            ["aspire://app-host/api"]);
+        InfrastructureWorkloadNonParticipation excluded = new(
+            worker,
+            "The API-only profile excludes background execution.",
+            ["profile://local/api-only"]);
+
+        var realization = InfrastructureRealizationCompiler.Compile(
+            closure,
+            lifecycle,
+            workloadPlacements: [placement],
+            capabilityWitnesses: [Witness(workerRequirement.Id, StorageEvidence, "physical/apps/worker")],
+            nonParticipatingWorkloads: [excluded]);
+
+        Assert.Empty(realization.ReadinessObligations);
+        Assert.False(realization.IsReadinessObligationComplete);
+        Assert.Contains(
+            realization.Diagnostics,
+            diagnostic => diagnostic.Code == InfrastructureCapabilityWitnessDiagnosticCodes.WorkloadDependencyNonParticipating
+                          && diagnostic.Evidence?.Subject == api.Value);
+        Assert.Contains(
+            realization.Diagnostics,
+            diagnostic => diagnostic.Code == InfrastructureCapabilityWitnessDiagnosticCodes.WitnessForNonParticipatingWorkload
+                          && diagnostic.Evidence?.Subject == workerRequirement.Id.Value);
+        Assert.Null(realization.FindWitnessDecision(workerRequirement.Id));
+    }
+
+    [Fact]
     public void Binding_obligation_proof_must_cover_both_selected_endpoint_resources()
     {
         InfrastructureNodeId api = new("workload/api");
@@ -267,6 +422,56 @@ public sealed class InfrastructureCapabilityWitnessTests
         Assert.Equal(first.Fingerprint, second.Fingerprint);
         Assert.Equal(first, roundTrip);
         Assert.Equal(apiRequirement.Id, first.FindWitnessDecision(apiRequirement.Id)?.Requirement);
+    }
+
+    [Fact]
+    public void Workload_non_participation_order_is_non_semantic_but_content_changes_identity()
+    {
+        InfrastructureNodeId api = new("workload/api");
+        InfrastructureNodeId admin = new("workload/admin");
+        InfrastructureNodeId ui = new("workload/ui");
+        var definition = Definition(workloads: [new(api), new(admin), new(ui)]);
+        var closure = Closure(definition, Profile(new(Variant)));
+        var lifecycle = Lifecycle(definition);
+        InfrastructureWorkloadPlacement placement = new(
+            api,
+            new("physical/apps/api"),
+            new("aspire"),
+            ["aspire://app-host/api"]);
+        InfrastructureWorkloadNonParticipation adminExcluded = new(
+            admin,
+            "The API-only profile omits administration.",
+            ["profile://local/api-only"]);
+        InfrastructureWorkloadNonParticipation uiExcluded = new(
+            ui,
+            "The API-only profile omits the UI.",
+            ["profile://local/api-only"]);
+
+        var first = InfrastructureRealizationCompiler.Compile(
+            closure,
+            lifecycle,
+            workloadPlacements: [placement],
+            nonParticipatingWorkloads: [uiExcluded, adminExcluded]);
+        var reordered = InfrastructureRealizationCompiler.Compile(
+            closure,
+            lifecycle,
+            workloadPlacements: [placement],
+            nonParticipatingWorkloads: [adminExcluded, uiExcluded]);
+        var changed = InfrastructureRealizationCompiler.Compile(
+            closure,
+            lifecycle,
+            workloadPlacements: [placement],
+            nonParticipatingWorkloads:
+            [
+                new(admin, "A different environment decision.", ["profile://local/api-only"]),
+                uiExcluded
+            ]);
+
+        Assert.Equal(first, reordered);
+        Assert.Equal(first.Fingerprint, reordered.Fingerprint);
+        Assert.True(first.NonParticipatingWorkloads.Select(static decision => decision.Workload).SequenceEqual(
+            [admin, ui]));
+        Assert.NotEqual(first.Fingerprint, changed.Fingerprint);
     }
 
     [Fact]

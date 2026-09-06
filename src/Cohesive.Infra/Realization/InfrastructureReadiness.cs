@@ -27,14 +27,19 @@ public sealed record InfrastructureReadinessObligation
     {
         if (string.IsNullOrWhiteSpace(dependency.Value))
             throw new ArgumentException("A readiness obligation requires its semantic dependency identity.", nameof(dependency));
+
         if (string.IsNullOrWhiteSpace(subject.Value))
             throw new ArgumentException("A readiness obligation requires a logical subject.", nameof(subject));
+
         if (string.IsNullOrWhiteSpace(subjectPhysicalResource.Value))
             throw new ArgumentException("A readiness obligation requires the subject's physical resource.", nameof(subjectPhysicalResource));
+
         if (string.IsNullOrWhiteSpace(requiredNode.Value))
             throw new ArgumentException("A readiness obligation requires a logical dependency.", nameof(requiredNode));
+
         if (string.IsNullOrWhiteSpace(requiredPhysicalResource.Value))
             throw new ArgumentException("A readiness obligation requires the dependency's physical resource.", nameof(requiredPhysicalResource));
+
         if (subject == requiredNode)
             throw new ArgumentException("A readiness obligation cannot require its own subject.", nameof(requiredNode));
 
@@ -66,15 +71,18 @@ static class InfrastructureReadinessObligationCompiler
     internal static ImmutableArray<InfrastructureReadinessObligation> Compile(
         InfrastructureDefinition definition,
         InfrastructureLifecyclePlan lifecycle,
-        ImmutableArray<InfrastructureWorkloadPlacement> placements)
+        ImmutableArray<InfrastructureWorkloadPlacement> placements,
+        ImmutableArray<InfrastructureWorkloadNonParticipation> nonParticipatingWorkloads)
     {
         var physicalResources = PhysicalResources(definition, lifecycle, placements);
+        var excluded = nonParticipatingWorkloads.Select(static decision => decision.Workload).ToHashSet();
 
         var obligations = ImmutableArray.CreateBuilder<InfrastructureReadinessObligation>(
-            definition.ReadinessDependencies.Length);
+            ParticipatingDependencyCount(definition, nonParticipatingWorkloads));
         foreach (var dependency in definition.ReadinessDependencies)
         {
-            if (!physicalResources.TryGetValue(dependency.Subject, out var subject)
+            if (excluded.Contains(dependency.Subject)
+                || !physicalResources.TryGetValue(dependency.Subject, out var subject)
                 || !physicalResources.TryGetValue(dependency.Dependency, out var required))
             {
                 continue;
@@ -87,9 +95,17 @@ static class InfrastructureReadinessObligationCompiler
                 dependency.Dependency,
                 required));
         }
-        return obligations.Count == definition.ReadinessDependencies.Length
+        return obligations.Count == obligations.Capacity
             ? obligations.MoveToImmutable()
             : obligations.ToImmutable();
+    }
+
+    internal static int ParticipatingDependencyCount(
+        InfrastructureDefinition definition,
+        ImmutableArray<InfrastructureWorkloadNonParticipation> nonParticipatingWorkloads)
+    {
+        var excluded = nonParticipatingWorkloads.Select(static decision => decision.Workload).ToHashSet();
+        return definition.ReadinessDependencies.Count(dependency => !excluded.Contains(dependency.Subject));
     }
 
     internal static Dictionary<InfrastructureNodeId, InfrastructurePhysicalResourceId> PhysicalResources(
@@ -119,6 +135,7 @@ static class InfrastructureReadinessObligationCompiler
     {
         if (obligations.IsDefaultOrEmpty)
             return [];
+
         if (obligations.Any(static obligation => obligation is null))
             throw new ArgumentException("Infrastructure readiness obligations cannot contain null.", nameof(obligations));
 
@@ -157,10 +174,13 @@ public sealed record InfrastructureResourceObservation
     {
         if (string.IsNullOrWhiteSpace(physicalResource.Value))
             throw new ArgumentException("An infrastructure observation requires a physical resource.", nameof(physicalResource));
+
         if (!Enum.IsDefined(health))
             throw new ArgumentOutOfRangeException(nameof(health), health, "Unsupported infrastructure health observation.");
+
         if (!Enum.IsDefined(readiness))
             throw new ArgumentOutOfRangeException(nameof(readiness), readiness, "Unsupported infrastructure readiness observation.");
+
         if (observedAtUtc.Offset != TimeSpan.Zero)
             throw new ArgumentException("Infrastructure observations must use UTC.", nameof(observedAtUtc));
 
@@ -251,14 +271,19 @@ public sealed record InfrastructureReadinessDecision
     {
         if (string.IsNullOrWhiteSpace(node.Value))
             throw new ArgumentException("A readiness decision requires a logical node.", nameof(node));
+
         if (!Enum.IsDefined(kind))
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported infrastructure node kind.");
+
         if (string.IsNullOrWhiteSpace(physicalResource.Value))
             throw new ArgumentException("A readiness decision requires an exact physical resource.", nameof(physicalResource));
+
         if (!Enum.IsDefined(observedHealth))
             throw new ArgumentOutOfRangeException(nameof(observedHealth), observedHealth, "Unsupported observed health.");
+
         if (!Enum.IsDefined(observedReadiness))
             throw new ArgumentOutOfRangeException(nameof(observedReadiness), observedReadiness, "Unsupported observed readiness.");
+
         if (!Enum.IsDefined(effectiveReadiness))
             throw new ArgumentOutOfRangeException(nameof(effectiveReadiness), effectiveReadiness, "Unsupported effective readiness.");
 
@@ -328,8 +353,10 @@ public sealed record InfrastructureReadinessDecision
         hash.Add(EffectiveReadiness);
         foreach (var dependency in BlockingDependencies)
             hash.Add(dependency);
+
         foreach (var dependency in UnknownDependencies)
             hash.Add(dependency);
+
         return hash.ToHashCode();
     }
 
@@ -339,6 +366,7 @@ public sealed record InfrastructureReadinessDecision
     {
         if (values.IsDefaultOrEmpty)
             return [];
+
         if (values.Any(static value => string.IsNullOrWhiteSpace(value.Value)))
             throw new ArgumentException("Readiness decision dependencies cannot be default.", parameterName);
 
@@ -414,6 +442,7 @@ public sealed record InfrastructureReadinessAssessment
         SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
         if (!string.Equals(SchemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
             throw new ArgumentException($"Readiness-assessment schema '{SchemaVersion}' is unsupported.", nameof(schemaVersion));
+
         Realization = Guard.RequireNotNull(realization);
         Observations = NormalizeObservations(observations);
         Decisions = NormalizeDecisions(decisions);
@@ -422,6 +451,7 @@ public sealed record InfrastructureReadinessAssessment
         var computed = ComputeFingerprint(SchemaVersion, Realization, Observations, Decisions, Diagnostics);
         if (fingerprint is not null && fingerprint != computed)
             throw new ArgumentException("The supplied readiness-assessment fingerprint is not canonical.", nameof(fingerprint));
+
         Fingerprint = computed;
     }
 
@@ -458,6 +488,7 @@ public sealed record InfrastructureReadinessAssessment
     {
         if (string.IsNullOrWhiteSpace(node.Value))
             throw new ArgumentException("A readiness-decision lookup requires a logical node.", nameof(node));
+
         var index = CanonicalDocumentCollections.BinarySearchIndex(
             Decisions,
             node,
@@ -470,8 +501,10 @@ public sealed record InfrastructureReadinessAssessment
     {
         if (observations.IsDefaultOrEmpty)
             return [];
+
         if (observations.Any(static observation => observation is null))
             throw new ArgumentException("Infrastructure observations cannot contain null.", nameof(observations));
+
         var ordered = CanonicalDocumentCollections.SortIfNeeded(
             observations,
             static (left, right) => StringComparer.Ordinal.Compare(left.PhysicalResource.Value, right.PhysicalResource.Value));
@@ -488,8 +521,10 @@ public sealed record InfrastructureReadinessAssessment
     {
         if (decisions.IsDefaultOrEmpty)
             return [];
+
         if (decisions.Any(static decision => decision is null))
             throw new ArgumentException("Infrastructure readiness decisions cannot contain null.", nameof(decisions));
+
         var ordered = CanonicalDocumentCollections.SortIfNeeded(
             decisions,
             static (left, right) => StringComparer.Ordinal.Compare(left.Node.Value, right.Node.Value));
@@ -642,6 +677,7 @@ public static class InfrastructureReadinessEvaluator
         {
             if (physicalByNode.ContainsKey(context.Node))
                 continue;
+
             diagnostics.Add(Diagnostic(
                 DiagnosticCodes.PhysicalSubjectMissing,
                 $"Canonical node '{context.Node.Value}' has no exact physical resource to observe.",
@@ -686,6 +722,7 @@ public static class InfrastructureReadinessEvaluator
         {
             if (evaluated.TryGetValue(node, out var existing))
                 return existing;
+
             if (!physicalByNode.TryGetValue(node, out var physicalResource))
                 return null;
 
