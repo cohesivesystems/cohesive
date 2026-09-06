@@ -108,6 +108,29 @@ diagnostics and inspection but are excluded from semantic fingerprints, so movin
 files does not change their canonical identity. Explicit source references remain semantic evidence and should be
 projected from typed target, facility, lifecycle, or artifact identities instead of handwritten repository paths.
 
+When the selected interpreter consumes a non-external resource whose lifecycle belongs to another interpreter, use
+`ReferencedResource(...)` and name that manager explicitly. For example, an Aspire projection can consume emulators
+whose lifecycle remains owned by Docker Compose:
+
+```csharp
+InfrastructureTargetId dockerCompose = new("docker-compose/2.30");
+InfrastructureLifecycleAuthorityId localComposeProject = new("compose/ari/local");
+
+physical.ReferencedResource(
+    AriNodes.DomainState,
+    AspireFacilities.Cosmos,
+    LocalResources.Cosmos("ari"),
+    dockerCompose,
+    localComposeProject,
+    [InfrastructureSourceReferences.LifecycleAuthority(localComposeProject)]);
+```
+
+The shared compiler derives both sides of that relationship: Docker Compose receives the sole `Managed` lifecycle
+binding and Aspire receives a `Referenced` binding to the same physical identity and authority. `Resource(...)`
+remains the concise default when canonical lifecycle intent makes the selected target the manager (or makes an
+external resource reference-only). Redundant selected-target managers, managers on canonical external resources, and
+aliases that disagree about a physical resource's manager, authority, or external status are structured errors.
+
 Canonical `RequiresReady(...)` declarations are lowered by `InfrastructureRealizationCompiler` from logical nodes to
 their exact physical placements. Local compilation projects those obligations into the existing topology consumed by
 Docker Compose and Aspire, so application code does not repeat physical dependency strings. Aspire continues to own

@@ -147,6 +147,40 @@ public sealed class InfrastructureTargetDeploymentManifestBuilder
         return this;
     }
 
+    /// <summary>Declares a resource consumed by this target but managed by another lifecycle interpreter.</summary>
+    /// <param name="resource">Canonical resource identity.</param>
+    /// <param name="facility">Target facility referencing the resource.</param>
+    /// <param name="physicalResource">Exact target-native resource identity shared with the managing interpreter.</param>
+    /// <param name="managingInterpreter">Exact foreign interpreter that manages the resource lifecycle.</param>
+    /// <param name="authority">Backend state scope owned by the managing interpreter.</param>
+    /// <param name="sourceReferences">Attributable adapter, artifact, configuration, or import sources.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for non-semantic attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for non-semantic attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for non-semantic attribution.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentException">An identity or source-reference collection is invalid or missing.</exception>
+    public InfrastructureTargetDeploymentManifestBuilder ReferencedResource(
+        InfrastructureNodeId resource,
+        InfrastructureTargetFacilityId facility,
+        InfrastructurePhysicalResourceId physicalResource,
+        InfrastructureTargetId managingInterpreter,
+        InfrastructureLifecycleAuthorityId authority,
+        ImmutableArray<SourceReference> sourceReferences,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        resources.Add(new(
+            resource,
+            facility,
+            physicalResource,
+            authority,
+            sourceReferences,
+            managingInterpreter));
+        sourceMap.Add(Capture(InfrastructureSourceReferences.Node(resource), sourceFile, sourceLine, sourceMember));
+        return this;
+    }
+
     internal InfrastructureTargetDeploymentManifest Build() => new(
         InfrastructureTargetDeploymentManifest.CurrentSchemaVersion,
         id,

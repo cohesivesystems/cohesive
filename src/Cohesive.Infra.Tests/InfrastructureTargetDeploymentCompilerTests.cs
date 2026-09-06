@@ -17,6 +17,8 @@ public sealed class InfrastructureTargetDeploymentCompilerTests
     static readonly InfrastructurePhysicalResourceId ApiPhysical = new("test/app-service/sites/api");
     static readonly InfrastructurePhysicalResourceId StatePhysical = new("test/object-store/buckets/state");
     static readonly InfrastructureLifecycleAuthorityId Authority = new("test/state/production");
+    static readonly InfrastructureTargetId Aspire = new("aspire/13.1");
+    static readonly InfrastructureTargetId DockerCompose = new("docker-compose/2.30");
     static readonly InfrastructureOperatingBoundaryId DisposableBoundary = new("test/boundaries/disposable");
     static readonly InfrastructureOperatingBoundaryId PrivateNetworkBoundary = new("test/boundaries/private-network");
     static readonly SourceReference Source = SourceReference.Create("test-adapter", "production");
@@ -80,6 +82,167 @@ public sealed class InfrastructureTargetDeploymentCompilerTests
         Assert.Equal(InfrastructureLifecycleDisposition.Managed, lifecycle.Disposition);
         Assert.Equal(2, realization.CapabilityWitnesses.Length);
         Assert.All(realization.WitnessDecisions, static decision => Assert.True(decision.IsComplete));
+    }
+
+    [Fact]
+    public void Fluent_foreign_management_compiles_to_one_manager_and_one_selected_target_reference()
+    {
+        var semantic = Semantic();
+        var facilities = Facilities(Aspire);
+        var fluent = InfrastructureTargetDeployments.Define(
+            new("test/deployments/compose-managed-aspire-consumed/v1"),
+            semantic.Definition,
+            facilities,
+            deployment =>
+            {
+                deployment.Workload(Api, AppService, ApiPhysical, [Source]);
+                deployment.ReferencedResource(
+                    State,
+                    ObjectStore,
+                    StatePhysical,
+                    DockerCompose,
+                    Authority,
+                    [Source]);
+            });
+        var direct = new InfrastructureTargetDeploymentManifest(
+            InfrastructureTargetDeploymentManifest.CurrentSchemaVersion,
+            fluent.Id,
+            semantic.Definition.ToReference(),
+            facilities,
+            [new(Api, AppService, ApiPhysical, [Source])],
+            [new(State, ObjectStore, StatePhysical, Authority, [Source], DockerCompose)]);
+
+        var plan = InfrastructureTargetDeploymentCompiler.Compile(semantic, fluent);
+        var realization = Assert.IsType<InfrastructureRealization>(plan.Realization);
+        var options = StrictDocumentJson.CreateOptions();
+        var roundTrip = Assert.IsType<InfrastructureTargetDeploymentManifest>(
+            JsonSerializer.Deserialize<InfrastructureTargetDeploymentManifest>(
+                JsonSerializer.Serialize(fluent, options),
+                options));
+
+        Assert.True(plan.IsComplete);
+        Assert.Empty(plan.Diagnostics);
+        Assert.Equal(direct.Fingerprint, fluent.Fingerprint);
+        Assert.True(direct.Resources.SequenceEqual(fluent.Resources));
+        Assert.Equal(fluent, roundTrip);
+        Assert.Equal(2, realization.Lifecycle.Bindings.Length);
+        var manager = Assert.Single(
+            realization.Lifecycle.Bindings,
+            static binding => binding.Disposition == InfrastructureLifecycleDisposition.Managed);
+        Assert.Equal(DockerCompose, manager.Interpreter);
+        Assert.Equal(Authority, manager.Authority);
+        var reference = Assert.Single(
+            realization.Lifecycle.Bindings,
+            static binding => binding.Disposition == InfrastructureLifecycleDisposition.Referenced);
+        Assert.Equal(Aspire, reference.Interpreter);
+        Assert.Equal(Authority, reference.Authority);
+    }
+
+    [Fact]
+    public void Invalid_foreign_manager_combinations_produce_structured_diagnostics()
+    {
+        InfrastructureNodeId externalState = new("resources/external-state");
+        var semantic = Infrastructure.Define(
+            new("test/target-deployment-invalid-manager"),
+            new("1"),
+            new("test/target-deployment-invalid-manager/bindings/v1"),
+            infrastructure =>
+            {
+                infrastructure.Workload(Api).Requires(Https);
+                infrastructure.Resource(State).Persistent().Requires(Storage);
+                infrastructure.Resource(externalState).External().Requires(Storage);
+            });
+        var facilities = Facilities(Aspire);
+        var manifest = InfrastructureTargetDeployments.Define(
+            new("test/deployments/invalid-manager/v1"),
+            semantic.Definition,
+            facilities,
+            deployment =>
+            {
+                deployment.Workload(Api, AppService, ApiPhysical, [Source]);
+                deployment.ReferencedResource(State, ObjectStore, StatePhysical, Aspire, Authority, [Source]);
+                deployment.ReferencedResource(
+                    externalState,
+                    ObjectStore,
+                    new("test/object-store/buckets/external"),
+                    DockerCompose,
+                    new("external/owner"),
+                    [Source]);
+            });
+
+        var plan = InfrastructureTargetDeploymentCompiler.Compile(semantic, manifest);
+
+        Assert.False(plan.IsComplete);
+        Assert.Null(plan.Realization);
+        Assert.Contains(
+            plan.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == InfrastructureTargetDeploymentCompiler.DiagnosticCodes.ResourceManagerSelfReference
+                && diagnostic.Evidence!.Observed == Aspire.Value);
+        Assert.Contains(
+            plan.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == InfrastructureTargetDeploymentCompiler.DiagnosticCodes.ExternalResourceManager
+                && diagnostic.Evidence!.Observed == DockerCompose.Value);
+        Assert.All(
+            plan.Diagnostics.Where(static diagnostic =>
+                diagnostic.Code == InfrastructureTargetDeploymentCompiler.DiagnosticCodes.ResourceManagerSelfReference
+                || diagnostic.Code == InfrastructureTargetDeploymentCompiler.DiagnosticCodes.ExternalResourceManager),
+            static diagnostic =>
+            {
+                Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
+                Assert.NotEmpty(diagnostic.Evidence!.SourceReferences);
+                Assert.NotEmpty(diagnostic.Evidence.ResolutionOptions);
+            });
+    }
+
+    [Fact]
+    public void Shared_physical_resource_ownership_conflicts_are_surfaced_as_a_deployment_diagnostic()
+    {
+        InfrastructureNodeId mirror = new("resources/mirror");
+        InfrastructureNodeId externalAlias = new("resources/external-alias");
+        InfrastructureLifecycleAuthorityId otherAuthority = new("test/state/other");
+        var semantic = Infrastructure.Define(
+            new("test/target-deployment-conflicting-physical-ownership"),
+            new("1"),
+            new("test/target-deployment-conflicting-physical-ownership/bindings/v1"),
+            infrastructure =>
+            {
+                infrastructure.Resource(State).Persistent().Requires(Storage);
+                infrastructure.Resource(mirror).Persistent().Requires(Storage);
+                infrastructure.Resource(externalAlias).External().Requires(Storage);
+            });
+        var facilities = Facilities(Aspire);
+        var manifest = InfrastructureTargetDeployments.Define(
+            new("test/deployments/conflicting-physical-ownership/v1"),
+            semantic.Definition,
+            facilities,
+            deployment =>
+            {
+                deployment.ReferencedResource(
+                    State,
+                    ObjectStore,
+                    StatePhysical,
+                    DockerCompose,
+                    Authority,
+                    [Source]);
+                deployment.Resource(mirror, ObjectStore, StatePhysical, otherAuthority, [Source]);
+                deployment.Resource(externalAlias, ObjectStore, StatePhysical, Authority, [Source]);
+            });
+
+        var plan = InfrastructureTargetDeploymentCompiler.Compile(semantic, manifest);
+
+        Assert.False(plan.IsComplete);
+        Assert.Null(plan.Realization);
+        var diagnostic = Assert.Single(
+            plan.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == InfrastructureTargetDeploymentCompiler.DiagnosticCodes.ResourceLifecycleInvalid);
+        Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
+        Assert.Contains("several lifecycle authorities", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Equal(manifest.Id.Value, diagnostic.Evidence!.Subject);
+        Assert.NotEmpty(diagnostic.Evidence.SourceReferences);
+        Assert.NotEmpty(diagnostic.Evidence.ResolutionOptions);
     }
 
     [Fact]
@@ -587,10 +750,10 @@ public sealed class InfrastructureTargetDeploymentCompilerTests
             infrastructure.Resource(State).Persistent().Requires(Storage);
         });
 
-    static InfrastructureTargetFacilityManifest Facilities() => InfrastructureTargetFacilities.Define(
+    static InfrastructureTargetFacilityManifest Facilities(InfrastructureTargetId? target = null) => InfrastructureTargetFacilities.Define(
         new("test/target-facilities/v1"),
         new("test/target-capabilities/v1"),
-        new("test-target/1"),
+        target ?? new("test-target/1"),
         Variant,
         [InfrastructureDefinitionDocument.CurrentSchemaVersion],
         target =>
