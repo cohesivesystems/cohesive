@@ -106,6 +106,13 @@ The catalog fingerprint covers exact values, weights, portable type, locale, ada
 references, and known deviations. This supports deterministic unit, property, and world generation without making an
 external fake-data library a runtime dependency of `Cohesive.Simulation`.
 
+Install `Cohesive.Adapters.Bogus` when Bogus should produce the retained snapshot. Its
+`BogusGenerationCatalog.Import(...)` helper applies an explicit locale, importer-local seed, and fixed UTC time
+reference, then records exact adapter/provider package evidence. The callback runs only during import; the resulting
+document is consumed through the same `Gen.Catalog<T>` path shown above. See the
+[Bogus adapter guide](../../adapters/Cohesive.Adapters.Bogus/README.md) for the complete example and determinism
+boundary.
+
 ## 6. Check properties
 
 ```csharp

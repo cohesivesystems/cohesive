@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using Cohesive.Adapters.Bogus;
 using Cohesive.Model;
 using Cohesive.Model.Authoring;
 using Cohesive.Relations.Model;
@@ -25,6 +26,7 @@ const string ExpectedJsonLinesFingerprint =
 
 if (args is ["emit", string coreWorldPath])
 {
+    VerifyBogusAdapterPackage();
     var customers = CreateCustomers();
     var compiledCustomers = customers.Compile();
     var propertyRun = compiledCustomers.CheckProperty(
@@ -142,6 +144,26 @@ static void Require(string? actual, string expected, string property)
     {
         throw new InvalidOperationException($"Expected {property} '{expected}' but found '{actual}'.");
     }
+}
+
+static void VerifyBogusAdapterPackage()
+{
+    var catalog = BogusGenerationCatalog.Import(
+        new(
+            id: "catalog/package-smoke-bogus",
+            revision: "r1",
+            count: 2,
+            seed: 1729,
+            locale: "en",
+            sourceReferences:
+            [
+                SourceReference.Repository(new("eng/package-smoke/Cohesive.Simulation.Consumer/Program.cs"))
+            ]),
+        faker => faker.Name.FullName());
+
+    Require(catalog.Definition.Provenance.Provider, "Bogus", "Bogus provider identity");
+    if (catalog.Definition.Entries.Length != 2)
+        throw new InvalidOperationException("Expected the installed Bogus adapter to retain two catalog entries.");
 }
 
 static PocoGenerationDefinition<SmokeCustomer> CreateCustomers() =>

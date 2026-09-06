@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>Bogus snapshot import adapter for portable Cohesive.Simulation generation catalogs.</Description>
+    <PackageTags>$(PackageTags);simulation;synthetic-data;bogus;faker</PackageTags>
+    <BogusPackageVersion>35.6.5</BogusPackageVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="CohesiveAdapterPackageVersion" Value="$(PackageVersion)" />
+    <AssemblyMetadata Include="BogusPackageVersion" Value="$(BogusPackageVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Bogus" Version="$(BogusPackageVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Cohesive.Simulation\Cohesive.Simulation.csproj" />
+  </ItemGroup>
+
+</Project>
