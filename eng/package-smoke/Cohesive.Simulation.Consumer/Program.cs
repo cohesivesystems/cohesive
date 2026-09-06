@@ -9,6 +9,7 @@ using Cohesive.Simulation;
 using Cohesive.Simulation.ExternalProcess;
 using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Generation;
+using Cohesive.Adapters.Mimesis;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Relations;
 using Cohesive.Simulation.Storage;
@@ -29,6 +30,7 @@ if (args is ["emit", string coreWorldPath])
 {
     VerifyBogusAdapterPackage();
     VerifyExternalProcessAdapterPackage();
+    await VerifyMimesisPackage();
     var customers = CreateCustomers();
     var compiledCustomers = customers.Compile();
     var propertyRun = compiledCustomers.CheckProperty(
@@ -168,6 +170,38 @@ static void VerifyBogusAdapterPackage()
         throw new InvalidOperationException("Expected the installed Bogus adapter to retain two catalog entries.");
 }
 
+static async Task VerifyMimesisPackage()
+{
+    var python = Environment.GetEnvironmentVariable("COHESIVE_MIMESIS_PYTHON");
+    if (string.IsNullOrWhiteSpace(python))
+    {
+        Console.Error.WriteLine(
+            "SKIP: Mimesis package smoke requires COHESIVE_MIMESIS_PYTHON with the pinned provider environment.");
+        return;
+    }
+
+    var definition = MimesisGenerationCatalog.Define<MimesisSmokePerson>(person => person
+        .Member(value => value.Name, "person.full_name")
+        .Member(value => value.Age, "numeric.integer_number", new { Start = 18, End = 80 }));
+    var catalog = await MimesisGenerationCatalog.ImportAsync(
+        definition,
+        new(
+            id: "catalog/package-smoke-mimesis",
+            revision: "r1",
+            count: 2,
+            seed: 1729,
+            locale: "en",
+            sourceReferences:
+            [
+                SourceReference.Repository(new("eng/package-smoke/Cohesive.Simulation.Consumer/Program.cs"))
+            ]),
+        new(pythonExecutable: python));
+
+    Require(catalog.Definition.Provenance.Provider, "Mimesis", "Mimesis provider identity");
+    if (catalog.Definition.Entries.Length != 2)
+        throw new InvalidOperationException("Expected the installed Mimesis package to retain two catalog entries.");
+}
+
 static void VerifyExternalProcessAdapterPackage()
 {
     DefaultClrTypeRefMapper typeMapper = new();
@@ -264,5 +298,7 @@ static async Task VerifyCliReport(string path, string expectedArtifactId, long e
 sealed record SmokeIdentity(string Name, string Region);
 
 sealed record SmokeCustomer(string Name, string Region, int Age);
+
+sealed record MimesisSmokePerson(string Name, int Age);
 
 sealed record SmokeExternalProviderConfiguration(string Generator);
