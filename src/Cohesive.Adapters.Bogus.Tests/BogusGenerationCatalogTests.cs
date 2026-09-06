@@ -16,20 +16,24 @@ public sealed class BogusGenerationCatalogTests
         var catalog = ImportProfiles(seed: 1729, locale: "en");
         var provenance = catalog.Definition.Provenance;
 
-        Assert.Equal(BogusGenerationCatalog.CapabilityProfileIdentity, provenance.Adapter);
+        Assert.Equal(BogusGenerationCatalog.AdapterIdentity, provenance.Adapter);
         Assert.Equal(BogusGenerationCatalog.AdapterVersion, provenance.AdapterVersion);
         Assert.Equal(BogusGenerationCatalog.ProviderIdentity, provenance.Provider);
         Assert.Equal("35.6.5", provenance.ProviderVersion);
         Assert.Equal("en", provenance.Locale);
         Assert.Equal(BogusGenerationCatalog.RandomAlgorithmIdentity, provenance.RandomAlgorithm);
         Assert.Equal("1729", provenance.Seed);
-        Assert.Contains("nuget://Bogus/35.6.5", provenance.SourceReferences.Select(static source => source.Value));
+        Assert.Equal(DateTimeOffset.UnixEpoch, provenance.DateTimeReferenceUtc);
+        Assert.Equal(BogusGenerationCatalog.CapabilityProfile, provenance.CapabilityProfile);
+        Assert.Contains(
+            "nuget://Bogus/35.6.5",
+            provenance.CapabilityProfile.SourceReferences.Select(static source => source.Value));
         Assert.Contains(
             $"nuget://Cohesive.Adapters.Bogus/{BogusGenerationCatalog.AdapterVersion}",
-            provenance.SourceReferences.Select(static source => source.Value));
+            provenance.CapabilityProfile.SourceReferences.Select(static source => source.Value));
         Assert.Contains(
             "repo://src/adapters/Cohesive.Adapters.Bogus/README.md",
-            provenance.SourceReferences.Select(static source => source.Value));
+            provenance.CapabilityProfile.SourceReferences.Select(static source => source.Value));
         Assert.Contains(
             "repo://src/Cohesive.Adapters.Bogus.Tests/BogusGenerationCatalogTests.cs",
             provenance.SourceReferences.Select(static source => source.Value));
@@ -135,11 +139,15 @@ public sealed class BogusGenerationCatalogTests
     [Fact]
     public void CapabilityProfile_DeclaresEveryImplementedConvention()
     {
-        Assert.Equal(
-            BogusGenerationCatalogCapability.All,
-            BogusGenerationCatalog.Capabilities);
-        Assert.True(BogusGenerationCatalog.Capabilities.HasFlag(
-            BogusGenerationCatalogCapability.FixedUtcDateTimeReference));
+        Assert.Equal(BogusGenerationCatalog.CapabilityProfileIdentity, BogusGenerationCatalog.CapabilityProfile.Id);
+        Assert.True(BogusGenerationCatalog.CapabilityProfile.Capabilities.SequenceEqual(
+            [
+                GenerationCatalogProducerCapability.FiniteSnapshot,
+                GenerationCatalogProducerCapability.StructuredValues,
+                GenerationCatalogProducerCapability.LocaleSelection,
+                GenerationCatalogProducerCapability.LocalSeed,
+                GenerationCatalogProducerCapability.FixedUtcDateTimeReference
+            ]));
     }
 
     static GenerationCatalogDocument ImportProfiles(int seed, string locale) =>

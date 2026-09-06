@@ -20,7 +20,7 @@ public sealed record GenerationDefinitionFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current generation-definition fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-generation/v1-c14n/v4";
+    public const string CurrentCanonicalization = "cohesive-generation/v1-c14n/v5";
 
     /// <summary>Creates generation-definition fingerprint metadata.</summary>
     /// <param name="algorithm">Hash-algorithm identity.</param>
@@ -54,7 +54,7 @@ public sealed record GenerationDefinitionFingerprint
 public sealed record GenerationDefinitionDocument
 {
     /// <summary>Current portable generation-definition document schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-simulation-generation/v3";
+    public const string CurrentSchemaVersion = "cohesive-simulation-generation/v4";
 
     /// <summary>Creates or restores one portable generation-definition document.</summary>
     /// <param name="schemaVersion">Exact portable generation-definition schema.</param>

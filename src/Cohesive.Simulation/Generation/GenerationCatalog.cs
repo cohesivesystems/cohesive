@@ -7,6 +7,122 @@ using Cohesive.Model.Serialization;
 
 namespace Cohesive.Simulation.Generation;
 
+/// <summary>Portable facility asserted by a generation-catalog producer profile.</summary>
+[JsonConverter(typeof(StrictStringEnumJsonConverterFactory))]
+public enum GenerationCatalogProducerCapability
+{
+    /// <summary>Materializes a finite set of exact values as retained catalog entries.</summary>
+    FiniteSnapshot = 0,
+
+    /// <summary>Materializes structured values rather than only independent scalar leaves.</summary>
+    StructuredValues = 1,
+
+    /// <summary>Selects one explicit provider locale for a complete import.</summary>
+    LocaleSelection = 2,
+
+    /// <summary>Uses an import-local deterministic random seed rather than ambient random state.</summary>
+    LocalSeed = 3,
+
+    /// <summary>Uses one explicit fixed UTC reference for provider operations whose results depend on time.</summary>
+    FixedUtcDateTimeReference = 4
+}
+
+/// <summary>Versioned, attributable capability evidence for one generation-catalog producer.</summary>
+/// <remarks>
+/// The profile describes how a producer can create a retained finite catalog. It is evidence about production of the
+/// snapshot, not an executable dependency of catalog interpretation. Profile identity, capability assertions, and
+/// sources are retained in the catalog fingerprint.
+/// </remarks>
+public sealed record GenerationCatalogCapabilityProfile
+{
+    /// <summary>Creates a producer capability profile.</summary>
+    /// <param name="id">Stable versioned profile identity.</param>
+    /// <param name="capabilities">Non-empty set of asserted producer facilities.</param>
+    /// <param name="sourceReferences">Exact package, documentation, or conformance evidence for the assertions.</param>
+    /// <exception cref="ArgumentNullException">A required value or collection entry is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The identity is empty; capabilities are empty, duplicated, unknown, or omit
+    /// <see cref="GenerationCatalogProducerCapability.FiniteSnapshot"/>; or source references are empty, invalid, or
+    /// duplicated.
+    /// </exception>
+    [JsonConstructor]
+    public GenerationCatalogCapabilityProfile(
+        string id,
+        ImmutableArray<GenerationCatalogProducerCapability> capabilities,
+        ImmutableArray<SourceReference> sourceReferences)
+    {
+        Id = Guard.RequireNotNullOrWhiteSpace(id);
+        if (capabilities.IsDefaultOrEmpty)
+            throw new ArgumentException("A generation-catalog capability profile requires capabilities.", nameof(capabilities));
+
+        var normalized = ImmutableArray.CreateBuilder<GenerationCatalogProducerCapability>(capabilities.Length);
+        foreach (var capability in capabilities)
+        {
+            if (!Enum.IsDefined(capability))
+            {
+                throw new ArgumentException(
+                    $"Generation-catalog producer capability '{capability}' is unsupported.",
+                    nameof(capabilities));
+            }
+
+            normalized.Add(capability);
+        }
+
+        normalized.Sort();
+        for (var index = 1; index < normalized.Count; index++)
+        {
+            if (normalized[index - 1] == normalized[index])
+            {
+                throw new ArgumentException(
+                    $"Generation-catalog producer capability '{normalized[index]}' is duplicated.",
+                    nameof(capabilities));
+            }
+        }
+
+        if (!normalized.Contains(GenerationCatalogProducerCapability.FiniteSnapshot))
+        {
+            throw new ArgumentException(
+                "A generation-catalog capability profile must assert finite snapshot materialization.",
+                nameof(capabilities));
+        }
+
+        Capabilities = normalized.MoveToImmutable();
+        SourceReferences = SourceReference.NormalizeSet(sourceReferences, requireNonEmpty: true);
+    }
+
+    /// <summary>Gets the stable versioned producer-profile identity.</summary>
+    public string Id { get; }
+
+    /// <summary>Gets asserted producer facilities in canonical enum order.</summary>
+    public ImmutableArray<GenerationCatalogProducerCapability> Capabilities { get; }
+
+    /// <summary>Gets exact package, documentation, or conformance evidence in ordinal order.</summary>
+    public ImmutableArray<SourceReference> SourceReferences { get; }
+
+    /// <summary>Compares two profiles by exact normalized semantic evidence.</summary>
+    /// <param name="other">Other profile.</param>
+    /// <returns><see langword="true"/> when every semantic field is equal; otherwise <see langword="false"/>.</returns>
+    public bool Equals(GenerationCatalogCapabilityProfile? other) =>
+        ReferenceEquals(this, other)
+        || other is not null
+        && string.Equals(Id, other.Id, StringComparison.Ordinal)
+        && Capabilities.SequenceEqual(other.Capabilities)
+        && SourceReferences.SequenceEqual(other.SourceReferences);
+
+    /// <summary>Returns a structural hash code for this profile.</summary>
+    /// <returns>A hash code derived from every semantic field.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Id, StringComparer.Ordinal);
+        foreach (var capability in Capabilities)
+            hash.Add(capability);
+        foreach (var sourceReference in SourceReferences)
+            hash.Add(sourceReference);
+        return hash.ToHashCode();
+    }
+}
+
 /// <summary>Attributable producer and provider evidence for one retained generation catalog.</summary>
 /// <remarks>
 /// A catalog snapshot is independently executable after it is retained. These coordinates explain how the snapshot
@@ -20,15 +136,18 @@ public sealed record GenerationCatalogProvenance
     /// <param name="adapterVersion">Exact adapter or importer version.</param>
     /// <param name="provider">Stable external provider or source-library identity.</param>
     /// <param name="providerVersion">Exact external provider or source-library version.</param>
+    /// <param name="capabilityProfile">Versioned producer capability assertions and their evidence.</param>
     /// <param name="locale">Optional exact locale or regional catalog identity.</param>
     /// <param name="randomAlgorithm">Optional random-algorithm identity used while producing the snapshot.</param>
     /// <param name="seed">Optional seed representation used while producing the snapshot.</param>
-    /// <param name="sourceReferences">Exact source, package, dataset, or conformance references.</param>
+    /// <param name="dateTimeReferenceUtc">Optional fixed UTC provider reference time used during production.</param>
+    /// <param name="sourceReferences">Exact catalog-specific application, callback, dataset, or import references.</param>
     /// <param name="knownDeviations">Known semantic deviations in ordinal identity order.</param>
     /// <exception cref="ArgumentNullException">A required string or collection element is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
-    /// A required string is empty, the source-reference set is empty, a source reference is invalid or duplicated,
-    /// or a deviation is empty or duplicated.
+    /// A required string is empty; the source-reference set is empty; a source reference is invalid or duplicated;
+    /// a deviation is empty or duplicated; a date-time reference is not UTC; or locale, seed, and reference-time
+    /// coordinates do not agree with the asserted producer capabilities.
     /// </exception>
     [JsonConstructor]
     public GenerationCatalogProvenance(
@@ -36,9 +155,11 @@ public sealed record GenerationCatalogProvenance
         string adapterVersion,
         string provider,
         string providerVersion,
+        GenerationCatalogCapabilityProfile capabilityProfile,
         string? locale = null,
         string? randomAlgorithm = null,
         string? seed = null,
+        DateTimeOffset? dateTimeReferenceUtc = null,
         ImmutableArray<SourceReference> sourceReferences = default,
         ImmutableArray<string> knownDeviations = default)
     {
@@ -46,15 +167,40 @@ public sealed record GenerationCatalogProvenance
         AdapterVersion = Guard.RequireNotNullOrWhiteSpace(adapterVersion);
         Provider = Guard.RequireNotNullOrWhiteSpace(provider);
         ProviderVersion = Guard.RequireNotNullOrWhiteSpace(providerVersion);
+        CapabilityProfile = Guard.RequireNotNull(capabilityProfile);
         Locale = NormalizeOptional(locale, nameof(locale));
         RandomAlgorithm = NormalizeOptional(randomAlgorithm, nameof(randomAlgorithm));
         Seed = NormalizeOptional(seed, nameof(seed));
+        DateTimeReferenceUtc = dateTimeReferenceUtc;
         if ((RandomAlgorithm is null) != (Seed is null))
         {
             throw new ArgumentException(
                 "Catalog production random-algorithm and seed evidence must either both be present or both be absent.",
                 randomAlgorithm is null ? nameof(randomAlgorithm) : nameof(seed));
         }
+
+        if (DateTimeReferenceUtc is { } referenceTime && referenceTime.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException(
+                "A catalog production date-time reference must use the UTC offset.",
+                nameof(dateTimeReferenceUtc));
+        }
+
+        RequireCoordinate(
+            capabilityProfile,
+            GenerationCatalogProducerCapability.LocaleSelection,
+            Locale is not null,
+            nameof(locale));
+        RequireCoordinate(
+            capabilityProfile,
+            GenerationCatalogProducerCapability.LocalSeed,
+            RandomAlgorithm is not null,
+            nameof(randomAlgorithm));
+        RequireCoordinate(
+            capabilityProfile,
+            GenerationCatalogProducerCapability.FixedUtcDateTimeReference,
+            DateTimeReferenceUtc is not null,
+            nameof(dateTimeReferenceUtc));
 
         SourceReferences = SourceReference.NormalizeSet(sourceReferences, requireNonEmpty: true);
         KnownDeviations = NormalizeDeviations(knownDeviations);
@@ -72,6 +218,9 @@ public sealed record GenerationCatalogProvenance
     /// <summary>Gets the exact external provider or source-library version.</summary>
     public string ProviderVersion { get; }
 
+    /// <summary>Gets the versioned producer capability assertions and their evidence.</summary>
+    public GenerationCatalogCapabilityProfile CapabilityProfile { get; }
+
     /// <summary>Gets the exact locale or regional catalog identity when one governed production.</summary>
     public string? Locale { get; }
 
@@ -81,7 +230,10 @@ public sealed record GenerationCatalogProvenance
     /// <summary>Gets the seed representation used to produce the snapshot when applicable.</summary>
     public string? Seed { get; }
 
-    /// <summary>Gets exact source, package, dataset, or conformance references in ordinal order.</summary>
+    /// <summary>Gets the fixed UTC provider reference time used during production when applicable.</summary>
+    public DateTimeOffset? DateTimeReferenceUtc { get; }
+
+    /// <summary>Gets exact catalog-specific application, callback, dataset, or import references in ordinal order.</summary>
     public ImmutableArray<SourceReference> SourceReferences { get; }
 
     /// <summary>Gets known semantic deviations in ordinal order.</summary>
@@ -96,6 +248,23 @@ public sealed record GenerationCatalogProvenance
         return value.Length > 0
             ? value
             : throw new ArgumentException("An optional catalog-provenance coordinate cannot be empty.", parameterName);
+    }
+
+    static void RequireCoordinate(
+        GenerationCatalogCapabilityProfile profile,
+        GenerationCatalogProducerCapability capability,
+        bool isPresent,
+        string parameterName)
+    {
+        var isClaimed = profile.Capabilities.Contains(capability);
+        if (isClaimed == isPresent)
+            return;
+
+        throw new ArgumentException(
+            isClaimed
+                ? $"Generation-catalog capability '{capability}' requires its production coordinate."
+                : $"A production coordinate for '{capability}' requires that capability in the producer profile.",
+            parameterName);
     }
 
     static ImmutableArray<string> NormalizeDeviations(ImmutableArray<string> deviations)
@@ -204,7 +373,7 @@ public sealed record GenerationCatalogFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current catalog fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-simulation-generation-catalog/v1-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-simulation-generation-catalog/v2-c14n/v1";
 
     /// <summary>Creates generation-catalog fingerprint metadata.</summary>
     /// <param name="algorithm">Hash-algorithm identity.</param>
@@ -238,7 +407,7 @@ public sealed record GenerationCatalogFingerprint
 public sealed record GenerationCatalogDocument
 {
     /// <summary>Current portable generation-catalog document schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-simulation-generation-catalog/v1";
+    public const string CurrentSchemaVersion = "cohesive-simulation-generation-catalog/v2";
 
     /// <summary>Creates or restores one portable generation-catalog document.</summary>
     /// <param name="schemaVersion">Exact portable catalog schema.</param>

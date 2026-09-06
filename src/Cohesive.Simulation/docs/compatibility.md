@@ -7,12 +7,12 @@ formats may change between alpha versions, but every persisted contract is expli
 
 | Contract | Current identity |
 | --- | --- |
-| Generation catalog document | `cohesive-simulation-generation-catalog/v1` |
-| Generation document | `cohesive-simulation-generation/v3` |
-| Core world document | `cohesive-simulation-world/v5` |
-| Relationship world document | `cohesive-simulation-relations-world/v2` |
-| World artifact manifest | `cohesive-simulation-world-artifact-manifest/v4` |
-| JSONL world item | `cohesive-simulation-world-item/v4` |
+| Generation catalog document | `cohesive-simulation-generation-catalog/v2` |
+| Generation document | `cohesive-simulation-generation/v4` |
+| Core world document | `cohesive-simulation-world/v6` |
+| Relationship world document | `cohesive-simulation-relations-world/v3` |
+| World artifact manifest | `cohesive-simulation-world-artifact-manifest/v5` |
+| JSONL world item | `cohesive-simulation-world-item/v5` |
 | Reference interpreter | `cohesive-simulation-reference/v3` |
 | Relationship interpreter | `cohesive-simulation-relations-reference/v1` |
 | Generation replay token | `csimr2.` |
@@ -45,6 +45,6 @@ or introduce an explicit migration interpreter; do not rewrite fingerprints or s
 4. Preserve replay tokens and structured diagnostics in test reports.
 5. Review release notes for schema, interpreter, entropy, identity, and shrinker changes before upgrading.
 
-Virtual-time scenarios, runtime activity, queue/resource models, fault injection, concrete external-provider adapters,
-and learned synthesis are outside this static-world alpha and therefore have no compatibility contract yet. Retained
-finite provider/catalog snapshots do have the generation-catalog contract listed above.
+Virtual-time scenarios, runtime activity, queue/resource models, fault injection, additional external-provider
+adapters, and learned synthesis are outside this static-world alpha and therefore have no compatibility contract yet.
+Retained finite provider/catalog snapshots do have the generation-catalog contract listed above.

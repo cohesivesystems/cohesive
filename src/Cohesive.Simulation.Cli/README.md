@@ -47,7 +47,7 @@ provision preserves the prior complete JSON Lines file. Standard output is inher
 partial batch if its consumer fails.
 
 The manifest and JSON Lines stream remain two independently framed artifacts rather than an invented aggregate file
-format. Every v4 item cites the exact manifest schema, artifact ID, and manifest fingerprint, as well as world, run,
+format. Every v5 item cites the exact manifest schema, artifact ID, and manifest fingerprint, as well as world, run,
 batch, population, exemplar, and replay provenance. The artifact ID and manifest fingerprint are independent of
 `--target` and `--batch-size`; run and batch IDs bind that artifact to those execution choices. `--target` is a
 required stable logical destination identity, not a machine-specific filesystem path.

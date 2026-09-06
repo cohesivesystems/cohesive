@@ -9,29 +9,6 @@ using BogusRandomizer = global::Bogus.Randomizer;
 
 namespace Cohesive.Adapters.Bogus;
 
-/// <summary>Closed facilities provided by the current Bogus generation-catalog import profile.</summary>
-[Flags]
-public enum BogusGenerationCatalogCapability
-{
-    /// <summary>No catalog-import capability is asserted.</summary>
-    None = 0,
-
-    /// <summary>Materializes a finite provider-produced sample as exact portable catalog entries.</summary>
-    FiniteSnapshot = 1,
-
-    /// <summary>Selects one explicit Bogus locale for the complete import.</summary>
-    LocaleSelection = 2,
-
-    /// <summary>Uses one importer-owned local randomizer rather than Bogus global random state.</summary>
-    LocalSeed = 4,
-
-    /// <summary>Uses the profile's fixed UTC date-time reference for Bogus date providers.</summary>
-    FixedUtcDateTimeReference = 8,
-
-    /// <summary>All facilities in the current import profile.</summary>
-    All = FiniteSnapshot | LocaleSelection | LocalSeed | FixedUtcDateTimeReference
-}
-
 /// <summary>Bounded inputs governing one Bogus generation-catalog import.</summary>
 public sealed class BogusGenerationCatalogImportOptions
 {
@@ -107,14 +84,14 @@ public static class BogusGenerationCatalog
     /// <summary>Stable identity of the current adapter capability and convention profile.</summary>
     public const string CapabilityProfileIdentity = "cohesive.adapters.bogus/catalog-snapshot/v1";
 
+    /// <summary>Stable adapter identity retained separately from the versioned capability profile.</summary>
+    public const string AdapterIdentity = "Cohesive.Adapters.Bogus";
+
     /// <summary>Stable external provider identity retained in catalog provenance.</summary>
     public const string ProviderIdentity = "Bogus";
 
     /// <summary>Random-algorithm profile used for locally seeded Bogus imports.</summary>
     public const string RandomAlgorithmIdentity = "Bogus.Randomizer/local-seed/v1";
-
-    /// <summary>Gets facilities asserted by the current adapter profile.</summary>
-    public static BogusGenerationCatalogCapability Capabilities => BogusGenerationCatalogCapability.All;
 
     /// <summary>Gets the fixed UTC reference used by Bogus date providers during import.</summary>
     public static DateTime DateTimeReference { get; } = DateTime.UnixEpoch;
@@ -124,6 +101,22 @@ public static class BogusGenerationCatalog
 
     /// <summary>Gets the exact Bogus package version retained in produced catalog provenance.</summary>
     public static string ProviderVersion { get; } = RequirePackageVersion(BogusPackageVersionMetadata);
+
+    /// <summary>Gets the complete versioned capability evidence retained in every imported catalog.</summary>
+    public static GenerationCatalogCapabilityProfile CapabilityProfile { get; } = new(
+        CapabilityProfileIdentity,
+        [
+            GenerationCatalogProducerCapability.FiniteSnapshot,
+            GenerationCatalogProducerCapability.StructuredValues,
+            GenerationCatalogProducerCapability.LocaleSelection,
+            GenerationCatalogProducerCapability.LocalSeed,
+            GenerationCatalogProducerCapability.FixedUtcDateTimeReference
+        ],
+        [
+            ProfileSource,
+            SourceReference.Create("nuget", $"Cohesive.Adapters.Bogus/{AdapterVersion}"),
+            SourceReference.Create("nuget", $"Bogus/{ProviderVersion}")
+        ]);
 
     /// <summary>Materializes a bounded, locally seeded Bogus sample into a portable catalog.</summary>
     /// <typeparam name="TValue">CLR value type returned by the transient provider callback.</typeparam>
@@ -172,30 +165,16 @@ public static class BogusGenerationCatalog
             TypeMapper.Map(typeof(TValue), nullability: null),
             entries.MoveToImmutable(),
             new(
-                adapter: CapabilityProfileIdentity,
+                adapter: AdapterIdentity,
                 adapterVersion: AdapterVersion,
                 provider: ProviderIdentity,
                 providerVersion: ProviderVersion,
+                capabilityProfile: CapabilityProfile,
                 locale: options.Locale,
                 randomAlgorithm: RandomAlgorithmIdentity,
                 seed: options.Seed.ToString(CultureInfo.InvariantCulture),
-                sourceReferences: CompleteSourceReferences(options.SourceReferences))));
-    }
-
-    static ImmutableArray<SourceReference> CompleteSourceReferences(ImmutableArray<SourceReference> applicationSources)
-    {
-        var references = ImmutableArray.CreateBuilder<SourceReference>(applicationSources.Length + 3);
-        references.AddRange(applicationSources);
-        AddIfMissing(references, ProfileSource);
-        AddIfMissing(references, SourceReference.Create("nuget", $"Cohesive.Adapters.Bogus/{AdapterVersion}"));
-        AddIfMissing(references, SourceReference.Create("nuget", $"Bogus/{ProviderVersion}"));
-        return SourceReference.NormalizeSet(references.ToImmutable(), requireNonEmpty: true);
-    }
-
-    static void AddIfMissing(ImmutableArray<SourceReference>.Builder references, SourceReference candidate)
-    {
-        if (!references.Contains(candidate))
-            references.Add(candidate);
+                dateTimeReferenceUtc: new DateTimeOffset(DateTimeReference),
+                sourceReferences: options.SourceReferences)));
     }
 
     static string RequirePackageVersion(string key)

@@ -41,7 +41,7 @@ public sealed record RelationshipWorldDefinitionFingerprint
 public sealed record RelationshipWorldDefinitionDocument
 {
     /// <summary>Current portable document schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive-simulation-relations-world/v2";
+    public const string CurrentSchemaVersion = "cohesive-simulation-relations-world/v3";
 
     /// <summary>Creates or restores a portable relationship-world document.</summary>
     /// <param name="schemaVersion">Exact portable document schema.</param>
