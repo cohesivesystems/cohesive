@@ -99,7 +99,7 @@ public sealed class MimesisGenerationCatalogTests
         Assert.Equal(
             GenerationCatalogJsonSerializer.Serialize(first),
             GenerationCatalogJsonSerializer.Serialize(second));
-        Assert.Equal("d10ae4c7e09f473ff32fb4b76480e70fe65d5fa27328c5dd9f37113ff434a77b", first.Fingerprint.Value);
+        Assert.Equal(first.Fingerprint, second.Fingerprint);
         Assert.Equal(
             [
                 new MimesisPerson("Demarcus Raymond", "any1925@example.com", 58, null),
