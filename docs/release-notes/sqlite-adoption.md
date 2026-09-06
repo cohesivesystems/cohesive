@@ -16,6 +16,15 @@ Runtime byte arrays are borrowed for the command lifetime; captured constants re
 adds capability-gated `SqlExpression.ScalarSubquery`, requiring one projected column and an explicit limit of one.
 Postgres and SQLite support this construction; other dialects must explicitly accept it.
 
+## Operation-scoped SQLite command reuse
+
+`SqliteCommandScope` is an additive execution option for repeated immutable templates within one caller-owned
+connection and active transaction. It retains private native commands, preparation and parameters, requires complete
+bindings on each execution, and permits one active reader. Disposing it closes its commands and reader without
+committing, rolling back or disposing borrowed resources. Existing one-shot commands remain independent. See the
+[scope contract](../../src/adapters/Cohesive.Adapters.SQLite/README.md#repeated-commands-within-a-transaction) and
+[benchmarks](../../src/adapters/Cohesive.Adapters.SQLite/PERFORMANCE.md#prepared-command-reuse).
+
 ## Intentional breaking SQL API changes
 
 `SqlFunction.ClockTimestamp` has intentionally left the shared SQL function enum. PostgreSQL wall-clock behavior

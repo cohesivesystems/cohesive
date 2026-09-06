@@ -132,6 +132,37 @@ Templates are immutable and reusable concurrently; returned commands are not.
 
 See [connection-reuse measurements](PERFORMANCE.md) for timing, allocation evidence and reproduction instructions.
 
+### Repeated commands within a transaction
+
+Use `SqliteCommandScope` when an operation executes the same templates repeatedly. The scope borrows an open
+connection and its active transaction, and owns one native command per template instance. Native preparation and
+parameter objects are reused after the first execution; SQL construction remains owned by the immutable template.
+
+```csharp
+using var transaction = connection.BeginTransaction(deferred: false);
+using (var commands = new SqliteCommandScope(database, connection, transaction))
+{
+    foreach (var id in ids)
+    {
+        using var reader = commands.ExecuteReader(read, cancellationToken, ("id", id));
+        while (reader.Read()) { /* consume this row before advancing */ }
+    }
+}
+transaction.Commit();
+```
+
+Use a finite set of shared template instances and one scope per operation. The scope is not thread-safe and allows
+one active reader; dispose that reader before executing another scope command. Disposing the scope also closes its
+reader and commands, without completing or disposing the borrowed transaction or connection. Execution after the
+transaction ends is rejected. Independent scopes can concurrently share templates, never native commands.
+
+Each execution requires a complete binding, including explicit nulls that replace prior values. Invalid binding
+fails before any cached parameter changes or SQL executes. Runtime byte arrays remain borrowed until their command
+is rebound or the scope is disposed. Native execution failures propagate to the caller; the scope neither retries
+nor selects a transaction recovery policy. Execution is synchronous, with cancellation checked before binding and
+execution rather than interrupting native I/O. See [prepared-command measurements](PERFORMANCE.md#prepared-command-reuse)
+for the measured benefit on repeated rows and the small overhead for a single execution.
+
 ## Exact scalar encodings
 
 `SqliteScalarCodec` is the single mapping catalog for column storage classes, parameters, encoding, decoding, and supported scalar kinds. `Encode` validates the full value contract before provider binding. `Decode` validates the native storage class and resulting observation. Use matching `STRICT` column types and `BINARY` text collation. This is scalar storage, not a relation/query capability declaration.
