@@ -54,7 +54,7 @@ internal sealed class WorldJsonLinesCodecException(
 
 internal static class WorldJsonLinesCodec
 {
-    public const string Format = "cohesive-simulation-world-item/v4";
+    public const string Format = "cohesive-simulation-world-item/v5";
 
     public const string FormatProperty = "format";
     public const string RunIdProperty = "runId";

@@ -102,9 +102,10 @@ public sealed record PersonProfile(string DisplayName, string Email);
 public sealed record Customer(string Name, string Email);
 ```
 
-The catalog fingerprint covers exact values, weights, portable type, locale, adapter and provider versions, source
-references, and known deviations. This supports deterministic unit, property, and world generation without making an
-external fake-data library a runtime dependency of `Cohesive.Simulation`.
+The catalog fingerprint covers exact values, weights, portable type, locale, adapter and provider versions, normalized
+producer capability evidence, distinct profile/import source references, and known deviations. This supports
+deterministic unit, property, and world generation without making an external fake-data library a runtime dependency
+of `Cohesive.Simulation`.
 
 Install `Cohesive.Adapters.Bogus` when Bogus should produce the retained snapshot. Its
 `BogusGenerationCatalog.Import(...)` helper applies an explicit locale, importer-local seed, and fixed UTC time

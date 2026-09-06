@@ -30,9 +30,22 @@ public sealed class GenerationCatalogTests
         Assert.Equal(["profile/a", "profile/z"], restored.Definition.Entries.Select(static entry => entry.Id));
         Assert.Equal("en-US", restored.Definition.Provenance.Locale);
         Assert.Equal("35.6.3", restored.Definition.Provenance.ProviderVersion);
+        Assert.Equal(DateTimeOffset.UnixEpoch, restored.Definition.Provenance.DateTimeReferenceUtc);
         Assert.Equal(
-            ["nuget://Bogus/35.6.3", "repo://eng/catalog-import.json"],
+            ["repo://eng/catalog-import.json"],
             restored.Definition.Provenance.SourceReferences.Select(static source => source.Value));
+        Assert.Equal("cohesive-adapters-bogus/catalog-snapshot/v1", restored.Definition.Provenance.CapabilityProfile.Id);
+        Assert.True(restored.Definition.Provenance.CapabilityProfile.Capabilities.SequenceEqual(
+            [
+                GenerationCatalogProducerCapability.FiniteSnapshot,
+                GenerationCatalogProducerCapability.StructuredValues,
+                GenerationCatalogProducerCapability.LocaleSelection,
+                GenerationCatalogProducerCapability.LocalSeed,
+                GenerationCatalogProducerCapability.FixedUtcDateTimeReference
+            ]));
+        Assert.Equal(
+            ["nuget://Bogus/35.6.3"],
+            restored.Definition.Provenance.CapabilityProfile.SourceReferences.Select(static source => source.Value));
         Assert.Equal(json, GenerationCatalogJsonSerializer.Serialize(restored));
     }
 
@@ -42,12 +55,47 @@ public sealed class GenerationCatalogTests
         var baseline = PersonCatalog();
         var otherLocale = PersonCatalog(locale: "fr-FR");
         var otherProviderVersion = PersonCatalog(providerVersion: "35.6.4");
+        var otherCapabilities = PersonCatalog(profile: AlternateProfile());
         var otherValues = PersonCatalog(
             entries: [Entry("profile/a", new PersonProfile("Augusta", "King", "augusta@example.test"))]);
 
         Assert.NotEqual(baseline.Fingerprint, otherLocale.Fingerprint);
         Assert.NotEqual(baseline.Fingerprint, otherProviderVersion.Fingerprint);
+        Assert.NotEqual(baseline.Fingerprint, otherCapabilities.Fingerprint);
         Assert.NotEqual(baseline.Fingerprint, otherValues.Fingerprint);
+    }
+
+    [Fact]
+    public void CapabilityProfile_NormalizesAndRejectsIncompleteEvidence()
+    {
+        var profile = Profile(
+            GenerationCatalogProducerCapability.LocalSeed,
+            GenerationCatalogProducerCapability.FiniteSnapshot,
+            GenerationCatalogProducerCapability.StructuredValues);
+
+        Assert.True(profile.Capabilities.SequenceEqual(
+            [
+                GenerationCatalogProducerCapability.FiniteSnapshot,
+                GenerationCatalogProducerCapability.StructuredValues,
+                GenerationCatalogProducerCapability.LocalSeed
+            ]));
+        Assert.Throws<ArgumentException>(() => Profile(GenerationCatalogProducerCapability.LocaleSelection));
+        Assert.Throws<ArgumentException>(() => Profile(
+            GenerationCatalogProducerCapability.FiniteSnapshot,
+            GenerationCatalogProducerCapability.FiniteSnapshot));
+        Assert.Throws<ArgumentException>(() => Profile(
+            GenerationCatalogProducerCapability.FiniteSnapshot,
+            (GenerationCatalogProducerCapability)999));
+
+        var finiteOnly = Profile(GenerationCatalogProducerCapability.FiniteSnapshot);
+        Assert.Throws<ArgumentException>(() => new GenerationCatalogProvenance(
+            adapter: "manual",
+            adapterVersion: "1",
+            provider: "manual",
+            providerVersion: "1",
+            capabilityProfile: finiteOnly,
+            locale: "en",
+            sourceReferences: [SourceReference.Repository(new("eng/catalog-import.json"))]));
     }
 
     [Theory]
@@ -56,6 +104,9 @@ public sealed class GenerationCatalogTests
     [InlineData("unknown", "simulation.generation.catalog.document.contentInvalid")]
     [InlineData("duplicate", "simulation.generation.catalog.document.duplicateProperty")]
     [InlineData("order", "simulation.generation.catalog.document.wireNonCanonical")]
+    [InlineData("capability", "simulation.generation.catalog.document.contentInvalid")]
+    [InlineData("capability-order", "simulation.generation.catalog.document.wireNonCanonical")]
+    [InlineData("time-reference", "simulation.generation.catalog.document.contentInvalid")]
     public void CatalogDocument_FailsClosedForInvalidOrNoncanonicalWireContent(
         string scenario,
         string expectedCode)
@@ -72,6 +123,11 @@ public sealed class GenerationCatalogTests
                 $"\"schemaVersion\":\"{GenerationCatalogDocument.CurrentSchemaVersion}\"",
                 StringComparison.Ordinal),
             "order" => Mutate(json, ReverseEntries),
+            "capability" => Mutate(json, root =>
+                root["definition"]!["provenance"]!["capabilityProfile"]!["capabilities"]![0] = "Unknown"),
+            "capability-order" => Mutate(json, ReverseCapabilities),
+            "time-reference" => Mutate(json, root =>
+                root["definition"]!["provenance"]!.AsObject().Remove("dateTimeReferenceUtc")),
             _ => throw new InvalidOperationException($"Unknown invalid-catalog scenario '{scenario}'.")
         };
 
@@ -183,7 +239,8 @@ public sealed class GenerationCatalogTests
     static GenerationCatalogDocument PersonCatalog(
         string locale = "en-US",
         string providerVersion = "35.6.3",
-        ImmutableArray<GenerationCatalogEntry> entries = default)
+        ImmutableArray<GenerationCatalogEntry> entries = default,
+        GenerationCatalogCapabilityProfile? profile = null)
     {
         if (entries.IsDefault)
         {
@@ -199,7 +256,7 @@ public sealed class GenerationCatalogTests
             revision: $"bogus-{providerVersion}-{locale}",
             valueType: TypeMapper.Map(typeof(PersonProfile), nullability: null),
             entries,
-            provenance: Provenance(locale, providerVersion)));
+            provenance: Provenance(locale, providerVersion, profile)));
     }
 
     static PocoGenerationDefinition<GeneratedPerson> PersonDefinition(GenerationCatalogDocument catalog) =>
@@ -213,19 +270,44 @@ public sealed class GenerationCatalogTests
 
     static GenerationCatalogProvenance Provenance(
         string locale = "en-US",
-        string providerVersion = "35.6.3") => new(
+        string providerVersion = "35.6.3",
+        GenerationCatalogCapabilityProfile? profile = null) => new(
         adapter: "cohesive-adapters-bogus",
         adapterVersion: "0.1.0-alpha.1",
         provider: "Bogus",
         providerVersion,
+        capabilityProfile: profile ?? Profile(
+            GenerationCatalogProducerCapability.FiniteSnapshot,
+            GenerationCatalogProducerCapability.StructuredValues,
+            GenerationCatalogProducerCapability.LocaleSelection,
+            GenerationCatalogProducerCapability.LocalSeed,
+            GenerationCatalogProducerCapability.FixedUtcDateTimeReference),
         locale,
         randomAlgorithm: "bogus-randomizer/v1",
         seed: "8675309",
+        dateTimeReferenceUtc: DateTimeOffset.UnixEpoch,
         sourceReferences:
         [
-            SourceReference.Repository(new("eng/catalog-import.json")),
-            SourceReference.Create("nuget", $"Bogus/{providerVersion}")
+            SourceReference.Repository(new("eng/catalog-import.json"))
         ]);
+
+    static GenerationCatalogCapabilityProfile Profile(
+        params GenerationCatalogProducerCapability[] capabilities) => new(
+        id: "cohesive-adapters-bogus/catalog-snapshot/v1",
+        capabilities: [.. capabilities],
+        sourceReferences: [SourceReference.Create("nuget", "Bogus/35.6.3")]);
+
+    static GenerationCatalogCapabilityProfile AlternateProfile() => new(
+        id: "cohesive-adapters-bogus/catalog-snapshot/v2",
+        capabilities:
+        [
+            GenerationCatalogProducerCapability.FiniteSnapshot,
+            GenerationCatalogProducerCapability.StructuredValues,
+            GenerationCatalogProducerCapability.LocaleSelection,
+            GenerationCatalogProducerCapability.LocalSeed,
+            GenerationCatalogProducerCapability.FixedUtcDateTimeReference
+        ],
+        sourceReferences: [SourceReference.Create("nuget", "Bogus/35.6.3")]);
 
     static GenerationCatalogEntry Entry(string id, PersonProfile profile, double weight = 1d) =>
         new(id, ObservationValue.FromObject(profile), weight);
@@ -249,6 +331,19 @@ public sealed class GenerationCatalogTests
         entries.Clear();
         foreach (var entry in reversed)
             entries.Add(entry);
+    }
+
+    static void ReverseCapabilities(JsonObject root)
+    {
+        var capabilities = root["definition"]?["provenance"]?["capabilityProfile"]?["capabilities"]?.AsArray()
+                           ?? throw new InvalidOperationException("Generation-catalog JSON has no capabilities array.");
+        var reversed = capabilities
+            .Select(static capability => capability?.DeepClone())
+            .Reverse()
+            .ToArray();
+        capabilities.Clear();
+        foreach (var capability in reversed)
+            capabilities.Add(capability);
     }
 
     public sealed record PersonProfile(string GivenName, string FamilyName, string Email);

@@ -97,9 +97,10 @@ but the reference provisioner does not invent retries or transactional guarantee
 
 Implemented generators are constants, inclusive uniform `Int32`, Bernoulli, weighted categorical, exact retained
 generation catalogs, object/member composition, and correlated record sampling with typed projections. Catalog
-documents pin values, weights, locale, adapter/provider versions, source references, known deviations, and a semantic
-fingerprint. The same canonical definitions support direct examples, bounded sequences, property cases, static
-populations, named exemplars, relationship-linked worlds, repository seeding, and portable artifacts.
+documents pin values, weights, locale, adapter/provider versions, normalized producer capability profiles, distinct
+profile and import source evidence, known deviations, and a semantic fingerprint. The same canonical definitions
+support direct examples, bounded sequences, property cases, static populations, named exemplars, relationship-linked
+worlds, repository seeding, and portable artifacts.
 
 Worlds currently describe static initial state. Virtual time, activity, events, queues, resources, failures, actors,
 actions, scenario traces, runtime provider interpreters, additional provider import adapters, and learned synthesis are

@@ -423,7 +423,7 @@ public static class RelationshipWorldCompiler
     public const string FingerprintAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile for relationship-world plans.</summary>
-    public const string FingerprintCanonicalization = "cohesive-simulation-relations-world/v2-c14n/v1";
+    public const string FingerprintCanonicalization = "cohesive-simulation-relations-world/v3-c14n/v1";
 
     /// <summary>Compiles and validates one canonical relationship-world definition.</summary>
     /// <param name="definition">Definition to compile.</param>

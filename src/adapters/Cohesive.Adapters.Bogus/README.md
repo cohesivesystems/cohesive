@@ -62,14 +62,21 @@ and provenance—not the callback or a future provider invocation—are the reta
 
 ## Capability and determinism profile
 
-`BogusGenerationCatalog.CapabilityProfileIdentity` identifies the exact import contract. The current profile:
+`BogusGenerationCatalog.CapabilityProfile` is the exact retained import contract;
+`BogusGenerationCatalog.CapabilityProfileIdentity` is its stable versioned identity. The current profile:
 
 - materializes a finite sample with equally weighted stable entry identities;
 - creates a fresh `Faker` for every import and uses `Randomizer(seed)` rather than global Bogus random state;
 - applies one explicit locale to the complete import;
 - fixes `Faker.DateTimeReference` to `DateTime.UnixEpoch` so date providers do not read wall-clock time;
-- records the adapter package, Bogus package, locale, local seed, profile documentation, and caller sources in catalog
+- retains normalized capability assertions with the adapter README and exact adapter/Bogus packages as profile-level
+  evidence;
+- records the distinct adapter and provider identities and versions, locale, local seed, and caller sources in catalog
   provenance.
+
+Profile evidence and import evidence are intentionally separate. The profile sources support claims about the adapter
+contract; `BogusGenerationCatalogImportOptions.SourceReferences` identify the application callback or specification
+that produced this particular catalog. Both are embedded in and fingerprinted with the returned document.
 
 Repeated values remain separate equally weighted entries, preserving their observed frequency in the finite sample.
 

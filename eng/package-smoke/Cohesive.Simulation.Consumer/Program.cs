@@ -16,13 +16,13 @@ using Cohesive.Simulation.Xunit;
 using Xunit.Sdk;
 
 const string ExpectedArtifactId =
-    "csimartifact1_571e3af7ae916eb7d7b55ab04ded535b9fdc779908e207b75cf5506797bb5575";
+    "csimartifact1_7f28277f04c1f1c4b5a104e7c4fe2c8e561a0eff36048749c6a6ca2bc86ccf1d";
 const string ExpectedManifestFingerprint =
-    "571e3af7ae916eb7d7b55ab04ded535b9fdc779908e207b75cf5506797bb5575";
+    "7f28277f04c1f1c4b5a104e7c4fe2c8e561a0eff36048749c6a6ca2bc86ccf1d";
 const string ExpectedWorldFingerprint =
-    "acfd6737bd655c8f96c6da5b3b4e52f1dac83c548fdee666448440015658aa8d";
+    "53adc1b48a3171c566ca32c2293d6d76bb81e577cb86367b64a7af0d205bbe75";
 const string ExpectedJsonLinesFingerprint =
-    "821688c353089e5809d2a30afec85d6a37efc0ece7f09ea4455fab4a8f0207e3";
+    "1e4954f2d2170ee2b060b6e6e0a9117993be7b22ac8f6a0c7b628e48a823c1e2";
 
 if (args is ["emit", string coreWorldPath])
 {
@@ -195,6 +195,17 @@ static GenerationCatalogDocument CreateIdentityCatalog()
             adapterVersion: "1",
             provider: "embedded-fixture",
             providerVersion: "1",
+            capabilityProfile: new(
+                id: "cohesive-package-smoke/embedded-catalog/v1",
+                capabilities:
+                [
+                    GenerationCatalogProducerCapability.FiniteSnapshot,
+                    GenerationCatalogProducerCapability.StructuredValues
+                ],
+                sourceReferences:
+                [
+                    SourceReference.Repository(new("eng/package-smoke/Cohesive.Simulation.Consumer/Program.cs"))
+                ]),
             sourceReferences: [SourceReference.Repository(new("eng/package-smoke/Cohesive.Simulation.Consumer/Program.cs"))])));
 }
 
