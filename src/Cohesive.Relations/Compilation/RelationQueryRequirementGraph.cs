@@ -599,6 +599,7 @@ public readonly record struct RelationQueryRequirementTraceStep
                 or RelationQueryExpressionSiteKind.AggregateAssignmentValue
                 or RelationQueryExpressionSiteKind.AggregateAssignmentFilter;
             var indexedSite = siteKind is RelationQueryExpressionSiteKind.DistinctKey
+                or RelationQueryExpressionSiteKind.RepresentativeKey
                 or RelationQueryExpressionSiteKind.OrderKey
                 or RelationQueryExpressionSiteKind.KeysetBoundary
                 or RelationQueryExpressionSiteKind.TemporalJoinIntervalLowerBound

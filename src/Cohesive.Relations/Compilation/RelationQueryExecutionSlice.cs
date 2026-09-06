@@ -393,6 +393,7 @@ public sealed record RelationQueryExecutionNode
             ? new(temporalJoin, ExpressionSites)
             : null;
         DistinctKeys = SelectIndexedSites(RelationQueryExpressionSiteKind.DistinctKey);
+        RepresentativeKeys = SelectIndexedSites(RelationQueryExpressionSiteKind.RepresentativeKey);
         OrderKeys = SelectIndexedSites(RelationQueryExpressionSiteKind.OrderKey);
         KeysetBoundaries = SelectIndexedSites(RelationQueryExpressionSiteKind.KeysetBoundary);
     }
@@ -428,6 +429,9 @@ public sealed record RelationQueryExecutionNode
 
     /// <summary>Demanded distinct-key sites sorted by their canonical ordinal.</summary>
     public ImmutableArray<RelationQueryExpressionSiteAnalysis> DistinctKeys { get; }
+
+    /// <summary>Indexed partition expressions for ordered representative selection.</summary>
+    public ImmutableArray<RelationQueryExpressionSiteAnalysis> RepresentativeKeys { get; }
 
     /// <summary>Demanded ordering-key sites sorted by their canonical ordinal.</summary>
     public ImmutableArray<RelationQueryExpressionSiteAnalysis> OrderKeys { get; }

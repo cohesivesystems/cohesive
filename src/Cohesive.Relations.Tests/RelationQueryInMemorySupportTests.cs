@@ -52,7 +52,7 @@ public sealed class RelationQueryInMemorySupportTests
                     RelationQueryStructuralCapabilityRole.BindingRead
                     or RelationQueryStructuralCapabilityRole.CurrentItemRead));
         Assert.Equal(
-            "cohesive.relations.in-memory/realization-v2",
+            "cohesive.relations.in-memory/realization-v3",
             RelationQueryInMemoryInterpreter.DefaultTargetProfile.Id.Value);
         Assert.Equal(
             "cohesive.relations.in-memory/realization-policy-v2",

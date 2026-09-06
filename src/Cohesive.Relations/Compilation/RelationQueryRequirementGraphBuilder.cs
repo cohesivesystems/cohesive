@@ -485,6 +485,16 @@ sealed class RelationQueryRequirementGraphBuilder
                     requirement,
                     trace,
                     strictAssignment),
+                SelectRepresentativeQueryNode representative => WalkPreservedField(
+                    representative.Id,
+                    representative.Input,
+                    binding,
+                    path,
+                    effect,
+                    output,
+                    requirement,
+                    trace,
+                    strictAssignment),
                 AggregateQueryNode aggregate => WalkAggregateField(
                     aggregate,
                     binding,
@@ -1226,6 +1236,27 @@ sealed class RelationQueryRequirementGraphBuilder
                         output,
                         requirement,
                         AppendStructural(trace, project.Id));
+                    break;
+                case SelectRepresentativeQueryNode representative:
+                    Retain(representative.Id);
+                    foreach (var candidate in analysis.SiteAnalyses.Where(site => site.Node == representative.Id))
+                    {
+                        if (!TryGetSite(candidate.Kind, out var site, node: representative.Id, ordinal: candidate.Ordinal))
+                            continue;
+                        WalkSiteRequirements(representative.Input, site,
+                            RelationQueryRequirementEffect.Membership, output, QueryInputRequirement.Required, trace);
+                        if (site.Kind == RelationQueryExpressionSiteKind.OrderKey)
+                            WalkSiteRequirements(representative.Input, site,
+                                RelationQueryRequirementEffect.Ordering, output, QueryInputRequirement.Required, trace);
+                    }
+                    var representativeTrace = AppendStructural(trace, representative.Id);
+                    WalkRow(representative.Input, effect, output, requirement, representativeTrace);
+                    if (effect != RelationQueryRequirementEffect.Membership)
+                        WalkRow(representative.Input, RelationQueryRequirementEffect.Membership,
+                            output, requirement, representativeTrace);
+                    if (effect != RelationQueryRequirementEffect.Cardinality)
+                        WalkRow(representative.Input, RelationQueryRequirementEffect.Cardinality,
+                            output, requirement, representativeTrace);
                     break;
                 case DistinctQueryNode distinct:
                     WalkDistinctRow(distinct, effect, output, requirement, trace);
@@ -2193,6 +2224,7 @@ sealed class RelationQueryRequirementGraphBuilder
                 TemporalJoinQueryNode join => FindBinaryJoin(join.Left, join.Right),
                 FilterQueryNode filter => Find(filter.Input),
                 DistinctQueryNode distinct => Find(distinct.Input),
+                SelectRepresentativeQueryNode representative => Find(representative.Input),
                 OrderQueryNode order => Find(order.Input),
                 PageQueryNode page => Find(page.Input),
                 _ => null

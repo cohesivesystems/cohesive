@@ -182,6 +182,19 @@ public static class RelationQueryRealizationRequirementProjector
                 case ProjectQueryNode:
                     ProjectProjection(execution);
                     break;
+                case SelectRepresentativeQueryNode representative:
+                    AddLogical(execution, RelationQueryLogicalCapabilityKind.SelectRepresentative,
+                        RelationQueryRequirementEffect.Membership,
+                        requiredGuarantees:
+                        [
+                            RelationQueryGuaranteeCapabilityKind.Cardinality,
+                            RelationQueryGuaranteeCapabilityKind.DeterministicResult,
+                            RelationQueryGuaranteeCapabilityKind.MissingNullDistinction
+                        ]);
+                    ProjectOrderingRequirements(execution, representative.Orderings);
+                    AddGuarantee(RelationQueryGuaranteeCapabilityKind.Cardinality);
+                    AddGuarantee(RelationQueryGuaranteeCapabilityKind.DeterministicResult);
+                    break;
                 case DistinctQueryNode distinct:
                     ProjectDistinct(execution, distinct);
                     break;
@@ -189,7 +202,7 @@ public static class RelationQueryRealizationRequirementProjector
                     ProjectAggregate(execution);
                     break;
                 case OrderQueryNode order:
-                    ProjectOrder(execution, order);
+                    ProjectOrderingRequirements(execution, order.Orderings);
                     break;
                 case PageQueryNode page:
                     ProjectPage(execution, page);
@@ -478,7 +491,7 @@ public static class RelationQueryRealizationRequirementProjector
             AddGuarantee(RelationQueryGuaranteeCapabilityKind.Cardinality);
         }
 
-        void ProjectOrder(RelationQueryExecutionNode execution, OrderQueryNode order)
+        void ProjectOrderingRequirements(RelationQueryExecutionNode execution, ImmutableArray<QueryOrdering> orderings)
         {
             AddLogical(
                 execution,
@@ -489,9 +502,9 @@ public static class RelationQueryRealizationRequirementProjector
                     RelationQueryGuaranteeCapabilityKind.Ordering,
                     RelationQueryGuaranteeCapabilityKind.NullPlacement
                 ]);
-            for (var index = 0; index < order.Orderings.Length; index++)
+            for (var index = 0; index < orderings.Length; index++)
             {
-                var ordering = order.Orderings[index];
+                var ordering = orderings[index];
                 var site = execution.OrderKeys.Single(candidate => candidate.Ordinal == index);
                 var origin = new RelationQueryRealizationRequirementOrigin(
                     node: execution.Id,
@@ -520,12 +533,13 @@ public static class RelationQueryRealizationRequirementProjector
                         RelationQueryGuaranteeCapabilityKind.MissingNullDistinction
                     ]);
             }
-            AddLogical(
-                execution.Id,
-                RelationQueryLogicalCapabilityKind.StableTieOrdering,
-                new(node: execution.Id, semanticSite: NodeSite(execution.Id, "stable-ties")),
-                UsesForNode(execution.Id, RelationQueryRequirementEffect.Ordering),
-                requiredGuarantees: [RelationQueryGuaranteeCapabilityKind.DeterministicResult]);
+            if (execution.CanonicalNode is OrderQueryNode)
+                AddLogical(
+                    execution.Id,
+                    RelationQueryLogicalCapabilityKind.StableTieOrdering,
+                    new(node: execution.Id, semanticSite: NodeSite(execution.Id, "stable-ties")),
+                    UsesForNode(execution.Id, RelationQueryRequirementEffect.Ordering),
+                    requiredGuarantees: [RelationQueryGuaranteeCapabilityKind.DeterministicResult]);
 
             AddGuarantee(RelationQueryGuaranteeCapabilityKind.Ordering);
             AddGuarantee(RelationQueryGuaranteeCapabilityKind.NullPlacement);
@@ -1550,6 +1564,7 @@ public static class RelationQueryRealizationRequirementProjector
             RelationQueryExpressionSiteKind.TemporalJoinIntervalUpperBound => RelationQueryRequirementEffect.Correlation,
             RelationQueryExpressionSiteKind.ExpandCollection => RelationQueryRequirementEffect.Cardinality,
             RelationQueryExpressionSiteKind.ProjectionAssignmentValue => RelationQueryRequirementEffect.Value,
+            RelationQueryExpressionSiteKind.RepresentativeKey => RelationQueryRequirementEffect.Membership,
             RelationQueryExpressionSiteKind.DistinctKey => RelationQueryRequirementEffect.Cardinality,
             RelationQueryExpressionSiteKind.AggregateGroupingKey => RelationQueryRequirementEffect.Grouping,
             RelationQueryExpressionSiteKind.AggregateAssignmentValue => RelationQueryRequirementEffect.Aggregation,

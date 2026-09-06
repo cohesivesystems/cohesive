@@ -20,7 +20,7 @@ namespace Cohesive.Relations.Authoring;
 /// previously returned result. Identity ordinals advance only after a declaration commits, so a
 /// caller may diagnose a rejected declaration and retry it without perturbing later durable identities.
 /// </remarks>
-public sealed class RelationQueryAuthoringCore
+public sealed partial class RelationQueryAuthoringCore
 {
     readonly List<LogicalQueryNode> nodes = [];
     readonly List<QueryParameterDefinition> parameters = [];
@@ -886,6 +886,12 @@ public sealed class RelationQueryAuthoringCore
                 foreach (var assignment in projection.Assignments)
                     yield return assignment.Value;
                 yield break;
+            case SelectRepresentativeQueryNode representative:
+                foreach (var key in representative.Keys)
+                    yield return key;
+                foreach (var ordering in representative.Orderings)
+                    yield return ordering.Key;
+                yield break;
             case DistinctQueryNode distinct:
                 foreach (var key in distinct.Keys)
                     yield return key;
@@ -1033,6 +1039,7 @@ public sealed class RelationQueryAuthoringCore
             AggregateQueryNode aggregation => [aggregation.ResultBinding],
             FilterQueryNode filter => [.. ResolveVisibleBindings(filter.Input, cache, visiting)],
             DistinctQueryNode distinct => [.. ResolveVisibleBindings(distinct.Input, cache, visiting)],
+            SelectRepresentativeQueryNode representative => [.. ResolveVisibleBindings(representative.Input, cache, visiting)],
             OrderQueryNode order => [.. ResolveVisibleBindings(order.Input, cache, visiting)],
             PageQueryNode page => [.. ResolveVisibleBindings(page.Input, cache, visiting)],
             _ => throw new InvalidOperationException(

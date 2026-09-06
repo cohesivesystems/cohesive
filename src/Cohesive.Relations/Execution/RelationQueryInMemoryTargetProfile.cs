@@ -10,7 +10,7 @@ namespace Cohesive.Relations.Execution;
 static class RelationQueryInMemoryTargetProfile
 {
     const string TargetIdentity = "cohesive.relations.in-memory";
-    const string DefaultProfileIdentity = "cohesive.relations.in-memory/realization-v2";
+    const string DefaultProfileIdentity = "cohesive.relations.in-memory/realization-v3";
 
     public static RelationQueryTargetCapabilityProfile Default { get; } = CreateCore(
         RelationQueryTemporalExecutionCapabilityProfile.All,
@@ -134,6 +134,7 @@ static class RelationQueryInMemoryTargetProfile
         RelationQueryLogicalCapabilityKind.ProjectionAssignment,
         RelationQueryLogicalCapabilityKind.DistinctRows,
         RelationQueryLogicalCapabilityKind.DistinctKeys,
+        RelationQueryLogicalCapabilityKind.SelectRepresentative,
         RelationQueryLogicalCapabilityKind.Aggregation,
         RelationQueryLogicalCapabilityKind.AggregateGrouping,
         RelationQueryLogicalCapabilityKind.AggregateFilter,

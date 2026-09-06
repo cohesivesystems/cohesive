@@ -7,6 +7,79 @@ namespace Cohesive.Adapters.SQLite.Tests;
 
 public sealed class SqliteSqlConstructionTests
 {
+    [Theory]
+    [InlineData(SqlSortDirection.Ascending, SqlNullPlacement.First, 1L)]
+    [InlineData(SqlSortDirection.Descending, SqlNullPlacement.First, 1L)]
+    [InlineData(SqlSortDirection.Ascending, SqlNullPlacement.Last, 2L)]
+    [InlineData(SqlSortDirection.Descending, SqlNullPlacement.Last, 3L)]
+    public void RowNumberPreservesPartitionOrderingAndFiltersWinnersAfterSelection(
+        SqlSortDirection direction, SqlNullPlacement nulls, long expected)
+    {
+        using var file = new DatabaseFixture();
+        using var connection = file.Database.OpenConnection();
+        using (var setup = file.Database.CreateCommand(connection, null, """
+            CREATE TABLE candidates (id INTEGER PRIMARY KEY, category TEXT, preference INTEGER, eligible INTEGER NOT NULL) STRICT;
+            INSERT INTO candidates VALUES (1, 'a', NULL, 1), (2, 'a', 5, 1), (3, 'a', 8, 1),
+                (4, 'b', 1, 0), (5, 'b', 1, 1);
+            """))
+            setup.ExecuteNonQuery();
+
+        var ranked = new SqlSelectBuilder(new SqlQualifiedTable("candidates"), "c")
+            .Select(SqlExpression.Column("c", "id"), "id")
+            .Select(SqlExpression.Column("c", "eligible"), "eligible")
+            .Select(SqlExpression.RowNumber([SqlExpression.Column("c", "category")],
+                [new(SqlExpression.Column("c", "preference"), direction, nulls),
+                 new(SqlExpression.Column("c", "id"))]), "rank")
+            .BuildQuery();
+        var template = new SqlSelectBuilder(ranked, "winner")
+            .Select(SqlExpression.Column("winner", "id"), "id")
+            .Where(SqlExpression.Binary(SqlBinaryOperator.Equal,
+                SqlExpression.Column("winner", "rank"), SqlExpression.Constant(1L)))
+            .Where(SqlExpression.Binary(SqlBinaryOperator.Equal,
+                SqlExpression.Column("winner", "eligible"), SqlExpression.RuntimeParameter("eligible")))
+            .OrderBy(SqlExpression.Column("winner", "id"))
+            .BuildTemplate(SqliteSqlDialect.Instance);
+        var restored = JsonSerializer.Deserialize<SqlCommandTemplate>(JsonSerializer.Serialize(template))!;
+        using var transaction = connection.BeginTransaction();
+        using var scope = new SqliteCommandScope(file.Database, connection, transaction);
+        var native = new SqliteCommandTemplate(restored);
+        Assert.Equal([expected], Read(eligible: 1L));
+        Assert.Equal([4L], Read(eligible: 0L));
+        Assert.Equal([expected], Read(eligible: 1L));
+
+        long[] Read(long eligible)
+        {
+            using var reader = scope.ExecuteReader(native, CancellationToken.None, ("eligible", eligible));
+            List<long> ids = [];
+            while (reader.Read()) ids.Add(reader.GetInt64(0));
+            return [.. ids];
+        }
+    }
+
+    [Fact]
+    public void GlobalRowNumberRequiresOrderingAndAnExplicitDialectCapability()
+    {
+        var ordering = new SqlOrdering(SqlExpression.Constant(1L));
+        Assert.Throws<ArgumentException>(() => SqlExpression.RowNumber([], []));
+        Assert.Throws<ArgumentException>(() => SqlExpression.RowNumber([], default));
+        Assert.Throws<ArgumentException>(() => SqlExpression.RowNumber([null!], [ordering]));
+        Assert.Throws<ArgumentException>(() => SqlExpression.RowNumber([], [null!]));
+        Assert.Throws<ArgumentNullException>(() => new SqlOrdering(null!));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SqlOrdering(SqlExpression.Constant(1L), (SqlSortDirection)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SqlOrdering(SqlExpression.Constant(1L), nullPlacement: (SqlNullPlacement)99));
+        var query = new SqlSelectBuilder().Select(SqlExpression.RowNumber(default, [ordering]), "rank");
+        var error = Assert.Throws<SqlConstructionException>(() => query.BuildTemplate(new RejectFeatureDialect(SqlFeature.RowNumber)));
+        Assert.Equal(nameof(SqlFeature.RowNumber), error.Construct);
+        var statement = query.Build(SqliteSqlDialect.Instance);
+        Assert.DoesNotContain("PARTITION BY", statement.Text, StringComparison.Ordinal);
+        using var file = new DatabaseFixture();
+        using var connection = file.Database.OpenConnection();
+        using var command = file.Database.CreateCommand(connection, null, statement.Text);
+        foreach (var parameter in statement.Parameters)
+            command.Parameters.AddWithValue(parameter.Placeholder, parameter.Value ?? DBNull.Value);
+        Assert.Equal(1L, command.ExecuteScalar());
+    }
+
     [Fact]
     public void SharedMutationAndQueryBuildersExecuteWithExactBindingsAndEscapedNames()
     {

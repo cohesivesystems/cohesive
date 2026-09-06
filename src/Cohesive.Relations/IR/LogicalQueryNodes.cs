@@ -64,6 +64,7 @@ public enum QueryNullPlacement
 [JsonDerivedType(typeof(ExpandCollectionQueryNode), RelationQueryWireNames.ExpandCollectionNode)]
 [JsonDerivedType(typeof(ProjectQueryNode), RelationQueryWireNames.ProjectNode)]
 [JsonDerivedType(typeof(DistinctQueryNode), RelationQueryWireNames.DistinctNode)]
+[JsonDerivedType(typeof(SelectRepresentativeQueryNode), RelationQueryWireNames.SelectRepresentativeNode)]
 [JsonDerivedType(typeof(AggregateQueryNode), RelationQueryWireNames.AggregateNode)]
 [JsonDerivedType(typeof(OrderQueryNode), RelationQueryWireNames.OrderNode)]
 [JsonDerivedType(typeof(PageQueryNode), RelationQueryWireNames.PageNode)]
@@ -440,6 +441,49 @@ public sealed record DistinctQueryNode : LogicalQueryNode
 
     /// <summary>Optional expressions defining row identity for distinctness.</summary>
     public ImmutableArray<Expr> Keys { get; init; }
+
+    /// <inheritdoc />
+    public override ImmutableArray<QueryNodeId> Inputs => [Input];
+}
+
+/// <summary>Selects the uniquely first row under explicit ordering in each key partition.</summary>
+/// <remarks>
+/// Partition equality uses canonical value equality, including the distinction between missing and null.
+/// Rooted execution additionally partitions by root occurrence. Empty keys select one global representative per root;
+/// empty input produces no row. Ordering uses <see cref="QueryOrdering"/> semantics. A tie for the best complete
+/// ordering tuple is an execution error; append a stable identity key when required. Ties among losing rows do not
+/// matter. Only the selected row's bindings, presence and provenance survive. Output partition order is unspecified;
+/// use an explicit <see cref="OrderQueryNode"/> when result order matters. Unlike keyed distinctness this operation
+/// neither relies on input encounter order nor merges provenance from discarded rows.
+/// </remarks>
+public sealed record SelectRepresentativeQueryNode : LogicalQueryNode
+{
+    /// <summary>Creates an ordered representative selection.</summary>
+    /// <param name="id">Stable node identity.</param>
+    /// <param name="input">Input rowset.</param>
+    /// <param name="keys">Partition expressions, or an empty/default array for a global partition.</param>
+    /// <param name="orderings">Nonempty ordering from primary preference to final tie-breaker.</param>
+    /// <exception cref="ArgumentException">A key or ordering is null, or ordering is empty/default.</exception>
+    public SelectRepresentativeQueryNode(QueryNodeId id, QueryNodeId input,
+        ImmutableArray<Expr> keys, ImmutableArray<QueryOrdering> orderings) : base(id)
+    {
+        Input = input;
+        Keys = keys.IsDefault ? [] : keys;
+        Orderings = orderings.IsDefault ? [] : orderings;
+        if (Keys.Any(static key => key is null))
+            throw new ArgumentException("Representative partition keys cannot contain null entries.", nameof(keys));
+        if (Orderings.IsDefaultOrEmpty || Orderings.Any(static ordering => ordering is null))
+            throw new ArgumentException("Representative selection requires nonempty, non-null orderings.", nameof(orderings));
+    }
+
+    /// <summary>Input rowset.</summary>
+    public QueryNodeId Input { get; init; }
+
+    /// <summary>Canonical partition keys; an empty array defines one partition per root.</summary>
+    public ImmutableArray<Expr> Keys { get; init; }
+
+    /// <summary>Ordered preferences defining the uniquely first row in each partition.</summary>
+    public ImmutableArray<QueryOrdering> Orderings { get; init; }
 
     /// <inheritdoc />
     public override ImmutableArray<QueryNodeId> Inputs => [Input];

@@ -97,6 +97,7 @@ static class RelationQueryBindingFlowAnalyzer
                 ExpandCollectionQueryNode expansion => ResolveExpansion(expansion),
                 ProjectQueryNode project => ResolveProject(project),
                 DistinctQueryNode distinct => ResolvePreservingNode(distinct.Id, distinct.Input),
+                SelectRepresentativeQueryNode representative => ResolvePreservingNode(representative.Id, representative.Input),
                 AggregateQueryNode aggregate => ResolveAggregate(aggregate),
                 OrderQueryNode order => ResolvePreservingNode(order.Id, order.Input),
                 PageQueryNode page => ResolvePreservingNode(page.Id, page.Input),

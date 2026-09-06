@@ -30,6 +30,8 @@ public static class RelationQueryWireNames
     public const string ProjectNode = "project";
     /// <summary>Distinct node discriminator value.</summary>
     public const string DistinctNode = "distinct";
+    /// <summary>Ordered representative-selection node discriminator value.</summary>
+    public const string SelectRepresentativeNode = "selectRepresentative";
     /// <summary>Aggregate node discriminator value.</summary>
     public const string AggregateNode = "aggregate";
     /// <summary>Order node discriminator value.</summary>

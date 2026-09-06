@@ -93,6 +93,15 @@ public sealed partial class RelationQueryExpressionAuthoring
         string? sourceReference = null)
         where TInput : LogicalQueryNode
     {
+        var reference = sourceReference ?? "order";
+        return structural.Order(input, LowerOrderings(input, orderings, reference),
+            source: Source(reference, "Expression-authored ordering."));
+    }
+
+    ImmutableArray<RelationQueryOrderingInput> LowerOrderings<TInput>(
+        RelationQueryNodeHandle<TInput> input, IEnumerable<RelationQueryExpressionOrdering> orderings, string reference)
+        where TInput : LogicalQueryNode
+    {
         ArgumentNullException.ThrowIfNull(orderings);
         var materialized = orderings.ToImmutableArray();
         if (materialized.IsDefaultOrEmpty)
@@ -100,9 +109,8 @@ public sealed partial class RelationQueryExpressionAuthoring
         if (materialized.Any(static ordering => ordering is null))
             throw new ArgumentException("Orderings cannot contain null entries.", nameof(orderings));
 
-        var reference = sourceReference ?? "order";
         var lowerer = ExpressionLowerer;
-        var lowered = new RelationQueryOrderingInput[materialized.Length];
+        var lowered = ImmutableArray.CreateBuilder<RelationQueryOrderingInput>(materialized.Length);
         for (var index = 0; index < materialized.Length; index++)
         {
             var ordering = materialized[index];
@@ -111,13 +119,10 @@ public sealed partial class RelationQueryExpressionAuthoring
             var handles = RequireBindings(ordering.Key, ordering.Bindings);
             RequireBindingsVisible(input, handles, nameof(orderings));
             var key = lowerer.LowerValue(ordering.Key, handles, site + "/key").RequireValue();
-            lowered[index] = new(key.Value, ordering.Direction, ordering.NullPlacement, key.Source);
+            lowered.Add(new(key.Value, ordering.Direction, ordering.NullPlacement, key.Source));
         }
 
-        return structural.Order(
-            input,
-            [.. lowered],
-            source: Source(reference, "Expression-authored ordering."));
+        return lowered.MoveToImmutable();
     }
 
     /// <summary>Orders a logical branch by one or more typed ordering declarations.</summary>
@@ -165,33 +170,40 @@ public sealed partial class RelationQueryExpressionAuthoring
         string? sourceReference = null)
         where TInput : LogicalQueryNode
     {
+        var reference = sourceReference ?? "distinct";
+        var lowered = LowerSetKeys(input, keys, bindings, reference, "distinct");
+        if (lowered.IsDefaultOrEmpty)
+            throw new ArgumentException("At least one distinct key is required.", nameof(keys));
+        return structural.Distinct(input, lowered,
+            source: Source(reference, "Expression-authored keyed distinctness."));
+    }
+
+    ImmutableArray<RelationQueryExpressionInput> LowerSetKeys<TInput>(
+        RelationQueryNodeHandle<TInput> input, IEnumerable<LambdaExpression> keys,
+        IReadOnlyList<RelationQueryExpressionValueBinding> bindings, string reference, string role)
+        where TInput : LogicalQueryNode
+    {
         ArgumentNullException.ThrowIfNull(keys);
         var materialized = keys.ToImmutableArray();
-        if (materialized.IsDefaultOrEmpty)
-            throw new ArgumentException("At least one distinct key is required.", nameof(keys));
         if (materialized.Any(static key => key is null))
-            throw new ArgumentException("Distinct keys cannot contain null entries.", nameof(keys));
+            throw new ArgumentException("Set keys cannot contain null entries.", nameof(keys));
 
-        var reference = sourceReference ?? "distinct";
         var lowerer = ExpressionLowerer;
-        var lowered = new RelationQueryExpressionInput[materialized.Length];
+        var lowered = ImmutableArray.CreateBuilder<RelationQueryExpressionInput>(materialized.Length);
         for (var index = 0; index < materialized.Length; index++)
         {
             var site = $"{reference}/keys/{index}";
-            RequireCarrierIndependentKey(materialized[index], "distinct", site);
+            RequireCarrierIndependentKey(materialized[index], role, site);
             var handles = RequireBindings(materialized[index], bindings);
             RequireBindingsVisible(input, handles, nameof(bindings));
             var key = lowerer.LowerValue(
                 materialized[index],
                 handles,
                 site).RequireValue();
-            lowered[index] = new(key.Value, key.Source);
+            lowered.Add(new(key.Value, key.Source));
         }
 
-        return structural.Distinct(
-            input,
-            [.. lowered],
-            source: Source(reference, "Expression-authored keyed distinctness."));
+        return lowered.MoveToImmutable();
     }
 
     /// <summary>Removes duplicates using one typed key expression.</summary>

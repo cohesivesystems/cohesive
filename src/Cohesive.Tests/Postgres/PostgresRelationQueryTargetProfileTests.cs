@@ -11,6 +11,21 @@ namespace Cohesive.Tests.Postgres;
 public sealed class PostgresRelationQueryTargetProfileTests
 {
     [Fact]
+    public void RepresentativeSelectionRemainsUnavailableUntilTheNativeCompilerProvesItsContract()
+    {
+        var plan = Cohesive.Relations.TestFixtures.RepresentativeSelectionFixture.Compile(
+            Cohesive.Relations.TestFixtures.RepresentativeSelectionFixture.Document());
+        var report = RelationQueryRealizationCompiler.Compile(plan,
+            PostgresRelationQueryTargetProfile.Default, PostgresRelationQueryTargetProfile.Policy,
+            RelationQueryResultObservability.NotRequested);
+        var requirement = Assert.Single(report.Requirements, item => item.Capability is LogicalRelationQueryCapability
+            { Kind: RelationQueryLogicalCapabilityKind.SelectRepresentative });
+        Assert.False(report.IsRealizable);
+        Assert.Contains(report.Decisions, decision => decision.Requirement == requirement.Id
+            && decision is UnavailableRelationQueryRealizationDecision);
+    }
+
+    [Fact]
     public void SourceAcquisitionCapabilities_MatchTheNpgsqlReaderClosure()
     {
         HashSet<RelationQueryPrimitiveCapabilityKind> expected =

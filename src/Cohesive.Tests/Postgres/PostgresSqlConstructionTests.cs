@@ -6,6 +6,23 @@ namespace Cohesive.Tests.Postgres;
 public sealed class PostgresSqlConstructionTests
 {
     [Fact]
+    public void RowNumberUsesSharedOrderingEscapingAndRuntimeSlots()
+    {
+        var runtime = SqlExpression.RuntimeParameter("offset");
+        var template = new SqlSelectBuilder(new SqlQualifiedTable("public", "candidates"), "c")
+            .Select(runtime, "offset")
+            .Select(SqlExpression.RowNumber([SqlExpression.Column("c", "category\"$1")],
+                [new(SqlExpression.Binary(SqlBinaryOperator.Add, SqlExpression.Column("c", "score"), runtime),
+                    SqlSortDirection.Descending, SqlNullPlacement.First),
+                 new(SqlExpression.Column("c", "id"))]), "rank")
+            .BuildTemplate(PostgresSqlDialect.Instance);
+        Assert.Single(template.Parameters);
+        Assert.Equal("SELECT $1 AS \"offset\", ROW_NUMBER() OVER (PARTITION BY \"c\".\"category\"\"$1\" "
+            + "ORDER BY (\"c\".\"score\" + $1) DESC NULLS FIRST, \"c\".\"id\" ASC NULLS LAST) AS \"rank\" "
+            + "FROM \"public\".\"candidates\" AS \"c\"", template.Text);
+    }
+
+    [Fact]
     public void ScalarSubqueriesShareTheOuterRuntimeBindingAndSerializeAsTemplates()
     {
         var child = new SqlSelectBuilder(new SqlQualifiedTable("public", "loads"), "l")
