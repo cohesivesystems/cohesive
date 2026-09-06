@@ -43,6 +43,10 @@ public sealed class CanonicalProcessAuthoringTests
             Provenance());
 
         Assert.True(first.IsValid, Format(first.Validation));
+        Assert.Equivalent(
+            ProcessDefinitionDocuments.Validate(first.Document),
+            first.Validation,
+            strict: true);
         Assert.Equal(DecisionInputContract, first.Definition.Input);
         Assert.Equal(StringContract, first.Definition.Result);
         Assert.Equal(directDefinition, first.Definition);
@@ -199,6 +203,10 @@ public sealed class CanonicalProcessAuthoringTests
             static diagnostic => diagnostic.Code == ExprAnalysisDiagnosticCodes.ResultTypeMismatch);
 
         Assert.False(authored.IsValid);
+        Assert.Equivalent(
+            ProcessDefinitionDocuments.Validate(authored.Document),
+            authored.Validation,
+            strict: true);
         Assert.Contains("/nodes/0", paths);
         Assert.Contains("/nodes/0/result", paths);
         Assert.Equal("/definition/nodes/0/result", mismatch.Location);

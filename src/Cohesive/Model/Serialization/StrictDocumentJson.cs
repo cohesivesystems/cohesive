@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -56,33 +57,46 @@ public static class StrictDocumentJson
         string path,
         out string duplicateLocation)
     {
+        List<JsonPointerSegment> segments = [];
+        return TryFindDuplicateProperty(element, path, segments, out duplicateLocation);
+    }
+
+    static bool TryFindDuplicateProperty(
+        JsonElement element,
+        string rootPath,
+        List<JsonPointerSegment> segments,
+        out string duplicateLocation)
+    {
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
                 HashSet<string> names = new(StringComparer.Ordinal);
                 foreach (var property in element.EnumerateObject())
                 {
-                    var propertyPath = $"{path}/{EscapeJsonPointerSegment(property.Name)}";
                     if (!names.Add(property.Name))
                     {
-                        duplicateLocation = propertyPath;
+                        duplicateLocation = BuildJsonPointer(rootPath, segments, property.Name);
                         return true;
                     }
 
-                    if (TryFindDuplicateProperty(property.Value, propertyPath, out duplicateLocation))
+                    segments.Add(JsonPointerSegment.Property(property.Name));
+                    if (TryFindDuplicateProperty(property.Value, rootPath, segments, out duplicateLocation))
                     {
                         return true;
                     }
+                    segments.RemoveAt(segments.Count - 1);
                 }
                 break;
             case JsonValueKind.Array:
                 var index = 0;
                 foreach (var item in element.EnumerateArray())
                 {
-                    if (TryFindDuplicateProperty(item, $"{path}/{index}", out duplicateLocation))
+                    segments.Add(JsonPointerSegment.ArrayIndex(index));
+                    if (TryFindDuplicateProperty(item, rootPath, segments, out duplicateLocation))
                     {
                         return true;
                     }
+                    segments.RemoveAt(segments.Count - 1);
 
                     index++;
                 }
@@ -91,6 +105,45 @@ public static class StrictDocumentJson
 
         duplicateLocation = string.Empty;
         return false;
+    }
+
+    static string BuildJsonPointer(
+        string rootPath,
+        IReadOnlyList<JsonPointerSegment> segments,
+        string duplicateProperty)
+    {
+        StringBuilder pointer = new(rootPath);
+        foreach (var segment in segments)
+        {
+            pointer.Append('/');
+            if (segment.PropertyName is { } propertyName)
+                AppendEscapedJsonPointerSegment(pointer, propertyName);
+            else
+                pointer.Append(segment.Index.ToString(CultureInfo.InvariantCulture));
+        }
+
+        pointer.Append('/');
+        AppendEscapedJsonPointerSegment(pointer, duplicateProperty);
+        return pointer.ToString();
+    }
+
+    static void AppendEscapedJsonPointerSegment(StringBuilder output, string value)
+    {
+        foreach (var character in value)
+        {
+            switch (character)
+            {
+                case '~':
+                    output.Append("~0");
+                    break;
+                case '/':
+                    output.Append("~1");
+                    break;
+                default:
+                    output.Append(character);
+                    break;
+            }
+        }
     }
 
     /// <summary>Creates a one-error structured validation result.</summary>
@@ -275,10 +328,9 @@ public static class StrictDocumentJson
     }
 
     static byte[] GetCanonicalBytes(JsonNode node, JsonSerializerOptions options) =>
-        CanonicalJsonWriter.GetCanonicalBytes(
+        CanonicalJsonWriter.GetCanonicalSequenceBytes(
             node,
             options,
-            static _ => CanonicalJsonArrayOrdering.Sequence,
             numberSemantics: CanonicalJsonNumberSemantics.ExactDecimalRational);
 
     static bool IsCanonicalWireFailure(Exception exception) =>
@@ -289,9 +341,12 @@ public static class StrictDocumentJson
             or FormatException
             or OverflowException;
 
-    static string EscapeJsonPointerSegment(string value) =>
-        value.Replace("~", "~0", StringComparison.Ordinal)
-            .Replace("/", "~1", StringComparison.Ordinal);
+    readonly record struct JsonPointerSegment(string? PropertyName, int Index)
+    {
+        public static JsonPointerSegment Property(string name) => new(name, 0);
+
+        public static JsonPointerSegment ArrayIndex(int index) => new(null, index);
+    }
 }
 
 /// <summary>Classification of a failed strict typed portable-document JSON read.</summary>

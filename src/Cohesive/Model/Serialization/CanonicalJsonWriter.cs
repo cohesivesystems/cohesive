@@ -258,6 +258,52 @@ public static class CanonicalJsonWriter
                 "Unsupported canonical JSON number semantics.");
         }
 
+        return GetCanonicalBytesCore(node, options, getArrayOrdering, numberSemantics);
+    }
+
+    /// <summary>Writes canonical UTF-8 JSON when every array has sequence semantics.</summary>
+    /// <param name="node">JSON value to canonicalize.</param>
+    /// <param name="options">Serializer options used when writing scalar JSON values.</param>
+    /// <param name="numberSemantics">Semantics used to normalize untyped JSON number tokens.</param>
+    /// <returns>Canonical UTF-8 JSON bytes with authored array order preserved.</returns>
+    /// <remarks>
+    /// This fixed policy avoids constructing structural array paths that no caller can observe. Use
+    /// <see cref="GetCanonicalBytes(JsonNode, JsonSerializerOptions, Func{CanonicalJsonArrayPath, CanonicalJsonArrayOrdering}, CanonicalJsonNumberSemantics)"/>
+    /// when any array has set semantics or its ordering depends on location.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="node"/> or <paramref name="options"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="numberSemantics"/> is not recognized.</exception>
+    /// <exception cref="InvalidOperationException">A JSON node or observation value has no canonical encoding.</exception>
+    /// <exception cref="JsonException">A scalar JSON value cannot be written using <paramref name="options"/>.</exception>
+    /// <exception cref="NotSupportedException">
+    /// A scalar JSON value uses a runtime type unsupported by <paramref name="options"/>.
+    /// </exception>
+    public static byte[] GetCanonicalSequenceBytes(
+        JsonNode node,
+        JsonSerializerOptions options,
+        CanonicalJsonNumberSemantics numberSemantics = CanonicalJsonNumberSemantics.PortableObservation)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(options);
+        if (!Enum.IsDefined(numberSemantics))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(numberSemantics),
+                numberSemantics,
+                "Unsupported canonical JSON number semantics.");
+        }
+
+        return GetCanonicalBytesCore(node, options, getArrayOrdering: null, numberSemantics);
+    }
+
+    static byte[] GetCanonicalBytesCore(
+        JsonNode node,
+        JsonSerializerOptions options,
+        Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering>? getArrayOrdering,
+        CanonicalJsonNumberSemantics numberSemantics)
+    {
         ArrayBufferWriter<byte> buffer = new();
         using (Utf8JsonWriter writer = new(buffer, new JsonWriterOptions
         {
@@ -281,7 +327,7 @@ public static class CanonicalJsonWriter
         Utf8JsonWriter writer,
         JsonNode? node,
         JsonSerializerOptions options,
-        Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering> getArrayOrdering,
+        Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering>? getArrayOrdering,
         string path,
         CanonicalJsonNumberSemantics numberSemantics)
     {
@@ -300,7 +346,7 @@ public static class CanonicalJsonWriter
                         property.Value,
                         options,
                         getArrayOrdering,
-                        AppendPropertyPath(path, property.Key),
+                        getArrayOrdering is null ? string.Empty : AppendPropertyPath(path, property.Key),
                         numberSemantics);
                 }
                 writer.WriteEndObject();
@@ -352,12 +398,14 @@ public static class CanonicalJsonWriter
         Utf8JsonWriter writer,
         JsonArray array,
         JsonSerializerOptions options,
-        Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering> getArrayOrdering,
+        Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering>? getArrayOrdering,
         string path,
         CanonicalJsonNumberSemantics numberSemantics)
     {
-        var ordering = getArrayOrdering(new(path));
-        var itemPath = AppendArrayItemPath(path);
+        var ordering = getArrayOrdering is null
+            ? CanonicalJsonArrayOrdering.Sequence
+            : getArrayOrdering(new(path));
+        var itemPath = getArrayOrdering is null ? string.Empty : AppendArrayItemPath(path);
         writer.WriteStartArray();
         switch (ordering.Kind)
         {

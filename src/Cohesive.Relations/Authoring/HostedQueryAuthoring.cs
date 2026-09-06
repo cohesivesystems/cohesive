@@ -139,16 +139,8 @@ public sealed class HostedQuery<TInput, TResult>
             extensions,
             displayName,
             description);
-        var validation = HostedQueryDefinitionDocuments.Validate(initial);
-        var document = HostedQueryDefinitionDocuments.Create(
-            definitionId,
-            revisionId,
-            definition,
-            provenance,
-            extensions,
-            displayName,
-            description,
-            diagnostics: validation.Diagnostics);
+        var validation = HostedQueryDefinitionDocuments.ValidateAuthored(initial, definition);
+        var document = initial.WithRetainedDiagnostics(validation.Diagnostics);
         return new(document, validation);
     }
 }
