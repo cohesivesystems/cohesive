@@ -22,8 +22,9 @@ Add only the integrations the application uses:
 | `Cohesive.Simulation.Xunit` | Translating property-case results into xUnit failures |
 | `Cohesive.Simulation.Cli` | `cohesive-sim` for scripts, CI, and Playwright setup |
 | `Cohesive.Adapters.Bogus` | Optional finite Bogus imports into exact retained generation catalogs |
+| `Cohesive.Simulation.ExternalProcess` | Bounded provider-process imports from Python or another runtime |
 
-Core depends only on `Cohesive`; Relations, Storage, xUnit, CLI, and Bogus concerns stay in optional packages.
+Core depends only on `Cohesive`; Relations, Storage, xUnit, CLI, and provider integrations stay in optional packages.
 
 ## Generate a POCO
 
