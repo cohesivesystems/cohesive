@@ -100,6 +100,12 @@ identifier quoting, parameter reuse, native array/lateral construction, and temp
 
 ## Migration
 
+`SqlExpression.ScalarSubquery(query)` embeds one value (SQL NULL for no row) and shares the outer parameter allocator.
+The query must project exactly one column and use `Limit(1)`; unbounded queries are rejected so dialect-specific
+multirow behavior cannot silently select different semantics. Callers needing a deterministic representative must
+also declare an ordering or establish uniqueness. Rendering requires `SqlFeature.ScalarSubquery` support. This is
+a SQL construction facility, not a canonical Relations representative-selection operator.
+
 The former `PostgresSql*` construction types move to `Cohesive.Adapters.Sql` as `Sql*`. Lowering and binding now
 require an explicit dialect. `CosmosSqlParameterBindingKind` becomes the shared `SqlParameterBindingKind`.
 Postgres compiled Relation artifacts advance to v4 with compiler profile v2: recompile older artifacts from canonical

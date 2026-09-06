@@ -126,6 +126,16 @@ public sealed class SqliteSqlConstructionTests
         Assert.Equal(expectedRows, count);
     }
 
+    [Fact]
+    public void ScalarSubqueriesRequireAnExplicitDialectCapability()
+    {
+        var child = new SqlSelectBuilder().Select(SqlExpression.Constant(1L), "one").Limit(1).BuildQuery();
+        var query = new SqlSelectBuilder().Select(SqlExpression.ScalarSubquery(child), "value");
+        var error = Assert.Throws<SqlConstructionException>(() =>
+            query.BuildTemplate(new RejectFeatureDialect(SqlFeature.ScalarSubquery)));
+        Assert.Equal(nameof(SqlFeature.ScalarSubquery), error.Construct);
+    }
+
     sealed class RejectFeatureDialect(SqlFeature rejected) : SqlDialect
     {
         public override string Name => "restricted/v1";

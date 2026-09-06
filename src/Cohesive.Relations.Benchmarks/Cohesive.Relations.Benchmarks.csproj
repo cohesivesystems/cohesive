@@ -10,6 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../adapters/Cohesive.Adapters.SQLite/Cohesive.Adapters.SQLite.csproj" />
     <PackageReference Include="AutoMapper" Version="16.2.0" />
     <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
   </ItemGroup>

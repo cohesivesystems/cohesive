@@ -6,6 +6,26 @@ namespace Cohesive.Tests.Postgres;
 public sealed class PostgresSqlConstructionTests
 {
     [Fact]
+    public void ScalarSubqueriesShareTheOuterRuntimeBindingAndSerializeAsTemplates()
+    {
+        var child = new SqlSelectBuilder(new SqlQualifiedTable("public", "loads"), "l")
+            .Select(SqlExpression.Column("l", "status"), "status")
+            .Where(SqlExpression.Binary(SqlBinaryOperator.Equal,
+                SqlExpression.Column("l", "id"), SqlExpression.RuntimeParameter("id")))
+            .Limit(1).BuildQuery();
+        var template = new SqlSelectBuilder()
+            .Select(SqlExpression.RuntimeParameter("id"), "id")
+            .Select(SqlExpression.ScalarSubquery(child), "status")
+            .BuildTemplate(PostgresSqlDialect.Instance);
+        Assert.Single(template.Parameters);
+        Assert.Equal("SELECT $1 AS \"id\", (SELECT \"l\".\"status\" AS \"status\" FROM \"public\".\"loads\" AS \"l\" WHERE (\"l\".\"id\" = $1) LIMIT 1) AS \"status\"", template.Text);
+        var restored = System.Text.Json.JsonSerializer.Deserialize<SqlCommandTemplate>(
+            System.Text.Json.JsonSerializer.Serialize(template))!;
+        Assert.Equal(template.Text, restored.Bind(PostgresSqlDialect.Instance,
+            new Dictionary<string, object?> { ["id"] = 7L }).Text);
+    }
+
+    [Fact]
     public void Build_QuotesEveryIdentifierAsOneInjectionSafeToken()
     {
         const string schema = "public\"; DROP SCHEMA public; --";

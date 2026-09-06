@@ -12,7 +12,8 @@ public sealed class SqliteFoundationTests
     {
         using var fixture = new DatabaseFixture();
         var defaults = fixture.Database.Options;
-        Assert.Equal<string>([nameof(SqliteDatabaseOptions.Durability), nameof(SqliteDatabaseOptions.BusyTimeoutSeconds)], defaults.ConventionSuppliedSettings);
+        Assert.Equal<string>([nameof(SqliteDatabaseOptions.Durability), nameof(SqliteDatabaseOptions.BusyTimeoutSeconds), nameof(SqliteDatabaseOptions.Pooling)], defaults.ConventionSuppliedSettings);
+        Assert.Equal(SqliteConnectionPooling.Disabled, defaults.Pooling);
         Assert.Equal(1, defaults.MaximumConcurrentWriters);
         Assert.False(defaults.SupportsDistributedTransactions);
         Assert.EndsWith("full/v1", defaults.Target.CapabilityProfile);
@@ -23,7 +24,8 @@ public sealed class SqliteFoundationTests
         Assert.Equal(2L, Read(fixture.Database, connection, "PRAGMA synchronous;"));
         Assert.Equal(5, connection.DefaultTimeout);
 
-        var normal = new SqliteDatabase(new(fixture.Path, durability: SqliteDurability.Normal, busyTimeoutSeconds: 2));
+        var normal = new SqliteDatabase(new(fixture.Path, durability: SqliteDurability.Normal, busyTimeoutSeconds: 2,
+            pooling: SqliteConnectionPooling.Disabled));
         using var another = normal.OpenConnection();
         Assert.Equal(1L, Read(normal, another, "PRAGMA synchronous;"));
         Assert.Empty(normal.Options.ConventionSuppliedSettings);
@@ -37,6 +39,85 @@ public sealed class SqliteFoundationTests
         Assert.Throws<ArgumentException>(() => new SqliteDatabaseOptions("file:memory?mode=memory"));
         Assert.Throws<ArgumentOutOfRangeException>(() => new SqliteDatabaseOptions("test.db", busyTimeoutSeconds: 0));
         Assert.Throws<ArgumentOutOfRangeException>(() => new SqliteDatabaseOptions("test.db", durability: (SqliteDurability)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SqliteDatabaseOptions("test.db", pooling: (SqliteConnectionPooling)99));
+    }
+
+    [Fact]
+    public void PooledCheckoutRestoresProfileAndRollsBackAbandonedTransaction()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new SqliteDatabase(new(fixture.Path, pooling: SqliteConnectionPooling.Enabled));
+        try
+        {
+            SQLitePCL.sqlite3? handle;
+            using (var first = database.OpenConnection())
+            {
+                handle = first.Handle;
+                Execute(database, first, null, "CREATE TABLE sample (id INTEGER PRIMARY KEY);");
+                Execute(database, first, null, "PRAGMA foreign_keys = OFF; PRAGMA synchronous = OFF;");
+                var abandoned = first.BeginTransaction();
+                Execute(database, first, abandoned, "INSERT INTO sample VALUES (1);");
+                // Disposing the logical connection must roll back before returning the handle.
+            }
+            using (var second = database.OpenConnection())
+            {
+                Assert.Same(handle, second.Handle);
+                Assert.Equal(0L, Read(database, second, "SELECT count(*) FROM sample;"));
+                Assert.Equal(1L, Read(database, second, "PRAGMA foreign_keys;"));
+                Assert.Equal(2L, Read(database, second, "PRAGMA synchronous;"));
+                Assert.Equal("wal", Read(database, second, "PRAGMA journal_mode;"));
+                Execute(database, second, null, "PRAGMA query_only = ON;");
+            }
+            using var third = database.OpenConnection();
+            Assert.Equal(0L, Read(database, third, "PRAGMA query_only;"));
+            using var transaction = third.BeginTransaction(deferred: false);
+            Execute(database, third, transaction, "INSERT INTO sample VALUES (2);");
+            transaction.Commit();
+        }
+        finally { database.ClearPool(); }
+    }
+
+    [Fact]
+    public void PoolPolicyPreservesConcurrentOwnershipAndReleasesNativeHandlesExplicitly()
+    {
+        using var fixture = new DatabaseFixture();
+        var database = new SqliteDatabase(new(fixture.Path, pooling: SqliteConnectionPooling.Enabled));
+        using var first = database.OpenConnection();
+        using var second = database.OpenConnection();
+        Assert.NotSame(first.Handle, second.Handle);
+        var firstHandle = first.Handle!;
+        var secondHandle = second.Handle!;
+        database.ClearPool();
+        Assert.Equal(1L, Read(database, first, "SELECT 1;"));
+        Assert.Equal(1L, Read(database, second, "SELECT 1;"));
+        first.Dispose();
+        second.Dispose();
+        Assert.True(firstHandle.IsClosed);
+        Assert.True(secondHandle.IsClosed);
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        Assert.Throws<OperationCanceledException>(() => database.OpenConnection(canceled.Token));
+        using var reopened = database.OpenConnection();
+        Assert.NotSame(firstHandle, reopened.Handle);
+        reopened.Dispose();
+        database.ClearPool();
+    }
+
+    [Fact]
+    public void PooledProfilesReapplyDurabilityWhenSharingAConnectionString()
+    {
+        using var fixture = new DatabaseFixture();
+        var full = new SqliteDatabase(new(fixture.Path, pooling: SqliteConnectionPooling.Enabled));
+        var normal = new SqliteDatabase(new(fixture.Path, durability: SqliteDurability.Normal,
+            pooling: SqliteConnectionPooling.Enabled));
+        try
+        {
+            using (var first = normal.OpenConnection())
+                Assert.Equal(1L, Read(normal, first, "PRAGMA synchronous;"));
+            using (var second = full.OpenConnection())
+                Assert.Equal(2L, Read(full, second, "PRAGMA synchronous;"));
+        }
+        finally { full.ClearPool(); }
     }
 
     [Fact]
