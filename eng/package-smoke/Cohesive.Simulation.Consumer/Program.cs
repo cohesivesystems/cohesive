@@ -174,7 +174,11 @@ static async Task VerifyMimesisPackage()
 {
     var python = Environment.GetEnvironmentVariable("COHESIVE_MIMESIS_PYTHON");
     if (string.IsNullOrWhiteSpace(python))
+    {
+        Console.Error.WriteLine(
+            "SKIP: Mimesis package smoke requires COHESIVE_MIMESIS_PYTHON with the pinned provider environment.");
         return;
+    }
 
     var definition = MimesisGenerationCatalog.Define<MimesisSmokePerson>(person => person
         .Member(value => value.Name, "person.full_name")

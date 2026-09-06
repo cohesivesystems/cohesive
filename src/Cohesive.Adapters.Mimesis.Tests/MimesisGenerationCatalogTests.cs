@@ -70,12 +70,10 @@ public sealed class MimesisGenerationCatalogTests
             .Member(value => value.Name, "person.full_name")));
     }
 
-    [Fact]
+    [MimesisFact]
     public async Task ImportAsync_RetainsPinnedDeterministicMimesisOutput()
     {
-        var python = Environment.GetEnvironmentVariable("COHESIVE_MIMESIS_PYTHON");
-        if (string.IsNullOrWhiteSpace(python))
-            return;
+        var python = RequireMimesisPython();
 
         var options = new MimesisGenerationCatalogImportOptions(
             id: "catalog/mimesis-people",
@@ -125,12 +123,10 @@ public sealed class MimesisGenerationCatalogTests
             first.Definition.Provenance.SourceReferences.Select(static source => source.Value));
     }
 
-    [Fact]
+    [MimesisFact]
     public async Task ImportAsync_NormalizesFiniteMimesisFloatsAsPortableNumbers()
     {
-        var python = Environment.GetEnvironmentVariable("COHESIVE_MIMESIS_PYTHON");
-        if (string.IsNullOrWhiteSpace(python))
-            return;
+        var python = RequireMimesisPython();
 
         var definition = MimesisGenerationCatalog.Define<MimesisNumeric>(numeric => numeric
             .Member(
@@ -163,6 +159,15 @@ public sealed class MimesisGenerationCatalogTests
             .Member(value => value.Name, "person.full_name")
             .Member(value => value.Age, "numeric.integer_number", new { Start = 18, End = 80 }));
 
+    static string RequireMimesisPython()
+    {
+        var python = Environment.GetEnvironmentVariable("COHESIVE_MIMESIS_PYTHON");
+        return !string.IsNullOrWhiteSpace(python)
+            ? python
+            : throw new InvalidOperationException(
+                "MimesisFact must skip this test when COHESIVE_MIMESIS_PYTHON is unset.");
+    }
+
     public sealed record MimesisPerson(
         [property: JsonPropertyName("display_name")] string Name,
         string Email,
@@ -174,4 +179,16 @@ public sealed class MimesisGenerationCatalogTests
     public sealed record Identity(string Name);
 
     public sealed record MimesisNumeric(double Score);
+}
+
+sealed class MimesisFactAttribute : FactAttribute
+{
+    public MimesisFactAttribute()
+    {
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("COHESIVE_MIMESIS_PYTHON")))
+        {
+            Skip =
+                "Set COHESIVE_MIMESIS_PYTHON to a Python executable containing the pinned Mimesis environment.";
+        }
+    }
 }
