@@ -21,8 +21,9 @@ Add only the integrations the application uses:
 | `Cohesive.Simulation.Storage` | Seeding Cohesive entity repositories |
 | `Cohesive.Simulation.Xunit` | Translating property-case results into xUnit failures |
 | `Cohesive.Simulation.Cli` | `cohesive-sim` for scripts, CI, and Playwright setup |
+| `Cohesive.Adapters.Bogus` | Optional finite Bogus imports into exact retained generation catalogs |
 
-Core depends only on `Cohesive`; Relations, Storage, xUnit, and CLI concerns stay in optional packages.
+Core depends only on `Cohesive`; Relations, Storage, xUnit, CLI, and Bogus concerns stay in optional packages.
 
 ## Generate a POCO
 
@@ -101,8 +102,9 @@ fingerprint. The same canonical definitions support direct examples, bounded seq
 populations, named exemplars, relationship-linked worlds, repository seeding, and portable artifacts.
 
 Worlds currently describe static initial state. Virtual time, activity, events, queues, resources, failures, actors,
-actions, scenario traces, concrete external-provider import/runtime adapters, and learned synthesis are later
-interpretations, not implicit callback behavior in this alpha.
+actions, scenario traces, runtime provider interpreters, additional provider import adapters, and learned synthesis are
+later interpretations, not implicit callback behavior in this alpha. `Cohesive.Adapters.Bogus` provides the first
+optional snapshot-import adapter without making Bogus a core dependency.
 
 Current portable schemas and replay tokens reject earlier versions rather than silently assigning compatibility
 semantics. See the compatibility guide before retaining artifacts across package upgrades.
@@ -118,3 +120,4 @@ semantics. See the compatibility guide before retaining artifacts across package
 - [Repository provisioning](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation.Storage/README.md)
 - [xUnit integration](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation.Xunit/README.md)
 - [CLI tool](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation.Cli/README.md)
+- [Bogus catalog adapter](https://github.com/cohesivesystems/cohesive/blob/main/src/adapters/Cohesive.Adapters.Bogus/README.md)

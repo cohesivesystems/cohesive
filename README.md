@@ -47,6 +47,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Adapters.AzureAppConfiguration` | Azure App Configuration integration for Cohesive configuration. |
 | `Cohesive.Adapters.AzureML` | Azure Machine Learning model training and dataset registry integration. |
 | `Cohesive.Adapters.AzureStorage` | Azure Blob Storage training artifacts, dataset streams, and target resolution. |
+| [`Cohesive.Adapters.Bogus`](src/adapters/Cohesive.Adapters.Bogus/README.md) | Finite locally seeded Bogus imports into exact portable simulation catalogs. |
 | `Cohesive.Adapters.Cosmos` | Cosmos DB storage, Relations acquisition, materialization change-feed sources, entity outbox, target-deduplicating domain-event inbox, and vector adapters. |
 | `Cohesive.Adapters.DurableTask` | Durable Task monitoring, capability planning, and exact-plan sequential Process execution. |
 | `Cohesive.Adapters.Elastic` | Elasticsearch query and aggregation compilers plus generation-isolated materialization and promotion targets. |
