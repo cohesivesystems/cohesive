@@ -14,5 +14,6 @@
     <None Update="ENTITY_REPOSITORIES.md" Pack="true" PackagePath="/" />
     <None Update="OUTBOX.md" Pack="true" PackagePath="/" />
     <None Update="RELATIONS.md" Pack="true" PackagePath="/" />
+    <None Update="examples/representative-selection.sql" Pack="true" PackagePath="examples/" />
   </ItemGroup>
 </Project>

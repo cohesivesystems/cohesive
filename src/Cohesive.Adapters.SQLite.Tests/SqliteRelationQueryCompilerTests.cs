@@ -18,6 +18,24 @@ namespace Cohesive.Adapters.SQLite.Tests;
 
 public sealed class SqliteRelationQueryCompilerTests
 {
+    [Fact]
+    public void GeneratedSqlKeepsSemanticNamesAndMatchesThePublishedExample()
+    {
+        var plan = RepresentativeSelectionFixture.Compile(Document(filterAfter: true));
+        var (request, binding) = Bind(plan);
+        var artifact = Assert.Single(new SqliteRelationQueryCompiler().Compile(request, binding).Artifacts);
+        var path = Path.Combine(AppContext.BaseDirectory, "representative-selection.sql");
+        if (Environment.GetEnvironmentVariable("UPDATE_SQL_EXAMPLES") == "1")
+            File.WriteAllText(path, artifact.Statement.Text + "\n");
+        Assert.Equal(File.ReadAllText(path), artifact.Statement.Text + "\n");
+        Assert.DoesNotContain("\"c0\"", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Contains("representative_rank", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Contains("candidate_Key_present", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Equal([3L], AssertEquivalent(plan,
+            [new(1, S("a"), 5), new(2, S("a"), 8, Eligible: false), new(3, S("b"), 4)])
+            .Select(static row => row.Value.Fields!["Id"].Int64));
+    }
+
     [Theory]
     [InlineData(QuerySortDirection.Ascending, QueryNullPlacement.First)]
     [InlineData(QuerySortDirection.Descending, QueryNullPlacement.First)]
@@ -222,7 +240,8 @@ public sealed class SqliteRelationQueryCompilerTests
         using var planReader = explain.ExecuteReader();
         List<string> details = [];
         while (planReader.Read()) details.Add(planReader.GetString(3));
-        Assert.Contains(details, detail => detail.Contains("SEARCH source USING INDEX candidate_order", StringComparison.Ordinal));
+        Assert.Contains(details, detail => detail.StartsWith("SEARCH ", StringComparison.Ordinal)
+            && detail.Contains(" USING INDEX candidate_order", StringComparison.Ordinal));
         Assert.Throws<ArgumentException>(() => artifact.BindParameters(new Dictionary<QueryParameterId, ObservationValue>()));
     }
 
@@ -246,10 +265,25 @@ public sealed class SqliteRelationQueryCompilerTests
         }
     }
 
-    static CompiledRelationQueryPlan JoinedPlan(JoinKind kind, bool includeRightIdentity)
+    [Fact]
+    public void NormalizationCollidingBindingsKeepSeparateValuesAndContributors()
+    {
+        ValueBindingId other = new("candidate!");
+        var plan = JoinedPlan(JoinKind.Left, includeRightIdentity: true, other);
+        var actual = AssertEquivalent(plan, new Dictionary<ValueBindingId, Candidate[]>
+        {
+            [RepresentativeSelectionFixture.Binding] = [new(1, S("a"), 3), new(2, S("missing"), 4)],
+            [other] = [new(10, S("a"), 8), new(11, S("a"), 9)]
+        });
+        Assert.Equal(["candidate", "candidate!"], actual[0].Occurrences.Select(static occurrence => occurrence.Binding.Value));
+        Assert.Equal("10", actual[0].Occurrences.Single(occurrence => occurrence.Binding == other).ObservationIdentity);
+        Assert.Single(actual[1].Occurrences);
+    }
+
+    static CompiledRelationQueryPlan JoinedPlan(JoinKind kind, bool includeRightIdentity, ValueBindingId? other = null)
     {
         ValueBindingId left = RepresentativeSelectionFixture.Binding;
-        ValueBindingId right = new("other");
+        ValueBindingId right = other ?? new("other");
         ValueBindingId output = new("projected");
         QueryNodeId join = new("join"), order = new("order"), project = new("project");
         List<QueryOrdering> ordering = [new(Expr.Field(left, Preference), QuerySortDirection.Descending), new(Expr.Field(left, Id))];

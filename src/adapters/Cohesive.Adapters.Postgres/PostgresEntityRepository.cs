@@ -673,7 +673,7 @@ internal sealed record PostgresEntityRepositorySql(
         PostgresEntityRepositoryFieldBinding identity,
         PostgresEntityRepositoryFieldBinding? partition)
     {
-        PostgresSqlAliasAllocator aliases = new();
+        SqlAliasAllocator aliases = new(PostgresSqlDialect.StandardMaxUtf8ByteLength, StringComparer.Ordinal);
         SqlSelectBuilder selected = new(mapping.Table, SourceAlias);
         foreach (var field in mapping.Fields)
         {

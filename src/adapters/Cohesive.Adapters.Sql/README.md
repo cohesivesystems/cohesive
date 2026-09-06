@@ -45,6 +45,28 @@ target-specific at rendering. `SqlIdentifier.ToSql` and `SqlQualifiedTable.ToSql
 `PostgresSqlDialect.Identifier` also supports early name validation. `SqlUtf8` provides the same strict Unicode and
 text-domain validation to adapter encoding paths.
 
+## Readable query construction
+
+`SqlSelectBuilder.BuildTemplate(dialect, SqlFormatting.Indented)` and
+`SqlSelectQuery.ToCommandTemplate(dialect, SqlFormatting.Indented)` render executable SQL with LF line endings,
+four-space nesting, separate clauses and one SELECT/order item per line. Derived, scalar, EXISTS and lateral
+subqueries share the same indentation context, as do window expressions. Formatting walks the existing tree;
+it does not parse SQL text or alter identifiers, expressions, parameter traversal, query structure or dialect
+capability checks. Intrinsic-owned syntax is emitted as supplied. Existing overloads retain compact output.
+This option currently covers SELECT trees; mutation builders retain their existing layout.
+
+`SqlAliasAllocator` is the shared naming mechanism used by PostgreSQL and SQLite. A compiler supplies readable
+names and stable semantic keys; the allocator normalizes punctuation/Unicode, shortens at a configured UTF-8
+byte budget and resolves collisions with deterministic suffixes. Use a separate allocator per identifier
+namespace and a deterministic allocation order. The caller supplies identifier equality: PostgreSQL uses ordinal
+equality; SQLite conservatively uses ordinal case-insensitive equality. Allocated aliases still pass through the
+builder's quoting and target validation. This allocator creates names, not semantic identities.
+
+Whitespace and aliases are part of the emitted statement. Compilers that change their selected naming or formatting
+policy must version the corresponding compiler/convention profile and regenerate exact statement fingerprints.
+The SQLite Relations compiler selects indented output in compiler-v2. PostgreSQL's extraction preserves its existing
+names and compact output.
+
 ## Implementing an adapter
 
 Official adapters use only this package's public API. `InternalsVisibleTo` is reserved for tests; adding an adapter

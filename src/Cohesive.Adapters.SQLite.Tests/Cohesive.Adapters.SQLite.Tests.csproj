@@ -21,4 +21,7 @@
     <ProjectReference Include="../Cohesive.Relations.TestFixtures/Cohesive.Relations.TestFixtures.csproj" />
     <Compile Include="../Cohesive.Tests/Storage/Conformance/EntityRepositoryConformance.cs" Link="Conformance/EntityRepositoryConformance.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="../adapters/Cohesive.Adapters.SQLite/examples/representative-selection.sql" Link="representative-selection.sql" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

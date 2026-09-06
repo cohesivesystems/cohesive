@@ -2,6 +2,13 @@
 
 ## Native SQLite Relations row queries
 
+SQLite compiler profile v2 emits deterministically indented SQL with canonical stage/field names and explicit rank,
+presence and identity aliases. Recompile v1 native artifacts to obtain the new text and exact fingerprints; the
+artifact schema and ordinal decoding layout are unchanged. Shared SQL construction adds `SqlFormatting.Indented`
+for SELECT trees and a public `SqlAliasAllocator`, extracted from PostgreSQL with target-owned identifier equality
+and byte budgets. Existing compact overloads and PostgreSQL aliases retain their prior output. See the
+[tested SQL example and explanation](../../src/adapters/Cohesive.Adapters.SQLite/RELATIONS.md#inspecting-generated-sql).
+
 `SqliteRelationQueryCompiler` now compiles source/filter/inner-and-left-join/representative/project/order pipelines
 into reusable SQLite templates with ordinal result decoding. It uses canonical bound-realization proof, exact
 placement/binding fingerprints and shared SQL construction. Winning source provenance and missing/null distinctions

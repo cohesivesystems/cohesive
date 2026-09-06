@@ -119,6 +119,38 @@ The source occurrence ID format is `sqlite/{escaped-binding}/{integer-identity}`
 invariant decimal representation of the source identity. An absent outer binding contributes no occurrence and an
 absent output binding materializes as undefined, distinct from a present object with missing fields.
 
+## Inspecting generated SQL
+
+Compiler profile `cohesive.adapters.sqlite.sql/compiler-v2` selects shared `SqlFormatting.Indented` rendering.
+SQL stage aliases derive from canonical node IDs, source aliases from bindings, and column aliases from binding/field
+paths. Names are normalized and bounded to 63 UTF-8 bytes for readability; this is a compiler convention, not an
+engine limit. Deterministic suffixes disambiguate collisions, including case-only differences. One allocator per
+projection namespace keeps field names recognizable through wrappers, while equal physical expressions still share
+one column. Ordinal decoding is independent of these display names.
+
+The [generated representative-selection example](examples/representative-selection.sql) is checked against the
+compiler by a test. Read it from the inner source outward:
+
+| SQL stage or column | Canonical meaning |
+| --- | --- |
+| `candidate`, `candidates` | Candidate binding and source node. |
+| `representative_ranked`, `representative_rank` | Derived ranking stage for the `representative` node; the unique declared ordering determines the winner. |
+| `representative` | Retains rank one before the next filter runs. |
+| `eligible_winners` | The `eligible-winners` node filters the chosen winner; it cannot select an older candidate. |
+| `result_order` | The `result-order` node establishes final identity order. |
+| `candidate_Key_present` | Distinguishes a missing key from an explicit null key. |
+| `candidate_binding_present`, `candidate_identity` | Reconstruct binding presence and winning contributor identity. |
+
+The example's `$1`–`$4` slots are captured INTEGER values of one: three required-field presence values and the rank
+predicate. `Statement.Parameters` identifies every constant/runtime slot; `Parameters` supplies canonical runtime
+parameter contracts. `ResultFields` and `OccurrenceColumns` identify decoded fields and contributors, and
+`Provenance` pins their source IR and compilation decisions. Values remain bound separately from SQL text.
+
+The formatted statement is the statement executed. Its fingerprint includes the exact text; compiler-v2 artifacts
+must be regenerated from retained IR and verified storage evidence. Artifact schema v1 remains unchanged. Formatting
+adds compilation work and retained SQL bytes, while query structure, parameter traversal and ordinal decoding stay
+the same. CTE conversion and query-layer elimination are separate lowering changes outside this update.
+
 ## Verification and performance
 
 `SqliteRelationQueryCompilerTests` runs real SQLite differential checks against the reference interpreter for

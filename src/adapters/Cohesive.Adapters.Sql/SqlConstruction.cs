@@ -720,7 +720,7 @@ public abstract partial record SqlExpression
         {
             context.Dialect.Require(SqlFeature.ScalarSubquery);
             builder.Append('(');
-            Query.WriteTo(context, builder);
+            context.WriteNestedQuery(Query, builder);
             builder.Append(')');
         }
     }
@@ -730,7 +730,7 @@ public abstract partial record SqlExpression
         internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
         {
             builder.Append("EXISTS (");
-            Query.WriteTo(context, builder);
+            context.WriteNestedQuery(Query, builder);
             builder.Append(')');
         }
     }
@@ -1388,9 +1388,18 @@ public sealed class SqlSelectQuery
     /// <param name="dialect">Explicit adapter-owned construction and parameter policy.</param>
     /// <exception cref="SqlConstructionException">A requested construct is unsupported by the dialect.</exception>
     /// <returns>Normalized SQL and deterministic positional-parameter slots.</returns>
-    public SqlCommandTemplate ToCommandTemplate(SqlDialect dialect)
+    public SqlCommandTemplate ToCommandTemplate(SqlDialect dialect) => ToCommandTemplate(dialect, SqlFormatting.Compact);
+
+    /// <summary>Renders this query with explicit, deterministic whitespace policy.</summary>
+    /// <param name="dialect">Adapter-owned construction and parameter policy.</param>
+    /// <param name="formatting">Whitespace layout; parameter order and query structure are preserved.</param>
+    /// <returns>A reusable template containing the actual executable SQL in the selected layout.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="dialect"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="formatting"/> is unknown.</exception>
+    /// <exception cref="SqlConstructionException">The dialect does not support a requested construct.</exception>
+    public SqlCommandTemplate ToCommandTemplate(SqlDialect dialect, SqlFormatting formatting)
     {
-        SqlRenderContext context = new(dialect);
+        SqlRenderContext context = new(dialect, formatting);
         StringBuilder builder = new();
         WriteTo(context, builder);
         return new(builder.ToString(), context.Parameters, dialect.Name);
@@ -1398,35 +1407,32 @@ public sealed class SqlSelectQuery
 
     internal void WriteTo(SqlRenderContext context, StringBuilder builder)
     {
-        builder.Append("SELECT ");
-        if (distinct)
-        {
-            builder.Append("DISTINCT ");
-        }
-
+        builder.Append(distinct ? "SELECT DISTINCT" : "SELECT");
+        context.Indentation++;
+        context.Separator(builder);
         for (var index = 0; index < selections.Length; index++)
         {
             if (index != 0)
             {
-                builder.Append(", ");
+                builder.Append(',');
+                context.Separator(builder);
             }
-
             selections[index].Expression.WriteTo(context, builder);
             builder.Append(" AS ");
             selections[index].Alias.WriteQuoted(context, builder);
         }
+        context.Indentation--;
 
         if (from is not null)
         {
-            builder.Append(" FROM ");
+            context.Separator(builder).Append("FROM ");
             from.WriteTo(context, builder);
         }
-
         foreach (var join in joins)
         {
             if (join.Kind == SqlJoinKind.Right) context.Dialect.Require(SqlFeature.RightJoin);
             if (join.Kind == SqlJoinKind.Full) context.Dialect.Require(SqlFeature.FullJoin);
-            builder.Append(' ').Append(SqlOperators.Text(join.Kind)).Append(' ');
+            context.Separator(builder).Append(SqlOperators.Text(join.Kind)).Append(' ');
             join.Source.WriteTo(context, builder);
             if (join.Predicate is not null)
             {
@@ -1434,42 +1440,38 @@ public sealed class SqlSelectQuery
                 join.Predicate.WriteTo(context, builder);
             }
         }
-
         if (!predicates.IsDefaultOrEmpty)
         {
-            builder.Append(" WHERE ");
+            context.Separator(builder).Append("WHERE ");
             WriteExpressionList(predicates, context, builder, " AND ");
         }
-
         if (!groupings.IsDefaultOrEmpty)
         {
-            builder.Append(" GROUP BY ");
+            context.Separator(builder).Append("GROUP BY ");
             WriteExpressionList(groupings, context, builder, ", ");
         }
-
         if (!orderings.IsDefaultOrEmpty)
         {
-            builder.Append(" ORDER BY ");
+            context.Separator(builder).Append("ORDER BY");
+            context.Indentation++;
+            context.Separator(builder);
             for (var index = 0; index < orderings.Length; index++)
             {
                 if (index != 0)
                 {
-                    builder.Append(", ");
+                    builder.Append(',');
+                    context.Separator(builder);
                 }
-
                 orderings[index].WriteTo(context, builder);
             }
+            context.Indentation--;
         }
-
         if (limit is { } pageLimit)
-        {
-            builder.Append(" LIMIT ").Append(pageLimit.ToString(CultureInfo.InvariantCulture));
-        }
-
+            context.Separator(builder).Append("LIMIT ").Append(pageLimit.ToString(CultureInfo.InvariantCulture));
         if (offset is { } pageOffset)
         {
             if (limit is null) context.Dialect.Require(SqlFeature.OffsetWithoutLimit);
-            builder.Append(" OFFSET ").Append(pageOffset.ToString(CultureInfo.InvariantCulture));
+            context.Separator(builder).Append("OFFSET ").Append(pageOffset.ToString(CultureInfo.InvariantCulture));
         }
     }
 
@@ -1761,6 +1763,17 @@ public sealed class SqlSelectBuilder
     /// <exception cref="InvalidOperationException">No projection has been configured.</exception>
     public SqlCommandTemplate BuildTemplate(SqlDialect dialect) => BuildQuery().ToCommandTemplate(dialect);
 
+    /// <summary>Builds a reusable template with explicit, deterministic whitespace policy.</summary>
+    /// <param name="dialect">Adapter-owned construction and parameter policy.</param>
+    /// <param name="formatting">Whitespace layout; query structure and parameter order are unchanged.</param>
+    /// <returns>The actual executable SQL and deterministic parameter slots.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="dialect"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="formatting"/> is unknown.</exception>
+    /// <exception cref="SqlConstructionException">The dialect does not support a requested construct.</exception>
+    /// <exception cref="InvalidOperationException">No projection has been configured.</exception>
+    public SqlCommandTemplate BuildTemplate(SqlDialect dialect, SqlFormatting formatting) =>
+        BuildQuery().ToCommandTemplate(dialect, formatting);
+
     /// <summary>Builds a concrete statement when the query contains no runtime-bound parameters.</summary>
     /// <param name="dialect">Explicit adapter-owned construction and parameter policy.</param>
     /// <exception cref="SqlConstructionException">A requested construct is unsupported by the dialect.</exception>
@@ -1831,7 +1844,7 @@ internal sealed record SqlDerivedFromItem(
     public override void WriteTo(SqlRenderContext context, StringBuilder builder)
     {
         builder.Append('(');
-        Query.WriteTo(context, builder);
+        context.WriteNestedQuery(Query, builder);
         builder.Append(") AS ");
         Alias.WriteQuoted(context, builder);
     }
@@ -1845,7 +1858,7 @@ internal sealed record SqlLateralDerivedFromItem(
     {
         context.Dialect.Require(SqlFeature.Lateral);
         builder.Append("LATERAL (");
-        Query.WriteTo(context, builder);
+        context.WriteNestedQuery(Query, builder);
         builder.Append(") AS ");
         Alias.WriteQuoted(context, builder);
     }
@@ -1878,9 +1891,32 @@ internal sealed record SqlJoinItem(
     SqlJoinKind Kind,
     SqlExpression? Predicate);
 
-internal sealed class SqlRenderContext(SqlDialect dialect)
+internal sealed class SqlRenderContext
 {
-    internal SqlDialect Dialect { get; } = dialect ?? throw new ArgumentNullException(nameof(dialect));
+    internal SqlRenderContext(SqlDialect dialect, SqlFormatting formatting = SqlFormatting.Compact)
+    {
+        Dialect = dialect ?? throw new ArgumentNullException(nameof(dialect));
+        if (!Enum.IsDefined(formatting)) throw new ArgumentOutOfRangeException(nameof(formatting));
+        Formatting = formatting;
+    }
+    internal SqlDialect Dialect { get; }
+    internal SqlFormatting Formatting { get; }
+    internal int Indentation { get; set; }
+    internal StringBuilder Separator(StringBuilder builder) => Formatting == SqlFormatting.Compact
+        ? builder.Append(' ') : LineBreak(builder);
+    internal StringBuilder LineBreak(StringBuilder builder)
+    {
+        if (Formatting == SqlFormatting.Indented) builder.Append('\n').Append(' ', Indentation * 4);
+        return builder;
+    }
+    internal void WriteNestedQuery(SqlSelectQuery query, StringBuilder builder)
+    {
+        Indentation++;
+        LineBreak(builder);
+        query.WriteTo(this, builder);
+        Indentation--;
+        LineBreak(builder);
+    }
     readonly SqlParameterSlots<SqlParameterSlot> parameters = new();
     public ImmutableArray<SqlParameterSlot> Parameters => parameters.Snapshot();
     public string AddConstant(SqlConstant value)

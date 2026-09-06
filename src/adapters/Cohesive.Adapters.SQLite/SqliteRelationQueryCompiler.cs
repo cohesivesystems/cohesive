@@ -13,7 +13,7 @@ namespace Cohesive.Adapters.SQLite;
 public sealed class SqliteRelationQueryCompiler
 {
     /// <summary>Version of exact lowering and result layout semantics.</summary>
-    public const string CompilerProfile = "cohesive.adapters.sqlite.sql/compiler-v1";
+    public const string CompilerProfile = "cohesive.adapters.sqlite.sql/compiler-v2";
 
     /// <summary>Creates a stateless compiler that can be shared across independent compilation requests.</summary>
     public SqliteRelationQueryCompiler() { }
@@ -108,8 +108,11 @@ public sealed class SqliteRelationQueryCompiler
         readonly Dictionary<QueryNodeId, RelationQueryExecutionNode> nodes = request.Plan.ExecutionSlice.Nodes.ToDictionary(static node => node.Id);
         readonly Dictionary<QueryNodeId, Scope> scopes = [];
         readonly Dictionary<QueryParameterId, SqliteRelationQueryParameter> parameters = [];
-        int aliasOrdinal;
-        string Alias() => $"c{aliasOrdinal++}";
+        // This is a readability budget, not a SQLite engine identifier limit. Case-insensitive allocation
+        // conservatively prevents SQLite's ASCII-insensitive identifier lookup from merging distinct slots.
+        const int AliasByteBudget = 63;
+        readonly SqlAliasAllocator relationAliases = NewAliases();
+        internal static SqlAliasAllocator NewAliases() => new(AliasByteBudget, StringComparer.OrdinalIgnoreCase);
 
         public PreparedBranch Compile()
         {
@@ -121,27 +124,32 @@ public sealed class SqliteRelationQueryCompiler
             if (selection.SourceInstances.Select(static source => source.ExecutionDomain).Distinct().Count() != 1)
                 throw Fail("SQLITE_REL_DOMAIN", "All sources must use one database execution domain.", branch.Node);
             var scope = CompileNode(branch.Node);
-            var terminal = new SqlSelectBuilder(scope.Query, "result");
+            var terminal = new SqlSelectBuilder(scope.Query, scope.Name);
+            var resultAliases = NewAliases();
             var fields = ImmutableArray.CreateBuilder<SqliteRelationQueryResultField>(branch.Fields.Length);
             var ordinal = 0;
             foreach (var field in branch.Fields)
             {
                 var slot = scope.Fields[new(branch.Binding, field.Path)];
-                terminal.Select(SqlExpression.Column("result", slot.Value), $"value_{ordinal}");
-                terminal.Select(slot.Present is null ? One : SqlExpression.Column("result", slot.Present), $"present_{ordinal}");
+                var name = $"{branch.Binding.Value}_{field.Path}";
+                terminal.Select(SqlExpression.Column(scope.Name, slot.Value), resultAliases.Allocate(name, $"value:{field.Path}", "value"));
+                terminal.Select(slot.Present is null ? One : SqlExpression.Column(scope.Name, slot.Present),
+                    resultAliases.Allocate($"{name}_present", $"presence:{field.Path}", "present"));
                 fields.Add(new(field, slot.Contract, ordinal, ordinal + 1));
                 ordinal += 2;
             }
             var bindingPresenceOrdinal = ordinal++;
-            terminal.Select(SqlExpression.IsNotNull(SqlExpression.Column("result", scope.BindingPresence[branch.Binding])), "binding_present");
+            terminal.Select(SqlExpression.IsNotNull(SqlExpression.Column(scope.Name, scope.BindingPresence[branch.Binding])),
+                resultAliases.Allocate($"{branch.Binding.Value}_binding_present", "binding-presence", "binding_present"));
             var occurrences = ImmutableArray.CreateBuilder<SqliteRelationQueryOccurrenceColumn>(scope.Identities.Count);
             foreach (var (binding, identity) in scope.Identities.OrderBy(static pair => pair.Key.Value, StringComparer.Ordinal))
             {
-                terminal.Select(SqlExpression.Column("result", identity.Alias), $"identity_{ordinal}");
+                terminal.Select(SqlExpression.Column(scope.Name, identity.Alias),
+                    resultAliases.Allocate($"{binding.Value}_identity", $"identity:{binding.Value}", "identity"));
                 occurrences.Add(new(binding, identity.Shape, ordinal++));
             }
-            ApplyOrdering(terminal, scope, "result");
-            return new(terminal.BuildTemplate(SqliteSqlDialect.Instance), fields.MoveToImmutable(), occurrences.MoveToImmutable(),
+            ApplyOrdering(terminal, scope, scope.Name);
+            return new(terminal.BuildTemplate(SqliteSqlDialect.Instance, SqlFormatting.Indented), fields.MoveToImmutable(), occurrences.MoveToImmutable(),
                 [.. parameters.Values.OrderBy(static parameter => parameter.Id.Value, StringComparer.Ordinal)], bindingPresenceOrdinal);
         }
 
@@ -161,6 +169,7 @@ public sealed class SqliteRelationQueryCompiler
                 OrderQueryNode order => Order(node, CompileNode(inputs[0]), order),
                 _ => throw Fail("SQLITE_REL_NODE", $"Node '{node.CanonicalNode.GetType().Name}' is outside the SQLite v1 slice.", id)
             };
+            result.Name = relationAliases.Allocate(id.Value, $"node:{id.Value}", "stage");
             scopes.Add(id, result);
             return result;
         }
@@ -176,7 +185,8 @@ public sealed class SqliteRelationQueryCompiler
             var identity = placement.Identity ?? throw Fail("SQLITE_REL_IDENTITY", "A non-null unique INTEGER identity selector is required.", source.Id);
             if (identity.SemanticPath is not { } identityPath)
                 throw Fail("SQLITE_REL_IDENTITY", "The identity must name its canonical semantic field for ordering proof.", source.Id);
-            var builder = new SqlSelectBuilder(new SqlQualifiedTable(table.Table), "source");
+            var sourceAlias = relationAliases.Allocate(source.Binding.Value, $"source:{source.Id.Value}", "source");
+            var builder = new SqlSelectBuilder(new SqlQualifiedTable(table.Table), sourceAlias);
             Scope result = new();
             foreach (var field in selection.Fields.Where(field => field.Input.Producer == source.Id))
             {
@@ -195,10 +205,11 @@ public sealed class SqliteRelationQueryCompiler
                     || !Integer(contract)))
                     throw Fail("SQLITE_REL_IDENTITY", "Identity field must use the same unique non-null INTEGER column as placement identity.", source.Id);
                 AddField(builder, result, new(source.Binding, field.Input.Field.Path), new(
-                    SqlExpression.Column("source", column), presence is null ? One : SqlExpression.Column("source", presence.Column),
+                    SqlExpression.Column(sourceAlias, column), presence is null ? One : SqlExpression.Column(sourceAlias, presence.Column),
                     contract, isIdentity ? source.Binding : null));
             }
-            var identityAlias = Select(builder, result, SqlExpression.Column("source", identity.SourceSelector));
+            var identityAlias = Select(builder, result, SqlExpression.Column(sourceAlias, identity.SourceSelector),
+                $"{source.Binding.Value}_identity", $"identity:{source.Binding.Value}");
             result.Identities.Add(source.Binding, new(identityAlias, source.Shape));
             result.BindingPresence.Add(source.Binding, identityAlias);
             result.Query = builder.BuildQuery();
@@ -216,7 +227,7 @@ public sealed class SqliteRelationQueryCompiler
         Scope Project(RelationQueryExecutionNode node, Scope input, ProjectQueryNode project)
         {
             var (builder, result, environment) = Wrap(input);
-            var bindingPresence = Select(builder, result, One);
+            var bindingPresence = Select(builder, result, One, $"{project.ResultBinding.Value}_binding_present", $"binding:{project.ResultBinding.Value}");
             result.BindingPresence.Add(project.ResultBinding, bindingPresence);
             foreach (var assignment in node.ProjectionAssignments)
             {
@@ -248,11 +259,11 @@ public sealed class SqliteRelationQueryCompiler
                 throw Fail("SQLITE_REL_JOIN", "Only inner and left joins are supported.", node.Id);
             if (left.Identities.Keys.Intersect(right.Identities.Keys).Any())
                 throw Fail("SQLITE_REL_JOIN", "Joined sources require distinct canonical bindings.", node.Id);
-            var environment = Environment(left, "left");
-            foreach (var pair in Environment(right, "right")) environment.Add(pair.Key, pair.Value);
+            var environment = Environment(left, left.Name);
+            foreach (var pair in Environment(right, right.Name)) environment.Add(pair.Key, pair.Value);
             var predicate = Boolean(Expression(join.Predicate, environment, node.Id), node.Id);
-            var builder = new SqlSelectBuilder(left.Query, "left");
-            builder.Join(right.Query, "right", join.Kind == JoinKind.Inner ? SqlJoinKind.Inner : SqlJoinKind.Left, predicate);
+            var builder = new SqlSelectBuilder(left.Query, left.Name);
+            builder.Join(right.Query, right.Name, join.Kind == JoinKind.Inner ? SqlJoinKind.Inner : SqlJoinKind.Left, predicate);
             Scope result = new();
             foreach (var (key, cell) in environment)
             {
@@ -260,20 +271,20 @@ public sealed class SqliteRelationQueryCompiler
                 AddField(builder, result, key, outer ? cell with
                 {
                     Present = SqlExpression.Binary(SqlBinaryOperator.And,
-                        SqlExpression.IsNotNull(SqlExpression.Column("right", right.BindingPresence[key.Binding])),
+                        SqlExpression.IsNotNull(SqlExpression.Column(right.Name, right.BindingPresence[key.Binding])),
                         SqlExpression.Coalesce(cell.Present, Zero)),
                     Contract = new ValueContract(cell.Contract.Type, cell.Contract.Shape, cell.Contract.Cardinality, FieldPresence.Optional, cell.Contract.Nullability)
                 } : cell);
             }
-            foreach (var (side, input) in new[] { ("left", left), ("right", right) })
+            foreach (var (side, input) in new[] { (left.Name, left), (right.Name, right) })
             {
                 foreach (var (binding, presence) in input.BindingPresence)
                 {
-                    result.BindingPresence.Add(binding, Select(builder, result, SqlExpression.Column(side, presence)));
+                    result.BindingPresence.Add(binding, Select(builder, result, SqlExpression.Column(side, presence), presence, $"binding:{binding.Value}"));
                 }
                 foreach (var (binding, identity) in input.Identities)
                 {
-                    result.Identities.Add(binding, identity with { Alias = Select(builder, result, SqlExpression.Column(side, identity.Alias)) });
+                    result.Identities.Add(binding, identity with { Alias = Select(builder, result, SqlExpression.Column(side, identity.Alias), identity.Alias, $"identity:{binding.Value}") });
                 }
             }
             result.Query = builder.BuildQuery();
@@ -292,11 +303,12 @@ public sealed class SqliteRelationQueryCompiler
                 partitions.Add(CanonicalValue(cell));
             }
             var orderings = Ordering(definition.Orderings, environment, input, node.Id);
-            var rank = Alias();
+            var rank = ranked.Aliases.Allocate("representative_rank", $"rank:{node.Id.Value}", "rank");
+            ranked.Name = relationAliases.Allocate($"{node.Id.Value}_ranked", $"ranked:{node.Id.Value}", "ranked");
             builder.Select(SqlExpression.RowNumber([.. partitions], orderings), rank);
             ranked.Query = builder.BuildQuery();
             var (winner, result, _) = Wrap(ranked, retainOrder: false);
-            winner.Where(SqlExpression.Binary(SqlBinaryOperator.Equal, SqlExpression.Column("input", rank), One));
+            winner.Where(SqlExpression.Binary(SqlBinaryOperator.Equal, SqlExpression.Column(ranked.Name, rank), One));
             result.Query = winner.BuildQuery();
             return result;
         }
@@ -306,7 +318,7 @@ public sealed class SqliteRelationQueryCompiler
             var (builder, result, environment) = Wrap(input, retainOrder: false);
             foreach (var ordering in Ordering(definition.Orderings, environment, input, node.Id))
             {
-                var alias = Select(builder, result, ordering.Expression);
+                var alias = Select(builder, result, ordering.Expression, "ordering_key", $"ordering:{result.Orderings.Count}");
                 builder.OrderBy(ordering.Expression, ordering.Direction, ordering.NullPlacement);
                 result.Orderings.Add(new(alias, ordering.Direction, ordering.NullPlacement));
             }
@@ -445,40 +457,42 @@ public sealed class SqliteRelationQueryCompiler
 
         (SqlSelectBuilder Builder, Scope Result, Dictionary<FieldKey, Cell> Environment) Wrap(Scope input, bool retainOrder = true)
         {
-            var builder = new SqlSelectBuilder(input.Query, "input");
+            var builder = new SqlSelectBuilder(input.Query, input.Name);
             Scope result = new();
-            var environment = Environment(input, "input");
+            var environment = Environment(input, input.Name);
             foreach (var (key, cell) in environment) AddField(builder, result, key, cell);
             foreach (var (binding, identity) in input.Identities)
             {
-                result.Identities.Add(binding, identity with { Alias = Select(builder, result, SqlExpression.Column("input", identity.Alias)) });
+                result.Identities.Add(binding, identity with { Alias = Select(builder, result, SqlExpression.Column(input.Name, identity.Alias), identity.Alias, $"identity:{binding.Value}") });
             }
             foreach (var (binding, presence) in input.BindingPresence)
             {
-                result.BindingPresence.Add(binding, Select(builder, result, SqlExpression.Column("input", presence)));
+                result.BindingPresence.Add(binding, Select(builder, result, SqlExpression.Column(input.Name, presence), presence, $"binding:{binding.Value}"));
             }
             if (retainOrder)
             {
                 foreach (var order in input.Orderings)
                 {
-                    result.Orderings.Add(order with { Alias = Select(builder, result, SqlExpression.Column("input", order.Alias)) });
+                    result.Orderings.Add(order with { Alias = Select(builder, result, SqlExpression.Column(input.Name, order.Alias), order.Alias, $"ordering:{result.Orderings.Count}") });
                 }
-                ApplyOrdering(builder, input, "input");
+                ApplyOrdering(builder, input, input.Name);
             }
             return (builder, result, environment);
         }
 
         void AddField(SqlSelectBuilder builder, Scope scope, FieldKey key, Cell cell)
         {
-            var value = Select(builder, scope, cell.Value);
+            var name = $"{key.Binding.Value}_{key.Path}";
+            var semanticKey = $"field:{key.Binding.Value}:{key.Path}";
+            var value = Select(builder, scope, cell.Value, name, semanticKey);
             // Required field presence is a compile-time fact. Carry a physical bit only where missing is possible.
-            var presence = cell.Contract.Presence == FieldPresence.Required ? null : Select(builder, scope, cell.Present);
+            var presence = cell.Contract.Presence == FieldPresence.Required ? null : Select(builder, scope, cell.Present, $"{name}_present", $"presence:{semanticKey}");
             scope.Fields.Add(key, new(value, presence, cell.Contract, cell.Identity));
         }
-        string Select(SqlSelectBuilder builder, Scope scope, SqlExpression expression)
+        static string Select(SqlSelectBuilder builder, Scope scope, SqlExpression expression, string preferredName, string semanticKey)
         {
             if (scope.Columns.TryGetValue(expression, out var alias)) return alias;
-            alias = Alias();
+            alias = scope.Aliases.Allocate(preferredName, semanticKey, "column");
             builder.Select(expression, alias);
             scope.Columns.Add(expression, alias);
             return alias;
@@ -510,6 +524,8 @@ public sealed class SqliteRelationQueryCompiler
     sealed record OrderingSlot(string Alias, SqlSortDirection Direction, SqlNullPlacement NullPlacement);
     sealed class Scope
     {
+        public string Name { get; set; } = null!;
+        public SqlAliasAllocator Aliases { get; } = BranchCompiler.NewAliases();
         public SqlSelectQuery Query { get; set; } = null!;
         public Dictionary<SqlExpression, string> Columns { get; } = [];
         public Dictionary<FieldKey, Slot> Fields { get; } = [];
