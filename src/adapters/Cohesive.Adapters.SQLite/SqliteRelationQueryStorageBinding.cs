@@ -17,23 +17,32 @@ public sealed record SqliteRelationQueryFieldPresence(RelationQueryInputId Input
 /// <summary>Physical table and attributable guarantees supplementing canonical source placement.</summary>
 /// <remarks>
 /// The named authority must establish a complete table whose fields use <see cref="SqliteScalarCodec"/>
-/// encodings, whose placement identity is a non-null UNIQUE INTEGER, and whose presence columns contain 0/1.
+/// encodings, whose placement identity is a non-null unique integer/text tuple, and whose presence columns contain 0/1.
 /// Missing fields must have SQL NULL payloads. Placement selectors are literal column names. The compiler trusts
 /// this schema/ingestion evidence; it does not scan data or infer guarantees from a sample.
+/// Scalar text identities must be nonblank, as required by canonical observation identities. Individual text
+/// components of a composite identity may be empty because their framed tuple encoding is always nonblank.
 /// </remarks>
 /// <param name="Placement">Canonical placement binding selecting this table.</param>
 /// <param name="Table">Table name in the connection's main database.</param>
 /// <param name="Authority">Versioned schema/ingestion contract establishing the documented guarantees.</param>
 /// <param name="Presence">Optional-field presence mappings; required fields need no mapping.</param>
+/// <param name="IdentityFields">Ordered components of a declared unique key. When empty, the placement identity selects one field.
+/// Components reference canonical field inputs; column mappings remain authoritative in placement. A composite identity uses
+/// a source-native placement selector with no single semantic path.</param>
+/// <param name="AsciiOrderingFields">Text field inputs whose values the table authority guarantees contain only U+0000 through
+/// U+007F. In this domain SQLite BINARY ordering equals canonical UTF-16 ordinal ordering. No data sampling is performed.</param>
 public sealed record SqliteRelationQueryTableBinding(
     RelationQuerySourcePlacementBindingId Placement, string Table, string Authority,
-    ImmutableArray<SqliteRelationQueryFieldPresence> Presence = default);
+    ImmutableArray<SqliteRelationQueryFieldPresence> Presence = default,
+    ImmutableArray<RelationQueryInputId> IdentityFields = default,
+    ImmutableArray<RelationQueryInputId> AsciiOrderingFields = default);
 
 /// <summary>Immutable, fingerprinted SQLite physical evidence pinned to one exact source placement.</summary>
 public sealed class SqliteRelationQueryStorageBinding
 {
     /// <summary>Storage interpretation and serialization contract version.</summary>
-    public const string CurrentSchemaVersion = "cohesive.relations.sqlite-storage/v1";
+    public const string CurrentSchemaVersion = "cohesive.relations.sqlite-storage/v2";
 
     /// <summary>Normalizes table evidence and pins it to the placement and compiled plan.</summary>
     /// <param name="placement">Exact canonical placement; its selectors supply all field and identity mappings.</param>
@@ -64,7 +73,18 @@ public sealed class SqliteRelationQueryStorageBinding
                     || string.IsNullOrWhiteSpace(field.Column))
                 || presence.Select(static field => field.Input).Distinct().Count() != presence.Length)
                 throw new ArgumentException("Presence columns require unique field inputs and nonempty column names.", nameof(tables));
-            normalized.Add(table with { Presence = [.. presence.OrderBy(static field => field.Input.Value, StringComparer.Ordinal)] });
+            var identityFields = table.IdentityFields.IsDefault ? [] : table.IdentityFields;
+            var asciiFields = table.AsciiOrderingFields.IsDefault ? [] : table.AsciiOrderingFields;
+            if (identityFields.Concat(asciiFields).Any(static field => string.IsNullOrWhiteSpace(field.Value))
+                || identityFields.Distinct().Count() != identityFields.Length
+                || asciiFields.Distinct().Count() != asciiFields.Length)
+                throw new ArgumentException("Identity and ASCII evidence require distinct, nonempty field inputs.", nameof(tables));
+            normalized.Add(table with
+            {
+                Presence = [.. presence.OrderBy(static field => field.Input.Value, StringComparer.Ordinal)],
+                IdentityFields = identityFields,
+                AsciiOrderingFields = [.. asciiFields.OrderBy(static field => field.Value, StringComparer.Ordinal)]
+            });
         }
         Tables = normalized.MoveToImmutable();
         Fingerprint = new("sha256", SchemaVersion + "-c14n/v1", SqliteRelationQueryHash.Compute(new

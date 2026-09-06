@@ -20,11 +20,50 @@ namespace Cohesive.Adapters.SQLite;
 public sealed record SqliteRelationQueryResultField(RelationQueryFieldReference Field, ValueContract Contract,
     int ValueOrdinal, int PresenceOrdinal);
 
+/// <summary>One required, non-null integer/text component of a source identity.</summary>
+/// <param name="Ordinal">Zero-based provider column; SQL NULL denotes outer-join absence.</param>
+/// <param name="Contract">Exact canonical component encoding.</param>
+public sealed record SqliteRelationQueryIdentityColumn(int Ordinal, ValueContract Contract);
+
 /// <summary>Winning-row contributor retained independently of projected fields.</summary>
 /// <param name="Binding">Canonical source binding.</param>
 /// <param name="Shape">Exact source shape.</param>
-/// <param name="IdentityOrdinal">Zero-based nullable INTEGER identity column; null denotes outer-join absence.</param>
-public sealed record SqliteRelationQueryOccurrenceColumn(ValueBindingId Binding, QualifiedShapeId Shape, int IdentityOrdinal);
+/// <param name="Components">Ordered identity components; an absent source has SQL NULL in every component.</param>
+public sealed record SqliteRelationQueryOccurrenceColumn(ValueBindingId Binding, QualifiedShapeId Shape,
+    ImmutableArray<SqliteRelationQueryIdentityColumn> Components)
+{
+    /// <summary>Encodes source observation identity without ambiguous tuple concatenation.</summary>
+    /// <param name="components">One or more non-null integer/text components in declared key order.</param>
+    /// <returns>A scalar's invariant decimal or exact text value; composite values use a versioned JSON array of type-tagged components.</returns>
+    /// <exception cref="ArgumentException">The tuple is empty or contains an unsupported value kind.</exception>
+    public static string EncodeIdentity(ReadOnlySpan<ObservationValue> components)
+    {
+        if (components.IsEmpty) throw new ArgumentException("An identity needs at least one component.", nameof(components));
+        if (components.Length == 1) return EncodeIdentity(components[0]);
+        var values = new string[components.Length];
+        for (var index = 0; index < components.Length; index++)
+            values[index] = (components[index].Kind == ObservationValueKind.Int64 ? "i:" : "s:") + Scalar(components[index]);
+        return "tuple/v1:" + JsonSerializer.Serialize(values);
+    }
+
+    /// <summary>Encodes a scalar source observation identity without allocating a component collection.</summary>
+    /// <param name="component">One non-null integer or nonblank text identity value.</param>
+    /// <returns>The invariant decimal integer or exact string value.</returns>
+    /// <exception cref="ArgumentException">The value is not an integer or nonblank string.</exception>
+    public static string EncodeIdentity(ObservationValue component)
+    {
+        if (component.Kind == ObservationValueKind.String && string.IsNullOrWhiteSpace(component.String))
+            throw new ArgumentException("A scalar observation identity cannot be blank.", nameof(component));
+        return Scalar(component);
+    }
+
+    static string Scalar(ObservationValue component) => component.Kind switch
+    {
+        ObservationValueKind.Int64 => component.Int64.ToString(CultureInfo.InvariantCulture),
+        ObservationValueKind.String => component.String!,
+        _ => throw new ArgumentException("Identity components must be non-null integers or strings.", nameof(component))
+    };
+}
 
 /// <summary>Canonical parameter encoded once per invocation.</summary>
 /// <param name="Id">Canonical parameter identity and shared SQL runtime binding name.</param>
@@ -64,7 +103,7 @@ public sealed class SqliteRelationQueryCompiledArtifact
     }
 
     /// <summary>Version of the inspectable native artifact layout.</summary>
-    public string SchemaVersion => "cohesive.relations.sqlite-artifact/v1";
+    public string SchemaVersion => "cohesive.relations.sqlite-artifact/v2";
     /// <summary>Exact demanded canonical terminal.</summary>
     public RelationQueryNativeResultBranch Branch { get; }
     /// <summary>Immutable shared SQL construction artifact.</summary>
@@ -133,11 +172,28 @@ public sealed class SqliteRelationQueryCompiledArtifact
         var occurrences = ImmutableArray.CreateBuilder<RelationQueryObservationOccurrence>(OccurrenceColumns.Length);
         foreach (var column in OccurrenceColumns)
         {
-            if (reader.IsDBNull(column.IdentityOrdinal)) continue;
-            if (reader.GetValue(column.IdentityOrdinal) is not long identity)
-                throw new InvalidOperationException("SQLite occurrence identity must be encoded as INTEGER.");
-            var value = identity.ToString(CultureInfo.InvariantCulture);
-            occurrences.Add(new(new($"sqlite/{Uri.EscapeDataString(column.Binding.Value)}/{value}"), column.Binding, column.Shape, value));
+            var absent = reader.IsDBNull(column.Components[0].Ordinal);
+            foreach (var component in column.Components)
+                if (reader.IsDBNull(component.Ordinal) != absent)
+                    throw new InvalidOperationException("SQLite identity components disagree about source absence.");
+            if (absent) continue;
+            string value;
+            if (column.Components.Length == 1)
+            {
+                var component = column.Components[0];
+                value = SqliteRelationQueryOccurrenceColumn.EncodeIdentity(SqliteScalarCodec.Decode(component.Contract, reader.GetValue(component.Ordinal)));
+            }
+            else
+            {
+                var values = new ObservationValue[column.Components.Length];
+                for (var index = 0; index < values.Length; index++)
+                {
+                    var component = column.Components[index];
+                    values[index] = SqliteScalarCodec.Decode(component.Contract, reader.GetValue(component.Ordinal));
+                }
+                value = SqliteRelationQueryOccurrenceColumn.EncodeIdentity(values);
+            }
+            occurrences.Add(new(new($"sqlite/{Uri.EscapeDataString(column.Binding.Value)}/{Uri.EscapeDataString(value)}"), column.Binding, column.Shape, value));
         }
         return new(ReadPresence(reader, BindingPresenceOrdinal) ? ObservationValue.FromObject(fields) : ObservationValue.Undefined,
             occurrences.Count == occurrences.Capacity ? occurrences.MoveToImmutable() : occurrences.ToImmutable());

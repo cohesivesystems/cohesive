@@ -156,7 +156,7 @@ changes without regenerating this artifact.
 - Capability evidence: 52
 - Definition schemas: `relation-query/v1`
 - Compiler profiles: `relation-query-static/v1`
-- Full-profile SHA-256: `f8a3a6498494be11a8c5fbe439032be4cf051458ed268b44bfa6aa5a9fc3d461`
+- Full-profile SHA-256: `af45e0f95a542df41520afd8d09f1a30fe58b76d2822756ef272cb65c373f5b3`
 - Families: boundary validation=1, expression=14, guarantee=12, logical=17, primitive=3, structural=5
 
 - Logical semantics: `AlwaysPresentBinding`, `AscendingOrdering`, `DescendingOrdering`, `Filter`, `InnerJoin`, `Join`, `LeftOuterJoin`, `MayBeAbsentBinding`, `NullsFirst`, `NullsLast`, `Ordering`, `Projection`, `ProjectionAssignment`, `QueryRowsResult`, `SelectRepresentative`, `Source`, `StableTieOrdering`
