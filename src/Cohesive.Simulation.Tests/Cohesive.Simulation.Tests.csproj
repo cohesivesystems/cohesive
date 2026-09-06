@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Cohesive.Simulation.Cli\Cohesive.Simulation.Cli.csproj" />
+    <ProjectReference Include="..\Cohesive.Simulation.ExternalProcess\Cohesive.Simulation.ExternalProcess.csproj" />
     <ProjectReference Include="..\Cohesive.Simulation.Relations\Cohesive.Simulation.Relations.csproj" />
     <ProjectReference Include="..\Cohesive.Simulation\Cohesive.Simulation.csproj" />
     <ProjectReference Include="..\Cohesive.Simulation.Storage\Cohesive.Simulation.Storage.csproj" />

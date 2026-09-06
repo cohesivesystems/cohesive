@@ -26,6 +26,8 @@ Add only the integrations the application uses:
 | `Cohesive.Adapters.Mimesis` | Typed finite Mimesis imports through the bounded Python process boundary |
 
 Core depends only on `Cohesive`; Relations, Storage, xUnit, CLI, and provider integrations stay in optional packages.
+The CLI can consume a strict portable ExternalProcess import definition while keeping executable paths and process
+limits local to the invocation, then atomically retain and independently verify the resulting catalog.
 
 ## Generate a POCO
 

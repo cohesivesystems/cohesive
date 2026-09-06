@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Cohesive.Adapters.Bogus;
@@ -84,6 +86,16 @@ else if (args is ["emit-catalog", string emittedCatalogPath])
         emittedCatalogPath,
         GenerationCatalogJsonSerializer.Serialize(CreateIdentityCatalog()));
 }
+else if (args is ["emit-external-import", string externalImportPath])
+{
+    await File.WriteAllTextAsync(
+        externalImportPath,
+        ExternalGenerationCatalogImportJsonSerializer.Serialize(CreateExternalImportDefinition()));
+}
+else if (args is ["provide-external-catalog"])
+{
+    await ProvideExternalCatalog();
+}
 else if (args is ["verify", string coreJsonLinesPath, string coreManifestPath, string coreReportPath])
 {
     var manifest = WorldArtifactManifestJsonSerializer.Deserialize(await File.ReadAllTextAsync(coreManifestPath));
@@ -145,10 +157,31 @@ else if (args is ["verify-catalog", string retainedCatalogPath, string catalogRe
     var catalog = GenerationCatalogJsonSerializer.Deserialize(await File.ReadAllTextAsync(retainedCatalogPath));
     await VerifyCatalogCliReport(catalogReportPath, catalog);
 }
+else if (args is [
+    "verify-external-catalog",
+    string importedCatalogPath,
+    string importedCatalogReportPath])
+{
+    var catalog = GenerationCatalogJsonSerializer.Deserialize(await File.ReadAllTextAsync(importedCatalogPath));
+    Require(catalog.Definition.Id, "catalog/package-smoke-external-cli", "external CLI catalog id");
+    Require(catalog.Definition.Provenance.Provider, "package-smoke-provider", "external CLI provider");
+    Require(catalog.Definition.Provenance.ProviderVersion, "1", "external CLI provider version");
+    Require(
+        catalog.Definition.Entries[0].Value.String,
+        "package-smoke-42-0",
+        "external CLI first value");
+    if (!catalog.Definition.Provenance.SourceReferences.Any(static source =>
+            source.Value.StartsWith("csimcatalogrequest://csimcatalogrequest1_", StringComparison.Ordinal)))
+    {
+        throw new InvalidOperationException("The imported catalog omitted its external request identity.");
+    }
+    await VerifyCatalogCliReport(importedCatalogReportPath, catalog);
+}
 else
 {
     throw new ArgumentException(
-        "Expected an emit, emit-catalog, emit-relationship, verify, verify-catalog, or verify-relationship command.");
+        "Expected an emit, emit-catalog, emit-external-import, emit-relationship, provide-external-catalog, verify, "
+        + "verify-catalog, verify-external-catalog, or verify-relationship command.");
 }
 
 return 0;
@@ -232,6 +265,55 @@ static void VerifyExternalProcessAdapterPackage()
         restored.SchemaVersion,
         "cohesive-simulation-generation-catalog-provider/v1",
         "external provider schema");
+}
+
+static ExternalGenerationCatalogImportDefinition CreateExternalImportDefinition() =>
+    ExternalGenerationCatalogImportDefinition.Create(
+        catalogId: "catalog/package-smoke-external-cli",
+        catalogRevision: "r1",
+        count: 2,
+        seed: 42,
+        valueType: new ScalarTypeRef(ScalarTypeKind.String),
+        configuration: JsonSerializer.SerializeToElement(new { prefix = "package-smoke" }),
+        provider: "package-smoke-provider",
+        providerVersion: "1",
+        randomAlgorithm: "package-smoke-provider/local-seed/v1",
+        capabilityProfile: new(
+            id: "package-smoke-provider/finite-snapshot/v1",
+            capabilities:
+            [
+                GenerationCatalogProducerCapability.FiniteSnapshot,
+                GenerationCatalogProducerCapability.LocalSeed
+            ],
+            sourceReferences:
+            [
+                SourceReference.Repository(new("eng/package-smoke/Cohesive.Simulation.Consumer/Program.cs"))
+            ]),
+        sourceReferences:
+        [
+            SourceReference.Repository(new("eng/package-smoke/Cohesive.Simulation.Consumer/Program.cs"))
+        ]);
+
+static async Task ProvideExternalCatalog()
+{
+    var request = ExternalGenerationCatalogProtocol.DeserializeRequest(await Console.In.ReadToEndAsync());
+    var prefix = request.Configuration.GetProperty("prefix").GetString()
+                 ?? throw new InvalidOperationException("The package-smoke provider requires a prefix.");
+    var values = ImmutableArray.CreateBuilder<ObservationValue>(request.Count);
+    for (var index = 0; index < request.Count; index++)
+    {
+        values.Add(ObservationValue.FromString(
+            $"{prefix}-{request.Seed.ToString(CultureInfo.InvariantCulture)}-"
+            + index.ToString(CultureInfo.InvariantCulture)));
+    }
+
+    var response = new ExternalGenerationCatalogResponse(
+        schemaVersion: ExternalGenerationCatalogProtocol.CurrentSchemaVersion,
+        requestId: request.RequestId,
+        provider: "package-smoke-provider",
+        providerVersion: "1",
+        values: values.MoveToImmutable());
+    await Console.Out.WriteAsync(ExternalGenerationCatalogProtocol.SerializeResponse(response));
 }
 
 static PocoGenerationDefinition<SmokeCustomer> CreateCustomers() =>

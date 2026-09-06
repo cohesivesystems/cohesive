@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 feed="${COHESIVE_NUGET_LOCAL_FEED:-"$repo_root/../.feeds/nuget/cohesive-local"}"
 version="${1:?Usage: test-simulation-tool.sh <package-version>}"
 project="$repo_root/eng/package-smoke/Cohesive.Simulation.Consumer/Cohesive.Simulation.Consumer.csproj"
+consumer_assembly="$repo_root/eng/package-smoke/Cohesive.Simulation.Consumer/bin/Release/net10.0/Cohesive.Simulation.Consumer.dll"
 package="$feed/Cohesive.Simulation.Cli.$version.nupkg"
 tool_directory="$(mktemp -d)"
 work_directory="$(mktemp -d)"
@@ -30,6 +31,35 @@ dotnet tool install Cohesive.Simulation.Cli \
   --version "$version" \
   --tool-path "$tool_directory" \
   --add-source "$feed"
+
+dotnet run \
+  --project "$project" \
+  --configuration Release \
+  --no-restore \
+  --property:CohesivePackageVersion="$version" \
+  --property:CohesivePackageFeed="$feed" \
+  -- emit-external-import "$work_directory/external.import.json"
+
+"$tool_directory/cohesive-sim" catalog import-external \
+  --definition "$work_directory/external.import.json" \
+  --executable dotnet \
+  --arg "$consumer_assembly" \
+  --arg provide-external-catalog \
+  --out "$work_directory/external.catalog.json"
+
+"$tool_directory/cohesive-sim" catalog verify \
+  --catalog "$work_directory/external.catalog.json" \
+  > "$work_directory/external.catalog.verification.json"
+
+dotnet run \
+  --project "$project" \
+  --configuration Release \
+  --no-restore \
+  --property:CohesivePackageVersion="$version" \
+  --property:CohesivePackageFeed="$feed" \
+  -- verify-external-catalog \
+  "$work_directory/external.catalog.json" \
+  "$work_directory/external.catalog.verification.json"
 
 dotnet run \
   --project "$project" \
@@ -115,4 +145,4 @@ dotnet run \
   "$work_directory/relationship.manifest.json" \
   "$work_directory/relationship.verification.json"
 
-echo "Cohesive.Simulation packages $version installed and verified catalogs, core artifacts, and relationship-world artifacts."
+echo "Cohesive.Simulation packages $version installed and verified external imports, catalogs, core artifacts, and relationship-world artifacts."

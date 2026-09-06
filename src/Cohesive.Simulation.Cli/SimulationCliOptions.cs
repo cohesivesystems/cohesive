@@ -2,6 +2,7 @@ using Cohesive.Cli;
 using Cohesive.Configuration;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
+using Cohesive.Simulation.ExternalProcess;
 using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
 
@@ -86,6 +87,52 @@ sealed record CatalogVerifyCliOptions
     public string CatalogPath { get; init; } = string.Empty;
 }
 
+sealed record ExternalCatalogImportCliOptions
+{
+    [ConfigurationParameter(
+        "definition",
+        Description = "Portable external catalog-import definition JSON path, or '-' for standard input.",
+        Required = true)]
+    public string DefinitionPath { get; init; } = string.Empty;
+
+    [ConfigurationParameter(
+        "executable",
+        Description = "Provider executable file name or path, launched directly without a command shell.",
+        Required = true)]
+    public string Executable { get; init; } = string.Empty;
+
+    [ConfigurationParameter(
+        "arg",
+        Description = "Ordered provider argument; repeat the option for multiple arguments.")]
+    public string[] Arguments { get; init; } = [];
+
+    [ConfigurationParameter(
+        "working-directory",
+        Description = "Optional provider-process working directory.")]
+    public string? WorkingDirectory { get; init; }
+
+    [ConfigurationParameter(
+        "timeout-seconds",
+        Description = "Positive provider wall-clock limit in seconds, no greater than one day.")]
+    public int TimeoutSeconds { get; init; } = (int)ExternalGenerationCatalogProvider.DefaultTimeout.TotalSeconds;
+
+    [ConfigurationParameter(
+        "maximum-message-bytes",
+        Description = "Positive maximum bytes accepted for a provider request or response.")]
+    public int MaximumMessageBytes { get; init; } = ExternalGenerationCatalogProvider.DefaultMaximumMessageBytes;
+
+    [ConfigurationParameter(
+        "maximum-standard-error-bytes",
+        Description = "Positive maximum provider standard-error bytes retained for diagnostics.")]
+    public int MaximumStandardErrorBytes { get; init; } =
+        ExternalGenerationCatalogProvider.DefaultMaximumStandardErrorBytes;
+
+    [ConfigurationParameter(
+        "out",
+        Description = "Canonical generation-catalog JSON path, or '-' for standard output.")]
+    public string OutputPath { get; init; } = CommandIo.StandardStreamPath;
+}
+
 sealed record WorldVerifyCliEvidence(
     string ArtifactId,
     string ArtifactManifestFingerprint,
@@ -121,3 +168,17 @@ sealed record CatalogVerifyCliEvidence(
     TypeRef ValueType,
     int EntryCount,
     GenerationCatalogProvenance Provenance);
+
+sealed record ExternalCatalogImportCliFailureReport(
+    string SchemaVersion,
+    bool IsSuccessful,
+    string Code,
+    string Message,
+    ExternalGenerationCatalogFailure? ProviderFailure,
+    int? ProviderExitCode,
+    string? ProviderStandardError,
+    bool ProviderStandardErrorTruncated,
+    IReadOnlyList<DocumentValidationDiagnostic> Diagnostics)
+{
+    public const string CurrentSchemaVersion = "cohesive-simulation-cli-external-catalog-import-failure/v1";
+}

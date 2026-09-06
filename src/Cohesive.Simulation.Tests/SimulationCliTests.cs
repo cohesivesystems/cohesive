@@ -7,6 +7,7 @@ using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
 using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Cli;
+using Cohesive.Simulation.ExternalProcess;
 using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Relations;
@@ -212,6 +213,69 @@ public sealed class SimulationCliTests
     }
 
     [Fact]
+    public async Task ExternalCatalogImportCommand_RejectsInvalidDefinitionBeforeProviderLaunch()
+    {
+        var invalid = CreateExternalImportDefinitionJson().Replace(
+            "\"catalogId\":",
+            "\"unknown\":true,\"catalogId\":",
+            StringComparison.Ordinal);
+
+        var result = await Run(
+            [
+                "catalog", "import-external",
+                "--definition", "-",
+                "--executable", "cohesive-intentionally-missing-provider-executable"
+            ],
+            invalid);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.Output);
+        using var report = JsonDocument.Parse(result.Error);
+        Assert.False(report.RootElement.GetProperty("isSuccessful").GetBoolean());
+        Assert.Equal(
+            "simulation.cli.catalog.import.external.definitionInvalid",
+            report.RootElement.GetProperty("code").GetString());
+        Assert.Equal(
+            "simulation.generation.catalog.externalImport.document.contentInvalid",
+            report.RootElement.GetProperty("diagnostics")[0].GetProperty("code").GetString());
+        Assert.Equal(JsonValueKind.Null, report.RootElement.GetProperty("providerFailure").ValueKind);
+    }
+
+    [Fact]
+    public async Task ExternalCatalogImportCommand_ClassifiesStartFailureAndPreservesExistingOutput()
+    {
+        var temporaryDirectory = CreateTemporaryDirectory();
+        try
+        {
+            var outputPath = Path.Combine(temporaryDirectory, "catalog.json");
+            await File.WriteAllTextAsync(outputPath, "previous-catalog");
+
+            var result = await Run(
+                [
+                    "catalog", "import-external",
+                    "--definition", "-",
+                    "--executable", "cohesive-intentionally-missing-provider-executable",
+                    "--out", outputPath
+                ],
+                CreateExternalImportDefinitionJson());
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Empty(result.Output);
+            Assert.Equal("previous-catalog", await File.ReadAllTextAsync(outputPath));
+            using var report = JsonDocument.Parse(result.Error);
+            Assert.Equal(
+                "simulation.cli.catalog.import.external.startFailed",
+                report.RootElement.GetProperty("code").GetString());
+            Assert.Equal("StartFailed", report.RootElement.GetProperty("providerFailure").GetString());
+            Assert.Empty(report.RootElement.GetProperty("diagnostics").EnumerateArray());
+        }
+        finally
+        {
+            Directory.Delete(temporaryDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ManifestFileOutput_ReplacesOnlyAfterSuccessfulValidation()
     {
         var temporaryDirectory = CreateTemporaryDirectory();
@@ -383,6 +447,7 @@ public sealed class SimulationCliTests
         var provision = await Run(["provision", "--help"]);
         var verify = await Run(["verify", "--help"]);
         var catalogVerify = await Run(["catalog", "verify", "--help"]);
+        var catalogImport = await Run(["catalog", "import-external", "--help"]);
 
         Assert.Equal(0, manifest.ExitCode);
         Assert.Contains("Create and retain", manifest.Output, StringComparison.Ordinal);
@@ -412,6 +477,17 @@ public sealed class SimulationCliTests
         Assert.Contains("--catalog", catalogVerify.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("--manifest", catalogVerify.Output, StringComparison.Ordinal);
         Assert.Empty(catalogVerify.Error);
+
+        Assert.Equal(0, catalogImport.ExitCode);
+        Assert.Contains("bounded external provider process", catalogImport.Output, StringComparison.Ordinal);
+        Assert.Contains("--definition", catalogImport.Output, StringComparison.Ordinal);
+        Assert.Contains("--executable", catalogImport.Output, StringComparison.Ordinal);
+        Assert.Contains("--arg", catalogImport.Output, StringComparison.Ordinal);
+        Assert.Contains("--working-directory", catalogImport.Output, StringComparison.Ordinal);
+        Assert.Contains("--timeout-seconds", catalogImport.Output, StringComparison.Ordinal);
+        Assert.Contains("--out", catalogImport.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("--provider", catalogImport.Output, StringComparison.Ordinal);
+        Assert.Empty(catalogImport.Error);
     }
 
     [Fact]
@@ -539,6 +615,34 @@ public sealed class SimulationCliTests
                     [
                         SourceReference.Repository(new("src/Cohesive.Simulation.Tests/SimulationCliTests.cs"))
                     ]))));
+
+    static string CreateExternalImportDefinitionJson() =>
+        ExternalGenerationCatalogImportJsonSerializer.Serialize(
+            ExternalGenerationCatalogImportDefinition.Create(
+                catalogId: "catalog/cli-external-names",
+                catalogRevision: "r1",
+                count: 2,
+                seed: 42,
+                valueType: new ScalarTypeRef(ScalarTypeKind.String),
+                configuration: JsonSerializer.SerializeToElement(new { Prefix = "cli" }),
+                provider: "cli-test-provider",
+                providerVersion: "1",
+                randomAlgorithm: "cli-test-provider/local-seed/v1",
+                capabilityProfile: new(
+                    id: "cli-test-provider/finite-snapshot/v1",
+                    capabilities:
+                    [
+                        GenerationCatalogProducerCapability.FiniteSnapshot,
+                        GenerationCatalogProducerCapability.LocalSeed
+                    ],
+                    sourceReferences:
+                    [
+                        SourceReference.Repository(new("src/Cohesive.Simulation.Tests/SimulationCliTests.cs"))
+                    ]),
+                sourceReferences:
+                [
+                    SourceReference.Repository(new("src/Cohesive.Simulation.Tests/SimulationCliTests.cs"))
+                ]));
 
     static WorldDefinition DemoWorld()
     {

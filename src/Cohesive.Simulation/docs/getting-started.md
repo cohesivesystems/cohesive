@@ -114,6 +114,11 @@ retained authority independently before embedding or consuming it:
 cohesive-sim catalog verify --catalog person-profiles.catalog.json
 ```
 
+Language-neutral producers can instead be invoked through `cohesive-sim catalog import-external`. Its portable
+definition retains provider semantics and deterministic inputs, while executable paths and operational limits remain
+local invocation settings. See the [ExternalProcess guide](../../Cohesive.Simulation.ExternalProcess/README.md) for
+the complete workflow.
+
 Install `Cohesive.Adapters.Bogus` when Bogus should produce the retained snapshot. Its
 `BogusGenerationCatalog.Import(...)` helper applies an explicit locale, importer-local seed, and fixed UTC time
 reference, then records exact adapter/provider package evidence. The callback runs only during import; the resulting
