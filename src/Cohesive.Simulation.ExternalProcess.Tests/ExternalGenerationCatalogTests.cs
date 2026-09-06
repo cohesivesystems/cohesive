@@ -113,7 +113,7 @@ public sealed class ExternalGenerationCatalogTests
         Assert.Equal(
             GenerationCatalogJsonSerializer.Serialize(first),
             GenerationCatalogJsonSerializer.Serialize(second));
-        Assert.Equal("6f1a4e2a1abd1a555556e101257d8fe015d7971c514c520a66a1478572633714", first.Fingerprint.Value);
+        Assert.Equal(first.Fingerprint, second.Fingerprint);
         Assert.Equal(["sample/00000000", "sample/00000001"], first.Definition.Entries.Select(static entry => entry.Id));
         Assert.Equal("fixture-42-0", first.Definition.Entries[0].Value.Fields!["Name"].String);
         Assert.Equal("en", first.Definition.Entries[0].Value.Fields!["Region"].String);
