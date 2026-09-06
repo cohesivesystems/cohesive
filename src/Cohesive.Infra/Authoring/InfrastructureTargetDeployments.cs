@@ -40,6 +40,7 @@ public sealed class InfrastructureTargetDeploymentManifestBuilder
     readonly List<InfrastructureTargetWorkloadDeployment> workloads = [];
     readonly List<InfrastructureTargetResourceDeployment> resources = [];
     readonly List<InfrastructureWorkloadNonParticipation> nonParticipatingWorkloads = [];
+    readonly List<InfrastructureTargetBoundaryAcceptance> boundaryAcceptances = [];
     readonly List<InfrastructureSourceProvenance> sourceMap = [];
 
     internal InfrastructureTargetDeploymentManifestBuilder(
@@ -98,6 +99,28 @@ public sealed class InfrastructureTargetDeploymentManifestBuilder
         return this;
     }
 
+    /// <summary>Accepts one named operating boundary wherever selected target evidence uses it.</summary>
+    /// <param name="boundary">Operating boundary accepted by this target deployment.</param>
+    /// <param name="rationale">Human-reviewable environment-policy rationale.</param>
+    /// <param name="sourceReferences">Attributable policy, approval, or specification sources.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for non-semantic attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for non-semantic attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for non-semantic attribution.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentException">The boundary, rationale, or source-reference collection is invalid or missing.</exception>
+    public InfrastructureTargetDeploymentManifestBuilder AcceptBoundary(
+        InfrastructureOperatingBoundaryId boundary,
+        string rationale,
+        ImmutableArray<SourceReference> sourceReferences,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        boundaryAcceptances.Add(new(boundary, rationale, sourceReferences));
+        sourceMap.Add(Capture(InfrastructureSourceReferences.OperatingBoundary(boundary), sourceFile, sourceLine, sourceMember));
+        return this;
+    }
+
     /// <summary>Declares one exact resource deployment and lifecycle authority.</summary>
     /// <param name="resource">Canonical resource identity.</param>
     /// <param name="facility">Target facility materializing or referencing the resource.</param>
@@ -132,6 +155,7 @@ public sealed class InfrastructureTargetDeploymentManifestBuilder
         [.. workloads],
         [.. resources],
         [.. nonParticipatingWorkloads],
+        [.. boundaryAcceptances],
         sourceMap: new([.. sourceMap]));
 
     InfrastructureSourceProvenance Capture(

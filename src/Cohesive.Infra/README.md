@@ -99,6 +99,10 @@ Every canonical workload must be either placed or explicitly declared non-partic
 omission remains an error. Non-participation is physical environment policy, not a second semantic definition and not
 permission to weaken the target's capability closure. Requirements demanded solely by a non-participating workload do
 not need physical witnesses, while a participating binding or readiness edge into that workload fails closed.
+Constrained target evidence remains inadmissible until the deployment explicitly calls `AcceptBoundary(...)` with a
+rationale and attributable sources. That declaration accepts only the named target boundary; the shared compiler
+matches it to selected demands, materializes the exact fenced `InfrastructureBoundaryAcceptancePolicy`, and exposes
+that policy on the deployment plan. Applications do not compile provisionally or enumerate requirement identities.
 Fluent facility and deployment authoring also captures C# call sites in a portable source map. Source maps support
 diagnostics and inspection but are excluded from semantic fingerprints, so moving equivalent declarations between
 files does not change their canonical identity. Explicit source references remain semantic evidence and should be

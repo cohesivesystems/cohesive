@@ -88,8 +88,10 @@ physical identities. It fences one definition and facility manifest, then attrib
 resource to a target facility, physical identity, source evidence, and—for resources—lifecycle authority. A canonical
 workload absent from a particular environment requires an explicit `InfrastructureWorkloadNonParticipation` decision
 with rationale and sources. Placements plus those decisions form an exact workload partition; neither silent omission
-nor placement/non-participation conflict is accepted. Its fluent builder is only a producer of immutable,
-serializable, fingerprinted IR.
+nor placement/non-participation conflict is accepted. The manifest may also declare
+`InfrastructureTargetBoundaryAcceptance` values: environment policy that accepts a named operating boundary with an
+exact rationale and sources, without copying definition-local requirement identities. Its fluent builder is only a
+producer of immutable, serializable, fingerprinted IR.
 
 `InfrastructureTargetDeploymentCompiler` owns the corresponding computation. Exact deployment declarations become
 explicit facility-selection policy; canonical resource lifecycle intent determines managed versus referenced
@@ -99,6 +101,14 @@ demand's logical endpoints, the compiler attributes that evidence to the declare
 facility rather than falsely claiming that every proof component applies to every subject. Missing declarations,
 unknown nodes, incompatible facilities, unavailable capabilities, and incomplete physical coverage remain structured
 diagnostics. Applications and lifecycle stacks consume this result; they do not reimplement the assessment.
+
+Target-boundary acceptance is compiled in two internal passes. The first facility plan establishes the selected proof
+and its exact demand identities. The deployment compiler joins each selected proof boundary to the corresponding
+target declaration, materializes a demand-scoped `InfrastructureBoundaryAcceptancePolicy`, and recompiles the final
+facility plan with that policy. Only the final facility diagnostics are reported. Unknown declarations fail closed;
+known declarations unused by any selected proof are warnings. The exact compiled policy is retained on
+`InfrastructureTargetDeploymentPlan` for inspection and provenance. This orchestration belongs to Cohesive.Infra so
+applications never traverse provisional capability decisions or synthesize acceptance records themselves.
 
 Workload non-participation does not modify the canonical definition and does not narrow target capability closure.
 Physical witness decisions omit demands owned solely by non-participating workloads, but resource demands and demands
