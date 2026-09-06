@@ -6,6 +6,7 @@ using Cohesive.Model.Authoring;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
 using Cohesive.Simulation;
+using Cohesive.Simulation.ExternalProcess;
 using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
@@ -27,6 +28,7 @@ const string ExpectedJsonLinesFingerprint =
 if (args is ["emit", string coreWorldPath])
 {
     VerifyBogusAdapterPackage();
+    VerifyExternalProcessAdapterPackage();
     var customers = CreateCustomers();
     var compiledCustomers = customers.Compile();
     var propertyRun = compiledCustomers.CheckProperty(
@@ -166,6 +168,27 @@ static void VerifyBogusAdapterPackage()
         throw new InvalidOperationException("Expected the installed Bogus adapter to retain two catalog entries.");
 }
 
+static void VerifyExternalProcessAdapterPackage()
+{
+    DefaultClrTypeRefMapper typeMapper = new();
+    var request = ExternalGenerationCatalogProtocol.CreateRequest(
+        catalogId: "catalog/package-smoke-external",
+        catalogRevision: "r1",
+        count: 2,
+        seed: long.MaxValue,
+        valueType: typeMapper.Map(typeof(string), nullability: null),
+        configuration: JsonSerializer.SerializeToElement(new SmokeExternalProviderConfiguration("name")),
+        locale: "en");
+    var restored = ExternalGenerationCatalogProtocol.DeserializeRequest(
+        ExternalGenerationCatalogProtocol.SerializeRequest(request));
+
+    Require(restored.RequestId, request.RequestId, "external provider requestId");
+    Require(
+        restored.SchemaVersion,
+        "cohesive-simulation-generation-catalog-provider/v1",
+        "external provider schema");
+}
+
 static PocoGenerationDefinition<SmokeCustomer> CreateCustomers() =>
     Simulation.Define<SmokeCustomer>(customer =>
     {
@@ -241,3 +264,5 @@ static async Task VerifyCliReport(string path, string expectedArtifactId, long e
 sealed record SmokeIdentity(string Name, string Region);
 
 sealed record SmokeCustomer(string Name, string Region, int Age);
+
+sealed record SmokeExternalProviderConfiguration(string Generator);
