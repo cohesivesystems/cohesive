@@ -20,6 +20,18 @@ The embedded world document, including complete embedded catalog documents, is t
 manifest fields are validated projections for discovery and provenance; they do not become a second definition or a
 dangling pointer to required catalog content.
 
+At a script or CI boundary, validate an independently retained provider catalog before embedding it:
+
+```bash
+cohesive-sim catalog verify \
+  --catalog person-profiles.catalog.json \
+  > person-profiles.catalog.verification.json
+```
+
+The `cohesive-simulation-cli-catalog-verification/v1` report projects the verified catalog identity, value type,
+entry count, and producer provenance. It is validation evidence, not another catalog authority; retain the canonical
+`GenerationCatalogDocument` itself.
+
 ## Create and retain a manifest
 
 ```csharp

@@ -31,6 +31,28 @@ dotnet tool install Cohesive.Simulation.Cli \
   --tool-path "$tool_directory" \
   --add-source "$feed"
 
+dotnet run \
+  --project "$project" \
+  --configuration Release \
+  --no-restore \
+  --property:CohesivePackageVersion="$version" \
+  --property:CohesivePackageFeed="$feed" \
+  -- emit-catalog "$work_directory/identities.catalog.json"
+
+"$tool_directory/cohesive-sim" catalog verify \
+  --catalog "$work_directory/identities.catalog.json" \
+  > "$work_directory/identities.catalog.verification.json"
+
+dotnet run \
+  --project "$project" \
+  --configuration Release \
+  --no-restore \
+  --property:CohesivePackageVersion="$version" \
+  --property:CohesivePackageFeed="$feed" \
+  -- verify-catalog \
+  "$work_directory/identities.catalog.json" \
+  "$work_directory/identities.catalog.verification.json"
+
 "$tool_directory/cohesive-sim" manifest \
   --world "$work_directory/world.json" \
   --seed 42 \
@@ -93,4 +115,4 @@ dotnet run \
   "$work_directory/relationship.manifest.json" \
   "$work_directory/relationship.verification.json"
 
-echo "Cohesive.Simulation packages $version installed and verified core and relationship-world artifacts."
+echo "Cohesive.Simulation packages $version installed and verified catalogs, core artifacts, and relationship-world artifacts."

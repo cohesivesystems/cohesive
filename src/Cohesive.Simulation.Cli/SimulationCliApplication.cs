@@ -2,6 +2,7 @@ using Cohesive.Cli;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Simulation.Artifacts;
+using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Relations;
 using Cohesive.Simulation.Worlds;
@@ -42,6 +43,13 @@ static class SimulationCliApplication
                 options => options.ManifestPath,
                 options => options.JsonLinesPath)
             .OnExecute(VerifyAsync);
+        app.Command<CatalogCliOptions>(
+                "catalog",
+                "Inspect and validate retained generation catalogs.")
+            .SubCommand<CatalogVerifyCliOptions>(
+                "verify",
+                "Verify a retained generation-catalog document.")
+            .OnExecute(VerifyCatalogAsync);
         return app;
     }
 
@@ -148,8 +156,8 @@ static class SimulationCliApplication
             }
 
             var verification = validation.Verification;
-            context.Io.WriteJson(new WorldVerifyCliReport(
-                WorldVerifyCliReport.CurrentSchemaVersion,
+            context.Io.WriteJson(new CliVerificationReport<WorldVerifyCliEvidence>(
+                CliVerificationReportSchemas.WorldArtifact,
                 IsValid: true,
                 new(
                     manifest.ArtifactId.Value,
@@ -183,6 +191,56 @@ static class SimulationCliApplication
         }
     }
 
+    static async Task<int> VerifyCatalogAsync(CliCommandContext<CatalogVerifyCliOptions> context)
+    {
+        try
+        {
+            var options = NormalizePaths(context.Configuration);
+            var catalogJson = await context.Io.ReadUtf8TextAsync(
+                    options.CatalogPath,
+                    context.CancellationToken)
+                .ConfigureAwait(false);
+            var validation = GenerationCatalogJsonSerializer.TryDeserialize(
+                catalogJson,
+                out var catalog);
+            if (!validation.IsValid || catalog is null)
+            {
+                WriteCatalogVerificationFailure(context, validation.Diagnostics);
+                return FailureExitCode;
+            }
+
+            var definition = catalog.Definition;
+            context.Io.WriteJson(new CliVerificationReport<CatalogVerifyCliEvidence>(
+                CliVerificationReportSchemas.GenerationCatalog,
+                IsValid: true,
+                new(
+                    catalog.SchemaVersion,
+                    definition.Id,
+                    definition.Revision,
+                    catalog.Fingerprint.Value,
+                    definition.ValueType,
+                    definition.Entries.Length,
+                    definition.Provenance),
+                Diagnostics: []));
+            return SuccessExitCode;
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            context.Io.WriteErrorLine("Generation-catalog verification was cancelled.");
+            return CancelledExitCode;
+        }
+        catch (Exception exception)
+        {
+            WriteCatalogVerificationFailure(
+                context,
+                [new(
+                    CatalogVerificationFailureCode(exception),
+                    DiagnosticSeverity.Error,
+                    exception.Message)]);
+            return FailureExitCode;
+        }
+    }
+
     static WorldManifestCliOptions NormalizePaths(WorldManifestCliOptions options) =>
         options with
         {
@@ -207,6 +265,12 @@ static class SimulationCliApplication
         {
             ManifestPath = NormalizePath(options.ManifestPath, "--manifest"),
             JsonLinesPath = NormalizePath(options.JsonLinesPath, "--jsonl")
+        };
+
+    static CatalogVerifyCliOptions NormalizePaths(CatalogVerifyCliOptions options) =>
+        options with
+        {
+            CatalogPath = NormalizePath(options.CatalogPath, "--catalog")
         };
 
     static string NormalizePath(string value, string option)
@@ -264,8 +328,17 @@ static class SimulationCliApplication
     static void WriteVerificationFailure(
         CliCommandContext<WorldVerifyCliOptions> context,
         IReadOnlyList<DocumentValidationDiagnostic> diagnostics) =>
-        context.Io.WriteJsonError(new WorldVerifyCliReport(
-            WorldVerifyCliReport.CurrentSchemaVersion,
+        context.Io.WriteJsonError(new CliVerificationReport<WorldVerifyCliEvidence>(
+            CliVerificationReportSchemas.WorldArtifact,
+            IsValid: false,
+            Verification: null,
+            diagnostics));
+
+    static void WriteCatalogVerificationFailure(
+        CliCommandContext<CatalogVerifyCliOptions> context,
+        IReadOnlyList<DocumentValidationDiagnostic> diagnostics) =>
+        context.Io.WriteJsonError(new CliVerificationReport<CatalogVerifyCliEvidence>(
+            CliVerificationReportSchemas.GenerationCatalog,
             IsValid: false,
             Verification: null,
             diagnostics));
@@ -276,5 +349,12 @@ static class SimulationCliApplication
         System.Text.Json.JsonException or ArgumentException => "simulation.cli.verify.artifactInvalid",
         IOException or UnauthorizedAccessException => "simulation.cli.verify.inputUnavailable",
         _ => "simulation.cli.verify.failed"
+    };
+
+    static string CatalogVerificationFailureCode(Exception exception) => exception switch
+    {
+        System.Text.Json.JsonException or ArgumentException => "simulation.cli.catalog.verify.catalogInvalid",
+        IOException or UnauthorizedAccessException => "simulation.cli.catalog.verify.inputUnavailable",
+        _ => "simulation.cli.catalog.verify.failed"
     };
 }

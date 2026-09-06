@@ -107,6 +107,13 @@ producer capability evidence, distinct profile/import source references, and kno
 deterministic unit, property, and world generation without making an external fake-data library a runtime dependency
 of `Cohesive.Simulation`.
 
+Persist adapter output with `GenerationCatalogJsonSerializer.Serialize(...)`. Scripts and CI can then validate the
+retained authority independently before embedding or consuming it:
+
+```bash
+cohesive-sim catalog verify --catalog person-profiles.catalog.json
+```
+
 Install `Cohesive.Adapters.Bogus` when Bogus should produce the retained snapshot. Its
 `BogusGenerationCatalog.Import(...)` helper applies an explicit locale, importer-local seed, and fixed UTC time
 reference, then records exact adapter/provider package evidence. The callback runs only during import; the resulting

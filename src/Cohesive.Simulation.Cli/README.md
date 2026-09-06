@@ -12,6 +12,21 @@ The current alpha targets .NET 10:
 dotnet tool install Cohesive.Simulation.Cli --global --prerelease
 ```
 
+Validate an adapter-produced catalog before using or embedding it in a generation definition:
+
+```bash
+cohesive-sim catalog verify \
+  --catalog test-data/person-profiles.catalog.json \
+  > test-results/person-profiles.catalog.verification.json
+```
+
+The command strictly validates the complete current-version catalog, including canonical wire form, value contract,
+entries, producer provenance, and recomputed fingerprint. Success writes a
+`cohesive-simulation-cli-catalog-verification/v1` report with catalog identity, value type, entry count, and producer
+provenance. Invalid content exits nonzero and writes the same report shape with stable structured diagnostics to
+standard error. The report is evidence about the retained catalog; it does not replace the catalog as semantic
+authority.
+
 Create the immutable, content-addressed manifest first, then provision only from that retained authority:
 
 ```bash
@@ -45,6 +60,10 @@ temporary file and moved over the requested path only after the complete command
 the immutable manifest therefore already exists before JSON Lines generation starts, and a failed or cancelled
 provision preserves the prior complete JSON Lines file. Standard output is inherently streaming and can contain a
 partial batch if its consumer fails.
+
+`catalog verify --catalog -` reads one catalog from standard input. Provider adapters remain separate packages: this
+command neither invokes an external provider nor invents machine-specific launch configuration. Import a catalog
+with the selected adapter, retain the returned canonical document, and use this command at process or CI boundaries.
 
 The manifest and JSON Lines stream remain two independently framed artifacts rather than an invented aggregate file
 format. Every v5 item cites the exact manifest schema, artifact ID, and manifest fingerprint, as well as world, run,

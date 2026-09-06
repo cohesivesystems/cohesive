@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>cohesive-sim</AssemblyName>
     <PackageId>Cohesive.Simulation.Cli</PackageId>
-    <Description>Create, provision, and verify portable deterministic Cohesive simulation artifacts.</Description>
+    <Description>Validate retained catalogs and create, provision, and verify portable deterministic Cohesive simulation artifacts.</Description>
     <PackageTags>cohesive;simulation;synthetic-data;testing;playwright;cli</PackageTags>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>cohesive-sim</ToolCommandName>

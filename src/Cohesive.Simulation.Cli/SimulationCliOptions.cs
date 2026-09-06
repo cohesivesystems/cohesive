@@ -1,6 +1,8 @@
 using Cohesive.Cli;
 using Cohesive.Configuration;
+using Cohesive.Model;
 using Cohesive.Model.Serialization;
+using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
 
 namespace Cohesive.Simulation.Cli;
@@ -73,6 +75,17 @@ sealed record WorldVerifyCliOptions
     public string JsonLinesPath { get; init; } = string.Empty;
 }
 
+sealed record CatalogCliOptions;
+
+sealed record CatalogVerifyCliOptions
+{
+    [ConfigurationParameter(
+        "catalog",
+        Description = "Generation-catalog document JSON path, or '-' for standard input.",
+        Required = true)]
+    public string CatalogPath { get; init; } = string.Empty;
+}
+
 sealed record WorldVerifyCliEvidence(
     string ArtifactId,
     string ArtifactManifestFingerprint,
@@ -86,11 +99,25 @@ sealed record WorldVerifyCliEvidence(
     int? BatchSize,
     long ItemCount);
 
-sealed record WorldVerifyCliReport(
+sealed record CliVerificationReport<TVerification>(
     string SchemaVersion,
     bool IsValid,
-    WorldVerifyCliEvidence? Verification,
+    TVerification? Verification,
     IReadOnlyList<DocumentValidationDiagnostic> Diagnostics)
+    where TVerification : class;
+
+static class CliVerificationReportSchemas
 {
-    public const string CurrentSchemaVersion = "cohesive-simulation-cli-verification/v1";
+    public const string WorldArtifact = "cohesive-simulation-cli-verification/v1";
+
+    public const string GenerationCatalog = "cohesive-simulation-cli-catalog-verification/v1";
 }
+
+sealed record CatalogVerifyCliEvidence(
+    string CatalogSchemaVersion,
+    string CatalogId,
+    string CatalogRevision,
+    string CatalogFingerprint,
+    TypeRef ValueType,
+    int EntryCount,
+    GenerationCatalogProvenance Provenance);

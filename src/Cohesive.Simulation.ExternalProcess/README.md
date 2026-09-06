@@ -54,9 +54,16 @@ var options = new ExternalGenerationCatalogImportOptions(
 GenerationCatalogDocument catalog =
     await ExternalGenerationCatalogImporter.ImportAsync<Person>(provider, options);
 
+await File.WriteAllTextAsync(
+    "demo-people.catalog.json",
+    GenerationCatalogJsonSerializer.Serialize(catalog));
+
 public sealed record PersonProviderConfiguration(string Generator);
 public sealed record Person(string Name, string Email);
 ```
+
+At a later process or CI boundary, `cohesive-sim catalog verify --catalog demo-people.catalog.json` validates the
+retained document and emits structured identity and provenance evidence without launching the provider again.
 
 The executable and arguments are passed directly to the platform process API; no command shell interprets them. The
 child inherits the caller's environment. Use an explicit executable path, working directory, wrapper, or virtual

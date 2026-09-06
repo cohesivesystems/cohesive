@@ -78,6 +78,12 @@ else if (args is ["emit-relationship", string relationshipWorldPath])
         relationshipWorldPath,
         RelationshipWorldDefinitionJsonSerializer.Serialize(world));
 }
+else if (args is ["emit-catalog", string emittedCatalogPath])
+{
+    await File.WriteAllTextAsync(
+        emittedCatalogPath,
+        GenerationCatalogJsonSerializer.Serialize(CreateIdentityCatalog()));
+}
 else if (args is ["verify", string coreJsonLinesPath, string coreManifestPath, string coreReportPath])
 {
     var manifest = WorldArtifactManifestJsonSerializer.Deserialize(await File.ReadAllTextAsync(coreManifestPath));
@@ -134,10 +140,15 @@ else if (args is [
 
     await VerifyCliReport(relationshipReportPath, manifest.ArtifactId.Value, expectedItemCount: 2);
 }
+else if (args is ["verify-catalog", string retainedCatalogPath, string catalogReportPath])
+{
+    var catalog = GenerationCatalogJsonSerializer.Deserialize(await File.ReadAllTextAsync(retainedCatalogPath));
+    await VerifyCatalogCliReport(catalogReportPath, catalog);
+}
 else
 {
     throw new ArgumentException(
-        "Expected an emit, emit-relationship, verify, or verify-relationship command.");
+        "Expected an emit, emit-catalog, emit-relationship, verify, verify-catalog, or verify-relationship command.");
 }
 
 return 0;
@@ -293,6 +304,46 @@ static async Task VerifyCliReport(string path, string expectedArtifactId, long e
     {
         throw new InvalidOperationException("The CLI verification report has an invalid item count.");
     }
+}
+
+static async Task VerifyCatalogCliReport(string path, GenerationCatalogDocument expectedCatalog)
+{
+    using var report = JsonDocument.Parse(await File.ReadAllTextAsync(path));
+    var root = report.RootElement;
+    if (!root.GetProperty("isValid").GetBoolean())
+    {
+        throw new InvalidOperationException("The CLI catalog-verification report is not valid.");
+    }
+
+    Require(
+        root.GetProperty("schemaVersion").GetString(),
+        "cohesive-simulation-cli-catalog-verification/v1",
+        "CLI catalog-verification schema");
+    var verification = root.GetProperty("verification");
+    Require(
+        verification.GetProperty("catalogSchemaVersion").GetString(),
+        expectedCatalog.SchemaVersion,
+        "CLI verified catalog schema");
+    Require(
+        verification.GetProperty("catalogId").GetString(),
+        expectedCatalog.Definition.Id,
+        "CLI verified catalog id");
+    Require(
+        verification.GetProperty("catalogRevision").GetString(),
+        expectedCatalog.Definition.Revision,
+        "CLI verified catalog revision");
+    Require(
+        verification.GetProperty("catalogFingerprint").GetString(),
+        expectedCatalog.Fingerprint.Value,
+        "CLI verified catalog fingerprint");
+    if (verification.GetProperty("entryCount").GetInt32() != expectedCatalog.Definition.Entries.Length)
+    {
+        throw new InvalidOperationException("The CLI catalog-verification report has an invalid entry count.");
+    }
+    Require(
+        verification.GetProperty("provenance").GetProperty("provider").GetString(),
+        expectedCatalog.Definition.Provenance.Provider,
+        "CLI verified catalog provider");
 }
 
 sealed record SmokeIdentity(string Name, string Region);

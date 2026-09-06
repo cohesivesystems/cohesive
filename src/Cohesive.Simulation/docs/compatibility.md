@@ -21,6 +21,7 @@ formats may change between alpha versions, but every persisted contract is expli
 | Property-case replay token | `csimpc1.` |
 | Relationship-world replay token | `csimwr1.` |
 | CLI verification report | `cohesive-simulation-cli-verification/v1` |
+| CLI catalog-verification report | `cohesive-simulation-cli-catalog-verification/v1` |
 
 These values are diagnostic references. Application code should use the corresponding public constants where they
 exist rather than copying strings.
@@ -43,7 +44,8 @@ or introduce an explicit migration interpreter; do not rewrite fingerprints or s
 
 1. Pin one prerelease package version across the Simulation package family.
 2. Retain canonical source documents and manifests in addition to generated observations.
-3. Run `cohesive-sim verify` or the library verifier before importing cross-process JSONL.
+3. Run `cohesive-sim catalog verify` for retained provider catalogs and `cohesive-sim verify` or the library verifier
+   before importing cross-process JSONL.
 4. Preserve replay tokens and structured diagnostics in test reports.
 5. Review release notes for schema, interpreter, entropy, identity, and shrinker changes before upgrading.
 

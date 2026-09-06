@@ -2,10 +2,12 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Cohesive.Cli;
+using Cohesive.Model;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
 using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Cli;
+using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Relations;
 using Cohesive.Simulation.Worlds;
@@ -151,6 +153,62 @@ public sealed class SimulationCliTests
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.Output);
         Assert.Contains("Only one of '--manifest' and '--jsonl' can read", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CatalogVerifyCommand_ReportsExactRetainedIdentityAndProvenance()
+    {
+        var catalogJson = CreateCatalogJson();
+        var catalog = GenerationCatalogJsonSerializer.Deserialize(catalogJson);
+
+        var result = await Run(["catalog", "verify", "--catalog", "-"], catalogJson);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.Error);
+        using var report = JsonDocument.Parse(result.Output);
+        var root = report.RootElement;
+        Assert.Equal(
+            "cohesive-simulation-cli-catalog-verification/v1",
+            root.GetProperty("schemaVersion").GetString());
+        Assert.True(root.GetProperty("isValid").GetBoolean());
+        Assert.Empty(root.GetProperty("diagnostics").EnumerateArray());
+        var verification = root.GetProperty("verification");
+        Assert.Equal(catalog.SchemaVersion, verification.GetProperty("catalogSchemaVersion").GetString());
+        Assert.Equal(catalog.Definition.Id, verification.GetProperty("catalogId").GetString());
+        Assert.Equal(catalog.Definition.Revision, verification.GetProperty("catalogRevision").GetString());
+        Assert.Equal(catalog.Fingerprint.Value, verification.GetProperty("catalogFingerprint").GetString());
+        Assert.Equal(2, verification.GetProperty("entryCount").GetInt32());
+        Assert.Equal(
+            "test-provider",
+            verification.GetProperty("provenance").GetProperty("provider").GetString());
+        Assert.Equal(
+            "scalar",
+            verification.GetProperty("valueType").GetProperty("$type").GetString());
+    }
+
+    [Fact]
+    public async Task CatalogVerifyCommand_RejectsTamperedCatalogWithStructuredDiagnostics()
+    {
+        var tampered = CreateCatalogJson().Replace("Ada", "Eve", StringComparison.Ordinal);
+
+        var result = await Run(["catalog", "verify", "--catalog", "-"], tampered);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.Output);
+        using var report = JsonDocument.Parse(result.Error);
+        Assert.False(report.RootElement.GetProperty("isValid").GetBoolean());
+        Assert.Equal(
+            "simulation.generation.catalog.document.contentInvalid",
+            report.RootElement
+                .GetProperty("diagnostics")[0]
+                .GetProperty("code")
+                .GetString());
+        Assert.Equal(
+            "$",
+            report.RootElement
+                .GetProperty("diagnostics")[0]
+                .GetProperty("location")
+                .GetString());
     }
 
     [Fact]
@@ -319,11 +377,12 @@ public sealed class SimulationCliTests
     }
 
     [Fact]
-    public async Task CommandHelp_SeparatesManifestCreationFromProvisioning()
+    public async Task CommandHelp_SeparatesArtifactAndCatalogOperations()
     {
         var manifest = await Run(["manifest", "--help"]);
         var provision = await Run(["provision", "--help"]);
         var verify = await Run(["verify", "--help"]);
+        var catalogVerify = await Run(["catalog", "verify", "--help"]);
 
         Assert.Equal(0, manifest.ExitCode);
         Assert.Contains("Create and retain", manifest.Output, StringComparison.Ordinal);
@@ -347,6 +406,12 @@ public sealed class SimulationCliTests
         Assert.Contains("--jsonl", verify.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("--target", verify.Output, StringComparison.Ordinal);
         Assert.Empty(verify.Error);
+
+        Assert.Equal(0, catalogVerify.ExitCode);
+        Assert.Contains("Verify a retained generation-catalog", catalogVerify.Output, StringComparison.Ordinal);
+        Assert.Contains("--catalog", catalogVerify.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("--manifest", catalogVerify.Output, StringComparison.Ordinal);
+        Assert.Empty(catalogVerify.Error);
     }
 
     [Fact]
@@ -359,6 +424,7 @@ public sealed class SimulationCliTests
         Assert.Contains("manifest", result.Output, StringComparison.Ordinal);
         Assert.Contains("provision", result.Output, StringComparison.Ordinal);
         Assert.Contains("verify", result.Output, StringComparison.Ordinal);
+        Assert.Contains("catalog", result.Output, StringComparison.Ordinal);
         Assert.Empty(result.Error);
     }
 
@@ -445,6 +511,34 @@ public sealed class SimulationCliTests
     static string CreateManifestJson(long rootSeed) =>
         WorldArtifactManifestJsonSerializer.Serialize(
             WorldArtifactManifest.FromWorld(DemoWorld().Compile(), rootSeed));
+
+    static string CreateCatalogJson() =>
+        GenerationCatalogJsonSerializer.Serialize(
+            GenerationCatalogDocument.FromDefinition(new(
+                id: "catalog/cli-names",
+                revision: "r1",
+                valueType: new ScalarTypeRef(ScalarTypeKind.String),
+                entries:
+                [
+                    new("name/ada", ObservationValue.FromString("Ada")),
+                    new("name/grace", ObservationValue.FromString("Grace"))
+                ],
+                provenance: new(
+                    adapter: "test-adapter",
+                    adapterVersion: "1",
+                    provider: "test-provider",
+                    providerVersion: "2",
+                    capabilityProfile: new(
+                        id: "test-provider/finite-snapshot/v1",
+                        capabilities: [GenerationCatalogProducerCapability.FiniteSnapshot],
+                        sourceReferences:
+                        [
+                            SourceReference.Repository(new("src/Cohesive.Simulation.Tests/SimulationCliTests.cs"))
+                        ]),
+                    sourceReferences:
+                    [
+                        SourceReference.Repository(new("src/Cohesive.Simulation.Tests/SimulationCliTests.cs"))
+                    ]))));
 
     static WorldDefinition DemoWorld()
     {
