@@ -17,7 +17,10 @@ public sealed class InfrastructureTargetDeploymentCompilerTests
     static readonly InfrastructurePhysicalResourceId ApiPhysical = new("test/app-service/sites/api");
     static readonly InfrastructurePhysicalResourceId StatePhysical = new("test/object-store/buckets/state");
     static readonly InfrastructureLifecycleAuthorityId Authority = new("test/state/production");
+    static readonly InfrastructureOperatingBoundaryId DisposableBoundary = new("test/boundaries/disposable");
+    static readonly InfrastructureOperatingBoundaryId PrivateNetworkBoundary = new("test/boundaries/private-network");
     static readonly SourceReference Source = SourceReference.Create("test-adapter", "production");
+    static readonly SourceReference PolicySource = SourceReference.Create("test-policy", "disposable");
 
     [Fact]
     public void Fluent_and_direct_manifests_materialize_the_same_canonical_ir()
@@ -59,6 +62,7 @@ public sealed class InfrastructureTargetDeploymentCompilerTests
 
         Assert.True(plan.IsComplete);
         Assert.Empty(plan.Diagnostics);
+        Assert.Null(plan.BoundaryAcceptancePolicy);
         Assert.Equal(plan.FacilityPlan, repeated.FacilityPlan);
         Assert.Equal(plan.Realization, repeated.Realization);
         Assert.Equal(ApiPhysical, manifest.FindWorkload(Api).PhysicalResource);
@@ -76,6 +80,161 @@ public sealed class InfrastructureTargetDeploymentCompilerTests
         Assert.Equal(InfrastructureLifecycleDisposition.Managed, lifecycle.Disposition);
         Assert.Equal(2, realization.CapabilityWitnesses.Length);
         Assert.All(realization.WitnessDecisions, static decision => Assert.True(decision.IsComplete));
+    }
+
+    [Fact]
+    public void Compiler_materializes_exact_boundary_policy_from_declarative_target_acceptance()
+    {
+        var semantic = Semantic();
+        var facilities = InfrastructureTargetFacilities.Define(
+            new("test/constrained-target-facilities/v1"),
+            new("test/constrained-target-capabilities/v1"),
+            new("test-target/1"),
+            Variant,
+            [InfrastructureDefinitionDocument.CurrentSchemaVersion],
+            target =>
+            {
+                target.Workload(AppService).Provides(new(
+                    new("test/evidence/constrained-https"),
+                    Https,
+                    CapabilityRealizationKind.Constrained,
+                    operatingBoundaries: [DisposableBoundary, PrivateNetworkBoundary],
+                    sourceReferences: [Source]));
+                target.Resource(ObjectStore).Provides(Native("test/evidence/storage", Storage));
+                target.Within(new(
+                    DisposableBoundary,
+                    "The target is suitable only for disposable tests.",
+                    [Source]));
+                target.Within(new(
+                    PrivateNetworkBoundary,
+                    "The target endpoint is exposed only on the private test network.",
+                    [Source]));
+            });
+        var manifest = InfrastructureTargetDeployments.Define(
+            new("test/deployments/constrained/v1"),
+            semantic.Definition,
+            facilities,
+            deployment =>
+            {
+                deployment.Workload(Api, AppService, ApiPhysical, [Source]);
+                deployment.Resource(State, ObjectStore, StatePhysical, Authority, [Source]);
+                deployment.AcceptBoundary(
+                    PrivateNetworkBoundary,
+                    "This deployment runs only on the isolated test network.",
+                    [PolicySource]);
+                deployment.AcceptBoundary(
+                    DisposableBoundary,
+                    "This deployment is used only for disposable test runs.",
+                    [PolicySource]);
+            });
+        var direct = new InfrastructureTargetDeploymentManifest(
+            InfrastructureTargetDeploymentManifest.CurrentSchemaVersion,
+            manifest.Id,
+            semantic.Definition.ToReference(),
+            facilities,
+            [new(Api, AppService, ApiPhysical, [Source])],
+            [new(State, ObjectStore, StatePhysical, Authority, [Source])],
+            boundaryAcceptances:
+            [
+                new(
+                    DisposableBoundary,
+                    "This deployment is used only for disposable test runs.",
+                    [PolicySource]),
+                new(
+                    PrivateNetworkBoundary,
+                    "This deployment runs only on the isolated test network.",
+                    [PolicySource])
+            ]);
+
+        var plan = InfrastructureTargetDeploymentCompiler.Compile(semantic, manifest);
+        var repeated = InfrastructureTargetDeploymentCompiler.Compile(semantic, manifest);
+        var restored = JsonSerializer.Deserialize<InfrastructureTargetDeploymentManifest>(
+            JsonSerializer.Serialize(manifest),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.True(plan.IsComplete, string.Join(Environment.NewLine, plan.Diagnostics.Select(static diagnostic =>
+            $"{diagnostic.Code}: {diagnostic.Message}")));
+        Assert.Empty(plan.Diagnostics);
+        Assert.Equal(direct.Fingerprint, manifest.Fingerprint);
+        Assert.Equal(manifest, restored);
+        var policy = Assert.IsType<InfrastructureBoundaryAcceptancePolicy>(plan.BoundaryAcceptancePolicy);
+        Assert.Equal(policy, repeated.BoundaryAcceptancePolicy);
+        Assert.Equal(policy.ToReference(), plan.FacilityPlan.CapabilityClosure.BoundaryAcceptancePolicy);
+        var decision = Assert.Single(
+            plan.FacilityPlan.CapabilityClosure.Decisions,
+            static decision => decision.Capability == Https);
+        Assert.All(policy.Acceptances, acceptance => Assert.Equal(decision.Requirement, acceptance.Requirement));
+        Assert.Equal<InfrastructureOperatingBoundaryId>(
+            [DisposableBoundary, PrivateNetworkBoundary],
+            policy.Acceptances.Select(static acceptance => acceptance.Boundary));
+        Assert.Equal(
+            "This deployment is used only for disposable test runs.",
+            policy.FindAcceptance(decision.Requirement, DisposableBoundary)?.Rationale);
+        Assert.Equal(
+            "This deployment runs only on the isolated test network.",
+            policy.FindAcceptance(decision.Requirement, PrivateNetworkBoundary)?.Rationale);
+        Assert.All(policy.Acceptances, static acceptance =>
+            Assert.Equal<SourceReference>([PolicySource], acceptance.SourceReferences));
+        Assert.Equal<InfrastructureOperatingBoundaryId>(
+            [DisposableBoundary, PrivateNetworkBoundary],
+            decision.AcceptedOperatingBoundaries);
+        Assert.Empty(decision.MissingOperatingBoundaries);
+    }
+
+    [Fact]
+    public void Unknown_and_unused_target_boundary_acceptances_are_diagnostic()
+    {
+        InfrastructureOperatingBoundaryId unknown = new("test/boundaries/unknown");
+        var semantic = Semantic();
+        var facilities = InfrastructureTargetFacilities.Define(
+            new("test/native-with-unused-boundary-facilities/v1"),
+            new("test/native-with-unused-boundary-capabilities/v1"),
+            new("test-target/1"),
+            Variant,
+            [InfrastructureDefinitionDocument.CurrentSchemaVersion],
+            target =>
+            {
+                target.Workload(AppService).Provides(Native("test/evidence/https", Https));
+                target.Resource(ObjectStore).Provides(Native("test/evidence/storage", Storage));
+                target.Within(new(
+                    DisposableBoundary,
+                    "An available boundary that no selected proof uses.",
+                    [Source]));
+            });
+        var manifest = InfrastructureTargetDeployments.Define(
+            new("test/deployments/invalid-boundaries/v1"),
+            semantic.Definition,
+            facilities,
+            deployment =>
+            {
+                deployment.Workload(Api, AppService, ApiPhysical, [Source]);
+                deployment.Resource(State, ObjectStore, StatePhysical, Authority, [Source]);
+                deployment.AcceptBoundary(DisposableBoundary, "Stale acceptance.", [PolicySource]);
+                deployment.AcceptBoundary(unknown, "Unknown acceptance.", [PolicySource]);
+            });
+
+        var plan = InfrastructureTargetDeploymentCompiler.Compile(semantic, manifest);
+
+        Assert.False(plan.IsComplete);
+        Assert.Null(plan.Realization);
+        Assert.Empty(Assert.IsType<InfrastructureBoundaryAcceptancePolicy>(plan.BoundaryAcceptancePolicy).Acceptances);
+        var unknownDiagnostic = Assert.Single(
+            plan.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == InfrastructureTargetDeploymentCompiler.DiagnosticCodes.BoundaryAcceptanceUnknown);
+        Assert.Equal(DiagnosticSeverity.Error, unknownDiagnostic.Severity);
+        Assert.Equal(unknown.Value, unknownDiagnostic.Evidence?.Subject);
+        var unusedDiagnostic = Assert.Single(
+            plan.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == InfrastructureTargetDeploymentCompiler.DiagnosticCodes.BoundaryAcceptanceUnused);
+        Assert.Equal(DiagnosticSeverity.Warning, unusedDiagnostic.Severity);
+        Assert.Equal(DisposableBoundary.Value, unusedDiagnostic.Evidence?.Subject);
+        Assert.All([unknownDiagnostic, unusedDiagnostic], static diagnostic =>
+        {
+            Assert.NotEmpty(diagnostic.Evidence!.SourceReferences);
+            Assert.NotEmpty(diagnostic.Evidence.ResolutionOptions);
+        });
     }
 
     [Fact]

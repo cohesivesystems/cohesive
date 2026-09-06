@@ -156,6 +156,64 @@ public sealed record InfrastructureTargetResourceDeployment
     }
 }
 
+/// <summary>
+/// Attributable target policy accepting one named operating boundary wherever the selected capability proof uses it.
+/// </summary>
+public sealed record InfrastructureTargetBoundaryAcceptance
+{
+    /// <summary>Creates one declarative target-boundary acceptance.</summary>
+    /// <param name="boundary">Operating boundary accepted by this target deployment.</param>
+    /// <param name="rationale">Human-reviewable environment-policy rationale.</param>
+    /// <param name="sourceReferences">Non-empty policy, approval, or specification references.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="rationale"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">The boundary, rationale, or source-reference collection is invalid or missing.</exception>
+    [JsonConstructor]
+    public InfrastructureTargetBoundaryAcceptance(
+        InfrastructureOperatingBoundaryId boundary,
+        string rationale,
+        ImmutableArray<SourceReference> sourceReferences)
+    {
+        if (string.IsNullOrWhiteSpace(boundary.Value))
+            throw new ArgumentException("A target boundary acceptance requires an operating boundary.", nameof(boundary));
+
+        Boundary = boundary;
+        Rationale = Guard.RequireNotNullOrWhiteSpace(rationale);
+        SourceReferences = SourceReference.NormalizeSet(sourceReferences, requireNonEmpty: true);
+    }
+
+    /// <summary>Operating boundary accepted by this target deployment.</summary>
+    public InfrastructureOperatingBoundaryId Boundary { get; }
+
+    /// <summary>Human-reviewable environment-policy rationale.</summary>
+    public string Rationale { get; }
+
+    /// <summary>Attributable policy, approval, or specification references in canonical order.</summary>
+    public ImmutableArray<SourceReference> SourceReferences { get; }
+
+    /// <summary>Compares target-boundary acceptances structurally.</summary>
+    /// <param name="other">Other declaration.</param>
+    /// <returns><see langword="true"/> when every field is equal.</returns>
+    public bool Equals(InfrastructureTargetBoundaryAcceptance? other) =>
+        ReferenceEquals(this, other)
+        || other is not null
+        && Boundary == other.Boundary
+        && string.Equals(Rationale, other.Rationale, StringComparison.Ordinal)
+        && SourceReferences.SequenceEqual(other.SourceReferences);
+
+    /// <summary>Returns a structural hash code for this declaration.</summary>
+    /// <returns>A hash code derived from every field.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Boundary);
+        hash.Add(Rationale, StringComparer.Ordinal);
+        foreach (var source in SourceReferences)
+            hash.Add(source);
+
+        return hash.ToHashCode();
+    }
+}
+
 /// <summary>Deterministic fingerprint of one exact target-deployment manifest.</summary>
 public sealed record InfrastructureTargetDeploymentManifestFingerprint
 {
@@ -163,7 +221,7 @@ public sealed record InfrastructureTargetDeploymentManifestFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current manifest fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-infra-target-deployment/v2-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-infra-target-deployment/v3-c14n/v1";
 
     /// <summary>Creates target-deployment manifest fingerprint metadata.</summary>
     /// <param name="algorithm">Stable digest algorithm identity.</param>
@@ -244,7 +302,7 @@ public sealed record InfrastructureTargetDeploymentManifestReference
 public sealed record InfrastructureTargetDeploymentManifest
 {
     /// <summary>Current persisted target-deployment manifest schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive.infra.target-deployment/2";
+    public const string CurrentSchemaVersion = "cohesive.infra.target-deployment/3";
 
     /// <summary>Creates or restores one exactly fingerprinted target-deployment manifest.</summary>
     /// <param name="schemaVersion">Exact persisted schema version.</param>
@@ -254,6 +312,7 @@ public sealed record InfrastructureTargetDeploymentManifest
     /// <param name="workloads">Declared workload deployments.</param>
     /// <param name="resources">Declared resource deployments.</param>
     /// <param name="nonParticipatingWorkloads">Attributable decisions for canonical workloads absent from this deployment.</param>
+    /// <param name="boundaryAcceptances">Attributable operating-boundary acceptances compiled into exact demand-scoped policy.</param>
     /// <param name="fingerprint">Persisted exact fingerprint, or <see langword="null"/> to compute it.</param>
     /// <param name="sourceMap">Optional non-semantic producer attribution.</param>
     /// <exception cref="ArgumentNullException">A reference argument is <see langword="null"/>.</exception>
@@ -267,6 +326,7 @@ public sealed record InfrastructureTargetDeploymentManifest
         ImmutableArray<InfrastructureTargetWorkloadDeployment> workloads = default,
         ImmutableArray<InfrastructureTargetResourceDeployment> resources = default,
         ImmutableArray<InfrastructureWorkloadNonParticipation> nonParticipatingWorkloads = default,
+        ImmutableArray<InfrastructureTargetBoundaryAcceptance> boundaryAcceptances = default,
         InfrastructureTargetDeploymentManifestFingerprint? fingerprint = null,
         InfrastructureSourceMap? sourceMap = null)
     {
@@ -287,6 +347,7 @@ public sealed record InfrastructureTargetDeploymentManifest
         Resources = NormalizeResources(resources);
         NonParticipatingWorkloads = InfrastructureCapabilityWitnessCollections.NormalizeNonParticipations(
             nonParticipatingWorkloads);
+        BoundaryAcceptances = NormalizeBoundaryAcceptances(boundaryAcceptances);
         SourceMap = sourceMap ?? InfrastructureSourceMap.Empty;
         ValidateFacilities();
 
@@ -297,7 +358,8 @@ public sealed record InfrastructureTargetDeploymentManifest
             TargetFacilities.ToReference(),
             Workloads,
             Resources,
-            NonParticipatingWorkloads);
+            NonParticipatingWorkloads,
+            BoundaryAcceptances);
         if (fingerprint is not null && fingerprint != computed)
             throw new ArgumentException("The supplied target-deployment manifest fingerprint is not canonical.", nameof(fingerprint));
 
@@ -324,6 +386,9 @@ public sealed record InfrastructureTargetDeploymentManifest
 
     /// <summary>Attributable non-participation decisions in workload-identity order.</summary>
     public ImmutableArray<InfrastructureWorkloadNonParticipation> NonParticipatingWorkloads { get; }
+
+    /// <summary>Attributable target-boundary acceptances in boundary-identity order.</summary>
+    public ImmutableArray<InfrastructureTargetBoundaryAcceptance> BoundaryAcceptances { get; }
 
     /// <summary>Deterministic fingerprint of the complete declaration.</summary>
     public InfrastructureTargetDeploymentManifestFingerprint Fingerprint { get; }
@@ -393,6 +458,7 @@ public sealed record InfrastructureTargetDeploymentManifest
         && Workloads.SequenceEqual(other.Workloads)
         && Resources.SequenceEqual(other.Resources)
         && NonParticipatingWorkloads.SequenceEqual(other.NonParticipatingWorkloads)
+        && BoundaryAcceptances.SequenceEqual(other.BoundaryAcceptances)
         && Fingerprint == other.Fingerprint
         && SourceMap == other.SourceMap;
 
@@ -413,6 +479,9 @@ public sealed record InfrastructureTargetDeploymentManifest
 
         foreach (var nonParticipation in NonParticipatingWorkloads)
             hash.Add(nonParticipation);
+
+        foreach (var boundaryAcceptance in BoundaryAcceptances)
+            hash.Add(boundaryAcceptance);
 
         hash.Add(Fingerprint);
         hash.Add(SourceMap);
@@ -457,6 +526,29 @@ public sealed record InfrastructureTargetDeploymentManifest
         return ordered;
     }
 
+    static ImmutableArray<InfrastructureTargetBoundaryAcceptance> NormalizeBoundaryAcceptances(
+        ImmutableArray<InfrastructureTargetBoundaryAcceptance> boundaryAcceptances)
+    {
+        if (boundaryAcceptances.IsDefaultOrEmpty)
+            return [];
+
+        if (boundaryAcceptances.Any(static acceptance => acceptance is null))
+            throw new ArgumentException("Target boundary acceptances cannot contain null.", nameof(boundaryAcceptances));
+
+        var ordered = boundaryAcceptances.Sort(static (left, right) =>
+            StringComparer.Ordinal.Compare(left.Boundary.Value, right.Boundary.Value));
+        for (var index = 1; index < ordered.Length; index++)
+        {
+            if (ordered[index - 1].Boundary == ordered[index].Boundary)
+            {
+                throw new ArgumentException(
+                    $"Target boundary acceptance '{ordered[index].Boundary.Value}' is duplicated.",
+                    nameof(boundaryAcceptances));
+            }
+        }
+        return ordered;
+    }
+
     void ValidateFacilities()
     {
         var facilities = TargetFacilities.Facilities.ToDictionary(static facility => facility.Id);
@@ -491,11 +583,13 @@ public sealed class InfrastructureTargetDeploymentPlan
     internal InfrastructureTargetDeploymentPlan(
         InfrastructureTargetDeploymentManifest manifest,
         InfrastructureTargetFacilityPlan facilityPlan,
+        InfrastructureBoundaryAcceptancePolicy? boundaryAcceptancePolicy,
         InfrastructureRealization? realization,
         ImmutableArray<DocumentValidationDiagnostic> diagnostics)
     {
         Manifest = manifest;
         FacilityPlan = facilityPlan;
+        BoundaryAcceptancePolicy = boundaryAcceptancePolicy;
         Realization = realization;
         Diagnostics = DocumentValidationDiagnostics.Normalize(diagnostics);
     }
@@ -505,6 +599,11 @@ public sealed class InfrastructureTargetDeploymentPlan
 
     /// <summary>Facility selection and capability-discharge result.</summary>
     public InfrastructureTargetFacilityPlan FacilityPlan { get; }
+
+    /// <summary>
+    /// Exact demand-scoped policy compiled from target-boundary declarations, or <see langword="null"/> when none were declared.
+    /// </summary>
+    public InfrastructureBoundaryAcceptancePolicy? BoundaryAcceptancePolicy { get; }
 
     /// <summary>Compiled lifecycle, placements, and physical evidence, or <see langword="null"/> for an invalid deployment declaration.</summary>
     public InfrastructureRealization? Realization { get; }
@@ -541,6 +640,12 @@ public static class InfrastructureTargetDeploymentCompiler
 
         /// <summary>A workload is both deployed and declared non-participating.</summary>
         public const string WorkloadParticipationConflict = "infra.target.deployment.workloadParticipation.conflict";
+
+        /// <summary>A target-boundary acceptance names no operating boundary in the selected target variant.</summary>
+        public const string BoundaryAcceptanceUnknown = "infra.target.deployment.boundaryAcceptance.unknown";
+
+        /// <summary>A target-boundary acceptance does not govern any selected capability demand.</summary>
+        public const string BoundaryAcceptanceUnused = "infra.target.deployment.boundaryAcceptance.unused";
     }
 
     /// <summary>Compiles one exact application definition through an adapter-authored target deployment.</summary>
@@ -569,13 +674,32 @@ public static class InfrastructureTargetDeploymentCompiler
                 EffectiveConfigurationOrigin.Explicit,
                 authority))
             .ToImmutableArray();
-        var facilityPlan = InfrastructureTargetCompiler.Compile(
+        InfrastructureConventionProfile selectionProfile = new(
+            new($"{manifest.Id.Value}/facility-selections"),
+            selections);
+        var provisionalFacilityPlan = InfrastructureTargetCompiler.Compile(
             semantic.Definition,
             manifest.TargetFacilities,
             semantic.BindingElaborationProfile,
-            [new(new($"{manifest.Id.Value}/facility-selections"), selections)]);
+            [selectionProfile]);
+        var (boundaryAcceptancePolicy, boundaryDiagnostics) = CompileBoundaryAcceptancePolicy(
+            semantic,
+            manifest,
+            provisionalFacilityPlan);
+        var facilityPlan = boundaryAcceptancePolicy is null
+            ? provisionalFacilityPlan
+            : InfrastructureTargetCompiler.Compile(
+                semantic.Definition,
+                manifest.TargetFacilities,
+                semantic.BindingElaborationProfile,
+                [selectionProfile],
+                boundaryAcceptancePolicy);
 
-        var diagnostics = ValidateDeployments(semantic.Definition, manifest);
+        ImmutableArray<DocumentValidationDiagnostic> diagnostics =
+        [
+            .. ValidateDeployments(semantic.Definition, manifest),
+            .. boundaryDiagnostics
+        ];
         InfrastructureRealization? realization = null;
         if (!diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
             realization = CompileRealization(semantic.Definition, manifest, facilityPlan);
@@ -583,8 +707,108 @@ public static class InfrastructureTargetDeploymentCompiler
         return new(
             manifest,
             facilityPlan,
+            boundaryAcceptancePolicy,
             realization,
             [.. facilityPlan.Diagnostics, .. diagnostics, .. realization?.Diagnostics ?? []]);
+    }
+
+    static (InfrastructureBoundaryAcceptancePolicy? Policy, ImmutableArray<DocumentValidationDiagnostic> Diagnostics)
+        CompileBoundaryAcceptancePolicy(
+            InfrastructureAuthoringResult semantic,
+            InfrastructureTargetDeploymentManifest manifest,
+            InfrastructureTargetFacilityPlan provisionalFacilityPlan)
+    {
+        if (manifest.BoundaryAcceptances.IsDefaultOrEmpty)
+            return (null, []);
+
+        var declarations = manifest.BoundaryAcceptances.ToDictionary(static acceptance => acceptance.Boundary);
+        var selectedVariant = manifest.TargetFacilities.Profile.FindVariant(manifest.TargetFacilities.Variant)!;
+        var knownBoundaries = selectedVariant.OperatingBoundaries.Select(static boundary => boundary.Id).ToHashSet();
+        var usedBoundaries = new HashSet<InfrastructureOperatingBoundaryId>();
+        var acceptances = ImmutableArray.CreateBuilder<InfrastructureBoundaryAcceptance>();
+        var diagnostics = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>();
+
+        foreach (var declaration in manifest.BoundaryAcceptances)
+        {
+            if (!knownBoundaries.Contains(declaration.Boundary))
+                diagnostics.Add(BoundaryAcceptanceDiagnostic(declaration, manifest, isUnknown: true));
+        }
+
+        foreach (var decision in provisionalFacilityPlan.CapabilityClosure.Decisions)
+        {
+            foreach (var boundary in decision.OperatingBoundaries)
+            {
+                if (!declarations.TryGetValue(boundary, out var declaration)
+                    || !knownBoundaries.Contains(boundary))
+                {
+                    continue;
+                }
+
+                usedBoundaries.Add(boundary);
+                acceptances.Add(new(
+                    decision.Requirement,
+                    boundary,
+                    declaration.Rationale,
+                    declaration.SourceReferences));
+            }
+        }
+
+        foreach (var declaration in manifest.BoundaryAcceptances)
+        {
+            if (knownBoundaries.Contains(declaration.Boundary) && !usedBoundaries.Contains(declaration.Boundary))
+                diagnostics.Add(BoundaryAcceptanceDiagnostic(declaration, manifest, isUnknown: false));
+        }
+
+        var policy = InfrastructureBoundaryAcceptancePolicy.Create(
+            new($"{manifest.Id.Value}/boundary-acceptance-policy"),
+            semantic.Definition,
+            manifest.TargetFacilities.Profile,
+            semantic.BindingElaborationProfile,
+            manifest.TargetFacilities.Variant,
+            acceptances.ToImmutable());
+        return (policy, DocumentValidationDiagnostics.Normalize(diagnostics.ToImmutable()));
+    }
+
+    static DocumentValidationDiagnostic BoundaryAcceptanceDiagnostic(
+        InfrastructureTargetBoundaryAcceptance declaration,
+        InfrastructureTargetDeploymentManifest manifest,
+        bool isUnknown)
+    {
+        var manifestReference = InfrastructureSourceReferences.TargetDeploymentManifest(manifest.ToReference()).Value;
+        var authoringSources = manifest.SourceMap.Resolve(
+            InfrastructureSourceReferences.OperatingBoundary(declaration.Boundary));
+        return new(
+            isUnknown ? DiagnosticCodes.BoundaryAcceptanceUnknown : DiagnosticCodes.BoundaryAcceptanceUnused,
+            isUnknown ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
+            isUnknown
+                ? $"Target boundary acceptance '{declaration.Boundary.Value}' is absent from selected target variant '{manifest.TargetFacilities.Variant.Value}'."
+                : $"Target boundary acceptance '{declaration.Boundary.Value}' does not govern any selected capability demand.",
+            SchemaLocation: declaration.Boundary.Value,
+            Evidence: new(
+                stage: Stage,
+                subject: declaration.Boundary.Value,
+                sourceReferences:
+                [
+                    .. declaration.SourceReferences
+                        .Concat(authoringSources)
+                        .Select(static source => source.Value)
+                        .Append(manifestReference)
+                        .Distinct(StringComparer.Ordinal)
+                        .Order(StringComparer.Ordinal)
+                ],
+                resolutionOptions: isUnknown
+                    ?
+                    [
+                        "Declare an operating boundary supplied by the selected target variant.",
+                        "Remove the stale target-boundary acceptance from this deployment."
+                    ]
+                    :
+                    [
+                        "Remove the unused target-boundary acceptance.",
+                        "Retain it only if the deployment intentionally anticipates a declared capability demand."
+                    ],
+                expected: isUnknown ? "an operating boundary declared by the selected target variant" : null,
+                observed: declaration.Boundary.Value));
     }
 
     static InfrastructureRealization CompileRealization(
@@ -855,7 +1079,8 @@ static class InfrastructureTargetDeploymentFingerprinting
         InfrastructureTargetFacilityManifestReference targetFacilities,
         ImmutableArray<InfrastructureTargetWorkloadDeployment> workloads,
         ImmutableArray<InfrastructureTargetResourceDeployment> resources,
-        ImmutableArray<InfrastructureWorkloadNonParticipation> nonParticipatingWorkloads)
+        ImmutableArray<InfrastructureWorkloadNonParticipation> nonParticipatingWorkloads,
+        ImmutableArray<InfrastructureTargetBoundaryAcceptance> boundaryAcceptances)
     {
         var canonical = StrictDocumentJson.GetCanonicalBytes(
             new FingerprintInput(
@@ -865,7 +1090,8 @@ static class InfrastructureTargetDeploymentFingerprinting
                 targetFacilities,
                 workloads,
                 resources,
-                nonParticipatingWorkloads),
+                nonParticipatingWorkloads,
+                boundaryAcceptances),
             StrictDocumentJson.CreateOptions());
         return new(
             InfrastructureTargetDeploymentManifestFingerprint.CurrentAlgorithm,
@@ -880,5 +1106,6 @@ static class InfrastructureTargetDeploymentFingerprinting
         InfrastructureTargetFacilityManifestReference TargetFacilities,
         ImmutableArray<InfrastructureTargetWorkloadDeployment> Workloads,
         ImmutableArray<InfrastructureTargetResourceDeployment> Resources,
-        ImmutableArray<InfrastructureWorkloadNonParticipation> NonParticipatingWorkloads);
+        ImmutableArray<InfrastructureWorkloadNonParticipation> NonParticipatingWorkloads,
+        ImmutableArray<InfrastructureTargetBoundaryAcceptance> BoundaryAcceptances);
 }
