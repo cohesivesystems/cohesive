@@ -76,7 +76,7 @@ public sealed record InfrastructureTargetWorkloadDeployment
     }
 }
 
-/// <summary>One declarative resource placement and lifecycle authority supplied by a target adapter.</summary>
+/// <summary>One declarative resource placement and lifecycle ownership supplied by a target adapter.</summary>
 public sealed record InfrastructureTargetResourceDeployment
 {
     /// <summary>Creates one resource deployment declaration.</summary>
@@ -85,6 +85,10 @@ public sealed record InfrastructureTargetResourceDeployment
     /// <param name="physicalResource">Exact target-native resource identity.</param>
     /// <param name="authority">Backend state scope or external authority that owns the resource lifecycle.</param>
     /// <param name="sourceReferences">Attributable adapter, artifact, configuration, or import sources.</param>
+    /// <param name="managingInterpreter">
+    /// Exact foreign lifecycle interpreter when the selected target only references the resource; otherwise
+    /// <see langword="null"/> so canonical lifecycle intent determines whether the selected target manages or references it.
+    /// </param>
     /// <exception cref="ArgumentException">An identity or source reference is invalid or missing.</exception>
     [JsonConstructor]
     public InfrastructureTargetResourceDeployment(
@@ -92,7 +96,8 @@ public sealed record InfrastructureTargetResourceDeployment
         InfrastructureTargetFacilityId facility,
         InfrastructurePhysicalResourceId physicalResource,
         InfrastructureLifecycleAuthorityId authority,
-        ImmutableArray<SourceReference> sourceReferences)
+        ImmutableArray<SourceReference> sourceReferences,
+        InfrastructureTargetId? managingInterpreter = null)
     {
         if (string.IsNullOrWhiteSpace(resource.Value))
             throw new ArgumentException("A target resource deployment requires a logical resource.", nameof(resource));
@@ -106,10 +111,18 @@ public sealed record InfrastructureTargetResourceDeployment
         if (string.IsNullOrWhiteSpace(authority.Value))
             throw new ArgumentException("A target resource deployment requires a lifecycle authority.", nameof(authority));
 
+        if (managingInterpreter is { } manager && string.IsNullOrWhiteSpace(manager.Value))
+        {
+            throw new ArgumentException(
+                "A foreign managing interpreter cannot be a default identity.",
+                nameof(managingInterpreter));
+        }
+
         Resource = resource;
         Facility = facility;
         PhysicalResource = physicalResource;
         Authority = authority;
+        ManagingInterpreter = managingInterpreter;
         SourceReferences = SourceReference.NormalizeSet(sourceReferences, requireNonEmpty: true);
     }
 
@@ -125,6 +138,11 @@ public sealed record InfrastructureTargetResourceDeployment
     /// <summary>Backend state scope or external authority that owns the resource lifecycle.</summary>
     public InfrastructureLifecycleAuthorityId Authority { get; }
 
+    /// <summary>
+    /// Exact foreign lifecycle interpreter, or <see langword="null"/> when ownership follows canonical lifecycle intent.
+    /// </summary>
+    public InfrastructureTargetId? ManagingInterpreter { get; }
+
     /// <summary>Attributable sources in canonical order.</summary>
     public ImmutableArray<SourceReference> SourceReferences { get; }
 
@@ -138,6 +156,7 @@ public sealed record InfrastructureTargetResourceDeployment
         && Facility == other.Facility
         && PhysicalResource == other.PhysicalResource
         && Authority == other.Authority
+        && ManagingInterpreter == other.ManagingInterpreter
         && SourceReferences.SequenceEqual(other.SourceReferences);
 
     /// <summary>Returns a structural hash code for this declaration.</summary>
@@ -149,6 +168,7 @@ public sealed record InfrastructureTargetResourceDeployment
         hash.Add(Facility);
         hash.Add(PhysicalResource);
         hash.Add(Authority);
+        hash.Add(ManagingInterpreter);
         foreach (var source in SourceReferences)
             hash.Add(source);
 
@@ -221,7 +241,7 @@ public sealed record InfrastructureTargetDeploymentManifestFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current manifest fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-infra-target-deployment/v3-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-infra-target-deployment/v4-c14n/v1";
 
     /// <summary>Creates target-deployment manifest fingerprint metadata.</summary>
     /// <param name="algorithm">Stable digest algorithm identity.</param>
@@ -302,7 +322,7 @@ public sealed record InfrastructureTargetDeploymentManifestReference
 public sealed record InfrastructureTargetDeploymentManifest
 {
     /// <summary>Current persisted target-deployment manifest schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive.infra.target-deployment/3";
+    public const string CurrentSchemaVersion = "cohesive.infra.target-deployment/4";
 
     /// <summary>Creates or restores one exactly fingerprinted target-deployment manifest.</summary>
     /// <param name="schemaVersion">Exact persisted schema version.</param>
@@ -646,6 +666,15 @@ public static class InfrastructureTargetDeploymentCompiler
 
         /// <summary>A target-boundary acceptance does not govern any selected capability demand.</summary>
         public const string BoundaryAcceptanceUnused = "infra.target.deployment.boundaryAcceptance.unused";
+
+        /// <summary>A foreign lifecycle manager redundantly names the selected target.</summary>
+        public const string ResourceManagerSelfReference = "infra.target.deployment.resourceManager.selfReference";
+
+        /// <summary>An external canonical resource incorrectly declares a lifecycle manager.</summary>
+        public const string ExternalResourceManager = "infra.target.deployment.resourceManager.external";
+
+        /// <summary>The declared ownership cannot form a valid canonical lifecycle plan.</summary>
+        public const string ResourceLifecycleInvalid = "infra.target.deployment.resourceLifecycle.invalid";
     }
 
     /// <summary>Compiles one exact application definition through an adapter-authored target deployment.</summary>
@@ -702,7 +731,17 @@ public static class InfrastructureTargetDeploymentCompiler
         ];
         InfrastructureRealization? realization = null;
         if (!diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
-            realization = CompileRealization(semantic.Definition, manifest, facilityPlan);
+        {
+            try
+            {
+                var lifecycle = CompileLifecycle(semantic.Definition, manifest);
+                realization = CompileRealization(manifest, facilityPlan, lifecycle);
+            }
+            catch (ArgumentException exception) when (exception.ParamName == nameof(InfrastructureLifecyclePlan.Bindings))
+            {
+                diagnostics = [.. diagnostics, ResourceLifecycleInvalid(exception, manifest)];
+            }
+        }
 
         return new(
             manifest,
@@ -811,25 +850,65 @@ public static class InfrastructureTargetDeploymentCompiler
                 observed: declaration.Boundary.Value));
     }
 
-    static InfrastructureRealization CompileRealization(
+    static InfrastructureLifecyclePlan CompileLifecycle(
         InfrastructureDefinitionDocument definition,
-        InfrastructureTargetDeploymentManifest manifest,
-        InfrastructureTargetFacilityPlan facilityPlan)
+        InfrastructureTargetDeploymentManifest manifest)
     {
         var target = manifest.TargetFacilities.Profile.Target;
         var lifecycleByResource = definition.Definition.Resources.ToDictionary(static resource => resource.Id);
-        var lifecycle = new InfrastructureLifecyclePlan(
-            definition,
-            [
-                .. manifest.Resources.Select(deployment => new InfrastructureResourceLifecycleBinding(
+        var lifecycleBindings = ImmutableArray.CreateBuilder<InfrastructureResourceLifecycleBinding>(
+            manifest.Resources.Length
+            + manifest.Resources.Count(static deployment => deployment.ManagingInterpreter is not null));
+        foreach (var deployment in manifest.Resources)
+        {
+            var canonicalLifecycle = lifecycleByResource[deployment.Resource].Lifecycle;
+            if (canonicalLifecycle == InfrastructureResourceLifecycle.External)
+            {
+                lifecycleBindings.Add(new(
                     deployment.Resource,
                     deployment.PhysicalResource,
                     target,
                     deployment.Authority,
-                    lifecycleByResource[deployment.Resource].Lifecycle == InfrastructureResourceLifecycle.External
-                        ? InfrastructureLifecycleDisposition.Referenced
-                        : InfrastructureLifecycleDisposition.Managed))
-            ]);
+                    InfrastructureLifecycleDisposition.Referenced));
+                continue;
+            }
+
+            if (deployment.ManagingInterpreter is { } managingInterpreter)
+            {
+                lifecycleBindings.Add(new(
+                    deployment.Resource,
+                    deployment.PhysicalResource,
+                    managingInterpreter,
+                    deployment.Authority,
+                    InfrastructureLifecycleDisposition.Managed));
+                lifecycleBindings.Add(new(
+                    deployment.Resource,
+                    deployment.PhysicalResource,
+                    target,
+                    deployment.Authority,
+                    InfrastructureLifecycleDisposition.Referenced));
+                continue;
+            }
+
+            lifecycleBindings.Add(new(
+                deployment.Resource,
+                deployment.PhysicalResource,
+                target,
+                deployment.Authority,
+                InfrastructureLifecycleDisposition.Managed));
+        }
+
+        return new InfrastructureLifecyclePlan(
+            definition,
+            lifecycleBindings.MoveToImmutable());
+    }
+
+    static InfrastructureRealization CompileRealization(
+        InfrastructureTargetDeploymentManifest manifest,
+        InfrastructureTargetFacilityPlan facilityPlan,
+        InfrastructureLifecyclePlan lifecycle)
+    {
+        var target = manifest.TargetFacilities.Profile.Target;
         ImmutableArray<InfrastructureWorkloadPlacement> placements =
         [
             .. manifest.Workloads.Select(deployment => new InfrastructureWorkloadPlacement(
@@ -918,7 +997,7 @@ public static class InfrastructureTargetDeploymentCompiler
     {
         var diagnostics = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>();
         var workloads = definition.Definition.Workloads.Select(static item => item.Id).ToHashSet();
-        var resources = definition.Definition.Resources.Select(static item => item.Id).ToHashSet();
+        var resources = definition.Definition.Resources.ToDictionary(static item => item.Id);
         var declaredWorkloads = manifest.Workloads.Select(static item => item.Workload).ToHashSet();
         var declaredResources = manifest.Resources.Select(static item => item.Resource).ToHashSet();
         var nonParticipatingWorkloads = manifest.NonParticipatingWorkloads
@@ -938,15 +1017,25 @@ public static class InfrastructureTargetDeploymentCompiler
         }
         foreach (var deployment in manifest.Resources)
         {
-            if (!resources.Contains(deployment.Resource))
+            if (!resources.TryGetValue(deployment.Resource, out var resource))
             {
                 diagnostics.Add(Unknown(
                     deployment.Resource,
                     InfrastructureNodeKind.Resource,
                     deployment.SourceReferences,
                     manifest.SourceMap));
+                continue;
+            }
+
+            if (deployment.ManagingInterpreter == manifest.TargetFacilities.Profile.Target)
+                diagnostics.Add(ResourceManagerSelfReference(deployment, manifest));
+            if (resource.Lifecycle == InfrastructureResourceLifecycle.External
+                && deployment.ManagingInterpreter is not null)
+            {
+                diagnostics.Add(ExternalResourceManager(deployment, manifest));
             }
         }
+
         foreach (var decision in manifest.NonParticipatingWorkloads)
         {
             if (!workloads.Contains(decision.Workload))
@@ -965,11 +1054,95 @@ public static class InfrastructureTargetDeploymentCompiler
             diagnostics.Add(Missing(workload, InfrastructureNodeKind.Workload, manifest));
         }
 
-        foreach (var resource in resources.Where(resource => !declaredResources.Contains(resource)))
+        foreach (var resource in resources.Keys.Where(resource => !declaredResources.Contains(resource)))
             diagnostics.Add(Missing(resource, InfrastructureNodeKind.Resource, manifest));
 
         return DocumentValidationDiagnostics.Normalize(diagnostics.ToImmutable());
     }
+
+    static DocumentValidationDiagnostic ResourceManagerSelfReference(
+        InfrastructureTargetResourceDeployment deployment,
+        InfrastructureTargetDeploymentManifest manifest) => new(
+        DiagnosticCodes.ResourceManagerSelfReference,
+        DiagnosticSeverity.Error,
+        $"Resource '{deployment.Resource.Value}' names selected target '{deployment.ManagingInterpreter!.Value.Value}' as a foreign lifecycle manager.",
+        SchemaLocation: deployment.Resource.Value,
+        Evidence: ResourceOwnershipEvidence(
+            deployment.Resource,
+            deployment.SourceReferences,
+            manifest,
+            resolutionOptions: ["Declare the resource with Resource(...) so the selected target manages it directly."],
+            expected: "a foreign lifecycle interpreter distinct from the selected target",
+            observed: deployment.ManagingInterpreter.Value.Value));
+
+    static DocumentValidationDiagnostic ExternalResourceManager(
+        InfrastructureTargetResourceDeployment deployment,
+        InfrastructureTargetDeploymentManifest manifest) => new(
+        DiagnosticCodes.ExternalResourceManager,
+        DiagnosticSeverity.Error,
+        $"External resource '{deployment.Resource.Value}' cannot declare lifecycle manager '{deployment.ManagingInterpreter!.Value.Value}'.",
+        SchemaLocation: deployment.Resource.Value,
+        Evidence: ResourceOwnershipEvidence(
+            deployment.Resource,
+            deployment.SourceReferences,
+            manifest,
+            resolutionOptions:
+            [
+                "Declare the external resource with Resource(...) so the selected target only references it.",
+                "Change the canonical resource lifecycle when this realization is responsible for management."
+            ],
+            expected: "no lifecycle manager for an external canonical resource",
+            observed: deployment.ManagingInterpreter.Value.Value));
+
+    static DocumentValidationDiagnostic ResourceLifecycleInvalid(
+        ArgumentException exception,
+        InfrastructureTargetDeploymentManifest manifest) => new(
+        DiagnosticCodes.ResourceLifecycleInvalid,
+        DiagnosticSeverity.Error,
+        exception.Message,
+        SchemaLocation: manifest.Id.Value,
+        Evidence: new(
+            stage: Stage,
+            subject: manifest.Id.Value,
+            sourceReferences:
+            [
+                .. manifest.Resources
+                    .SelectMany(deployment => deployment.SourceReferences.Concat(
+                        manifest.SourceMap.Resolve(InfrastructureSourceReferences.Node(deployment.Resource))))
+                    .Select(static source => source.Value)
+                    .Append(InfrastructureSourceReferences.TargetDeploymentManifest(manifest.ToReference()).Value)
+                    .Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal)
+            ],
+            resolutionOptions:
+            [
+                "Use one physical identity, lifecycle authority, and managing interpreter for every logical alias.",
+                "Use distinct physical-resource identities when declarations have independent lifecycle ownership."
+            ],
+            expected: "a valid lifecycle plan with exactly one manager for every managed physical resource",
+            observed: exception.Message));
+
+    static DocumentDiagnosticEvidence ResourceOwnershipEvidence(
+        InfrastructureNodeId subject,
+        ImmutableArray<SourceReference> sources,
+        InfrastructureTargetDeploymentManifest manifest,
+        ImmutableArray<string> resolutionOptions,
+        string expected,
+        string observed) => new(
+        stage: Stage,
+        subject: subject.Value,
+        sourceReferences:
+        [
+            .. sources
+                .Concat(manifest.SourceMap.Resolve(InfrastructureSourceReferences.Node(subject)))
+                .Select(static source => source.Value)
+                .Append(InfrastructureSourceReferences.TargetDeploymentManifest(manifest.ToReference()).Value)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+        ],
+        resolutionOptions: resolutionOptions,
+        expected: expected,
+        observed: observed);
 
     static DocumentValidationDiagnostic UnknownNonParticipation(
         InfrastructureWorkloadNonParticipation decision,

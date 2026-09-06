@@ -427,7 +427,12 @@ receipts remain required for that later authority.
 One lifecycle backend must be authoritative for each managed physical resource; referencing a resource never confers
 management. `InfrastructureLifecyclePlan` currently requires every logical resource to have at least one lifecycle
 binding, requires all participants for that logical resource to agree on its physical identity and authority, and
-rejects more than one management pair for the same physical identity. Later adapters may consume typed outputs or
+rejects more than one management pair for the same physical identity. A target-deployment `Resource(...)` declaration
+derives the selected target as manager for non-external canonical resources and as a reference for external resources.
+`ReferencedResource(...)` declares a foreign managing interpreter; target-deployment compilation expands it into the
+foreign `Managed` binding and selected-target `Referenced` binding, both fenced to the declared physical identity and
+authority. The deployment manifest does not become a parallel lifecycle plan: ownership validation and its normalized
+result remain centralized in `InfrastructureLifecyclePlan`. Later adapters may consume typed outputs or
 observe the resource, but two backends may not concurrently manage it.
 
 Shared and externally managed resources use the `External` resource lifecycle and `Referenced` lifecycle disposition.
