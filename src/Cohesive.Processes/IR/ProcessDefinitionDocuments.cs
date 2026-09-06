@@ -180,6 +180,21 @@ public static class ProcessDefinitionDocuments
             out _);
     }
 
+    internal static DocumentValidationResult ValidateAuthored(
+        ExecutionDefinitionDocument document,
+        ProcessDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(definition);
+        return Projection.ValidateAuthored(
+            document,
+            definition,
+            candidate => ProcessDefinitionValidator.Validate(
+                candidate,
+                context: null,
+                DefinitionReference(document)));
+    }
+
     static ExecutionDefinitionReference DefinitionReference(ExecutionDefinitionDocument document) => new(
         document.Metadata.DefinitionId,
         document.Metadata.RevisionId,

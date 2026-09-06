@@ -148,6 +148,18 @@ public static class HostedQueryDefinitionDocuments
             out _);
     }
 
+    internal static DocumentValidationResult ValidateAuthored(
+        ExecutionDefinitionDocument document,
+        HostedQueryDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(definition);
+        return Projection.ValidateAuthored(
+            document,
+            definition,
+            HostedQueryDefinitionValidator.Validate);
+    }
+
     static DocumentValidationResult Complete(
         DocumentValidationResult shared,
         ExecutionDefinitionDocument? document,

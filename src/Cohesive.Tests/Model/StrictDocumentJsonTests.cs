@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 
@@ -71,6 +72,25 @@ public sealed class StrictDocumentJsonTests
         Assert.Equal(expectedFailure, error.Failure);
         Assert.Equal(expectedLocation, error.Location);
         Assert.False(string.IsNullOrWhiteSpace(error.Message));
+    }
+
+    [Theory]
+    [InlineData("""{"outer":[{"a/b~":{"value":1,"value":2}}]}""", "", "/outer/0/a~1b~0/value")]
+    [InlineData("""[{"items":[{"id":"first"},{"id":"a","id":"b"}]}]""", "/root", "/root/0/items/1/id")]
+    public void DuplicatePropertyScan_ReportsNestedEscapedJsonPointer(
+        string json,
+        string rootPath,
+        string expectedLocation)
+    {
+        using var document = JsonDocument.Parse(json);
+
+        var duplicate = StrictDocumentJson.TryFindDuplicateProperty(
+            document.RootElement,
+            rootPath,
+            out var location);
+
+        Assert.True(duplicate);
+        Assert.Equal(expectedLocation, location);
     }
 
     [Fact]

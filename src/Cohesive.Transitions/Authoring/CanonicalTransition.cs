@@ -218,16 +218,8 @@ public static class TransitionAuthoring
             displayName: metadata.DisplayName,
             description: metadata.Description,
             sourceMap: sourceMap);
-        var validation = TransitionDefinitionDocuments.Validate(initial);
-        var document = TransitionDefinitionDocuments.Create(
-            metadata.DefinitionId,
-            metadata.RevisionId,
-            definition,
-            metadata.Provenance,
-            displayName: metadata.DisplayName,
-            description: metadata.Description,
-            sourceMap: sourceMap,
-            diagnostics: validation.Diagnostics);
+        var validation = TransitionDefinitionDocuments.ValidateAuthored(initial, definition);
+        var document = initial.WithRetainedDiagnostics(validation.Diagnostics);
         return new(document, validation);
     }
 }

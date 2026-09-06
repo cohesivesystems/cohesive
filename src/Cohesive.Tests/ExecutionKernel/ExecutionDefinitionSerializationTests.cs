@@ -124,6 +124,36 @@ public sealed class ExecutionDefinitionSerializationTests
     }
 
     [Fact]
+    public void WithRetainedDiagnostics_PreservesCanonicalSemanticContentAndFingerprint()
+    {
+        var originalDiagnostic = new DocumentValidationDiagnostic(
+            "authoring.original",
+            DiagnosticSeverity.Info,
+            "Original authoring diagnostic.",
+            "/definition/entry");
+        var replacementDiagnostic = new DocumentValidationDiagnostic(
+            "authoring.replacement",
+            DiagnosticSeverity.Warning,
+            "Replacement authoring diagnostic.",
+            "/definition/orderedSteps/0");
+        var original = CreateDocument(
+            extensions: [StringExtension("example.mode", "adaptive")],
+            diagnostics: [originalDiagnostic]);
+
+        var updated = original.WithRetainedDiagnostics([replacementDiagnostic]);
+
+        Assert.Equal(original.Kind, updated.Kind);
+        Assert.Equal(original.Definition.GetRawText(), updated.Definition.GetRawText());
+        Assert.True(original.Extensions.SequenceEqual(updated.Extensions));
+        Assert.Equal(original.Metadata.Fingerprint, updated.Metadata.Fingerprint);
+        Assert.Equal(
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(original),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(updated));
+        Assert.Equal(originalDiagnostic, Assert.Single(original.Metadata.Diagnostics));
+        Assert.Equal(replacementDiagnostic, Assert.Single(updated.Metadata.Diagnostics));
+    }
+
+    [Fact]
     public void TypeRichExtensionSourceMapAndTypedBody_RoundTripToIdenticalCanonicalBytes()
     {
         var extension = TypeRichExtension();
