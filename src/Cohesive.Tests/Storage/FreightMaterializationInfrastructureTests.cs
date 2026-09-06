@@ -106,7 +106,7 @@ public sealed class FreightMaterializationInfrastructureTests
             service.PhysicalResource == FreightMaterializationInfrastructure.CosmosService);
         var cosmosEnvironmentPort = Assert.IsType<InfrastructureLocalConfigurationValue>(
             cosmos.Environment.Single(variable => variable.Name == "PORT").Value);
-        var cosmosEndpointPort = cosmos.Endpoints.Single(endpoint => endpoint.Id.Value == "cosmos").ContainerPort;
+        var cosmosEndpointPort = cosmos.Endpoints.Single(endpoint => endpoint.Id.Value == "cosmos").ServicePort;
 
         Assert.True(document.IsValid);
         Assert.Equal("65432", effective.Value);

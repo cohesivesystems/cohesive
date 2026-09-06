@@ -14,7 +14,7 @@ public sealed class InfrastructureLocalRealizationTests
     static readonly InfrastructureLifecycleAuthorityId Authority = new("local/materialization");
     static readonly InfrastructureSettingId ProjectName = new("project-name");
     static readonly InfrastructureSettingId PostgresPort = new("postgres-port");
-    static readonly InfrastructureSettingId ElasticContainerPort = new("elastic-container-port");
+    static readonly InfrastructureSettingId ElasticServicePort = new("elastic-container-port");
 
     [Fact]
     public void Fluent_and_direct_topologies_compile_to_the_same_exact_document()
@@ -29,7 +29,7 @@ public sealed class InfrastructureLocalRealizationTests
                 .Endpoint(
                     id: new("postgres"),
                     scheme: "postgresql",
-                    containerPort: 5432,
+                    servicePort: 5432,
                     exposure: InfrastructureLocalEndpointExposure.HostLoopback,
                     role: InfrastructureLocalEndpointRole.Data,
                     hostPort: new(Subject, PostgresPort))
@@ -99,7 +99,7 @@ public sealed class InfrastructureLocalRealizationTests
                         new(
                             id: new("http"),
                             scheme: "http",
-                            containerPort: new InfrastructureLocalConfigurationValue(Subject, ElasticContainerPort),
+                            servicePort: new InfrastructureLocalConfigurationValue(Subject, ElasticServicePort),
                             exposure: InfrastructureLocalEndpointExposure.HostLoopback,
                             role: InfrastructureLocalEndpointRole.Data,
                             hostPort: new(Subject, new("elastic-port")))
@@ -109,7 +109,7 @@ public sealed class InfrastructureLocalRealizationTests
         var configuration = Configuration(
             (ProjectName, "materialization"),
             (PostgresPort, "55432"),
-            (ElasticContainerPort, "70000"),
+            (ElasticServicePort, "70000"),
             (new("elastic-port"), "55432"));
 
         var document = InfrastructureLocalRealizationCompiler.Compile(
@@ -120,7 +120,7 @@ public sealed class InfrastructureLocalRealizationTests
 
         Assert.False(document.IsValid);
         Assert.Equal(2, document.Diagnostics.Count(diagnostic => diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.ImageNotPinned));
-        Assert.Contains(document.Diagnostics, diagnostic => diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.ContainerPortInvalid);
+        Assert.Contains(document.Diagnostics, diagnostic => diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.ServicePortInvalid);
         Assert.Contains(document.Diagnostics, diagnostic => diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.HostPortInvalid);
     }
 
@@ -270,7 +270,7 @@ public sealed class InfrastructureLocalRealizationTests
                 .Endpoint(
                     id: new("dashboard"),
                     scheme: "http",
-                    containerPort: 8082,
+                    servicePort: 8082,
                     exposure: InfrastructureLocalEndpointExposure.HostLoopback,
                     role: InfrastructureLocalEndpointRole.Management,
                     hostPort: new(Subject, new("scheduler-port")))
@@ -284,7 +284,7 @@ public sealed class InfrastructureLocalRealizationTests
                     .Endpoint(
                         id: new("https"),
                         scheme: "https",
-                        containerPort: 7443,
+                        servicePort: 7443,
                         exposure: InfrastructureLocalEndpointExposure.HostLoopback,
                         role: InfrastructureLocalEndpointRole.Data,
                         hostPort: new(Subject, new("api-port")))
@@ -382,6 +382,120 @@ public sealed class InfrastructureLocalRealizationTests
             new("src/Ari.Api/Program.cs")));
     }
 
+    [Fact]
+    public void Referenced_resource_uses_exact_lifecycle_evidence_and_round_trips()
+    {
+        InfrastructureTargetId consumer = new("tests/local-consumer");
+        InfrastructureLocalEndpointId representative = new("health");
+        var realization = ReferencedResourceRealization(consumer);
+        var direct = new InfrastructureLocalTopology(
+            services:
+            [
+                new(
+                    node: new("resource/emulator"),
+                    physicalResource: new("physical/emulator"),
+                    source: new InfrastructureLocalReferencedServiceSource(consumer, representative),
+                    endpoints:
+                    [
+                        new(
+                            id: representative,
+                            scheme: "http",
+                            servicePort: 8082,
+                            exposure: InfrastructureLocalEndpointExposure.HostLoopback,
+                            role: InfrastructureLocalEndpointRole.Management,
+                            hostPort: new(Subject, new("emulator-port")))
+                    ],
+                    health: new(
+                        probes: [new InfrastructureLocalHttpHealthProbe(representative, "/health")],
+                        interval: TimeSpan.FromSeconds(2),
+                        timeout: TimeSpan.FromSeconds(1),
+                        retries: 10))
+            ]);
+        var fluent = InfrastructureLocal.Define(local => local.ReferencedService(
+            resource: new("resource/emulator"),
+            physicalResource: new("physical/emulator"),
+            interpreter: consumer,
+            representativeEndpoint: representative,
+            configure: emulator => emulator
+                .Endpoint(
+                    id: representative,
+                    scheme: "http",
+                    servicePort: 8082,
+                    exposure: InfrastructureLocalEndpointExposure.HostLoopback,
+                    role: InfrastructureLocalEndpointRole.Management,
+                    hostPort: new(Subject, new("emulator-port")))
+                .HttpHealth(representative, "/health")
+                .HealthTiming(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1), retries: 10)));
+        var configuration = Configuration((ProjectName, "referenced-test"), (new("emulator-port"), "58082"));
+
+        var first = InfrastructureLocalRealizationCompiler.Compile(
+            realization,
+            Environment(InfrastructureLocalDataLifetime.Persistent),
+            direct,
+            [configuration]);
+        var second = InfrastructureLocalRealizationCompiler.Compile(
+            realization,
+            Environment(InfrastructureLocalDataLifetime.Persistent),
+            fluent,
+            [configuration]);
+        var roundTrip = JsonSerializer.Deserialize<InfrastructureLocalRealizationDocument>(
+            JsonSerializer.Serialize(first, JsonOptions),
+            JsonOptions);
+
+        Assert.True(first.IsValid, string.Join(System.Environment.NewLine, first.Diagnostics.Select(static diagnostic => diagnostic.Message)));
+        Assert.Equal(first.Fingerprint, second.Fingerprint);
+        Assert.Equal(first.Fingerprint, roundTrip?.Fingerprint);
+        var source = Assert.IsType<InfrastructureLocalReferencedServiceSource>(Assert.Single(roundTrip!.Topology.Services).Source);
+        Assert.Equal(consumer, source.Interpreter);
+        Assert.Equal(representative, source.RepresentativeEndpoint);
+    }
+
+    [Fact]
+    public void Referenced_resource_mismatches_are_structured_diagnostics()
+    {
+        InfrastructureTargetId consumer = new("tests/local-consumer");
+        var realization = ReferencedResourceRealization(consumer);
+        var topology = new InfrastructureLocalTopology(
+            services:
+            [
+                new(
+                    node: new("resource/emulator"),
+                    physicalResource: new("physical/emulator"),
+                    source: new InfrastructureLocalReferencedServiceSource(new("tests/other-consumer"), new("health")),
+                    command: ["start"],
+                    endpoints:
+                    [
+                        new(
+                            id: new("health"),
+                            scheme: "http",
+                            servicePort: 8082,
+                            exposure: InfrastructureLocalEndpointExposure.Internal,
+                            role: InfrastructureLocalEndpointRole.Management)
+                    ])
+            ]);
+
+        var document = InfrastructureLocalRealizationCompiler.Compile(
+            realization,
+            Environment(InfrastructureLocalDataLifetime.Persistent),
+            topology,
+            [Configuration((ProjectName, "referenced-test"))]);
+
+        Assert.False(document.IsValid);
+        Assert.Contains(document.Diagnostics, static diagnostic =>
+            diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.ServiceBindingMismatch);
+        Assert.Contains(document.Diagnostics, static diagnostic =>
+            diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.ServiceSourceMismatch);
+        Assert.Contains(document.Diagnostics, static diagnostic =>
+            diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.ReferencedServiceEndpointInvalid);
+        Assert.All(document.Diagnostics, diagnostic =>
+        {
+            Assert.NotEmpty(diagnostic.Evidence!.SourceReferences);
+            Assert.NotEmpty(diagnostic.Evidence.ResolutionOptions);
+            Assert.NotNull(diagnostic.Evidence.Expected);
+            Assert.NotNull(diagnostic.Evidence.Observed);
+        });
+    }
+
     static InfrastructureLocalTopology DirectTopology() => new(
         services: [DirectPostgres("postgres:17.10-alpine3.24")],
         volumes: [new(new("postgres-data"))],
@@ -406,7 +520,7 @@ public sealed class InfrastructureLocalRealizationTests
             new(
                 id: new("postgres"),
                 scheme: "postgresql",
-                containerPort: 5432,
+                servicePort: 5432,
                 exposure: InfrastructureLocalEndpointExposure.HostLoopback,
                 role: InfrastructureLocalEndpointRole.Data,
                 hostPort: new(Subject, PostgresPort))
@@ -528,5 +642,39 @@ public sealed class InfrastructureLocalRealizationTests
                     interpreter: new("local-orchestration"),
                     sourceReferences: [placementReference])
             ]);
+    }
+
+    static InfrastructureRealization ReferencedResourceRealization(InfrastructureTargetId consumer)
+    {
+        var definition = InfrastructureDefinitionDocument.FromDefinition(new(
+            id: new("referenced-resource-tests"),
+            revision: new("v1"),
+            resources: [new(new("resource/emulator"), InfrastructureResourceLifecycle.Ephemeral)]));
+        InfrastructureCapabilityVariantId variant = new("local");
+        var profile = new InfrastructureCapabilityProfile(
+            schemaVersion: InfrastructureCapabilityProfile.CurrentSchemaVersion,
+            id: new("profiles/referenced-resource-tests/v1"),
+            target: consumer,
+            supportedDefinitionSchemaVersions: [InfrastructureDefinitionDocument.CurrentSchemaVersion],
+            variants: [new(variant)]);
+        var closure = InfrastructureCapabilityCompiler.Compile(definition, profile, variant);
+        var lifecycle = new InfrastructureLifecyclePlan(
+            definition,
+            bindings:
+            [
+                new(
+                    resource: new("resource/emulator"),
+                    physicalResource: new("physical/emulator"),
+                    interpreter: new("tests/foreign-manager"),
+                    authority: Authority,
+                    disposition: InfrastructureLifecycleDisposition.Managed),
+                new(
+                    resource: new("resource/emulator"),
+                    physicalResource: new("physical/emulator"),
+                    interpreter: consumer,
+                    authority: Authority,
+                    disposition: InfrastructureLifecycleDisposition.Referenced)
+            ]);
+        return InfrastructureRealizationCompiler.Compile(closure, lifecycle);
     }
 }

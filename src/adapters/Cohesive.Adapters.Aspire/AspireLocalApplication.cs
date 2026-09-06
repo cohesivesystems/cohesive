@@ -170,6 +170,7 @@ public static class AspireLocalApplicationBuilderExtensions
         var services = ImmutableDictionary.CreateBuilder<InfrastructurePhysicalResourceId, IResourceBuilder<IResource>>();
         Dictionary<InfrastructurePhysicalResourceId, IResourceBuilder<ContainerResource>> containers = [];
         Dictionary<InfrastructurePhysicalResourceId, IResourceBuilder<ProjectResource>> projects = [];
+        Dictionary<InfrastructurePhysicalResourceId, IResourceBuilder<ExternalServiceResource>> referencedServices = [];
         foreach (var item in projection.Services)
         {
             var annotation = new AspireInfraIdentityAnnotation(
@@ -194,6 +195,17 @@ public static class AspireLocalApplicationBuilderExtensions
                     projects.Add(item.Service.PhysicalResource, projectResource);
                     services.Add(item.Service.PhysicalResource, projectResource);
                     break;
+                case InfrastructureLocalReferencedServiceSource reference:
+                    var endpoint = projection.Endpoints.Single(candidate =>
+                        candidate.PhysicalResource == item.Service.PhysicalResource
+                        && candidate.Endpoint.Id == reference.RepresentativeEndpoint);
+                    var referencedResource = builder.AddExternalService(
+                            name: item.ResourceName,
+                            uri: new Uri(endpoint.ServiceAddress, UriKind.Absolute))
+                        .WithAnnotation(annotation);
+                    referencedServices.Add(item.Service.PhysicalResource, referencedResource);
+                    services.Add(item.Service.PhysicalResource, referencedResource);
+                    break;
                 default:
                     throw new InvalidOperationException($"Unsupported local service source '{item.Service.Source.GetType().Name}' passed validated Aspire compilation.");
             }
@@ -208,7 +220,7 @@ public static class AspireLocalApplicationBuilderExtensions
                     if (!item.Service.Command.IsEmpty)
                         container.WithArgs([.. item.Service.Command]);
                     AddEndpoints(container, item, projection);
-                    AddEnvironment(container, item, projection, services, secretParameters);
+                    AddEnvironment(container, item, projection, services, referencedServices, secretParameters);
                     AddVolumes(container, item, projection);
                     AddFiles(container, item, projection);
                     if (item.Service.StopGracePeriod is { } stopGracePeriod)
@@ -221,7 +233,9 @@ public static class AspireLocalApplicationBuilderExtensions
                 case InfrastructureLocalProjectSource:
                     var project = projects[item.Service.PhysicalResource];
                     AddEndpoints(project, item, projection);
-                    AddEnvironment(project, item, projection, services, secretParameters);
+                    AddEnvironment(project, item, projection, services, referencedServices, secretParameters);
+                    break;
+                case InfrastructureLocalReferencedServiceSource:
                     break;
             }
         }
@@ -241,6 +255,10 @@ public static class AspireLocalApplicationBuilderExtensions
                     AddHealth(builder, project, item, projection);
                     foreach (var dependency in item.Service.ReadyDependencies)
                         project.WaitFor(services[dependency]);
+                    break;
+                case InfrastructureLocalReferencedServiceSource:
+                    var referenced = referencedServices[item.Service.PhysicalResource];
+                    AddReferencedHealth(referenced, item);
                     break;
             }
         }
@@ -289,7 +307,7 @@ public static class AspireLocalApplicationBuilderExtensions
         foreach (var endpoint in projection.Endpoints.Where(item => item.PhysicalResource == service.Service.PhysicalResource))
         {
             resource.WithEndpoint(
-                targetPort: endpoint.Endpoint.ContainerPort.Resolve(projection.Configuration),
+                targetPort: endpoint.Endpoint.ServicePort.Resolve(projection.Configuration),
                 port: endpoint.HostPort,
                 scheme: endpoint.Endpoint.Scheme,
                 name: endpoint.Endpoint.Id.Value,
@@ -310,6 +328,7 @@ public static class AspireLocalApplicationBuilderExtensions
         AspireServiceProjection service,
         AspireLocalProjectionDocument projection,
         IReadOnlyDictionary<InfrastructurePhysicalResourceId, IResourceBuilder<IResource>> services,
+        IReadOnlyDictionary<InfrastructurePhysicalResourceId, IResourceBuilder<ExternalServiceResource>> referencedServices,
         IReadOnlyDictionary<string, IResourceBuilder<ParameterResource>> secretParameters)
         where TResource : IResourceWithEnvironment
     {
@@ -321,9 +340,18 @@ public static class AspireLocalApplicationBuilderExtensions
                     resource.WithEnvironment(name: variable.Name, parameter: secretParameters[secret.Name]);
                     break;
                 case InfrastructureLocalEndpointValue endpointValue
-                    when endpointValue.Address == InfrastructureLocalEndpointAddress.ServiceNetwork:
+                    when endpointValue.Address == InfrastructureLocalEndpointAddress.ServiceNetwork
+                         && referencedServices.TryGetValue(endpointValue.Service, out var referenced)
+                         && endpointValue.Format == InfrastructureLocalEndpointValueFormat.Uri
+                         && ((InfrastructureLocalReferencedServiceSource)projection.Services.Single(candidate =>
+                             candidate.Service.PhysicalResource == endpointValue.Service).Service.Source).RepresentativeEndpoint == endpointValue.Endpoint:
+                    resource.WithEnvironment(name: variable.Name, externalService: referenced);
+                    break;
+                case InfrastructureLocalEndpointValue endpointValue
+                    when endpointValue.Address == InfrastructureLocalEndpointAddress.ServiceNetwork
+                         && services[endpointValue.Service].Resource is IResourceWithEndpoints endpointResource:
                     var endpointReference = new EndpointReference(
-                        (IResourceWithEndpoints)services[endpointValue.Service].Resource,
+                        endpointResource,
                         endpointValue.Endpoint.Value);
                     if (endpointValue.Format == InfrastructureLocalEndpointValueFormat.Uri)
                         resource.WithEnvironment(name: variable.Name, endpointReference: endpointReference);
@@ -420,6 +448,18 @@ public static class AspireLocalApplicationBuilderExtensions
                 default:
                     throw new InvalidOperationException($"Unsupported health probe '{probe.GetType().Name}' passed validated Aspire compilation.");
             }
+        }
+    }
+
+    static void AddReferencedHealth(
+        IResourceBuilder<ExternalServiceResource> resource,
+        AspireServiceProjection service)
+    {
+        foreach (var probe in service.Service.Health?.Probes ?? [])
+        {
+            if (probe is not InfrastructureLocalHttpHealthProbe http)
+                throw new InvalidOperationException($"Unsupported referenced-service health probe '{probe.GetType().Name}' passed validated Aspire compilation.");
+            resource.WithHttpHealthCheck(path: http.Path, statusCode: http.ExpectedStatus);
         }
     }
 

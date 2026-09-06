@@ -349,7 +349,7 @@ public sealed record AspireLocalProjectionFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Current projection canonicalization profile.</summary>
-    public const string CurrentCanonicalization = "cohesive-aspire-local-projection/json-jcs/v4";
+    public const string CurrentCanonicalization = "cohesive-aspire-local-projection/json-jcs/v5";
 
     /// <summary>Creates projection fingerprint metadata.</summary>
     /// <param name="algorithm">Digest algorithm.</param>
@@ -389,11 +389,14 @@ public sealed record AspireLocalProjectionDocument
     /// <summary>Current Aspire lifecycle-interpreter identity.</summary>
     public const string CurrentTarget = "aspire/dcp-" + CurrentAspireVersion;
 
+    /// <summary>Strongly typed identity of the current Aspire lifecycle interpreter.</summary>
+    public static InfrastructureTargetId CurrentTargetId { get; } = new(CurrentTarget);
+
     /// <summary>Current portable projection schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-aspire-local-projection/v4";
+    public const string CurrentSchemaVersion = "cohesive-aspire-local-projection/v5";
 
     /// <summary>Current deterministic compiler identity.</summary>
-    public const string CurrentCompiler = "cohesive.adapters.aspire/v4";
+    public const string CurrentCompiler = "cohesive.adapters.aspire/v5";
 
     /// <summary>Creates or restores an exact Aspire projection.</summary>
     /// <param name="schemaVersion">Exact projection schema.</param>
