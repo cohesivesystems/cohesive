@@ -275,26 +275,63 @@ public static class ExternalGenerationCatalogImporter
     /// The process cannot start, times out, fails, exceeds a bound, emits invalid protocol JSON, or emits a response
     /// that does not correlate with the request.
     /// </exception>
-    public static async Task<GenerationCatalogDocument> ImportAsync<TValue>(
+    public static Task<GenerationCatalogDocument> ImportAsync<TValue>(
         ExternalGenerationCatalogProvider provider,
         ExternalGenerationCatalogImportOptions options,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(options);
-        cancellationToken.ThrowIfCancellationRequested();
-
         var valueType = TypeMapper.Map(typeof(TValue), nullability: null);
-        _ = CreateProvenance(provider, options);
-        var request = ExternalGenerationCatalogProtocol.CreateRequest(
-            options.Id,
-            options.Revision,
-            options.Count,
-            options.Seed,
+        var definition = ExternalGenerationCatalogImportDefinition.Create(
+            catalogId: options.Id,
+            catalogRevision: options.Revision,
+            count: options.Count,
+            seed: options.Seed,
             valueType,
-            options.Configuration,
-            options.Locale,
-            options.DateTimeReferenceUtc);
+            configuration: options.Configuration,
+            provider: provider.Provider,
+            providerVersion: provider.ProviderVersion,
+            randomAlgorithm: provider.RandomAlgorithm,
+            capabilityProfile: provider.CapabilityProfile,
+            sourceReferences: options.SourceReferences,
+            locale: options.Locale,
+            dateTimeReferenceUtc: options.DateTimeReferenceUtc);
+        return ImportAsync(provider, definition, cancellationToken);
+    }
+
+    /// <summary>
+    /// Invokes a provider process from a portable semantic import definition and retains its complete response.
+    /// </summary>
+    /// <param name="provider">
+    /// Execution-site process settings whose asserted provider semantics must exactly match
+    /// <paramref name="definition"/>.
+    /// </param>
+    /// <param name="definition">
+    /// Portable catalog, provider, value-contract, deterministic-input, and provenance definition.
+    /// </param>
+    /// <param name="cancellationToken">Token that cancels invocation and terminates the complete provider process tree.</param>
+    /// <returns>A fingerprinted finite catalog that no longer depends on the provider process.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="provider"/> or <paramref name="definition"/> is null.</exception>
+    /// <exception cref="ArgumentException">
+    /// Provider semantics do not exactly match the portable definition.
+    /// </exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> is canceled.</exception>
+    /// <exception cref="ExternalGenerationCatalogException">
+    /// The process cannot start, times out, fails, exceeds a bound, emits invalid protocol JSON, or emits a response
+    /// that does not correlate with the request.
+    /// </exception>
+    public static async Task<GenerationCatalogDocument> ImportAsync(
+        ExternalGenerationCatalogProvider provider,
+        ExternalGenerationCatalogImportDefinition definition,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(definition);
+        cancellationToken.ThrowIfCancellationRequested();
+        RequireMatchingProviderSemantics(provider, definition);
+
+        var request = definition.CreateRequest();
         var requestBytes = Encoding.UTF8.GetBytes(ExternalGenerationCatalogProtocol.SerializeRequest(request));
         if (requestBytes.Length > provider.MaximumMessageBytes)
         {
@@ -408,8 +445,8 @@ public static class ExternalGenerationCatalogImporter
         }
 
         if (!string.Equals(response.RequestId, request.RequestId, StringComparison.Ordinal)
-            || !string.Equals(response.Provider, provider.Provider, StringComparison.Ordinal)
-            || !string.Equals(response.ProviderVersion, provider.ProviderVersion, StringComparison.Ordinal)
+            || !string.Equals(response.Provider, definition.Provider, StringComparison.Ordinal)
+            || !string.Equals(response.ProviderVersion, definition.ProviderVersion, StringComparison.Ordinal)
             || response.Values.Length != request.Count)
         {
             throw new ExternalGenerationCatalogException(
@@ -432,11 +469,11 @@ public static class ExternalGenerationCatalogImporter
         try
         {
             return GenerationCatalogDocument.FromDefinition(new(
-                options.Id,
-                options.Revision,
-                valueType,
+                definition.CatalogId,
+                definition.CatalogRevision,
+                definition.ValueType,
                 entries.MoveToImmutable(),
-                CreateProvenance(provider, options, request.RequestId)));
+                definition.CreateProvenance(request.RequestId)));
         }
         catch (ArgumentException exception)
         {
@@ -450,27 +487,21 @@ public static class ExternalGenerationCatalogImporter
         }
     }
 
-    static GenerationCatalogProvenance CreateProvenance(
+    static void RequireMatchingProviderSemantics(
         ExternalGenerationCatalogProvider provider,
-        ExternalGenerationCatalogImportOptions options,
-        string? requestId = null)
+        ExternalGenerationCatalogImportDefinition definition)
     {
-        var sourceReferences = requestId is null
-            ? options.SourceReferences
-            : options.SourceReferences.Add(SourceReference.Create(
-                ExternalGenerationCatalogProtocol.RequestReferenceScheme,
-                requestId));
-        return new(
-            adapter: AdapterIdentity,
-            adapterVersion: AdapterVersion,
-            provider: provider.Provider,
-            providerVersion: provider.ProviderVersion,
-            capabilityProfile: provider.CapabilityProfile,
-            locale: options.Locale,
-            randomAlgorithm: provider.RandomAlgorithm,
-            seed: options.Seed.ToString(CultureInfo.InvariantCulture),
-            dateTimeReferenceUtc: options.DateTimeReferenceUtc,
-            sourceReferences: sourceReferences);
+        if (string.Equals(provider.Provider, definition.Provider, StringComparison.Ordinal)
+            && string.Equals(provider.ProviderVersion, definition.ProviderVersion, StringComparison.Ordinal)
+            && string.Equals(provider.RandomAlgorithm, definition.RandomAlgorithm, StringComparison.Ordinal)
+            && provider.CapabilityProfile == definition.CapabilityProfile)
+        {
+            return;
+        }
+
+        throw new ArgumentException(
+            "Execution-site provider semantics do not match the portable external catalog-import definition.",
+            nameof(provider));
     }
 
     static ProcessStartInfo CreateStartInfo(ExternalGenerationCatalogProvider provider)

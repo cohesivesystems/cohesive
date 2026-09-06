@@ -1,6 +1,9 @@
 using Cohesive.Cli;
 using Cohesive.Configuration;
+using Cohesive.Model;
 using Cohesive.Model.Serialization;
+using Cohesive.Simulation.ExternalProcess;
+using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
 
 namespace Cohesive.Simulation.Cli;
@@ -73,6 +76,63 @@ sealed record WorldVerifyCliOptions
     public string JsonLinesPath { get; init; } = string.Empty;
 }
 
+sealed record CatalogCliOptions;
+
+sealed record CatalogVerifyCliOptions
+{
+    [ConfigurationParameter(
+        "catalog",
+        Description = "Generation-catalog document JSON path, or '-' for standard input.",
+        Required = true)]
+    public string CatalogPath { get; init; } = string.Empty;
+}
+
+sealed record ExternalCatalogImportCliOptions
+{
+    [ConfigurationParameter(
+        "definition",
+        Description = "Portable external catalog-import definition JSON path, or '-' for standard input.",
+        Required = true)]
+    public string DefinitionPath { get; init; } = string.Empty;
+
+    [ConfigurationParameter(
+        "executable",
+        Description = "Provider executable file name or path, launched directly without a command shell.",
+        Required = true)]
+    public string Executable { get; init; } = string.Empty;
+
+    [ConfigurationParameter(
+        "arg",
+        Description = "Ordered provider argument; repeat the option for multiple arguments.")]
+    public string[] Arguments { get; init; } = [];
+
+    [ConfigurationParameter(
+        "working-directory",
+        Description = "Optional provider-process working directory.")]
+    public string? WorkingDirectory { get; init; }
+
+    [ConfigurationParameter(
+        "timeout-seconds",
+        Description = "Positive provider wall-clock limit in seconds, no greater than one day.")]
+    public int TimeoutSeconds { get; init; } = (int)ExternalGenerationCatalogProvider.DefaultTimeout.TotalSeconds;
+
+    [ConfigurationParameter(
+        "maximum-message-bytes",
+        Description = "Positive maximum bytes accepted for a provider request or response.")]
+    public int MaximumMessageBytes { get; init; } = ExternalGenerationCatalogProvider.DefaultMaximumMessageBytes;
+
+    [ConfigurationParameter(
+        "maximum-standard-error-bytes",
+        Description = "Positive maximum provider standard-error bytes retained for diagnostics.")]
+    public int MaximumStandardErrorBytes { get; init; } =
+        ExternalGenerationCatalogProvider.DefaultMaximumStandardErrorBytes;
+
+    [ConfigurationParameter(
+        "out",
+        Description = "Canonical generation-catalog JSON path, or '-' for standard output.")]
+    public string OutputPath { get; init; } = CommandIo.StandardStreamPath;
+}
+
 sealed record WorldVerifyCliEvidence(
     string ArtifactId,
     string ArtifactManifestFingerprint,
@@ -86,11 +146,39 @@ sealed record WorldVerifyCliEvidence(
     int? BatchSize,
     long ItemCount);
 
-sealed record WorldVerifyCliReport(
+sealed record CliVerificationReport<TVerification>(
     string SchemaVersion,
     bool IsValid,
-    WorldVerifyCliEvidence? Verification,
+    TVerification? Verification,
+    IReadOnlyList<DocumentValidationDiagnostic> Diagnostics)
+    where TVerification : class;
+
+static class CliVerificationReportSchemas
+{
+    public const string WorldArtifact = "cohesive-simulation-cli-verification/v1";
+
+    public const string GenerationCatalog = "cohesive-simulation-cli-catalog-verification/v1";
+}
+
+sealed record CatalogVerifyCliEvidence(
+    string CatalogSchemaVersion,
+    string CatalogId,
+    string CatalogRevision,
+    string CatalogFingerprint,
+    TypeRef ValueType,
+    int EntryCount,
+    GenerationCatalogProvenance Provenance);
+
+sealed record ExternalCatalogImportCliFailureReport(
+    string SchemaVersion,
+    bool IsSuccessful,
+    string Code,
+    string Message,
+    ExternalGenerationCatalogFailure? ProviderFailure,
+    int? ProviderExitCode,
+    string? ProviderStandardError,
+    bool ProviderStandardErrorTruncated,
     IReadOnlyList<DocumentValidationDiagnostic> Diagnostics)
 {
-    public const string CurrentSchemaVersion = "cohesive-simulation-cli-verification/v1";
+    public const string CurrentSchemaVersion = "cohesive-simulation-cli-external-catalog-import-failure/v1";
 }

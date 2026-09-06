@@ -13,6 +13,7 @@ generation authority; replay and provisioning do not invoke the process again.
 using System.Text.Json;
 using Cohesive.Simulation.ExternalProcess;
 using Cohesive.Model;
+using Cohesive.Model.Authoring;
 using Cohesive.Simulation.Generation;
 
 var profile = new GenerationCatalogCapabilityProfile(
@@ -54,13 +55,74 @@ var options = new ExternalGenerationCatalogImportOptions(
 GenerationCatalogDocument catalog =
     await ExternalGenerationCatalogImporter.ImportAsync<Person>(provider, options);
 
+await File.WriteAllTextAsync(
+    "demo-people.catalog.json",
+    GenerationCatalogJsonSerializer.Serialize(catalog));
+
 public sealed record PersonProviderConfiguration(string Generator);
 public sealed record Person(string Name, string Email);
 ```
 
+At a later process or CI boundary, `cohesive-sim catalog verify --catalog demo-people.catalog.json` validates the
+retained document and emits structured identity and provenance evidence without launching the provider again.
+
 The executable and arguments are passed directly to the platform process API; no command shell interprets them. The
 child inherits the caller's environment. Use an explicit executable path, working directory, wrapper, or virtual
 environment when environment reproducibility matters.
+
+## Portable import definitions and scripts
+
+For scripts and agent-authored workflows, materialize provider semantics separately from execution-site process
+settings. Using the profile, configuration, and `Person` contract above:
+
+```csharp
+DefaultClrTypeRefMapper types = new();
+ExternalGenerationCatalogImportDefinition definition =
+    ExternalGenerationCatalogImportDefinition.Create(
+        catalogId: "catalog/demo-people",
+        catalogRevision: "r1",
+        count: 100,
+        seed: 1729,
+        valueType: types.Map(typeof(Person), nullability: null),
+        configuration: options.Configuration,
+        provider: "example-provider",
+        providerVersion: "1.2.3",
+        randomAlgorithm: "example-provider/local-seed/v1",
+        capabilityProfile: profile,
+        sourceReferences: [SourceReference.Repository(new("tools/python-provider.py"))],
+        locale: "en",
+        dateTimeReferenceUtc: DateTimeOffset.UnixEpoch);
+
+await File.WriteAllTextAsync(
+    "demo-people.external-import.json",
+    ExternalGenerationCatalogImportJsonSerializer.Serialize(definition));
+```
+
+The current definition schema is `cohesive-simulation-external-generation-catalog-import/v1`. Its strict serializer
+rejects unknown or duplicate properties, noncanonical semantic ordering, opaque runtime types, unsupported schemas,
+and capability claims that contradict locale, seed, or fixed-time coordinates. It contains no executable path,
+argument, working-directory, timeout, or byte-limit fields.
+
+Run the same definition from a shell and retain only the completed catalog:
+
+```bash
+cohesive-sim catalog import-external \
+  --definition demo-people.external-import.json \
+  --executable python3 \
+  --arg tools/python-provider.py \
+  --out demo-people.catalog.json
+
+cohesive-sim catalog verify --catalog demo-people.catalog.json
+```
+
+Repeat `--arg` to preserve argument order. `--working-directory`, `--timeout-seconds`,
+`--maximum-message-bytes`, and `--maximum-standard-error-bytes` are optional local containment settings. The CLI
+constructs the runtime provider from the definition's asserted semantics and rejects any contradiction before launch.
+An existing output file is replaced only after the response has become a complete fingerprint-verified catalog.
+
+The generic `ImportAsync<TValue>` overload lowers the CLR value type, provider semantics, and import options through
+the same `ExternalGenerationCatalogImportDefinition` consumed by the non-generic overload. The portable definition is
+therefore the single execution contract rather than a parallel script-only model.
 
 ## Protocol
 

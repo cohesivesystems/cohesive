@@ -2,6 +2,8 @@ using Cohesive.Cli;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Simulation.Artifacts;
+using Cohesive.Simulation.ExternalProcess;
+using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Relations;
 using Cohesive.Simulation.Worlds;
@@ -42,6 +44,17 @@ static class SimulationCliApplication
                 options => options.ManifestPath,
                 options => options.JsonLinesPath)
             .OnExecute(VerifyAsync);
+        var catalog = app.Command<CatalogCliOptions>(
+            "catalog",
+            "Import, inspect, and validate retained generation catalogs.");
+        catalog.SubCommand<CatalogVerifyCliOptions>(
+                "verify",
+                "Verify a retained generation-catalog document.")
+            .OnExecute(VerifyCatalogAsync);
+        catalog.SubCommand<ExternalCatalogImportCliOptions>(
+                "import-external",
+                "Import and retain a catalog from a bounded external provider process.")
+            .OnExecute(ImportExternalCatalogAsync);
         return app;
     }
 
@@ -148,8 +161,8 @@ static class SimulationCliApplication
             }
 
             var verification = validation.Verification;
-            context.Io.WriteJson(new WorldVerifyCliReport(
-                WorldVerifyCliReport.CurrentSchemaVersion,
+            context.Io.WriteJson(new CliVerificationReport<WorldVerifyCliEvidence>(
+                CliVerificationReportSchemas.WorldArtifact,
                 IsValid: true,
                 new(
                     manifest.ArtifactId.Value,
@@ -183,6 +196,134 @@ static class SimulationCliApplication
         }
     }
 
+    static async Task<int> VerifyCatalogAsync(CliCommandContext<CatalogVerifyCliOptions> context)
+    {
+        try
+        {
+            var options = NormalizePaths(context.Configuration);
+            var catalogJson = await context.Io.ReadUtf8TextAsync(
+                    options.CatalogPath,
+                    context.CancellationToken)
+                .ConfigureAwait(false);
+            var validation = GenerationCatalogJsonSerializer.TryDeserialize(
+                catalogJson,
+                out var catalog);
+            if (!validation.IsValid || catalog is null)
+            {
+                WriteCatalogVerificationFailure(context, validation.Diagnostics);
+                return FailureExitCode;
+            }
+
+            var definition = catalog.Definition;
+            context.Io.WriteJson(new CliVerificationReport<CatalogVerifyCliEvidence>(
+                CliVerificationReportSchemas.GenerationCatalog,
+                IsValid: true,
+                new(
+                    catalog.SchemaVersion,
+                    definition.Id,
+                    definition.Revision,
+                    catalog.Fingerprint.Value,
+                    definition.ValueType,
+                    definition.Entries.Length,
+                    definition.Provenance),
+                Diagnostics: []));
+            return SuccessExitCode;
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            context.Io.WriteErrorLine("Generation-catalog verification was cancelled.");
+            return CancelledExitCode;
+        }
+        catch (Exception exception)
+        {
+            WriteCatalogVerificationFailure(
+                context,
+                [new(
+                    CatalogVerificationFailureCode(exception),
+                    DiagnosticSeverity.Error,
+                    exception.Message)]);
+            return FailureExitCode;
+        }
+    }
+
+    static async Task<int> ImportExternalCatalogAsync(
+        CliCommandContext<ExternalCatalogImportCliOptions> context)
+    {
+        try
+        {
+            var options = NormalizePaths(context.Configuration);
+            var definitionJson = await context.Io.ReadUtf8TextAsync(
+                    options.DefinitionPath,
+                    context.CancellationToken)
+                .ConfigureAwait(false);
+            var validation = ExternalGenerationCatalogImportJsonSerializer.TryDeserialize(
+                definitionJson,
+                out var definition);
+            if (!validation.IsValid || definition is null)
+            {
+                WriteExternalCatalogImportFailure(
+                    context,
+                    code: "simulation.cli.catalog.import.external.definitionInvalid",
+                    message: "The external generation-catalog import definition is invalid.",
+                    diagnostics: validation.Diagnostics);
+                return FailureExitCode;
+            }
+
+            var provider = new ExternalGenerationCatalogProvider(
+                executable: options.Executable,
+                arguments: [.. options.Arguments],
+                provider: definition.Provider,
+                providerVersion: definition.ProviderVersion,
+                randomAlgorithm: definition.RandomAlgorithm,
+                capabilityProfile: definition.CapabilityProfile,
+                workingDirectory: options.WorkingDirectory,
+                timeout: TimeSpan.FromSeconds(options.TimeoutSeconds),
+                maximumMessageBytes: options.MaximumMessageBytes,
+                maximumStandardErrorBytes: options.MaximumStandardErrorBytes);
+            var imported = await ExternalGenerationCatalogImporter.ImportAsync(
+                    provider,
+                    definition,
+                    context.CancellationToken)
+                .ConfigureAwait(false);
+            var canonicalCatalog = GenerationCatalogJsonSerializer.GetCanonicalBytes(imported);
+            await context.Io.WriteOutputAsync(
+                    options.OutputPath,
+                    async (output, cancellationToken) =>
+                    {
+                        await output.WriteAsync(canonicalCatalog, cancellationToken).ConfigureAwait(false);
+                        await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    },
+                    context.CancellationToken)
+                .ConfigureAwait(false);
+            return SuccessExitCode;
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            WriteExternalCatalogImportFailure(
+                context,
+                code: "simulation.cli.catalog.import.external.cancelled",
+                message: "External generation-catalog import was cancelled.");
+            return CancelledExitCode;
+        }
+        catch (ExternalGenerationCatalogException exception)
+        {
+            WriteExternalCatalogImportFailure(
+                context,
+                ExternalCatalogImportFailureCode(exception.Failure),
+                exception.Message,
+                exception);
+            return FailureExitCode;
+        }
+        catch (Exception exception)
+        {
+            WriteExternalCatalogImportFailure(
+                context,
+                ExternalCatalogImportFailureCode(exception),
+                exception.Message);
+            return FailureExitCode;
+        }
+    }
+
     static WorldManifestCliOptions NormalizePaths(WorldManifestCliOptions options) =>
         options with
         {
@@ -207,6 +348,22 @@ static class SimulationCliApplication
         {
             ManifestPath = NormalizePath(options.ManifestPath, "--manifest"),
             JsonLinesPath = NormalizePath(options.JsonLinesPath, "--jsonl")
+        };
+
+    static CatalogVerifyCliOptions NormalizePaths(CatalogVerifyCliOptions options) =>
+        options with
+        {
+            CatalogPath = NormalizePath(options.CatalogPath, "--catalog")
+        };
+
+    static ExternalCatalogImportCliOptions NormalizePaths(ExternalCatalogImportCliOptions options) =>
+        options with
+        {
+            DefinitionPath = NormalizePath(options.DefinitionPath, "--definition"),
+            WorkingDirectory = options.WorkingDirectory is null
+                ? null
+                : NormalizePath(options.WorkingDirectory, "--working-directory"),
+            OutputPath = NormalizePath(options.OutputPath, "--out")
         };
 
     static string NormalizePath(string value, string option)
@@ -264,11 +421,39 @@ static class SimulationCliApplication
     static void WriteVerificationFailure(
         CliCommandContext<WorldVerifyCliOptions> context,
         IReadOnlyList<DocumentValidationDiagnostic> diagnostics) =>
-        context.Io.WriteJsonError(new WorldVerifyCliReport(
-            WorldVerifyCliReport.CurrentSchemaVersion,
+        context.Io.WriteJsonError(new CliVerificationReport<WorldVerifyCliEvidence>(
+            CliVerificationReportSchemas.WorldArtifact,
             IsValid: false,
             Verification: null,
             diagnostics));
+
+    static void WriteCatalogVerificationFailure(
+        CliCommandContext<CatalogVerifyCliOptions> context,
+        IReadOnlyList<DocumentValidationDiagnostic> diagnostics) =>
+        context.Io.WriteJsonError(new CliVerificationReport<CatalogVerifyCliEvidence>(
+            CliVerificationReportSchemas.GenerationCatalog,
+            IsValid: false,
+            Verification: null,
+            diagnostics));
+
+    static void WriteExternalCatalogImportFailure(
+        CliCommandContext<ExternalCatalogImportCliOptions> context,
+        string code,
+        string message,
+        ExternalGenerationCatalogException? providerFailure = null,
+        IReadOnlyList<DocumentValidationDiagnostic>? diagnostics = null) =>
+        context.Io.WriteJsonError(new ExternalCatalogImportCliFailureReport(
+            ExternalCatalogImportCliFailureReport.CurrentSchemaVersion,
+            IsSuccessful: false,
+            code,
+            message,
+            providerFailure?.Failure,
+            providerFailure?.ExitCode,
+            string.IsNullOrEmpty(providerFailure?.StandardError)
+                ? null
+                : providerFailure.StandardError,
+            providerFailure?.StandardErrorTruncated ?? false,
+            diagnostics ?? []));
 
     static string VerificationFailureCode(Exception exception) => exception switch
     {
@@ -276,5 +461,40 @@ static class SimulationCliApplication
         System.Text.Json.JsonException or ArgumentException => "simulation.cli.verify.artifactInvalid",
         IOException or UnauthorizedAccessException => "simulation.cli.verify.inputUnavailable",
         _ => "simulation.cli.verify.failed"
+    };
+
+    static string CatalogVerificationFailureCode(Exception exception) => exception switch
+    {
+        System.Text.Json.JsonException or ArgumentException => "simulation.cli.catalog.verify.catalogInvalid",
+        IOException or UnauthorizedAccessException => "simulation.cli.catalog.verify.inputUnavailable",
+        _ => "simulation.cli.catalog.verify.failed"
+    };
+
+    static string ExternalCatalogImportFailureCode(ExternalGenerationCatalogFailure failure) => failure switch
+    {
+        ExternalGenerationCatalogFailure.RequestTooLarge =>
+            "simulation.cli.catalog.import.external.requestTooLarge",
+        ExternalGenerationCatalogFailure.StartFailed =>
+            "simulation.cli.catalog.import.external.startFailed",
+        ExternalGenerationCatalogFailure.TimedOut =>
+            "simulation.cli.catalog.import.external.timedOut",
+        ExternalGenerationCatalogFailure.ProcessFailed =>
+            "simulation.cli.catalog.import.external.processFailed",
+        ExternalGenerationCatalogFailure.ResponseTooLarge =>
+            "simulation.cli.catalog.import.external.responseTooLarge",
+        ExternalGenerationCatalogFailure.ResponseInvalid =>
+            "simulation.cli.catalog.import.external.responseInvalid",
+        ExternalGenerationCatalogFailure.ResponseMismatch =>
+            "simulation.cli.catalog.import.external.responseMismatch",
+        _ => "simulation.cli.catalog.import.external.failed"
+    };
+
+    static string ExternalCatalogImportFailureCode(Exception exception) => exception switch
+    {
+        System.Text.Json.JsonException or ArgumentException =>
+            "simulation.cli.catalog.import.external.invalid",
+        IOException or UnauthorizedAccessException =>
+            "simulation.cli.catalog.import.external.ioUnavailable",
+        _ => "simulation.cli.catalog.import.external.failed"
     };
 }

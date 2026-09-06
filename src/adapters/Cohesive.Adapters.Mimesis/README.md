@@ -54,8 +54,15 @@ GenerationCatalogDocument catalog = await MimesisGenerationCatalog.ImportAsync(
         ]),
     new(pythonExecutable: ".venv/bin/python"));
 
+await File.WriteAllTextAsync(
+    "demo-people.catalog.json",
+    GenerationCatalogJsonSerializer.Serialize(catalog));
+
 public sealed record Person(string Name, string Email, int Age);
 ```
+
+At a script or CI boundary, `cohesive-sim catalog verify --catalog demo-people.catalog.json` validates the exact
+retained document and emits structured identity and provenance evidence without invoking Python or Mimesis.
 
 The builder requires every non-optional direct CLR property to have exactly one binding. It respects
 `JsonPropertyNameAttribute`, canonicalizes bindings independently of callback order, rejects duplicate members, and

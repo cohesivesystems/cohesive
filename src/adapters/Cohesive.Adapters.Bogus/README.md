@@ -36,8 +36,15 @@ GenerationCatalogDocument profiles = BogusGenerationCatalog.Import(
             faker.Internet.Email(givenName, familyName));
     });
 
+await File.WriteAllTextAsync(
+    "person-profiles.catalog.json",
+    GenerationCatalogJsonSerializer.Serialize(profiles));
+
 public sealed record CustomerProfile(string GivenName, string FamilyName, string Email);
 ```
+
+At a script or CI boundary, `cohesive-sim catalog verify --catalog person-profiles.catalog.json` validates the exact
+retained document and emits structured identity and provenance evidence without loading Bogus.
 
 Use the returned document through `Gen.Catalog<CustomerProfile>(profiles)`, commonly as a `SampleRecord` source when
 multiple generated entity fields must remain correlated.

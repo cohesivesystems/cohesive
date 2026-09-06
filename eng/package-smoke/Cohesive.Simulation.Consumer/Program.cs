@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Cohesive.Adapters.Bogus;
@@ -78,6 +80,22 @@ else if (args is ["emit-relationship", string relationshipWorldPath])
         relationshipWorldPath,
         RelationshipWorldDefinitionJsonSerializer.Serialize(world));
 }
+else if (args is ["emit-catalog", string emittedCatalogPath])
+{
+    await File.WriteAllTextAsync(
+        emittedCatalogPath,
+        GenerationCatalogJsonSerializer.Serialize(CreateIdentityCatalog()));
+}
+else if (args is ["emit-external-import", string externalImportPath])
+{
+    await File.WriteAllTextAsync(
+        externalImportPath,
+        ExternalGenerationCatalogImportJsonSerializer.Serialize(CreateExternalImportDefinition()));
+}
+else if (args is ["provide-external-catalog"])
+{
+    await ProvideExternalCatalog();
+}
 else if (args is ["verify", string coreJsonLinesPath, string coreManifestPath, string coreReportPath])
 {
     var manifest = WorldArtifactManifestJsonSerializer.Deserialize(await File.ReadAllTextAsync(coreManifestPath));
@@ -134,10 +152,36 @@ else if (args is [
 
     await VerifyCliReport(relationshipReportPath, manifest.ArtifactId.Value, expectedItemCount: 2);
 }
+else if (args is ["verify-catalog", string retainedCatalogPath, string catalogReportPath])
+{
+    var catalog = GenerationCatalogJsonSerializer.Deserialize(await File.ReadAllTextAsync(retainedCatalogPath));
+    await VerifyCatalogCliReport(catalogReportPath, catalog);
+}
+else if (args is [
+    "verify-external-catalog",
+    string importedCatalogPath,
+    string importedCatalogReportPath])
+{
+    var catalog = GenerationCatalogJsonSerializer.Deserialize(await File.ReadAllTextAsync(importedCatalogPath));
+    Require(catalog.Definition.Id, "catalog/package-smoke-external-cli", "external CLI catalog id");
+    Require(catalog.Definition.Provenance.Provider, "package-smoke-provider", "external CLI provider");
+    Require(catalog.Definition.Provenance.ProviderVersion, "1", "external CLI provider version");
+    Require(
+        catalog.Definition.Entries[0].Value.String,
+        "package-smoke-42-0",
+        "external CLI first value");
+    if (!catalog.Definition.Provenance.SourceReferences.Any(static source =>
+            source.Value.StartsWith("csimcatalogrequest://csimcatalogrequest1_", StringComparison.Ordinal)))
+    {
+        throw new InvalidOperationException("The imported catalog omitted its external request identity.");
+    }
+    await VerifyCatalogCliReport(importedCatalogReportPath, catalog);
+}
 else
 {
     throw new ArgumentException(
-        "Expected an emit, emit-relationship, verify, or verify-relationship command.");
+        "Expected an emit, emit-catalog, emit-external-import, emit-relationship, provide-external-catalog, verify, "
+        + "verify-catalog, verify-external-catalog, or verify-relationship command.");
 }
 
 return 0;
@@ -223,6 +267,55 @@ static void VerifyExternalProcessAdapterPackage()
         "external provider schema");
 }
 
+static ExternalGenerationCatalogImportDefinition CreateExternalImportDefinition() =>
+    ExternalGenerationCatalogImportDefinition.Create(
+        catalogId: "catalog/package-smoke-external-cli",
+        catalogRevision: "r1",
+        count: 2,
+        seed: 42,
+        valueType: new ScalarTypeRef(ScalarTypeKind.String),
+        configuration: JsonSerializer.SerializeToElement(new { prefix = "package-smoke" }),
+        provider: "package-smoke-provider",
+        providerVersion: "1",
+        randomAlgorithm: "package-smoke-provider/local-seed/v1",
+        capabilityProfile: new(
+            id: "package-smoke-provider/finite-snapshot/v1",
+            capabilities:
+            [
+                GenerationCatalogProducerCapability.FiniteSnapshot,
+                GenerationCatalogProducerCapability.LocalSeed
+            ],
+            sourceReferences:
+            [
+                SourceReference.Repository(new("eng/package-smoke/Cohesive.Simulation.Consumer/Program.cs"))
+            ]),
+        sourceReferences:
+        [
+            SourceReference.Repository(new("eng/package-smoke/Cohesive.Simulation.Consumer/Program.cs"))
+        ]);
+
+static async Task ProvideExternalCatalog()
+{
+    var request = ExternalGenerationCatalogProtocol.DeserializeRequest(await Console.In.ReadToEndAsync());
+    var prefix = request.Configuration.GetProperty("prefix").GetString()
+                 ?? throw new InvalidOperationException("The package-smoke provider requires a prefix.");
+    var values = ImmutableArray.CreateBuilder<ObservationValue>(request.Count);
+    for (var index = 0; index < request.Count; index++)
+    {
+        values.Add(ObservationValue.FromString(
+            $"{prefix}-{request.Seed.ToString(CultureInfo.InvariantCulture)}-"
+            + index.ToString(CultureInfo.InvariantCulture)));
+    }
+
+    var response = new ExternalGenerationCatalogResponse(
+        schemaVersion: ExternalGenerationCatalogProtocol.CurrentSchemaVersion,
+        requestId: request.RequestId,
+        provider: "package-smoke-provider",
+        providerVersion: "1",
+        values: values.MoveToImmutable());
+    await Console.Out.WriteAsync(ExternalGenerationCatalogProtocol.SerializeResponse(response));
+}
+
 static PocoGenerationDefinition<SmokeCustomer> CreateCustomers() =>
     Simulation.Define<SmokeCustomer>(customer =>
     {
@@ -293,6 +386,46 @@ static async Task VerifyCliReport(string path, string expectedArtifactId, long e
     {
         throw new InvalidOperationException("The CLI verification report has an invalid item count.");
     }
+}
+
+static async Task VerifyCatalogCliReport(string path, GenerationCatalogDocument expectedCatalog)
+{
+    using var report = JsonDocument.Parse(await File.ReadAllTextAsync(path));
+    var root = report.RootElement;
+    if (!root.GetProperty("isValid").GetBoolean())
+    {
+        throw new InvalidOperationException("The CLI catalog-verification report is not valid.");
+    }
+
+    Require(
+        root.GetProperty("schemaVersion").GetString(),
+        "cohesive-simulation-cli-catalog-verification/v1",
+        "CLI catalog-verification schema");
+    var verification = root.GetProperty("verification");
+    Require(
+        verification.GetProperty("catalogSchemaVersion").GetString(),
+        expectedCatalog.SchemaVersion,
+        "CLI verified catalog schema");
+    Require(
+        verification.GetProperty("catalogId").GetString(),
+        expectedCatalog.Definition.Id,
+        "CLI verified catalog id");
+    Require(
+        verification.GetProperty("catalogRevision").GetString(),
+        expectedCatalog.Definition.Revision,
+        "CLI verified catalog revision");
+    Require(
+        verification.GetProperty("catalogFingerprint").GetString(),
+        expectedCatalog.Fingerprint.Value,
+        "CLI verified catalog fingerprint");
+    if (verification.GetProperty("entryCount").GetInt32() != expectedCatalog.Definition.Entries.Length)
+    {
+        throw new InvalidOperationException("The CLI catalog-verification report has an invalid entry count.");
+    }
+    Require(
+        verification.GetProperty("provenance").GetProperty("provider").GetString(),
+        expectedCatalog.Definition.Provenance.Provider,
+        "CLI verified catalog provider");
 }
 
 sealed record SmokeIdentity(string Name, string Region);

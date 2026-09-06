@@ -102,6 +102,62 @@ public sealed class ExternalGenerationCatalogTests
     }
 
     [Fact]
+    public void ImportDefinition_RoundTripsStrictPortableSemanticInputs()
+    {
+        var definition = Definition();
+
+        var json = ExternalGenerationCatalogImportJsonSerializer.Serialize(definition);
+        var restored = ExternalGenerationCatalogImportJsonSerializer.Deserialize(json);
+
+        Assert.Equal(ExternalGenerationCatalogImportDefinition.CurrentSchemaVersion, restored.SchemaVersion);
+        Assert.Equal("catalog/external-profiles", restored.CatalogId);
+        Assert.Equal("r1", restored.CatalogRevision);
+        Assert.Equal(2, restored.Count);
+        Assert.Equal(42, restored.Seed);
+        Assert.Equal("fixture-provider", restored.Provider);
+        Assert.Equal("9.1.0", restored.ProviderVersion);
+        Assert.Equal("fixture-random/v1", restored.RandomAlgorithm);
+        Assert.Equal(Profile(), restored.CapabilityProfile);
+        Assert.Equal("fixture", restored.Configuration.GetProperty("prefix").GetString());
+        Assert.Equal(
+            "repo://src/Cohesive.Simulation.ExternalProcess.Tests/ExternalGenerationCatalogTests.cs",
+            Assert.Single(restored.SourceReferences).Value);
+        Assert.Equal(json, ExternalGenerationCatalogImportJsonSerializer.Serialize(restored));
+        Assert.Contains("\"seed\":\"42\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("executable", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("workingDirectory", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("timeout", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ImportDefinition_RejectsOpenNoncanonicalAndOpaqueContent()
+    {
+        var json = ExternalGenerationCatalogImportJsonSerializer.Serialize(Definition());
+        var open = json.Replace("\"catalogId\":", "\"unknown\":true,\"catalogId\":", StringComparison.Ordinal);
+        var noncanonical = json.Replace(
+            "\"capabilities\":[\"FiniteSnapshot\",\"StructuredValues\"",
+            "\"capabilities\":[\"StructuredValues\",\"FiniteSnapshot\"",
+            StringComparison.Ordinal);
+
+        Assert.Throws<JsonException>(() => ExternalGenerationCatalogImportJsonSerializer.Deserialize(open));
+        Assert.Throws<JsonException>(() => ExternalGenerationCatalogImportJsonSerializer.Deserialize(noncanonical));
+        Assert.Throws<ArgumentException>(() => ExternalGenerationCatalogImportDefinition.Create(
+            catalogId: "catalog/opaque",
+            catalogRevision: "r1",
+            count: 1,
+            seed: 42,
+            valueType: new OpaqueRuntimeTypeRef("System.Object"),
+            configuration: Configuration(),
+            provider: "fixture-provider",
+            providerVersion: "9.1.0",
+            randomAlgorithm: "fixture-random/v1",
+            capabilityProfile: Profile(),
+            sourceReferences: [SourceReference.Repository(new("provider.py"))],
+            locale: "en",
+            dateTimeReferenceUtc: DateTimeOffset.UnixEpoch));
+    }
+
+    [Fact]
     public async Task ImportAsync_RetainsExactValuesAndProviderEvidence()
     {
         var provider = Provider("success");
@@ -130,6 +186,36 @@ public sealed class ExternalGenerationCatalogTests
                 "repo://src/Cohesive.Simulation.ExternalProcess.Tests/ExternalGenerationCatalogTests.cs"
             ],
             first.Definition.Provenance.SourceReferences.Select(static source => source.Value));
+    }
+
+    [Fact]
+    public async Task ImportAsync_ConsumesPortableDefinitionWithoutClrTypeMapping()
+    {
+        var catalog = await ExternalGenerationCatalogImporter.ImportAsync(
+            Provider("success"),
+            Definition());
+
+        Assert.Equal("catalog/external-profiles", catalog.Definition.Id);
+        Assert.Equal(TypeMapper.Map(typeof(FixtureProfile), nullability: null), catalog.Definition.ValueType);
+        Assert.Equal("fixture-42-0", catalog.Definition.Entries[0].Value.Fields!["Name"].String);
+        Assert.Equal("fixture-provider", catalog.Definition.Provenance.Provider);
+    }
+
+    [Fact]
+    public async Task ImportAsync_RejectsExecutionProviderThatContradictsPortableDefinition()
+    {
+        var mismatchedProvider = new ExternalGenerationCatalogProvider(
+            executable: "does-not-exist",
+            arguments: [],
+            provider: "different-provider",
+            providerVersion: "9.1.0",
+            randomAlgorithm: "fixture-random/v1",
+            capabilityProfile: Profile());
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            ExternalGenerationCatalogImporter.ImportAsync(mismatchedProvider, Definition()));
+
+        Assert.Equal("provider", exception.ParamName);
     }
 
     [Fact]
@@ -264,6 +350,26 @@ public sealed class ExternalGenerationCatalogTests
         configuration: Configuration(),
         locale: "en",
         dateTimeReferenceUtc: DateTimeOffset.UnixEpoch);
+
+    static ExternalGenerationCatalogImportDefinition Definition() =>
+        ExternalGenerationCatalogImportDefinition.Create(
+            catalogId: "catalog/external-profiles",
+            catalogRevision: "r1",
+            count: 2,
+            seed: 42,
+            valueType: TypeMapper.Map(typeof(FixtureProfile), nullability: null),
+            configuration: Configuration(),
+            provider: "fixture-provider",
+            providerVersion: "9.1.0",
+            randomAlgorithm: "fixture-random/v1",
+            capabilityProfile: Profile(),
+            sourceReferences:
+            [
+                SourceReference.Repository(
+                    new("src/Cohesive.Simulation.ExternalProcess.Tests/ExternalGenerationCatalogTests.cs"))
+            ],
+            locale: "en",
+            dateTimeReferenceUtc: DateTimeOffset.UnixEpoch);
 
     static ExternalGenerationCatalogProvider Provider(
         string mode,
