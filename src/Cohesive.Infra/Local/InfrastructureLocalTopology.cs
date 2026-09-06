@@ -383,7 +383,7 @@ public sealed record InfrastructureLocalEndpoint
     /// <summary>Creates an endpoint.</summary>
     /// <param name="id">Stable service-local identity.</param>
     /// <param name="scheme">URI scheme.</param>
-    /// <param name="containerPort">Literal or configured port inside the service environment.</param>
+    /// <param name="servicePort">Literal or configured port inside the service environment.</param>
     /// <param name="exposure">Endpoint exposure semantics.</param>
     /// <param name="role">Endpoint user-facing role.</param>
     /// <param name="hostPort">Effective host-port setting when exposed on loopback.</param>
@@ -393,7 +393,7 @@ public sealed record InfrastructureLocalEndpoint
     public InfrastructureLocalEndpoint(
         InfrastructureLocalEndpointId id,
         string scheme,
-        InfrastructureLocalPort containerPort,
+        InfrastructureLocalPort servicePort,
         InfrastructureLocalEndpointExposure exposure,
         InfrastructureLocalEndpointRole role,
         InfrastructureLocalConfigurationValue? hostPort = null)
@@ -409,7 +409,7 @@ public sealed record InfrastructureLocalEndpoint
 
         Id = id;
         Scheme = Guard.RequireNotNullOrWhiteSpace(scheme);
-        ContainerPort = Guard.RequireNotNull(containerPort);
+        ServicePort = Guard.RequireNotNull(servicePort);
         Exposure = exposure;
         Role = role;
         HostPort = hostPort;
@@ -422,7 +422,7 @@ public sealed record InfrastructureLocalEndpoint
     public string Scheme { get; }
 
     /// <summary>Literal or configured port inside the service environment.</summary>
-    public InfrastructureLocalPort ContainerPort { get; }
+    public InfrastructureLocalPort ServicePort { get; }
 
     /// <summary>Endpoint exposure semantics.</summary>
     public InfrastructureLocalEndpointExposure Exposure { get; }
@@ -608,10 +608,11 @@ public sealed record InfrastructureLocalHealthPolicy
     public TimeSpan? StartPeriod { get; }
 }
 
-/// <summary>Closed construction source for one executable local service.</summary>
+/// <summary>Closed realization source for one local service.</summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(InfrastructureLocalContainerSource), "container")]
 [JsonDerivedType(typeof(InfrastructureLocalProjectSource), "project")]
+[JsonDerivedType(typeof(InfrastructureLocalReferencedServiceSource), "referenced")]
 public abstract record InfrastructureLocalServiceSource;
 
 /// <summary>A local service constructed from one pinned container image.</summary>
@@ -680,7 +681,35 @@ public sealed record InfrastructureLocalProjectSource : InfrastructureLocalServi
     public string? LaunchProfile { get; }
 }
 
-/// <summary>One exact executable service in a local topology.</summary>
+/// <summary>An already-running physical service referenced without lifecycle management by the consuming interpreter.</summary>
+public sealed record InfrastructureLocalReferencedServiceSource : InfrastructureLocalServiceSource
+{
+    /// <summary>Creates a referenced-service realization source.</summary>
+    /// <param name="interpreter">Exact consuming lifecycle interpreter that references the service.</param>
+    /// <param name="representativeEndpoint">Host-loopback endpoint representing the service in the consuming interpreter.</param>
+    /// <exception cref="ArgumentException">An identity is default.</exception>
+    [JsonConstructor]
+    public InfrastructureLocalReferencedServiceSource(
+        InfrastructureTargetId interpreter,
+        InfrastructureLocalEndpointId representativeEndpoint)
+    {
+        if (string.IsNullOrWhiteSpace(interpreter.Value))
+            throw new ArgumentException("A referenced local service requires a consuming interpreter.", nameof(interpreter));
+        if (string.IsNullOrWhiteSpace(representativeEndpoint.Value))
+            throw new ArgumentException("A referenced local service requires a representative endpoint.", nameof(representativeEndpoint));
+
+        Interpreter = interpreter;
+        RepresentativeEndpoint = representativeEndpoint;
+    }
+
+    /// <summary>Exact consuming lifecycle interpreter that references the service without managing it.</summary>
+    public InfrastructureTargetId Interpreter { get; }
+
+    /// <summary>Host-loopback endpoint representing the service in the consuming interpreter.</summary>
+    public InfrastructureLocalEndpointId RepresentativeEndpoint { get; }
+}
+
+/// <summary>One exact managed or referenced service in a local topology.</summary>
 public sealed record InfrastructureLocalService
 {
     /// <summary>Creates a container-backed local service.</summary>
@@ -727,7 +756,7 @@ public sealed record InfrastructureLocalService
     /// <summary>Creates a local service.</summary>
     /// <param name="node">Canonical logical workload or resource represented by the service.</param>
     /// <param name="physicalResource">Exact physical identity from the fenced realization.</param>
-    /// <param name="source">Closed construction source for the executable service.</param>
+    /// <param name="source">Closed realization source for the local service.</param>
     /// <param name="command">Optional command argument vector.</param>
     /// <param name="environment">Environment-variable bindings.</param>
     /// <param name="endpoints">Service endpoints.</param>
@@ -778,7 +807,7 @@ public sealed record InfrastructureLocalService
     /// <summary>Exact physical identity from the fenced realization.</summary>
     public InfrastructurePhysicalResourceId PhysicalResource { get; }
 
-    /// <summary>Closed construction source for the executable service.</summary>
+    /// <summary>Closed realization source for the local service.</summary>
     public InfrastructureLocalServiceSource Source { get; }
 
     /// <summary>Optional command argument vector.</summary>
@@ -928,7 +957,7 @@ public sealed record InfrastructureLocalOperation
     public InfrastructureLifecycleAuthorityId? MutationAuthority { get; }
 }
 
-/// <summary>Canonical target-neutral construction topology shared by local lifecycle adapters.</summary>
+/// <summary>Canonical target-neutral service topology shared by local lifecycle adapters.</summary>
 public sealed record InfrastructureLocalTopology
 {
     /// <summary>Creates and normalizes a local topology.</summary>

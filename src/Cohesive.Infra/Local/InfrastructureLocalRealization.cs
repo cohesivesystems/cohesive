@@ -16,7 +16,7 @@ public sealed record InfrastructureLocalRealizationFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Current canonicalization profile.</summary>
-    public const string CurrentCanonicalization = "cohesive-infra-local-realization/v3-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-infra-local-realization/v4-c14n/v1";
 
     /// <summary>Creates local-realization fingerprint metadata.</summary>
     /// <param name="algorithm">Digest algorithm.</param>
@@ -42,21 +42,21 @@ public sealed record InfrastructureLocalRealizationFingerprint
     public string Value { get; }
 }
 
-/// <summary>Portable, exact local construction realization shared by lifecycle adapters.</summary>
+/// <summary>Portable, exact local service realization shared by lifecycle adapters.</summary>
 /// <remarks>
-/// This artifact is construction input, not a backend artifact, execution plan, receipt, or observation. Compose and
+/// This artifact is adapter input, not a backend artifact, execution plan, receipt, or observation. Compose and
 /// Aspire adapters must fence their outputs to this exact fingerprint and the referenced physical realization.
 /// </remarks>
 public sealed record InfrastructureLocalRealizationDocument
 {
     /// <summary>Current portable document schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-infra-local-realization/v3";
+    public const string CurrentSchemaVersion = "cohesive-infra-local-realization/v4";
 
     /// <summary>Creates or restores an exact local realization document.</summary>
     /// <param name="schemaVersion">Exact document schema.</param>
     /// <param name="realization">Exact physical-applicability realization fence.</param>
     /// <param name="environment">Selected local environment policy.</param>
-    /// <param name="topology">Canonical target-neutral local construction topology.</param>
+    /// <param name="topology">Canonical target-neutral local service topology.</param>
     /// <param name="configuration">Resolved effective configuration and attribution.</param>
     /// <param name="diagnostics">Structured deterministic compiler diagnostics.</param>
     /// <param name="fingerprint">Persisted fingerprint, or <see langword="null"/> to compute it.</param>
@@ -96,7 +96,7 @@ public sealed record InfrastructureLocalRealizationDocument
     /// <summary>Selected local environment policy.</summary>
     public InfrastructureLocalEnvironmentProfile Environment { get; }
 
-    /// <summary>Canonical target-neutral local construction topology.</summary>
+    /// <summary>Canonical target-neutral local service topology.</summary>
     public InfrastructureLocalTopology Topology { get; }
 
     /// <summary>Resolved effective configuration and attribution.</summary>
@@ -108,7 +108,7 @@ public sealed record InfrastructureLocalRealizationDocument
     /// <summary>Exact local-realization fingerprint.</summary>
     public InfrastructureLocalRealizationFingerprint Fingerprint { get; }
 
-    /// <summary>Whether the local construction realization is complete enough for adapter projection.</summary>
+    /// <summary>Whether the local service realization is complete enough for adapter projection.</summary>
     [JsonIgnore]
     public bool IsValid => Configuration.IsValid
         && !Diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
@@ -153,7 +153,7 @@ public static class InfrastructureLocalRealizationCompiler
         public const string ServiceBindingMismatch = "infra.local.service.bindingMismatch";
         /// <summary>A service names no workload or resource in the exact definition.</summary>
         public const string ServiceNodeUnknown = "infra.local.service.nodeUnknown";
-        /// <summary>A service construction source is incompatible with its logical node family.</summary>
+        /// <summary>A service realization source is incompatible with its logical node family or allowed semantics.</summary>
         public const string ServiceSourceMismatch = "infra.local.service.sourceMismatch";
         /// <summary>A project-backed service is absent from the exact workload placement attribution.</summary>
         public const string ProjectPlacementReferenceMissing = "infra.local.project.placementReferenceMissing";
@@ -164,7 +164,7 @@ public static class InfrastructureLocalRealizationCompiler
         /// <summary>A host port is invalid or duplicates another host port.</summary>
         public const string HostPortInvalid = "infra.local.endpoint.hostPortInvalid";
         /// <summary>A configured service listener port is invalid.</summary>
-        public const string ContainerPortInvalid = "infra.local.endpoint.containerPortInvalid";
+        public const string ServicePortInvalid = "infra.local.endpoint.servicePortInvalid";
         /// <summary>A service, endpoint, or volume reference cannot be resolved.</summary>
         public const string ReferenceUnknown = "infra.local.reference.unknown";
         /// <summary>A readiness dependency graph contains a cycle.</summary>
@@ -179,6 +179,8 @@ public static class InfrastructureLocalRealizationCompiler
         public const string DependencyHealthMissing = "infra.local.readiness.dependencyHealthMissing";
         /// <summary>A local ready dependency is not declared by the canonical infrastructure definition.</summary>
         public const string ReadinessDependencyNotCanonical = "infra.local.readiness.notCanonical";
+        /// <summary>A referenced service does not identify a declared host-loopback endpoint.</summary>
+        public const string ReferencedServiceEndpointInvalid = "infra.local.service.referencedEndpointInvalid";
     }
 
     /// <summary>Compiles one exact local realization.</summary>
@@ -271,27 +273,36 @@ public static class InfrastructureLocalRealizationCompiler
             }
             else if (isResource)
             {
+                var referenced = service.Source as InfrastructureLocalReferencedServiceSource;
                 var lifecycle = realization.Lifecycle.Bindings.FirstOrDefault(binding =>
                     binding.Resource == service.Node
                     && binding.PhysicalResource == service.PhysicalResource
-                    && binding.Authority == environment.Authority
-                    && binding.Disposition == InfrastructureLifecycleDisposition.Managed);
+                    && (referenced is null
+                        ? binding.Authority == environment.Authority
+                          && binding.Disposition == InfrastructureLifecycleDisposition.Managed
+                        : binding.Interpreter == referenced.Interpreter
+                          && binding.Disposition == InfrastructureLifecycleDisposition.Referenced));
                 if (lifecycle is null)
                 {
+                    var expected = referenced is null
+                        ? $"managed lifecycle binding {service.Node.Value} -> {service.PhysicalResource.Value} under {environment.Authority.Value}"
+                        : $"referenced lifecycle binding {service.Node.Value} -> {service.PhysicalResource.Value} for {referenced.Interpreter.Value}";
                     Add(
                         diagnostics,
                         DiagnosticCodes.ServiceBindingMismatch,
-                        $"Service '{service.PhysicalResource.Value}' is not a managed lifecycle binding for logical resource '{service.Node.Value}' under authority '{environment.Authority.Value}'.",
+                        $"Service '{service.PhysicalResource.Value}' has no exact {expected}.",
                         $"/topology/services/{service.PhysicalResource.Value}",
                         service.PhysicalResource.Value,
                         sourceReferences: diagnosticSources,
                         resolutionOptions:
                         [
-                            "Bind the logical resource to this physical service under the selected lifecycle authority.",
-                            "Correct the service identity or select the environment profile that owns its lifecycle."
+                            referenced is null
+                                ? "Bind the logical resource to this physical service under the selected lifecycle authority."
+                                : "Add a referenced lifecycle binding for the exact consuming interpreter without changing lifecycle ownership.",
+                            "Correct the service identity or realization source to match the exact lifecycle plan."
                         ],
-                        expected: $"managed lifecycle binding {service.Node.Value} -> {service.PhysicalResource.Value} under {environment.Authority.Value}",
-                        observed: "no exact managed lifecycle binding");
+                        expected: expected,
+                        observed: "no exact lifecycle binding");
                 }
 
                 if (service.Source is InfrastructureLocalProjectSource)
@@ -354,6 +365,24 @@ public static class InfrastructureLocalRealizationCompiler
                             ? "no placement source references"
                             : string.Join(", ", placement.SourceReferences.Select(static reference => reference.Value)));
                 }
+
+                if (service.Source is InfrastructureLocalReferencedServiceSource)
+                {
+                    Add(
+                        diagnostics,
+                        DiagnosticCodes.ServiceSourceMismatch,
+                        $"Logical workload '{service.Node.Value}' cannot use a referenced-resource realization source.",
+                        $"/topology/services/{service.PhysicalResource.Value}/source",
+                        service.Node.Value,
+                        sourceReferences: diagnosticSources,
+                        resolutionOptions:
+                        [
+                            "Use a repository-project or pinned-container source for the workload.",
+                            "Correct the logical node to a resource with an exact referenced lifecycle binding."
+                        ],
+                        expected: "referenced sources are attached only to resource nodes",
+                        observed: $"workload node {service.Node.Value}");
+                }
             }
 
             if (service.Source is InfrastructureLocalContainerSource container && !IsPinnedImage(container.Image))
@@ -389,6 +418,59 @@ public static class InfrastructureLocalRealizationCompiler
                         observed: string.Join(", ", containerOnlyFeatures));
                 }
             }
+            if (service.Source is InfrastructureLocalReferencedServiceSource reference)
+            {
+                List<string> managedFeatures = [];
+                if (!service.Command.IsEmpty)
+                    managedFeatures.Add("command");
+                if (!service.Environment.IsEmpty)
+                    managedFeatures.Add("environment variables");
+                if (!service.Mounts.IsEmpty)
+                    managedFeatures.Add("volume mounts");
+                if (!service.FileMounts.IsEmpty)
+                    managedFeatures.Add("generated-file mounts");
+                if (service.StopGracePeriod.HasValue)
+                    managedFeatures.Add("stop grace period");
+                if (service.Health?.Probes.Any(static probe => probe is InfrastructureLocalCommandHealthProbe) == true)
+                    managedFeatures.Add("in-service command health probes");
+                if (managedFeatures.Count > 0)
+                {
+                    Add(
+                        diagnostics,
+                        DiagnosticCodes.ServiceSourceMismatch,
+                        $"Referenced service '{service.PhysicalResource.Value}' uses lifecycle-managed semantics: {string.Join(", ", managedFeatures)}.",
+                        $"/topology/services/{service.PhysicalResource.Value}",
+                        service.PhysicalResource.Value,
+                        sourceReferences: diagnosticSources,
+                        resolutionOptions:
+                        [
+                            "Remove settings that mutate or execute the foreign-managed service.",
+                            "Use a pinned-container source when this interpreter should manage the service."
+                        ],
+                        expected: "reference-compatible endpoint, HTTP health, and readiness semantics",
+                        observed: string.Join(", ", managedFeatures));
+                }
+
+                var representative = service.Endpoints.FirstOrDefault(endpoint => endpoint.Id == reference.RepresentativeEndpoint);
+                if (representative is null
+                    || representative.Exposure != InfrastructureLocalEndpointExposure.HostLoopback)
+                {
+                    Add(
+                        diagnostics,
+                        DiagnosticCodes.ReferencedServiceEndpointInvalid,
+                        $"Referenced service '{service.PhysicalResource.Value}' representative endpoint '{reference.RepresentativeEndpoint.Value}' is not a declared host-loopback endpoint.",
+                        $"/topology/services/{service.PhysicalResource.Value}/source/representativeEndpoint",
+                        reference.RepresentativeEndpoint.Value,
+                        sourceReferences: diagnosticSources,
+                        resolutionOptions:
+                        [
+                            "Declare the representative endpoint with host-loopback exposure and effective host-port configuration.",
+                            "Select another declared host-loopback endpoint as the referenced service URI."
+                        ],
+                        expected: $"host-loopback endpoint {reference.RepresentativeEndpoint.Value}",
+                        observed: representative is null ? "endpoint is not declared" : $"endpoint exposure is {representative.Exposure}");
+                }
+            }
 
             foreach (var variable in service.Environment)
             {
@@ -403,24 +485,24 @@ public static class InfrastructureLocalRealizationCompiler
 
             foreach (var endpoint in service.Endpoints)
             {
-                if (endpoint.ContainerPort.Configuration is { } containerPortReference)
+                if (endpoint.ServicePort.Configuration is { } servicePortReference)
                 {
-                    var containerPortLocation = $"/topology/services/{service.PhysicalResource.Value}/endpoints/{endpoint.Id.Value}/containerPort";
+                    var servicePortLocation = $"/topology/services/{service.PhysicalResource.Value}/endpoints/{endpoint.Id.Value}/servicePort";
                     if (RequireConfiguration(
-                            containerPortReference.Subject,
-                            containerPortReference.Setting,
-                            containerPortLocation,
+                            servicePortReference.Subject,
+                            servicePortReference.Setting,
+                            servicePortLocation,
                             effective,
                             diagnostics,
-                            out var containerPortValue)
-                        && (!int.TryParse(containerPortValue, NumberStyles.None, CultureInfo.InvariantCulture, out var containerPort)
-                            || containerPort is < 1 or > 65535))
+                            out var servicePortValue)
+                        && (!int.TryParse(servicePortValue, NumberStyles.None, CultureInfo.InvariantCulture, out var servicePort)
+                            || servicePort is < 1 or > 65535))
                     {
                         Add(
                             diagnostics,
-                            DiagnosticCodes.ContainerPortInvalid,
-                            $"Effective container port '{containerPortValue}' is outside 1-65535.",
-                            containerPortLocation,
+                            DiagnosticCodes.ServicePortInvalid,
+                            $"Effective service port '{servicePortValue}' is outside 1-65535.",
+                            servicePortLocation,
                             endpoint.Id.Value);
                     }
                 }

@@ -119,6 +119,30 @@ public sealed class InfrastructureLocalBuilder
         return this;
     }
 
+    /// <summary>Adds a resource service that the selected interpreter references without managing.</summary>
+    /// <param name="resource">Canonical logical resource.</param>
+    /// <param name="physicalResource">Exact physical resource identity.</param>
+    /// <param name="interpreter">Exact consuming interpreter that references the service.</param>
+    /// <param name="representativeEndpoint">Host-loopback endpoint representing the service in that interpreter.</param>
+    /// <param name="configure">Optional endpoint, health, and readiness declarations.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentException"><paramref name="interpreter"/> or <paramref name="representativeEndpoint"/> is default.</exception>
+    public InfrastructureLocalBuilder ReferencedService(
+        InfrastructureNodeId resource,
+        InfrastructurePhysicalResourceId physicalResource,
+        InfrastructureTargetId interpreter,
+        InfrastructureLocalEndpointId representativeEndpoint,
+        Action<InfrastructureLocalServiceBuilder>? configure = null)
+    {
+        InfrastructureLocalServiceBuilder builder = new(
+            node: resource,
+            physicalResource: physicalResource,
+            source: new InfrastructureLocalReferencedServiceSource(interpreter, representativeEndpoint));
+        configure?.Invoke(builder);
+        services.Add(builder.Build());
+        return this;
+    }
+
     /// <summary>Adds an executable harness operation.</summary>
     /// <param name="id">Stable application-owned operation intent.</param>
     /// <param name="placement">Execution placement.</param>
@@ -208,7 +232,7 @@ public sealed class InfrastructureLocalServiceBuilder
     /// <summary>Adds a service endpoint.</summary>
     /// <param name="id">Service-local endpoint identity.</param>
     /// <param name="scheme">URI scheme.</param>
-    /// <param name="containerPort">Literal or configured container port.</param>
+    /// <param name="servicePort">Literal or configured service listener port.</param>
     /// <param name="exposure">Endpoint exposure.</param>
     /// <param name="role">Endpoint role.</param>
     /// <param name="hostPort">Effective host-port reference for loopback exposure.</param>
@@ -216,7 +240,7 @@ public sealed class InfrastructureLocalServiceBuilder
     public InfrastructureLocalServiceBuilder Endpoint(
         InfrastructureLocalEndpointId id,
         string scheme,
-        InfrastructureLocalPort containerPort,
+        InfrastructureLocalPort servicePort,
         InfrastructureLocalEndpointExposure exposure,
         InfrastructureLocalEndpointRole role,
         InfrastructureLocalConfigurationValue? hostPort = null)
@@ -224,7 +248,7 @@ public sealed class InfrastructureLocalServiceBuilder
         endpoints.Add(new(
             id: id,
             scheme: scheme,
-            containerPort: containerPort,
+            servicePort: servicePort,
             exposure: exposure,
             role: role,
             hostPort: hostPort));

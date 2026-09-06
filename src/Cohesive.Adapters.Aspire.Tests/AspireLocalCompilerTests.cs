@@ -244,9 +244,9 @@ public sealed class AspireLocalCompilerTests
         var projection = Compile(source).Projection!;
         var cosmos = projection.Services.Single(service =>
             service.Service.PhysicalResource == FreightMaterializationInfrastructure.CosmosService);
-        var containerPort = cosmos.Service.Endpoints.Single(endpoint => endpoint.Id.Value == "cosmos").ContainerPort;
+        var servicePort = cosmos.Service.Endpoints.Single(endpoint => endpoint.Id.Value == "cosmos").ServicePort;
 
-        Assert.Equal(65081, containerPort.Resolve(projection.Configuration));
+        Assert.Equal(65081, servicePort.Resolve(projection.Configuration));
         Assert.Contains(projection.Endpoints, endpoint =>
             endpoint.PhysicalResource == FreightMaterializationInfrastructure.CosmosService
             && endpoint.Endpoint.Id.Value == "cosmos"
@@ -334,6 +334,84 @@ public sealed class AspireLocalCompilerTests
         var sourceAnnotation = Assert.Single(project.Annotations.OfType<AspireInfraIdentityAnnotation>());
         Assert.Equal(new InfrastructureNodeId("workload/ari-training-api"), sourceAnnotation.LogicalNode);
         Assert.IsType<InfrastructureLocalProjectSource>(aspire.Projection!.Services[0].Service.Source);
+    }
+
+    [Fact]
+    public void Aspire_projects_foreign_managed_services_without_taking_lifecycle_ownership()
+    {
+        var source = ReferencedServiceSource(AspireLocalProjectionDocument.CurrentTargetId);
+        var aspire = AspireLocalCompiler.Compile(source);
+        var compose = DockerComposeCompiler.Compile(source);
+
+        Assert.True(source.IsValid, string.Join(Environment.NewLine, source.Diagnostics.Select(static item => item.Message)));
+        Assert.True(aspire.IsSuccess, string.Join(Environment.NewLine, aspire.Diagnostics.Select(static item => item.Message)));
+        Assert.False(compose.IsSuccess);
+        Assert.Contains(compose.Diagnostics, static diagnostic =>
+            diagnostic.Code == DockerComposeCompiler.DiagnosticCodes.ServiceSourceUnsupported);
+        var projection = aspire.Projection!;
+        Assert.Contains(projection.Decisions, static decision =>
+            decision.Concern == "local/service-realization/referenced"
+            && decision.Kind == CapabilityRealizationKind.Native);
+        Assert.Contains(projection.Endpoints, static endpoint =>
+            endpoint.PhysicalResource == new InfrastructurePhysicalResourceId("local/cosmos")
+            && endpoint.Endpoint.Id == new InfrastructureLocalEndpointId("gateway")
+            && endpoint.ServiceAddress == "https://localhost:58081"
+            && endpoint.HostAddress == "https://localhost:58081");
+
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        {
+            Args = [],
+            AssemblyName = typeof(AspireLocalCompilerTests).Assembly.GetName().Name,
+            ProjectDirectory = FindRepositoryRoot(),
+            DisableDashboard = true
+        });
+        var applied = builder.AddCohesiveLocalInfrastructure(
+            projection,
+            new AspireLocalApplicationOptions(
+                operationWorkingDirectory: FindRepositoryRoot(),
+                resolveSecret: static _ => null));
+
+        var external = Assert.IsType<ExternalServiceResource>(applied.Services[new("local/cosmos")].Resource);
+        Assert.Equal(new Uri("http://localhost:58082"), external.Uri);
+        Assert.False(external.TryGetContainerImageName(out _));
+        Assert.NotEmpty(external.Annotations.OfType<HealthCheckAnnotation>());
+        Assert.Empty(external.Annotations.OfType<EndpointAnnotation>());
+        var project = Assert.IsType<ProjectResource>(applied.Services[new("local/api")].Resource);
+        Assert.Single(project.Annotations.OfType<WaitAnnotation>());
+        Assert.NotEmpty(project.Annotations.OfType<EnvironmentCallbackAnnotation>());
+        var endpointValues = projection.Services.Single(candidate =>
+                candidate.Service.PhysicalResource == new InfrastructurePhysicalResourceId("local/api"))
+            .Service.Environment.Select(static variable => Assert.IsType<InfrastructureLocalEndpointValue>(variable.Value))
+            .ToArray();
+        Assert.All(endpointValues, static endpointValue =>
+        {
+            Assert.Equal(new InfrastructurePhysicalResourceId("local/cosmos"), endpointValue.Service);
+            Assert.Equal(InfrastructureLocalEndpointAddress.ServiceNetwork, endpointValue.Address);
+        });
+        Assert.Contains(endpointValues, static endpointValue => endpointValue.Endpoint == new InfrastructureLocalEndpointId("gateway"));
+        Assert.Contains(endpointValues, static endpointValue => endpointValue.Endpoint == new InfrastructureLocalEndpointId("health"));
+    }
+
+    [Fact]
+    public void Aspire_rejects_references_for_another_interpreter_and_non_representative_health()
+    {
+        var source = ReferencedServiceSource(
+            consumer: new("tests/other-local-interpreter"),
+            healthEndpoint: new("gateway"));
+
+        var compilation = AspireLocalCompiler.Compile(source);
+
+        Assert.True(source.IsValid, string.Join(Environment.NewLine, source.Diagnostics.Select(static item => item.Message)));
+        Assert.False(compilation.IsSuccess);
+        Assert.Null(compilation.Projection);
+        Assert.Contains(compilation.Diagnostics, static diagnostic =>
+            diagnostic.Code == AspireLocalCompiler.DiagnosticCodes.ReferencedServiceTargetMismatch
+            && diagnostic.Evidence?.Expected == AspireLocalProjectionDocument.CurrentTarget
+            && diagnostic.Evidence.Observed == "tests/other-local-interpreter");
+        Assert.Contains(compilation.Diagnostics, static diagnostic =>
+            diagnostic.Code == AspireLocalCompiler.DiagnosticCodes.ReferencedServiceHealthEndpointUnsupported
+            && diagnostic.Evidence?.Expected == "health"
+            && diagnostic.Evidence.Observed == "gateway");
     }
 
     [Fact]
@@ -660,6 +738,129 @@ public sealed class AspireLocalCompilerTests
                     value: "ari-training-local",
                     origin: EffectiveConfigurationOrigin.ScopedProfile,
                     authority: "ari-training/aspire-local/test/v1")
+            ]);
+        return InfrastructureLocalRealizationCompiler.Compile(realization, environment, topology, [configuration]);
+    }
+
+    static InfrastructureLocalRealizationDocument ReferencedServiceSource(
+        InfrastructureTargetId consumer,
+        InfrastructureLocalEndpointId? healthEndpoint = null)
+    {
+        InfrastructureNodeId workload = new("workload/api");
+        InfrastructureNodeId cosmos = new("resource/cosmos");
+        InfrastructurePhysicalResourceId apiPhysical = new("local/api");
+        InfrastructurePhysicalResourceId cosmosPhysical = new("local/cosmos");
+        InfrastructureLocalEndpointId representative = new("health");
+        InfrastructureLocalEndpointId gateway = new("gateway");
+        var project = new InfrastructureLocalProjectSource(
+            new("cohesive/infra-tests"),
+            new("src/Cohesive.Infra.Tests/Cohesive.Infra.Tests.csproj"));
+        var definition = InfrastructureDefinitionDocument.FromDefinition(new(
+            id: new("referenced-service-aspire-tests"),
+            revision: new("v1"),
+            workloads: [new(workload)],
+            resources: [new(cosmos, InfrastructureResourceLifecycle.Ephemeral)],
+            readinessDependencies:
+            [
+                new(
+                    InfrastructureReadinessDependency.DeriveId(workload, cosmos),
+                    workload,
+                    cosmos)
+            ]));
+        InfrastructureCapabilityVariantId variant = new("aspire-local");
+        var profile = new InfrastructureCapabilityProfile(
+            schemaVersion: InfrastructureCapabilityProfile.CurrentSchemaVersion,
+            id: new("tests/referenced-service/aspire-local/v1"),
+            target: consumer,
+            supportedDefinitionSchemaVersions: [InfrastructureDefinitionDocument.CurrentSchemaVersion],
+            variants: [new(variant)]);
+        var closure = InfrastructureCapabilityCompiler.Compile(definition, profile, variant);
+        InfrastructureLifecycleAuthorityId authority = new("local/ari");
+        var realization = InfrastructureRealizationCompiler.Compile(
+            closure,
+            new InfrastructureLifecyclePlan(
+                definition,
+                bindings:
+                [
+                    new(
+                        resource: cosmos,
+                        physicalResource: cosmosPhysical,
+                        interpreter: new("host/emulator-manager"),
+                        authority: authority,
+                        disposition: InfrastructureLifecycleDisposition.Managed),
+                    new(
+                        resource: cosmos,
+                        physicalResource: cosmosPhysical,
+                        interpreter: consumer,
+                        authority: authority,
+                        disposition: InfrastructureLifecycleDisposition.Referenced)
+                ]),
+            workloadPlacements:
+            [
+                new(
+                    workload: workload,
+                    physicalResource: apiPhysical,
+                    interpreter: consumer,
+                    sourceReferences: [project.Reference])
+            ]);
+        InfrastructureConfigurationSubject subject = new("environment/ari");
+        InfrastructureSettingId projectName = new("project-name");
+        InfrastructureSettingId gatewayPort = new("cosmos-gateway-port");
+        InfrastructureSettingId healthPort = new("cosmos-health-port");
+        var environment = new InfrastructureLocalEnvironmentProfile(
+            id: new("tests/referenced-service/aspire-local/v1"),
+            authority: authority,
+            configurationSubject: subject,
+            projectNameSetting: projectName,
+            dataLifetime: InfrastructureLocalDataLifetime.Persistent,
+            isolation: InfrastructureLocalEnvironmentIsolation.Shared);
+        var topology = InfrastructureLocal.Define(local => local
+            .ReferencedService(
+                resource: cosmos,
+                physicalResource: cosmosPhysical,
+                interpreter: consumer,
+                representativeEndpoint: representative,
+                configure: service => service
+                    .Endpoint(
+                        id: gateway,
+                        scheme: "https",
+                        servicePort: 8081,
+                        exposure: InfrastructureLocalEndpointExposure.HostLoopback,
+                        role: InfrastructureLocalEndpointRole.Data,
+                        hostPort: new(subject, gatewayPort))
+                    .Endpoint(
+                        id: representative,
+                        scheme: "http",
+                        servicePort: 8082,
+                        exposure: InfrastructureLocalEndpointExposure.HostLoopback,
+                        role: InfrastructureLocalEndpointRole.Management,
+                        hostPort: new(subject, healthPort))
+                    .HttpHealth(healthEndpoint ?? representative, "/health")
+                    .HealthTiming(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1), retries: 30))
+            .ProjectService(
+                workload: workload,
+                physicalResource: apiPhysical,
+                project: project,
+                configure: api => api
+                    .Environment(
+                        "COSMOS_ENDPOINT",
+                        new InfrastructureLocalEndpointValue(
+                            service: cosmosPhysical,
+                            endpoint: gateway,
+                            address: InfrastructureLocalEndpointAddress.ServiceNetwork))
+                    .Environment(
+                        "COSMOS_HEALTH_ENDPOINT",
+                        new InfrastructureLocalEndpointValue(
+                            service: cosmosPhysical,
+                            endpoint: representative,
+                            address: InfrastructureLocalEndpointAddress.ServiceNetwork))));
+        var configuration = new InfrastructureConventionProfile(
+            id: new("tests/referenced-service/config/v1"),
+            candidates:
+            [
+                new(subject, projectName, "ari-local", EffectiveConfigurationOrigin.ScopedProfile, "tests/referenced-service/config/v1"),
+                new(subject, gatewayPort, "58081", EffectiveConfigurationOrigin.ScopedProfile, "tests/referenced-service/config/v1"),
+                new(subject, healthPort, "58082", EffectiveConfigurationOrigin.ScopedProfile, "tests/referenced-service/config/v1")
             ]);
         return InfrastructureLocalRealizationCompiler.Compile(realization, environment, topology, [configuration]);
     }

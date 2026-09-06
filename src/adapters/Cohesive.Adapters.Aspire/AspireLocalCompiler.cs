@@ -37,6 +37,10 @@ public static class AspireLocalCompiler
         public const string OperationPlacementUnsupported = "infra.aspire.operation.placementUnsupported";
         /// <summary>An isolated anonymous volume is referenced by more than one service.</summary>
         public const string EphemeralSharedVolumeUnsupported = "infra.aspire.volume.ephemeralSharedUnsupported";
+        /// <summary>A referenced service names a different consuming lifecycle interpreter.</summary>
+        public const string ReferencedServiceTargetMismatch = "infra.aspire.service.referencedTargetMismatch";
+        /// <summary>A referenced service health probe cannot be preserved against its single Aspire URI.</summary>
+        public const string ReferencedServiceHealthEndpointUnsupported = "infra.aspire.health.referencedEndpointUnsupported";
     }
 
     /// <summary>Compiles one exact local realization without starting Aspire or performing container I/O.</summary>
@@ -115,6 +119,36 @@ public static class AspireLocalCompiler
 
         foreach (var service in source.Topology.Services)
         {
+            if (service.Source is InfrastructureLocalReferencedServiceSource reference)
+            {
+                if (reference.Interpreter != AspireLocalProjectionDocument.CurrentTargetId)
+                {
+                    Add(
+                        diagnostics,
+                        DiagnosticCodes.ReferencedServiceTargetMismatch,
+                        $"Referenced service '{service.PhysicalResource.Value}' is assigned to consuming interpreter '{reference.Interpreter.Value}', not the current Aspire target.",
+                        $"/topology/services/{service.PhysicalResource.Value}/source/interpreter",
+                        service.PhysicalResource.Value,
+                        $"Compile with interpreter '{reference.Interpreter.Value}' or author the reference for '{AspireLocalProjectionDocument.CurrentTarget}'.",
+                        expected: AspireLocalProjectionDocument.CurrentTarget,
+                        observed: reference.Interpreter.Value);
+                }
+
+                foreach (var probe in service.Health?.Probes.OfType<InfrastructureLocalHttpHealthProbe>() ?? [])
+                {
+                    if (probe.Endpoint == reference.RepresentativeEndpoint)
+                        continue;
+                    Add(
+                        diagnostics,
+                        DiagnosticCodes.ReferencedServiceHealthEndpointUnsupported,
+                        $"Referenced service health endpoint '{probe.Endpoint.Value}' differs from its Aspire external-service endpoint '{reference.RepresentativeEndpoint.Value}'.",
+                        $"/topology/services/{service.PhysicalResource.Value}/health",
+                        service.PhysicalResource.Value,
+                        "Probe the representative endpoint or split independently addressable services into distinct resource declarations.",
+                        expected: reference.RepresentativeEndpoint.Value,
+                        observed: probe.Endpoint.Value);
+                }
+            }
             if (service.StopGracePeriod is { } duration && duration.Ticks % TimeSpan.TicksPerSecond != 0)
             {
                 Add(
@@ -216,6 +250,15 @@ public static class AspireLocalCompiler
                 concern: "local/service-construction/repository-project",
                 kind: CapabilityRealizationKind.Native,
                 rationale: "Repository-relative .NET project sources become Aspire project resources, resolve from the explicit runtime repository directory, and retain exact Infra workload and physical-placement identity.",
+                boundaries: [],
+                sourceReferences: [sourceReference, AspireSourceReferences.Target]));
+        }
+        if (source.Topology.Services.Any(static service => service.Source is InfrastructureLocalReferencedServiceSource))
+        {
+            decisions.Add(Decision(
+                concern: "local/service-realization/referenced",
+                kind: CapabilityRealizationKind.Native,
+                rationale: "Foreign-managed local resources become Aspire external services using the exact declared host endpoint; Aspire observes readiness without taking lifecycle ownership.",
                 boundaries: [],
                 sourceReferences: [sourceReference, AspireSourceReferences.Target]));
         }
@@ -352,17 +395,20 @@ public static class AspireLocalCompiler
             var resourceName = serviceNames[service.PhysicalResource];
             foreach (var endpoint in service.Endpoints)
             {
-                var containerPort = endpoint.ContainerPort.Resolve(source.Configuration);
+                var servicePort = endpoint.ServicePort.Resolve(source.Configuration);
                 int? hostPort = endpoint.HostPort is null
                     ? null
                     : int.Parse(Effective(endpoint.HostPort.Subject, endpoint.HostPort.Setting, effective).Value, NumberStyles.None, CultureInfo.InvariantCulture);
+                var hostAddress = hostPort is null ? null : $"{endpoint.Scheme}://localhost:{hostPort.Value.ToString(CultureInfo.InvariantCulture)}";
                 endpoints.Add(new(
                     physicalResource: service.PhysicalResource,
                     resourceName: resourceName,
                     endpoint: endpoint,
                     hostPort: hostPort,
-                    serviceAddress: $"{endpoint.Scheme}://{resourceName}:{containerPort.ToString(CultureInfo.InvariantCulture)}",
-                    hostAddress: hostPort is null ? null : $"{endpoint.Scheme}://localhost:{hostPort.Value.ToString(CultureInfo.InvariantCulture)}"));
+                    serviceAddress: service.Source is InfrastructureLocalReferencedServiceSource && hostAddress is not null
+                        ? hostAddress
+                        : $"{endpoint.Scheme}://{resourceName}:{servicePort.ToString(CultureInfo.InvariantCulture)}",
+                    hostAddress: hostAddress));
             }
         }
         return [.. endpoints];
@@ -412,13 +458,13 @@ public static class AspireLocalCompiler
         IReadOnlyDictionary<InfrastructurePhysicalResourceId, string> serviceNames)
     {
         InfrastructureLocalEndpoint endpoint;
-        InfrastructureConventionResolution configuration;
+        string serviceAddress;
         string? hostAddress;
         if (source is InfrastructureLocalRealizationDocument realization)
         {
-            endpoint = realization.Topology.Services.Single(service => service.PhysicalResource == value.Service)
+            var service = realization.Topology.Services.Single(service => service.PhysicalResource == value.Service);
+            endpoint = service
                 .Endpoints.Single(candidate => candidate.Id == value.Endpoint);
-            configuration = realization.Configuration;
             int? hostPort = endpoint.HostPort is null
                 ? null
                 : int.Parse(
@@ -428,14 +474,17 @@ public static class AspireLocalCompiler
             hostAddress = hostPort is null
                 ? null
                 : $"{endpoint.Scheme}://localhost:{hostPort.Value.ToString(CultureInfo.InvariantCulture)}";
+            serviceAddress = service.Source is InfrastructureLocalReferencedServiceSource && hostAddress is not null
+                ? hostAddress
+                : $"{endpoint.Scheme}://{serviceNames[value.Service]}:{endpoint.ServicePort.Resolve(realization.Configuration).ToString(CultureInfo.InvariantCulture)}";
         }
         else if (source is AspireLocalProjectionDocument projection)
         {
             var mapping = projection.Endpoints.Single(candidate =>
                 candidate.PhysicalResource == value.Service && candidate.Endpoint.Id == value.Endpoint);
             endpoint = mapping.Endpoint;
-            configuration = projection.Configuration;
             hostAddress = mapping.HostAddress;
+            serviceAddress = mapping.ServiceAddress;
         }
         else
         {
@@ -445,7 +494,7 @@ public static class AspireLocalCompiler
         var uri = value.Address switch
         {
             InfrastructureLocalEndpointAddress.ServiceNetwork =>
-                $"{endpoint.Scheme}://{serviceNames[value.Service]}:{endpoint.ContainerPort.Resolve(configuration).ToString(CultureInfo.InvariantCulture)}",
+                serviceAddress,
             InfrastructureLocalEndpointAddress.HostLoopback when hostAddress is not null => hostAddress,
             InfrastructureLocalEndpointAddress.HostLoopback => throw new InvalidOperationException("Host endpoint value requires a resolved Aspire projection."),
             _ => throw new ArgumentOutOfRangeException(nameof(value), value.Address, "Unsupported endpoint address surface.")
@@ -477,6 +526,23 @@ public static class AspireLocalCompiler
                 location,
                 endpoint.Service.Value,
                 "Reference an endpoint in the exact local service graph.");
+        }
+        else if (value is InfrastructureLocalEndpointValue referencedEndpoint)
+        {
+            var service = source.Topology.Services.Single(candidate => candidate.PhysicalResource == referencedEndpoint.Service);
+            var declaredEndpoint = service.Endpoints.Single(candidate => candidate.Id == referencedEndpoint.Endpoint);
+            if (service.Source is InfrastructureLocalReferencedServiceSource
+                && referencedEndpoint.Address == InfrastructureLocalEndpointAddress.ServiceNetwork
+                && declaredEndpoint.Exposure != InfrastructureLocalEndpointExposure.HostLoopback)
+            {
+                Add(
+                    diagnostics,
+                    DiagnosticCodes.ValueUnsupported,
+                    $"Referenced endpoint '{referencedEndpoint.Service.Value}/{referencedEndpoint.Endpoint.Value}' has no host address available to Aspire.",
+                    location,
+                    referencedEndpoint.Service.Value,
+                    "Expose the referenced endpoint on host loopback or consume its representative external-service endpoint.");
+            }
         }
         else if (value is not InfrastructureLocalLiteralValue
                  and not InfrastructureLocalConfigurationValue
@@ -579,7 +645,9 @@ public static class AspireLocalCompiler
         string message,
         string location,
         string subject,
-        string resolution) => diagnostics.Add(new(
+        string resolution,
+        string? expected = null,
+        string? observed = null) => diagnostics.Add(new(
             Code: code,
             Severity: DiagnosticSeverity.Error,
             Message: message,
@@ -589,7 +657,9 @@ public static class AspireLocalCompiler
                 stage: Stage,
                 subject: subject,
                 sourceReferences: [AspireLocalProjectionDocument.CurrentCompiler, AspireSourceReferences.Target.Value],
-                resolutionOptions: [resolution])));
+                resolutionOptions: [resolution],
+                expected: expected,
+                observed: observed)));
 
     static bool HasErrors(IEnumerable<DocumentValidationDiagnostic> diagnostics) =>
         diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
