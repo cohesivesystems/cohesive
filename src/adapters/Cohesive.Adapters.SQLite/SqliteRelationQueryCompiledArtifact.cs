@@ -125,7 +125,8 @@ public sealed class SqliteRelationQueryCompiledArtifact
         {
             var present = ReadPresence(reader, field.PresenceOrdinal);
             if (present)
-                fields.Add(field.Field.Path.ToString(), SqliteScalarCodec.Decode(field.Contract, reader.GetValue(field.ValueOrdinal)));
+                // The compiler proves a single field segment. Reuse its immutable name instead of formatting a path per row.
+                fields.Add(field.Field.Path.Segments[0].Segment!, SqliteScalarCodec.Decode(field.Contract, reader.GetValue(field.ValueOrdinal)));
             else if (!reader.IsDBNull(field.ValueOrdinal))
                 throw new InvalidOperationException("Missing field has a non-null SQLite payload.");
         }

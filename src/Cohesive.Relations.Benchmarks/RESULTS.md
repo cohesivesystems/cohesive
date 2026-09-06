@@ -10,20 +10,21 @@ connection acquisition and transaction creation are outside the measured loop.
 
 | Candidates | Handwritten SQL | Compiled SQL | Compiled / handwritten | Compiled allocation | Reference execution |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100 | 56.64 μs | 58.01 μs | 1.02 | 19.60 KB | 242.98 μs |
-| 1,000 | 595.64 μs | 600.56 μs | 1.01 | 191.95 KB | 2,640.45 μs |
-| 10,000 | 6,165.40 μs | 6,118.58 μs | 0.99 | 1,921.63 KB | 36,542.61 μs |
+| 100 | 57.20 μs | 56.70 μs | 0.99 | 18.12 KB | 243.35 μs |
+| 1,000 | 589.43 μs | 604.40 μs | 1.03 | 177.10 KB | 2,884.18 μs |
+| 10,000 | 6,101.03 μs | 6,036.01 μs | 0.99 | 1,773.20 KB | 36,246.00 μs |
 
-Handwritten allocation was 19.23 / 191.57 / 1,921.26 KB respectively; the compiled path adds approximately
+Handwritten allocation was 17.74 / 176.73 / 1,772.82 KB respectively; the compiled path adds approximately
 0.38 KB per call. Reference allocations were 284.59 / 2,654.59 / 26,606.45 KB. These are pipeline measurements,
 not isolated window-function or database throughput numbers. At 10,000 rows the compiled standard deviation was
-27.31 μs; small apparent speed differences from handwritten SQL are not a claim of an inherent speedup.
+19.02 μs; small apparent speed differences from handwritten SQL are not a claim of an inherent speedup.
 
 Before sharing intermediate value/identity columns and eliding constant required-presence columns, the same SQL
 compiler measured 66.21 / 691.30 / 7,540.82 μs (one warmup, three measured iterations). Its contemporaneous direct
 SQL baseline was 58.76 / 622.00 / 6,424.12 μs. Removing those redundant intermediate columns reduced the observed
 11–17% overhead to approximately parity in the final run. Differential outer-join and missing/null tests cover
-the changed representation; explicit presence bits remain wherever absence is possible.
+the changed representation; explicit presence bits remain wherever absence is possible. The final reader also
+reuses canonical field names, removing 152 bytes of string allocation per winner from both SQL paths.
 
 Benchmark setup verifies use of `candidate_order(KeyPresent, Key COLLATE BINARY, Preference DESC, Id)`.
 The parameter-rebinding test separately verifies an indexed `SEARCH` before window selection. Final result
