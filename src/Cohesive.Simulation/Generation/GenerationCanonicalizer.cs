@@ -18,7 +18,7 @@ static class GenerationCanonicalizer
         foreach (var member in members.OrderBy(static member => member.Identity.Value, StringComparer.Ordinal))
         {
             writer.Append(member.Identity.Value);
-            AppendType(writer, member.Generator.ValueType);
+            writer.Append(member.Generator.ValueType);
         }
 
         return writer.Complete();
@@ -59,7 +59,7 @@ static class GenerationCanonicalizer
         {
             case ConstantGenerationNode constant:
                 writer.Append(GenerationDefinitionWireNames.Constant);
-                AppendType(writer, constant.ValueType);
+                writer.Append(constant.ValueType);
                 writer.Append(constant.Value);
                 return;
 
@@ -76,7 +76,7 @@ static class GenerationCanonicalizer
 
             case WeightedCategoricalGenerationNode categorical:
                 writer.Append(GenerationDefinitionWireNames.WeightedCategorical);
-                AppendType(writer, categorical.ValueType);
+                writer.Append(categorical.ValueType);
                 writer.Append(categorical.Options.Length);
                 foreach (var option in categorical.Options)
                 {
@@ -92,7 +92,7 @@ static class GenerationCanonicalizer
 
             case ExpressionGenerationNode expression:
                 writer.Append(GenerationDefinitionWireNames.Expression);
-                AppendType(writer, expression.ValueType);
+                writer.Append(expression.ValueType);
                 writer.Append(StrictDocumentJson.GetCanonicalBytes(
                     expression.Expression,
                     StrictDocumentJson.CreateOptions()));
@@ -101,72 +101,6 @@ static class GenerationCanonicalizer
             default:
                 throw new NotSupportedException(
                     $"Generation canonicalization does not support node '{generator.GetType().Name}'.");
-        }
-    }
-
-    static void AppendType(SimulationFingerprintWriter writer, TypeRef type)
-    {
-        switch (type)
-        {
-            case ScalarTypeRef scalar:
-                writer.Append("scalar");
-                writer.Append((int)scalar.Kind);
-                writer.Append((int)scalar.Format);
-                return;
-
-            case EnumTypeRef @enum:
-                writer.Append("enum");
-                writer.Append(@enum.Name);
-                foreach (var member in @enum.Members.Order(StringComparer.Ordinal))
-                    writer.Append(member);
-                return;
-
-            case EntityReferenceTypeRef entityReference:
-                writer.Append("entity-reference");
-                writer.Append(entityReference.Entity.Value);
-                return;
-
-            case ArrayTypeRef array:
-                writer.Append("array");
-                AppendType(writer, array.ElementType);
-                return;
-
-            case ObjectTypeRef obj:
-                writer.Append("object");
-                foreach (var field in obj.Fields.OrderBy(static field => field.Name, StringComparer.Ordinal))
-                {
-                    writer.Append(field.Name);
-                    writer.Append((int)field.Cardinality);
-                    writer.Append((int)field.Presence);
-                    writer.Append((int)field.Nullability);
-                    AppendType(writer, field.Type);
-                }
-                return;
-
-            case NamedTypeRef named:
-                writer.Append("named");
-                writer.Append(named.TypeId.Value);
-                return;
-
-            case QuantityTypeRef quantity:
-                writer.Append("quantity");
-                writer.Append(quantity.Quantity);
-                writer.Append((int)quantity.BaseKind);
-                return;
-
-            case OpaqueRuntimeTypeRef opaque:
-                writer.Append("opaque");
-                writer.Append(opaque.RuntimeType);
-                return;
-
-            case JsonTypeRef json:
-                writer.Append("json");
-                writer.Append((int)json.Kind);
-                return;
-
-            default:
-                throw new NotSupportedException(
-                    $"Generation canonicalization does not support type '{type.GetType().Name}'.");
         }
     }
 

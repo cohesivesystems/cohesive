@@ -3,17 +3,18 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Cohesive.Adapters.Bogus;
+using Cohesive.Adapters.Mimesis;
 using Cohesive.Model;
 using Cohesive.Model.Authoring;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
 using Cohesive.Simulation;
-using Cohesive.Simulation.ExternalProcess;
 using Cohesive.Simulation.Artifacts;
+using Cohesive.Simulation.ExternalProcess;
 using Cohesive.Simulation.Generation;
-using Cohesive.Adapters.Mimesis;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Relations;
+using Cohesive.Simulation.Scenarios;
 using Cohesive.Simulation.Storage;
 using Cohesive.Simulation.Worlds;
 using Cohesive.Simulation.Xunit;
@@ -68,6 +69,7 @@ if (args is ["emit", string coreWorldPath])
         throw new InvalidOperationException($"Expected property counterexample age '50' but found '{replayed.Age}'.");
     }
 
+    VerifyScenarioPackage(customers);
     await File.WriteAllTextAsync(coreWorldPath, WorldDefinitionJsonSerializer.Serialize(CreateWorld(customers)));
 }
 else if (args is ["emit-relationship", string relationshipWorldPath])
@@ -267,6 +269,37 @@ static void VerifyExternalProcessAdapterPackage()
         "external provider schema");
 }
 
+static void VerifyScenarioPackage(PocoGenerationDefinition<SmokeCustomer> customers)
+{
+    var initialWorld = WorldArtifactManifest.FromWorld(CreateWorld(customers).Compile(), rootSeed: 42);
+    var scenario = Simulation.DefineScenario(
+        id: "scenario/package-smoke",
+        revision: "r1",
+        initialWorld: initialWorld,
+        startsAtUtc: DateTimeOffset.UnixEpoch,
+        configure: builder => builder
+            .Operation<SmokeScenarioInput, SmokeScenarioOutput>("package-smoke.inspect-customer")
+            .Actor("customer", "customer-for-ui")
+            .Action(
+                id: "inspect-customer",
+                afterStart: TimeSpan.FromMinutes(1),
+                actorId: "customer",
+                operationId: "package-smoke.inspect-customer",
+                input: new SmokeScenarioInput("summary")));
+    var restored = ScenarioDefinitionJsonSerializer.Deserialize(
+        ScenarioDefinitionJsonSerializer.Serialize(scenario));
+
+    Require(restored.SchemaVersion, "cohesive-simulation-scenario/v1", "scenario schema");
+    Require(
+        restored.Definition.InitialWorld.ArtifactId.Value,
+        initialWorld.ArtifactId.Value,
+        "scenario initial world");
+    Require(
+        restored.Compile().GetActor("customer").ExemplarId,
+        "customer-for-ui",
+        "scenario actor exemplar");
+}
+
 static ExternalGenerationCatalogImportDefinition CreateExternalImportDefinition() =>
     ExternalGenerationCatalogImportDefinition.Create(
         catalogId: "catalog/package-smoke-external-cli",
@@ -435,3 +468,7 @@ sealed record SmokeCustomer(string Name, string Region, int Age);
 sealed record MimesisSmokePerson(string Name, int Age);
 
 sealed record SmokeExternalProviderConfiguration(string Generator);
+
+sealed record SmokeScenarioInput(string Projection);
+
+sealed record SmokeScenarioOutput(string Value);

@@ -4,8 +4,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Description>Deterministic synthetic-data generation, property cases, replayable worlds, and provider-neutral provisioning.</Description>
-    <PackageTags>cohesive;simulation;synthetic-data;property-testing;seeding;replay</PackageTags>
+    <Description>Deterministic synthetic-data generation, property cases, replayable worlds and scenarios, and provider-neutral provisioning.</Description>
+    <PackageTags>cohesive;simulation;synthetic-data;property-testing;seeding;scenarios;replay</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>

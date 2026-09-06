@@ -176,3 +176,9 @@ manifest before producing JSONL, seeding a remote environment, or handing work t
 Continue with [artifacts, replay, and verification](artifacts-and-replay.md) or
 [repository seeding and Playwright](seeding-and-playwright.md). The complete relationship/storage/browser flow is an
 [executable test](../../Cohesive.Examples/Simulation/SimulationAdoptionExamples.cs).
+
+## 9. Schedule activity over the retained world
+
+Use the exact `WorldArtifactManifest` as the starting authority for a deterministic scenario. Bind actors to named
+world exemplars, declare portable operation contracts, and schedule action inputs on a fixed virtual UTC timeline.
+The typed authoring projection and strict portable document are covered in [deterministic scenarios](scenarios.md).

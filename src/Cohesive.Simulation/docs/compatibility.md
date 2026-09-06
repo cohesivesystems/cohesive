@@ -16,6 +16,7 @@ formats may change between alpha versions, but every persisted contract is expli
 | Relationship world document | `cohesive-simulation-relations-world/v3` |
 | World artifact manifest | `cohesive-simulation-world-artifact-manifest/v5` |
 | JSONL world item | `cohesive-simulation-world-item/v5` |
+| Scenario definition document | `cohesive-simulation-scenario/v1` |
 | Reference interpreter | `cohesive-simulation-reference/v3` |
 | Relationship interpreter | `cohesive-simulation-relations-reference/v1` |
 | Generation replay token | `csimr2.` |
