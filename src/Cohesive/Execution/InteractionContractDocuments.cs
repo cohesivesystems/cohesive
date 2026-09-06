@@ -150,6 +150,18 @@ public static class InteractionContractDocuments
             out _);
     }
 
+    internal static DocumentValidationResult ValidateAuthored(
+        ExecutionDefinitionDocument document,
+        InteractionContractDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(definition);
+        return Projection.ValidateAuthored(
+            document,
+            definition,
+            InteractionContractValidator.Validate);
+    }
+
     static DocumentValidationResult Complete(
         DocumentValidationResult shared,
         ExecutionDefinitionDocument? document,

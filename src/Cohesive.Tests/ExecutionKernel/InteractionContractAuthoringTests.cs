@@ -23,6 +23,10 @@ public sealed class InteractionContractAuthoringTests
             displayName: "Training example generated");
 
         Assert.True(authored.IsValid, FormatDiagnostics(authored.Validation));
+        Assert.Equivalent(
+            InteractionContractDocuments.Validate(authored.Document),
+            authored.Validation,
+            strict: true);
         Assert.Equal(InteractionContractDocuments.Kind, authored.Document.Kind);
         Assert.Equal(new ExecutionDefinitionId("ari/event/training-example-generated"), authored.Document.Metadata.DefinitionId);
         Assert.Equal(new ExecutionRevisionId("1"), authored.Document.Metadata.RevisionId);
@@ -66,6 +70,10 @@ public sealed class InteractionContractAuthoringTests
         var authored = Create<RecursiveEvent>();
 
         Assert.False(authored.IsValid);
+        Assert.Equivalent(
+            InteractionContractDocuments.Validate(authored.Document),
+            authored.Validation,
+            strict: true);
         var diagnostic = Assert.Single(authored.Validation.Diagnostics);
         Assert.Equal(InteractionContractDiagnosticCodes.ValueSchemaInvalid, diagnostic.Code);
         Assert.Equal(diagnostic, Assert.Single(authored.Document.Metadata.Diagnostics));
@@ -104,6 +112,20 @@ public sealed class InteractionContractAuthoringTests
         Assert.Equal(protocol.Request, binding.Request);
         Assert.Equal(protocol.Replies, binding.Replies);
         Assert.Equal(protocol.Outcomes.Failed.Id, binding.TerminalFailureOutcome);
+    }
+
+    [Fact]
+    public void CreateRequestProtocol_RetainedAuthoredValidationMatchesFullDocumentValidation()
+    {
+        var protocol = CreateRequestProtocol();
+
+        Assert.All(protocol.Documents, document =>
+        {
+            var retained = DocumentValidationResult.FromDiagnostics(document.Metadata.Diagnostics);
+            var full = InteractionContractDocuments.Validate(document);
+
+            Assert.Equivalent(full, retained, strict: true);
+        });
     }
 
     [Fact]

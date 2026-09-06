@@ -45,6 +45,34 @@ public sealed class CanonicalJsonWriterTests
     }
 
     [Fact]
+    public void SequenceArrayPolicy_MatchesEquivalentPathClassifiedOutput()
+    {
+        JsonObject content = new()
+        {
+            ["nested"] = new JsonArray(
+                new JsonObject
+                {
+                    ["values"] = new JsonArray(2, 1),
+                    ["amount"] = JsonNode.Parse("1.2300")
+                })
+        };
+
+        var expected = CanonicalJsonWriter.GetCanonicalBytes(
+            content,
+            Options,
+            static _ => CanonicalJsonArrayOrdering.Sequence,
+            CanonicalJsonNumberSemantics.ExactDecimalRational);
+
+        var actual = CanonicalJsonWriter.GetCanonicalSequenceBytes(
+            content,
+            Options,
+            CanonicalJsonNumberSemantics.ExactDecimalRational);
+
+        Assert.Equal(expected, actual);
+        Assert.Equal("{\"nested\":[{\"amount\":1.23,\"values\":[2,1]}]}", Encoding.UTF8.GetString(actual));
+    }
+
+    [Fact]
     public void ArrayPath_EscapesPropertySegmentsAndHasValidDefaultRoot()
     {
         JsonObject content = new()

@@ -4,6 +4,7 @@ using Cohesive.Processes.Authoring;
 using Cohesive.Processes.IR;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Serialization;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
@@ -17,6 +18,10 @@ public sealed class HostedQueryProcessAuthoringTests
         var raw = GeneratedRawHostedQueryProcess.Define(metadata);
 
         Assert.True(GeneratedHostedQueryCatalog.ById.IsValid, Format(GeneratedHostedQueryCatalog.ById.Validation));
+        Assert.Equivalent(
+            HostedQueryDefinitionDocuments.Validate(GeneratedHostedQueryCatalog.ById.Document),
+            GeneratedHostedQueryCatalog.ById.Validation,
+            strict: true);
         Assert.True(typed.IsValid, Format(typed.Validation));
         Assert.True(raw.IsValid, Format(raw.Validation));
         Assert.Equal(raw.Definition, typed.Definition);
