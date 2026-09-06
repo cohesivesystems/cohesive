@@ -23,7 +23,7 @@ Add only the integrations the application uses:
 | `Cohesive.Simulation.Cli` | `cohesive-sim` for scripts, CI, and Playwright setup |
 | `Cohesive.Adapters.Bogus` | Optional finite Bogus imports into exact retained generation catalogs |
 | `Cohesive.Simulation.ExternalProcess` | Bounded provider-process imports from Python or another runtime |
-| `Cohesive.Simulation.Mimesis` | Typed finite Mimesis imports through the bounded Python process boundary |
+| `Cohesive.Adapters.Mimesis` | Typed finite Mimesis imports through the bounded Python process boundary |
 
 Core depends only on `Cohesive`; Relations, Storage, xUnit, CLI, and provider integrations stay in optional packages.
 
@@ -107,7 +107,7 @@ worlds, repository seeding, and portable artifacts.
 Worlds currently describe static initial state. Virtual time, activity, events, queues, resources, failures, actors,
 actions, scenario traces, runtime provider interpreters, additional provider import adapters, and learned synthesis are
 later interpretations, not implicit callback behavior in this alpha. `Cohesive.Adapters.Bogus` and
-`Cohesive.Simulation.Mimesis` provide optional snapshot producers without making either provider a core dependency.
+`Cohesive.Adapters.Mimesis` provide optional snapshot producers without making either provider a core dependency.
 
 Current portable schemas and replay tokens reject earlier versions rather than silently assigning compatibility
 semantics. See the compatibility guide before retaining artifacts across package upgrades.
@@ -124,4 +124,4 @@ semantics. See the compatibility guide before retaining artifacts across package
 - [xUnit integration](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation.Xunit/README.md)
 - [CLI tool](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation.Cli/README.md)
 - [Bogus catalog adapter](https://github.com/cohesivesystems/cohesive/blob/main/src/adapters/Cohesive.Adapters.Bogus/README.md)
-- [Mimesis catalog provider](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation.Mimesis/README.md)
+- [Mimesis catalog adapter](https://github.com/cohesivesystems/cohesive/blob/main/src/adapters/Cohesive.Adapters.Mimesis/README.md)

@@ -4,7 +4,7 @@ using Cohesive.Model;
 using Cohesive.Simulation.ExternalProcess;
 using Cohesive.Simulation.Generation;
 
-namespace Cohesive.Simulation.Mimesis;
+namespace Cohesive.Adapters.Mimesis;
 
 /// <summary>Application-owned inputs for one finite Mimesis generation-catalog import.</summary>
 public sealed class MimesisGenerationCatalogImportOptions
@@ -96,17 +96,20 @@ public sealed class MimesisRuntimeOptions
 /// </remarks>
 public static class MimesisGenerationCatalog
 {
-    const string PackageVersionMetadata = "CohesiveMimesisPackageVersion";
+    const string AdapterPackageVersionMetadata = "CohesiveAdapterPackageVersion";
     const string ProviderVersionMetadata = "MimesisPackageVersion";
     const string TypingExtensionsVersionMetadata = "TypingExtensionsPackageVersion";
-    const string ProviderResourceName = "Cohesive.Simulation.Mimesis.Provider.py";
+    const string ProviderResourceName = "Cohesive.Adapters.Mimesis.Provider.py";
     static readonly Lazy<string> ProviderSource = new(LoadProviderSource);
 
     /// <summary>Current closed declarative configuration schema understood by the bundled provider.</summary>
     public const string ConfigurationSchemaVersion = "cohesive-simulation-mimesis-record/v1";
 
     /// <summary>Stable identity of the current Mimesis capability and convention profile.</summary>
-    public const string CapabilityProfileIdentity = "cohesive.simulation.mimesis/field-record-snapshot/v1";
+    public const string CapabilityProfileIdentity = "cohesive.adapters.mimesis/field-record-snapshot/v1";
+
+    /// <summary>Stable adapter identity retained as package capability evidence.</summary>
+    public const string AdapterIdentity = "Cohesive.Adapters.Mimesis";
 
     /// <summary>Stable external provider identity retained in catalog provenance.</summary>
     public const string ProviderIdentity = "Mimesis";
@@ -114,8 +117,8 @@ public static class MimesisGenerationCatalog
     /// <summary>Random-algorithm profile used for locally seeded Mimesis Field imports.</summary>
     public const string RandomAlgorithmIdentity = "Mimesis.Field/local-seed/v1";
 
-    /// <summary>Gets the exact Cohesive Mimesis package version retained as capability evidence.</summary>
-    public static string PackageVersion { get; } = RequirePackageVersion(PackageVersionMetadata);
+    /// <summary>Gets the exact Mimesis adapter package version retained as capability evidence.</summary>
+    public static string AdapterVersion { get; } = RequirePackageVersion(AdapterPackageVersionMetadata);
 
     /// <summary>Gets the exact supported Mimesis Python package version.</summary>
     public static string ProviderVersion { get; } = RequirePackageVersion(ProviderVersionMetadata);
@@ -133,8 +136,8 @@ public static class MimesisGenerationCatalog
             GenerationCatalogProducerCapability.LocalSeed
         ],
         [
-            SourceReference.Repository(new("src/Cohesive.Simulation.Mimesis/README.md")),
-            SourceReference.Create("nuget", $"Cohesive.Simulation.Mimesis/{PackageVersion}"),
+            SourceReference.Repository(new("src/adapters/Cohesive.Adapters.Mimesis/README.md")),
+            SourceReference.Create("nuget", $"{AdapterIdentity}/{AdapterVersion}"),
             SourceReference.Create("pypi", $"mimesis/{ProviderVersion}"),
             SourceReference.Create("pypi", $"typing-extensions/{TypingExtensionsVersion}")
         ]);

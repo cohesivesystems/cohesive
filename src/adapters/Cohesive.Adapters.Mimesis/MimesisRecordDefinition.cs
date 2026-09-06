@@ -6,7 +6,7 @@ using Cohesive.Model;
 using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
 
-namespace Cohesive.Simulation.Mimesis;
+namespace Cohesive.Adapters.Mimesis;
 
 sealed class MimesisMemberBinding
 {

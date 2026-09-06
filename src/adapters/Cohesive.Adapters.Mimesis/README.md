@@ -1,6 +1,6 @@
-# Cohesive.Simulation.Mimesis
+# Cohesive.Adapters.Mimesis
 
-`Cohesive.Simulation.Mimesis` imports finite [Mimesis](https://mimesis.name/) record snapshots into portable
+`Cohesive.Adapters.Mimesis` imports finite [Mimesis](https://mimesis.name/) record snapshots into portable
 `GenerationCatalogDocument` authority. Typed CLR expressions make ordinary authoring convenient; the expressions,
 Python process, and Mimesis objects are discarded after import. Exact generated values and their provenance are what
 simulation, replay, scripts, and provisioning retain.
@@ -14,7 +14,7 @@ bindings, configuration validation, package-version checks, capability evidence,
 The current alpha targets .NET 10, requires Python 3.10 or newer, and pins its Python runtime dependencies:
 
 ```bash
-dotnet add package Cohesive.Simulation.Mimesis --prerelease
+dotnet add package Cohesive.Adapters.Mimesis --prerelease
 python -m pip install "mimesis==21.0.0" "typing_extensions==4.15.0"
 ```
 
@@ -27,7 +27,7 @@ explicitly pinned because the Mimesis 21.0.0 wheel imports it without declaring 
 ```csharp
 using Cohesive.Model;
 using Cohesive.Simulation.Generation;
-using Cohesive.Simulation.Mimesis;
+using Cohesive.Adapters.Mimesis;
 
 var people = MimesisGenerationCatalog.Define<Person>(person => person
     .Member(value => value.Name, "person.full_name")

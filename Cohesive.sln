@@ -152,9 +152,9 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Simulation.Externa
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Simulation.ExternalProcess.Tests", "src\Cohesive.Simulation.ExternalProcess.Tests\Cohesive.Simulation.ExternalProcess.Tests.csproj", "{2AFE3767-044F-4EBA-BE01-A96E6CE175EE}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Simulation.Mimesis", "src\Cohesive.Simulation.Mimesis\Cohesive.Simulation.Mimesis.csproj", "{C7D56E93-A4B0-4E82-930B-A40957E6654F}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Mimesis", "src\adapters\Cohesive.Adapters.Mimesis\Cohesive.Adapters.Mimesis.csproj", "{C7D56E93-A4B0-4E82-930B-A40957E6654F}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Simulation.Mimesis.Tests", "src\Cohesive.Simulation.Mimesis.Tests\Cohesive.Simulation.Mimesis.Tests.csproj", "{0E932FD8-30EA-4750-A6B9-E3756E5E6E92}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Mimesis.Tests", "src\Cohesive.Adapters.Mimesis.Tests\Cohesive.Adapters.Mimesis.Tests.csproj", "{0E932FD8-30EA-4750-A6B9-E3756E5E6E92}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

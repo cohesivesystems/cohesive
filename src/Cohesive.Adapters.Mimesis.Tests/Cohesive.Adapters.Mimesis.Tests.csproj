@@ -20,7 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Cohesive.Simulation.Mimesis\Cohesive.Simulation.Mimesis.csproj" />
+    <ProjectReference Include="..\adapters\Cohesive.Adapters.Mimesis\Cohesive.Adapters.Mimesis.csproj" />
   </ItemGroup>
 
 </Project>

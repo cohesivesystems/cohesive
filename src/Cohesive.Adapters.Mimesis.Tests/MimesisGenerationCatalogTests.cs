@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 using Cohesive.Model;
 using Cohesive.Simulation.Generation;
 
-namespace Cohesive.Simulation.Mimesis.Tests;
+namespace Cohesive.Adapters.Mimesis.Tests;
 
 public sealed class MimesisGenerationCatalogTests
 {
@@ -85,7 +85,7 @@ public sealed class MimesisGenerationCatalogTests
             sourceReferences:
             [
                 SourceReference.Repository(new(
-                    "src/Cohesive.Simulation.Mimesis.Tests/MimesisGenerationCatalogTests.cs"))
+                    "src/Cohesive.Adapters.Mimesis.Tests/MimesisGenerationCatalogTests.cs"))
             ],
             locale: "en");
 
@@ -101,7 +101,7 @@ public sealed class MimesisGenerationCatalogTests
         Assert.Equal(
             GenerationCatalogJsonSerializer.Serialize(first),
             GenerationCatalogJsonSerializer.Serialize(second));
-        Assert.Equal("f7f052057a512c3d30258863c78f5da23743f1ff839a8a69f955c2f5395f7e03", first.Fingerprint.Value);
+        Assert.Equal("d10ae4c7e09f473ff32fb4b76480e70fe65d5fa27328c5dd9f37113ff434a77b", first.Fingerprint.Value);
         Assert.Equal(
             [
                 new MimesisPerson("Demarcus Raymond", "any1925@example.com", 58, null),
@@ -115,9 +115,12 @@ public sealed class MimesisGenerationCatalogTests
         Assert.Null(first.Definition.Provenance.DateTimeReferenceUtc);
         Assert.Equal(MimesisGenerationCatalog.CapabilityProfile, first.Definition.Provenance.CapabilityProfile);
         Assert.Equal(
+            "cohesive.adapters.mimesis/field-record-snapshot/v1",
+            first.Definition.Provenance.CapabilityProfile.Id);
+        Assert.Equal(
             [
                 "csimcatalogrequest://csimcatalogrequest1_859f01c548ba1cd7b11144d4b3aea6b86acb66f64ffdc7a6efe3e406fc448d9f",
-                "repo://src/Cohesive.Simulation.Mimesis.Tests/MimesisGenerationCatalogTests.cs"
+                "repo://src/Cohesive.Adapters.Mimesis.Tests/MimesisGenerationCatalogTests.cs"
             ],
             first.Definition.Provenance.SourceReferences.Select(static source => source.Value));
     }
@@ -144,7 +147,7 @@ public sealed class MimesisGenerationCatalogTests
                 sourceReferences:
                 [
                     SourceReference.Repository(new(
-                        "src/Cohesive.Simulation.Mimesis.Tests/MimesisGenerationCatalogTests.cs"))
+                        "src/Cohesive.Adapters.Mimesis.Tests/MimesisGenerationCatalogTests.cs"))
                 ]),
             new(pythonExecutable: python));
 

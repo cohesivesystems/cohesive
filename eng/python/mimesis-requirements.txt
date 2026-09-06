@@ -1,4 +1,4 @@
-# Cohesive.Simulation.Mimesis tests and package consumers use this exact provider environment.
+# Cohesive.Adapters.Mimesis tests and package consumers use this exact provider environment.
 mimesis==21.0.0
 # Mimesis 21.0.0 imports Self from typing_extensions but omits the dependency from its wheel metadata.
 typing_extensions==4.15.0

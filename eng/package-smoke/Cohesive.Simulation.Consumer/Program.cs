@@ -9,7 +9,7 @@ using Cohesive.Simulation;
 using Cohesive.Simulation.ExternalProcess;
 using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Generation;
-using Cohesive.Simulation.Mimesis;
+using Cohesive.Adapters.Mimesis;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Relations;
 using Cohesive.Simulation.Storage;

@@ -4,24 +4,24 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Description>Mimesis snapshot imports for portable Cohesive.Simulation generation catalogs.</Description>
+    <Description>Mimesis snapshot import adapter for portable Cohesive.Simulation generation catalogs.</Description>
     <PackageTags>$(PackageTags);simulation;synthetic-data;mimesis;python;faker</PackageTags>
     <MimesisPackageVersion>21.0.0</MimesisPackageVersion>
     <TypingExtensionsPackageVersion>4.15.0</TypingExtensionsPackageVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <AssemblyMetadata Include="CohesiveMimesisPackageVersion" Value="$(PackageVersion)" />
+    <AssemblyMetadata Include="CohesiveAdapterPackageVersion" Value="$(PackageVersion)" />
     <AssemblyMetadata Include="MimesisPackageVersion" Value="$(MimesisPackageVersion)" />
     <AssemblyMetadata Include="TypingExtensionsPackageVersion" Value="$(TypingExtensionsPackageVersion)" />
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="MimesisProvider.py" LogicalName="Cohesive.Simulation.Mimesis.Provider.py" />
+    <EmbeddedResource Include="MimesisProvider.py" LogicalName="Cohesive.Adapters.Mimesis.Provider.py" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Cohesive.Simulation.ExternalProcess\Cohesive.Simulation.ExternalProcess.csproj" />
+    <ProjectReference Include="..\..\Cohesive.Simulation.ExternalProcess\Cohesive.Simulation.ExternalProcess.csproj" />
   </ItemGroup>
 
 </Project>
