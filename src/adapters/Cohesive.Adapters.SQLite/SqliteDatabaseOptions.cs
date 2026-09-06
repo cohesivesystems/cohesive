@@ -12,6 +12,15 @@ public enum SqliteDurability
     Normal = 1
 }
 
+/// <summary>Whether disposed logical connections return their native handles to the provider pool.</summary>
+public enum SqliteConnectionPooling
+{
+    /// <summary>Close the native handle on disposal; the existing file-lifetime convention.</summary>
+    Disabled = 0,
+    /// <summary>Reuse provider-owned native handles; required profile settings are reapplied and verified on every checkout.</summary>
+    Enabled = 1
+}
+
 /// <summary>Immutable effective configuration for one local, same-host SQLite file database.</summary>
 public sealed class SqliteDatabaseOptions
 {
@@ -22,9 +31,11 @@ public sealed class SqliteDatabaseOptions
     /// <param name="path">Database file path, resolved to an absolute path at construction; its directory must exist.</param>
     /// <param name="durability">Explicit WAL synchronization policy, or null for Full.</param>
     /// <param name="busyTimeoutSeconds">Positive provider lock retry timeout, at most 300 seconds, or null for five seconds.</param>
+    /// <param name="pooling">Native connection reuse policy, or null for Disabled. Enabled pools are shared by matching connection strings.</param>
     /// <exception cref="ArgumentException">The path is empty, a SQLite URI, or an in-memory database.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A policy is unknown or the timeout is outside 1–300 seconds.</exception>
-    public SqliteDatabaseOptions(string path, SqliteDurability? durability = null, int? busyTimeoutSeconds = null)
+    public SqliteDatabaseOptions(string path, SqliteDurability? durability = null, int? busyTimeoutSeconds = null,
+        SqliteConnectionPooling? pooling = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         if (path == ":memory:" || path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
@@ -36,9 +47,13 @@ public sealed class SqliteDatabaseOptions
         BusyTimeoutSeconds = busyTimeoutSeconds ?? DefaultBusyTimeoutSeconds;
         if (BusyTimeoutSeconds is < 1 or > 300)
             throw new ArgumentOutOfRangeException(nameof(busyTimeoutSeconds), "Use a bounded timeout from 1 through 300 seconds.");
-        var conventions = ImmutableArray.CreateBuilder<string>(2);
+        Pooling = pooling ?? SqliteConnectionPooling.Disabled;
+        if (!Enum.IsDefined(Pooling))
+            throw new ArgumentOutOfRangeException(nameof(pooling));
+        var conventions = ImmutableArray.CreateBuilder<string>(3);
         if (durability is null) conventions.Add(nameof(Durability));
         if (busyTimeoutSeconds is null) conventions.Add(nameof(BusyTimeoutSeconds));
+        if (pooling is null) conventions.Add(nameof(Pooling));
         ConventionSuppliedSettings = conventions.ToImmutable();
     }
 
@@ -48,6 +63,8 @@ public sealed class SqliteDatabaseOptions
     public SqliteDurability Durability { get; }
     /// <summary>Bounded provider lock retry timeout; this is not a wall-clock query execution deadline.</summary>
     public int BusyTimeoutSeconds { get; }
+    /// <summary>Native handle reuse policy; each returned logical connection still has one caller owner.</summary>
+    public SqliteConnectionPooling Pooling { get; }
     /// <summary>Settings supplied by conventions rather than explicit constructor arguments.</summary>
     public ImmutableArray<string> ConventionSuppliedSettings { get; }
     /// <summary>Exact adapter/profile identity describing the effective durability boundary.</summary>

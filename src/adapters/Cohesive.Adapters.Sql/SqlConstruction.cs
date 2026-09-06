@@ -388,6 +388,18 @@ public abstract record SqlExpression
     public static SqlExpression Exists(SqlSelectQuery query) =>
         new ExistsExpression(Guard.RequireNotNull(query));
 
+    /// <summary>Projects a bounded subquery as one value, or SQL null when no row matches.</summary>
+    /// <param name="query">Immutable query selecting exactly one column with an explicit limit of one.</param>
+    /// <returns>A scalar subquery sharing its containing statement's parameters.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="query"/> is null.</exception>
+    /// <exception cref="ArgumentException">The query does not select one column with limit one.</exception>
+    public static SqlExpression ScalarSubquery(SqlSelectQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        query.RequireScalarSubquery();
+        return new ScalarSubqueryExpression(query);
+    }
+
     /// <summary>Applies one explicitly selected SQL collation to an expression.</summary>
     /// <param name="operand">Text expression to collate.</param>
     /// <param name="collation">SQL collation identifier.</param>
@@ -699,6 +711,17 @@ public abstract record SqlExpression
             Operand.WriteTo(context, builder);
             context.Dialect.Require(SqlFeature.ArrayAny);
             builder.Append(" = ANY(").Append(context.AddRuntime(ArrayBinding)).Append("))");
+        }
+    }
+
+    sealed record ScalarSubqueryExpression(SqlSelectQuery Query) : SqlExpression
+    {
+        internal override void WriteTo(SqlRenderContext context, StringBuilder builder)
+        {
+            context.Dialect.Require(SqlFeature.ScalarSubquery);
+            builder.Append('(');
+            Query.WriteTo(context, builder);
+            builder.Append(')');
         }
     }
 
@@ -1332,6 +1355,12 @@ public sealed class SqlSelectQuery
     readonly bool distinct;
     readonly int? limit;
     readonly int? offset;
+
+    internal void RequireScalarSubquery()
+    {
+        if (selections.Length != 1 || limit != 1)
+            throw new ArgumentException("A scalar subquery must select exactly one column with an explicit limit of one.");
+    }
 
     internal SqlSelectQuery(
         SqlFromItem? from,

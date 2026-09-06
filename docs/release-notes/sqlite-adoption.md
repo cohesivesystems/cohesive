@@ -1,5 +1,21 @@
 # SQLite adoption — unreleased
 
+## Explicit SQLite pooling and reusable binding plans
+
+`SqliteDatabaseOptions` accepts an optional `pooling` policy. `SqliteConnectionPooling.Enabled` reuses provider native
+handles while restoring and verifying the connection profile on every checkout. Disabled remains the convention.
+Logical connections and transactions retain caller ownership; pooling is not a general native session reset.
+`SqliteDatabase.ClearPool()` releases idle handles and retires active ones on return. Applications must finish operations
+and clear enabled pools before replacing or deleting the database file. Recompile consumers for the extended options
+constructor signature. See the [ownership contract](../../src/adapters/Cohesive.Adapters.SQLite/README.md) and
+[measured tradeoffs](../../src/adapters/Cohesive.Adapters.SQLite/PERFORMANCE.md).
+
+`SqliteCommandTemplate` wraps a shared `SqlCommandTemplate` with cached binding lookup. `SqliteDatabase.CreateCommand`
+binds encoded values directly into fresh provider parameters without materializing a bound intermediate statement.
+Runtime byte arrays are borrowed for the command lifetime; captured constants remain isolated. The shared SQL builder
+adds capability-gated `SqlExpression.ScalarSubquery`, requiring one projected column and an explicit limit of one.
+Postgres and SQLite support this construction; other dialects must explicitly accept it.
+
 ## Intentional breaking SQL API changes
 
 `SqlFunction.ClockTimestamp` has intentionally left the shared SQL function enum. PostgreSQL wall-clock behavior

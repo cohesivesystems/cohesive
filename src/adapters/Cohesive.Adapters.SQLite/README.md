@@ -39,7 +39,7 @@ Construction performs no database I/O. The parent directory must exist. `OpenCon
 | Foreign keys | Enabled and verified on each acquired connection |
 | Distributed transactions | Unavailable; no guarantee across independent files, attached databases, or hosts |
 | Native engine | `SqliteDatabase.MinimumEngineVersion` or newer; the qualified floor is 3.51.3 |
-| Connection pooling | Disabled; disposing a connection releases its native ownership |
+| Connection pooling | Disabled by convention; opt in with `SqliteConnectionPooling.Enabled`, retaining one owner per logical connection |
 
 The application is responsible for attesting that the path uses an appropriate local filesystem. Path normalization cannot establish filesystem or hardware guarantees. In-memory databases and URI connection paths are excluded from this profile. The engine floor includes the upstream [WAL-reset fix](https://sqlite.org/wal.html#walresetbug); older branches with selective backports are outside this initial qualification. Actual native version is checked at connection acquisition, including when an application overrides the bundled provider.
 
@@ -81,6 +81,57 @@ Uncommitted transactions roll back on disposal. Prefer an immediate transaction 
 
 Use fresh parameters for data and `SqliteDatabase.QuoteIdentifier` for dynamic identifier components. `CreateCommand` checks transaction affinity and supplies the configured timeout. It is also the shared construction boundary for future repository implementations. Native access is an explicit adapter escape hatch: code borrowing a foreign connection or changing PRAGMAs assumes responsibility for maintaining the declared profile.
 
+## Reuse native connections and compiled commands
+
+For repeated operations, opt into provider pooling explicitly:
+
+```csharp
+var database = new SqliteDatabase(new SqliteDatabaseOptions(
+    path: "/data/market.db",
+    pooling: SqliteConnectionPooling.Enabled));
+```
+
+Each operation still owns and disposes its logical connection, transaction and commands. Disposal returns the native
+handle to the provider pool. The provider rolls back its active transaction on connection disposal. Every checkout
+restores foreign keys and writable mode and applies/verifies the requested WAL and synchronization profile, including
+when FULL and NORMAL runtimes share a pool. Pooling does not introduce an ambient transaction or automatic retries.
+
+Matching connection strings share a process-wide provider pool. Pooling is **not a general session-state reset**:
+callers using native access must clean up temporary tables, attached databases, custom functions/collations and other
+connection-local changes. Keep pooling disabled when native-handle isolation is required. Profile-acquisition failure
+clears the matching pool so an unsuitable handle is retired. No other pools are cleared.
+
+After all application operations finish, call `database.ClearPool()` before deleting or replacing its database file.
+It closes idle handles and retires active handles on return; it neither interrupts current owners nor prevents future
+opens. A connection's disposal alone does not release every pooled native handle. This lifecycle responsibility belongs
+to the application owning the database, not to each repository operation.
+
+Build shared SQL templates once and create a SQLite binding plan once:
+
+```csharp
+using Cohesive.Adapters.Sql;
+
+var read = new SqliteCommandTemplate(new SqlSelectBuilder(new SqlQualifiedTable("market_payloads"), "p")
+    .Select(SqlExpression.Column("p", "content"), "content")
+    .Where(SqlExpression.Binary(SqlBinaryOperator.Equal,
+        SqlExpression.Column("p", "id"), SqlExpression.RuntimeParameter("id")))
+    .BuildTemplate(SqliteSqlDialect.Instance));
+
+using var connection = database.OpenConnection();
+using var command = database.CreateCommand(connection, transaction: null, read, ("id", "payload/42"));
+var content = (byte[]?)command.ExecuteScalar();
+```
+
+`SqliteCommandTemplate.Template` retains the authoritative shared artifact. The provider binding plan caches slot
+lookup and creates fresh native parameters for every invocation, avoiding intermediate `SqlStatement` materialization.
+Supply each runtime binding exactly once, in any order; repeated SQL references share a slot. Missing, duplicate,
+unknown and non-encoded values fail before execution. Values must already be encoded as `int`, `long`, valid Unicode
+text, bytes or null; use the scalar codec when starting from semantic observations. Runtime byte arrays are borrowed
+until the command is disposed and must not be mutated during use. Captured constant bytes are isolated from callers.
+Templates are immutable and reusable concurrently; returned commands are not.
+
+See [connection-reuse measurements](PERFORMANCE.md) for timing, allocation evidence and reproduction instructions.
+
 ## Exact scalar encodings
 
 `SqliteScalarCodec` is the single mapping catalog for column storage classes, parameters, encoding, decoding, and supported scalar kinds. `Encode` validates the full value contract before provider binding. `Decode` validates the native storage class and resulting observation. Use matching `STRICT` column types and `BINARY` text collation. This is scalar storage, not a relation/query capability declaration.
@@ -117,7 +168,7 @@ For Ito adoption, keep existing `user_version` ownership with Ito. Cohesive modu
 1. **Integrity:** during a maintenance window, run `PRAGMA integrity_check;` and require the single result `ok`. Also run `PRAGMA foreign_key_check;` and require no rows. Record native engine version and module history alongside the result. These are operator actions, not work performed on every connection.
 2. **WAL:** keep the database, WAL, and shared-memory files on the same local filesystem. Monitor WAL growth and long-lived readers. A maintenance connection can inspect `PRAGMA wal_checkpoint(PASSIVE);`; busy/incomplete results require addressing readers before a stronger checkpoint. Do not delete an active WAL or force a checkpoint after every repository operation. See [SQLite WAL operations](https://sqlite.org/wal.html).
 3. **Backup:** use the provider's `sourceConnection.BackupDatabase(destinationConnection)` (SQLite's [online backup API](https://sqlite.org/backup.html)) into a separate database file, then verify integrity, foreign keys, and expected module versions on that snapshot. Avoid copying only the main file while WAL connections remain active. Retain a tested backup before schema changes.
-4. **Restore:** stop every process using the target database and dispose all connections. Preserve the original database **and its sidecar files** as a recovery set. Restore the verified standalone snapshot under a fresh path, open it with this runtime, verify integrity and module fingerprints, and point the application to it before resuming work. Rehearse this procedure against a disposable database; a successful backup call alone is not a restore test.
+4. **Restore:** stop every process using the target database, dispose all connections and clear any enabled pool. Preserve the original database **and its sidecar files** as a recovery set. Restore the verified standalone snapshot under a fresh path, open it with this runtime, verify integrity and module fingerprints, and point the application to it before resuming work. Rehearse this procedure against a disposable database; a successful backup call alone is not a restore test.
 
 ## Validation and extension boundary
 
@@ -127,7 +178,7 @@ For Ito adoption, keep existing `user_version` ownership with Ito. Cohesive modu
 dotnet test src/Cohesive.Adapters.SQLite.Tests/Cohesive.Adapters.SQLite.Tests.csproj
 ```
 
-The implementation deliberately retains native transaction ownership instead of introducing another unit-of-work interface. Each repository should reuse connection/command configuration and the scalar catalog; its schema and contract-specific CAS/batch semantics belong in that repository realization. Connections are unpooled and each acquisition verifies the profile; callers should batch a unit of work on one connection. No throughput or latency guarantee is asserted by this initial foundation.
+The implementation deliberately retains native transaction ownership instead of introducing another unit-of-work interface. Each repository should reuse connection/command configuration and the scalar catalog; its schema and contract-specific CAS/batch semantics belong in that repository realization. Each acquisition verifies the profile with either pooling policy; callers should batch a unit of work on one connection. No throughput or latency guarantee is asserted.
 
 The required native engine profile supports `IS [NOT] DISTINCT FROM` and right/full outer joins. The shared builder
 checks each facility through `SqlFeature` before rendering; these were added in [SQLite 3.39](https://www.sqlite.org/releaselog/3_39_0.html).

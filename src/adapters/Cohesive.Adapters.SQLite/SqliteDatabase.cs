@@ -28,7 +28,7 @@ public sealed class SqliteDatabase
             DataSource = options.Path,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Private,
-            Pooling = false,
+            Pooling = options.Pooling == SqliteConnectionPooling.Enabled,
             ForeignKeys = true,
             DefaultTimeout = options.BusyTimeoutSeconds
         }.ToString();
@@ -37,9 +37,9 @@ public sealed class SqliteDatabase
     /// <summary>Inspectable effective settings and their convention origins.</summary>
     public SqliteDatabaseOptions Options { get; }
 
-    /// <summary>Opens a fresh caller-owned connection with verified WAL, foreign keys, and synchronization settings.</summary>
+    /// <summary>Opens a caller-owned logical connection with verified WAL, foreign keys, and synchronization settings.</summary>
     /// <param name="cancellationToken">Cancellation checked before opening and between configuration operations.</param>
-    /// <returns>An open, unpooled connection which the caller must dispose.</returns>
+    /// <returns>An open connection which the caller must dispose. Native handle reuse follows <see cref="SqliteDatabaseOptions.Pooling"/>.</returns>
     /// <exception cref="OperationCanceledException">Cancellation is observed before ownership transfers to the caller.</exception>
     /// <exception cref="SqliteException">Opening, locking, or configuring the database fails.</exception>
     /// <exception cref="InvalidOperationException">SQLite cannot establish the requested operating profile.</exception>
@@ -51,6 +51,13 @@ public sealed class SqliteDatabase
         {
             connection.Open();
             cancellationToken.ThrowIfCancellationRequested();
+            // The provider applies connection-string PRAGMAs only when creating a native handle.
+            // A preceding pool borrower may have changed them, so restore required state on every checkout.
+            if (Options.Pooling == SqliteConnectionPooling.Enabled)
+            {
+                using var reset = CreateCommand(connection, null, "PRAGMA foreign_keys = ON; PRAGMA query_only = OFF;");
+                reset.ExecuteNonQuery();
+            }
             using (var engine = CreateCommand(connection, null, "SELECT sqlite_version();"))
             {
                 var version = engine.ExecuteScalar() as string;
@@ -82,9 +89,38 @@ public sealed class SqliteDatabase
         }
         catch
         {
+            // Do not repeatedly hand out a pooled handle whose required profile could not be established.
+            if (Options.Pooling == SqliteConnectionPooling.Enabled)
+                SqliteConnection.ClearPool(connection);
             connection.Dispose();
             throw;
         }
+    }
+
+    /// <summary>Releases this connection-string pool's idle native handles and retires active handles when returned.</summary>
+    /// <remarks>Call after operations finish before deleting or replacing the database file. Matching database objects
+    /// share the provider pool; this operation does not interrupt active borrowers or prevent later checkouts.</remarks>
+    public void ClearPool()
+    {
+        using var connection = new SqliteConnection(connectionString);
+        SqliteConnection.ClearPool(connection);
+    }
+
+    /// <summary>Binds a precompiled SQLite template directly to fresh provider parameters.</summary>
+    /// <param name="connection">Open caller-owned connection.</param>
+    /// <param name="transaction">Borrowed transaction on the same connection, or null.</param>
+    /// <param name="template">Reusable provider binding plan over shared SQL construction.</param>
+    /// <param name="values">Exactly one encoded INTEGER/TEXT/BLOB/null value per runtime binding, in any order.
+    /// Mutable byte arrays are borrowed for the command lifetime; callers retain ownership.</param>
+    /// <returns>A caller-owned command; binding does not execute SQL or take transaction ownership.</returns>
+    /// <exception cref="ArgumentNullException">The connection or template is null.</exception>
+    /// <exception cref="ArgumentException">Bindings are missing, repeated, unknown or invalid, or the transaction has another owner.</exception>
+    /// <exception cref="InvalidOperationException">The connection is not open.</exception>
+    public SqliteCommand CreateCommand(SqliteConnection connection, SqliteTransaction? transaction,
+        SqliteCommandTemplate template, params ReadOnlySpan<(string Binding, object? Value)> values)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        return template.Bind(this, connection, transaction, values);
     }
 
     /// <summary>Binds a command to a caller-owned connection and optional transaction with the configured timeout.</summary>

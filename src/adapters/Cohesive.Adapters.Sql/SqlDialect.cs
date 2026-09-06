@@ -24,7 +24,9 @@ public enum SqlFeature
     /// <summary>Right outer joins.</summary>
     RightJoin,
     /// <summary>Full outer joins.</summary>
-    FullJoin
+    FullJoin,
+    /// <summary>Single-column scalar subqueries bounded to at most one row.</summary>
+    ScalarSubquery
 }
 
 /// <summary>Adapter-owned policy for rendering and binding shared SQL construction artifacts.</summary>
