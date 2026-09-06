@@ -115,6 +115,20 @@ public sealed class InteractionContractAuthoringTests
     }
 
     [Fact]
+    public void CreateRequestProtocol_RetainedAuthoredValidationMatchesFullDocumentValidation()
+    {
+        var protocol = CreateRequestProtocol();
+
+        Assert.All(protocol.Documents, document =>
+        {
+            var retained = DocumentValidationResult.FromDiagnostics(document.Metadata.Diagnostics);
+            var full = InteractionContractDocuments.Validate(document);
+
+            Assert.Equivalent(full, retained, strict: true);
+        });
+    }
+
+    [Fact]
     public void CreateRequestProtocol_ProducesTheCanonicalDocumentModelWithoutAParallelAuthority()
     {
         var protocol = CreateRequestProtocol();
