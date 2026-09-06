@@ -145,4 +145,4 @@ dotnet run \
   "$work_directory/relationship.manifest.json" \
   "$work_directory/relationship.verification.json"
 
-echo "Cohesive.Simulation packages $version installed and verified external imports, catalogs, core artifacts, and relationship-world artifacts."
+echo "Cohesive.Simulation packages $version installed and verified scenarios, external imports, catalogs, core artifacts, and relationship-world artifacts."

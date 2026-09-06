@@ -9,6 +9,7 @@ using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Relations;
+using Cohesive.Simulation.Scenarios;
 using Cohesive.Simulation.Storage;
 using Cohesive.Simulation.Worlds;
 using Cohesive.Simulation.Xunit;
@@ -20,7 +21,7 @@ namespace Cohesive.Examples.SimulationAdoption;
 public sealed class SimulationAdoptionExamples
 {
     [Fact]
-    public async Task OneDefinitionSupportsTestsArtifactsRepositorySeedingAndBrowserFixtures()
+    public async Task OneDefinitionSupportsTestsArtifactsRepositorySeedingBrowserFixturesAndScenarios()
     {
         var demo = CreateFreightDemo();
 
@@ -31,6 +32,24 @@ public sealed class SimulationAdoptionExamples
 
         var plan = demo.World.Compile();
         WorldArtifactManifest artifact = RelationshipWorldArtifact.FromWorld(plan, rootSeed: 42);
+        ScenarioDefinition scenario = SimulationDsl.DefineScenario(
+            id: "scenario/freight-dispatch",
+            revision: "r1",
+            initialWorld: artifact,
+            startsAtUtc: DateTimeOffset.UnixEpoch,
+            configure: builder => builder
+                .Operation<DispatchLoad, DispatchReceipt>("freight.dispatch-load")
+                .Actor("carrier", "carrier-for-scenario")
+                .Actor("load", "load-for-browser")
+                .Action(
+                    id: "dispatch-load",
+                    afterStart: TimeSpan.FromMinutes(5),
+                    actorId: "carrier",
+                    operationId: "freight.dispatch-load",
+                    input: new DispatchLoad(Priority: 1),
+                    targetActorId: "load"));
+        ScenarioDefinitionDocument retainedScenario = ScenarioDefinitionJsonSerializer.Deserialize(
+            ScenarioDefinitionJsonSerializer.Serialize(scenario));
         var carrierRepository = RepositoryFor<DemoCarrier>(demo.Shapes);
         var loadRepository = RepositoryFor<DemoLoad>(demo.Shapes);
         var repositorySink = new RepositoryWorldProvisioningSink(
@@ -58,6 +77,8 @@ public sealed class SimulationAdoptionExamples
             EntityReadOptions.Full);
 
         Assert.Equal(4, seeded.ItemCount);
+        Assert.Equal(artifact.ArtifactId, retainedScenario.Definition.InitialWorld.ArtifactId);
+        Assert.Equal("dispatch-load", Assert.Single(retainedScenario.Compile().Definition.Actions).Id);
         Assert.NotNull(storedLoad);
         var carrierId = storedLoad.Entity.Observation.Value.Fields!["CarrierId"].String;
         Assert.NotNull(carrierId);
@@ -113,6 +134,7 @@ public sealed class SimulationAdoptionExamples
                 .Population("carriers", count: 2, carriers)
                 .Population("loads", count: 2, loads)
                 .Relationship("loads", loadCarrier.Id, "carriers")
+                .Exemplar("carrier-for-scenario", "carriers", sequenceIndex: 0)
                 .Exemplar("load-for-browser", "loads", sequenceIndex: 1));
         return new(shapes, carriers, world);
     }
@@ -138,4 +160,8 @@ public sealed class SimulationAdoptionExamples
 
     [ShapeDefinition("Load", ShapeRoles.Entity)]
     sealed record DemoLoad(int Number, string CarrierId);
+
+    sealed record DispatchLoad(int Priority);
+
+    sealed record DispatchReceipt(bool Accepted);
 }

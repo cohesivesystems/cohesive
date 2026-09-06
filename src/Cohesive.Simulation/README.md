@@ -1,8 +1,8 @@
 # Cohesive.Simulation
 
-`Cohesive.Simulation` provides deterministic synthetic-data generation, property cases, replayable worlds, and
-provider-neutral provisioning over canonical Cohesive shapes. Typed C# builders are the ordinary authoring surface;
-portable IR remains the semantic authority used by tests, scripts, seeders, and tools.
+`Cohesive.Simulation` provides deterministic synthetic-data generation, property cases, replayable worlds, scheduled
+scenarios, and provider-neutral provisioning over canonical Cohesive shapes. Typed C# builders are the ordinary
+authoring surface; portable IR remains the semantic authority used by tests, scripts, seeders, and tools.
 
 ## Install
 
@@ -16,7 +16,7 @@ Add only the integrations the application uses:
 
 | Package | Use it for |
 | --- | --- |
-| `Cohesive.Simulation` | POCO generation, property cases, worlds, artifacts, replay, and JSONL |
+| `Cohesive.Simulation` | POCO generation, property cases, worlds, scenarios, artifacts, replay, and JSONL |
 | `Cohesive.Simulation.Relations` | References between generated populations |
 | `Cohesive.Simulation.Storage` | Seeding Cohesive entity repositories |
 | `Cohesive.Simulation.Xunit` | Translating property-case results into xUnit failures |
@@ -119,6 +119,7 @@ semantics. See the compatibility guide before retaining artifacts across package
 - [Getting started](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/getting-started.md)
 - [Artifacts, replay, and verification](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/artifacts-and-replay.md)
 - [Repository seeding and Playwright](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/seeding-and-playwright.md)
+- [Deterministic scenarios](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/scenarios.md)
 - [Alpha compatibility contract](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/compatibility.md)
 - [Executable end-to-end example](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Examples/Simulation/SimulationAdoptionExamples.cs)
 - [Relationship worlds](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation.Relations/README.md)
