@@ -148,10 +148,9 @@ public static class ExecutionDefinitionFingerprinter
         var options = ExecutionDefinitionJsonSerializer.CreateOptions();
         var definitionNode = JsonNode.Parse(definition.GetRawText())
             ?? throw new InvalidOperationException("Failed to materialize canonical execution-definition JSON.");
-        var canonical = CanonicalJsonWriter.GetCanonicalBytes(
+        var canonical = CanonicalJsonWriter.GetCanonicalSequenceBytes(
             definitionNode,
             options,
-            static _ => CanonicalJsonArrayOrdering.Sequence,
             numberSemantics: CanonicalJsonNumberSemantics.ExactDecimalRational);
         using var document = JsonDocument.Parse(canonical);
         return document.RootElement.Clone();
@@ -179,10 +178,9 @@ public static class ExecutionDefinitionFingerprinter
             ["extensions"] = extensionNode
         };
 
-        return CanonicalJsonWriter.GetCanonicalBytes(
+        return CanonicalJsonWriter.GetCanonicalSequenceBytes(
             semanticContent,
             options,
-            static _ => CanonicalJsonArrayOrdering.Sequence,
             numberSemantics: CanonicalJsonNumberSemantics.ExactDecimalRational);
     }
 

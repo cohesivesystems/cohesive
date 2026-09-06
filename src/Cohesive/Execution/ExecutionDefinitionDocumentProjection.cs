@@ -107,6 +107,29 @@ public sealed class ExecutionDefinitionDocumentProjection<TDefinition>
         return combined;
     }
 
+    internal DocumentValidationResult ValidateAuthored(
+        ExecutionDefinitionDocument document,
+        TDefinition definition,
+        Func<TDefinition, DocumentValidationResult> validateDefinition)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(validateDefinition);
+        if (document.Kind != Kind)
+        {
+            return WithSourceReferences(
+                document,
+                Error(
+                    kindMismatchCode,
+                    $"Expected execution-definition kind '{Kind.Value}', but found '{document.Kind.Value}'.",
+                    "/kind"));
+        }
+
+        return WithSourceReferences(
+            document,
+            PrefixDefinitionLocations(validateDefinition(definition)));
+    }
+
     DocumentValidationResult ValidateContent(
         ExecutionDefinitionDocument document,
         Func<TDefinition, DocumentValidationResult> validateDefinition,

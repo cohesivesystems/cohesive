@@ -207,6 +207,39 @@ public sealed record ExecutionDefinitionDocument
             (Definition: definitionElement, Extensions: normalizedExtensions));
     }
 
+    /// <summary>Returns this canonical definition with replacement non-semantic retained diagnostics.</summary>
+    /// <param name="diagnostics">Validation or authoring diagnostics to retain with the definition.</param>
+    /// <returns>
+    /// A document that preserves the exact canonical definition, extensions, semantic fingerprint, and other
+    /// metadata while replacing only the retained diagnostics.
+    /// </returns>
+    /// <remarks>
+    /// Retained diagnostics are excluded from semantic identity. This operation therefore reuses the existing
+    /// canonical semantic content and fingerprint instead of serializing and fingerprinting the typed definition
+    /// again. Validators remain the authority for current integrity and activation evidence.
+    /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="diagnostics"/> contains a null entry, an empty code or message, or an unrecognized severity.
+    /// </exception>
+    public ExecutionDefinitionDocument WithRetainedDiagnostics(
+        ImmutableArray<DocumentValidationDiagnostic> diagnostics)
+    {
+        var metadata = new ExecutionDefinitionMetadata(
+            Metadata.DefinitionId,
+            Metadata.RevisionId,
+            Metadata.SchemaVersion,
+            Metadata.Fingerprint,
+            Metadata.Provenance,
+            Metadata.DisplayName,
+            Metadata.Description,
+            Metadata.SourceMap,
+            diagnostics);
+        return new(
+            Kind,
+            metadata,
+            (Definition, Extensions));
+    }
+
     /// <summary>Deserializes the canonical payload as a block-specific definition type.</summary>
     /// <typeparam name="TDefinition">Portable block-specific definition type.</typeparam>
     /// <returns>The typed canonical definition represented by <see cref="Definition"/>.</returns>

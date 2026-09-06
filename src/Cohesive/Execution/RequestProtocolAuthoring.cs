@@ -933,16 +933,8 @@ public static partial class InteractionContractAuthoring
             extensions,
             displayName,
             description);
-        var requestValidation = InteractionContractDocuments.Validate(initialRequest);
-        var requestDocument = InteractionContractDocuments.Create(
-            definitionId,
-            revisionId,
-            requestDefinition,
-            provenance,
-            extensions,
-            displayName,
-            description,
-            diagnostics: requestValidation.Diagnostics);
+        var requestValidation = InteractionContractDocuments.ValidateAuthored(initialRequest, requestDefinition);
+        var requestDocument = initialRequest.WithRetainedDiagnostics(requestValidation.Diagnostics);
         RequestContractReference request = new(Reference(requestDocument));
 
         var replyPrefix = replyDefinitionPrefix ?? new($"{definitionId.Value}/reply");
@@ -961,13 +953,8 @@ public static partial class InteractionContractAuthoring
                 exactReplyRevision,
                 replyDefinition,
                 attribution);
-            var replyValidation = InteractionContractDocuments.Validate(initialReply);
-            var replyDocument = InteractionContractDocuments.Create(
-                replyDefinitionId,
-                exactReplyRevision,
-                replyDefinition,
-                attribution,
-                diagnostics: replyValidation.Diagnostics);
+            var replyValidation = InteractionContractDocuments.ValidateAuthored(initialReply, replyDefinition);
+            var replyDocument = initialReply.WithRetainedDiagnostics(replyValidation.Diagnostics);
             documents.Add(replyDocument);
             replies.Add(new(outcome.Id, new(Reference(replyDocument))));
         }

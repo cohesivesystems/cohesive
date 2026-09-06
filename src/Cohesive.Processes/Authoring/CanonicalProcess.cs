@@ -531,16 +531,8 @@ public static partial class ProcessAuthoring
             displayName: metadata.DisplayName,
             description: metadata.Description,
             sourceMap: sourceMap);
-        var validation = ProcessDefinitionDocuments.Validate(initial);
-        var document = ProcessDefinitionDocuments.Create(
-            metadata.DefinitionId,
-            metadata.RevisionId,
-            definition,
-            metadata.Provenance,
-            displayName: metadata.DisplayName,
-            description: metadata.Description,
-            sourceMap: sourceMap,
-            diagnostics: validation.Diagnostics);
+        var validation = ProcessDefinitionDocuments.ValidateAuthored(initial, definition);
+        var document = initial.WithRetainedDiagnostics(validation.Diagnostics);
         return new(document, validation);
     }
 }

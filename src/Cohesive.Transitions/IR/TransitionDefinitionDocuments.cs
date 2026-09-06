@@ -192,6 +192,18 @@ public static class TransitionDefinitionDocuments
             out _);
     }
 
+    internal static DocumentValidationResult ValidateAuthored(
+        ExecutionDefinitionDocument document,
+        TransitionDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(definition);
+        return Projection.ValidateAuthored(
+            document,
+            definition,
+            candidate => TransitionDefinitionValidator.Validate(candidate));
+    }
+
     static DocumentValidationResult CompleteDeserialization(
         DocumentValidationResult sharedValidation,
         ExecutionDefinitionDocument? document,

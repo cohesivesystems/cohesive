@@ -23,6 +23,10 @@ public sealed class InteractionContractAuthoringTests
             displayName: "Training example generated");
 
         Assert.True(authored.IsValid, FormatDiagnostics(authored.Validation));
+        Assert.Equivalent(
+            InteractionContractDocuments.Validate(authored.Document),
+            authored.Validation,
+            strict: true);
         Assert.Equal(InteractionContractDocuments.Kind, authored.Document.Kind);
         Assert.Equal(new ExecutionDefinitionId("ari/event/training-example-generated"), authored.Document.Metadata.DefinitionId);
         Assert.Equal(new ExecutionRevisionId("1"), authored.Document.Metadata.RevisionId);
@@ -66,6 +70,10 @@ public sealed class InteractionContractAuthoringTests
         var authored = Create<RecursiveEvent>();
 
         Assert.False(authored.IsValid);
+        Assert.Equivalent(
+            InteractionContractDocuments.Validate(authored.Document),
+            authored.Validation,
+            strict: true);
         var diagnostic = Assert.Single(authored.Validation.Diagnostics);
         Assert.Equal(InteractionContractDiagnosticCodes.ValueSchemaInvalid, diagnostic.Code);
         Assert.Equal(diagnostic, Assert.Single(authored.Document.Metadata.Diagnostics));

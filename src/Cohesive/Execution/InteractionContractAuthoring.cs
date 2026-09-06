@@ -96,16 +96,8 @@ public static partial class InteractionContractAuthoring
             extensions,
             displayName,
             description);
-        var validation = InteractionContractDocuments.Validate(initial);
-        var document = InteractionContractDocuments.Create(
-            definitionId,
-            revisionId,
-            definition,
-            provenance,
-            extensions,
-            displayName,
-            description,
-            diagnostics: validation.Diagnostics);
+        var validation = InteractionContractDocuments.ValidateAuthored(initial, definition);
+        var document = initial.WithRetainedDiagnostics(validation.Diagnostics);
         return new(document, validation);
     }
 }

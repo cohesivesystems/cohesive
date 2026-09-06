@@ -40,6 +40,10 @@ public sealed class CanonicalTransitionAuthoringTests
             Provenance());
 
         Assert.True(first.IsValid, Format(first.Validation));
+        Assert.Equivalent(
+            TransitionDefinitionDocuments.Validate(first.Document),
+            first.Validation,
+            strict: true);
         Assert.Equal(ReviewInputContract, first.Definition.Input);
         Assert.Equal(ReviewObservationContract, first.Definition.Observation);
         Assert.Equal(StringContract, first.Definition.Outcome);
