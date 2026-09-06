@@ -135,14 +135,10 @@ public sealed class SqliteDatabase
     public SqliteCommand CreateCommand(SqliteConnection connection, SqliteTransaction? transaction, string sql,
         params ReadOnlySpan<SqliteParameter> parameters)
     {
-        ArgumentNullException.ThrowIfNull(connection);
         ArgumentException.ThrowIfNullOrWhiteSpace(sql);
         if (SqliteScalarCodec.RequireText(sql).Contains('\0'))
             throw new ArgumentException("SQLite command text cannot contain NUL; bind values as parameters.", nameof(sql));
-        if (connection.State != ConnectionState.Open)
-            throw new InvalidOperationException("A SQLite command requires an open borrowed connection.");
-        if (transaction is not null && !ReferenceEquals(transaction.Connection, connection))
-            throw new ArgumentException("The transaction must belong to the supplied open connection.", nameof(transaction));
+        RequireConnection(connection, transaction);
         var command = connection.CreateCommand();
         try
         {
@@ -158,6 +154,15 @@ public sealed class SqliteDatabase
             command.Dispose();
             throw;
         }
+    }
+
+    internal static void RequireConnection(SqliteConnection connection, SqliteTransaction? transaction)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        if (connection.State != ConnectionState.Open)
+            throw new InvalidOperationException("A SQLite command requires an open borrowed connection.");
+        if (transaction is not null && !ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("The transaction must belong to the supplied open connection.", nameof(transaction));
     }
 
     /// <summary>Quotes one SQLite identifier component without interpreting dots as schema qualification.</summary>
