@@ -74,7 +74,7 @@ public static class SqliteRelationQueryTargetProfile
         return new(Target, ProfileId, [RelationQueryDocument.CurrentSchemaVersion],
             [RelationQueryCompilationProvenance.CurrentCompilerProfile], [.. evidence],
             [new(StorageBoundary, RelationQueryOperatingBoundaryKind.CompleteInputEvidence,
-                description: "One SQLite database snapshot; complete codec-encoded tables with non-null unique integer identities, explicit optional-field presence, and proven unique order tuples.")]);
+                description: "One SQLite database snapshot; complete codec-encoded tables with non-null unique integer/text keys, declared text-order domains, explicit optional-field presence, and proven unique order tuples.")]);
     }
 
     static string CapabilityId(RelationQueryCapability capability) => capability switch

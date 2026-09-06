@@ -15,6 +15,30 @@ public sealed class ExprAnalysisTests
     static readonly ValueBindingId LoadBinding = new("load");
 
     [Fact]
+    public void Analyze_GuardsNarrowOnlyTheSelectedBranchAndRetainOptionalFieldContracts()
+    {
+        var scope = Scope(bindings:
+        [new(LoadBinding, new(new ObjectTypeRef(
+        [
+            new("Id", StringType), new("Value", Int64Type, nullability: FieldNullability.Nullable),
+            new("Optional", Int64Type, presence: FieldPresence.Optional)
+        ])), ExprBindingAvailability.MayBeAbsent)]);
+        var present = Expr.Eq(Expr.Field(LoadBinding, "Id"), Expr.Const("known"));
+        var value = Expr.Field(LoadBinding, "Value");
+        var compare = Expr.Le(value, Expr.Const(10L));
+        var notNull = Expr.Ne(value, Expr.Null());
+        var guarded = Expr.And(present, Expr.And(notNull, compare));
+        Assert.True(Analyze(guarded, scope, "guarded").IsValid);
+        Assert.True(Analyze(Expr.And(present, Expr.Or(Expr.Eq(value, Expr.Null()), compare)), scope, "false-guard").IsValid);
+        Assert.True(Analyze(Expr.And(present, Expr.And(Expr.Not(Expr.Eq(value, Expr.Null())), compare)), scope, "negated-guard").IsValid);
+        Assert.False(Analyze(Expr.And(notNull, compare), scope, "missing-is-not-null").IsValid);
+        Assert.False(Analyze(Expr.Or(guarded, compare), scope, "facts-do-not-escape").IsValid);
+        Assert.False(Analyze(Expr.And(present, Expr.Le(Expr.Field(LoadBinding, "Optional"), Expr.Const(10L))),
+            scope, "optional-field-stays-optional").IsValid);
+        Assert.False(Analyze(compare, scope, "independent-analysis").IsValid);
+    }
+
+    [Fact]
     public void Analyze_SameExpressionUnderDifferentScopes_DoesNotMutateExpression()
     {
         var expression = Expr.Field(LoadBinding, "Id");
