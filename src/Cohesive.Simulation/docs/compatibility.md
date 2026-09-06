@@ -8,6 +8,7 @@ formats may change between alpha versions, but every persisted contract is expli
 | Contract | Current identity |
 | --- | --- |
 | Generation catalog document | `cohesive-simulation-generation-catalog/v2` |
+| External catalog-import definition | `cohesive-simulation-external-generation-catalog-import/v1` |
 | External catalog-provider exchange | `cohesive-simulation-generation-catalog-provider/v1` |
 | Mimesis record-provider configuration | `cohesive-simulation-mimesis-record/v1` |
 | Generation document | `cohesive-simulation-generation/v4` |
@@ -22,6 +23,7 @@ formats may change between alpha versions, but every persisted contract is expli
 | Relationship-world replay token | `csimwr1.` |
 | CLI verification report | `cohesive-simulation-cli-verification/v1` |
 | CLI catalog-verification report | `cohesive-simulation-cli-catalog-verification/v1` |
+| CLI external-catalog import failure | `cohesive-simulation-cli-external-catalog-import-failure/v1` |
 
 These values are diagnostic references. Application code should use the corresponding public constants where they
 exist rather than copying strings.

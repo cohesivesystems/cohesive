@@ -1,8 +1,8 @@
 # Cohesive.Simulation.Cli
 
-`Cohesive.Simulation.Cli` packages the provider-neutral core and relationship-world provisioners as the `cohesive-sim`
-.NET tool. It lets shell scripts, CI jobs, demo-environment setup, and Playwright global setup consume the same
-portable world and retained artifact manifest used by .NET tests.
+`Cohesive.Simulation.Cli` packages provider-neutral catalog import, core generation, and relationship-world
+provisioning as the `cohesive-sim` .NET tool. It lets shell scripts, CI jobs, demo-environment setup, and Playwright
+global setup consume the same portable definitions and retained authorities used by .NET tests.
 
 ## Install
 
@@ -11,6 +11,28 @@ The current alpha targets .NET 10:
 ```bash
 dotnet tool install Cohesive.Simulation.Cli --global --prerelease
 ```
+
+Import an exact finite catalog from a language-neutral provider process:
+
+```bash
+cohesive-sim catalog import-external \
+  --definition test-data/person-profiles.external-import.json \
+  --executable python3 \
+  --arg tools/person-profile-provider.py \
+  --out test-data/person-profiles.catalog.json
+```
+
+The strict `cohesive-simulation-external-generation-catalog-import/v1` definition owns catalog identity, revision,
+bound, seed, portable value type, provider configuration, expected provider identity and version, random-algorithm
+profile, capability evidence, and source references. Machine-local launch choices—executable, ordered arguments,
+working directory, timeout, and byte limits—remain CLI options and are not copied into retained semantic data. The
+executable is launched directly without a command shell.
+
+Import completes and validates the full bounded provider response before atomically replacing a file selected by
+`--out`. Failures leave an existing output untouched and emit a
+`cohesive-simulation-cli-external-catalog-import-failure/v1` report on standard error, including a stable code,
+provider failure classification, exit code, bounded provider diagnostics, and definition diagnostics when
+applicable. Cancellation terminates the provider process tree and exits with code 130.
 
 Validate an adapter-produced catalog before using or embedding it in a generation definition:
 
@@ -61,9 +83,8 @@ the immutable manifest therefore already exists before JSON Lines generation sta
 provision preserves the prior complete JSON Lines file. Standard output is inherently streaming and can contain a
 partial batch if its consumer fails.
 
-`catalog verify --catalog -` reads one catalog from standard input. Provider adapters remain separate packages: this
-command neither invokes an external provider nor invents machine-specific launch configuration. Import a catalog
-with the selected adapter, retain the returned canonical document, and use this command at process or CI boundaries.
+`catalog verify --catalog -` reads one catalog from standard input. Provider-specific adapters remain separate
+packages. `catalog import-external` supplies the common process boundary; `catalog verify` never invokes a provider.
 
 The manifest and JSON Lines stream remain two independently framed artifacts rather than an invented aggregate file
 format. Every v5 item cites the exact manifest schema, artifact ID, and manifest fingerprint, as well as world, run,
