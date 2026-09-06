@@ -42,6 +42,24 @@ public sealed record CustomerProfile(string GivenName, string FamilyName, string
 Use the returned document through `Gen.Catalog<CustomerProfile>(profiles)`, commonly as a `SampleRecord` source when
 multiple generated entity fields must remain correlated.
 
+## What Cohesive adds beyond Bogus
+
+Bogus remains the source of realistic, domain-shaped sample values. This adapter turns those transient samples into a
+portable Cohesive generation asset that can participate in the rest of the simulation and assurance model:
+
+- a strict, provider-neutral `GenerationCatalogDocument` that can be persisted, inspected, compared, and consumed
+  without loading Bogus;
+- exact provenance and fingerprints covering the sampled values, adapter and provider versions, locale, seed, profile,
+  and application sources;
+- deterministic, addressable selection through Cohesive generation entropy, including replay and shrinking behavior;
+- composition with typed generators, correlated records, high-level worlds and scenarios, provisioning, JSONL
+  artifacts, and verification workflows used by unit, script, and end-to-end tests.
+
+Bogus alone is usually the simpler choice for a one-off fake created and consumed in one process. Use this adapter when
+the generated data must become a durable, reviewable, reproducible input to tests, demo environments, or agentic
+assurance. The finite catalog is the semantic boundary: Bogus and the callback produce it, while its materialized values
+and provenance—not the callback or a future provider invocation—are the retained authority.
+
 ## Capability and determinism profile
 
 `BogusGenerationCatalog.CapabilityProfileIdentity` identifies the exact import contract. The current profile:
