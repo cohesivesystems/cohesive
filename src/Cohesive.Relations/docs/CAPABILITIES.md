@@ -148,6 +148,25 @@ changes without regenerating this artifact.
 
 - Primitive facilities: `BatchedKeyLookup`, `BatchedPredicateLookup`, `CompleteSetEnumeration`, `FieldProjection`, `ObservationIdentityRead`, `RelationshipReferenceRead`
 - Operating boundaries: none declared by this profile.
+
+### SQLite native rows
+
+- Target: `cohesive.adapters.sqlite.sql`
+- Profile: `cohesive.adapters.sqlite.sql/canonical-v1`
+- Capability evidence: 52
+- Definition schemas: `relation-query/v1`
+- Compiler profiles: `relation-query-static/v1`
+- Full-profile SHA-256: `f8a3a6498494be11a8c5fbe439032be4cf051458ed268b44bfa6aa5a9fc3d461`
+- Families: boundary validation=1, expression=14, guarantee=12, logical=17, primitive=3, structural=5
+
+- Logical semantics: `AlwaysPresentBinding`, `AscendingOrdering`, `DescendingOrdering`, `Filter`, `InnerJoin`, `Join`, `LeftOuterJoin`, `MayBeAbsentBinding`, `NullsFirst`, `NullsLast`, `Ordering`, `Projection`, `ProjectionAssignment`, `QueryRowsResult`, `SelectRepresentative`, `Source`, `StableTieOrdering`
+- Expression semantics: `Operation:expr.node.constant`, `Operation:expr.node.field`, `Operation:expr.node.parameter`, `Operation:expr.node.typedField`, `Operation:expr.node.typedLiteral`, `Operation:expr.operator.binary.and`, `Operation:expr.operator.binary.eq`, `Operation:expr.operator.binary.ge`, `Operation:expr.operator.binary.gt`, `Operation:expr.operator.binary.le`, `Operation:expr.operator.binary.lt`, `Operation:expr.operator.binary.ne`, `Operation:expr.operator.binary.or`, `Operation:expr.operator.unary.not`
+- Structural paths: `BindingRead:TopLevelField`, `CompleteValue:RootValue`, `OccurrenceEvidenceReconstruction:TopLevelField`, `OutputSelection:TopLevelField`, `ProjectionTarget:TopLevelField`
+- Preserved guarantees: `AbsenceAvailabilityFailureDistinction`, `Cardinality`, `ConsistentSnapshot`, `DeterministicResult`, `EvidenceCompleteness`, `Grouping`, `InconclusiveEvidence`, `JoinMembership`, `MissingNullDistinction`, `NullPlacement`, `OccurrenceProvenance`, `Ordering`
+- Enforced boundaries: `sqlite/boundary/exact-storage`
+- Primitive facilities: `CompleteSetEnumeration`, `FieldProjection`, `ObservationIdentityRead`
+- Operating boundaries:
+  - `sqlite/boundary/exact-storage`: CompleteInputEvidence
 <!-- generated-capability-profiles:end -->
 
 Regenerate and verify only this document:
