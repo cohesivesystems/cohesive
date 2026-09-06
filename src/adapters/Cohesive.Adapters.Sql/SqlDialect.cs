@@ -26,7 +26,9 @@ public enum SqlFeature
     /// <summary>Full outer joins.</summary>
     FullJoin,
     /// <summary>Single-column scalar subqueries bounded to at most one row.</summary>
-    ScalarSubquery
+    ScalarSubquery,
+    /// <summary>Ordered row numbering within an optional partition using ROW_NUMBER() OVER.</summary>
+    RowNumber
 }
 
 /// <summary>Adapter-owned policy for rendering and binding shared SQL construction artifacts.</summary>

@@ -403,37 +403,11 @@ public static partial class RelationQueryDefinitionValidator
                         }
                     }
                     break;
-                case OrderQueryNode order when order.Orderings.IsDefaultOrEmpty:
-                    Add(
-                        code: "relationQuery.order.orderingsEmpty",
-                        message: $"Order node '{order.Id.Value}' must contain at least one ordering.",
-                        location: $"{NodeLocation(order.Id)}/orderings");
-                    break;
-                case OrderQueryNode order when order.Orderings.Any(static ordering => ordering is null):
-                    Add(
-                        code: "relationQuery.order.orderingMissing",
-                        message: $"Order node '{order.Id.Value}' contains a missing ordering entry.",
-                        location: $"{NodeLocation(order.Id)}/orderings");
+                case SelectRepresentativeQueryNode representative:
+                    ValidateOrderings(representative.Id, representative.Orderings, "representative");
                     break;
                 case OrderQueryNode order:
-                    for (var index = 0; index < order.Orderings.Length; index++)
-                    {
-                        var ordering = order.Orderings[index];
-                        if (!Enum.IsDefined(ordering.Direction))
-                        {
-                            Add(
-                                code: "relationQuery.order.directionInvalid",
-                                message: $"Order node '{order.Id.Value}' contains an unsupported sort direction.",
-                                location: $"{NodeLocation(order.Id)}/orderings/{index}/direction");
-                        }
-                        if (!Enum.IsDefined(ordering.NullPlacement))
-                        {
-                            Add(
-                                code: "relationQuery.order.nullPlacementInvalid",
-                                message: $"Order node '{order.Id.Value}' contains an unsupported null placement.",
-                                location: $"{NodeLocation(order.Id)}/orderings/{index}/nullPlacement");
-                        }
-                    }
+                    ValidateOrderings(order.Id, order.Orderings, "order");
                     break;
                 case PageQueryNode { Page: null } page:
                     Add(
@@ -503,25 +477,60 @@ public static partial class RelationQueryDefinitionValidator
                                 $"{NodeLocation(distinct.Id)}/keys/{index}");
                         }
                         break;
+                    case SelectRepresentativeQueryNode representative:
+                        var partitionKeys = representative.Keys.IsDefault ? [] : representative.Keys;
+                        for (var index = 0; index < partitionKeys.Length; index++)
+                        {
+                            ValidateExpressionPortability(
+                                partitionKeys[index],
+                                $"{NodeLocation(representative.Id)}/keys/{index}");
+                        }
+                        ValidateOrderingExpressions(representative.Id, representative.Orderings);
+                        break;
                     case AggregateQueryNode aggregate:
                         ValidateAggregateExpressions(aggregate);
                         break;
                     case OrderQueryNode order:
-                        var orderings = order.Orderings.IsDefault ? [] : order.Orderings;
-                        for (var index = 0; index < orderings.Length; index++)
-                        {
-                            if (orderings[index] is not { } ordering)
-                                continue;
-                            ValidateExpressionPortability(
-                                ordering.Key,
-                                $"{NodeLocation(order.Id)}/orderings/{index}/key");
-                        }
+                        ValidateOrderingExpressions(order.Id, order.Orderings);
                         break;
                     case PageQueryNode page:
                         ValidatePageExpressions(page);
                         break;
                 }
             }
+        }
+
+        void ValidateOrderings(QueryNodeId id, ImmutableArray<QueryOrdering> orderings, string role)
+        {
+            if (orderings.IsDefaultOrEmpty)
+            {
+                Add($"relationQuery.{role}.orderingsEmpty", $"Node '{id.Value}' must contain at least one ordering.",
+                    $"{NodeLocation(id)}/orderings");
+                return;
+            }
+            for (var index = 0; index < orderings.Length; index++)
+            {
+                var ordering = orderings[index];
+                if (ordering is null)
+                {
+                    Add($"relationQuery.{role}.orderingMissing", $"Node '{id.Value}' contains a missing ordering entry.",
+                        $"{NodeLocation(id)}/orderings");
+                    continue;
+                }
+                if (!Enum.IsDefined(ordering.Direction))
+                    Add($"relationQuery.{role}.directionInvalid", $"Node '{id.Value}' contains an unsupported sort direction.",
+                        $"{NodeLocation(id)}/orderings/{index}/direction");
+                if (!Enum.IsDefined(ordering.NullPlacement))
+                    Add($"relationQuery.{role}.nullPlacementInvalid", $"Node '{id.Value}' contains an unsupported null placement.",
+                        $"{NodeLocation(id)}/orderings/{index}/nullPlacement");
+            }
+        }
+
+        void ValidateOrderingExpressions(QueryNodeId id, ImmutableArray<QueryOrdering> orderings)
+        {
+            for (var index = 0; index < (orderings.IsDefault ? 0 : orderings.Length); index++)
+                if (orderings[index] is { } ordering)
+                    ValidateExpressionPortability(ordering.Key, $"{NodeLocation(id)}/orderings/{index}/key");
         }
 
         void ValidateTemporalMatch(TemporalJoinQueryNode temporalJoin)

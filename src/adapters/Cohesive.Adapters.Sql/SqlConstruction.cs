@@ -322,7 +322,7 @@ public sealed record SqlKeysetTerm
 }
 
 /// <summary>SQL scalar-expression tree with structured operands and dialect-owned intrinsic extensions.</summary>
-public abstract record SqlExpression
+public abstract partial record SqlExpression
 {
     /// <summary>Initializes a SQL expression.</summary>
     private protected SqlExpression()
@@ -1351,7 +1351,7 @@ public sealed class SqlSelectQuery
     readonly ImmutableArray<SqlJoinItem> joins;
     readonly ImmutableArray<SqlExpression> predicates;
     readonly ImmutableArray<SqlExpression> groupings;
-    readonly ImmutableArray<SqlOrderItem> orderings;
+    readonly ImmutableArray<SqlOrdering> orderings;
     readonly bool distinct;
     readonly int? limit;
     readonly int? offset;
@@ -1368,7 +1368,7 @@ public sealed class SqlSelectQuery
         ImmutableArray<SqlJoinItem> joins,
         ImmutableArray<SqlExpression> predicates,
         ImmutableArray<SqlExpression> groupings,
-        ImmutableArray<SqlOrderItem> orderings,
+        ImmutableArray<SqlOrdering> orderings,
         bool distinct,
         int? limit,
         int? offset)
@@ -1457,12 +1457,7 @@ public sealed class SqlSelectQuery
                     builder.Append(", ");
                 }
 
-                var ordering = orderings[index];
-                ordering.Expression.WriteTo(context, builder);
-                builder.Append(ordering.Direction == SqlSortDirection.Ascending ? " ASC" : " DESC");
-                builder.Append(ordering.NullPlacement == SqlNullPlacement.First
-                    ? " NULLS FIRST"
-                    : " NULLS LAST");
+                orderings[index].WriteTo(context, builder);
             }
         }
 
@@ -1504,7 +1499,7 @@ public sealed class SqlSelectBuilder
     readonly List<SqlJoinItem> joins = [];
     readonly List<SqlExpression> predicates = [];
     readonly List<SqlExpression> groupings = [];
-    readonly List<SqlOrderItem> orderings = [];
+    readonly List<SqlOrdering> orderings = [];
     readonly HashSet<SqlIdentifier> aliases = [];
     readonly HashSet<SqlIdentifier> selectionAliases = [];
     bool distinct;
@@ -1695,17 +1690,6 @@ public sealed class SqlSelectBuilder
         SqlSortDirection direction = SqlSortDirection.Ascending,
         SqlNullPlacement nullPlacement = SqlNullPlacement.Last)
     {
-        ArgumentNullException.ThrowIfNull(expression);
-        if (!Enum.IsDefined(direction))
-        {
-            throw new ArgumentOutOfRangeException(nameof(direction), direction, "Unsupported SQL sort direction.");
-        }
-
-        if (!Enum.IsDefined(nullPlacement))
-        {
-            throw new ArgumentOutOfRangeException(nameof(nullPlacement), nullPlacement, "Unsupported SQL null placement.");
-        }
-
         orderings.Add(new(expression, direction, nullPlacement));
         return this;
     }
@@ -1893,11 +1877,6 @@ internal sealed record SqlJoinItem(
     SqlFromItem Source,
     SqlJoinKind Kind,
     SqlExpression? Predicate);
-
-internal sealed record SqlOrderItem(
-    SqlExpression Expression,
-    SqlSortDirection Direction,
-    SqlNullPlacement NullPlacement);
 
 internal sealed class SqlRenderContext(SqlDialect dialect)
 {

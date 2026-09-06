@@ -1577,7 +1577,7 @@ export const relationQueryBoundAssessmentStatusLabels: Record<RelationQueryBound
   Blocked: 'Blocked',
 };
 
-export type RelationQueryLogicalCapabilityKind = 'Source' | 'Filter' | 'RelationshipTraversal' | 'ForwardRelationshipTraversal' | 'InverseRelationshipTraversal' | 'AtMostOneRelationshipTraversal' | 'ManyRelationshipTraversal' | 'RequiredRelationshipTraversal' | 'OptionalRelationshipTraversal' | 'Join' | 'InnerJoin' | 'LeftOuterJoin' | 'RightOuterJoin' | 'FullOuterJoin' | 'TemporalJoin' | 'ExpandCollection' | 'Projection' | 'ProjectionAssignment' | 'DistinctRows' | 'DistinctKeys' | 'Aggregation' | 'AggregateGrouping' | 'AggregateFilter' | 'CountAggregate' | 'SumAggregate' | 'MinimumAggregate' | 'MaximumAggregate' | 'AnyAggregate' | 'AllAggregate' | 'Ordering' | 'AscendingOrdering' | 'DescendingOrdering' | 'NullsFirst' | 'NullsLast' | 'StableTieOrdering' | 'OffsetPaging' | 'KeysetPaging' | 'OnePerRootRelationOutput' | 'ZeroOrOnePerRootRelationOutput' | 'ManyPerRootRelationOutput' | 'SetRelationOutput' | 'RelationOutputIdentity' | 'RelationInvariant' | 'QueryRowsResult' | 'QueryAggregationResult' | 'AlwaysPresentBinding' | 'MayBeAbsentBinding' | 'AverageAggregate';
+export type RelationQueryLogicalCapabilityKind = 'Source' | 'Filter' | 'RelationshipTraversal' | 'ForwardRelationshipTraversal' | 'InverseRelationshipTraversal' | 'AtMostOneRelationshipTraversal' | 'ManyRelationshipTraversal' | 'RequiredRelationshipTraversal' | 'OptionalRelationshipTraversal' | 'Join' | 'InnerJoin' | 'LeftOuterJoin' | 'RightOuterJoin' | 'FullOuterJoin' | 'TemporalJoin' | 'ExpandCollection' | 'Projection' | 'ProjectionAssignment' | 'DistinctRows' | 'DistinctKeys' | 'Aggregation' | 'AggregateGrouping' | 'AggregateFilter' | 'CountAggregate' | 'SumAggregate' | 'MinimumAggregate' | 'MaximumAggregate' | 'AnyAggregate' | 'AllAggregate' | 'Ordering' | 'AscendingOrdering' | 'DescendingOrdering' | 'NullsFirst' | 'NullsLast' | 'StableTieOrdering' | 'OffsetPaging' | 'KeysetPaging' | 'OnePerRootRelationOutput' | 'ZeroOrOnePerRootRelationOutput' | 'ManyPerRootRelationOutput' | 'SetRelationOutput' | 'RelationOutputIdentity' | 'RelationInvariant' | 'QueryRowsResult' | 'QueryAggregationResult' | 'AlwaysPresentBinding' | 'MayBeAbsentBinding' | 'AverageAggregate' | 'SelectRepresentative';
 
 export const relationQueryLogicalCapabilityKinds = {
   source: 'Source',
@@ -1628,6 +1628,7 @@ export const relationQueryLogicalCapabilityKinds = {
   alwaysPresentBinding: 'AlwaysPresentBinding',
   mayBeAbsentBinding: 'MayBeAbsentBinding',
   averageAggregate: 'AverageAggregate',
+  selectRepresentative: 'SelectRepresentative',
 } as const satisfies Record<string, RelationQueryLogicalCapabilityKind>;
 
 export const relationQueryLogicalCapabilityKindLabels: Record<RelationQueryLogicalCapabilityKind, string> = {
@@ -1679,6 +1680,7 @@ export const relationQueryLogicalCapabilityKindLabels: Record<RelationQueryLogic
   AlwaysPresentBinding: 'AlwaysPresentBinding',
   MayBeAbsentBinding: 'MayBeAbsentBinding',
   AverageAggregate: 'AverageAggregate',
+  SelectRepresentative: 'SelectRepresentative',
 };
 
 export interface ExprCapabilityId {
@@ -1932,6 +1934,8 @@ export type LogicalQueryNode = {
 } & ProjectQueryNode | {
   readonly $node: 'distinct';
 } & DistinctQueryNode | {
+  readonly $node: 'selectRepresentative';
+} & SelectRepresentativeQueryNode | {
   readonly $node: 'aggregate';
 } & AggregateQueryNode | {
   readonly $node: 'order';
@@ -2000,6 +2004,13 @@ export interface DistinctQueryNode {
   input: QueryNodeId;
   keys: Expr[];
   id: QueryNodeId;
+}
+
+export interface SelectRepresentativeQueryNode {
+  id: QueryNodeId;
+  input: QueryNodeId;
+  keys: Expr[];
+  orderings: QueryOrdering[];
 }
 
 export interface AggregateQueryNode {
@@ -2383,6 +2394,12 @@ export interface ProjectionAssignment {
   value: Expr;
 }
 
+export interface QueryOrdering {
+  key: Expr;
+  direction: QuerySortDirection;
+  nullPlacement: QueryNullPlacement;
+}
+
 export interface QueryGrouping {
   id: QueryAssignmentId;
   target: FieldPath;
@@ -2395,12 +2412,6 @@ export interface QueryAggregateAssignment {
   operation: AggregateOperator;
   value?: Expr | null;
   filter?: Expr | null;
-}
-
-export interface QueryOrdering {
-  key: Expr;
-  direction: QuerySortDirection;
-  nullPlacement: QueryNullPlacement;
 }
 
 export type QueryPageDefinition = {
@@ -2514,7 +2525,7 @@ export const relationQueryRealizationTraceStepKindLabels: Record<RelationQueryRe
   Terminal: 'Terminal',
 };
 
-export type RelationQueryExpressionSiteKind = 'FilterPredicate' | 'JoinPredicate' | 'ExpandCollection' | 'ProjectionAssignmentValue' | 'DistinctKey' | 'AggregateGroupingKey' | 'AggregateAssignmentValue' | 'AggregateAssignmentFilter' | 'OrderKey' | 'KeysetBoundary' | 'RelationOutputKey' | 'RelationInvariant' | 'TemporalJoinCorrelation' | 'TemporalJoinPoint' | 'TemporalJoinIntervalLowerBound' | 'TemporalJoinIntervalUpperBound';
+export type RelationQueryExpressionSiteKind = 'FilterPredicate' | 'JoinPredicate' | 'ExpandCollection' | 'ProjectionAssignmentValue' | 'DistinctKey' | 'AggregateGroupingKey' | 'AggregateAssignmentValue' | 'AggregateAssignmentFilter' | 'OrderKey' | 'KeysetBoundary' | 'RelationOutputKey' | 'RelationInvariant' | 'TemporalJoinCorrelation' | 'TemporalJoinPoint' | 'TemporalJoinIntervalLowerBound' | 'TemporalJoinIntervalUpperBound' | 'RepresentativeKey';
 
 export const relationQueryExpressionSiteKinds = {
   filterPredicate: 'FilterPredicate',
@@ -2533,6 +2544,7 @@ export const relationQueryExpressionSiteKinds = {
   temporalJoinPoint: 'TemporalJoinPoint',
   temporalJoinIntervalLowerBound: 'TemporalJoinIntervalLowerBound',
   temporalJoinIntervalUpperBound: 'TemporalJoinIntervalUpperBound',
+  representativeKey: 'RepresentativeKey',
 } as const satisfies Record<string, RelationQueryExpressionSiteKind>;
 
 export const relationQueryExpressionSiteKindLabels: Record<RelationQueryExpressionSiteKind, string> = {
@@ -2552,6 +2564,7 @@ export const relationQueryExpressionSiteKindLabels: Record<RelationQueryExpressi
   TemporalJoinPoint: 'TemporalJoinPoint',
   TemporalJoinIntervalLowerBound: 'TemporalJoinIntervalLowerBound',
   TemporalJoinIntervalUpperBound: 'TemporalJoinIntervalUpperBound',
+  RepresentativeKey: 'RepresentativeKey',
 };
 
 export type ExprSiteId = string;

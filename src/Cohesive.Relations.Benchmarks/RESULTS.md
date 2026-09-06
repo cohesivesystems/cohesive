@@ -1,5 +1,30 @@
 # Cohesive Benchmark Results
 
+## 2026-09-06: ordered representative reference execution (COH-96)
+
+Working revision of `codex/coh-96-ordered-representatives`; BenchmarkDotNet 0.15.8 ShortRun,
+.NET 10.0.5 / SDK 10.0.201, macOS 26.6.2, Apple M5 Max, `DOTNET_PROCESSOR_COUNT=2`.
+One launch, three warmups and three measured iterations. Reproduce with:
+
+```sh
+DOTNET_PROCESSOR_COUNT=2 dotnet run --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj -c Release -- \
+  --filter '*RepresentativeSelectionBenchmarks*' --job short
+```
+
+| Candidates | Winners | Mean | StdDev | Allocated per execution |
+| ---: | ---: | ---: | ---: | ---: |
+| 100 | 10 | 242.6 μs | 1.42 μs | 284.59 KB |
+| 1,000 | 100 | 2,624.2 μs | 90.86 μs | 2,654.54 KB |
+| 10,000 | 1,000 | 32,395.5 μs | 441.96 μs | 26,605.74 KB |
+
+The plan, realization and source evidence are prepared outside measurement. Each execution includes evidence
+validation/indexing, candidate materialization, partition selection, final winner ordering, full field projection
+and retained provenance. Each partition has ten candidates, an integer preference and an identity tie-breaker.
+These are descriptive reference-interpreter baselines, with substantial allocation in the full pipeline. They do
+not isolate the selection loop, compare equivalent prior behavior, or measure native SQLite query performance.
+SQL lowering, indexed query plans and application throughput measurements remain part of COH-96 follow-up work.
+
+
 ## 2026-09-05: ordinal observation storage (COH-87)
 
 Measured on the working revision of `codex/coh-87-sqlite-entity-repositories` implementing shared SQL construction

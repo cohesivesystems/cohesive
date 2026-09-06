@@ -254,6 +254,25 @@ public static class RelationQueryExpressionAnalyzer
                 ambientCapabilities);
             var nodePrefix = $"{prefix}/node/{Encode(node.Id.Value)}";
             var nodeLocation = NodeLocation(node.Id);
+            void AddOrderingSites(QueryNodeId id, ImmutableArray<QueryOrdering> definitions, string role)
+            {
+                var orderings = definitions.IsDefault ? [] : definitions;
+                for (var index = 0; index < orderings.Length; index++)
+                {
+                    if (orderings[index]?.Key is not { } key)
+                        continue;
+                    sites.Add(CreateSite(
+                        $"{nodePrefix}/{role}/key/{index}",
+                        key,
+                        inputScope,
+                        NullableComparableExpectation,
+                        $"{nodeLocation}/orderings/{index}/key",
+                        RelationQueryExpressionSiteKind.OrderKey,
+                        node: id,
+                        ordinal: index));
+                }
+            }
+
             switch (node)
             {
                 case FilterQueryNode filter when filter.Predicate is not null:
@@ -359,6 +378,25 @@ public static class RelationQueryExpressionAnalyzer
                     }
                     break;
 
+                case SelectRepresentativeQueryNode representative:
+                    var partitionKeys = representative.Keys.IsDefault ? [] : representative.Keys;
+                    for (var index = 0; index < partitionKeys.Length; index++)
+                    {
+                        if (partitionKeys[index] is not { } key)
+                            continue;
+                        sites.Add(CreateSite(
+                            $"{nodePrefix}/representative/key/{index}",
+                            key,
+                            inputScope,
+                            ExprExpectation.Any,
+                            $"{nodeLocation}/keys/{index}",
+                            RelationQueryExpressionSiteKind.RepresentativeKey,
+                            node: representative.Id,
+                            ordinal: index));
+                    }
+                    AddOrderingSites(representative.Id, representative.Orderings, "representative/order");
+                    break;
+
                 case AggregateQueryNode aggregate:
                     AddAggregateSites(
                         sites,
@@ -371,21 +409,7 @@ public static class RelationQueryExpressionAnalyzer
                     break;
 
                 case OrderQueryNode order:
-                    var orderings = order.Orderings.IsDefault ? [] : order.Orderings;
-                    for (var index = 0; index < orderings.Length; index++)
-                    {
-                        if (orderings[index]?.Key is not { } key)
-                            continue;
-                        sites.Add(CreateSite(
-                            $"{nodePrefix}/order/key/{index}",
-                            key,
-                            inputScope,
-                            NullableComparableExpectation,
-                            $"{nodeLocation}/orderings/{index}/key",
-                            RelationQueryExpressionSiteKind.OrderKey,
-                            node: order.Id,
-                            ordinal: index));
-                    }
+                    AddOrderingSites(order.Id, order.Orderings, "order");
                     break;
 
                 case PageQueryNode { Page: KeysetPageDefinition keyset } page:

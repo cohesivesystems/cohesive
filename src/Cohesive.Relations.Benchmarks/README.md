@@ -11,6 +11,9 @@ exercise the same semantic definitions, runtime evidence, and CLR DTO contracts.
 
 ## Benchmark groups
 
+- **Representative selection:** full reference execution over ten candidates per key at 100, 1,000 and 10,000 rows,
+  with plans and evidence prepared in setup; see `RepresentativeSelectionBenchmarks` and [results](RESULTS.md).
+
 - **Observation creation and validation:** already-owned immutable values, caller-owned field snapshots,
   successful validation, and diagnostic production across flat-scalar, nested-object, and array-heavy values.
 - **Observation physical ingestion:** direct ordinal validation, caller-owned snapshot construction, single-owner

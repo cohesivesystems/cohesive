@@ -53,7 +53,10 @@ public enum RelationQueryExpressionSiteKind
     TemporalJoinIntervalLowerBound = 14,
 
     /// <summary>An indexed upper-bound expression used by a temporal join interval.</summary>
-    TemporalJoinIntervalUpperBound = 15
+    TemporalJoinIntervalUpperBound = 15,
+
+    /// <summary>An indexed partition key used by ordered representative selection.</summary>
+    RepresentativeKey = 16
 }
 
 /// <summary>
@@ -104,6 +107,7 @@ public sealed class RelationQueryExpressionSiteAnalysis
             or RelationQueryExpressionSiteKind.AggregateAssignmentValue
             or RelationQueryExpressionSiteKind.AggregateAssignmentFilter;
         var requiresOrdinal = kind is RelationQueryExpressionSiteKind.DistinctKey
+            or RelationQueryExpressionSiteKind.RepresentativeKey
             or RelationQueryExpressionSiteKind.OrderKey
             or RelationQueryExpressionSiteKind.KeysetBoundary
             or RelationQueryExpressionSiteKind.TemporalJoinIntervalLowerBound

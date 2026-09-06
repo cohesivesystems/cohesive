@@ -12,6 +12,7 @@ Relations and queries use the same logical operators because both describe relat
 - Unnesting
 - Projection
 - Distinctness
+- Ordered representative selection
 - Aggregation
 - Ordering
 - Paging
@@ -29,6 +30,43 @@ They differ in their semantic contract:
 The distinction is semantic rather than physical. Neither construct chooses a database, join algorithm, batching strategy, or execution runtime.
 
 A Cohesive relation is also not synonymous with a table in the relational-database sense. A compiler may realize a relation as a SQL expression, compiled mapper, or application-side plan, but the relation itself remains portable.
+
+## Ordered representative selection
+
+`SelectRepresentativeQueryNode` chooses one uniquely best input occurrence per partition. Its keys use canonical
+value equality, preserving missing versus null. Its nonempty `QueryOrdering` sequence defines the preference:
+direction and null placement are explicit, and missing/null ordering values share the null placement. Empty keys
+mean one global partition; rooted relations always partition by root occurrence as well. Empty input produces no row.
+
+The best complete ordering tuple must identify one occurrence. Tied winners fail with `REL3212`, even if their
+visible values are identical. Ties among losing rows do not matter. Append a stable identity to the preference
+sequence when the source permits equal primary preferences. The selected row retains its bindings, outer-join
+presence and input provenance; discarded candidates do not contribute provenance. Partition output order is
+unspecified, so use an explicit `OrderQueryNode` for presentation or paging.
+
+```csharp
+var author = RelationQuery.Expression();
+var candidates = author.Source<Candidate>();
+var winners = author.SelectRepresentative(candidates.Node, row => row.Category, candidates.Binding,
+    [author.Ordering(row => row.Revision, candidates.Binding, QuerySortDirection.Descending),
+     author.Ordering(row => row.Id, candidates.Binding)]);
+```
+
+For a category with revision 1 eligible and revision 2 ineligible, selection followed by an eligibility filter
+returns no row. Moving that filter before selection would return revision 1 and change the meaning. Static
+compilation retains partition and ordering expressions as membership dependencies even when the output does not
+project them. Keyed `DistinctQueryNode` keeps its existing first-encountered row and merged group provenance.
+
+The node persists as `$node: "selectRepresentative"` in `relation-query/v1`, participates in canonical fingerprints,
+and is emitted into TypeScript contracts by code generation. Consumers with exhaustive node unions must recognize
+the additive case; older readers reject it. The in-memory realization profile advances to
+`cohesive.relations.in-memory/realization-v3`. Its execution uses a single candidate scan and retains a best row plus
+tie status per partition, on top of the interpreter's already materialized input and evidence.
+
+The reference interpreter supports this operation. Native adapter profiles do not yet advertise it. Shared SQL
+`RowNumber` construction is a lowering primitive, not proof of these semantics. COH-96 still requires a SQLite
+compiler with bound placement evidence, exact encoding/comparison constraints, unique-order proof, presence and
+provenance projection, differential tests and indexed query measurements before application adoption.
 
 ## Valid-Time Joins
 

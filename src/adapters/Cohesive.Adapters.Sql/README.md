@@ -100,6 +100,19 @@ identifier quoting, parameter reuse, native array/lateral construction, and temp
 
 ## Migration
 
+`SqlExpression.RowNumber(partitions, orderings)` constructs `ROW_NUMBER() OVER (...)`. `SqlOrdering` is the shared
+ordering contract for windows and SELECT ordering, with explicit direction and null placement. Empty partitions
+mean a global partition; an empty ordering is rejected. Rendering requires `SqlFeature.RowNumber`, supported by
+the PostgreSQL dialect and the adapter's required modern SQLite profile. All keys use the containing statement's
+escaping and parameter slots, including runtime bindings shared with outer or derived queries.
+
+Project the window expression in an inner SELECT, then filter its ordinal in a derived query. The SQL builder
+does not prove key uniqueness, canonical equality, collation equivalence or missing/presence semantics. Tied SQL
+keys receive unspecified row numbers, so a semantic compiler must establish a unique ordering or explicitly
+validate ambiguity before claiming deterministic representative selection. Window order also does not establish
+final result order. See the native [SQLite](https://www.sqlite.org/windowfunctions.html) and
+[PostgreSQL](https://www.postgresql.org/docs/current/functions-window.html) window contracts.
+
 `SqlExpression.ScalarSubquery(query)` embeds one value (SQL NULL for no row) and shares the outer parameter allocator.
 The query must project exactly one column and use `Limit(1)`; unbounded queries are rejected so dialect-specific
 multirow behavior cannot silently select different semantics. Callers needing a deterministic representative must

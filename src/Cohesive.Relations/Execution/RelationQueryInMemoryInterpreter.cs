@@ -406,6 +406,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             ExpandCollectionQueryNode node => ExecuteExpand(execution, node),
             ProjectQueryNode node => ExecuteProject(execution, node),
             DistinctQueryNode node => ExecuteDistinct(execution, node),
+            SelectRepresentativeQueryNode node => ExecuteRepresentative(execution, node),
             AggregateQueryNode node => ExecuteAggregate(execution, node),
             OrderQueryNode node => ExecuteOrder(execution, node),
             PageQueryNode node => ExecutePage(execution, node),
@@ -1125,6 +1126,54 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             }
 
             return [.. distinct];
+        }
+
+        ImmutableArray<RelationQueryRuntimeRow> ExecuteRepresentative(
+            RelationQueryExecutionNode execution, SelectRepresentativeQueryNode node)
+        {
+            Dictionary<RelationQueryValueVector, int> partitions = [];
+            List<(OrderEntry Winner, bool Tied)> winners = [];
+            foreach (var row in InputRows(execution, inputIndex: 0))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                List<ObservationValue> partitionValues = [];
+                AddRootPartition(partitionValues, row);
+                var complete = true;
+                foreach (var site in execution.RepresentativeKeys)
+                {
+                    if (TryEvaluate(site, row, out var value)) partitionValues.Add(value);
+                    else complete = false;
+                }
+                var orderValues = new ObservationValue[execution.OrderKeys.Length];
+                for (var index = 0; index < orderValues.Length; index++)
+                    if (!TryEvaluate(execution.OrderKeys[index], row, out orderValues[index])) complete = false;
+                if (!complete) continue;
+
+                RelationQueryValueVector partition = new(partitionValues);
+                OrderEntry candidate = new(row, orderValues, Ordinal: 0);
+                if (!partitions.TryGetValue(partition, out var retained))
+                {
+                    partitions.Add(partition, winners.Count);
+                    winners.Add((candidate, false));
+                    continue;
+                }
+                var (winner, tied) = winners[retained];
+                var compared = CompareOrderKeys(candidate, winner, execution, node.Orderings);
+                if (compared < 0) winners[retained] = (candidate, false);
+                else if (compared == 0 && !tied) winners[retained] = (winner, true);
+            }
+
+            var result = ImmutableArray.CreateBuilder<RelationQueryRuntimeRow>(winners.Count);
+            foreach (var (winner, tied) in winners)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (tied)
+                    throw Failure(RelationRuntimeDiagnosticCodes.ExecutionRepresentativeAmbiguous,
+                        "Representative selection has multiple best rows. Add an explicit stable identity tie-breaker.",
+                        node.Id, winner.Row.Root?.Id);
+                result.Add(winner.Row);
+            }
+            return result.MoveToImmutable();
         }
 
         ImmutableArray<RelationQueryRuntimeRow> ExecuteAggregate(
@@ -2204,10 +2253,20 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             RelationQueryExecutionNode execution,
             OrderQueryNode node)
         {
+            var compared = CompareOrderKeys(left, right, execution, node.Orderings);
+            return compared != 0 ? compared : left.Ordinal.CompareTo(right.Ordinal);
+        }
+
+        int CompareOrderKeys(
+            OrderEntry left,
+            OrderEntry right,
+            RelationQueryExecutionNode execution,
+            ImmutableArray<QueryOrdering> orderings)
+        {
             cancellationToken.ThrowIfCancellationRequested();
-            for (var index = 0; index < node.Orderings.Length; index++)
+            for (var index = 0; index < orderings.Length; index++)
             {
-                var ordering = node.Orderings[index];
+                var ordering = orderings[index];
                 int compared;
                 try
                 {
@@ -2223,7 +2282,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                     throw new RelationQueryExecutionException(
                         RelationRuntimeDiagnosticCodes.ExecutionExpressionFailure,
                         exception.Message,
-                        node.Id,
+                        execution.Id,
                         site.Analysis.Site.Id.Value,
                         left.Row.Root?.Id,
                         exception);
@@ -2232,7 +2291,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                     return compared;
             }
 
-            return left.Ordinal.CompareTo(right.Ordinal);
+            return 0;
         }
 
         int CompareRowToBoundary(

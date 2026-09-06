@@ -508,4 +508,7 @@ public static class RelationRuntimeDiagnosticCodes
 
     /// <summary>A temporal interval had a lower endpoint after its upper endpoint.</summary>
     public const string ExecutionTemporalIntervalInvalid = "REL3211";
+
+    /// <summary>Multiple rows tied for the best ordering tuple within a representative partition.</summary>
+    public const string ExecutionRepresentativeAmbiguous = "REL3212";
 }

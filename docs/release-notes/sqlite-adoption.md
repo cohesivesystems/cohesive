@@ -1,5 +1,19 @@
 # SQLite adoption — unreleased
 
+## Ordered representative semantics and SQL construction
+
+Relations adds `SelectRepresentativeQueryNode` and structural/typed `SelectRepresentative` authoring. It selects
+one uniquely best occurrence per explicit key partition, keeps only the winner's provenance and rejects tied
+winners (`REL3212`). A later filter never causes fallback to a discarded row. Existing keyed `Distinct` semantics
+are unchanged. See the [semantic contract](../../src/Cohesive.Relations/docs/internals/RELATIONS_AND_QUERIES.md#ordered-representative-selection).
+
+This adds a `selectRepresentative` node to the version-one document union and generated TypeScript contracts;
+update exhaustive consumers. The in-memory profile advances to `realization-v3`, so regenerate retained
+realization artifacts against the new profile. Definition fingerprints for documents without the new node are
+unchanged. Shared SQL adds capability-gated `SqlExpression.RowNumber` and public `SqlOrdering`, supported by the
+SQLite and PostgreSQL dialects. Native Relations compilation and application query migration remain follow-up
+work in COH-96; constructing a window alone does not establish canonical representative semantics.
+
 ## Explicit SQLite pooling and reusable binding plans
 
 `SqliteDatabaseOptions` accepts an optional `pooling` policy. `SqliteConnectionPooling.Enabled` reuses provider native

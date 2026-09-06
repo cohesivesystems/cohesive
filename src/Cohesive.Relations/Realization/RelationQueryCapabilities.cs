@@ -151,7 +151,10 @@ public enum RelationQueryLogicalCapabilityKind
     MayBeAbsentBinding = 46,
 
     /// <summary>Computes an arithmetic average in the canonical decimal result domain.</summary>
-    AverageAggregate = 47
+    AverageAggregate = 47,
+
+    /// <summary>Selects the unique best ordered row per partition, retaining only its provenance.</summary>
+    SelectRepresentative = 48
 }
 
 /// <summary>Semantic role in which a target interprets a structural field path.</summary>
