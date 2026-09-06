@@ -29,7 +29,7 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
 {
     const string DirectIdPrefix = "direct/v1/";
     const string ProcessIdPrefix = "process/v1/";
-    static readonly JsonSerializerOptions JsonOptions = StrictDocumentJson.CreateOptions();
+    static readonly JsonSerializerOptions JsonOptions = EntityStorageJson.CreateOptions();
     readonly SqliteDatabase database;
     readonly SqliteEntityRepository entities;
     readonly SqliteEntityOutboxSql sql;
@@ -54,8 +54,10 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
 
     /// <summary>Physical entity mapping; its migration must be applied separately from the auxiliary migration.</summary>
     public SqliteEntityRepositoryMapping Mapping => entities.Mapping;
-    /// <summary>Version-one auxiliary migration; apply under a stable application-owned schema module name.</summary>
+    /// <summary>Original version-one auxiliary migration; use <see cref="Migrations"/> to initialize or upgrade a repository.</summary>
     public SqliteMigration InitialMigration => sql.InitialMigration;
+    /// <summary>Complete ordered auxiliary schema plan, including the explicit receipt-encoding revision.</summary>
+    public ImmutableArray<SqliteMigration> Migrations => [sql.InitialMigration, sql.EncodingMigration];
     /// <summary>Table containing versioned canonical receipt payloads; shared by both publication authorities.</summary>
     public string ReceiptsTable => sql.ReceiptsTable;
     /// <summary>Unique emission-to-receipt index for direct-Transition commits.</summary>
@@ -87,6 +89,7 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
     /// <exception cref="ArgumentException">Candidate keys, shape, or scalar values are invalid.</exception>
     /// <exception cref="InvalidOperationException">Emission identities conflict, retained evidence is invalid, the byte limit is exceeded, or stored shape differs.</exception>
     /// <exception cref="ObservationConcurrencyConflictException">A first-time write has a stale or absent CAS target.</exception>
+    /// <exception cref="NotSupportedException">A retained receipt uses an unsupported encoding; replay requires an explicit evidence migration.</exception>
     /// <exception cref="SemanticRuleViolationException">Candidate state violates the canonical entity definition.</exception>
     /// <exception cref="OperationCanceledException">Cancellation is observed before commit.</exception>
     /// <exception cref="SqliteException">SQL, locking, storage, or commit fails; all uncommitted changes roll back.</exception>
@@ -140,6 +143,7 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
     /// <inheritdoc />
     /// <exception cref="ArgumentException">The request subject belongs to another entity type or its identity has invalid text.</exception>
     /// <exception cref="InvalidOperationException">Retained canonical evidence or its mapped shape is invalid, or exceeds the byte limit.</exception>
+    /// <exception cref="NotSupportedException">A retained receipt uses an unsupported encoding and needs explicit migration.</exception>
     /// <exception cref="SemanticRuleViolationException">Retained state violates the canonical entity definition.</exception>
     /// <exception cref="SqliteException">Opening or reading the database fails.</exception>
     public Task<EntityTransitionOperationResult> TryGetTransitionOperation(OperationContext context, EntityTransitionOperationRequest request) =>
@@ -147,6 +151,7 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
     /// <inheritdoc />
     /// <exception cref="ArgumentException">The request subject belongs to another entity type or its identity has invalid text.</exception>
     /// <exception cref="InvalidOperationException">The creation index or retained evidence is invalid, or exceeds the byte limit.</exception>
+    /// <exception cref="NotSupportedException">A retained receipt uses an unsupported encoding and needs explicit migration.</exception>
     /// <exception cref="SemanticRuleViolationException">Retained state violates the canonical entity definition.</exception>
     /// <exception cref="SqliteException">Opening or reading the database fails.</exception>
     public Task<EntityTransitionOperationResult> TryGetCreationTransitionOperation(OperationContext context, EntityTransitionOperationRequest request) =>
@@ -159,6 +164,7 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">Candidate keys, scalar values, or subject mapping are invalid.</exception>
     /// <exception cref="InvalidOperationException">Retained evidence is invalid, the byte limit is exceeded, or stored shape differs.</exception>
+    /// <exception cref="NotSupportedException">A retained receipt uses an unsupported encoding and needs explicit migration.</exception>
     /// <exception cref="SemanticRuleViolationException">The candidate violates the canonical entity definition.</exception>
     /// <exception cref="OperationCanceledException">Cancellation is observed before commit.</exception>
     /// <exception cref="SqliteException">SQL, locking, storage, or commit fails; state and receipt roll back together.</exception>
@@ -221,6 +227,7 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
     /// <exception cref="ArgumentNullException">The context is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The cursor or count is outside its documented range.</exception>
     /// <exception cref="InvalidOperationException">Retained evidence is corrupt or exceeds the configured byte limit.</exception>
+    /// <exception cref="NotSupportedException">A retained receipt uses an unsupported encoding and needs explicit migration.</exception>
     /// <exception cref="OperationCanceledException">Cancellation is observed before returning the page.</exception>
     /// <exception cref="SqliteException">Reading the database fails.</exception>
     public Task<ImmutableArray<SqliteEntityOutboxEntry>> ReadOutbox(OperationContext context, long afterSequence = 0, int maximumCommits = 100)
@@ -293,6 +300,8 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
     T Decode<T>(SqliteDataReader reader, int kindOrdinal, int expectedKind) where T : class
     {
         if (reader.GetInt32(kindOrdinal) != expectedKind) throw InvalidReceipt();
+        if (reader.GetInt32(kindOrdinal + 3) != EntityStorageJson.FormatVersion)
+            throw new NotSupportedException("This SQLite receipt uses an unsupported encoding. Migrate retained evidence with its original shape before retrying; it cannot be treated as a missing operation.");
         var length = PayloadLength(reader, kindOrdinal + 1);
         var bytes = new byte[length];
         if (reader.GetBytes(kindOrdinal + 1, 0, bytes, 0, length) != length || HashBytes(bytes) != reader.GetString(kindOrdinal + 2))
@@ -318,7 +327,7 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
     {
         var bytes = StrictDocumentJson.GetCanonicalBytes(value, JsonOptions);
         if (bytes.Length > MaximumReceiptBytes) throw new InvalidOperationException($"Canonical SQLite receipt exceeds {MaximumReceiptBytes} bytes.");
-        using var command = Command(connection, transaction, sql.InsertReceipt, (Id, id), (Kind, kind), (Content, bytes), (Hash, HashBytes(bytes)));
+        using var command = Command(connection, transaction, sql.InsertReceipt, (Id, id), (Kind, kind), (Content, bytes), (Hash, HashBytes(bytes)), (Format, EntityStorageJson.FormatVersion));
         command.ExecuteNonQuery();
     }
 

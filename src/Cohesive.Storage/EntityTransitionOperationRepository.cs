@@ -706,6 +706,7 @@ public static class EntityTransitionOperationRepositoryExtensions
 
 static class EntityTransitionOperationFingerprints
 {
+    static readonly System.Text.Json.JsonSerializerOptions EntityOptions = EntityStorageJson.CreateOptions();
     internal static ProcessCommitFingerprint Request(EntityTransitionOperationRequest request) =>
         ProcessStorageContentFingerprints.Value(new RequestContent(
             request.Operation,
@@ -732,7 +733,7 @@ static class EntityTransitionOperationFingerprints
             commit.Result,
             commit.GuaranteeDemands,
             commit.Evidence,
-            commit.PublicationAuthority));
+            commit.PublicationAuthority), EntityOptions, profile: "sha256-entity-v2");
 
     sealed record RequestContent(
         ProcessOperationOccurrence Operation,

@@ -109,6 +109,15 @@ public sealed class PortableValueTests
             actualFields["bytes"].Bytes.ToArray());
         Assert.Equal(expectedFields["decimal"].Decimal, actualFields["decimal"].Decimal);
         Assert.Equal(expectedFields["dateTimeOffset"].String, actualFields["dateTimeOffset"].String);
+
+        // Detached snapshot values and PortableValue must share one tagged node format, including every kind.
+        Assert.Equal(Enum.GetValues<ObservationValueKind>().Order(), expectedFields.Values.Select(value => value.Kind).Distinct().Order());
+        var detachedOptions = new JsonSerializerOptions(WebJsonOptions);
+        detachedOptions.Converters.Add(PortableValueJsonConverter.TaggedObservationValues);
+        var detached = JsonSerializer.Serialize(original.Value!.Value, detachedOptions);
+        using var portableDocument = JsonDocument.Parse(json);
+        Assert.Equal(portableDocument.RootElement.GetProperty("value").GetRawText(), detached);
+        Assert.Equal(original.Value, JsonSerializer.Deserialize<ObservationValue>(detached, detachedOptions));
     }
 
     [Fact]

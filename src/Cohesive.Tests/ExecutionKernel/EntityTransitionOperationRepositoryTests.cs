@@ -125,17 +125,21 @@ public sealed class EntityTransitionOperationRepositoryTests
                 fixture.Repository.EntityDefinition,
                 container,
                 partitionKeyPolicy: partitionKeyPolicy);
-            var legacyReplayed = await legacyRestarted.TryGetTransitionOperation(
+            await Assert.ThrowsAsync<InvalidOperationException>(() => legacyRestarted.TryGetTransitionOperation(
                 fixture.Context,
-                fixture.Request);
+                fixture.Request));
+
+            var olderCompressed = receiptDocument with { TransitionCommitEncoding = "br+base64/canonical-json;v=1", ETag = null };
+            await container.ReplaceItemAsync(olderCompressed, olderCompressed.Id, new(olderCompressed.PartitionKey));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => restarted.CommitTransitionOperation(fixture.Context, commit));
+            Assert.Equal(current, await restarted.TryGet(fixture.Context, fixture.Subject.EntityId.Value,
+                EntityReadOptions.Full.WithPartitionKey("tenant/acme")));
 
             Assert.True(
                 committed.Disposition == EntityTransitionOperationDisposition.Committed,
                 string.Join(Environment.NewLine, committed.Diagnostics.Select(static diagnostic => diagnostic.Message)));
             Assert.Equal(EntityTransitionOperationDisposition.Replayed, replayed.Disposition);
-            Assert.Equal(EntityTransitionOperationDisposition.Replayed, legacyReplayed.Disposition);
             Assert.Equal(commit.Fingerprint, replayed.Receipt?.Commit.Fingerprint);
-            Assert.Equal(commit.Fingerprint, legacyReplayed.Receipt?.Commit.Fingerprint);
             Assert.Equal(commit.Result.Value, replayed.Receipt?.Result.Value);
             Assert.Equal(
                 commit.Result.Emissions.Select(static envelope =>

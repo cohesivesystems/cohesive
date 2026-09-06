@@ -83,3 +83,10 @@ shape from which they were compiled. Each slot is one canonical field: `Undefine
 present. Full shape validation still runs. Name-based `Fields` is an immutable view over the same vector, and canonical
 serialization, equality, and fingerprints are independent of physical field order. The field view also implements
 `IOrdinalObservationFieldReader`, allowing a materializer compiled against that layout to read directly by ordinal.
+
+Default CLR materialization converts native byte observations directly to an independently owned `byte[]`, including
+inside conventional nested records and arrays. This copies mutable output once; it does not route bytes through JSON
+text. Explicit serializer customizations retain their chosen conversion contract. Durable detached observation values
+can opt into `PortableValueJsonConverter.TaggedObservationValues`, which reuses the PortableValue node encoding to
+preserve byte, temporal, numeric, and undefined kinds. Opting in changes the wire format and requires a versioned profile;
+ordinary observation JSON remains unchanged. Entity receipts use the explicit `EntityStorageJson` profile in Storage.

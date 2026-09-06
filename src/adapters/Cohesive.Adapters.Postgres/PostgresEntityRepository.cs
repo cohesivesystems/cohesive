@@ -253,8 +253,15 @@ public sealed class PostgresEntityRepository : IEntityRepository
         }
 
         await using var connection = await runtime.DataSource.OpenConnectionAsync(context.CancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(context.CancellationToken).ConfigureAwait(false);
         EntitySnapshot[] snapshots = new EntitySnapshot[writes.Count];
+        if (request.Atomicity == EntityBatchAtomicity.None)
+        {
+            // Separate commits retain a successful prefix and give successive writes distinct xmin fences.
+            for (var index = 0; index < writes.Count; index++)
+                snapshots[index] = await UpsertCore(context, connection, transaction: null, writes[index]).ConfigureAwait(false);
+            return new(snapshots, request.Atomicity);
+        }
+        await using var transaction = await connection.BeginTransactionAsync(context.CancellationToken).ConfigureAwait(false);
         try
         {
             for (var index = 0; index < writes.Count; index++)

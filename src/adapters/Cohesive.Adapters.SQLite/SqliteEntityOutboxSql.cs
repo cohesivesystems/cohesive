@@ -8,7 +8,7 @@ internal sealed class SqliteEntityOutboxSql
     internal const int Direct = 1;
     internal const int Process = 2;
     internal const int MaximumReadCommits = 1000;
-    internal const string Id = "id", Kind = "kind", Content = "content", Hash = "hash", Sequence = "sequence", Receipt = "receipt";
+    internal const string Id = "id", Kind = "kind", Content = "content", Hash = "hash", Sequence = "sequence", Receipt = "receipt", Format = "format";
     static readonly SqliteSqlDialect Dialect = SqliteSqlDialect.Instance;
 
     internal SqliteEntityOutboxSql(string entityTable)
@@ -23,14 +23,15 @@ internal sealed class SqliteEntityOutboxSql
             IndexTable(CreationsTable),
             $"CREATE INDEX {Quote(ReceiptsTable + "__outbox_cursor")} ON {Quote(ReceiptsTable)} ({Quote(Kind)}, {Quote(Sequence)})"
         ]);
-        ReadReceipt = Read(ReceiptsTable, Id, Kind, Content, Hash);
+        EncodingMigration = new(version: 2, [$"ALTER TABLE {Quote(ReceiptsTable)} ADD COLUMN {Quote(Format)} INTEGER NOT NULL DEFAULT 1"]);
+        ReadReceipt = Read(ReceiptsTable, Id, Kind, Content, Hash, Format);
         ReadEmission = Read(EmissionsTable, Id, Receipt);
         ReadCreation = Read(CreationsTable, Id, Receipt);
-        InsertReceipt = Insert(ReceiptsTable, Id, Kind, Content, Hash);
+        InsertReceipt = Insert(ReceiptsTable, Id, Kind, Content, Hash, Format);
         InsertEmission = Insert(EmissionsTable, Id, Receipt);
         InsertCreation = Insert(CreationsTable, Id, Receipt);
         var query = new SqlSelectBuilder(new SqlQualifiedTable(ReceiptsTable), "r");
-        foreach (var column in new[] { Sequence, Id, Kind, Content, Hash })
+        foreach (var column in new[] { Sequence, Id, Kind, Content, Hash, Format })
             query.Select(SqlExpression.UnqualifiedColumn(column), column);
         query.Where(Match(Kind));
         query.Where(SqlExpression.Binary(SqlBinaryOperator.GreaterThan,
@@ -42,6 +43,7 @@ internal sealed class SqliteEntityOutboxSql
     internal string EmissionsTable { get; }
     internal string CreationsTable { get; }
     internal SqliteMigration InitialMigration { get; }
+    internal SqliteMigration EncodingMigration { get; }
     internal SqlCommandTemplate ReadReceipt { get; }
     internal SqlCommandTemplate ReadEmission { get; }
     internal SqlCommandTemplate ReadCreation { get; }

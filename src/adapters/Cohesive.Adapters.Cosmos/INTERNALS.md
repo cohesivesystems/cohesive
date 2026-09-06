@@ -49,6 +49,25 @@ discriminator and must be distinct from the entity and outbox discriminators. Re
 storage evidence; canonical Transition definitions, entity observations, and Process operation identities remain
 their respective semantic authorities.
 
+Retained Transition commits use `EntityStorageJson` and compressed encoding
+`br+base64/canonical-json;v=2`, with `sha256-entity-v2` commit fingerprints. This preserves detached
+observation scalar kinds, including bytes. Unversioned and compressed v1 commit evidence fail
+explicitly; upgrading retained evidence requires its original shape and an explicit migration.
+Operation, request, and emission identities are unchanged. See the
+[release notes](../../../docs/release-notes/sqlite-adoption.md).
+
+This receipt profile does not change the default SDK encoding of ordinary entity observation bodies.
+The [shared conformance fixture](../../Cohesive.Tests/Storage/Conformance/CosmosRepositoryConformanceTests.cs)
+uses an explicit tagged profile in a new storage-only container for full scalar coverage, and documents
+its incompatibility with Relation bindings expecting raw scalar paths. Default profile limitations,
+identifier constraints, and the follow-up capability work are listed in the
+[adoption matrix](../Cohesive.Adapters.SQLite/ADOPTION.md#capability-to-test-matrix).
+
+Direct outbox retries reconcile exact emission evidence before rejecting the original CAS fence.
+The comparison rejects duplicate JSON properties and changed content while accepting Cosmos changes
+to escaping and property order. Direct replay still requires current state to match the committed
+candidate; only the Process receipt path retains a historical snapshot across later entity changes.
+
 The opt-in emulator regression creates and removes an isolated database and proves atomic update plus exact replay
 after repository restart:
 

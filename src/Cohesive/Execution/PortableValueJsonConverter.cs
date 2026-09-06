@@ -18,6 +18,25 @@ namespace Cohesive.Execution;
 /// </remarks>
 public sealed class PortableValueJsonConverter : JsonConverter<PortableValue>
 {
+    /// <summary>Lossless tagged codec for detached observation values, using the same node format as PortableValue.</summary>
+    /// <remarks>
+    /// Register explicitly in a serializer profile to preserve byte, temporal, numeric, and undefined kinds.
+    /// This changes the wire representation from ordinary JSON and requires an explicit format revision.
+    /// The converter is stateless and safe to share across immutable serializer options.
+    /// </remarks>
+    public static JsonConverter<ObservationValue> TaggedObservationValues { get; } = new TaggedObservationConverter();
+
+    sealed class TaggedObservationConverter : JsonConverter<ObservationValue>
+    {
+        public override ObservationValue Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            using var document = JsonDocument.ParseValue(ref reader);
+            return ReadObservation(document.RootElement);
+        }
+
+        public override void Write(Utf8JsonWriter writer, ObservationValue value, JsonSerializerOptions options) => WriteObservation(writer, value);
+    }
+
     const string ContractProperty = "contract";
     const string StateProperty = "state";
     const string ValueProperty = "value";

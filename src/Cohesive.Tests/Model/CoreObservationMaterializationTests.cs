@@ -7,6 +7,53 @@ namespace Cohesive.Tests.Model;
 
 public sealed class CoreObservationMaterializationTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(32)]
+    [InlineData(65536)]
+    public void Materialize_BytesOwnTheirOutputAndAllocateOnlyTheRecordAndByteArray(int length)
+    {
+        var metadata = BuildMetadata<BinaryRecord>("binary-materialization-v1");
+        var source = new byte[length];
+        if (length > 0) source[0] = 127;
+        var observation = Observe<BinaryRecord>(metadata, (nameof(BinaryRecord.Value), ObservationValue.FromBytes(source)));
+        var plan = ObservationMaterializer.GetDefault<BinaryRecord>(observation);
+        for (var index = 0; index < 32; index++) plan.Materialize(observation);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var result = plan.Materialize(observation);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(source, result.Value);
+        Assert.InRange(allocated, length, length + 128L);
+        if (length > 0)
+        {
+            result.Value[0] = 99;
+            Assert.Equal(127, observation.GetField(nameof(BinaryRecord.Value)).Bytes.Span[0]);
+            Assert.Equal(127, plan.Materialize(observation).Value[0]);
+        }
+    }
+
+    public sealed record BinaryRecord(byte[] Value);
+
+    [Fact]
+    public void Materialize_BytesInNestedRecordsAndCollectionsRemainIndependent()
+    {
+        var metadata = BuildMetadata<BinaryBundle>("nested-binary-v1");
+        var child = new BinaryRecord([0, 127, 255]);
+        var observed = CoreObservation.Create(ShapeFor<BinaryBundle>(metadata),
+            ObservationValue.FromObject(new BinaryBundle(child, [child])).Fields!);
+        var first = observed.Materialize<BinaryBundle>();
+        Assert.Equal(child.Value, first.Child.Value);
+        Assert.Equal(child.Value, first.Items[0].Value);
+        Assert.NotSame(first.Child.Value, first.Items[0].Value);
+        first.Child.Value[0] = 99;
+        first.Items[0].Value[1] = 99;
+        var second = observed.Materialize<BinaryBundle>();
+        Assert.Equal(child.Value, second.Child.Value);
+        Assert.Equal(child.Value, second.Items[0].Value);
+    }
+
+    public sealed record BinaryBundle(BinaryRecord Child, BinaryRecord[] Items);
+
     [Fact]
     public void Materialize_DefaultPlanSupportsImmutableRecordsAndIsCachedByQualifiedShape()
     {

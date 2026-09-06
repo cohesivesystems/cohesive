@@ -15,7 +15,7 @@ var mapping = new SqliteEntityRepositoryMapping(
 var repository = new SqliteEntityOutboxRepository(database, mapping);
 
 new SqliteSchema("ito/run-state", [mapping.InitialMigration]).Apply(database);
-new SqliteSchema("ito/run-outbox", [repository.InitialMigration]).Apply(database);
+new SqliteSchema("ito/run-outbox", repository.Migrations).Apply(database);
 ```
 
 Use stable application-owned module names. Constructors perform no I/O. An existing initialized
@@ -69,19 +69,33 @@ intent lookup share receipt-owned matching methods across all three adapters.
 
 ## Durable representation and limits
 
-The auxiliary migration creates three STRICT tables derived from the entity table name:
+The ordered auxiliary migrations create three STRICT tables derived from the entity table name:
 
 - `__receipts`: monotonic sequence, unique versioned receipt ID, direct/Process discriminator,
-  canonical JSON BLOB, and SHA-256 integrity hash. A `(kind, sequence)` index serves outbox reads.
+  canonical JSON BLOB, SHA-256 integrity hash, and explicit payload `format`. A `(kind, sequence)` index serves outbox reads.
 - `__emissions`: unique direct emission ID referencing its owning receipt.
 - `__creations`: unique creation subject ID referencing its Process receipt.
 
 Canonical `EntityCommitResult` or `EntityTransitionOperationReceipt` data is authoritative; identity
-indexes do not duplicate envelope payloads. Schema migration version one and `direct/v1/` or
-`process/v1/` key namespaces identify this representation. Canonical serializers preserve exact
+indexes do not duplicate envelope payloads. The `direct/v1/` and `process/v1/` key namespaces identify
+the stable identity grammar, independently of payload format. Canonical serializers preserve exact
 definitions, observation shape identity, values, provenance, and normalized evidence. Reads verify
 the byte bound, hash, canonical round trip, mapped state, and relevant identity evidence. Invalid
 or unknown representations fail explicitly; they are never reconstructed from current state.
+
+`EntityStorageJson` format 2 uses the existing PortableValue tagged observation codec for detached
+state fields. Bytes, temporal values, and numeric kinds survive without guessing from JSON tokens.
+Entity operation commit fingerprints use `sha256-entity-v2`; request and operation identities stay
+unchanged. Plain JSON is still the default outside this explicit storage profile.
+
+Migration 2 adds the format discriminator and labels existing rows as format 1 without rewriting
+their evidence. Original migration fingerprints and receipt IDs remain unchanged. Format 1 and
+unknown formats throw `NotSupportedException`, including when found through a duplicate or creation
+index. They are never treated as absent operations. Upgrade retained evidence with its original
+shape and original execution references before retrying. There is no automatic converter because
+plain JSON did not retain every scalar kind; conversion requires source evidence, regeneration of
+canonical payload/hash and commit fingerprint, and an explicit reviewed migration. Preserve operation
+and emission identities throughout. Do not delete receipts to make retries succeed.
 
 The default maximum is 16 MiB of canonical JSON per receipt, configurable through
 `maximumReceiptBytes`. Serialization can materialize a larger candidate before rejecting it, but
@@ -131,3 +145,6 @@ failure, byte limits, corruption, cursor paging, lost acknowledgment, and replay
 A separate child-process test kills a writer with dirty state and receipt pages before commit,
 then reopens the file and verifies WAL recovery and replay. That test checks abrupt native recovery;
 the repository transaction paths are independently exercised by the late-failure tests.
+
+The [Ito adoption proof](ADOPTION.md) adds shared repository conformance, persisted exact-definition
+decision replay, and a specialized three-table publication transaction fixture.

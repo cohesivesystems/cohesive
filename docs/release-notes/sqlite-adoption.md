@@ -40,3 +40,31 @@ entity mapping. Exact retries recover the original committed snapshot and token 
 Direct envelopes are exposed through a bounded commit cursor; Process envelopes remain handoff evidence for the
 Process outbox. Auxiliary migrations must be applied explicitly. Automatic dispatch, delivery acknowledgment, and
 retention pruning are not included. See the [outbox contract](../../src/adapters/Cohesive.Adapters.SQLite/OUTBOX.md).
+
+## Lossless retained evidence — breaking encoding revision
+
+Repository conformance found that plain receipt JSON rejected byte fields and erased detached
+temporal/numeric kinds. `EntityStorageJson` format 2 reuses the PortableValue tagged codec and
+preserves every observation kind. Entity operation commit fingerprints advance to `sha256-entity-v2`;
+request/intent fingerprints and operation/emission identities do not change.
+
+Apply SQLite outbox `repository.Migrations`, including migration 2. It leaves migration 1 intact,
+adds `format`, and labels retained rows as version 1. Version 1 and unknown versions fail explicitly
+on lookup, replay, or delivery reads; they cannot become missing operations or authorize another
+write. Existing evidence needs an explicit migration using its original shape and execution inputs.
+There is no automatic migration from lossy plain JSON.
+
+Cosmos compressed Transition commit evidence advances to `br+base64/canonical-json;v=2` with the same
+profile. Unversioned and compressed v1 evidence are rejected. Migrate retained evidence explicitly
+before enabling retries against upgraded repositories. External transports or stores of
+`EntityTransitionOperationCommit` must also select `EntityStorageJson.CreateOptions()` when retaining
+detached entity state; the default JSON profile remains unchanged.
+
+Default POCO materialization now handles native byte values directly, returning an owned mutable
+array. Custom serializer contracts keep their explicit behavior. PostgreSQL `None` batches now use
+individual commits, retaining the successful prefix and distinct `xmin` fences for repeated writes.
+Cosmos direct-outbox retries now reconcile retained emission evidence before rejecting the caller's
+original CAS token. Its direct replay still requires the current entity to match the candidate; only
+the Process receipt path retains historical snapshots across later mutations.
+
+See the [adoption recipe and evidence matrix](../../src/adapters/Cohesive.Adapters.SQLite/ADOPTION.md).
