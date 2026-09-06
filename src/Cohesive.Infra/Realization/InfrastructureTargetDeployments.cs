@@ -25,8 +25,10 @@ public sealed record InfrastructureTargetWorkloadDeployment
     {
         if (string.IsNullOrWhiteSpace(workload.Value))
             throw new ArgumentException("A target workload deployment requires a logical workload.", nameof(workload));
+
         if (string.IsNullOrWhiteSpace(facility.Value))
             throw new ArgumentException("A target workload deployment requires a facility.", nameof(facility));
+
         if (string.IsNullOrWhiteSpace(physicalResource.Value))
             throw new ArgumentException("A target workload deployment requires a physical resource.", nameof(physicalResource));
 
@@ -69,6 +71,7 @@ public sealed record InfrastructureTargetWorkloadDeployment
         hash.Add(PhysicalResource);
         foreach (var source in SourceReferences)
             hash.Add(source);
+
         return hash.ToHashCode();
     }
 }
@@ -93,10 +96,13 @@ public sealed record InfrastructureTargetResourceDeployment
     {
         if (string.IsNullOrWhiteSpace(resource.Value))
             throw new ArgumentException("A target resource deployment requires a logical resource.", nameof(resource));
+
         if (string.IsNullOrWhiteSpace(facility.Value))
             throw new ArgumentException("A target resource deployment requires a facility.", nameof(facility));
+
         if (string.IsNullOrWhiteSpace(physicalResource.Value))
             throw new ArgumentException("A target resource deployment requires a physical resource.", nameof(physicalResource));
+
         if (string.IsNullOrWhiteSpace(authority.Value))
             throw new ArgumentException("A target resource deployment requires a lifecycle authority.", nameof(authority));
 
@@ -145,6 +151,7 @@ public sealed record InfrastructureTargetResourceDeployment
         hash.Add(Authority);
         foreach (var source in SourceReferences)
             hash.Add(source);
+
         return hash.ToHashCode();
     }
 }
@@ -156,7 +163,7 @@ public sealed record InfrastructureTargetDeploymentManifestFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current manifest fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-infra-target-deployment/v1-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-infra-target-deployment/v2-c14n/v1";
 
     /// <summary>Creates target-deployment manifest fingerprint metadata.</summary>
     /// <param name="algorithm">Stable digest algorithm identity.</param>
@@ -204,6 +211,7 @@ public sealed record InfrastructureTargetDeploymentManifestReference
         SchemaVersion = Guard.RequireNotNullOrWhiteSpace(schemaVersion);
         if (string.IsNullOrWhiteSpace(id.Value))
             throw new ArgumentException("A target-deployment manifest reference requires an identity.", nameof(id));
+
         Id = id;
         Definition = Guard.RequireNotNull(definition);
         TargetFacilities = Guard.RequireNotNull(targetFacilities);
@@ -236,7 +244,7 @@ public sealed record InfrastructureTargetDeploymentManifestReference
 public sealed record InfrastructureTargetDeploymentManifest
 {
     /// <summary>Current persisted target-deployment manifest schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive.infra.target-deployment/1";
+    public const string CurrentSchemaVersion = "cohesive.infra.target-deployment/2";
 
     /// <summary>Creates or restores one exactly fingerprinted target-deployment manifest.</summary>
     /// <param name="schemaVersion">Exact persisted schema version.</param>
@@ -245,6 +253,7 @@ public sealed record InfrastructureTargetDeploymentManifest
     /// <param name="targetFacilities">Exact target facilities available to the deployment.</param>
     /// <param name="workloads">Declared workload deployments.</param>
     /// <param name="resources">Declared resource deployments.</param>
+    /// <param name="nonParticipatingWorkloads">Attributable decisions for canonical workloads absent from this deployment.</param>
     /// <param name="fingerprint">Persisted exact fingerprint, or <see langword="null"/> to compute it.</param>
     /// <param name="sourceMap">Optional non-semantic producer attribution.</param>
     /// <exception cref="ArgumentNullException">A reference argument is <see langword="null"/>.</exception>
@@ -257,6 +266,7 @@ public sealed record InfrastructureTargetDeploymentManifest
         InfrastructureTargetFacilityManifest targetFacilities,
         ImmutableArray<InfrastructureTargetWorkloadDeployment> workloads = default,
         ImmutableArray<InfrastructureTargetResourceDeployment> resources = default,
+        ImmutableArray<InfrastructureWorkloadNonParticipation> nonParticipatingWorkloads = default,
         InfrastructureTargetDeploymentManifestFingerprint? fingerprint = null,
         InfrastructureSourceMap? sourceMap = null)
     {
@@ -275,6 +285,8 @@ public sealed record InfrastructureTargetDeploymentManifest
         TargetFacilities = Guard.RequireNotNull(targetFacilities);
         Workloads = NormalizeWorkloads(workloads);
         Resources = NormalizeResources(resources);
+        NonParticipatingWorkloads = InfrastructureCapabilityWitnessCollections.NormalizeNonParticipations(
+            nonParticipatingWorkloads);
         SourceMap = sourceMap ?? InfrastructureSourceMap.Empty;
         ValidateFacilities();
 
@@ -284,9 +296,11 @@ public sealed record InfrastructureTargetDeploymentManifest
             Definition,
             TargetFacilities.ToReference(),
             Workloads,
-            Resources);
+            Resources,
+            NonParticipatingWorkloads);
         if (fingerprint is not null && fingerprint != computed)
             throw new ArgumentException("The supplied target-deployment manifest fingerprint is not canonical.", nameof(fingerprint));
+
         Fingerprint = computed;
     }
 
@@ -307,6 +321,9 @@ public sealed record InfrastructureTargetDeploymentManifest
 
     /// <summary>Declared resource deployments in logical-resource order.</summary>
     public ImmutableArray<InfrastructureTargetResourceDeployment> Resources { get; }
+
+    /// <summary>Attributable non-participation decisions in workload-identity order.</summary>
+    public ImmutableArray<InfrastructureWorkloadNonParticipation> NonParticipatingWorkloads { get; }
 
     /// <summary>Deterministic fingerprint of the complete declaration.</summary>
     public InfrastructureTargetDeploymentManifestFingerprint Fingerprint { get; }
@@ -332,6 +349,7 @@ public sealed record InfrastructureTargetDeploymentManifest
     {
         if (string.IsNullOrWhiteSpace(workload.Value))
             throw new ArgumentException("A default workload cannot be resolved.", nameof(workload));
+
         var index = CanonicalDocumentCollections.BinarySearchIndex(
             Workloads,
             workload,
@@ -351,6 +369,7 @@ public sealed record InfrastructureTargetDeploymentManifest
     {
         if (string.IsNullOrWhiteSpace(resource.Value))
             throw new ArgumentException("A default resource cannot be resolved.", nameof(resource));
+
         var index = CanonicalDocumentCollections.BinarySearchIndex(
             Resources,
             resource,
@@ -373,6 +392,7 @@ public sealed record InfrastructureTargetDeploymentManifest
         && TargetFacilities == other.TargetFacilities
         && Workloads.SequenceEqual(other.Workloads)
         && Resources.SequenceEqual(other.Resources)
+        && NonParticipatingWorkloads.SequenceEqual(other.NonParticipatingWorkloads)
         && Fingerprint == other.Fingerprint
         && SourceMap == other.SourceMap;
 
@@ -387,8 +407,13 @@ public sealed record InfrastructureTargetDeploymentManifest
         hash.Add(TargetFacilities);
         foreach (var workload in Workloads)
             hash.Add(workload);
+
         foreach (var resource in Resources)
             hash.Add(resource);
+
+        foreach (var nonParticipation in NonParticipatingWorkloads)
+            hash.Add(nonParticipation);
+
         hash.Add(Fingerprint);
         hash.Add(SourceMap);
         return hash.ToHashCode();
@@ -399,8 +424,10 @@ public sealed record InfrastructureTargetDeploymentManifest
     {
         if (workloads.IsDefaultOrEmpty)
             return [];
+
         if (workloads.Any(static deployment => deployment is null))
             throw new ArgumentException("Target workload deployments cannot contain null.", nameof(workloads));
+
         var ordered = workloads.Sort(static (left, right) =>
             StringComparer.Ordinal.Compare(left.Workload.Value, right.Workload.Value));
         for (var index = 1; index < ordered.Length; index++)
@@ -416,8 +443,10 @@ public sealed record InfrastructureTargetDeploymentManifest
     {
         if (resources.IsDefaultOrEmpty)
             return [];
+
         if (resources.Any(static deployment => deployment is null))
             throw new ArgumentException("Target resource deployments cannot contain null.", nameof(resources));
+
         var ordered = resources.Sort(static (left, right) =>
             StringComparer.Ordinal.Compare(left.Resource.Value, right.Resource.Value));
         for (var index = 1; index < ordered.Length; index++)
@@ -506,6 +535,12 @@ public static class InfrastructureTargetDeploymentCompiler
 
         /// <summary>A deployment declaration names no canonical node of the expected kind.</summary>
         public const string NodeUnknown = "infra.target.deployment.node.unknown";
+
+        /// <summary>A non-participation decision names no canonical workload.</summary>
+        public const string WorkloadNonParticipationUnknown = "infra.target.deployment.workloadNonParticipation.unknown";
+
+        /// <summary>A workload is both deployed and declared non-participating.</summary>
+        public const string WorkloadParticipationConflict = "infra.target.deployment.workloadParticipation.conflict";
     }
 
     /// <summary>Compiles one exact application definition through an adapter-authored target deployment.</summary>
@@ -582,13 +617,15 @@ public static class InfrastructureTargetDeploymentCompiler
         var provisional = InfrastructureRealizationCompiler.Compile(
             facilityPlan.CapabilityClosure,
             lifecycle,
-            placements);
+            placements,
+            nonParticipatingWorkloads: manifest.NonParticipatingWorkloads);
         var witnesses = CreateWitnesses(manifest, provisional);
         return InfrastructureRealizationCompiler.Compile(
             facilityPlan.CapabilityClosure,
             lifecycle,
             placements,
-            witnesses);
+            witnesses,
+            manifest.NonParticipatingWorkloads);
     }
 
     static ImmutableArray<InfrastructureCapabilityEvidenceWitness> CreateWitnesses(
@@ -626,6 +663,7 @@ public static class InfrastructureTargetDeploymentCompiler
                     .ToImmutableArray();
                 if (applicable.IsDefaultOrEmpty)
                     applicable = facilityDeployments;
+
                 var subjectDeployments = deployments
                     .Where(deployment => decision.ExpectedPhysicalResources.Contains(deployment.PhysicalResource));
 
@@ -659,6 +697,9 @@ public static class InfrastructureTargetDeploymentCompiler
         var resources = definition.Definition.Resources.Select(static item => item.Id).ToHashSet();
         var declaredWorkloads = manifest.Workloads.Select(static item => item.Workload).ToHashSet();
         var declaredResources = manifest.Resources.Select(static item => item.Resource).ToHashSet();
+        var nonParticipatingWorkloads = manifest.NonParticipatingWorkloads
+            .Select(static item => item.Workload)
+            .ToHashSet();
 
         foreach (var deployment in manifest.Workloads)
         {
@@ -682,13 +723,72 @@ public static class InfrastructureTargetDeploymentCompiler
                     manifest.SourceMap));
             }
         }
-        foreach (var workload in workloads.Where(workload => !declaredWorkloads.Contains(workload)))
+        foreach (var decision in manifest.NonParticipatingWorkloads)
+        {
+            if (!workloads.Contains(decision.Workload))
+            {
+                diagnostics.Add(UnknownNonParticipation(decision, manifest));
+            }
+            else if (declaredWorkloads.Contains(decision.Workload))
+            {
+                diagnostics.Add(ParticipationConflict(decision, manifest));
+            }
+        }
+        foreach (var workload in workloads.Where(workload =>
+                     !declaredWorkloads.Contains(workload)
+                     && !nonParticipatingWorkloads.Contains(workload)))
+        {
             diagnostics.Add(Missing(workload, InfrastructureNodeKind.Workload, manifest));
+        }
+
         foreach (var resource in resources.Where(resource => !declaredResources.Contains(resource)))
             diagnostics.Add(Missing(resource, InfrastructureNodeKind.Resource, manifest));
 
         return DocumentValidationDiagnostics.Normalize(diagnostics.ToImmutable());
     }
+
+    static DocumentValidationDiagnostic UnknownNonParticipation(
+        InfrastructureWorkloadNonParticipation decision,
+        InfrastructureTargetDeploymentManifest manifest) => new(
+        DiagnosticCodes.WorkloadNonParticipationUnknown,
+        DiagnosticSeverity.Error,
+        $"Workload non-participation decision '{decision.Workload.Value}' is not a canonical workload.",
+        SchemaLocation: decision.Workload.Value,
+        Evidence: new(
+            stage: Stage,
+            subject: decision.Workload.Value,
+            sourceReferences:
+            [
+                .. decision.SourceReferences.Select(static source => source.Value),
+                InfrastructureSourceReferences.TargetDeploymentManifest(manifest.ToReference()).Value
+            ],
+            resolutionOptions: ["Remove the stale decision or bind it to an exact canonical workload."],
+            expected: "a canonical workload identity",
+            observed: "unknown or wrong-kind node"));
+
+    static DocumentValidationDiagnostic ParticipationConflict(
+        InfrastructureWorkloadNonParticipation decision,
+        InfrastructureTargetDeploymentManifest manifest) => new(
+        DiagnosticCodes.WorkloadParticipationConflict,
+        DiagnosticSeverity.Error,
+        $"Workload '{decision.Workload.Value}' is both deployed and declared non-participating.",
+        SchemaLocation: decision.Workload.Value,
+        Evidence: new(
+            stage: Stage,
+            subject: decision.Workload.Value,
+            sourceReferences:
+            [
+                .. decision.SourceReferences.Select(static source => source.Value),
+                .. manifest.FindWorkload(decision.Workload).SourceReferences.Select(static source => source.Value),
+                InfrastructureSourceReferences.TargetDeploymentManifest(manifest.ToReference()).Value
+            ],
+            resolutionOptions:
+            [
+                "Remove the non-participation decision when this workload is deployed.",
+                "Remove the deployment when this workload is intentionally absent."
+            ],
+            expected: "exactly one participation state",
+            observed: "deployed and non-participating"));
 
     static DocumentValidationDiagnostic Unknown(
         InfrastructureNodeId node,
@@ -725,9 +825,19 @@ public static class InfrastructureTargetDeploymentCompiler
             stage: Stage,
             subject: node.Value,
             sourceReferences: [InfrastructureSourceReferences.TargetDeploymentManifest(manifest.ToReference()).Value],
-            resolutionOptions: ["Declare an exact physical deployment through the selected target adapter."],
-            expected: "one attributable physical deployment",
-            observed: "no deployment declaration"));
+            resolutionOptions: kind == InfrastructureNodeKind.Workload
+                ?
+                [
+                    "Declare an exact physical deployment through the selected target adapter.",
+                    "Declare attributable workload non-participation when this deployment intentionally excludes it."
+                ]
+                : ["Declare an exact physical deployment through the selected target adapter."],
+            expected: kind == InfrastructureNodeKind.Workload
+                ? "one attributable physical deployment or non-participation decision"
+                : "one attributable physical deployment",
+            observed: kind == InfrastructureNodeKind.Workload
+                ? "no participation decision"
+                : "no deployment declaration"));
 
     sealed record Deployment(
         InfrastructureNodeId Node,
@@ -744,10 +854,18 @@ static class InfrastructureTargetDeploymentFingerprinting
         InfrastructureDefinitionReference definition,
         InfrastructureTargetFacilityManifestReference targetFacilities,
         ImmutableArray<InfrastructureTargetWorkloadDeployment> workloads,
-        ImmutableArray<InfrastructureTargetResourceDeployment> resources)
+        ImmutableArray<InfrastructureTargetResourceDeployment> resources,
+        ImmutableArray<InfrastructureWorkloadNonParticipation> nonParticipatingWorkloads)
     {
         var canonical = StrictDocumentJson.GetCanonicalBytes(
-            new FingerprintInput(schemaVersion, id, definition, targetFacilities, workloads, resources),
+            new FingerprintInput(
+                schemaVersion,
+                id,
+                definition,
+                targetFacilities,
+                workloads,
+                resources,
+                nonParticipatingWorkloads),
             StrictDocumentJson.CreateOptions());
         return new(
             InfrastructureTargetDeploymentManifestFingerprint.CurrentAlgorithm,
@@ -761,5 +879,6 @@ static class InfrastructureTargetDeploymentFingerprinting
         InfrastructureDefinitionReference Definition,
         InfrastructureTargetFacilityManifestReference TargetFacilities,
         ImmutableArray<InfrastructureTargetWorkloadDeployment> Workloads,
-        ImmutableArray<InfrastructureTargetResourceDeployment> Resources);
+        ImmutableArray<InfrastructureTargetResourceDeployment> Resources,
+        ImmutableArray<InfrastructureWorkloadNonParticipation> NonParticipatingWorkloads);
 }

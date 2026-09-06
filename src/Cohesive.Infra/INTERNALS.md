@@ -85,8 +85,11 @@ unexpected, unavailable, or incorrectly scoped evidence fails closed with struct
 
 `InfrastructureTargetDeploymentManifest` is the portable declaration boundary between target facilities and exact
 physical identities. It fences one definition and facility manifest, then attributes every logical workload and
-resource to a target facility, physical identity, source evidence, and—for resources—lifecycle authority. Its fluent
-builder is only a producer of immutable, serializable, fingerprinted IR.
+resource to a target facility, physical identity, source evidence, and—for resources—lifecycle authority. A canonical
+workload absent from a particular environment requires an explicit `InfrastructureWorkloadNonParticipation` decision
+with rationale and sources. Placements plus those decisions form an exact workload partition; neither silent omission
+nor placement/non-participation conflict is accepted. Its fluent builder is only a producer of immutable,
+serializable, fingerprinted IR.
 
 `InfrastructureTargetDeploymentCompiler` owns the corresponding computation. Exact deployment declarations become
 explicit facility-selection policy; canonical resource lifecycle intent determines managed versus referenced
@@ -96,6 +99,11 @@ demand's logical endpoints, the compiler attributes that evidence to the declare
 facility rather than falsely claiming that every proof component applies to every subject. Missing declarations,
 unknown nodes, incompatible facilities, unavailable capabilities, and incomplete physical coverage remain structured
 diagnostics. Applications and lifecycle stacks consume this result; they do not reimplement the assessment.
+
+Workload non-participation does not modify the canonical definition and does not narrow target capability closure.
+Physical witness decisions omit demands owned solely by non-participating workloads, but resource demands and demands
+owned by participating nodes remain exact. A binding or readiness dependency from a participating node to a
+non-participating workload is an invalid physical participation boundary and produces a structured diagnostic.
 
 Physical witnesses still are not construction recipes or execution receipts. Backend adapters must extend the exact
 definition/profile/realization fence with compiler version, emitted-artifact fingerprint, preview, and backend receipts
@@ -110,7 +118,9 @@ dependency is ready. The fluent `RequiresReady(...)` methods are typed authoring
 definition normalizes dependency identities, rejects unknown nodes and duplicate semantic slots, and rejects cycles.
 
 `InfrastructureRealizationCompiler` uses the existing workload placements and resource lifecycle bindings to lower
-each logical dependency to one exact physical obligation. The local compiler projects those obligations into its
+each logical dependency whose subject participates to one exact physical obligation. An explicit non-participation
+decision suppresses obligations owned by that absent subject; it cannot suppress a dependency demanded by a
+participating subject. The local compiler projects those obligations into its
 construction topology, where existing Docker Compose and Aspire interpretations realize them using their own health
 and wait mechanisms. A local-only ready dependency absent from canonical intent is a structured diagnostic, preventing
 an AppHost or Compose file from becoming a second application topology.

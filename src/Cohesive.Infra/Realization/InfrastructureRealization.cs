@@ -12,7 +12,7 @@ public sealed record InfrastructureRealizationFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current realization fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-infra-realization/v1-c14n/v4";
+    public const string CurrentCanonicalization = "cohesive-infra-realization/v1-c14n/v5";
 
     /// <summary>Creates realization fingerprint metadata.</summary>
     /// <param name="algorithm">Stable digest algorithm identity.</param>
@@ -61,6 +61,7 @@ public sealed record InfrastructureRealizationReference
         Profile = Guard.RequireNotNull(profile);
         if (string.IsNullOrWhiteSpace(target.Value))
             throw new ArgumentException("An infrastructure-realization reference requires a target.", nameof(target));
+
         if (string.IsNullOrWhiteSpace(variant.Value))
             throw new ArgumentException("An infrastructure-realization reference requires a variant.", nameof(variant));
 
@@ -97,6 +98,7 @@ public sealed record InfrastructureRealization
     /// <param name="capabilityClosure">Exact target-strategy capability-closure report.</param>
     /// <param name="lifecycle">Physical resource identities and lifecycle ownership partition.</param>
     /// <param name="workloadPlacements">Selected physical deployment resources for logical workloads.</param>
+    /// <param name="nonParticipatingWorkloads">Attributable decisions for canonical workloads absent from this realization.</param>
     /// <param name="readinessObligations">Canonical readiness dependencies lowered to exact physical resources.</param>
     /// <param name="capabilityWitnesses">Demand-scoped applicability witnesses for selected capability evidence.</param>
     /// <param name="witnessDecisions">One derived physical-applicability decision per exact capability demand.</param>
@@ -114,6 +116,7 @@ public sealed record InfrastructureRealization
         InfrastructureCapabilityClosureReport capabilityClosure,
         InfrastructureLifecyclePlan lifecycle,
         ImmutableArray<InfrastructureWorkloadPlacement> workloadPlacements,
+        ImmutableArray<InfrastructureWorkloadNonParticipation> nonParticipatingWorkloads,
         ImmutableArray<InfrastructureReadinessObligation> readinessObligations,
         ImmutableArray<InfrastructureCapabilityEvidenceWitness> capabilityWitnesses,
         ImmutableArray<InfrastructureCapabilityWitnessDecision> witnessDecisions,
@@ -130,6 +133,8 @@ public sealed record InfrastructureRealization
         }
 
         WorkloadPlacements = InfrastructureCapabilityWitnessCollections.NormalizePlacements(workloadPlacements);
+        NonParticipatingWorkloads = InfrastructureCapabilityWitnessCollections.NormalizeNonParticipations(
+            nonParticipatingWorkloads);
         ReadinessObligations = InfrastructureReadinessObligationCompiler.Normalize(readinessObligations);
         CapabilityWitnesses = InfrastructureCapabilityWitnessCollections.NormalizeWitnesses(capabilityWitnesses);
         WitnessDecisions = InfrastructureCapabilityWitnessCollections.NormalizeDecisions(witnessDecisions);
@@ -139,16 +144,19 @@ public sealed record InfrastructureRealization
             CapabilityClosure,
             Lifecycle,
             WorkloadPlacements,
+            NonParticipatingWorkloads,
             CapabilityWitnesses);
         if (!WitnessDecisions.SequenceEqual(evaluation.Decisions))
             throw new ArgumentException("Capability-witness decisions do not match the exact realization inputs.", nameof(witnessDecisions));
+
         if (!Diagnostics.SequenceEqual(evaluation.Diagnostics))
             throw new ArgumentException("Capability-witness diagnostics do not match the exact realization inputs.", nameof(diagnostics));
 
         var expectedReadiness = InfrastructureReadinessObligationCompiler.Compile(
             CapabilityClosure.Definition.Definition,
             Lifecycle,
-            WorkloadPlacements);
+            WorkloadPlacements,
+            NonParticipatingWorkloads);
         if (!ReadinessObligations.SequenceEqual(expectedReadiness))
         {
             throw new ArgumentException(
@@ -160,11 +168,13 @@ public sealed record InfrastructureRealization
             CapabilityClosure,
             Lifecycle,
             WorkloadPlacements,
+            NonParticipatingWorkloads,
             ReadinessObligations,
             CapabilityWitnesses,
             WitnessDecisions);
         if (fingerprint is not null && fingerprint != computed)
             throw new ArgumentException("The supplied infrastructure-realization fingerprint is not canonical.", nameof(fingerprint));
+
         Fingerprint = computed;
     }
 
@@ -176,6 +186,9 @@ public sealed record InfrastructureRealization
 
     /// <summary>Selected physical workload deployment resources in workload-identity order.</summary>
     public ImmutableArray<InfrastructureWorkloadPlacement> WorkloadPlacements { get; }
+
+    /// <summary>Attributable non-participation decisions in workload-identity order.</summary>
+    public ImmutableArray<InfrastructureWorkloadNonParticipation> NonParticipatingWorkloads { get; }
 
     /// <summary>Canonical readiness dependencies lowered to exact physical resources.</summary>
     public ImmutableArray<InfrastructureReadinessObligation> ReadinessObligations { get; }
@@ -203,7 +216,9 @@ public sealed record InfrastructureRealization
     /// <summary>Whether every canonical readiness dependency has an exact physical obligation.</summary>
     [JsonIgnore]
     public bool IsReadinessObligationComplete =>
-        ReadinessObligations.Length == CapabilityClosure.Definition.Definition.ReadinessDependencies.Length;
+        ReadinessObligations.Length == InfrastructureReadinessObligationCompiler.ParticipatingDependencyCount(
+            CapabilityClosure.Definition.Definition,
+            NonParticipatingWorkloads);
 
     /// <summary>Projects a payload-free exact reference to this realization.</summary>
     /// <returns>The exact definition, profile, target, variant, and fingerprint fence.</returns>
@@ -231,6 +246,25 @@ public sealed record InfrastructureRealization
         return index < 0 ? null : WitnessDecisions[index];
     }
 
+    /// <summary>Finds the explicit non-participation decision for one canonical workload.</summary>
+    /// <param name="workload">Canonical workload identity.</param>
+    /// <returns>The matching decision, or <see langword="null"/> when the workload is placed or undecided.</returns>
+    /// <exception cref="ArgumentException"><paramref name="workload"/> is a default uninitialized value.</exception>
+    public InfrastructureWorkloadNonParticipation? FindNonParticipation(InfrastructureNodeId workload)
+    {
+        if (string.IsNullOrWhiteSpace(workload.Value))
+        {
+            throw new ArgumentException("A default workload identity cannot be inspected.", nameof(workload));
+        }
+
+        var index = CanonicalDocumentCollections.BinarySearchIndex(
+            NonParticipatingWorkloads,
+            workload,
+            static (decision, sought) =>
+                StringComparer.Ordinal.Compare(decision.Workload.Value, sought.Value));
+        return index < 0 ? null : NonParticipatingWorkloads[index];
+    }
+
     /// <summary>Compares realization candidates structurally.</summary>
     /// <param name="other">Other realization.</param>
     /// <returns><see langword="true"/> when every field is equal.</returns>
@@ -240,6 +274,7 @@ public sealed record InfrastructureRealization
         && CapabilityClosure == other.CapabilityClosure
         && Lifecycle == other.Lifecycle
         && WorkloadPlacements.SequenceEqual(other.WorkloadPlacements)
+        && NonParticipatingWorkloads.SequenceEqual(other.NonParticipatingWorkloads)
         && ReadinessObligations.SequenceEqual(other.ReadinessObligations)
         && CapabilityWitnesses.SequenceEqual(other.CapabilityWitnesses)
         && WitnessDecisions.SequenceEqual(other.WitnessDecisions)
@@ -254,6 +289,7 @@ public sealed record InfrastructureRealization
         hash.Add(CapabilityClosure);
         hash.Add(Lifecycle);
         Add(ref hash, WorkloadPlacements);
+        Add(ref hash, NonParticipatingWorkloads);
         Add(ref hash, ReadinessObligations);
         Add(ref hash, CapabilityWitnesses);
         Add(ref hash, WitnessDecisions);

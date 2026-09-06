@@ -25,14 +25,14 @@
     "variant": "local-containers",
     "fingerprint": {
       "algorithm": "sha256",
-      "canonicalization": "cohesive-infra-realization/v1-c14n/v4",
-      "value": "67cd63f4b1415986fb1a434cb607e786390296fbdeecdd6cc7361d3712adf02d"
+      "canonicalization": "cohesive-infra-realization/v1-c14n/v5",
+      "value": "effc0071b3797b59b4113570c26f3b35d6cc97aae9f1f0dc88f326c0d0a3ae60"
     }
   },
   "localRealization": {
     "algorithm": "sha256",
     "canonicalization": "cohesive-infra-local-realization/v3-c14n/v1",
-    "value": "a126d2b52914b336003bc9c3e5ad2fb987b871c371d3abcf896d6218223a90ec"
+    "value": "a775c94ed70a3ed14d61ada995ed317c7d2ffc1597f7bcab8c5239eff8ee863b"
   },
   "environment": "materialization-harness/interactive/v1",
   "lifecycleAuthority": "local/materialization-harness",
@@ -380,7 +380,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization://a126d2b52914b336003bc9c3e5ad2fb987b871c371d3abcf896d6218223a90ec"
+        "local-realization://a775c94ed70a3ed14d61ada995ed317c7d2ffc1597f7bcab8c5239eff8ee863b"
       ]
     },
     {
@@ -391,7 +391,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization://a126d2b52914b336003bc9c3e5ad2fb987b871c371d3abcf896d6218223a90ec"
+        "local-realization://a775c94ed70a3ed14d61ada995ed317c7d2ffc1597f7bcab8c5239eff8ee863b"
       ]
     },
     {
@@ -402,7 +402,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization://a126d2b52914b336003bc9c3e5ad2fb987b871c371d3abcf896d6218223a90ec"
+        "local-realization://a775c94ed70a3ed14d61ada995ed317c7d2ffc1597f7bcab8c5239eff8ee863b"
       ]
     },
     {
@@ -413,7 +413,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization://a126d2b52914b336003bc9c3e5ad2fb987b871c371d3abcf896d6218223a90ec"
+        "local-realization://a775c94ed70a3ed14d61ada995ed317c7d2ffc1597f7bcab8c5239eff8ee863b"
       ]
     },
     {
@@ -426,7 +426,7 @@
       ],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization://a126d2b52914b336003bc9c3e5ad2fb987b871c371d3abcf896d6218223a90ec"
+        "local-realization://a775c94ed70a3ed14d61ada995ed317c7d2ffc1597f7bcab8c5239eff8ee863b"
       ]
     },
     {
@@ -437,7 +437,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization://a126d2b52914b336003bc9c3e5ad2fb987b871c371d3abcf896d6218223a90ec"
+        "local-realization://a775c94ed70a3ed14d61ada995ed317c7d2ffc1597f7bcab8c5239eff8ee863b"
       ]
     },
     {
@@ -448,7 +448,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization://a126d2b52914b336003bc9c3e5ad2fb987b871c371d3abcf896d6218223a90ec"
+        "local-realization://a775c94ed70a3ed14d61ada995ed317c7d2ffc1597f7bcab8c5239eff8ee863b"
       ]
     },
     {
@@ -459,7 +459,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization://a126d2b52914b336003bc9c3e5ad2fb987b871c371d3abcf896d6218223a90ec"
+        "local-realization://a775c94ed70a3ed14d61ada995ed317c7d2ffc1597f7bcab8c5239eff8ee863b"
       ]
     },
     {
@@ -470,7 +470,7 @@
       "boundaries": [],
       "sourceReferences": [
         "https://docs.docker.com/compose/compose-file/",
-        "local-realization://a126d2b52914b336003bc9c3e5ad2fb987b871c371d3abcf896d6218223a90ec"
+        "local-realization://a775c94ed70a3ed14d61ada995ed317c7d2ffc1597f7bcab8c5239eff8ee863b"
       ]
     }
   ],

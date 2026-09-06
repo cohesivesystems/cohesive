@@ -79,6 +79,65 @@ public sealed class InfrastructureTargetDeploymentCompilerTests
     }
 
     [Fact]
+    public void Compiler_derives_a_complete_subset_from_declarative_non_participation()
+    {
+        InfrastructureNodeId admin = new("workloads/admin");
+        var semantic = Infrastructure.Define(
+            new("test/target-deployment-subset"),
+            new("1"),
+            new("test/target-deployment-subset/bindings/v1"),
+            infrastructure =>
+            {
+                infrastructure.Workload(Api).Requires(Https);
+                infrastructure.Workload(admin).Requires(Https);
+                infrastructure.Resource(State).Persistent().Requires(Storage);
+            });
+        var facilities = Facilities();
+        var manifest = InfrastructureTargetDeployments.Define(
+            new("test/deployments/api-only/v1"),
+            semantic.Definition,
+            facilities,
+            deployment =>
+            {
+                deployment.Workload(Api, AppService, ApiPhysical, [Source]);
+                deployment.NonParticipatingWorkload(
+                    admin,
+                    "The API-only environment does not host the administration workload.",
+                    ["profile://local/api-only"]);
+                deployment.Resource(State, ObjectStore, StatePhysical, Authority, [Source]);
+            });
+        var direct = new InfrastructureTargetDeploymentManifest(
+            InfrastructureTargetDeploymentManifest.CurrentSchemaVersion,
+            manifest.Id,
+            semantic.Definition.ToReference(),
+            facilities,
+            [new(Api, AppService, ApiPhysical, [Source])],
+            [new(State, ObjectStore, StatePhysical, Authority, [Source])],
+            [new(
+                admin,
+                "The API-only environment does not host the administration workload.",
+                ["profile://local/api-only"])]);
+
+        var plan = InfrastructureTargetDeploymentCompiler.Compile(semantic, manifest);
+        var realization = Assert.IsType<InfrastructureRealization>(plan.Realization);
+        var roundTrip = JsonSerializer.Deserialize<InfrastructureTargetDeploymentManifest>(
+            JsonSerializer.Serialize(manifest),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.True(plan.IsComplete, string.Join(Environment.NewLine, plan.Diagnostics.Select(static diagnostic =>
+            $"{diagnostic.Code}: {diagnostic.Message}")));
+        Assert.Empty(plan.Diagnostics);
+        Assert.Equal(direct.Fingerprint, manifest.Fingerprint);
+        Assert.Equal(direct.ToReference(), manifest.ToReference());
+        Assert.Equal(3, plan.FacilityPlan.Decisions.Length);
+        Assert.Equal(admin, Assert.Single(manifest.NonParticipatingWorkloads).Workload);
+        Assert.Equal(manifest.NonParticipatingWorkloads, realization.NonParticipatingWorkloads);
+        Assert.DoesNotContain(realization.WitnessDecisions, decision =>
+            decision.Subjects.SequenceEqual([admin]));
+        Assert.Equal(manifest, roundTrip);
+    }
+
+    [Fact]
     public void Missing_physical_declarations_produce_diagnostics_without_application_side_assessment()
     {
         var semantic = Semantic();
@@ -99,6 +158,49 @@ public sealed class InfrastructureTargetDeploymentCompilerTests
         Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
         Assert.Equal(Api.Value, diagnostic.Evidence?.Subject);
         Assert.NotEmpty(diagnostic.Evidence!.ResolutionOptions);
+    }
+
+    [Fact]
+    public void Target_deployment_rejects_unknown_and_conflicting_non_participation()
+    {
+        var semantic = Semantic();
+        var facilities = Facilities();
+        var manifest = InfrastructureTargetDeployments.Define(
+            new("test/deployments/invalid-participation/v1"),
+            semantic.Definition,
+            facilities,
+            deployment =>
+            {
+                deployment.Workload(Api, AppService, ApiPhysical, [Source]);
+                deployment.NonParticipatingWorkload(
+                    Api,
+                    "Conflicts with the physical deployment.",
+                    ["profile://local/invalid"]);
+                deployment.NonParticipatingWorkload(
+                    new("workloads/removed"),
+                    "Stale profile entry.",
+                    ["profile://local/invalid"]);
+                deployment.Resource(State, ObjectStore, StatePhysical, Authority, [Source]);
+            });
+
+        var plan = InfrastructureTargetDeploymentCompiler.Compile(semantic, manifest);
+
+        Assert.False(plan.IsComplete);
+        Assert.Null(plan.Realization);
+        Assert.Contains(
+            plan.Diagnostics,
+            diagnostic => diagnostic.Code == InfrastructureTargetDeploymentCompiler.DiagnosticCodes.WorkloadParticipationConflict
+                          && diagnostic.Evidence?.Subject == Api.Value);
+        Assert.Contains(
+            plan.Diagnostics,
+            diagnostic => diagnostic.Code == InfrastructureTargetDeploymentCompiler.DiagnosticCodes.WorkloadNonParticipationUnknown
+                          && diagnostic.Evidence?.Subject == "workloads/removed");
+        Assert.All(plan.Diagnostics, static diagnostic =>
+        {
+            Assert.NotNull(diagnostic.Evidence);
+            Assert.NotEmpty(diagnostic.Evidence!.SourceReferences);
+            Assert.NotEmpty(diagnostic.Evidence.ResolutionOptions);
+        });
     }
 
     [Fact]

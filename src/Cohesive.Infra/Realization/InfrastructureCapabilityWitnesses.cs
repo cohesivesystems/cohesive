@@ -16,6 +16,18 @@ public static class InfrastructureCapabilityWitnessDiagnosticCodes
     /// <summary>A declared workload has no selected physical deployment resource.</summary>
     public const string WorkloadPlacementMissing = "infra.witnesses.workloadPlacement.missing";
 
+    /// <summary>A non-participation decision names no workload in the exact definition.</summary>
+    public const string WorkloadNonParticipationUnknown = "infra.witnesses.workloadNonParticipation.unknown";
+
+    /// <summary>A workload is both physically placed and declared non-participating.</summary>
+    public const string WorkloadParticipationConflict = "infra.witnesses.workloadParticipation.conflict";
+
+    /// <summary>A participating node depends on a workload declared non-participating.</summary>
+    public const string WorkloadDependencyNonParticipating = "infra.witnesses.workloadParticipation.dependencyNonParticipating";
+
+    /// <summary>A physical witness was supplied for a demand owned by a non-participating workload.</summary>
+    public const string WitnessForNonParticipatingWorkload = "infra.witnesses.workloadNonParticipation.witnessUnexpected";
+
     /// <summary>A witness names a requirement absent from the exact capability closure.</summary>
     public const string RequirementUnknown = "infra.witnesses.requirement.unknown";
 
@@ -102,6 +114,69 @@ public sealed record InfrastructureWorkloadPlacement
         hash.Add(Workload);
         hash.Add(PhysicalResource);
         hash.Add(Interpreter);
+        foreach (var source in SourceReferences)
+        {
+            hash.Add(source);
+        }
+
+        return hash.ToHashCode();
+    }
+}
+
+/// <summary>Attributable decision that one canonical workload does not participate in a physical realization.</summary>
+/// <remarks>
+/// Non-participation is environment-specific physical policy. It does not remove the workload from the canonical
+/// infrastructure definition or weaken the exact target capability closure.
+/// </remarks>
+public sealed record InfrastructureWorkloadNonParticipation
+{
+    /// <summary>Creates an explicit workload non-participation decision.</summary>
+    /// <param name="workload">Exact canonical workload that does not participate.</param>
+    /// <param name="rationale">Human-legible reason the workload is absent from this realization.</param>
+    /// <param name="sourceReferences">Attributable environment, subsystem, policy, or deployment sources.</param>
+    /// <exception cref="ArgumentException">An identity, rationale, or source reference is invalid or missing.</exception>
+    [JsonConstructor]
+    public InfrastructureWorkloadNonParticipation(
+        InfrastructureNodeId workload,
+        string rationale,
+        ImmutableArray<SourceReference> sourceReferences)
+    {
+        if (string.IsNullOrWhiteSpace(workload.Value))
+        {
+            throw new ArgumentException("Workload non-participation requires a logical workload identity.", nameof(workload));
+        }
+
+        Workload = workload;
+        Rationale = Guard.RequireNotNullOrWhiteSpace(rationale);
+        SourceReferences = SourceReference.NormalizeSet(sourceReferences, requireNonEmpty: true);
+    }
+
+    /// <summary>Exact canonical workload that does not participate.</summary>
+    public InfrastructureNodeId Workload { get; }
+
+    /// <summary>Human-legible reason the workload is absent from this realization.</summary>
+    public string Rationale { get; }
+
+    /// <summary>Attributable environment, subsystem, policy, or deployment sources in ordinal order.</summary>
+    public ImmutableArray<SourceReference> SourceReferences { get; }
+
+    /// <summary>Compares workload non-participation decisions structurally.</summary>
+    /// <param name="other">Other decision.</param>
+    /// <returns><see langword="true"/> when every field is equal.</returns>
+    public bool Equals(InfrastructureWorkloadNonParticipation? other) =>
+        ReferenceEquals(this, other)
+        || other is not null
+        && Workload == other.Workload
+        && string.Equals(Rationale, other.Rationale, StringComparison.Ordinal)
+        && SourceReferences.SequenceEqual(other.SourceReferences);
+
+    /// <summary>Returns a structural hash code for this decision.</summary>
+    /// <returns>A hash code derived from every field.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Workload);
+        hash.Add(Rationale, StringComparer.Ordinal);
         foreach (var source in SourceReferences)
         {
             hash.Add(source);
@@ -228,8 +303,10 @@ public sealed record InfrastructureCapabilityWitnessDecision
     {
         if (string.IsNullOrWhiteSpace(requirement.Value))
             throw new ArgumentException("A capability-witness decision requires a requirement identity.", nameof(requirement));
+
         if (string.IsNullOrWhiteSpace(capability.Value))
             throw new ArgumentException("A capability-witness decision requires a capability identity.", nameof(capability));
+
         if (!Enum.IsDefined(realization))
             throw new ArgumentOutOfRangeException(nameof(realization), realization, "Unsupported capability realization kind.");
 
@@ -255,16 +332,22 @@ public sealed record InfrastructureCapabilityWitnessDecision
 
         if (UnplacedSubjects.Any(subject => !Subjects.Contains(subject)))
             throw new ArgumentException("Unplaced subjects must belong to the exact capability demand.", nameof(unplacedSubjects));
+
         if (MissingEvidence.Any(evidence => !RequiredEvidence.Contains(evidence)))
             throw new ArgumentException("Missing evidence must belong to the selected capability proof.", nameof(missingEvidence));
+
         if (UnexpectedEvidence.Any(RequiredEvidence.Contains))
             throw new ArgumentException("Unexpected evidence cannot belong to the selected capability proof.", nameof(unexpectedEvidence));
+
         if (MissingPhysicalResources.Any(resource => !ExpectedPhysicalResources.Contains(resource)))
             throw new ArgumentException("Missing physical resources must belong to the demand's expected subject resources.", nameof(missingPhysicalResources));
+
         if (!UnexpectedEvidence.SequenceEqual(WitnessedEvidence.Where(evidence => !RequiredEvidence.Contains(evidence))))
             throw new ArgumentException("Unexpected evidence must exactly describe witnessed evidence outside the selected proof.", nameof(unexpectedEvidence));
+
         if (!MissingEvidence.SequenceEqual(RequiredEvidence.Where(evidence => !WitnessedEvidence.Contains(evidence))))
             throw new ArgumentException("Missing evidence must exactly describe selected evidence without a witness.", nameof(missingEvidence));
+
         if (!MissingPhysicalResources.SequenceEqual(ExpectedPhysicalResources.Where(resource => !ObservedPhysicalResources.Contains(resource))))
             throw new ArgumentException("Missing physical resources must exactly describe expected resources absent from the witnessed proof.", nameof(missingPhysicalResources));
     }
@@ -386,18 +469,21 @@ public static class InfrastructureRealizationCompiler
     /// <param name="lifecycle">Exact logical-resource lifecycle and physical-identity partition.</param>
     /// <param name="workloadPlacements">Selected physical deployment resource for each workload.</param>
     /// <param name="capabilityWitnesses">Demand-scoped physical witnesses for selected capability evidence.</param>
+    /// <param name="nonParticipatingWorkloads">Explicit attributable decisions for workloads absent from this realization.</param>
     /// <returns>An exactly fingerprinted realization candidate with structured witness decisions and diagnostics.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="capabilityClosure"/> or <paramref name="lifecycle"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// Inputs reference different definitions, or a placement or witness collection contains malformed duplicates.
+    /// Inputs reference different definitions, or a placement, non-participation, or witness collection contains
+    /// malformed duplicates.
     /// </exception>
     public static InfrastructureRealization Compile(
         InfrastructureCapabilityClosureReport capabilityClosure,
         InfrastructureLifecyclePlan lifecycle,
         ImmutableArray<InfrastructureWorkloadPlacement> workloadPlacements = default,
-        ImmutableArray<InfrastructureCapabilityEvidenceWitness> capabilityWitnesses = default)
+        ImmutableArray<InfrastructureCapabilityEvidenceWitness> capabilityWitnesses = default,
+        ImmutableArray<InfrastructureWorkloadNonParticipation> nonParticipatingWorkloads = default)
     {
         ArgumentNullException.ThrowIfNull(capabilityClosure);
         ArgumentNullException.ThrowIfNull(lifecycle);
@@ -410,19 +496,24 @@ public static class InfrastructureRealizationCompiler
 
         var placements = InfrastructureCapabilityWitnessCollections.NormalizePlacements(workloadPlacements);
         var witnesses = InfrastructureCapabilityWitnessCollections.NormalizeWitnesses(capabilityWitnesses);
+        var nonParticipations = InfrastructureCapabilityWitnessCollections.NormalizeNonParticipations(
+            nonParticipatingWorkloads);
         var readinessObligations = InfrastructureReadinessObligationCompiler.Compile(
             capabilityClosure.Definition.Definition,
             lifecycle,
-            placements);
+            placements,
+            nonParticipations);
         var evaluation = InfrastructureCapabilityWitnessEvaluator.Evaluate(
             capabilityClosure,
             lifecycle,
             placements,
+            nonParticipations,
             witnesses);
         return new(
             capabilityClosure,
             lifecycle,
             placements,
+            nonParticipations,
             readinessObligations,
             witnesses,
             evaluation.Decisions,
@@ -439,6 +530,7 @@ static class InfrastructureCapabilityWitnessEvaluator
         InfrastructureCapabilityClosureReport closure,
         InfrastructureLifecyclePlan lifecycle,
         ImmutableArray<InfrastructureWorkloadPlacement> placements,
+        ImmutableArray<InfrastructureWorkloadNonParticipation> nonParticipatingWorkloads,
         ImmutableArray<InfrastructureCapabilityEvidenceWitness> witnesses)
     {
         var definition = closure.Definition;
@@ -446,6 +538,7 @@ static class InfrastructureCapabilityWitnessEvaluator
         var workloads = definition.Definition.Workloads.ToDictionary(static workload => workload.Id);
         var resources = definition.Definition.Resources.ToDictionary(static resource => resource.Id);
         var placementByWorkload = placements.ToDictionary(static placement => placement.Workload);
+        var nonParticipationByWorkload = nonParticipatingWorkloads.ToDictionary(static decision => decision.Workload);
         var exactSources = ExactSources(closure);
 
         for (var index = 0; index < placements.Length; index++)
@@ -471,11 +564,64 @@ static class InfrastructureCapabilityWitnessEvaluator
                     observed: "unknown or non-workload node")));
         }
 
+        for (var index = 0; index < nonParticipatingWorkloads.Length; index++)
+        {
+            var decision = nonParticipatingWorkloads[index];
+            if (!workloads.ContainsKey(decision.Workload))
+            {
+                diagnostics.Add(new(
+                    InfrastructureCapabilityWitnessDiagnosticCodes.WorkloadNonParticipationUnknown,
+                    DiagnosticSeverity.Error,
+                    $"Workload non-participation decision '{decision.Workload.Value}' does not name a declared workload.",
+                    Location: $"/nonParticipatingWorkloads/{index.ToString(CultureInfo.InvariantCulture)}/workload",
+                    SchemaLocation: decision.Workload.Value,
+                    Evidence: new(
+                        stage: InfrastructureRealizationCompiler.Stage,
+                        subject: decision.Workload.Value,
+                        sourceReferences: Merge(
+                            exactSources,
+                            decision.SourceReferences.Select(static reference => reference.Value).ToImmutableArray()),
+                        resolutionOptions: ["Remove the stale decision or bind it to an exact canonical workload."],
+                        expected: "a workload in the exact infrastructure definition",
+                        observed: "unknown or non-workload node")));
+                continue;
+            }
+
+            if (!placementByWorkload.ContainsKey(decision.Workload))
+            {
+                continue;
+            }
+
+            diagnostics.Add(new(
+                InfrastructureCapabilityWitnessDiagnosticCodes.WorkloadParticipationConflict,
+                DiagnosticSeverity.Error,
+                $"Workload '{decision.Workload.Value}' is both physically placed and declared non-participating.",
+                Location: $"/nonParticipatingWorkloads/{index.ToString(CultureInfo.InvariantCulture)}",
+                SchemaLocation: decision.Workload.Value,
+                Evidence: new(
+                    stage: InfrastructureRealizationCompiler.Stage,
+                    subject: decision.Workload.Value,
+                    relatedLocations: [$"/workloadPlacements/{PlacementIndex(placements, decision.Workload).ToString(CultureInfo.InvariantCulture)}"],
+                    sourceReferences: Merge(
+                        exactSources,
+                        decision.SourceReferences.Select(static reference => reference.Value).ToImmutableArray()),
+                    resolutionOptions:
+                    [
+                        "Remove the non-participation decision when this workload is deployed.",
+                        "Remove the placement when the workload is intentionally absent from this realization."
+                    ],
+                    expected: "exactly one participation state",
+                    observed: "placed and non-participating")));
+        }
+
         for (var index = 0; index < definition.Definition.Workloads.Length; index++)
         {
             var workload = definition.Definition.Workloads[index];
-            if (placementByWorkload.ContainsKey(workload.Id))
+            if (placementByWorkload.ContainsKey(workload.Id)
+                || nonParticipationByWorkload.ContainsKey(workload.Id))
+            {
                 continue;
+            }
 
             diagnostics.Add(new(
                 InfrastructureCapabilityWitnessDiagnosticCodes.WorkloadPlacementMissing,
@@ -487,10 +633,20 @@ static class InfrastructureCapabilityWitnessEvaluator
                     stage: InfrastructureRealizationCompiler.Stage,
                     subject: workload.Id.Value,
                     sourceReferences: exactSources,
-                    resolutionOptions: ["Select a physical workload deployment resource through an attributable interpreter."],
-                    expected: "one exact workload placement",
-                    observed: "no placement")));
+                    resolutionOptions:
+                    [
+                        "Select a physical workload deployment resource through an attributable interpreter.",
+                        "Declare attributable workload non-participation when this environment intentionally excludes it."
+                    ],
+                    expected: "one exact workload placement or non-participation decision",
+                    observed: "no participation decision")));
         }
+        ValidateParticipationDependencies(
+            definition.Definition,
+            workloads.Keys,
+            nonParticipationByWorkload,
+            exactSources,
+            diagnostics);
 
         var contexts = RequirementContexts(closure);
         var witnessesByRequirement = witnesses
@@ -500,8 +656,31 @@ static class InfrastructureCapabilityWitnessEvaluator
         for (var index = 0; index < witnesses.Length; index++)
         {
             var witness = witnesses[index];
-            if (contexts.ContainsKey(witness.Requirement))
+            if (contexts.TryGetValue(witness.Requirement, out var witnessContext)
+                && IsParticipatingDemand(witnessContext, workloads, nonParticipationByWorkload))
+            {
                 continue;
+            }
+
+            if (witnessContext is not null)
+            {
+                diagnostics.Add(new(
+                    InfrastructureCapabilityWitnessDiagnosticCodes.WitnessForNonParticipatingWorkload,
+                    DiagnosticSeverity.Error,
+                    $"Capability witness requirement '{witness.Requirement.Value}' is owned by non-participating workload '{witnessContext.DemandingNode.Value}'.",
+                    Location: $"/capabilityWitnesses/{index.ToString(CultureInfo.InvariantCulture)}/requirement",
+                    SchemaLocation: witness.Requirement.Value,
+                    Evidence: new(
+                        stage: InfrastructureRealizationCompiler.Stage,
+                        subject: witness.Requirement.Value,
+                        sourceReferences: Merge(
+                            exactSources,
+                            witness.SourceReferences.Select(static reference => reference.Value).ToImmutableArray()),
+                        resolutionOptions: ["Remove the stale witness or place the workload in this realization."],
+                        expected: "no physical witness for a non-participating workload demand",
+                        observed: string.Join(",", witness.PhysicalResources.Select(static resource => resource.Value)))));
+                continue;
+            }
 
             diagnostics.Add(new(
                 InfrastructureCapabilityWitnessDiagnosticCodes.RequirementUnknown,
@@ -530,6 +709,11 @@ static class InfrastructureCapabilityWitnessEvaluator
         foreach (var capabilityDecision in closure.Decisions)
         {
             var context = contexts[capabilityDecision.Requirement];
+            if (!IsParticipatingDemand(context, workloads, nonParticipationByWorkload))
+            {
+                continue;
+            }
+
             var requirementWitnesses = witnessesByRequirement.GetValueOrDefault(capabilityDecision.Requirement, []);
             var requiredEvidence = capabilityDecision.Evidence;
             var witnessedEvidence = EvidenceSet(requirementWitnesses.Select(static witness => witness.Evidence));
@@ -633,7 +817,7 @@ static class InfrastructureCapabilityWitnessEvaluator
         }
 
         return new(
-            decisions.MoveToImmutable(),
+            decisions.Count == decisions.Capacity ? decisions.MoveToImmutable() : decisions.ToImmutable(),
             DocumentValidationDiagnostics.Normalize(diagnostics.ToImmutable()));
     }
 
@@ -651,6 +835,7 @@ static class InfrastructureCapabilityWitnessEvaluator
                 var requirement = workload.Requirements[requirementIndex];
                 contexts.Add(requirement.Id, new(
                     requirement,
+                    workload.Id,
                     [workload.Id],
                     $"/definition/workloads/{workloadIndex.ToString(CultureInfo.InvariantCulture)}/requirements/{requirementIndex.ToString(CultureInfo.InvariantCulture)}/capability"));
             }
@@ -664,6 +849,7 @@ static class InfrastructureCapabilityWitnessEvaluator
                 var requirement = resource.Requirements[requirementIndex];
                 contexts.Add(requirement.Id, new(
                     requirement,
+                    resource.Id,
                     [resource.Id],
                     $"/definition/resources/{resourceIndex.ToString(CultureInfo.InvariantCulture)}/requirements/{requirementIndex.ToString(CultureInfo.InvariantCulture)}/capability"));
             }
@@ -675,6 +861,7 @@ static class InfrastructureCapabilityWitnessEvaluator
             var binding = bindings[obligation.Binding];
             contexts.Add(obligation.Requirement.Id, new(
                 obligation.Requirement,
+                binding.Source,
                 NodeSet([binding.Source, binding.Target]),
                 obligation.Location));
         }
@@ -772,8 +959,102 @@ static class InfrastructureCapabilityWitnessEvaluator
 
     internal sealed record RequirementContext(
         InfrastructureCapabilityRequirement Requirement,
+        InfrastructureNodeId DemandingNode,
         ImmutableArray<InfrastructureNodeId> Subjects,
         string Location);
+
+    static bool IsParticipatingDemand(
+        RequirementContext context,
+        IReadOnlyDictionary<InfrastructureNodeId, InfrastructureWorkloadDefinition> workloads,
+        IReadOnlyDictionary<InfrastructureNodeId, InfrastructureWorkloadNonParticipation> nonParticipations) =>
+        !workloads.ContainsKey(context.DemandingNode)
+        || !nonParticipations.ContainsKey(context.DemandingNode);
+
+    static void ValidateParticipationDependencies(
+        InfrastructureDefinition definition,
+        IEnumerable<InfrastructureNodeId> workloads,
+        IReadOnlyDictionary<InfrastructureNodeId, InfrastructureWorkloadNonParticipation> nonParticipations,
+        ImmutableArray<string> exactSources,
+        ICollection<DocumentValidationDiagnostic> diagnostics)
+    {
+        var workloadSet = workloads.ToHashSet();
+        for (var index = 0; index < definition.Bindings.Length; index++)
+        {
+            var binding = definition.Bindings[index];
+            if (!IsParticipatingNode(binding.Source, workloadSet, nonParticipations)
+                || !nonParticipations.TryGetValue(binding.Target, out var excluded))
+            {
+                continue;
+            }
+
+            diagnostics.Add(DependencyDiagnostic(
+                binding.Source,
+                binding.Target,
+                $"/definition/bindings/{index.ToString(CultureInfo.InvariantCulture)}",
+                $"Participating node '{binding.Source.Value}' binds to non-participating workload '{binding.Target.Value}'.",
+                excluded,
+                exactSources));
+        }
+
+        for (var index = 0; index < definition.ReadinessDependencies.Length; index++)
+        {
+            var dependency = definition.ReadinessDependencies[index];
+            if (!IsParticipatingNode(dependency.Subject, workloadSet, nonParticipations)
+                || !nonParticipations.TryGetValue(dependency.Dependency, out var excluded))
+            {
+                continue;
+            }
+
+            diagnostics.Add(DependencyDiagnostic(
+                dependency.Subject,
+                dependency.Dependency,
+                $"/definition/readinessDependencies/{index.ToString(CultureInfo.InvariantCulture)}",
+                $"Participating node '{dependency.Subject.Value}' requires non-participating workload '{dependency.Dependency.Value}' to be ready.",
+                excluded,
+                exactSources));
+        }
+    }
+
+    static bool IsParticipatingNode(
+        InfrastructureNodeId node,
+        IReadOnlySet<InfrastructureNodeId> workloads,
+        IReadOnlyDictionary<InfrastructureNodeId, InfrastructureWorkloadNonParticipation> nonParticipations) =>
+        !workloads.Contains(node) || !nonParticipations.ContainsKey(node);
+
+    static DocumentValidationDiagnostic DependencyDiagnostic(
+        InfrastructureNodeId subject,
+        InfrastructureNodeId dependency,
+        string location,
+        string message,
+        InfrastructureWorkloadNonParticipation excluded,
+        ImmutableArray<string> exactSources) => new(
+        InfrastructureCapabilityWitnessDiagnosticCodes.WorkloadDependencyNonParticipating,
+        DiagnosticSeverity.Error,
+        message,
+        Location: location,
+        SchemaLocation: subject.Value,
+        Evidence: new(
+            stage: InfrastructureRealizationCompiler.Stage,
+            subject: subject.Value,
+            relatedLocations: [$"workload/{Uri.EscapeDataString(dependency.Value)}"],
+            sourceReferences: Merge(
+                exactSources,
+                excluded.SourceReferences.Select(static reference => reference.Value).ToImmutableArray()),
+            resolutionOptions:
+            [
+                "Place the required workload in this realization.",
+                "Remove the semantic dependency only when the participating node no longer requires it."
+            ],
+            expected: "every dependency of a participating node also participates",
+            observed: $"{dependency.Value} is non-participating"));
+
+    static int PlacementIndex(
+        ImmutableArray<InfrastructureWorkloadPlacement> placements,
+        InfrastructureNodeId workload) =>
+        CanonicalDocumentCollections.BinarySearchIndex(
+            placements,
+            workload,
+            static (placement, sought) => StringComparer.Ordinal.Compare(placement.Workload.Value, sought.Value));
 }
 
 static class InfrastructureCapabilityWitnessCollections
@@ -783,6 +1064,7 @@ static class InfrastructureCapabilityWitnessCollections
     {
         if (placements.IsDefaultOrEmpty)
             return [];
+
         if (placements.Any(static placement => placement is null))
             throw new ArgumentException("Infrastructure workload placements cannot contain null.", nameof(placements));
 
@@ -796,11 +1078,40 @@ static class InfrastructureCapabilityWitnessCollections
         return ordered;
     }
 
+    internal static ImmutableArray<InfrastructureWorkloadNonParticipation> NormalizeNonParticipations(
+        ImmutableArray<InfrastructureWorkloadNonParticipation> decisions)
+    {
+        if (decisions.IsDefaultOrEmpty)
+        {
+            return [];
+        }
+
+        if (decisions.Any(static decision => decision is null))
+        {
+            throw new ArgumentException("Infrastructure workload non-participation decisions cannot contain null.", nameof(decisions));
+        }
+
+        var ordered = CanonicalDocumentCollections.SortIfNeeded(
+            decisions,
+            static (left, right) => StringComparer.Ordinal.Compare(left.Workload.Value, right.Workload.Value));
+        for (var index = 1; index < ordered.Length; index++)
+        {
+            if (ordered[index - 1].Workload == ordered[index].Workload)
+            {
+                throw new ArgumentException(
+                    $"Workload non-participation decision '{ordered[index].Workload.Value}' is duplicated.",
+                    nameof(decisions));
+            }
+        }
+        return ordered;
+    }
+
     internal static ImmutableArray<InfrastructureCapabilityEvidenceWitness> NormalizeWitnesses(
         ImmutableArray<InfrastructureCapabilityEvidenceWitness> witnesses)
     {
         if (witnesses.IsDefaultOrEmpty)
             return [];
+
         if (witnesses.Any(static witness => witness is null))
             throw new ArgumentException("Infrastructure capability witnesses cannot contain null.", nameof(witnesses));
 
@@ -829,6 +1140,7 @@ static class InfrastructureCapabilityWitnessCollections
     {
         if (decisions.IsDefaultOrEmpty)
             return [];
+
         if (decisions.Any(static decision => decision is null))
             throw new ArgumentException("Infrastructure capability-witness decisions cannot contain null.", nameof(decisions));
 
@@ -849,6 +1161,7 @@ static class InfrastructureRealizationFingerprinting
         InfrastructureCapabilityClosureReport closure,
         InfrastructureLifecyclePlan lifecycle,
         ImmutableArray<InfrastructureWorkloadPlacement> placements,
+        ImmutableArray<InfrastructureWorkloadNonParticipation> nonParticipatingWorkloads,
         ImmutableArray<InfrastructureReadinessObligation> readinessObligations,
         ImmutableArray<InfrastructureCapabilityEvidenceWitness> witnesses,
         ImmutableArray<InfrastructureCapabilityWitnessDecision> decisions)
@@ -864,6 +1177,7 @@ static class InfrastructureRealizationFingerprinting
                 lifecycle.Definition.ToReference(),
                 lifecycle.Bindings,
                 placements,
+                nonParticipatingWorkloads,
                 readinessObligations,
                 witnesses,
                 decisions),
@@ -884,6 +1198,7 @@ static class InfrastructureRealizationFingerprinting
         InfrastructureDefinitionReference Definition,
         ImmutableArray<InfrastructureResourceLifecycleBinding> LifecycleBindings,
         ImmutableArray<InfrastructureWorkloadPlacement> WorkloadPlacements,
+        ImmutableArray<InfrastructureWorkloadNonParticipation> NonParticipatingWorkloads,
         ImmutableArray<InfrastructureReadinessObligation> ReadinessObligations,
         ImmutableArray<InfrastructureCapabilityEvidenceWitness> CapabilityWitnesses,
         ImmutableArray<InfrastructureCapabilityWitnessDecision> WitnessDecisions);

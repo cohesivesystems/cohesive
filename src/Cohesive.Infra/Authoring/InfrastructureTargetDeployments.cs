@@ -39,6 +39,7 @@ public sealed class InfrastructureTargetDeploymentManifestBuilder
     readonly InfrastructureTargetFacilityManifest targetFacilities;
     readonly List<InfrastructureTargetWorkloadDeployment> workloads = [];
     readonly List<InfrastructureTargetResourceDeployment> resources = [];
+    readonly List<InfrastructureWorkloadNonParticipation> nonParticipatingWorkloads = [];
     readonly List<InfrastructureSourceProvenance> sourceMap = [];
 
     internal InfrastructureTargetDeploymentManifestBuilder(
@@ -71,6 +72,28 @@ public sealed class InfrastructureTargetDeploymentManifestBuilder
         [CallerMemberName] string sourceMember = "")
     {
         workloads.Add(new(workload, facility, physicalResource, sourceReferences));
+        sourceMap.Add(Capture(InfrastructureSourceReferences.Node(workload), sourceFile, sourceLine, sourceMember));
+        return this;
+    }
+
+    /// <summary>Declares that one canonical workload intentionally does not participate in this deployment.</summary>
+    /// <param name="workload">Canonical workload identity.</param>
+    /// <param name="rationale">Human-legible environment or subsystem rationale.</param>
+    /// <param name="sourceReferences">Attributable environment, subsystem, policy, or deployment sources.</param>
+    /// <param name="sourceFile">Compiler-supplied source file used only for non-semantic attribution.</param>
+    /// <param name="sourceLine">Compiler-supplied source line used only for non-semantic attribution.</param>
+    /// <param name="sourceMember">Compiler-supplied source member used only for non-semantic attribution.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentException">An identity, rationale, or source-reference collection is invalid or missing.</exception>
+    public InfrastructureTargetDeploymentManifestBuilder NonParticipatingWorkload(
+        InfrastructureNodeId workload,
+        string rationale,
+        ImmutableArray<SourceReference> sourceReferences,
+        [CallerFilePath] string sourceFile = "",
+        [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        nonParticipatingWorkloads.Add(new(workload, rationale, sourceReferences));
         sourceMap.Add(Capture(InfrastructureSourceReferences.Node(workload), sourceFile, sourceLine, sourceMember));
         return this;
     }
@@ -108,6 +131,7 @@ public sealed class InfrastructureTargetDeploymentManifestBuilder
         targetFacilities,
         [.. workloads],
         [.. resources],
+        [.. nonParticipatingWorkloads],
         sourceMap: new([.. sourceMap]));
 
     InfrastructureSourceProvenance Capture(
