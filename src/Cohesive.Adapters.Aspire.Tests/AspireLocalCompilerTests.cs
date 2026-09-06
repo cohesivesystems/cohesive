@@ -13,6 +13,7 @@ using Cohesive.MaterializationHarness.Model;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cohesive.Adapters.Aspire.Tests;
 
@@ -337,7 +338,7 @@ public sealed class AspireLocalCompilerTests
     }
 
     [Fact]
-    public void Aspire_projects_foreign_managed_services_without_taking_lifecycle_ownership()
+    public async Task Aspire_projects_foreign_managed_services_without_taking_lifecycle_ownership()
     {
         var source = ReferencedServiceSource(AspireLocalProjectionDocument.CurrentTargetId);
         var aspire = AspireLocalCompiler.Compile(source);
@@ -379,6 +380,23 @@ public sealed class AspireLocalCompilerTests
         var project = Assert.IsType<ProjectResource>(applied.Services[new("local/api")].Resource);
         Assert.Single(project.Annotations.OfType<WaitAnnotation>());
         Assert.NotEmpty(project.Annotations.OfType<EnvironmentCallbackAnnotation>());
+        Assert.Contains(
+            project.Annotations.OfType<ResourceRelationshipAnnotation>(),
+            relationship => ReferenceEquals(relationship.Resource, external)
+                && string.Equals(relationship.Type, "Reference", StringComparison.Ordinal));
+        var executionConfiguration = await ExecutionConfigurationBuilder
+            .Create(project)
+            .WithEnvironmentVariablesConfig()
+            .BuildAsync(
+                new DistributedApplicationExecutionContext(DistributedApplicationOperation.Run),
+                NullLogger.Instance,
+                CancellationToken.None);
+        var environment = executionConfiguration.EnvironmentVariables.ToDictionary(
+            static variable => variable.Key,
+            static variable => variable.Value,
+            StringComparer.Ordinal);
+        Assert.Equal("https://localhost:58081", environment["COSMOS_ENDPOINT"]);
+        Assert.Equal("http://localhost:58082/", environment["COSMOS_HEALTH_ENDPOINT"]);
         var endpointValues = projection.Services.Single(candidate =>
                 candidate.Service.PhysicalResource == new InfrastructurePhysicalResourceId("local/api"))
             .Service.Environment.Select(static variable => Assert.IsType<InfrastructureLocalEndpointValue>(variable.Value))
@@ -390,6 +408,25 @@ public sealed class AspireLocalCompilerTests
         });
         Assert.Contains(endpointValues, static endpointValue => endpointValue.Endpoint == new InfrastructureLocalEndpointId("gateway"));
         Assert.Contains(endpointValues, static endpointValue => endpointValue.Endpoint == new InfrastructureLocalEndpointId("health"));
+    }
+
+    [Fact]
+    public void Aspire_rejects_a_foreign_endpoint_without_a_concrete_host_address()
+    {
+        var source = ReferencedServiceSource(
+            consumer: AspireLocalProjectionDocument.CurrentTargetId,
+            exposeGatewayOnHost: false);
+
+        var compilation = AspireLocalCompiler.Compile(source);
+
+        Assert.True(source.IsValid, string.Join(Environment.NewLine, source.Diagnostics.Select(static item => item.Message)));
+        Assert.False(compilation.IsSuccess);
+        Assert.Null(compilation.Projection);
+        Assert.Contains(compilation.Diagnostics, static diagnostic =>
+            diagnostic.Code == AspireLocalCompiler.DiagnosticCodes.ReferencedServiceEndpointUnsupported
+            && diagnostic.Location == "/topology/services/local/cosmos/endpoints/gateway"
+            && diagnostic.Evidence?.Expected == "host-loopback exposure with host-port configuration"
+            && diagnostic.Evidence.Observed == "endpoint exposure is Internal");
     }
 
     [Fact]
@@ -744,7 +781,8 @@ public sealed class AspireLocalCompilerTests
 
     static InfrastructureLocalRealizationDocument ReferencedServiceSource(
         InfrastructureTargetId consumer,
-        InfrastructureLocalEndpointId? healthEndpoint = null)
+        InfrastructureLocalEndpointId? healthEndpoint = null,
+        bool exposeGatewayOnHost = true)
     {
         InfrastructureNodeId workload = new("workload/api");
         InfrastructureNodeId cosmos = new("resource/cosmos");
@@ -825,9 +863,11 @@ public sealed class AspireLocalCompilerTests
                         id: gateway,
                         scheme: "https",
                         servicePort: 8081,
-                        exposure: InfrastructureLocalEndpointExposure.HostLoopback,
+                        exposure: exposeGatewayOnHost
+                            ? InfrastructureLocalEndpointExposure.HostLoopback
+                            : InfrastructureLocalEndpointExposure.Internal,
                         role: InfrastructureLocalEndpointRole.Data,
-                        hostPort: new(subject, gatewayPort))
+                        hostPort: exposeGatewayOnHost ? new(subject, gatewayPort) : null)
                     .Endpoint(
                         id: representative,
                         scheme: "http",

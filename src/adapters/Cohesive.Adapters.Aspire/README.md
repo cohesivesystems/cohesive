@@ -4,6 +4,13 @@ This adapter projects an exact `InfrastructureLocalRealizationDocument` into an 
 
 `AspireLocalCompiler.Compile` is pure and deterministic. It performs no Aspire, Docker, filesystem, network, or secret I/O. `AddCohesiveLocalInfrastructure` is the separate runtime application boundary that turns a successful projection into AppHost resources.
 
+Foreign-managed services become Aspire `ExternalServiceResource` instances only when every declared endpoint has a
+concrete host-loopback address. The representative endpoint supplies the external-service URI; a representative
+`Uri` environment value is bound through Aspire's resource reference, while secondary endpoints and alternate
+encodings use their exact resolved host URIs. Missing host exposure or effective host-port configuration fails before
+projection, so the adapter never substitutes an Aspire resource name for a service that lives outside Aspire's
+network.
+
 `AspireInfrastructureObservations.CaptureCurrent` is the runtime observation boundary. It reads Aspire's current `ResourceNotificationService` snapshots for the exact resources returned by `AddCohesiveLocalInfrastructure`, verifies their physical identity and projection fingerprints, and normalizes Aspire lifecycle and health evidence into canonical `InfrastructureResourceObservation` values. Services for which Aspire has not published an event remain absent so `InfrastructureReadinessEvaluator` can emit its provider-neutral missing-observation diagnostic. `AssessCurrent` composes the same capture with that evaluator after verifying the exact physical-realization fence; applications do not implement state normalization or readiness computation.
 
 Aspire considers only a `Running` resource with `Healthy` aggregate health ready. `Degraded` and `Unhealthy` health, known non-running lifecycle states, unrecognized states, and identity-fence failures retain structured adapter diagnostics and exact Aspire/local-projection provenance. Health-report exception text is intentionally not copied into portable diagnostics.
