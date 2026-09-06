@@ -57,6 +57,13 @@ physical acquisition and exact source evidence.
 semantic documents and compiled evidence from those owning blocks. Provider SDKs and physical schemas remain in
 adapter packages.
 
+Retained entity snapshots and Transition operation commits use the explicit lossless
+`EntityStorageJson.CreateOptions()` profile. It reuses the core PortableValue tagged node codec for
+detached observation fields; ordinary JSON serialization is unchanged. Payload format 2 and
+`sha256-entity-v2` commit fingerprints require explicit migration of older retained evidence. Request
+and operation identities remain stable so old receipts cannot be mistaken for missing operations.
+See the [SQLite adoption and migration notes](../adapters/Cohesive.Adapters.SQLite/OUTBOX.md).
+
 `InMemoryProcessDurableStore` is the copy-on-write reference implementation and semantic test oracle. It is not a
 production durability provider and does not claim physical exactly-once publication.
 

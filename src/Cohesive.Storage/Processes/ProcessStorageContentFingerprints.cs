@@ -23,12 +23,10 @@ static class ProcessStorageContentFingerprints
 
     internal static ProcessCommitFingerprint Value<T>(T value) where T : class => Compute(value);
 
+    internal static ProcessCommitFingerprint Value<T>(T value, System.Text.Json.JsonSerializerOptions options, string profile) where T : class =>
+        new($"{profile}:{Convert.ToHexStringLower(SHA256.HashData(StrictDocumentJson.GetCanonicalBytes(value, options)))}");
+
     static ProcessCommitFingerprint Compute<T>(T value) where T : class => new(ComputeValue(value));
 
-    static string ComputeValue<T>(T value) where T : class
-    {
-        var bytes = StrictDocumentJson.GetCanonicalBytes(value, Options);
-        var digest = SHA256.HashData(bytes);
-        return $"sha256-v1:{Convert.ToHexStringLower(digest)}";
-    }
+    static string ComputeValue<T>(T value) where T : class => Value(value, Options, "sha256-v1").Value;
 }

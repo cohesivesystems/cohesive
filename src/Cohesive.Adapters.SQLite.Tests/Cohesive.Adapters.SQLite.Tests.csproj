@@ -17,5 +17,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../adapters/Cohesive.Adapters.SQLite/Cohesive.Adapters.SQLite.csproj" />
+    <ProjectReference Include="../Cohesive.ExecutionKernel.TestFixtures/Cohesive.ExecutionKernel.TestFixtures.csproj" />
+    <Compile Include="../Cohesive.Tests/Storage/Conformance/EntityRepositoryConformance.cs" Link="Conformance/EntityRepositoryConformance.cs" />
   </ItemGroup>
 </Project>

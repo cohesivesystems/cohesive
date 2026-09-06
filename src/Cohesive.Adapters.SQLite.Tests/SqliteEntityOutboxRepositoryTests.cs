@@ -23,6 +23,57 @@ public sealed class SqliteEntityOutboxRepositoryTests
     static readonly ValueContract StateContract = new(new ObjectTypeRef(
         [new("id", StringContract.Type!), new("tenant", StringContract.Type!), new("status", StringContract.Type!)]));
 
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 1)]
+    [InlineData(false, 99)]
+    [InlineData(true, 99)]
+    public async Task UnsupportedReceiptFormatIsNeverTreatedAsAnAbsentOperation(bool process, int format)
+    {
+        using var file = new DatabaseFixture();
+        var repository = Repository(file);
+        var initial = await repository.Upsert(Context, Write(repository));
+        var operation = Operation(repository, initial.ConcurrencyToken);
+        var direct = new EntityOutboxCommit(operation.Write, [Envelope("versioned", operation.Write.Entity)]);
+        if (process) await repository.CommitTransitionOperation(Context, operation);
+        else await repository.UpsertWithOutbox(Context, direct);
+        var advanced = await repository.Upsert(Context, Write(repository, status: "later", version: 2));
+        Execute(file, $"UPDATE {Quote(repository.ReceiptsTable)} SET format = {format}");
+        var reopened = Reopen(file, repository);
+        if (process)
+        {
+            await Assert.ThrowsAsync<NotSupportedException>(() => reopened.TryGetTransitionOperation(Context, operation.Request));
+            await Assert.ThrowsAsync<NotSupportedException>(() => reopened.CommitTransitionOperation(Context, operation));
+        }
+        else
+        {
+            await Assert.ThrowsAsync<NotSupportedException>(() => reopened.ReadOutbox(Context));
+            await Assert.ThrowsAsync<NotSupportedException>(() => reopened.UpsertWithOutbox(Context, direct));
+        }
+        Assert.Equal(advanced, await reopened.TryGet(Context, "customer/1"));
+        Assert.Equal(1L, Count(file, repository.ReceiptsTable));
+    }
+
+    [Fact]
+    public void EncodingMigrationRetainsLegacyEvidenceAndLabelsItsOriginalFormat()
+    {
+        using var file = new DatabaseFixture();
+        var definition = new EntityDefinition(new("legacy"), [new(new("id"), StringContract.Type!)]);
+        var mapping = new SqliteEntityRepositoryMapping(definition, "id");
+        var repository = new SqliteEntityOutboxRepository(file.Database, mapping);
+        new SqliteSchema("legacy-outbox", [repository.InitialMigration]).Apply(file.Database);
+        Execute(file, $"INSERT INTO {Quote(repository.ReceiptsTable)} (id, kind, content, hash) VALUES ('retained', 1, X'0102', 'retained-hash')");
+        new SqliteSchema("legacy-outbox", repository.Migrations).Apply(file.Database);
+        using var connection = file.Database.OpenConnection();
+        using var command = file.Database.CreateCommand(connection, null, $"SELECT id, content, hash, format FROM {Quote(repository.ReceiptsTable)}");
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal("retained", reader.GetString(0));
+        Assert.Equal(new byte[] { 1, 2 }, (byte[])reader.GetValue(1));
+        Assert.Equal("retained-hash", reader.GetString(2));
+        Assert.Equal(1, reader.GetInt32(3));
+    }
+
     [Fact]
     public async Task KilledWriterRollsBackStateAndReceiptPagesBeforeReopenAndRetry()
     {
@@ -321,7 +372,7 @@ public sealed class SqliteEntityOutboxRepositoryTests
         var mapping = new SqliteEntityRepositoryMapping(definition, identityField: "id", partitionField: "tenant", tableName: "customer\"records");
         var repository = new SqliteEntityOutboxRepository(file.Database, mapping);
         new SqliteSchema("customer-state", [mapping.InitialMigration]).Apply(file.Database);
-        new SqliteSchema("customer-outbox", [repository.InitialMigration]).Apply(file.Database);
+        new SqliteSchema("customer-outbox", repository.Migrations).Apply(file.Database);
         return repository;
     }
 

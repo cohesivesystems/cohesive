@@ -79,6 +79,11 @@ static class DefaultObservationValueConverterCache
                 return CallConverter(value, nameof(ReadString));
             }
 
+            if (targetType == typeof(byte[]))
+            {
+                return CallConverter(value, nameof(ReadBytes));
+            }
+
             if (targetType == typeof(bool))
             {
                 return CallConverter(value, nameof(ReadBoolean));
@@ -323,6 +328,12 @@ static class DefaultObservationValueConverterCache
             value.Kind == ObservationValueKind.Bool
                 ? value.Bool
                 : DeserializeDefault<bool>(value);
+
+        // Mutable CLR output must own its bytes; never expose the immutable observation's backing storage.
+        static byte[]? ReadBytes(ObservationValue value) =>
+            value.Kind == ObservationValueKind.Bytes
+                ? value.Bytes.ToArray()
+                : DeserializeDefault<byte[]>(value);
 
         static int ReadInt32(ObservationValue value) =>
             value.Kind == ObservationValueKind.Int64

@@ -18,7 +18,7 @@ namespace Cohesive.Adapters.Cosmos;
 /// </summary>
 public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEntityTransitionOperationRepository
 {
-    internal const string TransitionCommitBrotliEncoding = "br+base64/canonical-json;v=1";
+    internal const string TransitionCommitBrotliEncoding = "br+base64/canonical-json;v=2";
     internal const int MaximumTransitionCommitCanonicalBytes = 16 * 1024 * 1024;
 
     /// <summary>
@@ -32,7 +32,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
     readonly EntityPartitionKeyPolicy partitionKeyPolicy;
     readonly Func<EntityObservationSnapshot, string> itemIdSelector;
     readonly CosmosObservationOutboxRepositoryOptions options;
-    static readonly JsonSerializerOptions TransitionReceiptJsonOptions = StrictDocumentJson.CreateOptions();
+    static readonly JsonSerializerOptions TransitionReceiptJsonOptions = EntityStorageJson.CreateOptions();
 
     /// <summary>
     /// Creates a repository for one entity definition persisted in observation format.
@@ -200,6 +200,12 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
                     commit.Write.Entity.EntityId.Value,
                     partitionKey)
                 .ConfigureAwait(false);
+            if ((current is null || GetConcurrencyToken(current) != expectedConcurrencyToken)
+                && await TryReplayOutboxCommit(context, commit, partitionKey, outboxDocuments).ConfigureAwait(false) is { } replay)
+            {
+                // An exact successful commit rotates the caller's fence; reconcile its evidence before rejecting it.
+                return replay;
+            }
             RequireExpectedConcurrencyToken(
                 current,
                 expectedConcurrencyToken,
@@ -661,10 +667,9 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
                     StringComparison.Ordinal)
                 || retained.Envelope is not { } retainedEnvelope
                 || candidate.Envelope is not { } candidateEnvelope
-                || !string.Equals(
-                    retainedEnvelope.GetRawText(),
-                    candidateEnvelope.GetRawText(),
-                    StringComparison.Ordinal))
+                || StrictDocumentJson.TryFindDuplicateProperty(retainedEnvelope, string.Empty, out _)
+                // Cosmos may rewrite escaping and object-property order; raw JSON spelling is not receipt identity.
+                || !JsonElement.DeepEquals(retainedEnvelope, candidateEnvelope))
             {
                 throw new InvalidOperationException(
                     $"Cosmos outbox identity '{candidate.Id}' is retained with different canonical content.");
@@ -946,30 +951,17 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
         return Convert.ToHexString(SHA256.HashData(canonical)).ToLowerInvariant();
     }
 
-    static bool HasValidTransitionCommitEvidence(CosmosObservationContainerDocument document)
-    {
-        var hasLegacyCommit = document.TransitionCommit is not null;
-        var hasCompressedCommit = string.Equals(
+    static bool HasValidTransitionCommitEvidence(CosmosObservationContainerDocument document) =>
+        document.TransitionCommit is null
+        && string.Equals(
                 document.TransitionCommitEncoding,
                 TransitionCommitBrotliEncoding,
                 StringComparison.Ordinal)
             && !string.IsNullOrWhiteSpace(document.TransitionCommitPayload);
-        return hasLegacyCommit != hasCompressedCommit
-            && (hasLegacyCommit
-                ? document.TransitionCommitEncoding is null && document.TransitionCommitPayload is null
-                : document.TransitionCommit is null);
-    }
 
     static EntityTransitionOperationCommit DeserializeTransitionCommit(
         CosmosObservationContainerDocument document)
     {
-        if (document.TransitionCommit is { } legacy)
-        {
-            return legacy.Deserialize<EntityTransitionOperationCommit>(TransitionReceiptJsonOptions)
-                ?? throw new InvalidOperationException(
-                    $"Cosmos Transition operation receipt '{document.Id}' deserialized to null.");
-        }
-
         try
         {
             var canonical = DecompressTransitionCommit(
