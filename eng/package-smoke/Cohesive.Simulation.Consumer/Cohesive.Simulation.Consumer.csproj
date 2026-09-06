@@ -18,6 +18,7 @@
   <ItemGroup>
     <PackageReference Include="Cohesive.Adapters.Bogus" Version="$(CohesivePackageVersion)" />
     <PackageReference Include="Cohesive.Simulation.ExternalProcess" Version="$(CohesivePackageVersion)" />
+    <PackageReference Include="Cohesive.Simulation.Mimesis" Version="$(CohesivePackageVersion)" />
     <PackageReference Include="Cohesive.Simulation" Version="$(CohesivePackageVersion)" />
     <PackageReference Include="Cohesive.Simulation.Relations" Version="$(CohesivePackageVersion)" />
     <PackageReference Include="Cohesive.Simulation.Storage" Version="$(CohesivePackageVersion)" />

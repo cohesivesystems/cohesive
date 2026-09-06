@@ -9,6 +9,7 @@ formats may change between alpha versions, but every persisted contract is expli
 | --- | --- |
 | Generation catalog document | `cohesive-simulation-generation-catalog/v2` |
 | External catalog-provider exchange | `cohesive-simulation-generation-catalog-provider/v1` |
+| Mimesis record-provider configuration | `cohesive-simulation-mimesis-record/v1` |
 | Generation document | `cohesive-simulation-generation/v4` |
 | Core world document | `cohesive-simulation-world/v6` |
 | Relationship world document | `cohesive-simulation-relations-world/v3` |
