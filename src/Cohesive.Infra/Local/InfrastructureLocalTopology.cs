@@ -686,7 +686,7 @@ public sealed record InfrastructureLocalReferencedServiceSource : Infrastructure
 {
     /// <summary>Creates a referenced-service realization source.</summary>
     /// <param name="interpreter">Exact consuming lifecycle interpreter that references the service.</param>
-    /// <param name="representativeEndpoint">Host-loopback endpoint representing the service in the consuming interpreter.</param>
+    /// <param name="representativeEndpoint">Host-loopback endpoint with an effective host port representing the service in the consuming interpreter.</param>
     /// <exception cref="ArgumentException">An identity is default.</exception>
     [JsonConstructor]
     public InfrastructureLocalReferencedServiceSource(
@@ -705,7 +705,7 @@ public sealed record InfrastructureLocalReferencedServiceSource : Infrastructure
     /// <summary>Exact consuming lifecycle interpreter that references the service without managing it.</summary>
     public InfrastructureTargetId Interpreter { get; }
 
-    /// <summary>Host-loopback endpoint representing the service in the consuming interpreter.</summary>
+    /// <summary>Host-loopback endpoint with an effective host port representing the service in the consuming interpreter.</summary>
     public InfrastructureLocalEndpointId RepresentativeEndpoint { get; }
 }
 

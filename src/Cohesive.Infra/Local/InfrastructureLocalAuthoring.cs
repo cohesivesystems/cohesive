@@ -123,7 +123,7 @@ public sealed class InfrastructureLocalBuilder
     /// <param name="resource">Canonical logical resource.</param>
     /// <param name="physicalResource">Exact physical resource identity.</param>
     /// <param name="interpreter">Exact consuming interpreter that references the service.</param>
-    /// <param name="representativeEndpoint">Host-loopback endpoint representing the service in that interpreter.</param>
+    /// <param name="representativeEndpoint">Host-loopback endpoint with an effective host port representing the service in that interpreter.</param>
     /// <param name="configure">Optional endpoint, health, and readiness declarations.</param>
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentException"><paramref name="interpreter"/> or <paramref name="representativeEndpoint"/> is default.</exception>

@@ -451,6 +451,45 @@ public sealed class InfrastructureLocalRealizationTests
     }
 
     [Fact]
+    public void Referenced_resource_representative_requires_an_effective_host_port()
+    {
+        Assert.Throws<ArgumentException>(() => new InfrastructureLocalEndpoint(
+            id: new("health"),
+            scheme: "http",
+            servicePort: 8082,
+            exposure: InfrastructureLocalEndpointExposure.HostLoopback,
+            role: InfrastructureLocalEndpointRole.Management));
+
+        InfrastructureTargetId consumer = new("tests/local-consumer");
+        InfrastructureSettingId hostPort = new("emulator-port");
+        var realization = ReferencedResourceRealization(consumer);
+        var topology = InfrastructureLocal.Define(local => local.ReferencedService(
+            resource: new("resource/emulator"),
+            physicalResource: new("physical/emulator"),
+            interpreter: consumer,
+            representativeEndpoint: new("health"),
+            configure: emulator => emulator.Endpoint(
+                id: new("health"),
+                scheme: "http",
+                servicePort: 8082,
+                exposure: InfrastructureLocalEndpointExposure.HostLoopback,
+                role: InfrastructureLocalEndpointRole.Management,
+                hostPort: new(Subject, hostPort))));
+
+        var document = InfrastructureLocalRealizationCompiler.Compile(
+            realization,
+            Environment(InfrastructureLocalDataLifetime.Persistent),
+            topology,
+            [Configuration((ProjectName, "referenced-test"))]);
+
+        Assert.False(document.IsValid);
+        Assert.Contains(document.Diagnostics, diagnostic =>
+            diagnostic.Code == InfrastructureLocalRealizationCompiler.DiagnosticCodes.ConfigurationMissing
+            && diagnostic.Location == "/topology/services/physical/emulator/endpoints/health/hostPort"
+            && diagnostic.Evidence?.Subject == $"{Subject.Value}/{hostPort.Value}");
+    }
+
+    [Fact]
     public void Referenced_resource_mismatches_are_structured_diagnostics()
     {
         InfrastructureTargetId consumer = new("tests/local-consumer");

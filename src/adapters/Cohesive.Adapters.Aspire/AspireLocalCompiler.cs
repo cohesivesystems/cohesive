@@ -39,6 +39,8 @@ public static class AspireLocalCompiler
         public const string EphemeralSharedVolumeUnsupported = "infra.aspire.volume.ephemeralSharedUnsupported";
         /// <summary>A referenced service names a different consuming lifecycle interpreter.</summary>
         public const string ReferencedServiceTargetMismatch = "infra.aspire.service.referencedTargetMismatch";
+        /// <summary>A referenced service endpoint has no concrete host address available to Aspire.</summary>
+        public const string ReferencedServiceEndpointUnsupported = "infra.aspire.service.referencedEndpointUnsupported";
         /// <summary>A referenced service health probe cannot be preserved against its single Aspire URI.</summary>
         public const string ReferencedServiceHealthEndpointUnsupported = "infra.aspire.health.referencedEndpointUnsupported";
     }
@@ -132,6 +134,26 @@ public static class AspireLocalCompiler
                         $"Compile with interpreter '{reference.Interpreter.Value}' or author the reference for '{AspireLocalProjectionDocument.CurrentTarget}'.",
                         expected: AspireLocalProjectionDocument.CurrentTarget,
                         observed: reference.Interpreter.Value);
+                }
+
+                foreach (var endpoint in service.Endpoints)
+                {
+                    if (endpoint.Exposure == InfrastructureLocalEndpointExposure.HostLoopback
+                        && endpoint.HostPort is not null)
+                    {
+                        continue;
+                    }
+                    Add(
+                        diagnostics,
+                        DiagnosticCodes.ReferencedServiceEndpointUnsupported,
+                        $"Referenced service endpoint '{service.PhysicalResource.Value}/{endpoint.Id.Value}' has no concrete host address available to Aspire.",
+                        $"/topology/services/{service.PhysicalResource.Value}/endpoints/{endpoint.Id.Value}",
+                        service.PhysicalResource.Value,
+                        "Expose the foreign-managed endpoint on host loopback with an effective host-port configuration, or omit it from this Aspire realization.",
+                        expected: "host-loopback exposure with host-port configuration",
+                        observed: endpoint.Exposure == InfrastructureLocalEndpointExposure.HostLoopback
+                            ? "host-port configuration is absent"
+                            : $"endpoint exposure is {endpoint.Exposure}");
                 }
 
                 foreach (var probe in service.Health?.Probes.OfType<InfrastructureLocalHttpHealthProbe>() ?? [])
@@ -405,8 +427,9 @@ public static class AspireLocalCompiler
                     resourceName: resourceName,
                     endpoint: endpoint,
                     hostPort: hostPort,
-                    serviceAddress: service.Source is InfrastructureLocalReferencedServiceSource && hostAddress is not null
-                        ? hostAddress
+                    serviceAddress: service.Source is InfrastructureLocalReferencedServiceSource
+                        ? hostAddress ?? throw new InvalidOperationException(
+                            $"Referenced service endpoint '{service.PhysicalResource.Value}/{endpoint.Id.Value}' passed Aspire validation without a host address.")
                         : $"{endpoint.Scheme}://{resourceName}:{servicePort.ToString(CultureInfo.InvariantCulture)}",
                     hostAddress: hostAddress));
             }
@@ -474,8 +497,9 @@ public static class AspireLocalCompiler
             hostAddress = hostPort is null
                 ? null
                 : $"{endpoint.Scheme}://localhost:{hostPort.Value.ToString(CultureInfo.InvariantCulture)}";
-            serviceAddress = service.Source is InfrastructureLocalReferencedServiceSource && hostAddress is not null
-                ? hostAddress
+            serviceAddress = service.Source is InfrastructureLocalReferencedServiceSource
+                ? hostAddress ?? throw new InvalidOperationException(
+                    $"Referenced service endpoint '{value.Service.Value}/{value.Endpoint.Value}' passed Aspire validation without a host address.")
                 : $"{endpoint.Scheme}://{serviceNames[value.Service]}:{endpoint.ServicePort.Resolve(realization.Configuration).ToString(CultureInfo.InvariantCulture)}";
         }
         else if (source is AspireLocalProjectionDocument projection)
