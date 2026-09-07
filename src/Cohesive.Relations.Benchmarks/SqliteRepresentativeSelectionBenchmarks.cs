@@ -87,7 +87,7 @@ public class SqliteRepresentativeSelectionBenchmarks
             columns[field.PresenceOrdinal] = field.Field.Path == RepresentativeSelectionFixture.Key ? "KeyPresent" : "1";
         }
         columns[artifact.BindingPresenceOrdinal] = "1";
-        foreach (var occurrence in artifact.OccurrenceColumns) columns[occurrence.IdentityOrdinal] = "Id";
+        foreach (var occurrence in artifact.OccurrenceColumns) columns[occurrence.Components.Single().Ordinal] = "Id";
         handwritten = database.CreateCommand(connection, null,
             "WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY KeyPresent, Key COLLATE BINARY ORDER BY Preference DESC NULLS LAST, Id ASC NULLS LAST) AS rank FROM candidates) SELECT "
             + string.Join(",", columns) + " FROM ranked WHERE rank=1 ORDER BY Id");

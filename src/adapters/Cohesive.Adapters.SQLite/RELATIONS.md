@@ -12,41 +12,56 @@ The versioned `SqliteRelationQueryTargetProfile.Default` advertises the supporte
 feasibility is followed by inspection of the exact branch and storage binding; it is not sufficient to authorize
 execution by itself.
 
-| Semantic operation | SQLite v1 realization and constraints |
+| Semantic operation | SQLite realization and constraints |
 | --- | --- |
 | Source | Complete table enumeration in one connection's main database. All source instances share one execution domain. Supplied roots, partition selectors and relationship acquisition are rejected. |
 | Fields and projection | Top-level scalar paths. Values use `SqliteScalarCodec`, including value-only decimal, temporal and binary payloads. Nested objects and collections are rejected. |
 | Equality and partitioning | Int32/Int64, Boolean and String domains. Text uses explicit `BINARY` collation for exact equality, including when the column declares another collation. Missing and explicit null stay distinct. |
-| Predicates | Required non-null booleans; `Not`, `And`, `Or`, exact equality/inequality, and ordered comparisons of required non-null integers. Nullable ordered comparisons need further refinement proof and are rejected. |
+| Predicates | Required non-null booleans; `Not`, `And`, `Or`, exact equality/inequality, and ordered comparisons of required non-null integers. Guarded comparisons use shared canonical `ExprGuardRefinement`; unproven nullish operands are rejected. |
 | Parameters | Required non-null codec-encoded scalar values without defaults; only demanded parameters are bound. |
 | Join | Inner and left joins over distinct source bindings. Optional bindings retain a presence marker separate from nullable field payloads. |
 | Representative selection | `ROW_NUMBER` in a derived query, followed by rank = 1. Partition expressions retain missing/null distinction; empty/global partitions follow the canonical operation. |
-| Ordering | Int32/Int64 keys with explicit direction and null placement. The tuple must contain the identity of **every contributing source**, including nullable identities after left joins. |
+| Ordering | Int32/Int64, or String fields with explicit ASCII-domain evidence, with explicit direction and null placement. The order must cover a proven unique key; representative partition keys also contribute to its uniqueness proof. |
 | Results | Named query rows, selected output fields and winning source occurrences; decoding uses fixed ordinals. |
 
-Each placed source requires a stable, non-null, unique INTEGER identity with a semantic field path. Its demanded
-field mapping must use the same physical column. Requiring all source identities is deliberately conservative:
-one identity can repeat after a join. Including all identities proves a unique order tuple for every possible
-bound input and avoids SQLite arbitrarily resolving a canonical top tie. A plan without that proof is rejected
-even if today's data happens to have no ties, or a later filter would remove the tied group. This first slice does
-not implement data-dependent tie detection or infer functional dependencies from join predicates.
+Each placed source requires a stable, non-null unique integer/text identity. A scalar placement identity names its
+semantic field and physical column. `IdentityFields` can instead declare an ordered composite key through exact
+canonical field-input IDs; a composite placement uses a source-native identity selector with no single semantic
+path. Every identity component must be selected by the plan. Scalar text identities must be nonblank; composite
+text components may be empty. No hidden rowid surrogate or schema alteration is inferred.
+
+The compiler derives a bounded uniqueness proof from these keys. A join always retains the combined key; it retains
+the left key alone when direct conjunctive equality covers a right unique key. Inner joins also propagate field
+equalities and can retain the right key. Cross-side left-join equalities and disjunctive predicates do not establish
+those facts. Representative selection establishes uniqueness of its direct field partition keys. Missing and null
+are distinct partitions but share an ordering bucket, so an optional nullable partition cannot alone prove a final
+order is unique. A plan without proof is rejected even when today's data has no ties. Final `OrderQueryNode` still
+requires a unique order: the reference interpreter preserves encounter order for ties, which this compiler cannot
+reconstruct. This is a bounded key proof, not a general functional-dependency or data-dependent tie detector.
 
 Required presence is a compile-time fact. Only optional fields carry physical presence bits through intermediate
 queries. Repeated value, identity and binding-presence expressions share one internal projection column. Left joins
 still test the contributing binding's presence before reconstructing optional fields.
 
-Text ordering is intentionally unavailable: SQLite `BINARY` and .NET ordinal ordering need not agree for all Unicode
-strings. Decimal TEXT does not establish numeric comparisons; offset-preserving timestamp TEXT does not establish
-instant comparisons. String/composite identities, proven text ordering, nullable-operand refinement, rooted
-relations, relationship traversal, aggregates, distinct, paging and additional expression operations remain outside
-this profile. Explicit realization overrides have no execution handler in v1 and are rejected. These are explicit
-capability or binding diagnostics, never implicit fallback SQL.
+`AsciiOrderingFields` references the exact text inputs whose schema/ingestion authority guarantees U+0000–U+007F.
+In that domain SQLite `BINARY` and canonical UTF-16 ordinal order agree. Unrestricted Unicode ordering, ordered text
+parameters/literals, decimal numeric ordering and temporal TEXT instant comparisons remain unavailable. Equality
+continues to support the full exact text domain independently of ordering evidence.
+
+Shared expression guard analysis recognizes equality/inequality, negation, true conjunctions and false disjunctions.
+For example, equality of a joined identity with a required field proves that binding is present. Its required fields
+can then be compared; originally optional fields still need their own guards. `field != null` does not prove that a
+missing field exists. Native lowering reuses these rules for short-circuit operands and surviving filter rows. It
+never treats a raw SQL NULL comparison as a canonical false result without proof. Rooted relations, relationship
+traversal, aggregates, distinct, paging and additional expression operations remain outside this profile. Explicit
+realization overrides have no execution handler and are rejected.
 
 ## Storage evidence
 
 `SqliteRelationQueryTableBinding.Authority` names the versioned schema/ingestion contract establishing:
 
-- Complete, authoritative tables with the declared unique INTEGER identities.
+- Complete, authoritative tables with the declared unique integer/text identities and key component order.
+- Declared ASCII ordering domains, when used; constraints or controlled ingestion must cover every stored value.
 - Every field's exact codec encoding and canonical value domain; SQLite storage affinity alone is insufficient.
 - Optional-field presence stored as INTEGER NOT NULL 0/1. A missing field has presence 0 **and a SQL NULL payload**;
   an explicit null has presence 1 and a SQL NULL payload.
@@ -62,7 +77,7 @@ sets to those limits; streaming result consumption and database execution resour
 The binding constructor normalizes declarations, fingerprints them together with the exact placement, and checks
 any persisted version/fingerprint. It can be serialized and reopened with `System.Text.Json`. It introduces no
 second field-mapping catalog: `RelationQuerySourceFieldBinding.SourceSelector` and the identity selector are literal
-column names, and source contracts come from the compiled plan.
+column names for scalar identities. Composite selectors name source-native keys; `IdentityFields` points back to the same field mappings. Source contracts come from the compiled plan.
 
 ## Compile once, execute repeatedly
 
@@ -115,13 +130,15 @@ created by `RelationQueryNativeCompilationProvenanceFactory`, retaining exact pl
 decisions and compiler/convention versions. `artifact.ToJson()` exports an inspectable derived artifact. Recompile
 retained canonical IR and verified storage evidence after restart; importing executable SQL artifacts is not a v1 API.
 
-The source occurrence ID format is `sqlite/{escaped-binding}/{integer-identity}`. Observation identity remains the
-invariant decimal representation of the source identity. An absent outer binding contributes no occurrence and an
+The source occurrence ID format is `sqlite/{escaped-binding}/{escaped-identity}`. Observation identity is invariant
+decimal for integers, exact text for scalar strings, or `tuple/v1:` followed by a JSON array of type-tagged components
+for composite keys. `SqliteRelationQueryOccurrenceColumn.EncodeIdentity` provides the same encoding for source evidence.
+Component order and type are significant; delimiters inside a value cannot collide with tuple boundaries. An absent outer binding contributes no occurrence and an
 absent output binding materializes as undefined, distinct from a present object with missing fields.
 
 ## Inspecting generated SQL
 
-Compiler profile `cohesive.adapters.sqlite.sql/compiler-v2` selects shared `SqlFormatting.Indented` rendering.
+Compiler profile `cohesive.adapters.sqlite.sql/compiler-v3` retains shared `SqlFormatting.Indented` rendering.
 SQL stage aliases derive from canonical node IDs, source aliases from bindings, and column aliases from binding/field
 paths. Names are normalized and bounded to 63 UTF-8 bytes for readability; this is a compiler convention, not an
 engine limit. Deterministic suffixes disambiguate collisions, including case-only differences. One allocator per
@@ -146,10 +163,11 @@ predicate. `Statement.Parameters` identifies every constant/runtime slot; `Param
 parameter contracts. `ResultFields` and `OccurrenceColumns` identify decoded fields and contributors, and
 `Provenance` pins their source IR and compilation decisions. Values remain bound separately from SQL text.
 
-The formatted statement is the statement executed. Its fingerprint includes the exact text; compiler-v2 artifacts
-must be regenerated from retained IR and verified storage evidence. Artifact schema v1 remains unchanged. Formatting
-adds compilation work and retained SQL bytes, while query structure, parameter traversal and ordinal decoding stay
-the same. CTE conversion and query-layer elimination are separate lowering changes outside this update.
+The formatted statement is the statement executed. Its fingerprint includes the exact text. Compiler-v3 uses the
+canonical execution slice's field requirements to stop carrying values after their last use. Identity, binding
+presence and ordering slots remain independently retained. This reduces intermediate row width and SQL size without
+moving eligibility filters across representative selection. CTE conversion and query-layer elimination remain
+separate lowering changes.
 
 ## Verification and performance
 
@@ -165,3 +183,14 @@ See [measured results](../../Cohesive.Relations.Benchmarks/RESULTS.md#sqlite-nat
 
 This is the first native compiler slice. Application query migration still needs compatible identity/comparison
 evidence and application-owned schema/ingestion guarantees. It does not replace a store's existing queries by itself.
+
+## Compiler-v3 adoption and compatibility
+
+Recompile retained IR and reconstruct storage evidence when moving to compiler-v3. Storage binding schema v2 adds
+key components and ASCII domain evidence; artifact schema v2 carries typed identity component ordinals. Old versions
+are rejected rather than reinterpreted. SQL text, ordinal metadata and fingerprints may change. The SHA-256 digest
+size remains fixed; wrappers increase the serialized SQL/artifact size and the bytes hashed. Schema DDL is unchanged.
+
+The shared canonical analyzer now accepts proven guards; this does not change evaluation or authorize unguarded
+nullish comparisons. Generic conformance fixtures cover composite/string keys, key-preserving and multiplying joins,
+missing/null winners, guarded eligibility, final partition ordering, evidence round trips and unsupported domains.

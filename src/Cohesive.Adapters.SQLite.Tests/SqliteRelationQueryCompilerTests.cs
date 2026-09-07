@@ -80,6 +80,25 @@ public sealed class SqliteRelationQueryCompilerTests
     }
 
     [Fact]
+    public void MissingAndNullPartitionsCannotProveUniqueFinalNullishOrdering()
+    {
+        var original = Assert.IsType<QueryDefinition>(Document().Definition);
+        var plan = RepresentativeSelectionFixture.Compile(RelationQueryDocument.FromDefinition(original with
+        {
+            Body = new([.. original.Body.Nodes.Select(node => node is OrderQueryNode order
+                ? order with { Orderings = [new(Expr.Field(RepresentativeSelectionFixture.Binding, Key))] } : node)])
+        }));
+        var (request, binding) = Bind(plan);
+        // Even with text-domain evidence, NULL and missing compare as one ordering bucket.
+        var storage = new SqliteRelationQueryStorageBinding(binding.Placement,
+            [binding.Tables[0] with { AsciiOrderingFields = [binding.Placement.Bindings[0].Fields.Single(field => field.SemanticPath == Key).Input] }]);
+        var result = new SqliteRelationQueryCompiler().Compile(request, storage);
+        Assert.False(result.IsSuccessful);
+        Assert.Contains(result.BoundRealization.Evidence.Assessments,
+            assessment => assessment.AdapterDecisionCode?.Value == "SQLITE_REL_UNIQUE_ORDER");
+    }
+
+    [Fact]
     public void MissingPresenceEvidenceFailsClosed()
     {
         var plan = RepresentativeSelectionFixture.Compile(Document());

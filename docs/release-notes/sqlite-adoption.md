@@ -1,10 +1,27 @@
 # SQLite adoption — unreleased
 
+## SQLite Relations adoption evidence
+
+Compiler-v3 supports scalar integer/text and ordered composite source identities, explicit ASCII text-ordering
+evidence, and bounded uniqueness propagation through joins and representative partitions. Final ordering remains
+required to be unique, but it can now be proved by a partition or a key-preserving join instead of listing every
+contributor. Optional nullable partitions do not establish tie-free ordering because missing and null sort together.
+
+Canonical `ExprGuardRefinement` supplies branch-local facts to both expression validation and SQLite lowering.
+Guarded required fields from outer joins and guarded nullable integers can be compared without weakening the
+reference interpreter's error semantics. An inequality against null alone never proves missing data exists.
+
+Storage binding schema v2 and native artifact schema v2 are breaking format changes: rebuild evidence and recompile
+retained IR. Typed identity component ordinals replace the single integer identity ordinal. Scalar text identities
+remain exact nonblank strings; composite identities use a versioned, type-tagged JSON tuple encoding. Physical schema
+DDL is unchanged. Compiler-v3 also prunes values after their last canonical use while retaining contributor and
+ordering metadata. Exact SQL/artifact fingerprints change; their SHA-256 digest length remains fixed.
+
 ## Native SQLite Relations row queries
 
-SQLite compiler profile v2 emits deterministically indented SQL with canonical stage/field names and explicit rank,
-presence and identity aliases. Recompile v1 native artifacts to obtain the new text and exact fingerprints; the
-artifact schema and ordinal decoding layout are unchanged. Shared SQL construction adds `SqlFormatting.Indented`
+Earlier compiler-v2 added deterministically indented SQL with canonical stage/field names and explicit rank,
+presence and identity aliases. Its v1-to-v2 update changed SQL text and fingerprints while preserving the artifact
+schema and ordinal layout; the subsequent v3 format changes are described above. Shared SQL construction adds `SqlFormatting.Indented`
 for SELECT trees and a public `SqlAliasAllocator`, extracted from PostgreSQL with target-owned identifier equality
 and byte budgets. Existing compact overloads and PostgreSQL aliases retain their prior output. See the
 [tested SQL example and explanation](../../src/adapters/Cohesive.Adapters.SQLite/RELATIONS.md#inspecting-generated-sql).
@@ -14,10 +31,9 @@ into reusable SQLite templates with ordinal result decoding. It uses canonical b
 placement/binding fingerprints and shared SQL construction. Winning source provenance and missing/null distinctions
 survive projection and outer joins; post-selection filtering never falls back to a discarded candidate.
 
-The first profile requires declared exact codec encodings, complete tables in one database, unique INTEGER source
-identities and integer order tuples containing every contributing identity. Unsupported domains or incomplete
-evidence fail explicitly. String/composite identity mappings, further comparison-domain evidence and application
-query migration remain follow-up work. See the [native compiler contract](../../src/adapters/Cohesive.Adapters.SQLite/RELATIONS.md).
+The original compiler-v1/v2 profile required declared exact codec encodings, complete tables in one database, unique INTEGER source
+identities and integer order tuples containing every contributing identity. Compiler-v3 extends these evidence contracts as described above. Unsupported domains or incomplete
+evidence still fail explicitly. Application-owned query migration remains a separate adoption step. See the [native compiler contract](../../src/adapters/Cohesive.Adapters.SQLite/RELATIONS.md).
 
 ## Ordered representative semantics and SQL construction
 
@@ -31,7 +47,7 @@ update exhaustive consumers. The in-memory profile advances to `realization-v3`,
 realization artifacts against the new profile. Definition fingerprints for documents without the new node are
 unchanged. Shared SQL adds capability-gated `SqlExpression.RowNumber` and public `SqlOrdering`, supported by the
 SQLite and PostgreSQL dialects. The SQLite compiler above establishes a bounded native interpretation; broader
-adoption mappings and application query migration remain follow-up work in COH-96. Constructing a window alone
+adoption mappings and application query migration are tracked separately from the completed COH-96 compiler slice. Constructing a window alone
 does not establish canonical representative semantics.
 
 ## Explicit SQLite pooling and reusable binding plans

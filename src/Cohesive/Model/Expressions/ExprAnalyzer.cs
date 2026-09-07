@@ -38,6 +38,8 @@ public static class ExprAnalyzer
         readonly List<ExprCapabilityUse> capabilityUses = [];
         readonly List<DocumentValidationDiagnostic> diagnostics = [];
         bool requiresCurrentItem;
+        Dictionary<(ValueBindingId Binding, FieldPath Path), ValueContract> guardedFields = [];
+        HashSet<ValueBindingId> presentBindings = [];
 
         public ExprAnalysisResult Analyze()
         {
@@ -129,7 +131,7 @@ public static class ExprAnalyzer
                 return NodeResult.Unknown;
             }
 
-            var value = binding.Availability == ExprBindingAvailability.MayBeAbsent
+            var value = binding.Availability == ExprBindingAvailability.MayBeAbsent && !presentBindings.Contains(binding.Id)
                 ? WithPresence(binding.Value, FieldPresence.Optional)
                 : binding.Value;
             return NodeResult.FromValue(value);
@@ -204,10 +206,10 @@ public static class ExprAnalyzer
 
             if (TryResolvePath(binding.Value, path, out var value, out var definitelyMissing))
             {
-                var resolvedValue = binding.Availability == ExprBindingAvailability.MayBeAbsent
+                var resolvedValue = binding.Availability == ExprBindingAvailability.MayBeAbsent && !presentBindings.Contains(binding.Id)
                     ? WithPresence(value!, FieldPresence.Optional)
                     : value!;
-                return NodeResult.FromValue(resolvedValue);
+                return NodeResult.FromValue(guardedFields.GetValueOrDefault((binding.Id, path), resolvedValue));
             }
 
             if (definitelyMissing)
@@ -221,7 +223,7 @@ public static class ExprAnalyzer
             if (!definitelyMissing)
             {
                 var unresolvedValue = value;
-                if (binding.Availability == ExprBindingAvailability.MayBeAbsent)
+                if (binding.Availability == ExprBindingAvailability.MayBeAbsent && !presentBindings.Contains(binding.Id))
                 {
                     unresolvedValue = WithPresence(
                         unresolvedValue ?? new ValueContract(),
@@ -229,7 +231,7 @@ public static class ExprAnalyzer
                 }
 
                 if (unresolvedValue is not null)
-                    return NodeResult.FromValue(unresolvedValue);
+                    return NodeResult.FromValue(guardedFields.GetValueOrDefault((binding.Id, path), unresolvedValue));
             }
 
             return NodeResult.Unknown;
@@ -450,12 +452,56 @@ public static class ExprAnalyzer
                 scope,
                 new(definition.LeftCategory),
                 Child(expressionPath, "left"));
-            _ = AnalyzeNode(
-                binary.Right,
-                scope,
-                new(definition.RightCategory),
-                Child(expressionPath, "right"));
+            if (binary.Operator is BinaryOperator.And or BinaryOperator.Or)
+                _ = AnalyzeGuarded(binary.Right, scope, new(definition.RightCategory), Child(expressionPath, "right"),
+                    binary.Left, whenTrue: binary.Operator == BinaryOperator.And);
+            else
+                _ = AnalyzeNode(binary.Right, scope, new(definition.RightCategory), Child(expressionPath, "right"));
             return new(definition.ResultCategory, definition.FixedResult);
+        }
+
+        NodeResult AnalyzeGuarded(Expr expression, ExprScope scope, ExprExpectation expectation, string path,
+            Expr guard, bool whenTrue)
+        {
+            var previousFields = guardedFields;
+            var previousBindings = presentBindings;
+            guardedFields = new(previousFields);
+            presentBindings = new(previousBindings);
+            try
+            {
+                ExprGuardRefinement.Apply(guard, whenTrue, Resolve, (field, contract) =>
+                {
+                    if (FieldIdentity(field) is not { } identity) return;
+                    guardedFields[identity] = contract;
+                    if (contract.Presence == FieldPresence.Required) presentBindings.Add(identity.Binding);
+                });
+                return AnalyzeNode(expression, scope, expectation, path);
+            }
+            finally
+            {
+                guardedFields = previousFields;
+                presentBindings = previousBindings;
+            }
+
+            (ValueBindingId Binding, FieldPath Path)? FieldIdentity(Expr field)
+            {
+                var binding = field is FieldExpr untyped ? untyped.Binding ?? scope.ImplicitBinding : scope.ImplicitBinding;
+                var fieldPath = field switch { FieldExpr reference => reference.Path, FieldRefExpr typed => typed.Path, _ => (FieldPath?)null };
+                return binding is { } id && fieldPath is { } selected ? (id, selected) : null;
+            }
+
+            ValueContract? Resolve(Expr value)
+            {
+                if (value is ParameterExpr parameter)
+                    return scope.TryGetParameter(parameter.Parameter, out var contract) ? contract.Value : null;
+                if (FieldIdentity(value) is not { } identity || !scope.TryGetBinding(identity.Binding, out var binding)) return null;
+                if (guardedFields.TryGetValue(identity, out var refined)) return refined;
+                _ = TryResolvePath(binding.Value, identity.Path, out var resolved, out var missing);
+                if (missing) return null;
+                resolved ??= new ValueContract();
+                return binding.Availability == ExprBindingAvailability.MayBeAbsent && !presentBindings.Contains(binding.Id)
+                    ? WithPresence(resolved, FieldPresence.Optional) : resolved;
+            }
         }
 
         NodeResult AnalyzeConditional(
