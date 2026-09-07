@@ -1,5 +1,17 @@
 # SQLite adoption — unreleased
 
+## Typed SQLite result reading
+
+Native query artifacts can create reusable typed row mappings backed by the core observation materializer and
+cached ordinals. Selected shape contracts are checked at mapping creation; row reading preserves presence,
+nullability and scalar encoding checks. Typed rows omit contributor identities, available through the existing
+canonical row API. No SQL, schema, artifact format or fingerprint changes are required.
+
+`IOrdinalObservationFieldReader` adds a default owned-byte read operation. Existing implementations retain canonical
+copying; SQLite overrides it to avoid two intermediate payload copies for standard scalar `byte[]` mappings.
+Custom conversion policies retain existing behavior. Value-contract validation now dispatches without allocating
+captured callbacks per field or nested item. See the [usage and ownership contract](../../src/adapters/Cohesive.Adapters.SQLite/RELATIONS.md#typed-row-reading).
+
 ## SQLite Relations adoption evidence
 
 Compiler-v3 supports scalar integer/text and ordered composite source identities, explicit ASCII text-ordering

@@ -129,6 +129,18 @@ public sealed class SqliteRelationQueryCompiledArtifact
     /// <returns>A deterministic inspection artifact. Recompile canonical IR and storage evidence to obtain executable state after restart.</returns>
     public string ToJson(bool indented = false) => JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = indented });
 
+    /// <summary>Compiles typed row materialization against this artifact's exact result contracts and ordinals.</summary>
+    /// <typeparam name="T">CLR result type interpreted by the core observation materializer.</typeparam>
+    /// <param name="shape">Exact semantic result shape from the query's retained shape documents.</param>
+    /// <param name="configure">Optional explicit core member mappings, conversions and missing-field policy.</param>
+    /// <returns>An immutable mapping reusable across independent reader lifetimes.</returns>
+    /// <exception cref="ArgumentNullException">The shape has no graph.</exception>
+    /// <exception cref="ArgumentException">The shape or its selected field contracts differ from the artifact.</exception>
+    /// <exception cref="KeyNotFoundException">The shape identity is not declared in its graph.</exception>
+    /// <exception cref="InvalidOperationException">Core materializer mappings or construction cannot be compiled.</exception>
+    public SqliteRelationQueryRowMapping<T> CreateRowMapping<T>(GraphShapeId shape,
+        Action<ObservationMaterializerBuilder<T>>? configure = null) => new(this, shape, configure);
+
     /// <summary>Encodes required canonical values for reuse of the compiled SQLite command.</summary>
     /// <param name="values">Exactly the declared parameter values, keyed by canonical identity.</param>
     /// <returns>Invocation-owned encoded values accepted by the command scope.</returns>
@@ -162,12 +174,10 @@ public sealed class SqliteRelationQueryCompiledArtifact
         var fields = new Dictionary<string, ObservationValue>(ResultFields.Length, StringComparer.Ordinal);
         foreach (var field in ResultFields)
         {
-            var present = ReadPresence(reader, field.PresenceOrdinal);
+            var present = IsFieldPresent(reader, field);
             if (present)
                 // The compiler proves a single field segment. Reuse its immutable name instead of formatting a path per row.
                 fields.Add(field.Field.Path.Segments[0].Segment!, SqliteScalarCodec.Decode(field.Contract, reader.GetValue(field.ValueOrdinal)));
-            else if (!reader.IsDBNull(field.ValueOrdinal))
-                throw new InvalidOperationException("Missing field has a non-null SQLite payload.");
         }
         var occurrences = ImmutableArray.CreateBuilder<RelationQueryObservationOccurrence>(OccurrenceColumns.Length);
         foreach (var column in OccurrenceColumns)
@@ -199,7 +209,15 @@ public sealed class SqliteRelationQueryCompiledArtifact
             occurrences.Count == occurrences.Capacity ? occurrences.MoveToImmutable() : occurrences.ToImmutable());
     }
 
-    static bool ReadPresence(SqliteDataReader reader, int ordinal) => reader.GetValue(ordinal) switch
+    internal static bool IsFieldPresent(SqliteDataReader reader, SqliteRelationQueryResultField field)
+    {
+        var present = ReadPresence(reader, field.PresenceOrdinal);
+        if (!present && !reader.IsDBNull(field.ValueOrdinal))
+            throw new InvalidOperationException("Missing field has a non-null SQLite payload.");
+        return present;
+    }
+
+    internal static bool ReadPresence(SqliteDataReader reader, int ordinal) => reader.GetValue(ordinal) switch
     {
         0L => false, 1L => true,
         _ => throw new InvalidOperationException("SQLite presence must be encoded as INTEGER 0 or 1.")

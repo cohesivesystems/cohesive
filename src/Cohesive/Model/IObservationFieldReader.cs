@@ -44,4 +44,30 @@ public interface IOrdinalObservationFieldReader : IObservationFieldReader
     /// <see langword="false"/>.
     /// </returns>
     bool TryGetField(int ordinal, out ObservationValue field);
+
+    /// <summary>Reads a scalar bytes field directly into independently owned mutable CLR storage.</summary>
+    /// <param name="ordinal">Ordinal of a single-valued bytes field in <see cref="Layout"/>.</param>
+    /// <param name="value">Caller-owned bytes when present, or null for an explicit null or missing field.</param>
+    /// <returns>True for a present field, including explicit null; false for a missing or invalid ordinal.</returns>
+    /// <remarks>
+    /// The default implementation uses the core byte-array converter, including its JSON compatibility fallback,
+    /// and copies canonical bytes. Physical readers may override this operation to avoid
+    /// an intermediate immutable snapshot, but must preserve the field contract and return independently mutable
+    /// storage. Changing that buffer must not affect this reader, another result, or
+    /// retained observations. The default materializer uses this operation only for scalar bytes-to-byte-array
+    /// mappings with its standard conversion policy; custom converters retain the canonical value path.
+    /// </remarks>
+    /// <exception cref="System.Text.Json.JsonException">A present value cannot be converted by the default byte-array policy.</exception>
+    /// <exception cref="InvalidOperationException">A present value cannot be represented for the default conversion.</exception>
+    bool TryGetBytes(int ordinal, out byte[]? value)
+    {
+        if (!TryGetField(ordinal, out var field))
+        {
+            value = null;
+            return false;
+        }
+
+        value = DefaultObservationValueConverterCache.ReadBytes(field);
+        return true;
+    }
 }
