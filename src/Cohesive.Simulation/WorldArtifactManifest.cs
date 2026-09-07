@@ -468,6 +468,23 @@ public sealed record WorldArtifactManifest
         return WorldDefinitionJsonSerializer.Deserialize(World.Document.GetRawText());
     }
 
+    internal void RequireCoreReferenceCompatibility()
+    {
+        if (!string.Equals(
+                Interpreter,
+                ReferenceGenerationInterpreter.Identity,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                EntropyAlgorithm,
+                ReferenceGenerationInterpreter.EntropyAlgorithm,
+                StringComparison.Ordinal))
+        {
+            throw new NotSupportedException(
+                $"The core reference interpreter cannot realize artifact interpreter '{Interpreter}' with entropy "
+                + $"algorithm '{EntropyAlgorithm}'.");
+        }
+    }
+
     static WorldArtifactManifest Create(
         WorldDefinitionDocument document,
         CompiledWorldPlan world,

@@ -76,8 +76,9 @@ using Cohesive.Execution;
 using Cohesive.Model;
 
 var retained = ScenarioDefinitionDocument.FromDefinition(scenario);
+var initialWorld = ScenarioWorldSnapshot.FromCoreWorld(retained);
 ScenarioExecutionTraceDocument trace = await ScenarioRunner.ExecuteAsync(
-    retained,
+    initialWorld,
     new FreightInterpreter());
 
 await File.WriteAllTextAsync(
@@ -103,10 +104,18 @@ sealed class FreightInterpreter : IScenarioActionInterpreter
 }
 ```
 
-The context exposes the exact retained scenario, scheduled action, operation contract, actor and optional target actor,
-zero-based schedule position, and contract-bearing input. An interpreter must return a `PortableValue` carrying the
-declared operation output contract. The runner fails with structured diagnostics before executing another action when
-the contract or value is invalid. Exceptions and cancellation are operational failures and produce no complete trace.
+`ScenarioWorldSnapshot.FromCoreWorld` deterministically materializes every actor's named exemplar from the retained
+artifact's exact seed and core interpreter. For a relationship-aware artifact, use
+`RelationshipScenarioWorldSnapshot.Materialize` from `Cohesive.Simulation.Relations`; it produces the same core
+snapshot shape after completing relationship-owned fields. Both paths fail closed when the artifact selects a schema,
+interpreter, or entropy algorithm they do not own.
+
+The context exposes that complete snapshot, the exact retained scenario, scheduled action, operation contract,
+materialized actor and optional target actor, zero-based schedule position, and contract-bearing input. An interpreter
+can read `context.ActorSnapshot.Observation`, `EntityId`, and replay evidence without rediscovering how the artifact is
+interpreted. It must return a `PortableValue` carrying the declared operation output contract. The runner fails with
+structured diagnostics before executing another action when the contract or value is invalid. Exceptions and
+cancellation are operational failures and produce no complete trace.
 
 `PortableValue.Failed` and `PortableValue.Unknown` are valid retained outcomes, not hidden control flow, so the runner
 continues to later actions. If an interpretation requires fail-fast domain behavior, model that choice explicitly in
@@ -117,10 +126,10 @@ the exact interpreter identity/version, and one contract-validated outcome per a
 own fingerprint detects changes to scenario coordinates, interpreter identity, action association, output state, or
 payload. Strict deserialization rejects incomplete, reordered, unknown, or fingerprint-inconsistent content.
 
-The runner does not yet materialize actor exemplars, mutate world state, or invent transition semantics. An interpreter
-can resolve actors from `context.Scenario.Definition.InitialWorld` using the world package that owns that artifact. A
-subsequent stateful layer can make snapshots and changes first-class while retaining these same schedule and outcome
-contracts.
+The runner does not yet mutate actor snapshots or invent transition semantics. The snapshot is an immutable initial
+state projection; the retained scenario and world artifact remain the replay authorities, so the trace does not
+duplicate generated observations. A subsequent state-evolution layer can apply explicit changes between actions while
+retaining these same schedule and outcome contracts.
 
 ```csharp
 sealed record AssignLoad(string LoadId);
