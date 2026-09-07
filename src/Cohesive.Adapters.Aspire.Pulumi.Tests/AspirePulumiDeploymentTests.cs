@@ -89,7 +89,7 @@ public sealed class AspirePulumiDeploymentTests
     }
 
     [Fact]
-    public void Handoff_surfaces_capability_mismatch_diagnostic_codes_from_incomplete_plans()
+    public void Handoff_surfaces_actionable_capability_mismatch_diagnostics_from_incomplete_plans()
     {
         InfrastructureCapabilityId unsupported = new("test/workload/unsupported");
         var semantic = Infrastructure.Define(
@@ -119,6 +119,7 @@ public sealed class AspirePulumiDeploymentTests
         Assert.False(plan.IsComplete);
         Assert.Equal("plan", exception.ParamName);
         Assert.Contains(diagnostic.Code, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(diagnostic.Message, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

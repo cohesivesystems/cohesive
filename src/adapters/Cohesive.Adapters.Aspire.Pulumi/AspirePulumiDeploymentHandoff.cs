@@ -175,9 +175,11 @@ public sealed record AspirePulumiDeploymentHandoff
         ArgumentNullException.ThrowIfNull(plan);
         if (!plan.IsComplete || plan.Realization is null)
         {
-            var codes = string.Join(", ", plan.Diagnostics.Select(static diagnostic => diagnostic.Code));
+            var diagnosticSummary = string.Join(
+                "; ",
+                plan.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
             throw new ArgumentException(
-                $"A Pulumi handoff requires a complete target deployment plan. Diagnostics: {codes}",
+                $"A Pulumi handoff requires a complete target deployment plan. Diagnostics: {diagnosticSummary}",
                 nameof(plan));
         }
         if (!plan.Realization.IsReadinessObligationComplete)
