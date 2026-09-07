@@ -107,7 +107,7 @@ await using var input = File.OpenRead("test-results/demo-world.jsonl");
 WorldJsonLinesVerificationResult verified = await WorldJsonLinesVerifier.VerifyAsync(manifest, input);
 ```
 
-The verifier uses the same internal v4 codec as the sink and rejects noncanonical or reordered records, unknown or
+The verifier uses the same current v5 codec as the sink and rejects noncanonical or reordered records, unknown or
 duplicated properties, mismatched artifact/world/run/batch identity, missing or extra items, incorrect exemplars or
 replay evidence, and observations that do not exactly replay from the manifest. Tooling can call `ValidateAsync` to
 receive stable `DocumentValidationResult` codes and JSON Pointer locations without treating invalid content as an

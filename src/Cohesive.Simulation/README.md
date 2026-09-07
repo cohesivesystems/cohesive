@@ -26,9 +26,10 @@ Add only the integrations the application uses:
 | `Cohesive.Simulation.ExternalProcess` | Bounded provider-process imports from Python or another runtime |
 | `Cohesive.Adapters.Mimesis` | Typed finite Mimesis imports through the bounded Python process boundary |
 
-Core depends only on `Cohesive`; Relations, Storage, xUnit, CLI, and provider integrations stay in optional packages.
-The CLI can consume a strict portable ExternalProcess import definition while keeping executable paths and process
-limits local to the invocation, then atomically retain and independently verify the resulting catalog.
+Core depends only on `Cohesive`; Relations, Storage, Transitions, xUnit, CLI, ExternalProcess, and provider
+integrations stay in optional packages. The CLI can consume a strict portable ExternalProcess import definition while
+keeping executable paths and process limits local to the invocation, then atomically retain and independently verify
+the resulting catalog.
 
 ## Generate a POCO
 
@@ -110,8 +111,10 @@ worlds, repository seeding, and portable artifacts.
 Worlds currently describe static initial state. Scenarios add actors, declared operations, fixed virtual-time actions,
 deterministic actor materialization, an explicit runtime interpreter seam, contract-checked outcomes, and
 fingerprint-verified complete traces. Core and relationship-world materializers expose each actor's observation,
-entity identity, and replay evidence to the runner. The runner does not yet own state mutation, events, queues,
-resources, or fault policies; those remain later explicit interpretations rather than implicit callback behavior.
+entity identity, and origin replay evidence to the runner. Actions can return explicit complete before/after actor
+replacements; the runner applies them immutably between actions, rejects stale evidence, and retains the verified
+state chain for final-world reconstruction. Actor creation and deletion, events, queues, resources, and fault policies
+remain later explicit interpretations rather than implicit callback behavior.
 `Cohesive.Adapters.Bogus` and
 `Cohesive.Adapters.Mimesis` provide optional snapshot producers without making either provider a core dependency.
 
@@ -121,6 +124,7 @@ semantics. See the compatibility guide before retaining artifacts across package
 ## Learn more
 
 - [Getting started](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/getting-started.md)
+- [Adoption and agentic assurance](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/adoption-and-assurance.md)
 - [Artifacts, replay, and verification](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/artifacts-and-replay.md)
 - [Repository seeding and Playwright](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/seeding-and-playwright.md)
 - [Deterministic scenarios](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation/docs/scenarios.md)

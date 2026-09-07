@@ -4,7 +4,7 @@ status: accepted
 authority: cohesive.documentation-index
 owners: [cohesive-core]
 applies_to: [cohesive]
-last_verified: 2026-09-05
+last_verified: 2026-09-07
 supersedes: []
 ---
 
@@ -36,6 +36,7 @@ expectations.
 | How are semantic and target claims tested? | [Conformance](quality/conformance.md) | Verification strategy |
 | Which Execution Kernel behavior exists today? | [Execution Kernel compatibility](EXECUTION_KERNEL_COMPATIBILITY.md) | Implementation compatibility inventory |
 | How do I adopt, execute, observe, and migrate to the canonical kernel? | [Execution Kernel adoption guide](EXECUTION_KERNEL_GUIDE.md) | Source-backed implementation guide and executable examples |
+| How do I use deterministic data, seeding, scenarios, and replay as one assurance spine? | [Simulation adoption and agentic assurance](../src/Cohesive.Simulation/docs/adoption-and-assurance.md) | Alpha adoption and evidence guide |
 | How is index synchronization operated? | [Index synchronization runbook](INDEX_SYNC_RUNBOOK.md) | Operational procedure |
 
 ## Sources of authority
@@ -145,11 +146,13 @@ The principal package entry points are:
 - [Identity](../src/Cohesive.Identity/README.md)
 - [Configuration](../src/Cohesive.Configuration/README.md)
 - [Simulation](../src/Cohesive.Simulation/README.md)
+- [Simulation adoption and agentic assurance](../src/Cohesive.Simulation/docs/adoption-and-assurance.md)
 - [Simulation relationship worlds](../src/Cohesive.Simulation.Relations/README.md)
 - [Simulation repository provisioning](../src/Cohesive.Simulation.Storage/README.md)
 - [Simulation Transition interpretation](../src/Cohesive.Simulation.Transitions/README.md)
 - [Simulation xUnit integration](../src/Cohesive.Simulation.Xunit/README.md)
 - [Simulation CLI tool](../src/Cohesive.Simulation.Cli/README.md)
+- [Simulation external-process catalogs](../src/Cohesive.Simulation.ExternalProcess/README.md)
 - [Host integration](../src/Cohesive.Host/README.md)
 - [Frontend packages](../src/frontend/README.md)
 
