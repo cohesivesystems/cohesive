@@ -232,3 +232,6 @@ assessment requires separately attributable observations from an adapter.
   construction document to Compose.
 - [`Cohesive.Adapters.Aspire`](../adapters/Cohesive.Adapters.Aspire/README.md) consumes the same definition and
   realization for local orchestration.
+- [`Cohesive.Adapters.Aspire.Pulumi`](../adapters/Cohesive.Adapters.Aspire.Pulumi/README.md) contributes exact
+  handoff, apply, and destroy steps to Aspire's deployment pipeline while delegating provider state and
+  reconciliation to an existing Pulumi program.

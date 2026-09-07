@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);ASPIREPIPELINES001;ASPIREPIPELINES004</NoWarn>
+    <Description>Exact Cohesive.Infra deployment handoffs through Aspire pipelines to existing Pulumi programs.</Description>
+    <PackageTags>cohesive;infrastructure;aspire;pulumi;automation;deployment</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting" Version="13.5.2" />
+    <PackageReference Include="Pulumi.Automation" Version="3.113.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../Cohesive.Infra/Cohesive.Infra.csproj" />
+  </ItemGroup>
+</Project>
