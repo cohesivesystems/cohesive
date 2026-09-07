@@ -106,9 +106,10 @@ profile and import source evidence, known deviations, and a semantic fingerprint
 support direct examples, bounded sequences, property cases, static populations, named exemplars, relationship-linked
 worlds, repository seeding, and portable artifacts.
 
-Worlds currently describe static initial state. Virtual time, activity, events, queues, resources, failures, actors,
-actions, scenario traces, runtime provider interpreters, additional provider import adapters, and learned synthesis are
-later interpretations, not implicit callback behavior in this alpha. `Cohesive.Adapters.Bogus` and
+Worlds currently describe static initial state. Scenarios add actors, declared operations, fixed virtual-time actions,
+an explicit runtime interpreter seam, contract-checked outcomes, and fingerprint-verified complete traces. The runner
+does not yet materialize actor snapshots or own state mutation, events, queues, resources, or fault policies; those
+remain later explicit interpretations rather than implicit callback behavior. `Cohesive.Adapters.Bogus` and
 `Cohesive.Adapters.Mimesis` provide optional snapshot producers without making either provider a core dependency.
 
 Current portable schemas and replay tokens reject earlier versions rather than silently assigning compatibility
