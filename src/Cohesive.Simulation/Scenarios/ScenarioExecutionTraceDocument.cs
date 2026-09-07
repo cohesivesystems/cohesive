@@ -9,21 +9,76 @@ using Cohesive.Simulation.Generation;
 
 namespace Cohesive.Simulation.Scenarios;
 
+/// <summary>Portable initial materialization of one scenario actor retained by an execution trace.</summary>
+/// <remarks>
+/// Actor and exemplar definitions remain authoritative in the retained scenario. This record retains only the
+/// interpreter-produced state and identity needed to verify and reconstruct the execution's state chain.
+/// </remarks>
+public sealed record ScenarioActorInitialState
+{
+    /// <summary>Creates one retained initial actor state.</summary>
+    /// <param name="actorId">Stable identity of the scenario actor.</param>
+    /// <param name="entityId">Canonical entity identity assigned by the world interpreter.</param>
+    /// <param name="observation">Complete initial actor observation.</param>
+    /// <param name="originReplayToken">Opaque evidence for replaying the exact initial observation.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="actorId"/>, <paramref name="observation"/>, or <paramref name="originReplayToken"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// The actor identity, entity identity, or origin replay token is empty or white-space.
+    /// </exception>
+    [JsonConstructor]
+    public ScenarioActorInitialState(
+        string actorId,
+        EntityId entityId,
+        Observation observation,
+        string originReplayToken)
+    {
+        ActorId = Guard.RequireNotNullOrWhiteSpace(actorId);
+        if (string.IsNullOrWhiteSpace(entityId.Value))
+            throw new ArgumentException("An initial actor state requires an entity identity.", nameof(entityId));
+
+        EntityId = entityId;
+        Observation = Guard.RequireNotNull(observation);
+        OriginReplayToken = Guard.RequireNotNullOrWhiteSpace(originReplayToken);
+    }
+
+    /// <summary>Gets the stable identity of the scenario actor.</summary>
+    public string ActorId { get; }
+
+    /// <summary>Gets the canonical entity identity assigned by the world interpreter.</summary>
+    public EntityId EntityId { get; }
+
+    /// <summary>Gets the complete initial actor observation.</summary>
+    public Observation Observation { get; }
+
+    /// <summary>Gets opaque evidence for replaying the exact initial observation.</summary>
+    public string OriginReplayToken { get; }
+}
+
 /// <summary>One portable outcome associated with an exact scheduled scenario action.</summary>
 public sealed record ScenarioActionOutcome
 {
     /// <summary>Creates a retained action outcome.</summary>
     /// <param name="actionId">Stable identity of the action that produced the outcome.</param>
     /// <param name="output">Portable output or semantic failure evidence returned by its interpreter.</param>
+    /// <param name="stateChanges">Explicit actor observation replacements produced by the action.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="actionId"/> or <paramref name="output"/> is <see langword="null"/>.
     /// </exception>
-    /// <exception cref="ArgumentException"><paramref name="actionId"/> is empty or white-space.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="actionId"/> is empty or white-space, or state changes contain one actor more than once.
+    /// </exception>
     [JsonConstructor]
-    public ScenarioActionOutcome(string actionId, PortableValue output)
+    public ScenarioActionOutcome(
+        string actionId,
+        PortableValue output,
+        ImmutableArray<ScenarioActorStateChange> stateChanges = default)
     {
         ActionId = Guard.RequireNotNullOrWhiteSpace(actionId);
         Output = Guard.RequireNotNull(output);
+        StateChanges = ScenarioActionResult.NormalizeStateChanges(stateChanges);
     }
 
     /// <summary>Gets the stable identity of the action that produced the outcome.</summary>
@@ -31,6 +86,9 @@ public sealed record ScenarioActionOutcome
 
     /// <summary>Gets the portable output or semantic failure evidence.</summary>
     public PortableValue Output { get; }
+
+    /// <summary>Gets explicit actor observation replacements in canonical actor-identity order.</summary>
+    public ImmutableArray<ScenarioActorStateChange> StateChanges { get; }
 }
 
 /// <summary>Versioned deterministic identity of exact retained scenario execution content.</summary>
@@ -40,7 +98,7 @@ public sealed record ScenarioExecutionTraceFingerprint
     public const string CurrentAlgorithm = "sha256";
 
     /// <summary>Canonicalization profile used by the current trace fingerprint.</summary>
-    public const string CurrentCanonicalization = "cohesive-simulation-scenario-trace/v1-c14n/v1";
+    public const string CurrentCanonicalization = "cohesive-simulation-scenario-trace/v2-c14n/v1";
 
     /// <summary>Creates scenario execution trace fingerprint metadata.</summary>
     /// <param name="algorithm">Hash-algorithm identity.</param>
@@ -68,19 +126,21 @@ public sealed record ScenarioExecutionTraceFingerprint
 
 /// <summary>Portable self-validating record of one complete canonical scenario execution.</summary>
 /// <remarks>
-/// <see cref="Scenario"/> remains the complete source authority. Outcomes are required to correspond one-for-one to
-/// its canonical schedule, and each output is revalidated against the selected operation contract. The interpreter
-/// identity is retained as execution-policy attribution; executable handler code never enters the document.
+/// <see cref="Scenario"/> remains the complete source authority. Initial actor materializations retain the execution's
+/// starting evidence, while every action outcome retains explicit before/after state changes. The complete chain is
+/// revalidated on restoration. The interpreter identity is execution-policy attribution; executable handler code
+/// never enters the document.
 /// </remarks>
 public sealed record ScenarioExecutionTraceDocument
 {
     /// <summary>Current portable scenario execution trace schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive-simulation-scenario-trace/v1";
+    public const string CurrentSchemaVersion = "cohesive-simulation-scenario-trace/v2";
 
     /// <summary>Creates or restores one complete scenario execution trace.</summary>
     /// <param name="schemaVersion">Exact portable scenario-trace schema.</param>
     /// <param name="scenario">Exact fingerprint-verified scenario that was interpreted.</param>
     /// <param name="interpreter">Exact action-interpreter identity and version.</param>
+    /// <param name="initialActors">One initial materialization per scenario actor in canonical actor order.</param>
     /// <param name="outcomes">One outcome per action in canonical execution order.</param>
     /// <param name="fingerprint">Persisted fingerprint of exact retained trace content.</param>
     /// <exception cref="ArgumentNullException">
@@ -88,17 +148,19 @@ public sealed record ScenarioExecutionTraceDocument
     /// <paramref name="fingerprint"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// The schema is unsupported; the interpreter is empty; outcomes are missing, reordered, duplicated, or invalid
-    /// for their operation contracts; or the fingerprint does not match current canonical content.
+    /// The schema is unsupported; the interpreter is empty; initial actors or outcomes are incomplete or reordered;
+    /// outputs violate their operation contracts; state changes do not form a valid chain; or the fingerprint does
+    /// not match current canonical content.
     /// </exception>
     [JsonConstructor]
     public ScenarioExecutionTraceDocument(
         string schemaVersion,
         ScenarioDefinitionDocument scenario,
         string interpreter,
+        ImmutableArray<ScenarioActorInitialState> initialActors,
         ImmutableArray<ScenarioActionOutcome> outcomes,
         ScenarioExecutionTraceFingerprint fingerprint)
-        : this(ValidateAndNormalize(schemaVersion, scenario, interpreter, outcomes, fingerprint))
+        : this(ValidateAndNormalize(schemaVersion, scenario, interpreter, initialActors, outcomes, fingerprint))
     {
     }
 
@@ -106,12 +168,14 @@ public sealed record ScenarioExecutionTraceDocument
         string SchemaVersion,
         ScenarioDefinitionDocument Scenario,
         string Interpreter,
+        ImmutableArray<ScenarioActorInitialState> InitialActors,
         ImmutableArray<ScenarioActionOutcome> Outcomes,
         ScenarioExecutionTraceFingerprint Fingerprint) state)
     {
         SchemaVersion = state.SchemaVersion;
         Scenario = state.Scenario;
         Interpreter = state.Interpreter;
+        InitialActors = state.InitialActors;
         Outcomes = state.Outcomes;
         Fingerprint = state.Fingerprint;
     }
@@ -125,6 +189,9 @@ public sealed record ScenarioExecutionTraceDocument
     /// <summary>Gets the exact action-interpreter identity and version.</summary>
     public string Interpreter { get; }
 
+    /// <summary>Gets one retained initial state per scenario actor in canonical actor-identity order.</summary>
+    public ImmutableArray<ScenarioActorInitialState> InitialActors { get; }
+
     /// <summary>Gets one outcome per action in canonical execution order.</summary>
     public ImmutableArray<ScenarioActionOutcome> Outcomes { get; }
 
@@ -132,36 +199,66 @@ public sealed record ScenarioExecutionTraceDocument
     public ScenarioExecutionTraceFingerprint Fingerprint { get; }
 
     /// <summary>Creates a current-version trace from exact scenario execution outcomes.</summary>
-    /// <param name="scenario">Exact fingerprint-verified scenario that was interpreted.</param>
+    /// <param name="world">Exact scenario and complete initial actor materialization that were interpreted.</param>
     /// <param name="interpreter">Exact action-interpreter identity and version.</param>
     /// <param name="outcomes">One outcome per action in canonical execution order.</param>
     /// <returns>A complete fingerprint-verified scenario execution trace.</returns>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="scenario"/> or <paramref name="interpreter"/> is <see langword="null"/>.
+    /// <paramref name="world"/> or <paramref name="interpreter"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// The interpreter is empty, or outcomes do not correspond exactly to the scenario schedule and contracts.
+    /// The interpreter is empty, outcomes do not correspond exactly to the scenario schedule and contracts, or state
+    /// changes do not form a valid chain from <paramref name="world"/>.
     /// </exception>
     public static ScenarioExecutionTraceDocument FromOutcomes(
-        ScenarioDefinitionDocument scenario,
+        ScenarioWorldSnapshot world,
         string interpreter,
         ImmutableArray<ScenarioActionOutcome> outcomes)
     {
-        ArgumentNullException.ThrowIfNull(scenario);
+        ArgumentNullException.ThrowIfNull(world);
         interpreter = Guard.RequireNotNullOrWhiteSpace(interpreter);
-        outcomes = ValidateOutcomes(scenario, outcomes);
-        return new(CreateState(scenario, interpreter, outcomes));
+        var initialActors = ToInitialActors(world);
+        outcomes = ValidateOutcomes(world.Scenario, initialActors, outcomes);
+        return new(CreateState(world.Scenario, interpreter, initialActors, outcomes));
+    }
+
+    /// <summary>Reconstructs the complete actor world after every retained action outcome has been applied.</summary>
+    /// <returns>An immutable final-world snapshot retaining the scenario's actor and exemplar definitions.</returns>
+    /// <exception cref="ArgumentException">
+    /// Retained initial state or state changes no longer form a valid chain. Verified instances do not throw this
+    /// exception unless modified through unsupported means.
+    /// </exception>
+    public ScenarioWorldSnapshot ToFinalWorldSnapshot()
+    {
+        var finalObservations = BuildFinalObservations(InitialActors, Outcomes);
+        var definition = Scenario.Definition;
+        var actors = ImmutableArray.CreateBuilder<ScenarioActorSnapshot>(definition.Actors.Length);
+        for (var index = 0; index < definition.Actors.Length; index++)
+        {
+            var actor = definition.Actors[index];
+            var initial = InitialActors[index];
+            actors.Add(new(
+                actor,
+                definition.InitialWorld.GetExemplar(actor.ExemplarId),
+                initial.EntityId,
+                finalObservations[actor.Id],
+                initial.OriginReplayToken));
+        }
+
+        return ScenarioWorldSnapshot.Create(Scenario, actors.MoveToImmutable());
     }
 
     static (
         string SchemaVersion,
         ScenarioDefinitionDocument Scenario,
         string Interpreter,
+        ImmutableArray<ScenarioActorInitialState> InitialActors,
         ImmutableArray<ScenarioActionOutcome> Outcomes,
         ScenarioExecutionTraceFingerprint Fingerprint) ValidateAndNormalize(
         string schemaVersion,
         ScenarioDefinitionDocument scenario,
         string interpreter,
+        ImmutableArray<ScenarioActorInitialState> initialActors,
         ImmutableArray<ScenarioActionOutcome> outcomes,
         ScenarioExecutionTraceFingerprint fingerprint)
     {
@@ -176,8 +273,9 @@ public sealed record ScenarioExecutionTraceDocument
         ArgumentNullException.ThrowIfNull(scenario);
         interpreter = Guard.RequireNotNullOrWhiteSpace(interpreter);
         ArgumentNullException.ThrowIfNull(fingerprint);
-        outcomes = ValidateOutcomes(scenario, outcomes);
-        var state = CreateState(scenario, interpreter, outcomes);
+        initialActors = ValidateInitialActors(scenario, initialActors);
+        outcomes = ValidateOutcomes(scenario, initialActors, outcomes);
+        var state = CreateState(scenario, interpreter, initialActors, outcomes);
         if (fingerprint != state.Fingerprint)
         {
             throw new ArgumentException(
@@ -188,8 +286,56 @@ public sealed record ScenarioExecutionTraceDocument
         return state;
     }
 
+    static ImmutableArray<ScenarioActorInitialState> ToInitialActors(ScenarioWorldSnapshot world)
+    {
+        var actors = ImmutableArray.CreateBuilder<ScenarioActorInitialState>(world.Actors.Length);
+        foreach (var actor in world.Actors)
+        {
+            actors.Add(new(
+                actor.Actor.Id,
+                actor.EntityId,
+                actor.Observation,
+                actor.OriginReplayToken));
+        }
+
+        return actors.MoveToImmutable();
+    }
+
+    static ImmutableArray<ScenarioActorInitialState> ValidateInitialActors(
+        ScenarioDefinitionDocument scenario,
+        ImmutableArray<ScenarioActorInitialState> initialActors)
+    {
+        if (initialActors.IsDefault)
+            throw new ArgumentException("Initial actor states must be initialized.", nameof(initialActors));
+
+        var actors = scenario.Definition.Actors;
+        if (initialActors.Length != actors.Length)
+        {
+            throw new ArgumentException(
+                $"A complete scenario trace requires {actors.Length} initial actor states, but "
+                + $"{initialActors.Length} were supplied.",
+                nameof(initialActors));
+        }
+
+        for (var index = 0; index < actors.Length; index++)
+        {
+            var initial = initialActors[index]
+                ?? throw new ArgumentException("Initial actor states cannot contain null.", nameof(initialActors));
+            if (!string.Equals(initial.ActorId, actors[index].Id, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"Initial actor state {index} names '{initial.ActorId}', but canonical actor order requires "
+                    + $"'{actors[index].Id}'.",
+                    nameof(initialActors));
+            }
+        }
+
+        return initialActors;
+    }
+
     static ImmutableArray<ScenarioActionOutcome> ValidateOutcomes(
         ScenarioDefinitionDocument scenario,
+        ImmutableArray<ScenarioActorInitialState> initialActors,
         ImmutableArray<ScenarioActionOutcome> outcomes)
     {
         outcomes = outcomes.IsDefault ? [] : outcomes;
@@ -235,27 +381,68 @@ public sealed record ScenarioExecutionTraceDocument
             }
         }
 
+        _ = BuildFinalObservations(initialActors, outcomes);
+
         return outcomes;
+    }
+
+    static Dictionary<string, Observation> BuildFinalObservations(
+        ImmutableArray<ScenarioActorInitialState> initialActors,
+        ImmutableArray<ScenarioActionOutcome> outcomes)
+    {
+        Dictionary<string, Observation> current = new(initialActors.Length, StringComparer.Ordinal);
+        foreach (var actor in initialActors)
+            current.Add(actor.ActorId, actor.Observation);
+
+        for (var outcomeIndex = 0; outcomeIndex < outcomes.Length; outcomeIndex++)
+        {
+            foreach (var change in outcomes[outcomeIndex].StateChanges)
+            {
+                if (!current.TryGetValue(change.ActorId, out var before))
+                {
+                    throw new ArgumentException(
+                        $"Outcome {outcomeIndex} changes unknown actor '{change.ActorId}'.",
+                        nameof(outcomes));
+                }
+                if (!before.Equals(change.Before))
+                {
+                    throw new ArgumentException(
+                        $"Outcome {outcomeIndex} carries stale before-state evidence for actor '{change.ActorId}'.",
+                        nameof(outcomes));
+                }
+
+                current[change.ActorId] = change.After;
+            }
+        }
+
+        return current;
     }
 
     static (
         string SchemaVersion,
         ScenarioDefinitionDocument Scenario,
         string Interpreter,
+        ImmutableArray<ScenarioActorInitialState> InitialActors,
         ImmutableArray<ScenarioActionOutcome> Outcomes,
         ScenarioExecutionTraceFingerprint Fingerprint) CreateState(
         ScenarioDefinitionDocument scenario,
         string interpreter,
+        ImmutableArray<ScenarioActorInitialState> initialActors,
         ImmutableArray<ScenarioActionOutcome> outcomes) =>
         (
             CurrentSchemaVersion,
             scenario,
             interpreter,
+            initialActors,
             outcomes,
             new(
                 ScenarioExecutionTraceFingerprint.CurrentAlgorithm,
                 ScenarioExecutionTraceFingerprint.CurrentCanonicalization,
-                ScenarioExecutionTraceCanonicalizer.ComputeFingerprint(scenario, interpreter, outcomes)));
+                ScenarioExecutionTraceCanonicalizer.ComputeFingerprint(
+                    scenario,
+                    interpreter,
+                    initialActors,
+                    outcomes)));
 }
 
 /// <summary>Strict deterministic JSON boundary for portable scenario execution traces.</summary>
@@ -362,6 +549,7 @@ static class ScenarioExecutionTraceCanonicalizer
     public static string ComputeFingerprint(
         ScenarioDefinitionDocument scenario,
         string interpreter,
+        ImmutableArray<ScenarioActorInitialState> initialActors,
         ImmutableArray<ScenarioActionOutcome> outcomes)
     {
         using SimulationFingerprintWriter writer = new();
@@ -373,12 +561,28 @@ static class ScenarioExecutionTraceCanonicalizer
         writer.Append(scenario.Fingerprint.Canonicalization);
         writer.Append(scenario.Fingerprint.Value);
         writer.Append(interpreter);
-        writer.Append(outcomes.Length);
+        writer.Append(initialActors.Length);
         var options = ScenarioExecutionTraceJsonSerializer.CreateOptions();
+        foreach (var actor in initialActors)
+        {
+            writer.Append(actor.ActorId);
+            writer.Append(actor.EntityId.Value);
+            writer.Append(StrictDocumentJson.GetCanonicalBytes(actor.Observation, options));
+            writer.Append(actor.OriginReplayToken);
+        }
+
+        writer.Append(outcomes.Length);
         foreach (var outcome in outcomes)
         {
             writer.Append(outcome.ActionId);
             writer.Append(StrictDocumentJson.GetCanonicalBytes(outcome.Output, options));
+            writer.Append(outcome.StateChanges.Length);
+            foreach (var change in outcome.StateChanges)
+            {
+                writer.Append(change.ActorId);
+                writer.Append(StrictDocumentJson.GetCanonicalBytes(change.Before, options));
+                writer.Append(StrictDocumentJson.GetCanonicalBytes(change.After, options));
+            }
         }
 
         return writer.Complete();

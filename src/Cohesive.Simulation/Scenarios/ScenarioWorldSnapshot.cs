@@ -5,10 +5,11 @@ using Cohesive.Simulation.Worlds;
 
 namespace Cohesive.Simulation.Scenarios;
 
-/// <summary>One materialized scenario actor at the initial-world boundary.</summary>
+/// <summary>One materialized scenario actor at a specific point in scenario execution.</summary>
 /// <remarks>
 /// The actor and exemplar definitions remain projections of the owning scenario and artifact. The observation,
-/// entity identity, and replay token are runtime interpretation results and do not replace either semantic authority.
+/// entity identity, and origin replay token are runtime interpretation results and do not replace either semantic
+/// authority. State evolution replaces only <see cref="Observation"/>; identity and origin evidence remain stable.
 /// </remarks>
 public sealed class ScenarioActorSnapshot
 {
@@ -17,20 +18,22 @@ public sealed class ScenarioActorSnapshot
     /// <param name="exemplar">Exact initial-world exemplar selected by <paramref name="actor"/>.</param>
     /// <param name="entityId">Canonical entity identity assigned by the world interpreter.</param>
     /// <param name="observation">Complete actor observation produced by the world interpreter.</param>
-    /// <param name="replayToken">Opaque interpreter-specific evidence for replaying the exact observation.</param>
+    /// <param name="originReplayToken">
+    /// Opaque interpreter-specific evidence for replaying the actor's exact initial observation.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="actor"/>, <paramref name="exemplar"/>, or <paramref name="observation"/> is
     /// <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// The entity identity or replay token is empty, or the actor does not select the supplied exemplar.
+    /// The entity identity or origin replay token is empty, or the actor does not select the supplied exemplar.
     /// </exception>
     public ScenarioActorSnapshot(
         ScenarioActorDefinition actor,
         WorldExemplarDefinition exemplar,
         EntityId entityId,
         Observation observation,
-        string replayToken)
+        string originReplayToken)
     {
         Actor = Guard.RequireNotNull(actor);
         Exemplar = Guard.RequireNotNull(exemplar);
@@ -45,7 +48,7 @@ public sealed class ScenarioActorSnapshot
 
         EntityId = entityId;
         Observation = Guard.RequireNotNull(observation);
-        ReplayToken = Guard.RequireNotNullOrWhiteSpace(replayToken);
+        OriginReplayToken = Guard.RequireNotNullOrWhiteSpace(originReplayToken);
     }
 
     /// <summary>Gets the exact scenario actor definition represented by this snapshot.</summary>
@@ -57,14 +60,17 @@ public sealed class ScenarioActorSnapshot
     /// <summary>Gets the canonical world entity identity represented by this actor.</summary>
     public EntityId EntityId { get; }
 
-    /// <summary>Gets the complete initial observation produced by the world interpreter.</summary>
+    /// <summary>Gets the complete actor observation at this point in scenario execution.</summary>
     public Observation Observation { get; }
 
-    /// <summary>Gets opaque canonical interpreter-specific replay evidence for the initial observation.</summary>
-    public string ReplayToken { get; }
+    /// <summary>Gets opaque canonical interpreter-specific replay evidence for the actor's initial observation.</summary>
+    public string OriginReplayToken { get; }
+
+    internal ScenarioActorSnapshot WithObservation(Observation observation) =>
+        new(Actor, Exemplar, EntityId, observation, OriginReplayToken);
 }
 
-/// <summary>Immutable materialization of every actor in one exact scenario's initial world.</summary>
+/// <summary>Immutable materialization of every actor at one point in an exact scenario execution.</summary>
 /// <remarks>
 /// The retained scenario and its world artifact remain the semantic and replay authorities. This snapshot is the
 /// concrete runtime projection supplied to action interpreters. Actors are retained in canonical actor-identity order.
@@ -83,7 +89,7 @@ public sealed class ScenarioWorldSnapshot
         this.actorsById = actorsById;
     }
 
-    /// <summary>Gets the exact fingerprint-verified scenario whose initial actors were materialized.</summary>
+    /// <summary>Gets the exact fingerprint-verified scenario whose actors were materialized.</summary>
     public ScenarioDefinitionDocument Scenario { get; }
 
     /// <summary>Gets every materialized actor in canonical actor-identity order.</summary>
@@ -217,6 +223,74 @@ public sealed class ScenarioWorldSnapshot
             ? actor!
             : throw new KeyNotFoundException(
                 $"Scenario '{Scenario.Definition.Id}' contains no materialized actor with identity '{id}'.");
+
+    /// <summary>Applies explicit actor state changes and returns the resulting immutable world snapshot.</summary>
+    /// <param name="stateChanges">Evidence-backed replacements to apply in canonical actor-identity order.</param>
+    /// <returns>
+    /// This snapshot when no changes are supplied; otherwise a new snapshot whose affected observations have been
+    /// replaced while actor identity and origin evidence remain stable.
+    /// </returns>
+    /// <exception cref="ArgumentException">
+    /// Changes are uninitialized, reordered, duplicated, name an unknown actor, carry stale before-state evidence,
+    /// or replace an actor with an observation governed by another shape.
+    /// </exception>
+    /// <exception cref="ArgumentNullException">
+    /// An element of <paramref name="stateChanges"/> is <see langword="null"/>.
+    /// </exception>
+    public ScenarioWorldSnapshot Apply(ImmutableArray<ScenarioActorStateChange> stateChanges)
+    {
+        if (stateChanges.IsDefault)
+            throw new ArgumentException("Scenario actor state changes must be initialized.", nameof(stateChanges));
+        if (stateChanges.IsEmpty)
+            return this;
+
+        var changedActors = new Dictionary<string, Observation>(stateChanges.Length, StringComparer.Ordinal);
+        string? previousActorId = null;
+        foreach (var change in stateChanges)
+        {
+            ArgumentNullException.ThrowIfNull(change);
+            if (previousActorId is not null
+                && string.CompareOrdinal(previousActorId, change.ActorId) >= 0)
+            {
+                throw new ArgumentException(
+                    "Scenario actor state changes must be unique and ordered by actor identity.",
+                    nameof(stateChanges));
+            }
+
+            if (!TryGetActor(change.ActorId, out var actor) || actor is null)
+            {
+                throw new ArgumentException(
+                    $"State change names actor '{change.ActorId}', which is not declared by this scenario.",
+                    nameof(stateChanges));
+            }
+            if (!actor.Observation.Equals(change.Before))
+            {
+                throw new ArgumentException(
+                    $"State change for actor '{change.ActorId}' does not match its current observation.",
+                    nameof(stateChanges));
+            }
+            if (change.After.ShapeId != actor.Observation.ShapeId)
+            {
+                throw new ArgumentException(
+                    $"State change for actor '{change.ActorId}' replaces shape '{actor.Observation.ShapeId}' with "
+                    + $"'{change.After.ShapeId}'.",
+                    nameof(stateChanges));
+            }
+
+            changedActors.Add(change.ActorId, change.After);
+            previousActorId = change.ActorId;
+        }
+
+        var actors = ImmutableArray.CreateBuilder<ScenarioActorSnapshot>(Actors.Length);
+        foreach (var actor in Actors)
+        {
+            actors.Add(changedActors.TryGetValue(actor.Actor.Id, out var observation)
+                ? actor.WithObservation(observation)
+                : actor);
+        }
+
+        return Create(Scenario, actors.MoveToImmutable());
+    }
 
     internal static ScenarioWorldSnapshot Materialize(
         ScenarioDefinitionDocument scenario,

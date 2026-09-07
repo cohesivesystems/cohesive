@@ -17,6 +17,7 @@ using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Relations;
 using Cohesive.Simulation.Scenarios;
 using Cohesive.Simulation.Storage;
+using Cohesive.Simulation.Transitions;
 using Cohesive.Simulation.Worlds;
 using Cohesive.Simulation.Xunit;
 using Xunit.Sdk;
@@ -34,6 +35,7 @@ if (args is ["emit", string coreWorldPath])
 {
     VerifyBogusAdapterPackage();
     VerifyExternalProcessAdapterPackage();
+    VerifyTransitionScenarioAdapterPackage();
     await VerifyMimesisPackage();
     var customers = CreateCustomers();
     var compiledCustomers = customers.Compile();
@@ -270,6 +272,11 @@ static void VerifyExternalProcessAdapterPackage()
         "external provider schema");
 }
 
+static void VerifyTransitionScenarioAdapterPackage() => Require(
+    TransitionScenarioActionInterpreter.ProfileIdentity,
+    "cohesive-simulation-transitions-reference/v1",
+    "Transition scenario interpreter profile");
+
 static async Task VerifyScenarioPackage(PocoGenerationDefinition<SmokeCustomer> customers)
 {
     var initialWorld = WorldArtifactManifest.FromWorld(CreateWorld(customers).Compile(), rootSeed: 42);
@@ -309,7 +316,7 @@ static async Task VerifyScenarioPackage(PocoGenerationDefinition<SmokeCustomer> 
         "materialized scenario actor exemplar");
     Require(
         restoredTrace.SchemaVersion,
-        "cohesive-simulation-scenario-trace/v1",
+        "cohesive-simulation-scenario-trace/v2",
         "scenario trace schema");
     Require(
         restoredTrace.Scenario.Fingerprint.Value,
@@ -321,6 +328,8 @@ static async Task VerifyScenarioPackage(PocoGenerationDefinition<SmokeCustomer> 
         "scenario trace interpreter");
     if (restoredTrace.Outcomes is not [{ Output.State: PortableValueState.Concrete }])
         throw new InvalidOperationException("The scenario trace did not retain one concrete outcome.");
+    if (restoredTrace.InitialActors is not [{ ActorId: "customer" }])
+        throw new InvalidOperationException("The scenario trace did not retain its initial actor state.");
 }
 
 static ExternalGenerationCatalogImportDefinition CreateExternalImportDefinition() =>
@@ -502,13 +511,13 @@ sealed class SmokeScenarioInterpreter : IScenarioActionInterpreter
 
     public string Identity => InterpreterIdentity;
 
-    public ValueTask<PortableValue> ExecuteAsync(
+    public ValueTask<ScenarioActionResult> ExecuteAsync(
         ScenarioActionContext context,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(PortableValue.Concrete(
+        return ValueTask.FromResult(ScenarioActionResult.Unchanged(PortableValue.Concrete(
             context.Operation.Output,
-            ObservationValue.FromObject(new SmokeScenarioOutput("ok"))));
+            ObservationValue.FromObject(new SmokeScenarioOutput("ok")))));
     }
 }

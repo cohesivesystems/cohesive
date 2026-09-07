@@ -22,6 +22,7 @@
     <PackageReference Include="Cohesive.Simulation" Version="$(CohesivePackageVersion)" />
     <PackageReference Include="Cohesive.Simulation.Relations" Version="$(CohesivePackageVersion)" />
     <PackageReference Include="Cohesive.Simulation.Storage" Version="$(CohesivePackageVersion)" />
+    <PackageReference Include="Cohesive.Simulation.Transitions" Version="$(CohesivePackageVersion)" />
     <PackageReference Include="Cohesive.Simulation.Xunit" Version="$(CohesivePackageVersion)" />
   </ItemGroup>
 

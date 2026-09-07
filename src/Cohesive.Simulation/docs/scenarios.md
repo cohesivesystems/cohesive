@@ -89,7 +89,7 @@ sealed class FreightInterpreter : IScenarioActionInterpreter
 {
     public string Identity => "demo/freight-interpreter/v1";
 
-    public ValueTask<PortableValue> ExecuteAsync(
+    public ValueTask<ScenarioActionResult> ExecuteAsync(
         ScenarioActionContext context,
         CancellationToken cancellationToken)
     {
@@ -97,9 +97,9 @@ sealed class FreightInterpreter : IScenarioActionInterpreter
         var input = context.Input.Value?.Deserialize<AssignLoad>()
             ?? throw new InvalidOperationException("A concrete assignment input is required.");
         var receipt = new AssignmentReceipt(Accepted: input.LoadId.Length > 0);
-        return ValueTask.FromResult(PortableValue.Concrete(
+        return ValueTask.FromResult(ScenarioActionResult.Unchanged(PortableValue.Concrete(
             context.Operation.Output,
-            ObservationValue.FromObject(receipt)));
+            ObservationValue.FromObject(receipt))));
     }
 }
 ```
@@ -110,26 +110,33 @@ artifact's exact seed and core interpreter. For a relationship-aware artifact, u
 snapshot shape after completing relationship-owned fields. Both paths fail closed when the artifact selects a schema,
 interpreter, or entropy algorithm they do not own.
 
-The context exposes that complete snapshot, the exact retained scenario, scheduled action, operation contract,
+The context exposes the complete state visible immediately before the action, the exact retained scenario, scheduled
+action, operation contract,
 materialized actor and optional target actor, zero-based schedule position, and contract-bearing input. An interpreter
-can read `context.ActorSnapshot.Observation`, `EntityId`, and replay evidence without rediscovering how the artifact is
-interpreted. It must return a `PortableValue` carrying the declared operation output contract. The runner fails with
-structured diagnostics before executing another action when the contract or value is invalid. Exceptions and
-cancellation are operational failures and produce no complete trace.
+can read `context.ActorSnapshot.Observation`, `EntityId`, and origin replay evidence without rediscovering how the
+artifact is interpreted. It returns a `ScenarioActionResult` containing a `PortableValue` with the declared operation
+output contract and zero or more explicit `ScenarioActorStateChange` replacements. Each replacement carries the exact
+before observation as concurrency evidence and a complete after observation governed by the same shape. The runner
+rejects unknown actors, duplicate changes, shape changes, stale before evidence, invalid output contracts, or invalid
+portable values before executing another action. Exceptions and cancellation are operational failures and produce no
+complete trace.
 
 `PortableValue.Failed` and `PortableValue.Unknown` are valid retained outcomes, not hidden control flow, so the runner
 continues to later actions. If an interpretation requires fail-fast domain behavior, model that choice explicitly in
 the interpreter or its operation result rather than relying on exceptions as semantic output.
 
-The trace schema is `cohesive-simulation-scenario-trace/v1`. A trace embeds the complete fingerprint-verified scenario,
-the exact interpreter identity/version, and one contract-validated outcome per action in canonical schedule order. Its
-own fingerprint detects changes to scenario coordinates, interpreter identity, action association, output state, or
-payload. Strict deserialization rejects incomplete, reordered, unknown, or fingerprint-inconsistent content.
+The trace schema is `cohesive-simulation-scenario-trace/v2`. A trace embeds the complete fingerprint-verified scenario,
+the exact interpreter identity/version, every initial actor materialization, and one contract-validated outcome per
+action in canonical schedule order. Outcomes retain their explicit before/after state changes, so strict restoration
+independently validates the whole state chain and `ToFinalWorldSnapshot()` reconstructs the evolved world. The trace
+fingerprint covers all of that content. The initial world artifact remains the generation authority; retained initial
+observations and origin replay tokens are execution evidence, not a parallel world definition.
 
-The runner does not yet mutate actor snapshots or invent transition semantics. The snapshot is an immutable initial
-state projection; the retained scenario and world artifact remain the replay authorities, so the trace does not
-duplicate generated observations. A subsequent state-evolution layer can apply explicit changes between actions while
-retaining these same schedule and outcome contracts.
+For canonical Cohesive Transitions, install `Cohesive.Simulation.Transitions`. Its
+`TransitionScenarioActionInterpreter` binds scenario operation identities to exact compiled Transition plans, selects
+the actor or target actor explicitly, and projects accepted sparse patches into these same complete state changes. The
+adapter identity pins every Transition definition reference. Its current profile fails closed for emission intents and
+Machine movements because the scenario result model cannot yet retain or atomically commit those effects.
 
 ```csharp
 sealed record AssignLoad(string LoadId);

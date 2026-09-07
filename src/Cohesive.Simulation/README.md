@@ -19,6 +19,7 @@ Add only the integrations the application uses:
 | `Cohesive.Simulation` | POCO generation, property cases, worlds, scenarios, artifacts, replay, and JSONL |
 | `Cohesive.Simulation.Relations` | References between generated populations |
 | `Cohesive.Simulation.Storage` | Seeding Cohesive entity repositories |
+| `Cohesive.Simulation.Transitions` | Executing scenario actions through canonical Cohesive Transitions |
 | `Cohesive.Simulation.Xunit` | Translating property-case results into xUnit failures |
 | `Cohesive.Simulation.Cli` | `cohesive-sim` for scripts, CI, and Playwright setup |
 | `Cohesive.Adapters.Bogus` | Optional finite Bogus imports into exact retained generation catalogs |
@@ -127,6 +128,7 @@ semantics. See the compatibility guide before retaining artifacts across package
 - [Executable end-to-end example](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Examples/Simulation/SimulationAdoptionExamples.cs)
 - [Relationship worlds](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation.Relations/README.md)
 - [Repository provisioning](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation.Storage/README.md)
+- [Transition-driven scenarios](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation.Transitions/README.md)
 - [xUnit integration](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation.Xunit/README.md)
 - [CLI tool](https://github.com/cohesivesystems/cohesive/blob/main/src/Cohesive.Simulation.Cli/README.md)
 - [Bogus catalog adapter](https://github.com/cohesivesystems/cohesive/blob/main/src/adapters/Cohesive.Adapters.Bogus/README.md)
