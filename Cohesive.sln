@@ -160,6 +160,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Mimesis",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Mimesis.Tests", "src\Cohesive.Adapters.Mimesis.Tests\Cohesive.Adapters.Mimesis.Tests.csproj", "{0E932FD8-30EA-4750-A6B9-E3756E5E6E92}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Integrations", "src\Cohesive.Integrations\Cohesive.Integrations.csproj", "{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1070,6 +1072,18 @@ Global
 		{0E932FD8-30EA-4750-A6B9-E3756E5E6E92}.Release|x64.Build.0 = Release|Any CPU
 		{0E932FD8-30EA-4750-A6B9-E3756E5E6E92}.Release|x86.ActiveCfg = Release|Any CPU
 		{0E932FD8-30EA-4750-A6B9-E3756E5E6E92}.Release|x86.Build.0 = Release|Any CPU
+		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Debug|x64.Build.0 = Debug|Any CPU
+		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Debug|x86.Build.0 = Debug|Any CPU
+		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Release|x64.ActiveCfg = Release|Any CPU
+		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Release|x64.Build.0 = Release|Any CPU
+		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Release|x86.ActiveCfg = Release|Any CPU
+		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
