@@ -135,7 +135,7 @@ public sealed class SqliteRelationQueryCompiledArtifact
     /// <param name="configure">Optional explicit core member mappings, conversions and missing-field policy.</param>
     /// <returns>An immutable mapping reusable across independent reader lifetimes.</returns>
     /// <exception cref="ArgumentNullException">The shape has no graph.</exception>
-    /// <exception cref="ArgumentException">The shape or its selected field contracts differ from the artifact.</exception>
+    /// <exception cref="ArgumentException">Field identities/types differ, or compiled presence/nullability is weaker than the declaration.</exception>
     /// <exception cref="KeyNotFoundException">The shape identity is not declared in its graph.</exception>
     /// <exception cref="InvalidOperationException">Core materializer mappings or construction cannot be compiled.</exception>
     public SqliteRelationQueryRowMapping<T> CreateRowMapping<T>(GraphShapeId shape,

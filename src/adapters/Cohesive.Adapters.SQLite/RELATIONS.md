@@ -139,8 +139,10 @@ while (reader.Read())
 }
 ```
 
-`SqliteRelationQueryRowMapping<T>` verifies selected field identities and complete value contracts against the
-artifact, then compiles the existing core `ObservationMaterializer<T>` against one shared `ObservationLayout`.
+`SqliteRelationQueryRowMapping<T>` verifies selected field identities, types and cardinality against the artifact,
+then compiles the existing core `ObservationMaterializer<T>` against one shared `ObservationLayout`. Compiled
+presence/nullability may be stronger than the declared carrier after predicate refinement; weaker guarantees
+are rejected. The artifact's refined contract remains authoritative while decoding.
 An optional configuration callback supplies the core materializer's explicit member mappings, converters and
 missing-field policy. The mapping is immutable and reusable; `Bind` creates an operation-scoped reader which
 never advances or disposes the underlying provider. Execute the matching artifact: binding checks column count,

@@ -9,7 +9,8 @@ namespace Cohesive.Adapters.SQLite;
 /// <remarks>
 /// Create once with <see cref="SqliteRelationQueryCompiledArtifact.CreateRowMapping{T}"/> and share across
 /// operations. Member conversion and missing-field policy belong to the core materializer. This mapping validates
-/// the exact semantic field contracts and binds them to native ordinals; no per-row name lookup is required.
+/// semantic field identities/types and any stronger compiled presence/nullability guarantees, then binds native
+/// ordinals; no per-row name lookup is required.
 /// </remarks>
 public sealed class SqliteRelationQueryRowMapping<T>
 {
@@ -24,8 +25,8 @@ public sealed class SqliteRelationQueryRowMapping<T>
         {
             if (field.Field.Shape != shape.QualifiedId || field.Field.Path.Segments.Length != 1
                 || !definition.TryGetField(field.Field.Path.Segments[0].Segment!, out var declared)
-                || ValueContract.FromField(declared) != field.Contract)
-                throw new ArgumentException("Result shape and field contracts must match the compiled artifact exactly.", nameof(shape));
+                || !FitsDeclaration(field.Contract, ValueContract.FromField(declared)))
+                throw new ArgumentException($"Result field '{field.Field}' is absent from the supplied shape or its compiled contract is incompatible.", nameof(shape));
         }
 
         Artifact = artifact;
@@ -41,6 +42,13 @@ public sealed class SqliteRelationQueryRowMapping<T>
             lastOrdinal = Math.Max(lastOrdinal, component.Ordinal);
         fieldCount = lastOrdinal + 1;
     }
+
+    // A projection may retain a wider declared carrier after guards establish stronger runtime guarantees.
+    // Keep the artifact's refined contract authoritative during decoding; never accept weaker guarantees.
+    static bool FitsDeclaration(ValueContract compiled, ValueContract declared) =>
+        compiled.Type == declared.Type && compiled.Shape == declared.Shape && compiled.Cardinality == declared.Cardinality
+        && (declared.Presence == FieldPresence.Optional || compiled.Presence == FieldPresence.Required)
+        && (declared.Nullability == FieldNullability.Nullable || compiled.Nullability == FieldNullability.NonNullable);
 
     /// <summary>Gets the immutable artifact whose result columns this mapping interprets.</summary>
     public SqliteRelationQueryCompiledArtifact Artifact { get; }

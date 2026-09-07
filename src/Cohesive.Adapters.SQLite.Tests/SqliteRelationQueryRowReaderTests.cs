@@ -96,6 +96,39 @@ public sealed class SqliteRelationQueryRowReaderTests
     }
 
     [Theory]
+    [InlineData(FieldPresence.Optional, FieldNullability.NonNullable)]
+    [InlineData(FieldPresence.Required, FieldNullability.Nullable)]
+    [InlineData(FieldPresence.Optional, FieldNullability.Nullable)]
+    public void MappingAcceptsStrongerCompiledPresenceAndNullability(FieldPresence presence, FieldNullability nullability)
+    {
+        using var fixture = new SqliteTypedRowFixture();
+        var carrier = WithFieldPolicy(fixture.Shape, nameof(SqliteTypedRowFixture.Row.Id), presence, nullability);
+        var mapping = fixture.Artifact.CreateRowMapping<SqliteTypedRowFixture.Row>(carrier);
+        using var command = fixture.CreateCommand();
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal(1, mapping.Bind(reader).ReadCurrent().Id);
+    }
+
+    [Theory]
+    [InlineData(FieldPresence.Required, FieldNullability.Nullable)]
+    [InlineData(FieldPresence.Optional, FieldNullability.NonNullable)]
+    public void MappingRejectsWeakerCompiledPresenceOrNullability(FieldPresence presence, FieldNullability nullability)
+    {
+        using var fixture = new SqliteTypedRowFixture();
+        var carrier = WithFieldPolicy(fixture.Shape, nameof(SqliteTypedRowFixture.Row.Payload), presence, nullability);
+        Assert.Throws<ArgumentException>(() => fixture.Artifact.CreateRowMapping<SqliteTypedRowFixture.Row>(carrier));
+    }
+
+    static GraphShapeId WithFieldPolicy(GraphShapeId source, string name, FieldPresence presence, FieldNullability nullability)
+    {
+        var original = source.Graph.GetShape(source.ShapeId);
+        Shape changed = new(original.Id, [.. original.Fields.Select(field => field.Name.Value == name
+            ? new FieldDefinition(field.Name, field.Type, presence: presence, nullability: nullability) : field)]);
+        return new(new ShapeGraph(source.Graph.Id, [changed]), changed.Id);
+    }
+
+    [Theory]
     [InlineData("presence", "2", false)]
     [InlineData("presence", "0", false)]
     [InlineData("payload", "'text'", false)]
