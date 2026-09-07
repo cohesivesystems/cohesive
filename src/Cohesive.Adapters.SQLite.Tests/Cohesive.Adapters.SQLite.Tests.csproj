@@ -19,6 +19,7 @@
     <ProjectReference Include="../adapters/Cohesive.Adapters.SQLite/Cohesive.Adapters.SQLite.csproj" />
     <ProjectReference Include="../Cohesive.ExecutionKernel.TestFixtures/Cohesive.ExecutionKernel.TestFixtures.csproj" />
     <ProjectReference Include="../Cohesive.Relations.TestFixtures/Cohesive.Relations.TestFixtures.csproj" />
+    <Compile Include="../Cohesive.Tests/Storage/Conformance/StorageCommitConformance.cs" Link="Conformance/StorageCommitConformance.cs" />
     <Compile Include="../Cohesive.Tests/Storage/Conformance/EntityRepositoryConformance.cs" Link="Conformance/EntityRepositoryConformance.cs" />
   </ItemGroup>
   <ItemGroup>
