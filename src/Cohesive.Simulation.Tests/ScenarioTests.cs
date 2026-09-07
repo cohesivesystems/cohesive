@@ -8,7 +8,7 @@ using Cohesive.Simulation.Scenarios;
 
 namespace Cohesive.Simulation.Tests;
 
-public sealed class ScenarioTests
+public sealed partial class ScenarioTests
 {
     static readonly DateTimeOffset StartsAtUtc = new(2030, 1, 2, 3, 4, 5, TimeSpan.Zero);
     static readonly DefaultClrTypeRefMapper TypeMapper = new();

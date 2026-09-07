@@ -1,7 +1,7 @@
 # Deterministic scenarios
 
 A scenario describes activity over one exact generated world without making a runtime, test framework, or application
-transport part of the semantic model. The first scenario contract covers deterministic scheduled intent:
+transport part of the semantic model. Its portable definition covers deterministic scheduled intent:
 
 - a fingerprint-verified `WorldArtifactManifest` is the initial-world authority;
 - actors bind stable scenario names to named world exemplars;
@@ -9,9 +9,8 @@ transport part of the semantic model. The first scenario contract covers determi
 - actions bind an actor, optional target actor, operation, exact portable input, and fixed virtual UTC instant;
 - compilation validates all references and types, normalizes declaration order, and fingerprints the resulting plan.
 
-Execution targets, observed action outcomes, state evolution, stochastic policies, and retained traces are deliberately
-not embedded in this definition. They are interpretations of the scenario contract and will build on this schedule
-without changing its source authority.
+Execution targets, observed action outcomes, state evolution, and stochastic policies are deliberately not embedded
+in this definition. They are interpretations of the scenario contract and do not change its source authority.
 
 ## Author with CLR types
 
@@ -65,9 +64,63 @@ properties, noncanonical operation/actor/action order, unsupported schemas, inva
 inputs, and fingerprint mismatches. Given equivalent declarations, it emits the same canonical document regardless of
 authoring order. Actions at the same virtual instant execute in ordinal action-identity order.
 
-This gives agents an inspectable and patchable source contract before an execution seam exists. The next layer can
-consume `CompiledScenarioPlan`, interpret operations against an in-memory model or system under test, and retain
-typed outcomes and traces attributable to this exact scenario fingerprint.
+## Execute without wall-clock waits
+
+`ScenarioRunner` interprets each action sequentially in canonical virtual-time order. It does not sleep until an
+action's timestamp. Application behavior stays behind `IScenarioActionInterpreter`, so unit tests can use an in-memory
+model while Playwright setup or assurance agents can call an application or external system through a different
+interpreter:
+
+```csharp
+using Cohesive.Execution;
+using Cohesive.Model;
+
+var retained = ScenarioDefinitionDocument.FromDefinition(scenario);
+ScenarioExecutionTraceDocument trace = await ScenarioRunner.ExecuteAsync(
+    retained,
+    new FreightInterpreter());
+
+await File.WriteAllTextAsync(
+    "freight-dispatch.trace.json",
+    ScenarioExecutionTraceJsonSerializer.Serialize(trace));
+
+sealed class FreightInterpreter : IScenarioActionInterpreter
+{
+    public string Identity => "demo/freight-interpreter/v1";
+
+    public ValueTask<PortableValue> ExecuteAsync(
+        ScenarioActionContext context,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var input = context.Input.Value?.Deserialize<AssignLoad>()
+            ?? throw new InvalidOperationException("A concrete assignment input is required.");
+        var receipt = new AssignmentReceipt(Accepted: input.LoadId.Length > 0);
+        return ValueTask.FromResult(PortableValue.Concrete(
+            context.Operation.Output,
+            ObservationValue.FromObject(receipt)));
+    }
+}
+```
+
+The context exposes the exact retained scenario, scheduled action, operation contract, actor and optional target actor,
+zero-based schedule position, and contract-bearing input. An interpreter must return a `PortableValue` carrying the
+declared operation output contract. The runner fails with structured diagnostics before executing another action when
+the contract or value is invalid. Exceptions and cancellation are operational failures and produce no complete trace.
+
+`PortableValue.Failed` and `PortableValue.Unknown` are valid retained outcomes, not hidden control flow, so the runner
+continues to later actions. If an interpretation requires fail-fast domain behavior, model that choice explicitly in
+the interpreter or its operation result rather than relying on exceptions as semantic output.
+
+The trace schema is `cohesive-simulation-scenario-trace/v1`. A trace embeds the complete fingerprint-verified scenario,
+the exact interpreter identity/version, and one contract-validated outcome per action in canonical schedule order. Its
+own fingerprint detects changes to scenario coordinates, interpreter identity, action association, output state, or
+payload. Strict deserialization rejects incomplete, reordered, unknown, or fingerprint-inconsistent content.
+
+The runner does not yet materialize actor exemplars, mutate world state, or invent transition semantics. An interpreter
+can resolve actors from `context.Scenario.Definition.InitialWorld` using the world package that owns that artifact. A
+subsequent stateful layer can make snapshots and changes first-class while retaining these same schedule and outcome
+contracts.
 
 ```csharp
 sealed record AssignLoad(string LoadId);

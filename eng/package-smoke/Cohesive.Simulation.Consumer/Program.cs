@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Cohesive.Adapters.Bogus;
 using Cohesive.Adapters.Mimesis;
+using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Authoring;
 using Cohesive.Relations.Model;
@@ -69,7 +70,7 @@ if (args is ["emit", string coreWorldPath])
         throw new InvalidOperationException($"Expected property counterexample age '50' but found '{replayed.Age}'.");
     }
 
-    VerifyScenarioPackage(customers);
+    await VerifyScenarioPackage(customers);
     await File.WriteAllTextAsync(coreWorldPath, WorldDefinitionJsonSerializer.Serialize(CreateWorld(customers)));
 }
 else if (args is ["emit-relationship", string relationshipWorldPath])
@@ -269,7 +270,7 @@ static void VerifyExternalProcessAdapterPackage()
         "external provider schema");
 }
 
-static void VerifyScenarioPackage(PocoGenerationDefinition<SmokeCustomer> customers)
+static async Task VerifyScenarioPackage(PocoGenerationDefinition<SmokeCustomer> customers)
 {
     var initialWorld = WorldArtifactManifest.FromWorld(CreateWorld(customers).Compile(), rootSeed: 42);
     var scenario = Simulation.DefineScenario(
@@ -288,6 +289,9 @@ static void VerifyScenarioPackage(PocoGenerationDefinition<SmokeCustomer> custom
                 input: new SmokeScenarioInput("summary")));
     var restored = ScenarioDefinitionJsonSerializer.Deserialize(
         ScenarioDefinitionJsonSerializer.Serialize(scenario));
+    var trace = await ScenarioRunner.ExecuteAsync(restored, new SmokeScenarioInterpreter());
+    var restoredTrace = ScenarioExecutionTraceJsonSerializer.Deserialize(
+        ScenarioExecutionTraceJsonSerializer.Serialize(trace));
 
     Require(restored.SchemaVersion, "cohesive-simulation-scenario/v1", "scenario schema");
     Require(
@@ -298,6 +302,20 @@ static void VerifyScenarioPackage(PocoGenerationDefinition<SmokeCustomer> custom
         restored.Compile().GetActor("customer").ExemplarId,
         "customer-for-ui",
         "scenario actor exemplar");
+    Require(
+        restoredTrace.SchemaVersion,
+        "cohesive-simulation-scenario-trace/v1",
+        "scenario trace schema");
+    Require(
+        restoredTrace.Scenario.Fingerprint.Value,
+        restored.Fingerprint.Value,
+        "scenario trace definition fingerprint");
+    Require(
+        restoredTrace.Interpreter,
+        SmokeScenarioInterpreter.InterpreterIdentity,
+        "scenario trace interpreter");
+    if (restoredTrace.Outcomes is not [{ Output.State: PortableValueState.Concrete }])
+        throw new InvalidOperationException("The scenario trace did not retain one concrete outcome.");
 }
 
 static ExternalGenerationCatalogImportDefinition CreateExternalImportDefinition() =>
@@ -472,3 +490,20 @@ sealed record SmokeExternalProviderConfiguration(string Generator);
 sealed record SmokeScenarioInput(string Projection);
 
 sealed record SmokeScenarioOutput(string Value);
+
+sealed class SmokeScenarioInterpreter : IScenarioActionInterpreter
+{
+    public const string InterpreterIdentity = "package-smoke/scenario-interpreter/v1";
+
+    public string Identity => InterpreterIdentity;
+
+    public ValueTask<PortableValue> ExecuteAsync(
+        ScenarioActionContext context,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(PortableValue.Concrete(
+            context.Operation.Output,
+            ObservationValue.FromObject(new SmokeScenarioOutput("ok"))));
+    }
+}

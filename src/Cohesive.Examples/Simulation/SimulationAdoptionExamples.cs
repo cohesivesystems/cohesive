@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Model;
@@ -50,6 +51,11 @@ public sealed class SimulationAdoptionExamples
                     targetActorId: "load"));
         ScenarioDefinitionDocument retainedScenario = ScenarioDefinitionJsonSerializer.Deserialize(
             ScenarioDefinitionJsonSerializer.Serialize(scenario));
+        ScenarioExecutionTraceDocument scenarioTrace = await ScenarioRunner.ExecuteAsync(
+            retainedScenario,
+            new FreightScenarioInterpreter());
+        ScenarioExecutionTraceDocument retainedTrace = ScenarioExecutionTraceJsonSerializer.Deserialize(
+            ScenarioExecutionTraceJsonSerializer.Serialize(scenarioTrace));
         var carrierRepository = RepositoryFor<DemoCarrier>(demo.Shapes);
         var loadRepository = RepositoryFor<DemoLoad>(demo.Shapes);
         var repositorySink = new RepositoryWorldProvisioningSink(
@@ -79,6 +85,9 @@ public sealed class SimulationAdoptionExamples
         Assert.Equal(4, seeded.ItemCount);
         Assert.Equal(artifact.ArtifactId, retainedScenario.Definition.InitialWorld.ArtifactId);
         Assert.Equal("dispatch-load", Assert.Single(retainedScenario.Compile().Definition.Actions).Id);
+        Assert.Equal(retainedScenario.Fingerprint, retainedTrace.Scenario.Fingerprint);
+        Assert.Equal("examples/freight-scenario/v1", retainedTrace.Interpreter);
+        Assert.Equal(PortableValueState.Concrete, Assert.Single(retainedTrace.Outcomes).Output.State);
         Assert.NotNull(storedLoad);
         var carrierId = storedLoad.Entity.Observation.Value.Fields!["CarrierId"].String;
         Assert.NotNull(carrierId);
@@ -164,4 +173,19 @@ public sealed class SimulationAdoptionExamples
     sealed record DispatchLoad(int Priority);
 
     sealed record DispatchReceipt(bool Accepted);
+
+    sealed class FreightScenarioInterpreter : IScenarioActionInterpreter
+    {
+        public string Identity => "examples/freight-scenario/v1";
+
+        public ValueTask<PortableValue> ExecuteAsync(
+            ScenarioActionContext context,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(PortableValue.Concrete(
+                context.Operation.Output,
+                ObservationValue.FromObject(new DispatchReceipt(Accepted: true))));
+        }
+    }
 }
