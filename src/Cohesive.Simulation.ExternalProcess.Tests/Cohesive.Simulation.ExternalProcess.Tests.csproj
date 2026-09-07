@@ -22,6 +22,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\Cohesive.Simulation.Tests\Generation\GenerationCatalogFingerprintAssertions.cs" Link="GenerationCatalogFingerprintAssertions.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Cohesive.Simulation.ExternalProcess\Cohesive.Simulation.ExternalProcess.csproj" />
   </ItemGroup>
 

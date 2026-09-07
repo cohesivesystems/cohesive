@@ -5,6 +5,7 @@ using Cohesive.Model;
 using Cohesive.Model.Authoring;
 using Cohesive.Simulation.ExternalProcess;
 using Cohesive.Simulation.Generation;
+using Cohesive.Simulation.Tests;
 
 namespace Cohesive.Simulation.ExternalProcess.Tests;
 
@@ -169,11 +170,18 @@ public sealed class ExternalGenerationCatalogTests
         Assert.Equal(
             GenerationCatalogJsonSerializer.Serialize(first),
             GenerationCatalogJsonSerializer.Serialize(second));
-        Assert.Equal("6f1a4e2a1abd1a555556e101257d8fe015d7971c514c520a66a1478572633714", first.Fingerprint.Value);
+        GenerationCatalogFingerprintAssertions.EqualPinnedWireIdentity(
+            first,
+            static json => json.Replace(
+                $"\"adapterVersion\":\"{ExternalGenerationCatalogImporter.AdapterVersion}\"",
+                "\"adapterVersion\":\"<adapter-version>\"",
+                StringComparison.Ordinal),
+            "c83b815af92c8e0a52dabeec68340dee4b77e180b4265f1f389331d033c22872");
         Assert.Equal(["sample/00000000", "sample/00000001"], first.Definition.Entries.Select(static entry => entry.Id));
         Assert.Equal("fixture-42-0", first.Definition.Entries[0].Value.Fields!["Name"].String);
         Assert.Equal("en", first.Definition.Entries[0].Value.Fields!["Region"].String);
         Assert.Equal(ExternalGenerationCatalogImporter.AdapterIdentity, first.Definition.Provenance.Adapter);
+        Assert.Equal(ExternalGenerationCatalogImporter.AdapterVersion, first.Definition.Provenance.AdapterVersion);
         Assert.Equal("fixture-provider", first.Definition.Provenance.Provider);
         Assert.Equal("9.1.0", first.Definition.Provenance.ProviderVersion);
         Assert.Equal("fixture-random/v1", first.Definition.Provenance.RandomAlgorithm);

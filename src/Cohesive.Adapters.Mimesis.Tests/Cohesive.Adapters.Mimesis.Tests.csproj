@@ -20,6 +20,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\Cohesive.Simulation.Tests\Generation\GenerationCatalogFingerprintAssertions.cs" Link="GenerationCatalogFingerprintAssertions.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\adapters\Cohesive.Adapters.Mimesis\Cohesive.Adapters.Mimesis.csproj" />
   </ItemGroup>
 
