@@ -131,6 +131,59 @@ remains the concise default when canonical lifecycle intent makes the selected t
 external resource reference-only). Redundant selected-target managers, managers on canonical external resources, and
 aliases that disagree about a physical resource's manager, authority, or external status are structured errors.
 
+When the target deployment and local construction topology describe the same services, use coordinated local
+deployment authoring so each logical-to-physical association is declared once. The producer emits the existing
+independently portable manifest and topology artifacts; it does not introduce another source of infrastructure truth:
+
+```csharp
+var local = InfrastructureLocalDeployments.Define(
+    id: new("shipping/aspire-local/v1"),
+    definition: ShippingInfrastructure.Current.Definition,
+    targetFacilities: AspireLocalFacilities.Current,
+    configure: deployment => deployment
+        .ProjectService(
+            ShippingNodes.Api,
+            AspireFacilities.Project,
+            LocalResources.Api,
+            ShippingProjects.Api)
+        .ReferencedResourceService(
+            ShippingNodes.State,
+            AspireFacilities.Postgres,
+            LocalResources.Postgres,
+            DockerComposeTarget,
+            DockerComposeAuthority,
+            ShippingEndpoints.Postgres,
+            [ShippingSources.LocalCompose],
+            postgres => postgres
+                .Endpoint(
+                    ShippingEndpoints.Postgres,
+                    "postgresql",
+                    5432,
+                    InfrastructureLocalEndpointExposure.HostLoopback,
+                    InfrastructureLocalEndpointRole.Data,
+                    ShippingConfiguration.PostgresPort)
+                .CommandHealth("pg_isready")
+                .HealthTiming(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1), retries: 30))
+        .NonParticipatingWorkloadsByDefault(
+            "The local API profile excludes other workloads.",
+            [ShippingSources.LocalProfile]));
+
+var targetPlan = InfrastructureTargetDeploymentCompiler.Compile(
+    ShippingInfrastructure.Current,
+    local.TargetDeployment);
+var localRealization = InfrastructureLocalRealizationCompiler.Compile(
+    targetPlan.Realization!,
+    ShippingEnvironments.Local,
+    local.Topology,
+    [ShippingConventions.Local]);
+```
+
+`ProjectService`, `ContainerWorkload`, `ContainerResource`, and `ReferencedResourceService` each produce the physical
+placement or lifecycle declaration together with its local service. Non-service resources may still be refined with
+`Resource` or `ReferencedResource`. `NonParticipatingWorkloadsByDefault` expands one attributable closed-world
+environment decision across canonical workloads not otherwise classified, avoiding an exhaustive parallel workload
+list while retaining explicit decisions in the fingerprinted deployment manifest.
+
 Canonical `RequiresReady(...)` declarations are lowered by `InfrastructureRealizationCompiler` from logical nodes to
 their exact physical placements. Local compilation projects those obligations into the existing topology consumed by
 Docker Compose and Aspire, so application code does not repeat physical dependency strings. Aspire continues to own
