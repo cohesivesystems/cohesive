@@ -289,7 +289,8 @@ static async Task VerifyScenarioPackage(PocoGenerationDefinition<SmokeCustomer> 
                 input: new SmokeScenarioInput("summary")));
     var restored = ScenarioDefinitionJsonSerializer.Deserialize(
         ScenarioDefinitionJsonSerializer.Serialize(scenario));
-    var trace = await ScenarioRunner.ExecuteAsync(restored, new SmokeScenarioInterpreter());
+    var initialScenarioWorld = ScenarioWorldSnapshot.FromCoreWorld(restored);
+    var trace = await ScenarioRunner.ExecuteAsync(initialScenarioWorld, new SmokeScenarioInterpreter());
     var restoredTrace = ScenarioExecutionTraceJsonSerializer.Deserialize(
         ScenarioExecutionTraceJsonSerializer.Serialize(trace));
 
@@ -302,6 +303,10 @@ static async Task VerifyScenarioPackage(PocoGenerationDefinition<SmokeCustomer> 
         restored.Compile().GetActor("customer").ExemplarId,
         "customer-for-ui",
         "scenario actor exemplar");
+    Require(
+        initialScenarioWorld.GetActor("customer").Exemplar.Id,
+        "customer-for-ui",
+        "materialized scenario actor exemplar");
     Require(
         restoredTrace.SchemaVersion,
         "cohesive-simulation-scenario-trace/v1",

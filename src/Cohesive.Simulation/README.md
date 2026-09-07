@@ -107,9 +107,11 @@ support direct examples, bounded sequences, property cases, static populations, 
 worlds, repository seeding, and portable artifacts.
 
 Worlds currently describe static initial state. Scenarios add actors, declared operations, fixed virtual-time actions,
-an explicit runtime interpreter seam, contract-checked outcomes, and fingerprint-verified complete traces. The runner
-does not yet materialize actor snapshots or own state mutation, events, queues, resources, or fault policies; those
-remain later explicit interpretations rather than implicit callback behavior. `Cohesive.Adapters.Bogus` and
+deterministic actor materialization, an explicit runtime interpreter seam, contract-checked outcomes, and
+fingerprint-verified complete traces. Core and relationship-world materializers expose each actor's observation,
+entity identity, and replay evidence to the runner. The runner does not yet own state mutation, events, queues,
+resources, or fault policies; those remain later explicit interpretations rather than implicit callback behavior.
+`Cohesive.Adapters.Bogus` and
 `Cohesive.Adapters.Mimesis` provide optional snapshot producers without making either provider a core dependency.
 
 Current portable schemas and replay tokens reject earlier versions rather than silently assigning compatibility

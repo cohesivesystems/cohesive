@@ -159,7 +159,7 @@ public static class WorldJsonLinesVerifier
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(artifact);
-        WorldProvisioner.RequireReferenceCompatibility(artifact);
+        artifact.RequireCoreReferenceCompatibility();
         var plan = WorldProvisioner.CreateReferencePlan(artifact.GetCoreWorld().Compile(), artifact);
         return await ValidateAsync(plan, input, cancellationToken).ConfigureAwait(false);
     }
@@ -205,7 +205,7 @@ public static class WorldJsonLinesVerifier
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(artifact);
-        WorldProvisioner.RequireReferenceCompatibility(artifact);
+        artifact.RequireCoreReferenceCompatibility();
         return VerifyCoreAsync(
             WorldProvisioner.CreateReferencePlan(artifact.GetCoreWorld().Compile(), artifact),
             input,

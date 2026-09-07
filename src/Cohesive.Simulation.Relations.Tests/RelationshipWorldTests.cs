@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Model;
@@ -7,6 +8,7 @@ using Cohesive.Relations.Serialization;
 using Cohesive.Simulation.Artifacts;
 using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Provisioning;
+using Cohesive.Simulation.Scenarios;
 using Cohesive.Simulation.Worlds;
 
 namespace Cohesive.Simulation.Relations.Tests;
@@ -15,6 +17,34 @@ public sealed class RelationshipWorldTests
 {
     static readonly GraphId GraphId = new("freight/v1");
     static readonly RelationshipId CarrierRelationshipId = new("load-carrier");
+
+    [Fact]
+    public void ScenarioSnapshot_MaterializesRelationshipCompleteActorsThroughOwningInterpreter()
+    {
+        var world = CreateDefinition(carrierCount: 2, loadCount: 3, includeExemplar: true);
+        var artifact = RelationshipWorldArtifact.FromWorld(world.Compile(), rootSeed: 42);
+        var operationContract = new ValueContract(new ScalarTypeRef(ScalarTypeKind.Bool));
+        var scenario = ScenarioDefinitionDocument.FromDefinition(new(
+            "scenario/relationship-world",
+            "r1",
+            artifact,
+            DateTimeOffset.UnixEpoch,
+            [new("inspect", operationContract, operationContract)],
+            [new("load", "load-for-ui")],
+            [new("inspect-load", DateTimeOffset.UnixEpoch, "load", "inspect", ObservationValue.FromBool(true))]));
+
+        var snapshot = RelationshipScenarioWorldSnapshot.Materialize(scenario);
+        var actor = snapshot.GetActor("load");
+        var expected = world.Compile().GenerateExemplar("load-for-ui", seed: 42);
+
+        Assert.Equal(expected.EntityId, actor.EntityId);
+        Assert.Equal(expected.Observation.ToCanonicalJson(), actor.Observation.ToCanonicalJson());
+        Assert.True(actor.Observation.TryGetField("CarrierId", out _));
+        Assert.Equal(
+            RelationshipWorldInterpreter.Identity,
+            RelationshipWorldReplayEvidence.ParseToken(actor.ReplayToken).Interpreter);
+        Assert.Throws<NotSupportedException>(() => ScenarioWorldSnapshot.FromCoreWorld(scenario));
+    }
 
     [Fact]
     public void CompileAndGenerate_ResolvesEveryReferenceToTheNamedTargetPopulation()

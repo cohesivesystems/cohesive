@@ -181,4 +181,7 @@ Continue with [artifacts, replay, and verification](artifacts-and-replay.md) or
 
 Use the exact `WorldArtifactManifest` as the starting authority for a deterministic scenario. Bind actors to named
 world exemplars, declare portable operation contracts, and schedule action inputs on a fixed virtual UTC timeline.
-The typed authoring projection and strict portable document are covered in [deterministic scenarios](scenarios.md).
+Materialize those actors through `ScenarioWorldSnapshot.FromCoreWorld` or the relationship package's
+`RelationshipScenarioWorldSnapshot.Materialize`, then execute the immutable snapshot through `ScenarioRunner`. The
+typed authoring projection, strict portable document, materialization boundary, and trace are covered in
+[deterministic scenarios](scenarios.md).
