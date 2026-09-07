@@ -19,11 +19,14 @@ public static class CohesivePulumiEnvironmentVariables
 /// <summary>Lifecycle operation delegated by an Aspire deployment pipeline to Pulumi.</summary>
 public enum AspirePulumiDeploymentOperation
 {
+    /// <summary>Preview the changes Pulumi would apply without reconciling resources.</summary>
+    Preview = 0,
+
     /// <summary>Reconcile the existing Pulumi program with <c>pulumi up</c>.</summary>
-    Apply = 0,
+    Apply = 1,
 
     /// <summary>Destroy resources owned by the Pulumi stack.</summary>
-    Destroy = 1
+    Destroy = 2
 }
 
 /// <summary>Stream from which a Pulumi Automation message originated.</summary>
@@ -187,10 +190,34 @@ public sealed class PulumiAutomationDeploymentExecutor : IAspirePulumiDeployment
             cancellationToken).ConfigureAwait(false);
         return request.Operation switch
         {
+            AspirePulumiDeploymentOperation.Preview => await PreviewAsync(stack, request, cancellationToken).ConfigureAwait(false),
             AspirePulumiDeploymentOperation.Apply => await ApplyAsync(stack, request, cancellationToken).ConfigureAwait(false),
             AspirePulumiDeploymentOperation.Destroy => await DestroyAsync(stack, request, cancellationToken).ConfigureAwait(false),
             _ => throw new ArgumentOutOfRangeException(nameof(request), request.Operation, "Unsupported Pulumi deployment operation.")
         };
+    }
+
+    static async Task<AspirePulumiDeploymentResult> PreviewAsync(
+        WorkspaceStack stack,
+        AspirePulumiDeploymentRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await stack.PreviewAsync(
+            new PreviewOptions
+            {
+                Refresh = true,
+                OnStandardOutput = message => Report(request, AspirePulumiOutputStream.StandardOutput, message),
+                OnStandardError = message => Report(request, AspirePulumiOutputStream.StandardError, message)
+            },
+            cancellationToken).ConfigureAwait(false);
+        var outcome = result.ChangeSummary.Count == 0
+            ? "no changes"
+            : string.Join(
+                ", ",
+                result.ChangeSummary
+                    .OrderBy(static change => change.Key.ToString(), StringComparer.Ordinal)
+                    .Select(static change => $"{change.Key}={change.Value}"));
+        return new(request.Operation, outcome);
     }
 
     static async Task<AspirePulumiDeploymentResult> ApplyAsync(
@@ -201,6 +228,7 @@ public sealed class PulumiAutomationDeploymentExecutor : IAspirePulumiDeployment
         var result = await stack.UpAsync(
             new UpOptions
             {
+                Refresh = true,
                 ShowSecrets = false,
                 OnStandardOutput = message => Report(request, AspirePulumiOutputStream.StandardOutput, message),
                 OnStandardError = message => Report(request, AspirePulumiOutputStream.StandardError, message)
@@ -217,6 +245,7 @@ public sealed class PulumiAutomationDeploymentExecutor : IAspirePulumiDeployment
         var result = await stack.DestroyAsync(
             new DestroyOptions
             {
+                Refresh = true,
                 ShowSecrets = false,
                 OnStandardOutput = message => Report(request, AspirePulumiOutputStream.StandardOutput, message),
                 OnStandardError = message => Report(request, AspirePulumiOutputStream.StandardError, message)

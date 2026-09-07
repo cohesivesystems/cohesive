@@ -225,11 +225,14 @@ public sealed class AspirePulumiDeploymentTests
             foreach (var annotation in resource.Resource.Annotations.OfType<PipelineStepAnnotation>())
                 steps.AddRange(await annotation.CreateStepsAsync(factoryContext));
 
-            Assert.Equal(3, steps.Count);
+            Assert.Equal(4, steps.Count);
             var handoffStep = Assert.Single(steps, step => step.Name == resource.Resource.HandoffStepName);
             Assert.Contains(WellKnownPipelineSteps.Publish, handoffStep.RequiredBySteps);
             Assert.Contains(WellKnownPipelineSteps.Deploy, handoffStep.RequiredBySteps);
             Assert.Contains(WellKnownPipelineSteps.Destroy, handoffStep.RequiredBySteps);
+            var previewStep = Assert.Single(steps, step => step.Name == resource.Resource.PreviewStepName);
+            Assert.Contains(resource.Resource.HandoffStepName, previewStep.DependsOnSteps);
+            Assert.Empty(previewStep.RequiredBySteps);
             var applyStep = Assert.Single(steps, step => step.Name == resource.Resource.ApplyStepName);
             Assert.Contains(resource.Resource.HandoffStepName, applyStep.DependsOnSteps);
             Assert.Contains(WellKnownPipelineSteps.Deploy, applyStep.RequiredBySteps);
@@ -253,12 +256,14 @@ public sealed class AspirePulumiDeploymentTests
                     StrictDocumentJson.CreateOptions()));
             Assert.Equal(resource.Resource.Handoff, restored);
 
+            await previewStep.Action(stepContext);
             await applyStep.Action(stepContext);
             await destroyStep.Action(stepContext);
 
-            Assert.Equal(2, executor.Requests.Count);
-            Assert.Equal(AspirePulumiDeploymentOperation.Apply, executor.Requests[0].Operation);
-            Assert.Equal(AspirePulumiDeploymentOperation.Destroy, executor.Requests[1].Operation);
+            Assert.Equal(3, executor.Requests.Count);
+            Assert.Equal(AspirePulumiDeploymentOperation.Preview, executor.Requests[0].Operation);
+            Assert.Equal(AspirePulumiDeploymentOperation.Apply, executor.Requests[1].Operation);
+            Assert.Equal(AspirePulumiDeploymentOperation.Destroy, executor.Requests[2].Operation);
             Assert.All(executor.Requests, request =>
             {
                 Assert.Equal(resource.Resource.Handoff, request.Handoff);

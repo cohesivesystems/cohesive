@@ -56,6 +56,7 @@ public sealed class AspirePulumiDeploymentResource : Resource
         Handoff = Guard.RequireNotNull(handoff);
         Options = Guard.RequireNotNull(options);
         HandoffStepName = $"cohesive-pulumi-{Name}-handoff";
+        PreviewStepName = $"cohesive-pulumi-{Name}-preview";
         ApplyStepName = $"cohesive-pulumi-{Name}-apply";
         DestroyStepName = $"cohesive-pulumi-{Name}-destroy";
     }
@@ -68,6 +69,9 @@ public sealed class AspirePulumiDeploymentResource : Resource
 
     /// <summary>Stable Aspire pipeline step that materializes <see cref="Handoff"/>.</summary>
     public string HandoffStepName { get; }
+
+    /// <summary>Stable Aspire pipeline step that delegates a non-mutating preview to Pulumi.</summary>
+    public string PreviewStepName { get; }
 
     /// <summary>Stable Aspire pipeline step that delegates apply to Pulumi.</summary>
     public string ApplyStepName { get; }
@@ -129,6 +133,13 @@ public static class AspirePulumiDeploymentBuilderExtensions
             ],
             tags: [],
             description: "Persist the exact Cohesive infrastructure realization for Pulumi and external tooling.");
+        resourceBuilder.WithPipelineStepFactory(
+            stepName: resource.PreviewStepName,
+            callback: context => ExecuteAsync(resource, context, AspirePulumiDeploymentOperation.Preview),
+            dependsOn: [resource.HandoffStepName],
+            requiredBy: [],
+            tags: [],
+            description: "Preview Pulumi changes without reconciling physical resources.");
         resourceBuilder.WithPipelineStepFactory(
             stepName: resource.ApplyStepName,
             callback: context => ExecuteAsync(resource, context, AspirePulumiDeploymentOperation.Apply),

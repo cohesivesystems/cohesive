@@ -31,13 +31,17 @@ builder.AddCohesivePulumiDeployment(
 builder.Build().Run();
 ```
 
-The resource contributes three named Aspire pipeline steps:
+The resource contributes four named Aspire pipeline steps:
 
 - handoff materialization, required by Aspire `publish`, `deploy`, and `destroy`;
+- Pulumi preview, available through `aspire do cohesive-pulumi-{resource-name}-preview`;
 - Pulumi `up`, required by Aspire `deploy`;
 - Pulumi `destroy`, required by Aspire `destroy`.
 
-`aspire publish` writes `cohesive.infra.pulumi.json` as a deterministic one-way artifact. `aspire deploy` and `aspire destroy` materialize the same artifact and invoke the existing Pulumi program through Automation API. The Pulumi project name is validated before a stack is selected or created.
+`aspire publish` writes `cohesive.infra.pulumi.json` as a deterministic one-way artifact. The named preview step
+performs a refresh-backed Pulumi preview without applying changes. `aspire deploy` and `aspire destroy` materialize the
+same artifact and invoke the existing Pulumi program through Automation API with refresh enabled. The Pulumi project
+name is validated before a stack is selected or created.
 The Pulumi lifecycle authority is derived from the selected target's managed resource bindings; the bridge rejects
 plans with no managed authority or more than one instead of asking the AppHost to restate canonical ownership.
 
