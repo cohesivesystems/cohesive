@@ -23,10 +23,9 @@ builder.AddCohesivePulumiDeployment(
     name: "ari-production",
     plan: deploymentPlan,
     environmentName: "production",
-    pulumiProjectName: "Ari.Infra.Pulumi",
-    pulumiStackName: "cohesive/Ari.Infra.Pulumi/production",
-    programDirectory: new("infra/src/Ari.Infra.Pulumi"),
-    lifecycleAuthority: new("pulumi/ari/production"),
+    pulumiProjectName: "cohesive-ari-infra",
+    pulumiStackName: "ari-prod",
+    programDirectory: new("infra"),
     options: new(repositoryRoot));
 
 builder.Build().Run();
@@ -39,6 +38,8 @@ The resource contributes three named Aspire pipeline steps:
 - Pulumi `destroy`, required by Aspire `destroy`.
 
 `aspire publish` writes `cohesive.infra.pulumi.json` as a deterministic one-way artifact. `aspire deploy` and `aspire destroy` materialize the same artifact and invoke the existing Pulumi program through Automation API. The Pulumi project name is validated before a stack is selected or created.
+The Pulumi lifecycle authority is derived from the selected target's managed resource bindings; the bridge rejects
+plans with no managed authority or more than one instead of asking the AppHost to restate canonical ownership.
 
 ## Pulumi program contract
 

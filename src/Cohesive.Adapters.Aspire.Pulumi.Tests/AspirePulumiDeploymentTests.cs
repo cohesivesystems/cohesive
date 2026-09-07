@@ -23,8 +23,10 @@ public sealed class AspirePulumiDeploymentTests
     static readonly InfrastructureCapabilityVariantId Variant = new("test/production");
     static readonly InfrastructureNodeId Api = new("workloads/api");
     static readonly InfrastructureNodeId State = new("resources/state");
+    static readonly InfrastructureNodeId Logs = new("resources/logs");
     static readonly InfrastructurePhysicalResourceId ApiPhysical = new("test/app-service/sites/api");
     static readonly InfrastructurePhysicalResourceId StatePhysical = new("test/object-store/buckets/state");
+    static readonly InfrastructurePhysicalResourceId LogsPhysical = new("test/object-store/buckets/logs");
     static readonly InfrastructureLifecycleAuthorityId Authority = new("pulumi/test/production");
     static readonly InfrastructureTargetId Target = new("test/pulumi/1");
     static readonly SourceReference Source = SourceReference.Create("test-adapter", "pulumi-production");
@@ -57,17 +59,33 @@ public sealed class AspirePulumiDeploymentTests
     {
         var plan = CompletePlan();
 
-        var exception = Assert.Throws<ArgumentException>(() => AspirePulumiDeploymentHandoff.Create(
-            plan,
-            environmentName: "production",
-            pulumiProjectName: "test-infrastructure",
-            pulumiStackName: "organization/test-infrastructure/production",
-            programDirectory: new("infra/test"),
-            lifecycleAuthority: new("pulumi/test/other")));
+        var valid = CreateHandoff(plan);
+        var exception = Assert.Throws<ArgumentException>(() => new AspirePulumiDeploymentHandoff(
+            valid.SchemaVersion,
+            valid.EnvironmentName,
+            valid.PulumiProjectName,
+            valid.PulumiStackName,
+            valid.ProgramDirectory,
+            new("pulumi/test/other"),
+            valid.Manifest,
+            valid.Realization,
+            valid.Diagnostics));
 
         Assert.Equal("lifecycleAuthority", exception.ParamName);
-        Assert.Contains(State.Value, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("manages resource", exception.Message, StringComparison.Ordinal);
         Assert.Contains(Authority.Value, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Handoff_rejects_more_than_one_managed_lifecycle_authority()
+    {
+        InfrastructureLifecycleAuthorityId secondAuthority = new("pulumi/test/other-stack");
+
+        var exception = Assert.Throws<ArgumentException>(() => CreateHandoff(CompletePlan(secondAuthority)));
+
+        Assert.Equal("plan", exception.ParamName);
+        Assert.Contains(Authority.Value, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(secondAuthority.Value, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -141,7 +159,6 @@ public sealed class AspirePulumiDeploymentTests
                 pulumiProjectName: "test-infrastructure",
                 pulumiStackName: "organization/test-infrastructure/production",
                 programDirectory: new("infra/test"),
-                lifecycleAuthority: Authority,
                 options: new(FindRepositoryRoot(), executor));
             using var services = new ServiceCollection()
                 .AddSingleton<IPipelineOutputService>(new FixedOutputService(outputDirectory))
@@ -247,10 +264,10 @@ public sealed class AspirePulumiDeploymentTests
             environmentName: "production",
             pulumiProjectName: "test-infrastructure",
             pulumiStackName: "organization/test-infrastructure/production",
-            programDirectory: new("infra/test"),
-            lifecycleAuthority: Authority);
+            programDirectory: new("infra/test"));
 
-    static InfrastructureTargetDeploymentPlan CompletePlan()
+    static InfrastructureTargetDeploymentPlan CompletePlan(
+        InfrastructureLifecycleAuthorityId? logsAuthority = null)
     {
         var semantic = Infrastructure.Define(
             new("test/aspire-pulumi"),
@@ -260,6 +277,7 @@ public sealed class AspirePulumiDeploymentTests
             {
                 infrastructure.Workload(Api).Requires(Https);
                 infrastructure.Resource(State).Persistent().Requires(Storage);
+                infrastructure.Resource(Logs).Persistent().Requires(Storage);
             });
         var facilities = InfrastructureTargetFacilities.Define(
             new("test/aspire-pulumi/facilities/v1"),
@@ -280,6 +298,7 @@ public sealed class AspirePulumiDeploymentTests
             {
                 deployment.Workload(Api, AppService, ApiPhysical, [Source]);
                 deployment.Resource(State, ObjectStore, StatePhysical, Authority, [Source]);
+                deployment.Resource(Logs, ObjectStore, LogsPhysical, logsAuthority ?? Authority, [Source]);
             });
         return InfrastructureTargetDeploymentCompiler.Compile(semantic, manifest);
     }

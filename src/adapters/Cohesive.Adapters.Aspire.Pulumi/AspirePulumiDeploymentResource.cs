@@ -89,7 +89,6 @@ public static class AspirePulumiDeploymentBuilderExtensions
     /// <param name="pulumiProjectName">Expected project name from the existing Pulumi program.</param>
     /// <param name="pulumiStackName">Pulumi stack name or fully qualified stack identity.</param>
     /// <param name="programDirectory">Repository-relative directory containing the existing Pulumi program.</param>
-    /// <param name="lifecycleAuthority">Pulumi state scope owning resources managed by the selected target.</param>
     /// <param name="options">Runtime-only repository and executor policy.</param>
     /// <returns>
     /// An Aspire resource contributing a portable handoff to <c>publish</c>, Pulumi reconciliation to <c>deploy</c>,
@@ -105,7 +104,6 @@ public static class AspirePulumiDeploymentBuilderExtensions
         string pulumiProjectName,
         string pulumiStackName,
         RepositoryPath programDirectory,
-        InfrastructureLifecycleAuthorityId lifecycleAuthority,
         AspirePulumiDeploymentOptions options)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -115,8 +113,7 @@ public static class AspirePulumiDeploymentBuilderExtensions
             environmentName,
             pulumiProjectName,
             pulumiStackName,
-            programDirectory,
-            lifecycleAuthority);
+            programDirectory);
         var resource = new AspirePulumiDeploymentResource(name, handoff, options);
         var resourceBuilder = builder.AddResource(resource);
 

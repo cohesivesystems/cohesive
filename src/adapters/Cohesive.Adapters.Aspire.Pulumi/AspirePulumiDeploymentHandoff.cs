@@ -160,7 +160,6 @@ public sealed record AspirePulumiDeploymentHandoff
     /// <param name="pulumiProjectName">Expected project name from the existing Pulumi program.</param>
     /// <param name="pulumiStackName">Pulumi stack name or fully qualified stack identity.</param>
     /// <param name="programDirectory">Repository-relative directory containing the existing Pulumi program.</param>
-    /// <param name="lifecycleAuthority">Pulumi state scope owning resources managed by the selected target.</param>
     /// <returns>An exact, serializable handoff fenced to the compiled manifest and realization.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
@@ -171,8 +170,7 @@ public sealed record AspirePulumiDeploymentHandoff
         string environmentName,
         string pulumiProjectName,
         string pulumiStackName,
-        RepositoryPath programDirectory,
-        InfrastructureLifecycleAuthorityId lifecycleAuthority)
+        RepositoryPath programDirectory)
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (!plan.IsComplete || plan.Realization is null)
@@ -189,6 +187,8 @@ public sealed record AspirePulumiDeploymentHandoff
                 nameof(plan));
         }
 
+        var lifecycleAuthority = RequireSingleManagedAuthority(plan.Realization, nameof(plan));
+
         return new(
             CurrentSchemaVersion,
             environmentName,
@@ -199,6 +199,30 @@ public sealed record AspirePulumiDeploymentHandoff
             plan.Manifest,
             plan.Realization,
             plan.Diagnostics);
+    }
+
+    static InfrastructureLifecycleAuthorityId RequireSingleManagedAuthority(
+        InfrastructureRealization realization,
+        string parameterName)
+    {
+        var selectedTarget = realization.ToReference().Target;
+        var authorities = realization.Lifecycle.Bindings
+            .Where(binding => binding.Interpreter == selectedTarget
+                && binding.Disposition == InfrastructureLifecycleDisposition.Managed)
+            .Select(static binding => binding.Authority)
+            .Distinct()
+            .ToArray();
+        return authorities.Length switch
+        {
+            1 => authorities[0],
+            0 => throw new ArgumentException(
+                $"A Pulumi handoff requires at least one resource managed by selected target '{selectedTarget.Value}'.",
+                parameterName),
+            _ => throw new ArgumentException(
+                $"A Pulumi handoff requires exactly one lifecycle authority for selected target "
+                + $"'{selectedTarget.Value}', but found: {string.Join(", ", authorities.Select(static authority => authority.Value))}.",
+                parameterName)
+        };
     }
 
     /// <summary>Serializes the full handoff using Cohesive's strict portable-document options.</summary>
