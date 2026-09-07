@@ -139,6 +139,53 @@ public sealed class AspirePulumiDeploymentTests
     }
 
     [Fact]
+    public void Pulumi_program_loads_the_exact_handoff_from_the_shared_environment_contract()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cohesive-pulumi-handoff-{Guid.NewGuid():N}.json");
+        try
+        {
+            var handoff = CreateHandoff(CompletePlan());
+            File.WriteAllBytes(path, handoff.ToCanonicalBytes());
+            var environment = new Dictionary<string, string?>
+            {
+                [CohesivePulumiEnvironmentVariables.HandoffPath] = path,
+                [CohesivePulumiEnvironmentVariables.HandoffFingerprint] = handoff.Fingerprint.Value,
+                [CohesivePulumiEnvironmentVariables.EnvironmentName] = handoff.EnvironmentName
+            };
+
+            var restored = AspirePulumiDeploymentHandoff.TryLoadFromEnvironment(environment);
+
+            Assert.Equal(handoff, restored);
+            Assert.Null(AspirePulumiDeploymentHandoff.TryLoadFromEnvironment(
+                new Dictionary<string, string?>()));
+            Assert.Throws<InvalidOperationException>(() =>
+                AspirePulumiDeploymentHandoff.TryLoadFromEnvironment(
+                    new Dictionary<string, string?>
+                    {
+                        [CohesivePulumiEnvironmentVariables.HandoffPath] = path
+                    }));
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Pulumi_program_rejects_a_recompiled_plan_that_differs_from_the_handoff()
+    {
+        var handoff = CreateHandoff(CompletePlan());
+        var changed = CompletePlan(statePhysical: new("test/object-store/buckets/changed-state"));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => handoff.RequireExactPlan(changed));
+
+        Assert.Contains(handoff.Fingerprint.Value, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(handoff.Manifest.Fingerprint.Value, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(changed.Manifest.Fingerprint.Value, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Aspire_pipeline_materializes_handoff_and_delegates_apply_and_destroy_to_executor()
     {
         var outputDirectory = Path.Combine(Path.GetTempPath(), $"cohesive-aspire-pulumi-{Guid.NewGuid():N}");
@@ -267,7 +314,8 @@ public sealed class AspirePulumiDeploymentTests
             programDirectory: new("infra/test"));
 
     static InfrastructureTargetDeploymentPlan CompletePlan(
-        InfrastructureLifecycleAuthorityId? logsAuthority = null)
+        InfrastructureLifecycleAuthorityId? logsAuthority = null,
+        InfrastructurePhysicalResourceId? statePhysical = null)
     {
         var semantic = Infrastructure.Define(
             new("test/aspire-pulumi"),
@@ -297,7 +345,7 @@ public sealed class AspirePulumiDeploymentTests
             deployment =>
             {
                 deployment.Workload(Api, AppService, ApiPhysical, [Source]);
-                deployment.Resource(State, ObjectStore, StatePhysical, Authority, [Source]);
+                deployment.Resource(State, ObjectStore, statePhysical ?? StatePhysical, Authority, [Source]);
                 deployment.Resource(Logs, ObjectStore, LogsPhysical, logsAuthority ?? Authority, [Source]);
             });
         return InfrastructureTargetDeploymentCompiler.Compile(semantic, manifest);

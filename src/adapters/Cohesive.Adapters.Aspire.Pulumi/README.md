@@ -51,6 +51,11 @@ The Pulumi process receives these non-secret environment variables:
 
 The Pulumi program can deserialize the handoff and lower the retained manifest and realization into provider resources. During incremental adoption it can also validate the handoff while existing resource declarations remain in place. Provider configuration and secrets continue to use Pulumi's normal configuration and secrets facilities.
 
+Use `AspirePulumiDeploymentHandoff.TryLoadFromEnvironment()` in an existing Pulumi program. It returns `null` only
+when the complete bridge contract is absent for a temporary direct-Pulumi compatibility path; partially configured,
+invalid, or mismatched contracts fail. `RequireExactPlan` verifies a freshly compiled provider-configured plan against
+the persisted handoff without introducing an application-specific serialization protocol.
+
 Pulumi output is forwarded to Aspire with Pulumi secret display disabled. Stack outputs are not copied into a second state model; applications should expose only intentionally selected values through explicit integration code.
 
 ## Failure behavior

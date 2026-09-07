@@ -236,6 +236,115 @@ public sealed record AspirePulumiDeploymentHandoff
     public byte[] ToCanonicalBytes() =>
         StrictDocumentJson.GetCanonicalBytes(this, StrictDocumentJson.CreateOptions());
 
+    /// <summary>Loads the handoff supplied to a Pulumi program by this adapter.</summary>
+    /// <param name="environment">
+    /// Explicit environment-variable values, or <see langword="null"/> to read the current process environment.
+    /// </param>
+    /// <returns>
+    /// The exact validated handoff, or <see langword="null"/> when none of the adapter variables are present.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// Only part of the environment contract is present; the handoff file is missing or invalid; or the environment
+    /// name or fingerprint does not match the persisted handoff.
+    /// </exception>
+    public static AspirePulumiDeploymentHandoff? TryLoadFromEnvironment(
+        IReadOnlyDictionary<string, string?>? environment = null)
+    {
+        string? Read(string name) => environment is null
+            ? Environment.GetEnvironmentVariable(name)
+            : environment.TryGetValue(name, out var value) ? value : null;
+
+        var path = Read(CohesivePulumiEnvironmentVariables.HandoffPath);
+        var fingerprint = Read(CohesivePulumiEnvironmentVariables.HandoffFingerprint);
+        var environmentName = Read(CohesivePulumiEnvironmentVariables.EnvironmentName);
+        if (string.IsNullOrWhiteSpace(path)
+            && string.IsNullOrWhiteSpace(fingerprint)
+            && string.IsNullOrWhiteSpace(environmentName))
+        {
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(path)
+            || string.IsNullOrWhiteSpace(fingerprint)
+            || string.IsNullOrWhiteSpace(environmentName))
+        {
+            throw new InvalidOperationException(
+                "The Cohesive Aspire-Pulumi environment contract is incomplete; handoff path, fingerprint, and "
+                + "environment name must be supplied together.");
+        }
+        if (!Path.IsPathFullyQualified(path))
+            throw new InvalidOperationException("The Cohesive Aspire-Pulumi handoff path must be absolute.");
+        if (!File.Exists(path))
+            throw new InvalidOperationException($"Cohesive Aspire-Pulumi handoff '{path}' does not exist.");
+
+        AspirePulumiDeploymentHandoff handoff;
+        try
+        {
+            handoff = JsonSerializer.Deserialize<AspirePulumiDeploymentHandoff>(
+                File.ReadAllText(path),
+                StrictDocumentJson.CreateOptions())
+                ?? throw new InvalidOperationException("The handoff document deserialized to null.");
+        }
+        catch (Exception exception) when (exception is JsonException or ArgumentException)
+        {
+            throw new InvalidOperationException(
+                $"Cohesive Aspire-Pulumi handoff '{path}' is invalid: {exception.Message}",
+                exception);
+        }
+
+        if (!string.Equals(fingerprint, handoff.Fingerprint.Value, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Cohesive Aspire-Pulumi environment fingerprint '{fingerprint}' does not match handoff "
+                + $"'{handoff.Fingerprint.Value}'.");
+        }
+        if (!string.Equals(environmentName, handoff.EnvironmentName, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Cohesive Aspire-Pulumi environment '{environmentName}' does not match handoff environment "
+                + $"'{handoff.EnvironmentName}'.");
+        }
+        return handoff;
+    }
+
+    /// <summary>Requires this handoff to match a freshly compiled exact target-deployment plan.</summary>
+    /// <param name="plan">Plan compiled from the consuming program's current source and provider configuration.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The plan is incomplete or its manifest, realization, diagnostics, or lifecycle authority differs.
+    /// </exception>
+    public void RequireExactPlan(InfrastructureTargetDeploymentPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        AspirePulumiDeploymentHandoff candidate;
+        try
+        {
+            candidate = Create(
+                plan,
+                EnvironmentName,
+                PulumiProjectName,
+                PulumiStackName,
+                ProgramDirectory);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new InvalidOperationException(
+                $"The consuming Pulumi program produced an invalid Cohesive deployment plan: {exception.Message}",
+                exception);
+        }
+
+        if (Manifest != candidate.Manifest
+            || Realization != candidate.Realization
+            || !Diagnostics.SequenceEqual(candidate.Diagnostics)
+            || LifecycleAuthority != candidate.LifecycleAuthority)
+        {
+            throw new InvalidOperationException(
+                $"The consuming Pulumi program's Cohesive plan does not match exact handoff '{Fingerprint.Value}'. "
+                + $"Expected manifest '{Manifest.Fingerprint.Value}' and realization '{Realization.Fingerprint.Value}'; "
+                + $"observed manifest '{candidate.Manifest.Fingerprint.Value}' and realization "
+                + $"'{candidate.Realization.Fingerprint.Value}'.");
+        }
+    }
+
     /// <summary>Compares handoffs structurally.</summary>
     /// <param name="other">Other handoff.</param>
     /// <returns><see langword="true"/> when every persisted field is equal.</returns>
