@@ -80,3 +80,23 @@ explicit rebuild policy.
 - [`Cohesive.Adapters.Postgres`](../adapters/Cohesive.Adapters.Postgres/README.md),
   [`Cohesive.Adapters.Cosmos`](../adapters/Cohesive.Adapters.Cosmos/README.md), and
   [`Cohesive.Adapters.Elastic`](../adapters/Cohesive.Adapters.Elastic/README.md) provide physical interpretations.
+
+## Experimental atomic commit declarations
+
+`Cohesive.Storage.Commits.IStorageCommitExecutor` accepts an immutable `StorageCommitIntent`:
+conditional portable item writes, explicit query guard dependencies and a retained operation result.
+SQLite and Cosmos interpreters commit the writes and receipt atomically within their advertised
+placement limits. `ReconcileAsync` resolves exact receipts after uncertain acknowledgments without
+reading later state. Missing evidence is `Unknown`, not proof that an operation rolled back.
+
+This bounded profile owns dedicated item storage; it does not yet enlist arbitrary repository tables.
+See the [decision and native capability boundaries](../../docs/decisions/declarative-storage-commits.md).
+
+Third-party interpreters implement the public executor interface and advertise their capability
+profile. Intent inspection, strict serialization and result factories are public; no friend-assembly
+registration or access to adapter internals is required.
+
+Commit preflight is `executor.Validate(intent)`: it includes adapter-encoded payload limits without
+I/O. `Capabilities.ValidateStructure(intent)` only checks placement and dependencies; full capability
+validation requires serialized byte evidence when a payload budget is declared. Query guard writes
+must carry a non-null token captured before the query; initialize a missing guard separately.

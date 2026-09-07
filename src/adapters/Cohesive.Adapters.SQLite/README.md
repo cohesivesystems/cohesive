@@ -213,3 +213,12 @@ The implementation deliberately retains native transaction ownership instead of 
 
 The required native engine profile supports `IS [NOT] DISTINCT FROM` and right/full outer joins. The shared builder
 checks each facility through `SqlFeature` before rendering; these were added in [SQLite 3.39](https://www.sqlite.org/releaselog/3_39_0.html).
+
+## Experimental atomic storage commits
+
+`SqliteStorageCommitExecutor` realizes `StorageCommitIntent` as conditional writes plus a retained
+receipt in one immediate transaction. It requires `SqliteDurability.Full`. Apply
+`SqliteStorageCommitExecutor.Schema.Apply(database)` explicitly before use. Its dedicated schema
+can include multiple logical targets and partitions within that database; it does not enlist
+existing repository tables. Exact retries return the original receipt even after later state changes.
+See the [commit contract and query guard protocol](../../../docs/decisions/declarative-storage-commits.md).

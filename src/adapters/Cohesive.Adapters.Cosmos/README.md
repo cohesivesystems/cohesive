@@ -68,3 +68,23 @@ explicitly. Unsupported combinations fail with structured diagnostics rather tha
   PostgreSQL/Cosmos reads.
 - [Relations capability reference](../../Cohesive.Relations/docs/CAPABILITIES.md) records the generated profile.
 - [`Cohesive.Storage`](../../Cohesive.Storage/README.md) owns the provider-neutral storage contracts.
+
+## Experimental atomic storage commits
+
+Create `CosmosStorageCommitExecutor` with `CreateAsync(client, databaseId, containerId, target)`.
+It verifies a single observed writable region, `/partitionKey` container partitioning and disabled
+TTL, then realizes conditional writes plus a receipt in one transactional batch. Other targets or
+partitions are rejected; native limits include the receipt. The conservative serialized document
+budget is 1 MiB. It owns a dedicated document namespace and uses a lossless stream codec independent
+of the client's serializer. Recreate the executor after topology or consistency changes.
+
+Query-dependent commits require the explicit all-writers guard protocol and a Strong account/read
+profile. The local vNext emulator's Eventual profile cannot qualify these reads; it still exercises
+native batch, ETag and exact receipt behavior. Run those integration checks by setting
+`COSMOS_STORAGE_COMMIT_CONNECTION_STRING` and filtering `CosmosStorageCommitTests`.
+See the [commit decision and deferred adoption work](../../../docs/decisions/declarative-storage-commits.md).
+
+For commit profiles below Strong, an item conflict or token mismatch followed by an invisible receipt
+returns `Unknown`, including Session profiles after restart. Reconcile the exact intent when visibility
+catches up; do not treat this as a definitive precondition failure. `executor.Validate(intent)` measures
+native documents and the receipt before any I/O, using the same encoding and byte budget as execution.
