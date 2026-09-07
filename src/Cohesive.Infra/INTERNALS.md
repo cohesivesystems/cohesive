@@ -93,6 +93,13 @@ nor placement/non-participation conflict is accepted. The manifest may also decl
 exact rationale and sources, without copying definition-local requirement identities. Its fluent builder is only a
 producer of immutable, serializable, fingerprinted IR.
 
+`InfrastructureLocalDeployments` coordinates authoring when those target placements are also local services. A
+project, container workload, container resource, or foreign-managed referenced service is associated with its logical
+node and physical identity once; the producer materializes both the target-deployment manifest and local topology.
+The grouped result is not a new persisted authority. Each emitted artifact retains its existing schema, fingerprint,
+validation, and compiler boundary. A default non-participation policy may classify the remaining canonical workloads
+as a closed world while still materializing one attributable decision per workload in the target manifest.
+
 `InfrastructureTargetDeploymentCompiler` owns the corresponding computation. Exact deployment declarations become
 explicit facility-selection policy; canonical resource lifecycle intent determines managed versus referenced
 disposition; workload and resource declarations become placements and lifecycle bindings; and selected facility
