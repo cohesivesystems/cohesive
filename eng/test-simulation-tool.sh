@@ -5,6 +5,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 feed="${COHESIVE_NUGET_LOCAL_FEED:-"$repo_root/../.feeds/nuget/cohesive-local"}"
 version="${1:?Usage: test-simulation-tool.sh <package-version>}"
 project="$repo_root/eng/package-smoke/Cohesive.Simulation.Consumer/Cohesive.Simulation.Consumer.csproj"
+core_project="$repo_root/eng/package-smoke/Cohesive.Simulation.Core.Consumer/Cohesive.Simulation.Core.Consumer.csproj"
+core_assets="$repo_root/eng/package-smoke/Cohesive.Simulation.Core.Consumer/obj/project.assets.json"
 consumer_assembly="$repo_root/eng/package-smoke/Cohesive.Simulation.Consumer/bin/Release/net10.0/Cohesive.Simulation.Consumer.dll"
 package="$feed/Cohesive.Simulation.Cli.$version.nupkg"
 tool_directory="$(mktemp -d)"
@@ -19,6 +21,32 @@ if [[ ! -f "$package" ]]; then
   echo "Cohesive.Simulation.Cli package not found at '$package'." >&2
   exit 1
 fi
+
+dotnet run \
+  --project "$core_project" \
+  --configuration Release \
+  --property:CohesivePackageVersion="$version" \
+  --property:CohesivePackageFeed="$feed"
+
+for excluded_package in \
+  Cohesive.Adapters.Bogus \
+  Cohesive.Adapters.Mimesis \
+  Cohesive.Cli \
+  Cohesive.Relations \
+  Cohesive.Simulation.Cli \
+  Cohesive.Simulation.ExternalProcess \
+  Cohesive.Simulation.Relations \
+  Cohesive.Simulation.Storage \
+  Cohesive.Simulation.Transitions \
+  Cohesive.Simulation.Xunit \
+  Cohesive.Storage \
+  Cohesive.Transitions \
+  xunit; do
+  if grep --fixed-strings --quiet "\"$excluded_package/" "$core_assets"; then
+    echo "Cohesive.Simulation core consumer unexpectedly acquired $excluded_package." >&2
+    exit 1
+  fi
+done
 
 dotnet run \
   --project "$project" \
@@ -145,4 +173,4 @@ dotnet run \
   "$work_directory/relationship.manifest.json" \
   "$work_directory/relationship.verification.json"
 
-echo "Cohesive.Simulation packages $version installed and verified stateful scenario traces, Transition integration, external imports, catalogs, core artifacts, and relationship-world artifacts."
+echo "Cohesive.Simulation packages $version installed and verified core dependency isolation, stateful scenario traces, Transition integration, external imports, catalogs, core artifacts, and relationship-world artifacts."

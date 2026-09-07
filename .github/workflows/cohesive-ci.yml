@@ -75,7 +75,7 @@ jobs:
       - name: Test CLI package consumer
         run: bash ./eng/test-cli-package-consumer.sh 0.1.0-ci.${{ github.run_number }}
 
-      - name: Test simulation CLI package
+      - name: Test simulation package family
         run: bash ./eng/test-simulation-tool.sh 0.1.0-ci.${{ github.run_number }}
         env:
           COHESIVE_MIMESIS_PYTHON: python

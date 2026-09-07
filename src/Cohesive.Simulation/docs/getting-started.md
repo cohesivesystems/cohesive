@@ -183,5 +183,11 @@ Use the exact `WorldArtifactManifest` as the starting authority for a determinis
 world exemplars, declare portable operation contracts, and schedule action inputs on a fixed virtual UTC timeline.
 Materialize those actors through `ScenarioWorldSnapshot.FromCoreWorld` or the relationship package's
 `RelationshipScenarioWorldSnapshot.Materialize`, then execute the immutable snapshot through `ScenarioRunner`. The
-typed authoring projection, strict portable document, materialization boundary, and trace are covered in
-[deterministic scenarios](scenarios.md).
+action interpreter returns a portable operation output plus any explicit complete actor-state replacements. Each next
+action sees the evolved immutable world, and the strict trace verifies the before/after chain and reconstructs the
+final snapshot. Install `Cohesive.Simulation.Transitions` when canonical Transition plans should produce those state
+changes. The typed authoring projection, strict portable document, materialization boundary, execution, and trace are
+covered in [deterministic scenarios](scenarios.md).
+
+For a goal-oriented package map and the recommended evidence retained by agentic end-to-end tests, continue with
+[adoption and agentic assurance](adoption-and-assurance.md).

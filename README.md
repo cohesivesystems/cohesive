@@ -28,12 +28,13 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Api.Execution` | Optional execution-control API catalog, safe result projections, and in-memory reference integration. |
 | `Cohesive.Storage` | Entity repository, durable Process state, materialization, Control, and storage adapter contracts. |
 | `Cohesive.AI` | Inference, training, text, vector, ontology, and model registry contracts. |
-| `Cohesive.Simulation` | Provider-neutral deterministic generator IR, addressable entropy, replay evidence, and core-observation POCO generation. |
+| [`Cohesive.Simulation`](src/Cohesive.Simulation/README.md) | Provider-neutral deterministic generation, property cases, replayable worlds and scenarios, portable artifacts, and bounded provisioning. |
 | `Cohesive.Simulation.Relations` | Optional relationship-complete worlds with portable inter-population entity references. |
 | `Cohesive.Simulation.Storage` | Optional deterministic world provisioning into Cohesive entity repositories. |
 | `Cohesive.Simulation.Transitions` | Optional execution of scenario actions through exact canonical Transition plans. |
 | `Cohesive.Simulation.Xunit` | Optional xUnit assertion adapter for deterministic property-case results and replayable counterexamples. |
 | `Cohesive.Simulation.Cli` | `cohesive-sim` tool for retained manifests, portable JSONL provisioning, and independent verification. |
+| `Cohesive.Simulation.ExternalProcess` | Optional bounded imports of finite generation catalogs from another runtime. |
 | `Cohesive.Identity` | Identity context and scope resolution helpers. |
 | `Cohesive.Cli` | Reusable typed command composition, configuration binding, validation, invocation, and testing helpers. |
 | `Cohesive.Host` | Generic-host lifecycle, dependency-injection scope, and runtime binding helpers. |
@@ -56,6 +57,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Adapters.GraphQL` | GraphQL schema emission from Cohesive API declarations. |
 | `Cohesive.Adapters.Json` | JSON Schema helpers and validators for Cohesive shape graph documents. |
 | `Cohesive.Adapters.MicrosoftML` | Microsoft ML tokenizer integration. |
+| [`Cohesive.Adapters.Mimesis`](src/adapters/Cohesive.Adapters.Mimesis/README.md) | Typed finite Mimesis imports through the bounded Python provider process. |
 | `Cohesive.Adapters.ONNX` | ONNX Runtime inference adapters. |
 | `Cohesive.Adapters.OpenApi` | OpenAPI document emission from Cohesive API declarations. |
 | `Cohesive.Adapters.Parquet` | Parquet row and column writing helpers. |

@@ -20,6 +20,7 @@ formats may change between alpha versions, but every persisted contract is expli
 | Scenario execution trace | `cohesive-simulation-scenario-trace/v2` |
 | Reference interpreter | `cohesive-simulation-reference/v3` |
 | Relationship interpreter | `cohesive-simulation-relations-reference/v1` |
+| Transition scenario interpreter | `cohesive-simulation-transitions-reference/v1` |
 | Generation replay token | `csimr2.` |
 | Property-case replay token | `csimpc1.` |
 | Relationship-world replay token | `csimwr1.` |
@@ -53,7 +54,8 @@ or introduce an explicit migration interpreter; do not rewrite fingerprints or s
 4. Preserve replay tokens and structured diagnostics in test reports.
 5. Review release notes for schema, interpreter, entropy, identity, and shrinker changes before upgrading.
 
-Virtual-time scenario definitions and complete action-outcome traces have the contracts listed above. Stateful world
-evolution, queue/resource models, fault injection, additional external-provider adapters, and learned synthesis remain
-outside this alpha compatibility surface. Retained finite provider/catalog snapshots have the generation-catalog
-contract listed above.
+Virtual-time scenario definitions, immutable actor-state evolution, and complete action-outcome traces have the
+contracts listed above. Actor creation and deletion, event and queue semantics, resource models, fault injection,
+additional external-provider adapters, and learned synthesis remain outside this alpha compatibility surface. The
+Transition scenario profile fails closed for subject creation, emission intents, and Machine movements. Retained
+finite provider/catalog snapshots have the generation-catalog contract listed above.

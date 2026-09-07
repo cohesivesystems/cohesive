@@ -106,6 +106,8 @@ Retain these files as test evidence:
 - the exact manifest;
 - the verified JSONL artifact when the destination consumes it;
 - the CLI verification report;
+- the canonical scenario and its execution trace, when activity is simulated;
+- the exact action-interpreter identity and any Transition definitions it pins;
 - the seed and any failing replay token;
 - the application-specific import or repository receipt.
 
