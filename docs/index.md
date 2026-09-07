@@ -147,6 +147,7 @@ The principal package entry points are:
 - [Simulation](../src/Cohesive.Simulation/README.md)
 - [Simulation relationship worlds](../src/Cohesive.Simulation.Relations/README.md)
 - [Simulation repository provisioning](../src/Cohesive.Simulation.Storage/README.md)
+- [Simulation Transition interpretation](../src/Cohesive.Simulation.Transitions/README.md)
 - [Simulation xUnit integration](../src/Cohesive.Simulation.Xunit/README.md)
 - [Simulation CLI tool](../src/Cohesive.Simulation.Cli/README.md)
 - [Host integration](../src/Cohesive.Host/README.md)

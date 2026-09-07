@@ -31,6 +31,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Simulation` | Provider-neutral deterministic generator IR, addressable entropy, replay evidence, and core-observation POCO generation. |
 | `Cohesive.Simulation.Relations` | Optional relationship-complete worlds with portable inter-population entity references. |
 | `Cohesive.Simulation.Storage` | Optional deterministic world provisioning into Cohesive entity repositories. |
+| `Cohesive.Simulation.Transitions` | Optional execution of scenario actions through exact canonical Transition plans. |
 | `Cohesive.Simulation.Xunit` | Optional xUnit assertion adapter for deterministic property-case results and replayable counterexamples. |
 | `Cohesive.Simulation.Cli` | `cohesive-sim` tool for retained manifests, portable JSONL provisioning, and independent verification. |
 | `Cohesive.Identity` | Identity context and scope resolution helpers. |

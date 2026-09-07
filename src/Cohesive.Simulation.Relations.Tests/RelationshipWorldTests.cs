@@ -42,7 +42,7 @@ public sealed class RelationshipWorldTests
         Assert.True(actor.Observation.TryGetField("CarrierId", out _));
         Assert.Equal(
             RelationshipWorldInterpreter.Identity,
-            RelationshipWorldReplayEvidence.ParseToken(actor.ReplayToken).Interpreter);
+            RelationshipWorldReplayEvidence.ParseToken(actor.OriginReplayToken).Interpreter);
         Assert.Throws<NotSupportedException>(() => ScenarioWorldSnapshot.FromCoreWorld(scenario));
     }
 

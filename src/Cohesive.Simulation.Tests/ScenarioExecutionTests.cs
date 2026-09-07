@@ -29,8 +29,8 @@ public sealed partial class ScenarioTests
             first.Actors.Select(static actor => actor.Observation.ToCanonicalJson()),
             second.Actors.Select(static actor => actor.Observation.ToCanonicalJson()));
         Assert.Equal(
-            first.Actors.Select(static actor => actor.ReplayToken),
-            second.Actors.Select(static actor => actor.ReplayToken));
+            first.Actors.Select(static actor => actor.OriginReplayToken),
+            second.Actors.Select(static actor => actor.OriginReplayToken));
         Assert.Equal(
             first.Actors.Select(static actor => actor.Actor.Id),
             reordered.Actors.Select(static actor => actor.Actor.Id));
@@ -55,7 +55,7 @@ public sealed partial class ScenarioTests
             alternateExemplar,
             carrier.EntityId,
             carrier.Observation,
-            carrier.ReplayToken);
+            carrier.OriginReplayToken);
 
         Assert.Throws<ArgumentException>(() => ScenarioWorldSnapshot.Create(document, [carrier]));
         Assert.Throws<ArgumentException>(() => ScenarioWorldSnapshot.Create(
@@ -94,14 +94,14 @@ public sealed partial class ScenarioTests
             interpreter.Contexts[0].ActorSnapshot.EntityId);
         Assert.Equal(
             ReferenceGenerationInterpreter.Identity,
-            GenerationReplayEvidence.ParseToken(interpreter.Contexts[0].ActorSnapshot.ReplayToken).Interpreter);
+            GenerationReplayEvidence.ParseToken(interpreter.Contexts[0].ActorSnapshot.OriginReplayToken).Interpreter);
         Assert.Equal("load-1", interpreter.Contexts[0].Input.Value!.Value.GetProperty("LoadId").String);
         Assert.Equal(
             ["assign-first", "assign-second", "release-load"],
             trace.Outcomes.Select(static outcome => outcome.ActionId));
         Assert.All(trace.Outcomes, static outcome => Assert.Equal(PortableValueState.Concrete, outcome.Output.State));
         Assert.Equal(
-            "5498bc77f50e60ea7c195cbfca06c62cc8687fe1eb088dc30c381bb94eb461f7",
+            "d17aab8b48f4445a58365d7a4b76712ac02fa809633c1bf9549a3c2653f03c25",
             trace.Fingerprint.Value);
 
         var json = ScenarioExecutionTraceJsonSerializer.Serialize(trace);
@@ -132,6 +132,137 @@ public sealed partial class ScenarioTests
         Assert.Equal(
             ScenarioExecutionTraceJsonSerializer.Serialize(first),
             ScenarioExecutionTraceJsonSerializer.Serialize(second));
+    }
+
+    [Fact]
+    public async Task Execution_AppliesExplicitStateChangesBeforeTheNextActionAndRetainsTheChain()
+    {
+        var document = ScenarioDefinitionDocument.FromDefinition(Scenario(
+            operationOrder: ["freight.assign-load", "freight.release-load"],
+            actorOrder: ["dispatcher", "carrier"],
+            actionOrder: ["assign-first", "assign-second", "release-load"]));
+        var initialWorld = ScenarioWorldSnapshot.FromCoreWorld(document);
+        var generation = document.Definition.InitialWorld.GetCoreWorld().Definition.Populations.Single().Generation;
+        var outputShape = new GraphShapeId(generation.ShapeGraph, generation.Root.ShapeId);
+        var changedCarrier = Observation.Create(
+            outputShape,
+            ObservationValue.FromObject(new FreightActor("Assigned carrier")));
+        var finalCarrier = Observation.Create(
+            outputShape,
+            ObservationValue.FromObject(new FreightActor("Released carrier")));
+        RecordingScenarioInterpreter interpreter = new(context =>
+        {
+            if (context.SequenceIndex == 0)
+            {
+                return new(
+                    Complete(context),
+                    [ScenarioActorStateChange.Replace(context.TargetActorSnapshot!, changedCarrier)]);
+            }
+
+            if (context.SequenceIndex == 1)
+            {
+                Assert.Equal(changedCarrier, context.TargetActorSnapshot!.Observation);
+                return new(
+                    Complete(context),
+                    [ScenarioActorStateChange.Replace(context.TargetActorSnapshot, finalCarrier)]);
+            }
+
+            Assert.Equal(finalCarrier, context.ActorSnapshot.Observation);
+
+            return ScenarioActionResult.Unchanged(Complete(context));
+        });
+
+        var trace = await ScenarioRunner.ExecuteAsync(initialWorld, interpreter);
+
+        var change = Assert.Single(trace.Outcomes[0].StateChanges);
+        Assert.Equal("carrier", change.ActorId);
+        Assert.Equal(initialWorld.GetActor("carrier").Observation, change.Before);
+        Assert.Equal(changedCarrier, change.After);
+        Assert.Equal(
+            initialWorld.GetActor("carrier").Observation,
+            trace.InitialActors.Single(static actor => actor.ActorId == "carrier").Observation);
+        Assert.Equal(finalCarrier, trace.ToFinalWorldSnapshot().GetActor("carrier").Observation);
+        Assert.Equal(
+            initialWorld.GetActor("carrier").OriginReplayToken,
+            trace.ToFinalWorldSnapshot().GetActor("carrier").OriginReplayToken);
+
+        var json = ScenarioExecutionTraceJsonSerializer.Serialize(trace);
+        var restored = ScenarioExecutionTraceJsonSerializer.Deserialize(json);
+        Assert.Equal(finalCarrier, restored.ToFinalWorldSnapshot().GetActor("carrier").Observation);
+        Assert.Equal(json, ScenarioExecutionTraceJsonSerializer.Serialize(restored));
+
+        var staleSecond = new ScenarioActionOutcome(
+            trace.Outcomes[1].ActionId,
+            trace.Outcomes[1].Output,
+            [new("carrier", initialWorld.GetActor("carrier").Observation, finalCarrier)]);
+        var exception = Assert.Throws<ArgumentException>(() => new ScenarioExecutionTraceDocument(
+            trace.SchemaVersion,
+            trace.Scenario,
+            trace.Interpreter,
+            trace.InitialActors,
+            [trace.Outcomes[0], staleSecond, trace.Outcomes[2]],
+            trace.Fingerprint));
+        Assert.Contains("stale before-state evidence", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Execution_FailsClosedWhenStateChangeBeforeEvidenceIsStale()
+    {
+        var document = ScenarioDefinitionDocument.FromDefinition(Scenario(
+            operationOrder: ["freight.assign-load", "freight.release-load"],
+            actorOrder: ["dispatcher", "carrier"],
+            actionOrder: ["assign-first", "assign-second", "release-load"]));
+        var initialWorld = ScenarioWorldSnapshot.FromCoreWorld(document);
+        var initialCarrier = initialWorld.GetActor("carrier");
+        var generation = document.Definition.InitialWorld.GetCoreWorld().Definition.Populations.Single().Generation;
+        var outputShape = new GraphShapeId(generation.ShapeGraph, generation.Root.ShapeId);
+        var first = Observation.Create(
+            outputShape,
+            ObservationValue.FromObject(new FreightActor("First state")));
+        var second = Observation.Create(
+            outputShape,
+            ObservationValue.FromObject(new FreightActor("Second state")));
+        RecordingScenarioInterpreter interpreter = new(context => new(
+            Complete(context),
+            [new("carrier", initialCarrier.Observation, context.SequenceIndex == 0 ? first : second)]));
+
+        var exception = await Assert.ThrowsAsync<ScenarioExecutionException>(
+            () => ScenarioRunner.ExecuteAsync(initialWorld, interpreter));
+
+        var diagnostic = Assert.Single(exception.Validation.Diagnostics);
+        Assert.Equal(ScenarioExecutionDiagnosticCodes.StateChangesInvalid, diagnostic.Code);
+        Assert.Equal("/outcomes/1/stateChanges", diagnostic.Location);
+        Assert.Equal("assign-second", diagnostic.Evidence!.Subject);
+        Assert.Equal(2, interpreter.Contexts.Count);
+    }
+
+    [Fact]
+    public void ActionResult_NormalizesIndependentActorChangesBeforeWorldApplication()
+    {
+        var document = ScenarioDefinitionDocument.FromDefinition(Scenario(
+            operationOrder: ["freight.assign-load", "freight.release-load"],
+            actorOrder: ["dispatcher", "carrier"],
+            actionOrder: ["assign-first", "assign-second", "release-load"]));
+        var world = ScenarioWorldSnapshot.FromCoreWorld(document);
+        var generation = document.Definition.InitialWorld.GetCoreWorld().Definition.Populations.Single().Generation;
+        var outputShape = new GraphShapeId(generation.ShapeGraph, generation.Root.ShapeId);
+        var carrierChange = ScenarioActorStateChange.Replace(
+            world.GetActor("carrier"),
+            Observation.Create(outputShape, ObservationValue.FromObject(new FreightActor("Changed carrier"))));
+        var dispatcherChange = ScenarioActorStateChange.Replace(
+            world.GetActor("dispatcher"),
+            Observation.Create(outputShape, ObservationValue.FromObject(new FreightActor("Changed dispatcher"))));
+        var output = PortableValue.Unknown(new(new ScalarTypeRef(ScalarTypeKind.Bool)));
+
+        var result = new ScenarioActionResult(output, [dispatcherChange, carrierChange]);
+        var changedWorld = world.Apply(result.StateChanges);
+
+        Assert.Equal(["carrier", "dispatcher"], result.StateChanges.Select(static change => change.ActorId));
+        Assert.Equal("Changed carrier", changedWorld.GetActor("carrier").Observation.Materialize<FreightActor>().Name);
+        Assert.Equal(
+            "Changed dispatcher",
+            changedWorld.GetActor("dispatcher").Observation.Materialize<FreightActor>().Name);
+        Assert.Throws<ArgumentException>(() => new ScenarioActionResult(output, [carrierChange, carrierChange]));
     }
 
     [Fact]
@@ -322,16 +453,25 @@ public sealed partial class ScenarioTests
             _ => throw new InvalidOperationException($"Unknown operation '{context.Operation.Id}'.")
         };
 
-    sealed class RecordingScenarioInterpreter(Func<ScenarioActionContext, PortableValue> execute)
-        : IScenarioActionInterpreter
+    sealed class RecordingScenarioInterpreter : IScenarioActionInterpreter
     {
+        readonly Func<ScenarioActionContext, ScenarioActionResult> execute;
+
+        public RecordingScenarioInterpreter(Func<ScenarioActionContext, PortableValue> execute)
+            : this(context => ScenarioActionResult.Unchanged(execute(context)))
+        {
+        }
+
+        public RecordingScenarioInterpreter(Func<ScenarioActionContext, ScenarioActionResult> execute) =>
+            this.execute = execute;
+
         public const string InterpreterIdentity = "tests/freight-scenario-interpreter/v1";
 
         public List<ScenarioActionContext> Contexts { get; } = [];
 
         public string Identity => InterpreterIdentity;
 
-        public ValueTask<PortableValue> ExecuteAsync(
+        public ValueTask<ScenarioActionResult> ExecuteAsync(
             ScenarioActionContext context,
             CancellationToken cancellationToken)
         {

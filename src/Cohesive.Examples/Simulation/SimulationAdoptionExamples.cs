@@ -12,9 +12,13 @@ using Cohesive.Simulation.Provisioning;
 using Cohesive.Simulation.Relations;
 using Cohesive.Simulation.Scenarios;
 using Cohesive.Simulation.Storage;
+using Cohesive.Simulation.Transitions;
 using Cohesive.Simulation.Worlds;
 using Cohesive.Simulation.Xunit;
 using Cohesive.Storage;
+using Cohesive.Transitions.Authoring;
+using Cohesive.Transitions.Compilation;
+using Cohesive.Transitions.IR;
 using SimulationDsl = Cohesive.Simulation.Simulation;
 
 namespace Cohesive.Examples.SimulationAdoption;
@@ -55,7 +59,13 @@ public sealed class SimulationAdoptionExamples
             RelationshipScenarioWorldSnapshot.Materialize(retainedScenario);
         ScenarioExecutionTraceDocument scenarioTrace = await ScenarioRunner.ExecuteAsync(
             initialScenarioWorld,
-            new FreightScenarioInterpreter());
+            new TransitionScenarioActionInterpreter(
+            [
+                new(
+                    operationId: "freight.dispatch-load",
+                    transition: demo.DispatchLoad,
+                    subject: ScenarioTransitionSubject.TargetActor)
+            ]));
         ScenarioExecutionTraceDocument retainedTrace = ScenarioExecutionTraceJsonSerializer.Deserialize(
             ScenarioExecutionTraceJsonSerializer.Serialize(scenarioTrace));
         var carrierRepository = RepositoryFor<DemoCarrier>(demo.Shapes);
@@ -88,8 +98,14 @@ public sealed class SimulationAdoptionExamples
         Assert.Equal(artifact.ArtifactId, retainedScenario.Definition.InitialWorld.ArtifactId);
         Assert.Equal("dispatch-load", Assert.Single(retainedScenario.Compile().Definition.Actions).Id);
         Assert.Equal(retainedScenario.Fingerprint, retainedTrace.Scenario.Fingerprint);
-        Assert.Equal("examples/freight-scenario/v1", retainedTrace.Interpreter);
+        Assert.StartsWith(
+            TransitionScenarioActionInterpreter.ProfileIdentity,
+            retainedTrace.Interpreter,
+            StringComparison.Ordinal);
         Assert.Equal(PortableValueState.Concrete, Assert.Single(retainedTrace.Outcomes).Output.State);
+        Assert.Equal(
+            initialScenarioWorld.GetActor("load").Observation.Materialize<DemoLoad>().Number + 1,
+            retainedTrace.ToFinalWorldSnapshot().GetActor("load").Observation.Materialize<DemoLoad>().Number);
         Assert.True(initialScenarioWorld.GetActor("load").Observation.TryGetField("CarrierId", out _));
         Assert.NotNull(storedLoad);
         var carrierId = storedLoad.Entity.Observation.Value.Fields!["CarrierId"].String;
@@ -148,7 +164,35 @@ public sealed class SimulationAdoptionExamples
                 .Relationship("loads", loadCarrier.Id, "carriers")
                 .Exemplar("carrier-for-scenario", "carriers", sequenceIndex: 0)
                 .Exemplar("load-for-browser", "loads", sequenceIndex: 1));
-        return new(shapes, carriers, world);
+        var authoredDispatch = TransitionAuthoring.Create<DemoLoad, DispatchLoad, DispatchReceipt>(
+            shapes.Graph.GetShape(shapes.GetShape<DemoLoad>().ShapeId),
+            new(
+                new("transition/freight/dispatch-load"),
+                new("r1"),
+                new("body"),
+                new(
+                    new(TransitionAuthoring.Producer),
+                    new("examples/simulation-adoption"),
+                    DocumentOrigin.Generated)),
+            transition => transition
+                .Increment(
+                    new("apply-priority"),
+                    load => load.Number,
+                    (load, input) => input.Priority)
+                .Return(
+                    new("accepted"),
+                    TransitionOutcomeDisposition.Applied,
+                    new DispatchReceipt(Accepted: true)));
+        var dispatchCompilation = authoredDispatch.Compile(shapes.Graph);
+        if (dispatchCompilation.Plan is not { } dispatchLoad)
+        {
+            throw new InvalidOperationException(string.Join(
+                Environment.NewLine,
+                dispatchCompilation.Validation.Diagnostics.Select(
+                    static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")));
+        }
+
+        return new(shapes, carriers, world, dispatchLoad);
     }
 
     static InMemoryEntityOutboxRepository RepositoryFor<T>(ClrShapeGraphBuildResult shapes)
@@ -165,7 +209,8 @@ public sealed class SimulationAdoptionExamples
     sealed record FreightDemo(
         ClrShapeGraphBuildResult Shapes,
         PocoGenerationDefinition<DemoCarrier> Carriers,
-        RelationshipWorldDefinition World);
+        RelationshipWorldDefinition World,
+        CompiledTransitionPlan DispatchLoad);
 
     [ShapeDefinition("Carrier", ShapeRoles.Entity)]
     sealed record DemoCarrier(string Name);
@@ -177,18 +222,4 @@ public sealed class SimulationAdoptionExamples
 
     sealed record DispatchReceipt(bool Accepted);
 
-    sealed class FreightScenarioInterpreter : IScenarioActionInterpreter
-    {
-        public string Identity => "examples/freight-scenario/v1";
-
-        public ValueTask<PortableValue> ExecuteAsync(
-            ScenarioActionContext context,
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return ValueTask.FromResult(PortableValue.Concrete(
-                context.Operation.Output,
-                ObservationValue.FromObject(new DispatchReceipt(Accepted: true))));
-        }
-    }
 }
