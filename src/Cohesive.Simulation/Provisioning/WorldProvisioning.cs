@@ -690,7 +690,7 @@ public static class WorldProvisioner
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(artifact);
-        RequireReferenceCompatibility(artifact);
+        artifact.RequireCoreReferenceCompatibility();
         return ProvisionAsync(
             CreateReferencePlan(artifact.GetCoreWorld().Compile(), artifact),
             sink,
@@ -714,24 +714,6 @@ public static class WorldProvisioner
             targetId,
             options,
             cancellationToken);
-    }
-
-    internal static void RequireReferenceCompatibility(WorldArtifactManifest artifact)
-    {
-        ArgumentNullException.ThrowIfNull(artifact);
-        if (!string.Equals(
-                artifact.Interpreter,
-                ReferenceGenerationInterpreter.Identity,
-                StringComparison.Ordinal)
-            || !string.Equals(
-                artifact.EntropyAlgorithm,
-                ReferenceGenerationInterpreter.EntropyAlgorithm,
-                StringComparison.Ordinal))
-        {
-            throw new NotSupportedException(
-                $"Reference provisioning cannot realize artifact interpreter '{artifact.Interpreter}' with entropy "
-                + $"algorithm '{artifact.EntropyAlgorithm}'.");
-        }
     }
 
     internal static WorldArtifactInterpreterPlan CreateReferencePlan(

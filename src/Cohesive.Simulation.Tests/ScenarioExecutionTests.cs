@@ -2,12 +2,67 @@ using System.Text.Json.Nodes;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
+using Cohesive.Simulation.Generation;
 using Cohesive.Simulation.Scenarios;
 
 namespace Cohesive.Simulation.Tests;
 
 public sealed partial class ScenarioTests
 {
+    [Fact]
+    public void CoreWorldSnapshot_MaterializesEveryExactActorDeterministically()
+    {
+        var document = ScenarioDefinitionDocument.FromDefinition(Scenario(
+            operationOrder: ["freight.assign-load", "freight.release-load"],
+            actorOrder: ["dispatcher", "carrier"],
+            actionOrder: ["assign-first", "assign-second", "release-load"]));
+
+        var first = ScenarioWorldSnapshot.FromCoreWorld(document);
+        var second = ScenarioWorldSnapshot.FromCoreWorld(document);
+        var reordered = ScenarioWorldSnapshot.Create(document, [.. first.Actors.Reverse()]);
+
+        Assert.Equal(["carrier", "dispatcher"], first.Actors.Select(static actor => actor.Actor.Id));
+        Assert.Equal(
+            first.Actors.Select(static actor => actor.EntityId),
+            second.Actors.Select(static actor => actor.EntityId));
+        Assert.Equal(
+            first.Actors.Select(static actor => actor.Observation.ToCanonicalJson()),
+            second.Actors.Select(static actor => actor.Observation.ToCanonicalJson()));
+        Assert.Equal(
+            first.Actors.Select(static actor => actor.ReplayToken),
+            second.Actors.Select(static actor => actor.ReplayToken));
+        Assert.Equal(
+            first.Actors.Select(static actor => actor.Actor.Id),
+            reordered.Actors.Select(static actor => actor.Actor.Id));
+        Assert.Equal(1, first.GetActor("carrier").Exemplar.SequenceIndex);
+        Assert.False(first.TryGetActor("absent", out var absent));
+        Assert.Null(absent);
+    }
+
+    [Fact]
+    public void SnapshotCreation_FailsClosedForIncompleteOrInconsistentActorMaterializations()
+    {
+        var document = ScenarioDefinitionDocument.FromDefinition(Scenario(
+            operationOrder: ["freight.assign-load", "freight.release-load"],
+            actorOrder: ["dispatcher", "carrier"],
+            actionOrder: ["assign-first", "assign-second", "release-load"]));
+        var world = ScenarioWorldSnapshot.FromCoreWorld(document);
+        var carrier = world.GetActor("carrier");
+        var alternateDefinition = new ScenarioActorDefinition("carrier", "dispatcher-for-scenario");
+        var alternateExemplar = document.Definition.InitialWorld.GetExemplar("dispatcher-for-scenario");
+        var inconsistent = new ScenarioActorSnapshot(
+            alternateDefinition,
+            alternateExemplar,
+            carrier.EntityId,
+            carrier.Observation,
+            carrier.ReplayToken);
+
+        Assert.Throws<ArgumentException>(() => ScenarioWorldSnapshot.Create(document, [carrier]));
+        Assert.Throws<ArgumentException>(() => ScenarioWorldSnapshot.Create(
+            document,
+            [inconsistent, world.GetActor("dispatcher")]));
+    }
+
     [Fact]
     public async Task Execution_UsesCanonicalVirtualScheduleAndRetainsExactTrace()
     {
@@ -17,9 +72,11 @@ public sealed partial class ScenarioTests
             actionOrder: ["release-load", "assign-second", "assign-first"]));
         RecordingScenarioInterpreter interpreter = new(Complete);
 
-        var trace = await ScenarioRunner.ExecuteAsync(document, interpreter);
+        var world = ScenarioWorldSnapshot.FromCoreWorld(document);
+        var trace = await ScenarioRunner.ExecuteAsync(world, interpreter);
 
         Assert.Same(document, trace.Scenario);
+        Assert.Same(world, interpreter.Contexts[0].World);
         Assert.Equal(RecordingScenarioInterpreter.InterpreterIdentity, trace.Interpreter);
         Assert.Equal(
             ["assign-first", "assign-second", "release-load"],
@@ -30,6 +87,14 @@ public sealed partial class ScenarioTests
             interpreter.Contexts.Select(static context => context.Action.ScheduledAtUtc));
         Assert.Equal("dispatcher-for-scenario", interpreter.Contexts[0].Actor.ExemplarId);
         Assert.Equal("carrier-for-scenario", interpreter.Contexts[0].TargetActor!.ExemplarId);
+        Assert.Equal("dispatcher", interpreter.Contexts[0].ActorSnapshot.Actor.Id);
+        Assert.Equal("carrier", interpreter.Contexts[0].TargetActorSnapshot!.Actor.Id);
+        Assert.Equal(
+            world.GetActor("dispatcher").EntityId,
+            interpreter.Contexts[0].ActorSnapshot.EntityId);
+        Assert.Equal(
+            ReferenceGenerationInterpreter.Identity,
+            GenerationReplayEvidence.ParseToken(interpreter.Contexts[0].ActorSnapshot.ReplayToken).Interpreter);
         Assert.Equal("load-1", interpreter.Contexts[0].Input.Value!.Value.GetProperty("LoadId").String);
         Assert.Equal(
             ["assign-first", "assign-second", "release-load"],
@@ -56,8 +121,12 @@ public sealed partial class ScenarioTests
             actorOrder: ["dispatcher", "carrier"],
             actionOrder: ["assign-first", "assign-second", "release-load"]));
 
-        var first = await ScenarioRunner.ExecuteAsync(document, new RecordingScenarioInterpreter(Complete));
-        var second = await ScenarioRunner.ExecuteAsync(document, new RecordingScenarioInterpreter(Complete));
+        var first = await ScenarioRunner.ExecuteAsync(
+            ScenarioWorldSnapshot.FromCoreWorld(document),
+            new RecordingScenarioInterpreter(Complete));
+        var second = await ScenarioRunner.ExecuteAsync(
+            ScenarioWorldSnapshot.FromCoreWorld(document),
+            new RecordingScenarioInterpreter(Complete));
 
         Assert.Equal(first.Fingerprint, second.Fingerprint);
         Assert.Equal(
@@ -82,7 +151,7 @@ public sealed partial class ScenarioTests
                         Message: "The carrier rejected the load."))
                 : Complete(context));
 
-        var trace = await ScenarioRunner.ExecuteAsync(document, interpreter);
+        var trace = await ScenarioRunner.ExecuteAsync(ScenarioWorldSnapshot.FromCoreWorld(document), interpreter);
 
         Assert.Equal(3, interpreter.Contexts.Count);
         Assert.Equal(PortableValueState.Failed, trace.Outcomes[0].Output.State);
@@ -113,7 +182,8 @@ public sealed partial class ScenarioTests
             context.Operation.Output,
             ObservationValue.FromBool(true)));
 
-        await ScenarioRunner.ExecuteAsync(ScenarioDefinitionDocument.FromDefinition(scenario), interpreter);
+        var document = ScenarioDefinitionDocument.FromDefinition(scenario);
+        await ScenarioRunner.ExecuteAsync(ScenarioWorldSnapshot.FromCoreWorld(document), interpreter);
 
         Assert.Equal(
             [PortableValueState.Missing, PortableValueState.Null],
@@ -133,7 +203,7 @@ public sealed partial class ScenarioTests
                 ObservationValue.FromString("wrong contract")));
 
         var exception = await Assert.ThrowsAsync<ScenarioExecutionException>(
-            () => ScenarioRunner.ExecuteAsync(document, interpreter));
+            () => ScenarioRunner.ExecuteAsync(ScenarioWorldSnapshot.FromCoreWorld(document), interpreter));
 
         var diagnostic = Assert.Single(exception.Validation.Diagnostics);
         Assert.Equal(ScenarioExecutionDiagnosticCodes.OutputContractMismatch, diagnostic.Code);
@@ -152,7 +222,7 @@ public sealed partial class ScenarioTests
         RecordingScenarioInterpreter interpreter = new(context => PortableValue.Null(context.Operation.Output));
 
         var exception = await Assert.ThrowsAsync<ScenarioExecutionException>(
-            () => ScenarioRunner.ExecuteAsync(document, interpreter));
+            () => ScenarioRunner.ExecuteAsync(ScenarioWorldSnapshot.FromCoreWorld(document), interpreter));
 
         var diagnostic = Assert.Single(exception.Validation.Diagnostics);
         Assert.Equal(PortableExecutionDiagnosticCodes.NullabilityMismatch, diagnostic.Code);
@@ -175,7 +245,10 @@ public sealed partial class ScenarioTests
         });
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => ScenarioRunner.ExecuteAsync(document, interpreter, cancellation.Token));
+            () => ScenarioRunner.ExecuteAsync(
+                ScenarioWorldSnapshot.FromCoreWorld(document),
+                interpreter,
+                cancellation.Token));
 
         Assert.Single(interpreter.Contexts);
     }
@@ -194,7 +267,9 @@ public sealed partial class ScenarioTests
             operationOrder: ["freight.assign-load", "freight.release-load"],
             actorOrder: ["dispatcher", "carrier"],
             actionOrder: ["assign-first", "assign-second", "release-load"]));
-        var trace = await ScenarioRunner.ExecuteAsync(document, new RecordingScenarioInterpreter(Complete));
+        var trace = await ScenarioRunner.ExecuteAsync(
+            ScenarioWorldSnapshot.FromCoreWorld(document),
+            new RecordingScenarioInterpreter(Complete));
         var root = JsonNode.Parse(ScenarioExecutionTraceJsonSerializer.Serialize(trace))!.AsObject();
         switch (mutation)
         {

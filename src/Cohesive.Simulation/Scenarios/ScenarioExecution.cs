@@ -17,31 +17,35 @@ public static class ScenarioExecutionDiagnosticCodes
 
 /// <summary>Runtime context for interpreting one action from a canonical scenario schedule.</summary>
 /// <remarks>
-/// The context is a convenience projection over the retained scenario document. It introduces no second semantic
-/// authority: action, operation, actor, and target definitions are resolved from <see cref="Scenario"/>.
+/// The context is a convenience projection over the retained scenario document and materialized world snapshot. It
+/// introduces no second semantic authority: action and operation definitions are resolved from <see cref="Scenario"/>,
+/// while actor definitions and observations are projected by <see cref="World"/>.
 /// </remarks>
 public sealed class ScenarioActionContext
 {
     internal ScenarioActionContext(
-        ScenarioDefinitionDocument scenario,
+        ScenarioWorldSnapshot world,
         int sequenceIndex,
         ScenarioActionDefinition action,
         ScenarioOperationDefinition operation,
-        ScenarioActorDefinition actor,
-        ScenarioActorDefinition? targetActor,
+        ScenarioActorSnapshot actorSnapshot,
+        ScenarioActorSnapshot? targetActorSnapshot,
         PortableValue input)
     {
-        Scenario = scenario;
+        World = world;
         SequenceIndex = sequenceIndex;
         Action = action;
         Operation = operation;
-        Actor = actor;
-        TargetActor = targetActor;
+        ActorSnapshot = actorSnapshot;
+        TargetActorSnapshot = targetActorSnapshot;
         Input = input;
     }
 
+    /// <summary>Gets the complete materialized world snapshot used for this action.</summary>
+    public ScenarioWorldSnapshot World { get; }
+
     /// <summary>Gets the exact fingerprint-verified scenario document being interpreted.</summary>
-    public ScenarioDefinitionDocument Scenario { get; }
+    public ScenarioDefinitionDocument Scenario => World.Scenario;
 
     /// <summary>Gets the zero-based position in canonical virtual-time and action-identity order.</summary>
     public int SequenceIndex { get; }
@@ -53,10 +57,16 @@ public sealed class ScenarioActionContext
     public ScenarioOperationDefinition Operation { get; }
 
     /// <summary>Gets the actor selected by <see cref="ScenarioActionDefinition.ActorId"/>.</summary>
-    public ScenarioActorDefinition Actor { get; }
+    public ScenarioActorDefinition Actor => ActorSnapshot.Actor;
+
+    /// <summary>Gets the materialized initial-world state of <see cref="Actor"/>.</summary>
+    public ScenarioActorSnapshot ActorSnapshot { get; }
 
     /// <summary>Gets the optional target actor selected by the action.</summary>
-    public ScenarioActorDefinition? TargetActor { get; }
+    public ScenarioActorDefinition? TargetActor => TargetActorSnapshot?.Actor;
+
+    /// <summary>Gets the materialized initial-world state of <see cref="TargetActor"/>, when selected.</summary>
+    public ScenarioActorSnapshot? TargetActorSnapshot { get; }
 
     /// <summary>Gets the action input represented against the operation's exact input contract.</summary>
     public PortableValue Input { get; }
@@ -75,7 +85,7 @@ public interface IScenarioActionInterpreter
     string Identity { get; }
 
     /// <summary>Interprets one action at its declared virtual UTC instant.</summary>
-    /// <param name="context">Canonical action, actor, operation, input, and scenario context.</param>
+    /// <param name="context">Canonical action, materialized actors, operation, input, and scenario context.</param>
     /// <param name="cancellationToken">Token that cancels physical interpretation.</param>
     /// <returns>An outcome carrying the action operation's exact output contract.</returns>
     /// <remarks>
@@ -110,7 +120,7 @@ public sealed class ScenarioExecutionException : InvalidOperationException
 public static class ScenarioRunner
 {
     /// <summary>Executes every scheduled action sequentially and returns one complete canonical trace.</summary>
-    /// <param name="scenario">Exact fingerprint-verified scenario authority.</param>
+    /// <param name="world">Complete materialization of the exact scenario and its initial actors.</param>
     /// <param name="interpreter">Runtime policy that interprets each declared operation.</param>
     /// <param name="cancellationToken">Token that cancels physical interpretation.</param>
     /// <returns>
@@ -123,7 +133,7 @@ public static class ScenarioRunner
     /// does not implicitly control later scheduling.
     /// </remarks>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="scenario"/> or <paramref name="interpreter"/> is <see langword="null"/>.
+    /// <paramref name="world"/> or <paramref name="interpreter"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException"><see cref="IScenarioActionInterpreter.Identity"/> is empty.</exception>
     /// <exception cref="ScenarioExecutionException">
@@ -131,13 +141,14 @@ public static class ScenarioRunner
     /// </exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> is canceled.</exception>
     public static async Task<ScenarioExecutionTraceDocument> ExecuteAsync(
-        ScenarioDefinitionDocument scenario,
+        ScenarioWorldSnapshot world,
         IScenarioActionInterpreter interpreter,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(scenario);
+        ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(interpreter);
         var interpreterIdentity = Guard.RequireNotNullOrWhiteSpace(interpreter.Identity);
+        var scenario = world.Scenario;
         var plan = scenario.Compile();
         var actions = plan.Definition.Actions;
         var outcomes = ImmutableArray.CreateBuilder<ScenarioActionOutcome>(actions.Length);
@@ -147,17 +158,17 @@ public static class ScenarioRunner
             cancellationToken.ThrowIfCancellationRequested();
             var action = actions[index];
             var operation = plan.GetOperation(action.OperationId);
-            var actor = plan.GetActor(action.ActorId);
-            var targetActor = action.TargetActorId is { } targetActorId
-                ? plan.GetActor(targetActorId)
+            var actorSnapshot = world.GetActor(action.ActorId);
+            var targetActorSnapshot = action.TargetActorId is { } targetSnapshotId
+                ? world.GetActor(targetSnapshotId)
                 : null;
             var context = new ScenarioActionContext(
-                scenario,
+                world,
                 index,
                 action,
                 operation,
-                actor,
-                targetActor,
+                actorSnapshot,
+                targetActorSnapshot,
                 ToPortableInput(action.Input, operation.Input));
             var output = await interpreter.ExecuteAsync(context, cancellationToken).ConfigureAwait(false);
             ValidateOutput(output, operation, action, index);

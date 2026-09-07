@@ -51,8 +51,10 @@ public sealed class SimulationAdoptionExamples
                     targetActorId: "load"));
         ScenarioDefinitionDocument retainedScenario = ScenarioDefinitionJsonSerializer.Deserialize(
             ScenarioDefinitionJsonSerializer.Serialize(scenario));
+        ScenarioWorldSnapshot initialScenarioWorld =
+            RelationshipScenarioWorldSnapshot.Materialize(retainedScenario);
         ScenarioExecutionTraceDocument scenarioTrace = await ScenarioRunner.ExecuteAsync(
-            retainedScenario,
+            initialScenarioWorld,
             new FreightScenarioInterpreter());
         ScenarioExecutionTraceDocument retainedTrace = ScenarioExecutionTraceJsonSerializer.Deserialize(
             ScenarioExecutionTraceJsonSerializer.Serialize(scenarioTrace));
@@ -88,6 +90,7 @@ public sealed class SimulationAdoptionExamples
         Assert.Equal(retainedScenario.Fingerprint, retainedTrace.Scenario.Fingerprint);
         Assert.Equal("examples/freight-scenario/v1", retainedTrace.Interpreter);
         Assert.Equal(PortableValueState.Concrete, Assert.Single(retainedTrace.Outcomes).Output.State);
+        Assert.True(initialScenarioWorld.GetActor("load").Observation.TryGetField("CarrierId", out _));
         Assert.NotNull(storedLoad);
         var carrierId = storedLoad.Entity.Observation.Value.Fields!["CarrierId"].String;
         Assert.NotNull(carrierId);
