@@ -120,6 +120,48 @@ each operation owns its connection, transaction, scope and reader. An operation 
 with new parameter values after disposing its previous reader. `ReadCurrentRow` allocates owned canonical results
 and never looks up a provider column by name.
 
+### Typed row reading
+
+When an application needs CLR values, compile a mapping once from the exact result shape retained with the query:
+
+```csharp
+// Startup: resultShape is a GraphShapeId from the query's semantic shape document.
+var mapping = artifact.CreateRowMapping<ResultRow>(resultShape);
+
+// Each operation borrows its own reader executing artifact.Command.
+using var reader = scope.ExecuteReader(
+    artifact.Command, cancellationToken, artifact.BindParameters(parameterValues));
+var rows = mapping.Bind(reader);
+while (reader.Read())
+{
+    var row = rows.ReadCurrent();
+    // Use row.Id, row.Label, etc. No application-maintained ordinal table.
+}
+```
+
+`SqliteRelationQueryRowMapping<T>` verifies selected field identities, types and cardinality against the artifact,
+then compiles the existing core `ObservationMaterializer<T>` against one shared `ObservationLayout`. Compiled
+presence/nullability may be stronger than the declared carrier after predicate refinement; weaker guarantees
+are rejected. The artifact's refined contract remains authoritative while decoding.
+An optional configuration callback supplies the core materializer's explicit member mappings, converters and
+missing-field policy. The mapping is immutable and reusable; `Bind` creates an operation-scoped reader which
+never advances or disposes the underlying provider. Execute the matching artifact: binding checks column count,
+not SQL identity. Compilation and name resolution stay outside the row loop.
+
+Reading validates field presence and exact SQLite scalar encodings through the shared codec. Optional missing
+fields follow the core materializer's configured policy; explicit null stays null. `TryReadCurrent` returns false
+for an absent output binding, whereas `ReadCurrent` rejects it. Typed reads materialize mapped values only and do
+not construct contributor identities; use `ReadCurrentRow` when canonical observations or occurrence provenance
+are required. Custom converters own the lifetime of any custom result objects they return.
+
+Standard scalar `byte[]` mappings use `IOrdinalObservationFieldReader.TryGetBytes`: SQLite transfers its newly
+allocated BLOB buffer directly to the caller. Results remain valid after advancement/disposal, and mutating one
+does not affect another read or a canonical observation. The interface's default implementation copies canonical
+bytes for existing readers; custom converters and custom serializer policies retain the canonical conversion path.
+This avoids an immutable snapshot followed by another mutable copy without weakening canonical byte ownership.
+Typed reading still costs presence/contract validation and CLR construction; it is not identical to unchecked
+provider getters. See the [row-reading measurements](../../../docs/performance/sqlite-typed-rows.md).
+
 Native artifact dispatch is explicit. Registering this capability profile does not install a source reader or cause
 `RelationQueryEvaluator` to execute a native statement automatically.
 

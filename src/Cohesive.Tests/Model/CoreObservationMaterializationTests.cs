@@ -34,6 +34,120 @@ public sealed class CoreObservationMaterializationTests
 
     public sealed record BinaryRecord(byte[] Value);
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(32)]
+    [InlineData(65536)]
+    public void OrdinalByteReadsPreserveOwnershipAndAvoidIntermediateCanonicalSnapshots(int length)
+    {
+        var metadata = BuildMetadata<BinaryRecord>("ordinal-binary-v1");
+        var shape = ShapeFor<BinaryRecord>(metadata);
+        var layout = ObservationLayout.Create(shape);
+        var source = ObservationValue.FromBytes(new byte[length]);
+        var ordinary = new BinaryFieldReader(layout, source);
+        var physical = new OwnedBinaryReader(layout, source);
+        var materializer = ObservationMaterializer.For<BinaryRecord>(shape).Compile(layout);
+        var canonical = materializer.Materialize(ordinary);
+        for (var index = 0; index < 64; index++) materializer.Materialize(physical);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var actual = materializer.Materialize(physical);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(canonical.Value, actual.Value);
+        Assert.InRange(allocated, length, length + 128L);
+        Assert.Equal(0, physical.CanonicalReads);
+        Assert.Equal(0, physical.NameReads);
+        if (length > 0)
+        {
+            actual.Value[0] = 127;
+            Assert.Equal(0, canonical.Value[0]);
+            Assert.Equal(0, materializer.Materialize(physical).Value[0]);
+        }
+    }
+
+    [Fact]
+    public void CustomByteConversionAndSerializerPolicyRetainCanonicalReads()
+    {
+        var metadata = BuildMetadata<BinaryRecord>("custom-ordinal-binary-v1");
+        var shape = ShapeFor<BinaryRecord>(metadata);
+        var layout = ObservationLayout.Create(shape);
+        var physical = new OwnedBinaryReader(layout, ObservationValue.FromBytes(new byte[] { 1, 2 }));
+        var converted = ObservationMaterializer.For<BinaryRecord>(shape)
+            .Map(nameof(BinaryRecord.Value), row => row.Value, value => new byte[] { (byte)(value.GetBytes().Span[0] + 1) })
+            .Compile(layout);
+        Assert.Equal(new byte[] { 2 }, converted.Materialize(physical).Value);
+        var configured = ObservationMaterializer.For<BinaryRecord>(shape)
+            .WithSerializerOptions(new JsonSerializerOptions(JsonSerializerDefaults.Web)).Compile(layout);
+        // Custom serializer policy keeps the existing canonical JSON path, which rejects bytes without an encoding policy.
+        Assert.Throws<InvalidOperationException>(() => configured.Materialize(physical));
+        Assert.Equal(2, physical.CanonicalReads);
+        Assert.Equal(0, physical.BinaryReads);
+    }
+
+    [Fact]
+    public void OrdinalByteReadsHonorMissingPolicyAndExplicitNull()
+    {
+        var metadata = BuildMetadata<NullableBinaryRecord>("nullable-ordinal-binary-v1");
+        var shape = ShapeFor<NullableBinaryRecord>(metadata);
+        var layout = ObservationLayout.Create(shape);
+        var nullable = new OwnedBinaryReader(layout, ObservationValue.Null);
+        var missing = new OwnedBinaryReader(layout, ObservationValue.Undefined);
+        var materializer = ObservationMaterializer.For<NullableBinaryRecord>(shape).Compile(layout);
+        Assert.Null(materializer.Materialize(nullable).Value);
+        Assert.Null(materializer.Materialize(missing).Value);
+        var strict = ObservationMaterializer.For<NullableBinaryRecord>(shape)
+            .WithMissingFieldBehavior(ObservationMissingFieldBehavior.Throw).Compile(layout);
+        Assert.Null(strict.Materialize(nullable).Value);
+        Assert.Throws<InvalidOperationException>(() => strict.Materialize(missing));
+    }
+
+    public sealed record NullableBinaryRecord(byte[]? Value);
+
+    [Fact]
+    public void DefaultOrdinalByteReadRetainsBase64CompatibilityConversion()
+    {
+        var metadata = BuildMetadata<BinaryRecord>("compatible-ordinal-binary-v1");
+        var shape = ShapeFor<BinaryRecord>(metadata);
+        var layout = ObservationLayout.Create(shape);
+        var reader = new BinaryFieldReader(layout, ObservationValue.FromString("AQI="));
+        var ordinal = ObservationMaterializer.For<BinaryRecord>(shape).Compile(layout).Materialize(reader);
+        var canonical = ObservationMaterializer.For<BinaryRecord>(shape).Compile().Materialize(reader);
+        Assert.Equal(new byte[] { 1, 2 }, ordinal.Value);
+        Assert.Equal(canonical.Value, ordinal.Value);
+    }
+
+    class BinaryFieldReader(ObservationLayout layout, ObservationValue value) : IOrdinalObservationFieldReader
+    {
+        protected ObservationValue Value { get; } = value;
+        public int CanonicalReads { get; private set; }
+        public int NameReads { get; private set; }
+        public ObservationLayout Layout { get; } = layout;
+        public QualifiedShapeId ShapeId => Layout.ShapeId;
+        public bool TryGetField(string fieldIdentity, out ObservationValue field)
+        {
+            NameReads++;
+            field = Value;
+            return field.Kind != ObservationValueKind.Undefined;
+        }
+        public bool TryGetField(int ordinal, out ObservationValue field)
+        {
+            CanonicalReads++;
+            field = Value;
+            return ordinal == 0 && field.Kind != ObservationValueKind.Undefined;
+        }
+    }
+
+    sealed class OwnedBinaryReader(ObservationLayout layout, ObservationValue value)
+        : BinaryFieldReader(layout, value), IOrdinalObservationFieldReader
+    {
+        public int BinaryReads { get; private set; }
+        public bool TryGetBytes(int ordinal, out byte[]? value)
+        {
+            BinaryReads++;
+            value = Value.Kind == ObservationValueKind.Bytes ? Value.GetBytes().ToArray() : null;
+            return ordinal == 0 && Value.Kind != ObservationValueKind.Undefined;
+        }
+    }
+
     [Fact]
     public void Materialize_BytesInNestedRecordsAndCollectionsRemainIndependent()
     {

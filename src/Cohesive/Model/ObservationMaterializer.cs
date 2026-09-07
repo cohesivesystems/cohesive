@@ -604,8 +604,24 @@ public sealed class ObservationMaterializerBuilder<T>
                 $"Materializer field '{mapping.FieldIdentity}' is absent from layout '{ordinalLayout}'.");
         }
 
-        var observed = Expression.Variable(typeof(ObservationValue), "observed");
         var fieldIdentity = Expression.Constant(mapping.FieldIdentity);
+        if (targetType == typeof(byte[]) && mapping.Converter is null && useDefaultValueConverters
+            && ordinalLayout.GetFieldDefinition(ordinal) is
+            { Type: ScalarTypeRef { Kind: ScalarTypeKind.Bytes }, Cardinality: FieldCardinality.Single })
+        {
+            var bytes = Expression.Variable(typeof(byte[]), "bytes");
+            return Expression.Block(
+                [bytes],
+                Expression.Condition(
+                    Expression.Call(observation, ObservationMaterializerTypeCache<T>.TryGetBytesByOrdinalMethod,
+                        Expression.Constant(ordinal), bytes),
+                    bytes,
+                    Expression.Call(
+                        ObservationMaterializerTypeCache<T>.ResolveMissingValueMethod.MakeGenericMethod(targetType),
+                        observation, fieldIdentity, Expression.Constant(missingFieldResolution))));
+        }
+
+        var observed = Expression.Variable(typeof(ObservationValue), "observed");
         return Expression.Block(
             [observed],
             Expression.Condition(
@@ -795,6 +811,10 @@ static class ObservationMaterializerTypeCache<T>
             "ConvertObservedValue",
             BindingFlags.Static | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("Observation materializer conversion method was not found.");
+
+    public static MethodInfo TryGetBytesByOrdinalMethod { get; } =
+        typeof(IOrdinalObservationFieldReader).GetMethod(nameof(IOrdinalObservationFieldReader.TryGetBytes))
+        ?? throw new InvalidOperationException("Observation ordinal bytes reader method was not found.");
 
     public static MethodInfo ResolveMissingValueMethod { get; } =
         typeof(ObservationMaterializerBuilder<T>).GetMethod(

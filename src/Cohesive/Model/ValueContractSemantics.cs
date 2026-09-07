@@ -33,21 +33,24 @@ internal static class ValueContractSemantics
         if (value.Kind is ObservationValueKind.Undefined or ObservationValueKind.Null)
             return ValueConstantCompatibility.Incompatible;
 
-        return type.Match(
-            onNamedTypeRef: static _ => ValueConstantCompatibility.Unknown,
-            onOpaqueRuntimeTypeRef: static _ => ValueConstantCompatibility.Unknown,
-            onScalarTypeRef: scalar => FromBoolean(MatchesScalar(scalar.Kind, value)),
-            onEnumTypeRef: @enum => FromBoolean(
+        // Dispatch directly: capturing value in Match callbacks allocates for every field and nested item.
+        return type switch
+        {
+            NamedTypeRef or OpaqueRuntimeTypeRef => ValueConstantCompatibility.Unknown,
+            ScalarTypeRef scalar => FromBoolean(MatchesScalar(scalar.Kind, value)),
+            EnumTypeRef @enum => FromBoolean(
                 value.Kind == ObservationValueKind.String
                 && value.String is { } member
                 && @enum.Members.Contains(member, StringComparer.Ordinal)),
-            onEntityReferenceTypeRef: _ => FromBoolean(
+            EntityReferenceTypeRef => FromBoolean(
                 value.Kind == ObservationValueKind.String
                 && !string.IsNullOrWhiteSpace(value.String)),
-            onArrayTypeRef: array => EvaluateArray(array, value),
-            onObjectTypeRef: objectType => EvaluateObject(objectType, value),
-            onQuantityTypeRef: quantity => FromBoolean(MatchesScalar(quantity.BaseKind, value)),
-            onJsonTypeRef: json => FromBoolean(MatchesJson(json.Kind, value)));
+            ArrayTypeRef array => EvaluateArray(array, value),
+            ObjectTypeRef objectType => EvaluateObject(objectType, value),
+            QuantityTypeRef quantity => FromBoolean(MatchesScalar(quantity.BaseKind, value)),
+            JsonTypeRef json => FromBoolean(MatchesJson(json.Kind, value)),
+            _ => throw new InvalidOperationException("No matching union case callback was provided.")
+        };
     }
 
     static ValueConstantCompatibility EvaluateArray(ArrayTypeRef type, ObservationValue value)

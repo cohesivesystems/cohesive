@@ -22,6 +22,12 @@ static class DefaultObservationValueConverterCache
 
     sealed record ConverterEntry(Delegate? Converter);
 
+    // Mutable CLR output must own its bytes; keep the default JSON compatibility fallback in one place.
+    public static byte[]? ReadBytes(ObservationValue value) =>
+        value.Kind == ObservationValueKind.Bytes
+            ? value.Bytes.ToArray()
+            : value.Deserialize<byte[]>(ObservationMaterializerDefaults.SerializerOptions);
+
     sealed class ConverterBuilder
     {
         static readonly MethodInfo ReadArrayMethod = GetGenericMethod(nameof(ReadArray));
@@ -329,11 +335,7 @@ static class DefaultObservationValueConverterCache
                 ? value.Bool
                 : DeserializeDefault<bool>(value);
 
-        // Mutable CLR output must own its bytes; never expose the immutable observation's backing storage.
-        static byte[]? ReadBytes(ObservationValue value) =>
-            value.Kind == ObservationValueKind.Bytes
-                ? value.Bytes.ToArray()
-                : DeserializeDefault<byte[]>(value);
+        static byte[]? ReadBytes(ObservationValue value) => DefaultObservationValueConverterCache.ReadBytes(value);
 
         static int ReadInt32(ObservationValue value) =>
             value.Kind == ObservationValueKind.Int64

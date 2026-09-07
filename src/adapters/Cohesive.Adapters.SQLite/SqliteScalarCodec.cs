@@ -102,6 +102,21 @@ public static class SqliteScalarCodec
         return decoded;
     }
 
+    // SqliteDataReader.GetValue returns a newly allocated byte array for a BLOB. This read transfers
+    // that buffer directly to the CLR consumer; canonical Decode still snapshots arbitrary caller-owned input.
+    internal static byte[]? ReadOwnedBytes(ValueContract contract, SqliteDataReader reader, int ordinal)
+    {
+        if (contract.Type is not ScalarTypeRef { Kind: ScalarTypeKind.Bytes }
+            || Resolve(contract).Kind != ObservationValueKind.Bytes)
+            throw new NotSupportedException("Direct byte reads require a single-valued scalar bytes contract.");
+        var value = reader.GetValue(ordinal);
+        if (value is byte[] bytes)
+            return bytes;
+        if (value is DBNull && contract.Nullability == FieldNullability.Nullable)
+            return null;
+        throw InvalidStoredValue();
+    }
+
     /// <summary>Creates a fresh parameter with explicit storage type and validated encoded ownership.</summary>
     /// <param name="name">SQLite parameter name beginning with $, @, or :.</param>
     /// <param name="contract">Supported scalar contract.</param>
