@@ -38,10 +38,13 @@ public sealed class SqliteStorageCommitExecutor : IStorageCommitExecutor
         SupportsMultiplePartitions: true, SupportsQueryGuards: true);
 
     /// <inheritdoc />
+    public StorageCommitResult? Validate(StorageCommitIntent intent) => Capabilities.Validate(intent);
+
+    /// <inheritdoc />
     public ValueTask<StorageCommitResult> CommitAsync(OperationContext context, StorageCommitIntent intent)
     {
         ArgumentNullException.ThrowIfNull(context);
-        if (Capabilities.Validate(intent) is { } unsupported) return ValueTask.FromResult(unsupported);
+        if (Validate(intent) is { } unsupported) return ValueTask.FromResult(unsupported);
         using var connection = database.OpenConnection(context.CancellationToken);
         using var transaction = connection.BeginTransaction(deferred: false);
         using var commands = new SqliteCommandScope(database, connection, transaction);

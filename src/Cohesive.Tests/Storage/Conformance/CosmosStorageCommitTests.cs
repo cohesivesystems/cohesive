@@ -21,7 +21,9 @@ public sealed class CosmosStorageCommitTests
             var container = (await database.CreateContainerAsync(new ContainerProperties("items", "/partitionKey"))).Container;
             var executor = await CosmosStorageCommitExecutor.CreateAsync(client, database.Id, container.Id, StorageCommitConformance.Target);
             await StorageCommitConformance.Verify(executor,
-                address => executor.ReadAsync(StorageCommitConformance.Context, address), CountActive, probe);
+                address => executor.ReadAsync(StorageCommitConformance.Context, address), CountActive, probe,
+                unresolvedPrecondition: executor.Capabilities.SupportsQueryGuards
+                    ? StorageCommitDisposition.PreconditionFailed : StorageCommitDisposition.Unknown);
             async Task<int> CountActive()
             {
                 using var iterator = container.GetItemQueryStreamIterator(
@@ -62,7 +64,8 @@ public sealed class CosmosStorageCommitTests
             Assert.Null(await executor.ReadAsync(StorageCommitConformance.Context, tooMany.Writes[0].Address));
             var tooLarge = StorageCommitConformance.Intent("too-large", new StorageCommitWrite(StorageCommitConformance.Address("large"),
                 StorageCommitConformance.Value(new string('x', CosmosStorageCommitExecutor.MaxSerializedDocumentBytes))));
-            Assert.Equal(StorageCommitDisposition.Unsupported, (await executor.CommitAsync(StorageCommitConformance.Context, tooLarge)).Disposition);
+            Assert.Equal("storage.commit.payload-limit", executor.Validate(tooLarge)!.Diagnostics[0].Code);
+            Assert.Equal("storage.commit.payload-limit", (await executor.CommitAsync(StorageCommitConformance.Context, tooLarge)).Diagnostics[0].Code);
             Assert.Null(await executor.ReadAsync(StorageCommitConformance.Context, tooLarge.Writes[0].Address));
             var intent = StorageCommitConformance.Intent("before-restart", new StorageCommitWrite(StorageCommitConformance.Address("restart"), StorageCommitConformance.Value("first")));
             var committed = await executor.CommitAsync(StorageCommitConformance.Context, intent);

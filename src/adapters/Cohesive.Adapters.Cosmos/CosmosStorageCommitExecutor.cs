@@ -24,10 +24,12 @@ public sealed class CosmosStorageCommitExecutor : IStorageCommitExecutor
     const string ReceiptKind = "receipt";
     static readonly JsonSerializerOptions Json = StorageCommitJson.CreateOptions();
     readonly Container container;
+    readonly ConsistencyLevel accountConsistency;
 
-    CosmosStorageCommitExecutor(Container container, StorageCommitCapabilities capabilities)
+    internal CosmosStorageCommitExecutor(Container container, StorageCommitCapabilities capabilities, ConsistencyLevel accountConsistency)
     {
         this.container = container;
+        this.accountConsistency = accountConsistency;
         Capabilities = capabilities;
     }
 
@@ -62,17 +64,27 @@ public sealed class CosmosStorageCommitExecutor : IStorageCommitExecutor
             throw new NotSupportedException("Storage commits require /partitionKey partitioning, disabled TTL and no additional unique keys.");
         return new(container, new(Target: target, SupportsMultiplePartitions: false,
             SupportsQueryGuards: account.Consistency.DefaultConsistencyLevel == ConsistencyLevel.Strong, MaxAtomicItems: 100, MaxSerializedPayloadBytes: MaxSerializedDocumentBytes,
-            MaxPartitionKeyUtf8Bytes: properties.PartitionKeyDefinitionVersion == PartitionKeyDefinitionVersion.V2 ? 2048 : 101));
+            MaxPartitionKeyUtf8Bytes: properties.PartitionKeyDefinitionVersion == PartitionKeyDefinitionVersion.V2 ? 2048 : 101),
+            account.Consistency.DefaultConsistencyLevel);
     }
 
     /// <inheritdoc />
     public StorageCommitCapabilities Capabilities { get; }
 
     /// <inheritdoc />
+    public StorageCommitResult? Validate(StorageCommitIntent intent)
+    {
+        if (Capabilities.ValidateStructure(intent) is { } unsupported) return unsupported;
+        List<MemoryStream> payloads = new(intent.Writes.Length + 1);
+        try { return EncodeAndValidate(intent, payloads); }
+        finally { foreach (var payload in payloads) payload.Dispose(); }
+    }
+
+    /// <inheritdoc />
     public async ValueTask<StorageCommitResult> CommitAsync(OperationContext context, StorageCommitIntent intent)
     {
         ArgumentNullException.ThrowIfNull(context);
-        if (Capabilities.Validate(intent) is { } unsupported) return unsupported;
+        if (Capabilities.ValidateStructure(intent) is { } unsupported) return unsupported;
         var cancellation = context.CancellationToken;
         cancellation.ThrowIfCancellationRequested();
         var receipt = new StorageCommitReceipt(intent.Reference, intent.Result);
@@ -80,17 +92,8 @@ public sealed class CosmosStorageCommitExecutor : IStorageCommitExecutor
         List<MemoryStream> payloads = new(intent.Writes.Length + 1);
         try
         {
-            var totalBytes = 0L;
-            foreach (var write in intent.Writes)
-            {
-                var payload = Encode(write.Address, ItemKind, write.Value, intent.Fingerprint);
-                payloads.Add(payload);
-                totalBytes += payload.Length;
-                if (totalBytes > MaxSerializedDocumentBytes) return PayloadLimit();
-            }
-            var receiptPayload = Encode(intent.ReceiptAddress, ReceiptKind, receipt, intent.Fingerprint);
-            payloads.Add(receiptPayload);
-            if (totalBytes + receiptPayload.Length > MaxSerializedDocumentBytes) return PayloadLimit();
+            if (EncodeAndValidate(intent, payloads) is { } invalidPayload) return invalidPayload;
+            var receiptPayload = payloads[^1];
 
             var replay = await ReconcileAsync(context, intent.Reference).ConfigureAwait(false);
             if (replay.Disposition != StorageCommitDisposition.Unknown) return replay;
@@ -114,23 +117,29 @@ public sealed class CosmosStorageCommitExecutor : IStorageCommitExecutor
             using var response = await batch.ExecuteAsync(cancellation).ConfigureAwait(false);
             if (response.IsSuccessStatusCode)
                 return StorageCommitResult.Success(receipt, StorageCommitDisposition.Committed);
-            if ((response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed)
-                && (response.Count != intent.Writes.Length + 1 || response[intent.Writes.Length].StatusCode == HttpStatusCode.Conflict))
-                // A receipt collision or missing per-item evidence does not establish an item failure. An eventually
-                // consistent receipt miss remains Unknown until its retained content can be compared.
-                return await ReconcileAsync(context, intent.Reference).ConfigureAwait(false);
-            if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed)
-                return await ReconcileOrPrecondition(context, intent.Reference, "/writes").ConfigureAwait(false);
-            if (response.StatusCode == HttpStatusCode.RequestEntityTooLarge) return PayloadLimit();
-            if ((int)response.StatusCode >= 500 || response.StatusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests)
-                return StorageCommitResult.Unknown();
-            throw new CosmosException("Storage commit batch failed.", response.StatusCode, subStatusCode: 0,
-                response.ActivityId, response.RequestCharge);
+            return await ReconcileBatchFailureAsync(context, intent, response).ConfigureAwait(false);
         }
         finally
         {
             foreach (var payload in payloads) payload.Dispose();
         }
+    }
+
+    internal async ValueTask<StorageCommitResult> ReconcileBatchFailureAsync(OperationContext context,
+        StorageCommitIntent intent, TransactionalBatchResponse response)
+    {
+        if ((response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed)
+            && (response.Count != intent.Writes.Length + 1 || response[intent.Writes.Length].StatusCode == HttpStatusCode.Conflict))
+            // A receipt collision or missing per-item evidence does not establish an item failure. An eventually
+            // consistent receipt miss remains Unknown until its retained content can be compared.
+            return await ReconcileAsync(context, intent.Reference).ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed)
+            return await ReconcileOrPrecondition(context, intent.Reference, "/writes").ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.RequestEntityTooLarge) return PayloadLimit();
+        if ((int)response.StatusCode >= 500 || response.StatusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests)
+            return StorageCommitResult.Unknown();
+        throw new CosmosException("Storage commit batch failed.", response.StatusCode, subStatusCode: 0,
+            response.ActivityId, response.RequestCharge);
     }
 
     /// <inheritdoc />
@@ -167,20 +176,39 @@ public sealed class CosmosStorageCommitExecutor : IStorageCommitExecutor
     async ValueTask<StorageCommitResult> ReconcileOrPrecondition(OperationContext context, StorageCommitReference reference, string location)
     {
         var reconciliation = await ReconcileAsync(context, reference).ConfigureAwait(false);
-        return reconciliation.Disposition != StorageCommitDisposition.Unknown ? reconciliation
-            : StorageCommitResult.PreconditionFailed(location);
+        // Weak reads can hide the receipt of a prior successful exact attempt. An item failure cannot
+        // turn that absence into proof that the logical operation failed.
+        return reconciliation.Disposition != StorageCommitDisposition.Unknown || accountConsistency != ConsistencyLevel.Strong
+            ? reconciliation : StorageCommitResult.PreconditionFailed(location);
     }
 
     async Task<ReadDocumentResult?> ReadDocument(StorageCommitAddress address, string kind, CancellationToken cancellation)
     {
         using var response = await container.ReadItemStreamAsync(DocumentId(address, kind), new PartitionKey(address.Partition),
-            requestOptions: Capabilities.SupportsQueryGuards ? new ItemRequestOptions { ConsistencyLevel = ConsistencyLevel.Strong } : null,
+            requestOptions: accountConsistency == ConsistencyLevel.Strong ? new ItemRequestOptions { ConsistencyLevel = ConsistencyLevel.Strong } : null,
             cancellationToken: cancellation).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
         response.EnsureSuccessStatusCode();
         using var document = await JsonDocument.ParseAsync(response.Content, cancellationToken: cancellation).ConfigureAwait(false);
         var root = document.RootElement;
         return new(root.GetProperty("payload").Clone(), root.GetProperty("token").GetString()!, response.Headers.ETag);
+    }
+
+    StorageCommitResult? EncodeAndValidate(StorageCommitIntent intent, List<MemoryStream> payloads)
+    {
+        var totalBytes = 0L;
+        foreach (var write in intent.Writes)
+        {
+            var payload = Encode(write.Address, ItemKind, write.Value, intent.Fingerprint);
+            payloads.Add(payload);
+            totalBytes += payload.Length;
+            if (Capabilities.MaxSerializedPayloadBytes is { } maximum && totalBytes > maximum)
+                return Capabilities.Validate(intent, totalBytes);
+        }
+        var receiptPayload = Encode(intent.ReceiptAddress, ReceiptKind,
+            new StorageCommitReceipt(intent.Reference, intent.Result), intent.Fingerprint);
+        payloads.Add(receiptPayload);
+        return Capabilities.Validate(intent, totalBytes + receiptPayload.Length);
     }
 
     static MemoryStream Encode<T>(StorageCommitAddress address, string kind, T payload, string token) =>

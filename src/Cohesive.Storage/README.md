@@ -95,3 +95,8 @@ See the [decision and native capability boundaries](../../docs/decisions/declara
 Third-party interpreters implement the public executor interface and advertise their capability
 profile. Intent inspection, strict serialization and result factories are public; no friend-assembly
 registration or access to adapter internals is required.
+
+Commit preflight is `executor.Validate(intent)`: it includes adapter-encoded payload limits without
+I/O. `Capabilities.ValidateStructure(intent)` only checks placement and dependencies; full capability
+validation requires serialized byte evidence when a payload budget is declared. Query guard writes
+must carry a non-null token captured before the query; initialize a missing guard separately.

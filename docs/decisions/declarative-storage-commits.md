@@ -57,6 +57,14 @@ higher-level invariant and physical schema boundary.
 `Unsupported` carry structured diagnostics. Receipt absence is `Unknown`, including on SQLite:
 this uniform reconciliation contract does not establish that another attempt cannot still commit.
 A precondition failure describes this attempt; it does not exclude another in-flight exact attempt.
+On Cosmos profiles below Strong, an item conflict, missing item or token mismatch followed by an
+invisible receipt remains `Unknown`: a previous exact attempt may already have committed. This
+conservative rule also applies to Session consistency after restart or across clients. Strong reads
+can establish an item precondition miss after checking the receipt; receipt collisions without
+visible receipt content remain `Unknown` on every profile. Callers must retain the exact intent and
+reconcile again rather than treating uncertainty as permission to recompute. If no receipt was ever
+written, a weak profile may remain inconclusive indefinitely; choose a qualified Strong profile when
+definitive precondition-failure classification is required.
 
 Receipts are retained indefinitely in v1. Deleting/expiring them, writing around the executor or
 changing physical ownership invalidates the protocol. Retention compaction must eventually retain
@@ -83,6 +91,15 @@ This profile intentionally rejects other targets/partitions and does not claim t
 other Cosmos transaction facilities. Requests exceeding its declared item or byte budget are
 rejected before submission, and native batch limits remain a final atomic rejection boundary.
 
+`IStorageCommitExecutor.Validate(intent)` is the complete local preflight, with no database I/O.
+It checks the actual adapter encoding, including native document envelopes and the receipt.
+`Capabilities.ValidateStructure(intent)` checks placement and dependencies only; it deliberately
+makes no payload claim. `Capabilities.Validate(intent, serializedPayloadBytes)` also enforces the
+byte budget, and returns `storage.commit.payload-size-required` if a budget exists but its size
+evidence is missing. Canonical intent JSON size is not native document size. Cosmos execution
+shares preflight's encoder and reuses its buffers for submission, avoiding duplicate serialization
+inside a commit; explicitly calling preflight and then commit will encode twice.
+
 Both realizations own dedicated storage. **They cannot yet enlist existing entity repository
 rows or arbitrary application tables/documents.** This is an executable proof of commit semantics,
 not a drop-in replacement for every repository transaction. Adopting an application store will
@@ -94,7 +111,7 @@ Checking ETags of returned items does not protect a query like “there are no a
 concurrent writer can create a different matching item without changing any previously read ETag.
 A supported guard protocol is:
 
-1. Read a designated guard's token (absence may be the initial version).
+1. Initialize the guard in an ordinary commit if needed, then read its existing token before querying.
 2. Evaluate the query using a fresh committed read boundary that observes at least the guard read.
 3. Construct the result and include a conditional **guard write**, even when its value is unchanged.
 4. Declare the exact query/arguments/read-contract fingerprint and guard address as a query dependency.
@@ -105,14 +122,14 @@ entire attempted decision rolls back. The query itself need not share a long-liv
 with application code. On SQLite, do not query from an old read transaction. On Cosmos, this v1
 qualification uses Strong guard and query reads; eventually consistent queries are not qualified.
 
-The executor can check that a guard participates in the intent and enforce its CAS. It cannot
+The executor requires a participating guard replacement with a non-null `ExpectedToken` and enforces its CAS. It cannot
 infer the predicate, prove its declared fingerprint, or enforce an application-wide all-writers
 protocol from this declaration alone. That requirement is explicit, not evidence supplied by
 an ETag. The next application adoption must centralize writer construction so bypassing guards
 is prevented at its owning boundary. More selective guards, predicate locks, query read-set IR
 and automatic guard inference require separate semantic work.
 
-A query dependency with no participating guard, or without a qualified consistency profile,
+A query dependency with no participating guard replacement, no expected token, or no qualified consistency profile,
 is rejected before I/O. Omitting a dependency does not magically validate an application decision;
 it declares only the item preconditions present in the intent.
 
@@ -134,7 +151,11 @@ rollback including an earlier successful write, competing writers, disjoint rece
 exact replay after later state, lost acknowledgment, target/partition limits and a query guard race.
 Separate tests reopen SQLite connections and Cosmos clients, round-trip strict JSON, preserve
 binary/decimal scalar tags and validate capability limits. SQLite's full adapter suite guards
-against regressions in shared command/schema behavior.
+against regressions in shared command/schema behavior. Deterministic Cosmos SDK transport tests
+hold receipt visibility back after item conflicts and stale/missing item reads, then expose retained
+receipts to verify replay or identity conflict. They also verify requested Strong point reads and
+that native envelopes and receipt payloads participate in local preflight; these tests require no
+running Cosmos service.
 
 The local Cosmos vNext emulator reports Eventual consistency. Native batch/CAS/replay tests run
 there; query-dependent intents must be rejected under that observed profile. Its ordinary guard

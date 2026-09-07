@@ -64,7 +64,11 @@ public sealed class StorageCommitIntentTests
             [new("query/v1", StorageCommitConformance.Address("missing-guard"))]);
         var capable = new StorageCommitCapabilities(null, SupportsMultiplePartitions: true, SupportsQueryGuards: true);
         Assert.Equal(StorageCommitDisposition.Unsupported, capable.Validate(intent)!.Disposition);
-        var guarded = new StorageCommitIntent(intent.ReceiptAddress, [write], write.Value, [new("query/v1", write.Address)]);
+        var missingToken = new StorageCommitIntent(intent.ReceiptAddress, [write], write.Value, [new("query/v1", write.Address)]);
+        Assert.Equal("storage.commit.query-guard", capable.Validate(missingToken)!.Diagnostics[0].Code);
+        Assert.Null(capable.Validate(StorageCommitConformance.Intent("ordinary-create", write)));
+        var guarded = new StorageCommitIntent(intent.ReceiptAddress,
+            [new(write.Address, write.Value, new("observed-before-query"))], write.Value, [new("query/v1", write.Address)]);
         Assert.Null(capable.Validate(guarded));
         Assert.NotNull((capable with { SupportsQueryGuards = false }).Validate(guarded));
         Assert.Equal(StorageCommitDisposition.Unsupported, (capable with { MaxAtomicItems = 1 }).Validate(guarded)!.Disposition);
@@ -72,4 +76,18 @@ public sealed class StorageCommitIntentTests
         Assert.Null((capable with { MaxPartitionKeyUtf8Bytes = 4 }).ValidateAddress(StorageCommitConformance.Address("id", partition: "éé")));
         Assert.NotNull((capable with { MaxPartitionKeyUtf8Bytes = 3 }).ValidateAddress(StorageCommitConformance.Address("id", partition: "éé")));
     }
+    [Fact]
+    public void PayloadBudgetRequiresNativeSizeEvidenceAndIncludesTheBoundary()
+    {
+        var intent = StorageCommitConformance.Intent("sized",
+            new StorageCommitWrite(StorageCommitConformance.Address("item"), StorageCommitConformance.Value("v")));
+        var capabilities = new StorageCommitCapabilities(null, SupportsMultiplePartitions: true,
+            SupportsQueryGuards: true, MaxSerializedPayloadBytes: 100);
+        Assert.Null(capabilities.ValidateStructure(intent));
+        Assert.Equal("storage.commit.payload-size-required", capabilities.Validate(intent)!.Diagnostics[0].Code);
+        Assert.Null(capabilities.Validate(intent, serializedPayloadBytes: 100));
+        Assert.Equal("storage.commit.payload-limit", capabilities.Validate(intent, serializedPayloadBytes: 101)!.Diagnostics[0].Code);
+        Assert.Throws<ArgumentOutOfRangeException>(() => capabilities.Validate(intent, serializedPayloadBytes: -1));
+    }
+
 }

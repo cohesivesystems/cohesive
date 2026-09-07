@@ -118,11 +118,31 @@ public sealed record StorageCommitResult
 public sealed record StorageCommitCapabilities(string? Target, bool SupportsMultiplePartitions,
     bool SupportsQueryGuards, int? MaxAtomicItems = null, long? MaxSerializedPayloadBytes = null, int? MaxPartitionKeyUtf8Bytes = null)
 {
-    /// <summary>Validates placement and dependency support without performing I/O.</summary>
+    /// <summary>Validates every declared limit using adapter-measured serialized document bytes when required.</summary>
     /// <param name="intent">Materialized declaration.</param>
-    /// <returns>A structured rejection or null when the profile supports this declaration.</returns>
+    /// <param name="serializedPayloadBytes">Actual adapter-encoded bytes including the receipt, or null if not measured.</param>
+    /// <returns>A structured rejection, including missing size evidence, or null when all limits are satisfied.</returns>
     /// <exception cref="ArgumentNullException">The intent is null.</exception>
-    public StorageCommitResult? Validate(StorageCommitIntent intent)
+    /// <exception cref="ArgumentOutOfRangeException">The byte count is negative.</exception>
+    /// <remarks>Canonical intent JSON size is not a substitute for native document size. Prefer the executor's
+    /// Validate method, which owns encoding and supplies this evidence without database I/O.</remarks>
+    public StorageCommitResult? Validate(StorageCommitIntent intent, long? serializedPayloadBytes = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(serializedPayloadBytes ?? 0);
+        if (ValidateStructure(intent) is { } unsupported) return unsupported;
+        if (MaxSerializedPayloadBytes is not { } maximum) return null;
+        if (serializedPayloadBytes is null)
+            return Unsupported("payload-size-required", "Adapter-encoded document byte evidence is required. Use the executor's Validate method.", "/writes");
+        return serializedPayloadBytes > maximum
+            ? Unsupported("payload-limit", $"The atomic boundary supports at most {maximum} serialized document bytes including its receipt.", "/writes")
+            : null;
+    }
+
+    /// <summary>Validates placement and dependencies before encoding; does not validate serialized payload size.</summary>
+    /// <param name="intent">Materialized declaration.</param>
+    /// <returns>A structural rejection, or null when structural requirements pass; full validation still requires Validate.</returns>
+    /// <exception cref="ArgumentNullException">The intent is null.</exception>
+    public StorageCommitResult? ValidateStructure(StorageCommitIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
         if (ValidateAddress(intent.ReceiptAddress) is { } invalidReceipt) return invalidReceipt;
@@ -138,8 +158,8 @@ public sealed record StorageCommitCapabilities(string? Target, bool SupportsMult
         foreach (var dependency in intent.QueryDependencies)
         {
             if (!SupportsQueryGuards || dependency.Guard is null
-                || !intent.Writes.Any(write => write.Address == dependency.Guard))
-                return Unsupported("query-guard", "A query dependency requires a participating guard write and a qualified read-consistency profile.", "/queryDependencies");
+                || !intent.Writes.Any(write => write.Address == dependency.Guard && write.ExpectedToken is not null))
+                return Unsupported("query-guard", "A query dependency requires a participating guard replacement with a token captured before querying and a qualified read-consistency profile.", "/queryDependencies");
         }
         return null;
     }
@@ -165,6 +185,12 @@ public interface IStorageCommitExecutor
 {
     /// <summary>Effective guarantees and placement limits used for validation.</summary>
     StorageCommitCapabilities Capabilities { get; }
+
+    /// <summary>Validates placement, dependencies and adapter-encoded payload limits without database I/O.</summary>
+    /// <param name="intent">Materialized declaration to inspect.</param>
+    /// <returns>A structured rejection, or null when local validation passes; concurrent preconditions remain runtime checks.</returns>
+    /// <exception cref="ArgumentNullException">The intent is null.</exception>
+    StorageCommitResult? Validate(StorageCommitIntent intent);
 
     /// <summary>Atomically applies conditional writes and retains an exact operation receipt.</summary>
     /// <param name="context">Cancellation and operation context.</param>

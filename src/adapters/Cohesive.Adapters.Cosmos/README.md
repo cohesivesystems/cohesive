@@ -83,3 +83,8 @@ profile. The local vNext emulator's Eventual profile cannot qualify these reads;
 native batch, ETag and exact receipt behavior. Run those integration checks by setting
 `COSMOS_STORAGE_COMMIT_CONNECTION_STRING` and filtering `CosmosStorageCommitTests`.
 See the [commit decision and deferred adoption work](../../../docs/decisions/declarative-storage-commits.md).
+
+For commit profiles below Strong, an item conflict or token mismatch followed by an invisible receipt
+returns `Unknown`, including Session profiles after restart. Reconcile the exact intent when visibility
+catches up; do not treat this as a definitive precondition failure. `executor.Validate(intent)` measures
+native documents and the receipt before any I/O, using the same encoding and byte budget as execution.

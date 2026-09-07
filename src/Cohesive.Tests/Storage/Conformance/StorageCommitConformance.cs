@@ -21,7 +21,8 @@ public static class StorageCommitConformance
 
     public static async Task Verify(IStorageCommitExecutor executor,
         Func<StorageCommitAddress, ValueTask<StorageCommitItem?>> read,
-        Func<Task<int>> countActive, StorageCommitProbe probe)
+        Func<Task<int>> countActive, StorageCommitProbe probe,
+        StorageCommitDisposition unresolvedPrecondition = StorageCommitDisposition.PreconditionFailed)
     {
         var item = Address("z-state");
         var create = Intent("create", new StorageCommitWrite(item, Value("initial")));
@@ -47,12 +48,12 @@ public static class StorageCommitConformance
                 var prefix = Address("a-prefix");
                 var failed = Intent("failed", new StorageCommitWrite(prefix, Value("must-not-survive")),
                     new(item, Value("wrong"), new EntityConcurrencyToken("stale")));
-                Assert.Equal(StorageCommitDisposition.PreconditionFailed, (await executor.CommitAsync(Context, failed)).Disposition);
+                Assert.Equal(unresolvedPrecondition, (await executor.CommitAsync(Context, failed)).Disposition);
                 Assert.Null(await read(prefix));
                 Assert.Equal(snapshot, await read(item));
                 Assert.Equal(StorageCommitDisposition.Unknown, (await executor.ReconcileAsync(Context, failed.Reference)).Disposition);
                 var duplicateCreate = Intent("duplicate", new StorageCommitWrite(prefix, Value("also-rolled-back")), new(item, Value("wrong")));
-                Assert.Equal(StorageCommitDisposition.PreconditionFailed, (await executor.CommitAsync(Context, duplicateCreate)).Disposition);
+                Assert.Equal(unresolvedPrecondition, (await executor.CommitAsync(Context, duplicateCreate)).Disposition);
                 Assert.Null(await read(prefix));
                 break;
             case StorageCommitProbe.CompetingWriters:
@@ -60,7 +61,7 @@ public static class StorageCommitConformance
                 var b = Intent("writer-b", new StorageCommitWrite(item, Value("b"), snapshot.Token), new(Address("b-only"), Value("b")));
                 var results = await Race(executor, a, b);
                 Assert.Single(results, result => result.Disposition == StorageCommitDisposition.Committed);
-                Assert.Single(results, result => result.Disposition == StorageCommitDisposition.PreconditionFailed);
+                Assert.Single(results, result => result.Disposition == unresolvedPrecondition);
                 var winner = results[0].Disposition == StorageCommitDisposition.Committed ? a : b;
                 Assert.Equal(winner.Fingerprint, (await read(item))!.Token.Value);
                 Assert.NotNull(await read(Address(winner == a ? "a-only" : "b-only")));
@@ -136,7 +137,7 @@ public static class StorageCommitConformance
                 Assert.Equal(StorageCommitDisposition.Unsupported, (await executor.CommitAsync(Context, unprotected)).Disposition);
                 // The actual native guard CAS is also tested when the emulator cannot qualify query consistency.
                 var staleGuard = new StorageCommitIntent(Address("stale-guard"), decision.Writes, decision.Result);
-                Assert.Equal(StorageCommitDisposition.PreconditionFailed, (await executor.CommitAsync(Context, staleGuard)).Disposition);
+                Assert.Equal(unresolvedPrecondition, (await executor.CommitAsync(Context, staleGuard)).Disposition);
                 if (executor.Capabilities.SupportsQueryGuards)
                 {
                     var currentGuard = (await read(guard))!.Token;

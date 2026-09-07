@@ -54,15 +54,15 @@ public sealed record StorageCommitWrite
 
 /// <summary>An attributable query dependency protected by a participating guard write.</summary>
 /// <remarks>
-/// Capture the guard token BEFORE querying. Every writer affecting the predicate must advance this same guard.
+/// Initialize the guard in an ordinary commit if needed, then capture its existing token BEFORE querying. Every writer affecting the predicate must advance this same guard.
 /// The query must observe at least the guard read's committed state. The executor enforces the guard CAS, not
-/// this application-wide writer protocol or query semantics. A missing guard is explicitly unsupported.
+/// this application-wide writer protocol or query semantics. A missing guard or expected token is explicitly unsupported.
 /// </remarks>
 public sealed record StorageCommitQueryDependency
 {
     /// <summary>Declares a query decision and its explicit guard protocol.</summary>
     /// <param name="queryFingerprint">Exact query, arguments and read-contract revision fingerprint.</param>
-    /// <param name="guard">Address of the guard write in this intent; null denotes an unprotected query.</param>
+    /// <param name="guard">Address of a guard replacement with an expected token in this intent; null denotes an unprotected query.</param>
     /// <exception cref="ArgumentException">The fingerprint is empty or invalid Unicode.</exception>
     public StorageCommitQueryDependency(string queryFingerprint, StorageCommitAddress? guard = null)
     {
