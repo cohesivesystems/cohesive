@@ -1,7 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Model;
+using Cohesive.Simulation.ExternalProcess;
 using Cohesive.Simulation.Generation;
+using Cohesive.Simulation.Tests;
 
 namespace Cohesive.Adapters.Mimesis.Tests;
 
@@ -99,7 +101,18 @@ public sealed class MimesisGenerationCatalogTests
         Assert.Equal(
             GenerationCatalogJsonSerializer.Serialize(first),
             GenerationCatalogJsonSerializer.Serialize(second));
-        Assert.Equal("d10ae4c7e09f473ff32fb4b76480e70fe65d5fa27328c5dd9f37113ff434a77b", first.Fingerprint.Value);
+        GenerationCatalogFingerprintAssertions.EqualPinnedWireIdentity(
+            first,
+            static json => json
+                .Replace(
+                    $"\"adapterVersion\":\"{ExternalGenerationCatalogImporter.AdapterVersion}\"",
+                    "\"adapterVersion\":\"<external-process-version>\"",
+                    StringComparison.Ordinal)
+                .Replace(
+                    $"nuget://{MimesisGenerationCatalog.AdapterIdentity}/{MimesisGenerationCatalog.AdapterVersion}",
+                    $"nuget://{MimesisGenerationCatalog.AdapterIdentity}/<mimesis-adapter-version>",
+                    StringComparison.Ordinal),
+            "c0c69f38f38b3e1e495a04eb0e296d14bc40c6576a03d711dc3c3c9d754969bc");
         Assert.Equal(
             [
                 new MimesisPerson("Demarcus Raymond", "any1925@example.com", 58, null),
@@ -107,6 +120,8 @@ public sealed class MimesisGenerationCatalogTests
             ],
             first.Definition.Entries.Select(static entry => entry.Value.Deserialize<MimesisPerson>()));
         Assert.Equal("Mimesis", first.Definition.Provenance.Provider);
+        Assert.Equal(ExternalGenerationCatalogImporter.AdapterIdentity, first.Definition.Provenance.Adapter);
+        Assert.Equal(ExternalGenerationCatalogImporter.AdapterVersion, first.Definition.Provenance.AdapterVersion);
         Assert.Equal("21.0.0", first.Definition.Provenance.ProviderVersion);
         Assert.Equal("Mimesis.Field/local-seed/v1", first.Definition.Provenance.RandomAlgorithm);
         Assert.Equal("42", first.Definition.Provenance.Seed);
