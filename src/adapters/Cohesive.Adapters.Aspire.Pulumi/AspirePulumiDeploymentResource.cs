@@ -190,7 +190,22 @@ public static class AspirePulumiDeploymentBuilderExtensions
                     ? LogLevel.Warning
                     : LogLevel.Information,
                 progress.Message));
-        var result = await resource.Options.Executor.ExecuteAsync(request, context.CancellationToken).ConfigureAwait(false);
+        AspirePulumiDeploymentResult result;
+        try
+        {
+            result = await resource.Options.Executor.ExecuteAsync(request, context.CancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            var failure = new AspirePulumiDeploymentException(request, exception);
+            context.Summary.Add("Cohesive diagnostic", failure.Diagnostic.Code);
+            context.ReportingStep.Log(LogLevel.Error, failure.Message);
+            throw failure;
+        }
         context.Summary.Add("Pulumi stack", resource.Handoff.PulumiStackName);
         context.Summary.Add("Pulumi outcome", result.Outcome);
         await context.ReportingStep.SucceedAsync(

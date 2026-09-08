@@ -1,4 +1,7 @@
 using System.Collections.Immutable;
+using Cohesive.Infra.Realization;
+using Cohesive.Model;
+using Cohesive.Model.Serialization;
 using Pulumi.Automation;
 
 namespace Cohesive.Adapters.Aspire.Pulumi;
@@ -27,6 +30,82 @@ public enum AspirePulumiDeploymentOperation
 
     /// <summary>Destroy resources owned by the Pulumi stack.</summary>
     Destroy = 2
+}
+
+/// <summary>Stable diagnostics emitted by the Aspire-to-Pulumi execution boundary.</summary>
+public static class AspirePulumiDeploymentDiagnosticCodes
+{
+    /// <summary>Pulumi did not return a successful outcome for the requested exact deployment operation.</summary>
+    public const string ExecutionFailed = "infra.aspire.pulumi.execution.failed";
+}
+
+/// <summary>
+/// Typed failure for an exact Pulumi operation whose provider-owned details remain in forwarded Pulumi diagnostics.
+/// </summary>
+public sealed class AspirePulumiDeploymentException : InvalidOperationException
+{
+    const string ExecutionStage = "aspire-pulumi-execution";
+    const string HandoffReferenceScheme = "cohesive-infra-handoff";
+    const string OperationReferenceScheme = "aspire-pulumi-operation";
+
+    internal AspirePulumiDeploymentException(
+        AspirePulumiDeploymentRequest request,
+        Exception innerException)
+        : this(request, CreateDiagnostic(request), innerException)
+    {
+    }
+
+    AspirePulumiDeploymentException(
+        AspirePulumiDeploymentRequest request,
+        DocumentValidationDiagnostic diagnostic,
+        Exception innerException)
+        : base($"{diagnostic.Code}: {diagnostic.Message}", innerException)
+    {
+        Operation = request.Operation;
+        LifecycleAuthority = request.Handoff.LifecycleAuthority;
+        HandoffFingerprint = request.Handoff.Fingerprint;
+        Diagnostic = diagnostic;
+    }
+
+    /// <summary>Exact lifecycle operation that failed.</summary>
+    public AspirePulumiDeploymentOperation Operation { get; }
+
+    /// <summary>Canonical lifecycle authority selected by the exact deployment realization.</summary>
+    public InfrastructureLifecycleAuthorityId LifecycleAuthority { get; }
+
+    /// <summary>Exact handoff fingerprint supplied to Pulumi for the failed operation.</summary>
+    public AspirePulumiDeploymentHandoffFingerprint HandoffFingerprint { get; }
+
+    /// <summary>
+    /// Stable non-secret diagnostic identifying the requested operation, lifecycle authority, and exact handoff.
+    /// </summary>
+    public DocumentValidationDiagnostic Diagnostic { get; }
+
+    static DocumentValidationDiagnostic CreateDiagnostic(AspirePulumiDeploymentRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var operation = request.Operation.ToString().ToLowerInvariant();
+        return new(
+            AspirePulumiDeploymentDiagnosticCodes.ExecutionFailed,
+            DiagnosticSeverity.Error,
+            $"Pulumi {operation} failed for lifecycle authority '{request.Handoff.LifecycleAuthority.Value}'. "
+            + "Inspect the Pulumi diagnostics forwarded by Aspire for the provider-owned cause.",
+            Evidence: new(
+                stage: ExecutionStage,
+                subject: request.Handoff.LifecycleAuthority.Value,
+                sourceReferences:
+                [
+                    SourceReference.Create(HandoffReferenceScheme, request.Handoff.Fingerprint.Value).Value,
+                    SourceReference.Create(OperationReferenceScheme, operation).Value
+                ],
+                resolutionOptions:
+                [
+                    "Inspect the Pulumi diagnostics forwarded through the Aspire pipeline step.",
+                    "Correct the Pulumi program, provider configuration, credentials, or target state before retrying the same operation."
+                ],
+                expected: $"Pulumi {operation} returns a successful outcome.",
+                observed: "The Pulumi executor failed before returning a successful outcome."));
+    }
 }
 
 /// <summary>Stream from which a Pulumi Automation message originated.</summary>
