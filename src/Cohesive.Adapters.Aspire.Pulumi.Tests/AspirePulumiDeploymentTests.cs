@@ -187,7 +187,7 @@ public sealed class AspirePulumiDeploymentTests
     }
 
     [Fact]
-    public async Task Aspire_pipeline_materializes_handoff_and_delegates_apply_and_destroy_to_executor()
+    public async Task Aspire_pipeline_materializes_handoff_delegates_lifecycle_and_normalizes_failures()
     {
         var outputDirectory = Path.Combine(Path.GetTempPath(), $"cohesive-aspire-pulumi-{Guid.NewGuid():N}");
         var executor = new RecordingExecutor();
@@ -272,6 +272,23 @@ public sealed class AspirePulumiDeploymentTests
                 Assert.Equal(FindRepositoryRoot(), request.RepositoryRoot);
             });
             Assert.Contains(reporting.Messages, static message => message.Contains("pulumi-output", StringComparison.Ordinal));
+
+            executor.Failure = new InvalidOperationException("provider-owned failure detail");
+            var failure = await Assert.ThrowsAsync<AspirePulumiDeploymentException>(() => previewStep.Action(stepContext));
+            Assert.Equal(AspirePulumiDeploymentDiagnosticCodes.ExecutionFailed, failure.Diagnostic.Code);
+            Assert.Equal(DiagnosticSeverity.Error, failure.Diagnostic.Severity);
+            Assert.Equal(AspirePulumiDeploymentOperation.Preview, failure.Operation);
+            Assert.Equal(Authority, failure.LifecycleAuthority);
+            Assert.Equal(resource.Resource.Handoff.Fingerprint, failure.HandoffFingerprint);
+            Assert.Equal(Authority.Value, failure.Diagnostic.Evidence?.Subject);
+            Assert.Equal(2, failure.Diagnostic.Evidence?.SourceReferences.Length);
+            Assert.IsType<InvalidOperationException>(failure.InnerException);
+            Assert.DoesNotContain("provider-owned failure detail", failure.Message, StringComparison.Ordinal);
+            Assert.Contains(reporting.Messages, message =>
+                message.Contains(AspirePulumiDeploymentDiagnosticCodes.ExecutionFailed, StringComparison.Ordinal));
+
+            executor.Failure = new OperationCanceledException();
+            await Assert.ThrowsAsync<OperationCanceledException>(() => previewStep.Action(stepContext));
         }
         finally
         {
@@ -375,12 +392,16 @@ public sealed class AspirePulumiDeploymentTests
     {
         internal List<AspirePulumiDeploymentRequest> Requests { get; } = [];
 
+        internal Exception? Failure { get; set; }
+
         public Task<AspirePulumiDeploymentResult> ExecuteAsync(
             AspirePulumiDeploymentRequest request,
             CancellationToken cancellationToken)
         {
             Requests.Add(request);
             request.ReportProgress?.Invoke(new(AspirePulumiOutputStream.StandardOutput, "pulumi-output"));
+            if (Failure is not null)
+                return Task.FromException<AspirePulumiDeploymentResult>(Failure);
             return Task.FromResult(new AspirePulumiDeploymentResult(request.Operation, "Succeeded"));
         }
     }

@@ -66,4 +66,10 @@ Pulumi output is forwarded to Aspire with Pulumi secret display disabled. Stack 
 
 Handoff creation fails before Aspire registers the target when capability witnessing, readiness-obligation lowering, or target deployment diagnostics contain an error. It also rejects exact-fence mismatches and selected-target resources whose lifecycle authority differs from the declared Pulumi stack authority. Existing Cohesive diagnostics remain available on the input `InfrastructureTargetDeploymentPlan` and are retained in successful handoffs.
 
+If Pulumi cannot complete an operation, its native output remains the provider-owned detailed diagnosis. The adapter
+also reports `infra.aspire.pulumi.execution.failed` and throws `AspirePulumiDeploymentException`; its structured,
+non-secret diagnostic attributes the failure to the requested operation, lifecycle authority, and exact handoff.
+The adapter does not parse provider messages into a parallel error model. Cancellation remains cancellation and is
+not reclassified as an execution failure.
+
 The Aspire pipeline APIs used by version 13.5 are still marked for evaluation by Aspire. This package isolates that dependency from `Cohesive.Infra` and `Cohesive.Adapters.Aspire`; future Aspire pipeline changes or a native Pulumi deployment target can therefore be absorbed in this adapter without changing the canonical infrastructure IR.
