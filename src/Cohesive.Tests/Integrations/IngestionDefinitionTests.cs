@@ -153,6 +153,84 @@ public sealed class IngestionDefinitionTests
         Assert.Empty(failed.State.OutstandingRequests);
     }
 
+    [Fact]
+    public void AtomicWireDoesNotAcquireANullLedgerPropertyOrChangeItsKind()
+    {
+        var document = Declaration(Fixture().Requests);
+        Assert.Equal(IngestionDefinitionDocuments.Kind, document.Kind);
+        Assert.False(document.Definition.TryGetProperty("advanceLedger", out _));
+    }
+
+    [Fact]
+    public void LedgerStepCannotBeSmuggledIntoTheAtomicProfile()
+    {
+        var fixture = Fixture(separateLedger: true);
+        var invalid = ExecutionDefinitionDocument.Create(IngestionDefinitionDocuments.Kind, new("flow"), new("v1"),
+            new IngestionDefinition(fixture.Requests[0], fixture.Requests[1], fixture.Requests[3], fixture.Requests[2]), Provenance());
+        var validation = IngestionDefinitionDocuments.TryLower(invalid, fixture.Catalog, out var process);
+        Assert.False(validation.IsValid);
+        Assert.Null(process);
+        Assert.Contains(validation.Diagnostics, x => x.Code == "integrations.ingestion.profile");
+    }
+
+    [Fact]
+    public async Task SeparateLedgerFlowReconcilesLostAcknowledgmentsBeforeSettlement()
+    {
+        var fixture = Fixture(separateLedger: true);
+        var source = Declaration(fixture.Requests);
+        Assert.Equal(IngestionDefinitionDocuments.SeparateLedgerKind, source.Kind);
+        Valid(IngestionDefinitionDocuments.TryDeserialize(ExecutionDefinitionJsonSerializer.Serialize(source), out var reopened, out _));
+        Valid(IngestionDefinitionDocuments.TryLower(reopened!, fixture.Catalog, out var process));
+        Assert.Equal(4, process!.Metadata.SourceMap.Entries.Length);
+        var compiled = ProcessStaticCompiler.Compile(process, new(interactionContracts: fixture.Catalog));
+        Valid(compiled.Validation);
+        var plan = compiled.Plan!;
+        var initial = ProcessReferenceInterpreter.Create(plan, new(new("instance/ledger"), new("attempt/1")), Text("selection"));
+        var acquire = ProcessReferenceInterpreter.Activate(plan, initial, Activate(plan, "start", ProcessActivationCause.Start), RejectingHost.Instance);
+        var publish = Reply(plan, acquire, fixture.Replies[0, 0], "accepted", "prepared-work:operation/1");
+        var publication = Request(publish, fixture.Requests[1]);
+        // A reference sink retains the first result. Lost acknowledgment cannot authorize a new operation.
+        var sink = new Dictionary<string, string>();
+        var ledger = new InMemoryIngestionLedger();
+        sink.Add(publication.Context.IdempotencyKey.Value, "original-sink-receipt/1");
+        Assert.Null(await ledger.ReadAsync(new("flow", "source", "sink", "partition"), CancellationToken.None));
+        var replayPublish = Reply(plan, acquire, fixture.Replies[0, 0], "accepted", "prepared-work:operation/1");
+        Assert.Equal(publication.Context.IdempotencyKey, Request(replayPublish, fixture.Requests[1]).Context.IdempotencyKey);
+        var ledgerRequest = Reply(plan, replayPublish, fixture.Replies[1, 0], "accepted", sink[publication.Context.IdempotencyKey.Value]);
+        Request(ledgerRequest, fixture.Requests[2]);
+        var intent = IngestionLedgerDocuments.Create(new(new("flow", "source", "sink", "partition"), Reference(source), 0,
+            new IngestionDateRangePosition(new(2026, 9, 1), new(2026, 9, 2)),
+            new("operation/1", "prepared-work-fingerprint/1", sink[publication.Context.IdempotencyKey.Value])), Provenance());
+        var advanced = await ledger.AdvanceAsync(intent, CancellationToken.None);
+        Assert.Equal(IngestionLedgerDisposition.Advanced, advanced.Disposition);
+        // The ledger committed, but its reply was lost. Source settlement has not been emitted.
+        Assert.Equal(fixture.Requests[2], Assert.IsType<RequestEnvelope>(Assert.Single(ledgerRequest.Emissions)).Contract);
+        var recovered = await ledger.AdvanceAsync(intent, CancellationToken.None);
+        Assert.Equal(IngestionLedgerDisposition.Replayed, recovered.Disposition);
+        Assert.Equal(advanced.Receipt, recovered.Receipt);
+        var settle = Reply(plan, ledgerRequest, fixture.Replies[2, 0], "accepted", "original-ledger-receipt/1");
+        Request(settle, fixture.Requests[3]);
+        Assert.Equal(ProcessActivationDisposition.Completed, Reply(plan, settle, fixture.Replies[3, 0], "accepted", "settled").Disposition);
+        Assert.Single(sink);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void SeparateLedgerTerminalFailureNeverEmitsALaterStage(int stage)
+    {
+        var fixture = Fixture(separateLedger: true);
+        var plan = Compile(fixture);
+        var initial = ProcessReferenceInterpreter.Create(plan, new(new("instance/failure"), new("attempt/1")), Text("selection"));
+        var decision = ProcessReferenceInterpreter.Activate(plan, initial, Activate(plan, "start", ProcessActivationCause.Start), RejectingHost.Instance);
+        for (var i = 0; i < stage; i++) decision = Reply(plan, decision, fixture.Replies[i, 0], "accepted", "evidence");
+        var failed = Reply(plan, decision, fixture.Replies[stage, 1], "rejected", "conflict");
+        Assert.Equal(ProcessActivationDisposition.Failed, failed.Disposition);
+        Assert.Empty(failed.Emissions);
+    }
+
     static CompiledProcessPlan Compile((InteractionContractCatalog Catalog, RequestContractReference[] Requests, ReplyContractReference[,] Replies) fixture)
     {
         Valid(IngestionDefinitionDocuments.TryLower(Declaration(fixture.Requests), fixture.Catalog, out var process));
@@ -197,15 +275,15 @@ public sealed class IngestionDefinitionTests
 
     static (InteractionContractCatalog Catalog, RequestContractReference[] Requests, ReplyContractReference[,] Replies) Fixture(
         string publishInputRevision = "work/v1", RequestRetrySemantics retry = RequestRetrySemantics.StableIdentity,
-        bool includeFailures = true, bool additionalSuccess = false)
+        bool includeFailures = true, bool additionalSuccess = false, bool separateLedger = false)
     {
-        string[] roles = ["acquire", "publish", "settle"];
-        string[] inputs = ["selection/v1", publishInputRevision, "receipt/v1"];
-        string[] results = ["work/v1", "receipt/v1", "settled/v1"];
+        string[] roles = separateLedger ? ["acquire", "publish", "advanceLedger", "settle"] : ["acquire", "publish", "settle"];
+        string[] inputs = separateLedger ? ["selection/v1", publishInputRevision, "receipt/v1", "ledger-receipt/v1"] : ["selection/v1", publishInputRevision, "receipt/v1"];
+        string[] results = separateLedger ? ["work/v1", "receipt/v1", "ledger-receipt/v1", "settled/v1"] : ["work/v1", "receipt/v1", "settled/v1"];
         string[] outcomes = ["accepted", "rejected"];
         var documents = new List<ExecutionDefinitionDocument>();
-        var requests = new RequestContractReference[3];
-        var replies = new ReplyContractReference[3, 2];
+        var requests = new RequestContractReference[roles.Length];
+        var replies = new ReplyContractReference[roles.Length, 2];
         for (var stage = 0; stage < roles.Length; stage++)
         {
             var terminals = ImmutableArray.CreateBuilder<RequestTerminalOutcomeDefinition>();
@@ -235,7 +313,7 @@ public sealed class IngestionDefinitionTests
 
     static ExecutionDefinitionDocument Declaration(RequestContractReference[] requests) =>
         IngestionDefinitionDocuments.Create(new("ingestion/source-to-destination"), new("v1"),
-            new(requests[0], requests[1], requests[2]), Provenance());
+            new(requests[0], requests[1], requests[^1], AdvanceLedger: requests.Length == 4 ? requests[2] : null), Provenance());
     static ExecutionDefinitionReference Reference(ExecutionDefinitionDocument document) =>
         new(document.Metadata.DefinitionId, document.Metadata.RevisionId, document.Metadata.Fingerprint);
     static InteractionValueSchema Schema(string revision) => new(TextContract, new(revision));
