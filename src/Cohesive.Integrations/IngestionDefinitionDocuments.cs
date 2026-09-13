@@ -16,11 +16,20 @@ public static class IngestionDefinitionDocuments
         new("integration.ingestion.atomic.v1"), "integrations.ingestion.kind",
         "integrations.ingestion.projection", "integrations.ingestion.wire",
         "The definition must use the canonical bounded ingestion wire representation.");
+    static readonly ExecutionDefinitionDocumentProjection<IngestionDefinition> LedgerProjection = new(
+        new("integration.ingestion.separate-ledger.v1"), "integrations.ingestion.kind",
+        "integrations.ingestion.projection", "integrations.ingestion.wire",
+        "The definition must use the canonical separate-ledger ingestion wire representation.");
     static readonly ValueContract CompletionContract = new(new ScalarTypeRef(ScalarTypeKind.Bool));
-    static readonly string[] Steps = ["acquire", "publish", "settle"];
 
     /// <summary>Exact execution-document kind of this bounded ingestion profile.</summary>
     public static ExecutionDefinitionKind Kind => Projection.Kind;
+
+    /// <summary>Exact kind for publication followed by a separate recoverable ledger advancement and settlement.</summary>
+    public static ExecutionDefinitionKind SeparateLedgerKind => LedgerProjection.Kind;
+
+    static ExecutionDefinitionDocumentProjection<IngestionDefinition> For(ExecutionDefinitionDocument? document) =>
+        document?.Kind == SeparateLedgerKind ? LedgerProjection : Projection;
 
     /// <summary>Creates a fingerprinted ingestion declaration using the existing execution document envelope.</summary>
     /// <param name="definitionId">Stable application-binding identity; distinct consumers use distinct identities.</param>
@@ -35,7 +44,7 @@ public static class IngestionDefinitionDocuments
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(provenance);
-        return ExecutionDefinitionDocument.Create(Kind, definitionId, revisionId, definition, provenance);
+        return ExecutionDefinitionDocument.Create(definition.AdvanceLedger is null ? Kind : SeparateLedgerKind, definitionId, revisionId, definition, provenance);
     }
 
     /// <summary>Reads and validates the strict shared envelope and typed declaration without resolving Requests.</summary>
@@ -47,7 +56,8 @@ public static class IngestionDefinitionDocuments
         out IngestionDefinition? definition)
     {
         var validation = ExecutionDefinitionJsonSerializer.TryDeserialize(json, out document);
-        return Projection.ValidateAndProject(validation, document, Validate, out definition);
+        var kind = document?.Kind ?? Kind;
+        return For(document).ValidateAndProject(validation, document, value => Validate(value, kind), out definition);
     }
 
     /// <summary>Lowers the declaration to existing durable Request nodes and explicit outcome routing.</summary>
@@ -62,19 +72,21 @@ public static class IngestionDefinitionDocuments
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(contracts);
         process = null;
-        var validation = Projection.ValidateAndProject(ExecutionDefinitionDocumentValidator.Validate(document),
-            document, Validate, out var definition);
+        var validation = For(document).ValidateAndProject(ExecutionDefinitionDocumentValidator.Validate(document),
+            document, value => Validate(value, document.Kind), out var definition);
         if (!validation.IsValid) return validation;
         if (!document.Extensions.IsDefaultOrEmpty)
             return Error("extension", "This bounded profile cannot interpret semantic extensions.", "/extensions");
 
-        RequestContractReference[] references = [definition!.Acquire, definition.Publish, definition.Settle];
-        var requests = new RequestContractDefinition[Steps.Length];
-        var successes = new RequestResultDefinition[Steps.Length];
-        for (var index = 0; index < Steps.Length; index++)
+        (string Role, RequestContractReference Request)[] steps = definition!.AdvanceLedger is null
+            ? [("acquire", definition.Acquire), ("publish", definition.Publish), ("settle", definition.Settle)]
+            : [("acquire", definition.Acquire), ("publish", definition.Publish), ("advanceLedger", definition.AdvanceLedger), ("settle", definition.Settle)];
+        var requests = new RequestContractDefinition[steps.Length];
+        var successes = new RequestResultDefinition[steps.Length];
+        for (var index = 0; index < steps.Length; index++)
         {
-            var location = "/definition/" + Steps[index];
-            var linked = contracts.ValidateReference(references[index].Definition, location, out var resolved);
+            var location = "/definition/" + steps[index].Role;
+            var linked = contracts.ValidateReference(steps[index].Request.Definition, location, out var resolved);
             if (!linked.IsValid) return linked;
             if (resolved is not RequestContractDefinition request)
                 return Error("request", "The operation must resolve to a Request contract.", location);
@@ -100,30 +112,30 @@ public static class IngestionDefinitionDocuments
 
         var nodes = ImmutableArray.CreateBuilder<ProcessNode>();
         var hasFailureBranch = false;
-        for (var index = 0; index < Steps.Length; index++)
+        for (var index = 0; index < steps.Length; index++)
         {
-            var step = Steps[index];
+            var step = steps[index].Role;
             var branches = ImmutableArray.CreateBuilder<ProcessRequestOutcomeBranch>(requests[index].Response.TerminalOutcomes.Length);
             foreach (var outcome in requests[index].Response.TerminalOutcomes)
             {
                 var accepted = outcome.Id == successes[index].Id;
                 hasFailureBranch |= !accepted;
                 var branch = step + "/" + outcome.Id.Value;
-                var target = accepted ? (index + 1 < Steps.Length ? Steps[index + 1] : "complete") : "failed";
+                var target = accepted ? (index + 1 < steps.Length ? steps[index + 1].Role : "complete") : "failed";
                 var edge = new ProcessEdge(new(branch + "/next"), new(target));
                 var output = new ProcessOutputBinding(new(branch), outcome.Schema.Contract);
                 branches.Add(new(new(branch), outcome.Id, new(edge, output)));
             }
-            var input = index == 0 ? ProcessBindingIds.Input : new ValueBindingId(Steps[index - 1] + "/" + successes[index - 1].Id.Value);
-            nodes.Add(new RequestProcessNode(new(step), references[index], Expr.BoundValue(input), branches.MoveToImmutable()));
+            var input = index == 0 ? ProcessBindingIds.Input : new ValueBindingId(steps[index - 1].Role + "/" + successes[index - 1].Id.Value);
+            nodes.Add(new RequestProcessNode(new(step), steps[index].Request, Expr.BoundValue(input), branches.MoveToImmutable()));
         }
         nodes.Add(new ReturnProcessNode(new("complete"), Expr.Const(true)));
         if (hasFailureBranch)
             nodes.Add(new FailProcessNode(new("failed"), Expr.Const(false)));
-        var graph = new ProcessDefinition(requests[0].Payload.Contract, CompletionContract, new(Steps[0]),
+        var graph = new ProcessDefinition(requests[0].Payload.Contract, CompletionContract, new(steps[0].Role),
             nodes.ToImmutable(), ProcessRecoveryPolicy.ContinueAttempt);
         var source = $"ingestion:{Uri.EscapeDataString(document.Metadata.DefinitionId.Value)}/{Uri.EscapeDataString(document.Metadata.RevisionId.Value)}/{document.Metadata.Fingerprint.Value}";
-        var mappings = ImmutableArray.CreateBuilder<ExecutionSourceProvenance>(Steps.Length);
+        var mappings = ImmutableArray.CreateBuilder<ExecutionSourceProvenance>(steps.Length);
         for (var index = 0; index < graph.Nodes.Length; index++)
         {
             if (graph.Nodes[index] is RequestProcessNode request)
@@ -140,14 +152,16 @@ public static class IngestionDefinitionDocuments
         process = candidate;
         return new([.. graphValidation.Diagnostics,
             new("integrations.ingestion.realization.unqualified", DiagnosticSeverity.Warning,
-                "Typed sequencing is valid, but no physical realization has been qualified. Validate atomic publication, scoped idempotency, retention, source completeness, and settlement before execution.",
+                "Typed sequencing is valid, but no physical realization has been qualified. Validate atomic publication, scoped idempotency, retention, source completeness, and settlement before execution. Separate-ledger bindings additionally require receipt-before-CAS reconciliation and publication-before-progress ordering.",
                 "/definition")]);
     }
 
-    static DocumentValidationResult Validate(IngestionDefinition definition) =>
+    static DocumentValidationResult Validate(IngestionDefinition definition, ExecutionDefinitionKind kind) =>
         definition.Acquire is null || definition.Publish is null || definition.Settle is null
             ? Error("request", "Acquire, Publish, and Settle must all be declared.", "/")
-            : DocumentValidationResult.Valid;
+            : (kind == SeparateLedgerKind) != (definition.AdvanceLedger is not null)
+                ? Error("profile", "The document kind must match the declared ledger protocol.", "/advanceLedger")
+                : DocumentValidationResult.Valid;
 
     static DocumentValidationResult Error(string code, string message, string location) =>
         new([new("integrations.ingestion." + code, DiagnosticSeverity.Error, message, location)]);
