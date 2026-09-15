@@ -129,6 +129,7 @@ tests, and eventually a repository-wide maturity matrix.
 | [Identity-free observation materialization](decisions/identity-free-observation-materialization.md) | Implemented | Qualified-shape plan identity, immutable CLR metadata policy, compiled materialization, and indexed-mapper migration boundary |
 | [Observation identity, snapshot, and occurrence semantics](decisions/observation-identity-snapshot-and-occurrence-semantics.md) | Implemented | Entity snapshot identity/version, relation occurrence identity, lineage ownership, and compatibility migration |
 | [Relations indexed observation physical interpretation](decisions/relations-indexed-observation-physical-interpretation.md) | Implemented | Qualified occurrence composition, validated core projection, indexed materialization, and legacy bridge boundary |
+| [Native OpenTelemetry registration](decisions/native-opentelemetry-registration.md) | Implemented | Optional collection of existing core scopes, native builder composition, and adapter registration boundaries |
 
 ## Package documentation
 
@@ -154,6 +155,7 @@ The principal package entry points are:
 - [Simulation CLI tool](../src/Cohesive.Simulation.Cli/README.md)
 - [Simulation external-process catalogs](../src/Cohesive.Simulation.ExternalProcess/README.md)
 - [Host integration](../src/Cohesive.Host/README.md)
+- [OpenTelemetry registration](../src/Cohesive.OpenTelemetry/README.md)
 - [Frontend packages](../src/frontend/README.md)
 
 Adapters document their target capabilities and operational requirements beside their source under

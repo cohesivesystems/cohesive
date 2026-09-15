@@ -166,6 +166,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Mimesis.T
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Integrations", "src\Cohesive.Integrations\Cohesive.Integrations.csproj", "{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.OpenTelemetry", "src\Cohesive.OpenTelemetry\Cohesive.OpenTelemetry.csproj", "{5CABB2C2-E45D-42CA-AEAA-E8E97A18C478}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.OpenTelemetry.Tests", "src\Cohesive.OpenTelemetry.Tests\Cohesive.OpenTelemetry.Tests.csproj", "{609EF936-A11C-4AA3-8492-44CFC5774A68}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1112,6 +1116,30 @@ Global
 		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Release|x64.Build.0 = Release|Any CPU
 		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Release|x86.ActiveCfg = Release|Any CPU
 		{8A9DBA5E-8FE1-46B5-8106-082013B3EF33}.Release|x86.Build.0 = Release|Any CPU
+		{5CABB2C2-E45D-42CA-AEAA-E8E97A18C478}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5CABB2C2-E45D-42CA-AEAA-E8E97A18C478}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5CABB2C2-E45D-42CA-AEAA-E8E97A18C478}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{5CABB2C2-E45D-42CA-AEAA-E8E97A18C478}.Debug|x64.Build.0 = Debug|Any CPU
+		{5CABB2C2-E45D-42CA-AEAA-E8E97A18C478}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{5CABB2C2-E45D-42CA-AEAA-E8E97A18C478}.Debug|x86.Build.0 = Debug|Any CPU
+		{5CABB2C2-E45D-42CA-AEAA-E8E97A18C478}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5CABB2C2-E45D-42CA-AEAA-E8E97A18C478}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5CABB2C2-E45D-42CA-AEAA-E8E97A18C478}.Release|x64.ActiveCfg = Release|Any CPU
+		{5CABB2C2-E45D-42CA-AEAA-E8E97A18C478}.Release|x64.Build.0 = Release|Any CPU
+		{5CABB2C2-E45D-42CA-AEAA-E8E97A18C478}.Release|x86.ActiveCfg = Release|Any CPU
+		{5CABB2C2-E45D-42CA-AEAA-E8E97A18C478}.Release|x86.Build.0 = Release|Any CPU
+		{609EF936-A11C-4AA3-8492-44CFC5774A68}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{609EF936-A11C-4AA3-8492-44CFC5774A68}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{609EF936-A11C-4AA3-8492-44CFC5774A68}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{609EF936-A11C-4AA3-8492-44CFC5774A68}.Debug|x64.Build.0 = Debug|Any CPU
+		{609EF936-A11C-4AA3-8492-44CFC5774A68}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{609EF936-A11C-4AA3-8492-44CFC5774A68}.Debug|x86.Build.0 = Debug|Any CPU
+		{609EF936-A11C-4AA3-8492-44CFC5774A68}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{609EF936-A11C-4AA3-8492-44CFC5774A68}.Release|Any CPU.Build.0 = Release|Any CPU
+		{609EF936-A11C-4AA3-8492-44CFC5774A68}.Release|x64.ActiveCfg = Release|Any CPU
+		{609EF936-A11C-4AA3-8492-44CFC5774A68}.Release|x64.Build.0 = Release|Any CPU
+		{609EF936-A11C-4AA3-8492-44CFC5774A68}.Release|x86.ActiveCfg = Release|Any CPU
+		{609EF936-A11C-4AA3-8492-44CFC5774A68}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1161,5 +1189,6 @@ Global
 		{626E3856-1128-45ED-B0AF-2FEC027BFF87} = {5751A714-1C63-4459-AE6F-B239AFE570E4}
 		{2AFE3767-044F-4EBA-BE01-A96E6CE175EE} = {5751A714-1C63-4459-AE6F-B239AFE570E4}
 		{0E932FD8-30EA-4750-A6B9-E3756E5E6E92} = {5751A714-1C63-4459-AE6F-B239AFE570E4}
+		{609EF936-A11C-4AA3-8492-44CFC5774A68} = {5751A714-1C63-4459-AE6F-B239AFE570E4}
 	EndGlobalSection
 EndGlobal
