@@ -27,6 +27,7 @@ public sealed class CliApplication(
     readonly Dictionary<Type, List<CliDynamicBindingRegistration>> dynamicBindingPipelines = [];
     Action<IConfigurationBuilder>? configureConfiguration;
     string? environmentVariablePrefix;
+    bool useEnvironmentVariables = true;
 
     /// <summary>
     /// Root command description used for generated help.
@@ -61,6 +62,17 @@ public sealed class CliApplication(
     public CliApplication WithEnvironmentVariablePrefix(string? prefix = null)
     {
         environmentVariablePrefix = prefix;
+        useEnvironmentVariables = true;
+        return this;
+    }
+
+    /// <summary>Disables automatic environment-variable binding for subsequent invocations.</summary>
+    /// <returns>The current application.</returns>
+    /// <remarks>Explicitly registered configuration providers remain active. Calling
+    /// <see cref="WithEnvironmentVariablePrefix"/> re-enables automatic environment binding.</remarks>
+    public CliApplication WithoutEnvironmentVariables()
+    {
+        useEnvironmentVariables = false;
         return this;
     }
 
@@ -288,6 +300,8 @@ public sealed class CliApplication(
     internal void ApplySharedConfiguration(IConfigurationBuilder builder) => configureConfiguration?.Invoke(builder);
 
     internal string? EnvironmentVariablePrefix => environmentVariablePrefix;
+
+    internal bool UseEnvironmentVariables => useEnvironmentVariables;
 
     async Task<int> InvokeCoreAsync(
         IReadOnlyList<string> args,
