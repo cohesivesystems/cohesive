@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Description>Exact Cohesive.Infra Azure Durable Task construction through Pulumi.</Description>
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);BundleDurableTaskSdk</TargetsForTfmSpecificBuildOutput>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <PackageReference Include="Pulumi" Version="3.113.1" />
+    <PackageReference Include="Pulumi.AzureNative" Version="3.16.0" />
+    <ProjectReference Include="../../Cohesive.Infra/Cohesive.Infra.csproj" />
+    <ProjectReference Include="Generated/dotnet/Pulumi.AzureNative_durabletask_v20251101.csproj" PrivateAssets="all" />
+  </ItemGroup>
+  <!-- This generated SDK is bundled, never independently published under Pulumi's package identity. -->
+  <Target Name="BundleDurableTaskSdk" DependsOnTargets="BuildOnlySettings;ResolveReferences">
+    <ItemGroup>
+      <BuildOutputInPackage Include="$(OutputPath)Pulumi.AzureNative_durabletask_v20251101.dll" />
+    </ItemGroup>
+  </Target>
+</Project>

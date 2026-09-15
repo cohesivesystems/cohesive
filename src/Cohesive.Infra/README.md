@@ -235,3 +235,5 @@ assessment requires separately attributable observations from an adapter.
 - [`Cohesive.Adapters.Aspire.Pulumi`](../adapters/Cohesive.Adapters.Aspire.Pulumi/README.md) contributes exact
   handoff, apply, and destroy steps to Aspire's deployment pipeline while delegating provider state and
   reconciliation to an existing Pulumi program.
+- [`Cohesive.Adapters.Pulumi.Azure`](../adapters/Cohesive.Adapters.Pulumi.Azure/README.md) constructs an exact
+  Azure Durable Task facility inside that program and derives canonical worker access-grant inputs.

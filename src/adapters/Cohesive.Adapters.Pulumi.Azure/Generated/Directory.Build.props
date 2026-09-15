@@ -1,0 +1,4 @@
+<Project>
+  <PropertyGroup><EnableCohesiveGlobalUsings>false</EnableCohesiveGlobalUsings></PropertyGroup>
+  <Import Project="../../../../Directory.Build.props" />
+</Project>

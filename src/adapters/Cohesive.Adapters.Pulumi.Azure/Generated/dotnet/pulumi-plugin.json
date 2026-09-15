@@ -1,0 +1,10 @@
+{
+  "resource": true,
+  "name": "azure-native",
+  "version": "3.19.0",
+  "parameterization": {
+    "name": "azure-native_durabletask_v20251101",
+    "version": "3.19.0",
+    "value": "ZXlKdGIyUjFiR1VpT2lKa2RYSmhZbXhsZEdGemF5SXNJblpsY25OcGIyNGlPaUoyTWpBeU5URXhNREVpZlE9PQ=="
+  }
+}

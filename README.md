@@ -23,6 +23,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Processes` | Canonical multistep Process IR, typed authoring, validation, compilation, continuations, and reference interpretation. |
 | [`Cohesive.Integrations`](src/Cohesive.Integrations/README.md) | Experimental bounded ingestion declarations and lowering to Processes; physical realization qualification remains pending. |
 | `Cohesive.Processes.Contracts` | Code-generation roots for canonical Process documents and closed construct inventories. |
+| [`Cohesive.Infra`](src/Cohesive.Infra/README.md) | Portable infrastructure requirements, bindings, exact realizations, and lifecycle ownership. |
 | `Cohesive.Processes.Distribution` | Optional portable worker pools, durable competing-consumer claims, capacity, leases, fencing, and recovery for canonical Process work. |
 | `Cohesive.Presentation` | Backend-declared presentation IR for navigation, views, actions, forms, and flows. |
 | `Cohesive.Api` | Semantic API declarations and endpoint metadata. |
@@ -48,6 +49,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | --- | --- |
 | `Cohesive.Adapters.AspNet` | ASP.NET Core endpoints and request binding for Cohesive APIs, entities, relations, processes, and identity. |
 | `Cohesive.Adapters.AzureAppConfiguration` | Azure App Configuration integration for Cohesive configuration. |
+| [`Cohesive.Adapters.Pulumi.Azure`](src/adapters/Cohesive.Adapters.Pulumi.Azure/README.md) | Exact Infra Durable Task construction, connection outputs, and hub-scoped grant inputs through Pulumi. |
 | `Cohesive.Adapters.AzureML` | Azure Machine Learning model training and dataset registry integration. |
 | `Cohesive.Adapters.AzureStorage` | Azure Blob Storage training artifacts, dataset streams, and target resolution. |
 | [`Cohesive.Adapters.Bogus`](src/adapters/Cohesive.Adapters.Bogus/README.md) | Finite locally seeded Bogus imports into exact portable simulation catalogs. |
