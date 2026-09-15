@@ -39,7 +39,6 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Identity` | Identity context and scope resolution helpers. |
 | `Cohesive.Cli` | Reusable typed command composition, configuration binding, validation, invocation, and testing helpers. |
 | `Cohesive.Host` | Generic-host lifecycle, dependency-injection scope, and runtime binding helpers. |
-| [`Cohesive.OpenTelemetry`](src/Cohesive.OpenTelemetry/README.md) | Optional native OpenTelemetry builder registration for existing core tracing and metric scopes. |
 | `Cohesive.CodeGen.Cli` | Build-facing code generation for shapes, APIs, OpenAPI, GraphQL, and TypeScript artifacts. |
 | `Cohesive.Analyzers` | Roslyn analyzers and source generators for Cohesive authoring patterns. |
 
@@ -62,6 +61,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | [`Cohesive.Adapters.Mimesis`](src/adapters/Cohesive.Adapters.Mimesis/README.md) | Typed finite Mimesis imports through the bounded Python provider process. |
 | `Cohesive.Adapters.ONNX` | ONNX Runtime inference adapters. |
 | `Cohesive.Adapters.OpenApi` | OpenAPI document emission from Cohesive API declarations. |
+| [`Cohesive.Adapters.OpenTelemetry`](src/adapters/Cohesive.Adapters.OpenTelemetry/README.md) | Optional native OpenTelemetry builder registration for existing Cohesive tracing and metric scopes. |
 | `Cohesive.Adapters.Parquet` | Parquet row and column writing helpers. |
 | `Cohesive.Adapters.Postgres` | PostgreSQL relation/query and materialization integrations plus a durable Process distribution ledger. |
 | [`Cohesive.Adapters.SQLite`](src/adapters/Cohesive.Adapters.SQLite/README.md) | SQLite entity repositories with optimistic concurrency and atomic batches, exact scalar encodings, and module migrations. |

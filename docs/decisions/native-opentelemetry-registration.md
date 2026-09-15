@@ -3,7 +3,7 @@ kind: decision
 status: implemented
 authority: cohesive.opentelemetry.registration
 owners: [cohesive-core]
-applies_to: [cohesive-opentelemetry, cohesive-execution, cohesive-relations, cohesive-processes-distribution]
+applies_to: [cohesive-adapters-opentelemetry, cohesive-execution, cohesive-relations, cohesive-processes-distribution]
 last_verified: 2026-09-15
 supersedes: []
 ---
@@ -24,9 +24,10 @@ storage adapter merely because the package can emit native diagnostics.
 
 ## Decision
 
-Provide a small optional `Cohesive.OpenTelemetry` package with extension methods on the native
+Provide a small optional `Cohesive.Adapters.OpenTelemetry` package with extension methods on the native
 `TracerProviderBuilder` and `MeterProviderBuilder` types. It registers the source and meter constants owned by the
-core execution, Relations, and Process-distribution blocks.
+core execution, Relations, and Process-distribution blocks. The package is an adapter because it interprets native
+.NET diagnostic emitters through an external collection API; the emitting core packages remain provider-neutral.
 
 The package provides both an aggregate `AddCohesiveInstrumentation` helper and block-specific helpers. The aggregate
 is an exact composition of the block helpers rather than a second catalog of names. It depends only on the lightweight

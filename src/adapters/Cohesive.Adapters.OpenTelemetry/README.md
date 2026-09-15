@@ -1,13 +1,14 @@
-# Cohesive.OpenTelemetry
+# Cohesive.Adapters.OpenTelemetry
 
-`Cohesive.OpenTelemetry` registers Cohesive's existing `ActivitySource` and `Meter` scopes directly with native
-OpenTelemetry builders. It does not define another telemetry model and it does not select exporters, collectors,
-sampling, resources, propagation, processors, logging, or hosting.
+`Cohesive.Adapters.OpenTelemetry` interprets Cohesive's existing `ActivitySource` and `Meter` scopes through native
+OpenTelemetry builders. Core packages continue to emit standard .NET diagnostics without depending on OpenTelemetry.
+This adapter does not define another telemetry model and it does not select exporters, collectors, sampling,
+resources, propagation, processors, logging, or hosting.
 
 ## Install
 
 ```bash
-dotnet add package Cohesive.OpenTelemetry
+dotnet add package Cohesive.Adapters.OpenTelemetry
 ```
 
 ## Register core instrumentation
@@ -56,8 +57,8 @@ same interval.
 
 ## Adapter and provider scopes
 
-Core registration intentionally does not reference adapter assemblies. A host registers only the adapters it selected,
-using the constants owned by those packages:
+The core-scope aggregate intentionally does not reference other adapter assemblies. A host registers only the adapters
+it selected, using the constants owned by those packages:
 
 ```csharp
 services.AddOpenTelemetry()

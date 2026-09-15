@@ -7,7 +7,7 @@ using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 
-namespace Cohesive.OpenTelemetry.Tests;
+namespace Cohesive.Adapters.OpenTelemetry.Tests;
 
 public sealed class CohesiveOpenTelemetryRegistrationTests
 {

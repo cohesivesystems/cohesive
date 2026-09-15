@@ -155,7 +155,7 @@ The principal package entry points are:
 - [Simulation CLI tool](../src/Cohesive.Simulation.Cli/README.md)
 - [Simulation external-process catalogs](../src/Cohesive.Simulation.ExternalProcess/README.md)
 - [Host integration](../src/Cohesive.Host/README.md)
-- [OpenTelemetry registration](../src/Cohesive.OpenTelemetry/README.md)
+- [OpenTelemetry adapter](../src/adapters/Cohesive.Adapters.OpenTelemetry/README.md)
 - [Frontend packages](../src/frontend/README.md)
 
 Adapters document their target capabilities and operational requirements beside their source under
