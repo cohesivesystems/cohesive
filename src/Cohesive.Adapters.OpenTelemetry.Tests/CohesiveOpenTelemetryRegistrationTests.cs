@@ -12,18 +12,15 @@ namespace Cohesive.Adapters.OpenTelemetry.Tests;
 public sealed class CohesiveOpenTelemetryRegistrationTests
 {
     [Fact]
-    public void AggregateTraceRegistrationCollectsEveryCoreScope()
+    public void AggregateTraceRegistrationMatchesBlockCompositionAndCollectsEveryCoreScope()
     {
-        var exporter = new CollectingActivityExporter();
-        using TracerProvider provider = Sdk.CreateTracerProviderBuilder()
-            .AddCohesiveInstrumentation()
-            .AddProcessor(new SimpleActivityExportProcessor(exporter))
-            .Build();
-
-        EmitActivity(ExecutionTelemetry.ActivitySourceName);
-        EmitActivity(RelationQueryTelemetry.ActivitySourceName);
-        EmitActivity(ProcessDistributionTelemetry.ActivitySourceName);
-        Assert.True(provider.ForceFlush(10_000));
+        string[] aggregate = CollectActivitySourceNames(
+            builder => builder.AddCohesiveCoreInstrumentation());
+        string[] composed = CollectActivitySourceNames(
+            builder => builder
+                .AddCohesiveExecutionInstrumentation()
+                .AddCohesiveRelationsInstrumentation()
+                .AddCohesiveProcessDistributionInstrumentation());
 
         Assert.Equal(
             [
@@ -31,7 +28,8 @@ public sealed class CohesiveOpenTelemetryRegistrationTests
                 ProcessDistributionTelemetry.ActivitySourceName,
                 RelationQueryTelemetry.ActivitySourceName
             ],
-            exporter.SourceNames.Order(StringComparer.Ordinal));
+            aggregate);
+        Assert.Equal(composed, aggregate);
     }
 
     [Fact]
@@ -52,22 +50,20 @@ public sealed class CohesiveOpenTelemetryRegistrationTests
     }
 
     [Fact]
-    public void AggregateMetricRegistrationCollectsEveryCoreScope()
+    public void AggregateMetricRegistrationMatchesBlockCompositionAndCollectsEveryCoreScope()
     {
-        var exporter = new CollectingMetricExporter();
-        using MeterProvider provider = Sdk.CreateMeterProviderBuilder()
-            .AddCohesiveInstrumentation()
-            .AddReader(new PeriodicExportingMetricReader(exporter, exportIntervalMilliseconds: 60_000))
-            .Build();
-
-        EmitMetric(ExecutionTelemetry.MeterName, "test.execution");
-        EmitMetric(RelationQueryTelemetry.MeterName, "test.relations");
-        EmitMetric(ProcessDistributionTelemetry.MeterName, "test.distribution");
-        Assert.True(provider.ForceFlush(10_000));
+        string[] aggregate = CollectInstrumentNames(
+            builder => builder.AddCohesiveCoreInstrumentation());
+        string[] composed = CollectInstrumentNames(
+            builder => builder
+                .AddCohesiveExecutionInstrumentation()
+                .AddCohesiveRelationsInstrumentation()
+                .AddCohesiveProcessDistributionInstrumentation());
 
         Assert.Equal(
-            ["test.distribution", "test.execution", "test.relations"],
-            exporter.InstrumentNames.Order(StringComparer.Ordinal));
+            ["test.core.0", "test.core.1", "test.core.2"],
+            aggregate);
+        Assert.Equal(composed, aggregate);
     }
 
     [Fact]
@@ -104,6 +100,41 @@ public sealed class CohesiveOpenTelemetryRegistrationTests
     {
         using Meter meter = new(meterName);
         meter.CreateCounter<long>(instrumentName).Add(1);
+    }
+
+    static string[] CollectActivitySourceNames(
+        Func<TracerProviderBuilder, TracerProviderBuilder> configure)
+    {
+        var exporter = new CollectingActivityExporter();
+        using TracerProvider provider = configure(Sdk.CreateTracerProviderBuilder())
+            .AddProcessor(new SimpleActivityExportProcessor(exporter))
+            .Build();
+
+        foreach (CohesiveInstrumentationScope scope in CohesiveInstrumentationScopes.Core)
+            EmitActivity(scope.ActivitySourceName);
+
+        Assert.True(provider.ForceFlush(10_000));
+
+        return exporter.SourceNames.Order(StringComparer.Ordinal).ToArray();
+    }
+
+    static string[] CollectInstrumentNames(
+        Func<MeterProviderBuilder, MeterProviderBuilder> configure)
+    {
+        var exporter = new CollectingMetricExporter();
+        using MeterProvider provider = configure(Sdk.CreateMeterProviderBuilder())
+            .AddReader(new PeriodicExportingMetricReader(exporter, exportIntervalMilliseconds: 60_000))
+            .Build();
+
+        for (var index = 0; index < CohesiveInstrumentationScopes.Core.Count; index++)
+        {
+            CohesiveInstrumentationScope scope = CohesiveInstrumentationScopes.Core[index];
+            EmitMetric(scope.MeterName, $"test.core.{index}");
+        }
+
+        Assert.True(provider.ForceFlush(10_000));
+
+        return exporter.InstrumentNames.Order(StringComparer.Ordinal).ToArray();
     }
 
     sealed class CollectingActivityExporter : BaseExporter<Activity>

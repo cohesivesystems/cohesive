@@ -29,15 +29,21 @@ Provide a small optional `Cohesive.Adapters.OpenTelemetry` package with extensio
 core execution, Relations, and Process-distribution blocks. The package is an adapter because it interprets native
 .NET diagnostic emitters through an external collection API; the emitting core packages remain provider-neutral.
 
-The package provides both an aggregate `AddCohesiveInstrumentation` helper and block-specific helpers. The aggregate
-is an exact composition of the block helpers rather than a second catalog of names. It depends only on the lightweight
-OpenTelemetry provider-builder API and the core packages whose constants it consumes. It does not select or wrap
-exporters, collectors, sampling, resources, propagation, processors, logging, or hosting.
+The package provides both an aggregate `AddCohesiveCoreInstrumentation` helper and block-specific helpers. `Core` is
+explicit because the aggregate does not imply coverage of adapter or provider scopes. Trace and metric registration
+project one internal paired core-scope membership list whose values reference the instrumentation owners' public
+constants; no source or meter name is copied. Conformance tests require the aggregate to remain behaviorally
+equivalent to the block helpers composed together.
+
+The package depends only on the lightweight OpenTelemetry provider-builder API and the core packages whose constants
+it consumes. It does not select or wrap exporters, collectors, sampling, resources, propagation, processors, logging,
+or hosting.
 
 Adapter and provider scopes remain explicit host selections. Hosts register those scopes from constants exposed by
 the selected adapter packages and configure provider-native instrumentation independently. Consequently, selecting
 core Cohesive collection does not pull Cosmos, PostgreSQL, Elasticsearch, or another adapter into the dependency
-graph.
+graph. Central typed helpers for those scopes are intentionally omitted: they would either pull every adapter into
+this package or make OpenTelemetry a dependency of each adapter for all consumers.
 
 Activity parentage remains native. Cohesive activities start beneath `Activity.Current`, so ASP.NET request
 activities are their parents and provider-client operations started during logical work are their children. The
@@ -75,7 +81,9 @@ changing the collection contract.
 
 - Hosts can collect every core Cohesive scope with one native builder call or select only the blocks they use.
 - Existing instrumentation packages remain the authorities for emitted names and semantics.
+- Trace and metric aggregate membership is paired in one place and tested against explicit block composition.
 - Export, sampling, resources, sensitive-data policy, and Application Insights configuration remain host-owned.
-- Adapter scopes require explicit registration, preventing hidden infrastructure dependencies.
+- Other adapter scopes require explicit native registration from their package constants, preventing hidden
+  infrastructure dependencies while retaining compile-time names.
 - Package-consumer compatibility is constrained by the OpenTelemetry provider-builder API version. Applications with
   older OpenTelemetry dependency sets must validate package resolution when adopting this integration.

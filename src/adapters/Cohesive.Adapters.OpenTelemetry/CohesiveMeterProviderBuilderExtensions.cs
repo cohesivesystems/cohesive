@@ -1,8 +1,6 @@
-using Cohesive.Execution;
-using Cohesive.Processes.Distribution;
-using Cohesive.Relations.Observability;
+using OpenTelemetry.Metrics;
 
-namespace OpenTelemetry.Metrics;
+namespace Cohesive.Adapters.OpenTelemetry;
 
 /// <summary>Registers Cohesive meters with the native OpenTelemetry metric pipeline.</summary>
 public static class CohesiveMeterProviderBuilderExtensions
@@ -12,16 +10,16 @@ public static class CohesiveMeterProviderBuilderExtensions
     /// <returns><paramref name="builder"/> for fluent composition.</returns>
     /// <remarks>
     /// This method registers only core scopes. Adapter-owned and provider-owned meters remain explicit opt-ins in
-    /// the host so selecting core instrumentation never introduces an adapter dependency.
+    /// the host so selecting core instrumentation never introduces another adapter dependency.
     /// </remarks>
-    public static MeterProviderBuilder AddCohesiveInstrumentation(this MeterProviderBuilder builder)
+    public static MeterProviderBuilder AddCohesiveCoreInstrumentation(this MeterProviderBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        return builder
-            .AddCohesiveExecutionInstrumentation()
-            .AddCohesiveRelationsInstrumentation()
-            .AddCohesiveProcessDistributionInstrumentation();
+        foreach (CohesiveInstrumentationScope scope in CohesiveInstrumentationScopes.Core)
+            builder.AddCohesiveInstrumentationScope(scope);
+
+        return builder;
     }
 
     /// <summary>Registers the core execution meter.</summary>
@@ -30,7 +28,7 @@ public static class CohesiveMeterProviderBuilderExtensions
     public static MeterProviderBuilder AddCohesiveExecutionInstrumentation(this MeterProviderBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        return builder.AddMeter(ExecutionTelemetry.MeterName);
+        return builder.AddCohesiveInstrumentationScope(CohesiveInstrumentationScopes.Execution);
     }
 
     /// <summary>Registers the canonical Relations meter.</summary>
@@ -39,7 +37,7 @@ public static class CohesiveMeterProviderBuilderExtensions
     public static MeterProviderBuilder AddCohesiveRelationsInstrumentation(this MeterProviderBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        return builder.AddMeter(RelationQueryTelemetry.MeterName);
+        return builder.AddCohesiveInstrumentationScope(CohesiveInstrumentationScopes.Relations);
     }
 
     /// <summary>Registers the portable Process distribution meter.</summary>
@@ -49,6 +47,11 @@ public static class CohesiveMeterProviderBuilderExtensions
         this MeterProviderBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        return builder.AddMeter(ProcessDistributionTelemetry.MeterName);
+        return builder.AddCohesiveInstrumentationScope(CohesiveInstrumentationScopes.ProcessDistribution);
     }
+
+    static MeterProviderBuilder AddCohesiveInstrumentationScope(
+        this MeterProviderBuilder builder,
+        CohesiveInstrumentationScope scope) =>
+        builder.AddMeter(scope.MeterName);
 }

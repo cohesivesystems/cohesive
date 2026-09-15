@@ -16,15 +16,19 @@ dotnet add package Cohesive.Adapters.OpenTelemetry
 Register all core scopes in an existing host pipeline:
 
 ```csharp
+using Cohesive.Adapters.OpenTelemetry;
+
 services.AddOpenTelemetry()
     .WithTracing(tracing => tracing
-        .AddCohesiveInstrumentation())
+        .AddCohesiveCoreInstrumentation())
     .WithMetrics(metrics => metrics
-        .AddCohesiveInstrumentation());
+        .AddCohesiveCoreInstrumentation());
 ```
 
-The aggregate helpers are exact compositions of block helpers. Register a smaller surface when the host does not use
-every core block:
+`Core` is explicit in the aggregate name because other adapter and provider scopes remain host selections. Trace and
+metric registration project the same internal paired core-scope membership, and conformance tests require the
+aggregate to remain behaviorally equivalent to the block helpers composed together. Register a smaller surface when
+the host does not use every core block:
 
 ```csharp
 services.AddOpenTelemetry()
@@ -42,7 +46,8 @@ The extension methods operate on `TracerProviderBuilder` and `MeterProviderBuild
 ## Scope authority and parentage
 
 The instrumentation owner remains the source of truth for every name, activity, instrument, unit, status, and tag.
-This package calls those public constants directly and contains no copied scope catalog.
+This package copies no scope names. Its internal collection-membership list pairs the public activity-source and meter
+constants owned by each block so trace and metric registration cannot drift independently.
 
 | Owner | Activity source | Meter | Responsibility |
 | --- | --- | --- | --- |
@@ -55,7 +60,7 @@ the parent of logical Cohesive work. Provider SDK or HTTP activities started whi
 its children. Do not add a second wrapper activity around an already-instrumented provider call merely to measure the
 same interval.
 
-## Adapter and provider scopes
+## Other adapter and provider scopes
 
 The core-scope aggregate intentionally does not reference other adapter assemblies. A host registers only the adapters
 it selected, using the constants owned by those packages:
@@ -63,13 +68,18 @@ it selected, using the constants owned by those packages:
 ```csharp
 services.AddOpenTelemetry()
     .WithTracing(tracing => tracing
-        .AddCohesiveInstrumentation()
+        .AddCohesiveCoreInstrumentation()
         .AddSource(CosmosRelationQueryTelemetry.InstrumentationName)
         .AddSource(CosmosClientFactory.OperationActivitySourceName))
     .WithMetrics(metrics => metrics
-        .AddCohesiveInstrumentation()
+        .AddCohesiveCoreInstrumentation()
         .AddMeter(CosmosRelationQueryTelemetry.InstrumentationName));
 ```
+
+The adapter deliberately does not offer typed helpers for these external scopes. Doing so here would pull every
+supported infrastructure adapter into one package; doing so in each adapter would make OpenTelemetry mandatory for
+all of that adapter's consumers. Hosts therefore use the selected package's compile-time constants with native
+`AddSource` and `AddMeter` calls.
 
 Current adapter scopes are:
 
