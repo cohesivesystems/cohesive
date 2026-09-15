@@ -33,6 +33,8 @@ public sealed record AzureDurableTaskPolicy
     public required string TaskHubName { get; init; }
     /// <summary>Explicit IPv4 addresses or CIDR network rules. A default array is rejected.</summary>
     public required ImmutableArray<string> IpAllowlist { get; init; }
+    /// <summary>Existing scheduler tags; empty explicitly declares no tags. Keys and values are non-secret policy.</summary>
+    public ImmutableSortedDictionary<string, string> Tags { get; init; } = ImmutableSortedDictionary<string, string>.Empty;
     /// <summary>Non-empty references attributing scope, naming, and network policy.</summary>
     public required ImmutableArray<SourceReference> SourceReferences { get; init; }
 }

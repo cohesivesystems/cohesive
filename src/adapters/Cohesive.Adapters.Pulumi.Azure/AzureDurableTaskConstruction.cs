@@ -66,6 +66,11 @@ public static class AzureDurableTaskConstruction
             Error("logical-name", "Supply explicit Pulumi provider, scheduler, and task-hub logical names; preserve existing names during migration.");
         if (policy.IpAllowlist.IsDefault || policy.IpAllowlist.Any(rule => !ValidNetwork(rule)))
             Error("network", "Supply an explicit IPv4 address/CIDR allowlist (empty denies public access); IPv6 and private networking are unsupported by this slice.");
+        if (policy.Tags is null || policy.Tags.Count > 50 || policy.Tags.Any(t =>
+            string.IsNullOrWhiteSpace(t.Key) || t.Key.Length > 512 || t.Value is null || t.Value.Length > 256 ||
+            t.Key.IndexOfAny(['<', '>', '%', '&', '\\', '?', '/']) >= 0) ||
+            policy.Tags.Keys.Distinct(StringComparer.OrdinalIgnoreCase).Count() != policy.Tags.Count)
+            Error("tags", "Supply at most 50 non-secret Azure tags with unique case-insensitive keys (1–512 characters) and values of at most 256 characters.");
 
         var resource = deployment.Manifest.Resources.SingleOrDefault(r => r.Resource == policy.Resource);
         if (resource is null || resource.Facility.Value != Facility)
@@ -105,12 +110,13 @@ public static class AzureDurableTaskConstruction
     /// <param name="policy">Explicit provider policy and existing logical names.</param>
     /// <param name="subscriptionId">Hosting program's subscription, checked against policy before registration.</param>
     /// <param name="parent">Existing resource parent, or null for existing root resources. No implicit parent is added.</param>
+    /// <param name="resourceGroupDependency">Resource group created by this program, or null when the group already exists. Preserves creation/deletion ordering without duplicating ownership.</param>
     /// <param name="cancellationToken">Checked before any registration. Pulumi owns cancellation once registration starts.</param>
     /// <returns>Resources, noncredential connection outputs, and canonical access-grant construction.</returns>
     /// <exception cref="AzureDurableTaskValidationException">Validation failed; nothing was registered.</exception>
     /// <exception cref="OperationCanceledException">Cancellation was requested before construction.</exception>
     public static AzureDurableTaskResources Register(InfrastructureTargetDeploymentPlan deployment,
-        AzureDurableTaskPolicy policy, Guid subscriptionId, Resource? parent = null,
+        AzureDurableTaskPolicy policy, Guid subscriptionId, Resource? parent = null, Resource? resourceGroupDependency = null,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -126,12 +132,14 @@ public static class AzureDurableTaskConstruction
             ResourceGroupName = policy.ResourceGroupName,
             Location = policy.Location,
             SchedulerName = physical.Groups[1].Value,
+            Tags = policy.Tags.ToDictionary(t => t.Key, t => t.Value),
             Properties = new SchedulerPropertiesArgs
             {
                 Sku = new SchedulerSkuArgs { Name = "Consumption" },
                 IpAllowlist = policy.IpAllowlist.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray()
             }
-        }, new() { Provider = provider, Parent = parent });
+        }, new() { Provider = provider, Parent = parent,
+            DependsOn = resourceGroupDependency is null ? [] : [resourceGroupDependency] });
         var hub = new TaskHub(policy.TaskHubName, new()
         {
             ResourceGroupName = policy.ResourceGroupName,

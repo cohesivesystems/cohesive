@@ -29,7 +29,8 @@ public sealed class AzureDurableTaskTests
         Resource = Scheduler, WorkerContract = Contract, LifecycleAuthority = Authority,
         SubscriptionId = Subscription, ResourceGroupName = "test-rg", Location = "westus",
         ProviderName = "existing-durable-provider", SchedulerName = "existing-scheduler", TaskHubName = "existing-hub",
-        IpAllowlist = ["192.0.2.0/24"], SourceReferences = [Source]
+        IpAllowlist = ["192.0.2.0/24"], SourceReferences = [Source],
+        Tags = ImmutableSortedDictionary<string, string>.Empty.Add("environment", "test")
     };
 
     [Fact]
@@ -60,6 +61,7 @@ public sealed class AzureDurableTaskTests
         var scheduler = Assert.Single(mocks.Resources, r => r.Name == "existing-scheduler");
         Assert.Equal("azure-native_durabletask_v20251101:durabletask:Scheduler", scheduler.Type);
         Assert.Equal("test-scheduler", scheduler.Inputs["schedulerName"]);
+        Assert.Equal("test", Assert.IsAssignableFrom<ImmutableDictionary<string, object>>(scheduler.Inputs["tags"])["environment"]);
         Assert.Contains("existing-durable-provider", scheduler.Provider);
         var hub = Assert.Single(mocks.Resources, r => r.Name == "existing-hub");
         Assert.Equal("test-hub", hub.Inputs["taskHubName"]);
@@ -81,6 +83,7 @@ public sealed class AzureDurableTaskTests
     [InlineData("target")]
     [InlineData("incomplete")]
     [InlineData("alias")]
+    [InlineData("tags")]
     public async Task Invalid_plans_register_nothing(string failure)
     {
         var policy = failure switch
@@ -90,6 +93,7 @@ public sealed class AzureDurableTaskTests
             "network" => Policy() with { IpAllowlist = ["::/0"] },
             "provenance" => Policy() with { SourceReferences = [] },
             "binding" => Policy() with { WorkerContract = new("unsupported/contract") },
+            "tags" => Policy() with { Tags = ImmutableSortedDictionary<string, string>.Empty.Add("invalid/key", "value") },
             _ => Policy()
         };
         var plan = Plan(physical: failure == "physical-identity" ? "azure/durable-task/wrong" : Physical,
@@ -115,6 +119,7 @@ public sealed class AzureDurableTaskTests
             var checkedParents = 0;
             await Deployment.TestAsync(mocks, new TestOptions { IsPreview = false }, () =>
             {
+                var resourceGroup = new ComponentResource("test:index:ResourceGroup", "existing-resource-group");
                 ComponentResource? parent = null;
                 parent = new ComponentResource("test:index:Existing", "existing-parent", new ComponentResourceOptions
                 {
@@ -126,12 +131,18 @@ public sealed class AzureDurableTaskTests
                             {
                                 Assert.Same(parent, args.Options.Parent);
                                 checkedParents++;
+                                if (args.Resource.GetType().Name == "Scheduler")
+                                    ((Output<ImmutableArray<Resource>>)args.Options.DependsOn).Apply(dependencies =>
+                                    {
+                                        Assert.Contains(resourceGroup, dependencies);
+                                        return dependencies;
+                                    });
                             }
                             return null;
                         }
                     }
                 });
-                AzureDurableTaskConstruction.Register(Plan(), Policy() with { IpAllowlist = [.. rules] }, Subscription, parent);
+                AzureDurableTaskConstruction.Register(Plan(), Policy() with { IpAllowlist = [.. rules] }, Subscription, parent, resourceGroup);
             });
             Assert.Equal(3, checkedParents);
             return mocks.Resources.OrderBy(r => r.Name, StringComparer.Ordinal)

@@ -41,7 +41,8 @@ Within the existing Pulumi program, first call the Aspire handoff's `RequireExac
 remain unchanged. This provider adapter deliberately has no Aspire dependency.
 
 The following fragment assumes the program already has `plan`, `handoff`, `subscriptionId`,
-`resourceGroupName`, `location`, `workerPrincipalId`, `existingAssignmentId`, and `azureProvider`:
+`resourceGroupName`, `resourceGroup`, `location`, `existingSchedulerTags`, `workerPrincipalId`,
+`existingAssignmentId`, and `azureProvider`:
 
 ```csharp
 handoff.RequireExactPlan(plan);
@@ -57,8 +58,9 @@ var durable = AzureDurableTaskConstruction.Register(plan, new AzureDurableTaskPo
     SchedulerName = "existing-scheduler",
     TaskHubName = "existing-hub",
     IpAllowlist = ["192.0.2.0/24"], // replace with explicit environment policy
+    Tags = existingSchedulerTags, // immutable sorted dictionary of the existing non-secret tags
     SourceReferences = [SourceReference.Create("environment-policy", "production/durable-task/v1")]
-}, subscriptionId);
+}, subscriptionId, resourceGroupDependency: resourceGroup);
 
 var workerBinding = durable.WorkerBindings.Single(b => b.Source == new InfrastructureNodeId("workloads/worker"));
 var grant = new RoleAssignment("existing-worker-grant",
@@ -69,7 +71,9 @@ var connectionString = durable.ConnectionString;
 
 Replace the handwritten provider/scheduler/hub declarations in place. Preserve their logical names,
 physical names, subscription, resource group, region, common parent (null for root resources), and
-role identities. No component parent is introduced. Preserve the role provider and any existing
+role identities and tags. Pass `resourceGroupDependency` when the group is created by the same program;
+otherwise null means the group already exists. Scheduler creation waits for that dependency, and hub
+creation waits for scheduler outputs. No component parent is introduced. Preserve the role provider and any existing
 resource options when registering the returned role arguments. Programs requiring distinct parents,
 imports, aliases, or other scheduler/hub options need an explicit adapter extension before adoption.
 Do not construct both the old and new slice in one program.
@@ -84,7 +88,7 @@ environment-specific identity/network decisions are tracked separately in ARI-53
 This initial slice supports Consumption, one scheduler/hub pair, managed resources, same-subscription
 ServicePrincipal grants, explicit IPv4 address/CIDR rules, and managed-identity connections. Empty
 network lists are emitted as empty; there is no automatic public-access fallback. Dedicated capacity,
-private networking, IPv6, retention policy, scheduler tags, cross-subscription grants, physical aliases,
+private networking, IPv6, retention policy, cross-subscription grants, physical aliases,
 other binding contracts/directions, and referenced/external lifecycle ownership are outside this slice.
 Unsupported options are absent from the policy rather than silently ignored; use strict document JSON
 when restoring policy so unknown properties are rejected.
