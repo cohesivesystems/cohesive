@@ -256,6 +256,9 @@ public sealed class CliCommandBuilder<TConfiguration>(
         {
             switch (binding.Symbol)
             {
+                case Option<bool> option when parseResult.GetResult(option) is { Implicit: false }:
+                    values[binding.Descriptor.ConfigurationKey] = parseResult.GetValue(option) ? "true" : "false";
+                    break;
                 case Option<string?> option when parseResult.GetResult(option) is not null:
                     values[binding.Descriptor.ConfigurationKey] = parseResult.GetValue(option);
                     break;
@@ -275,11 +278,11 @@ public sealed class CliCommandBuilder<TConfiguration>(
         application.ApplySharedConfiguration(builder);
         configureConfiguration?.Invoke(builder);
 
-        if (application.EnvironmentVariablePrefix is null)
+        if (application.UseEnvironmentVariables && application.EnvironmentVariablePrefix is null)
         {
             builder.AddEnvironmentVariables();
         }
-        else
+        else if (application.UseEnvironmentVariables)
         {
             builder.AddEnvironmentVariables(prefix: application.EnvironmentVariablePrefix);
         }
@@ -313,6 +316,15 @@ public sealed class CliCommandBuilder<TConfiguration>(
         if (IsStringCollectionType(descriptor.ParameterType))
         {
             return CreateStringCollectionOption(descriptor);
+        }
+
+        if ((Nullable.GetUnderlyingType(descriptor.ParameterType) ?? descriptor.ParameterType) == typeof(bool))
+        {
+            return new Option<bool>(descriptor.CliName,
+                descriptor.CliShortName is null ? [] : [descriptor.CliShortName])
+            {
+                Description = BuildDescription(descriptor.Description, descriptor.Required, descriptor.AllowedValues)
+            };
         }
 
         return CreateScalarOption(descriptor);

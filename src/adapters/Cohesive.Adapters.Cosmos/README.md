@@ -9,6 +9,49 @@ materialization sources, Process Transition receipts, domain-event inboxes, outb
 dotnet add package Cohesive.Adapters.Cosmos
 ```
 
+## Collect Cosmos operation telemetry
+
+`CosmosClientFactory` enables the Cosmos SDK's native `Azure.Cosmos.Operation` activities by default. Query text
+remains suppressed, telemetry upload to Microsoft remains disabled, and the SDK's slow-operation diagnostic
+thresholds are unchanged. Register the published source name with the host's existing OpenTelemetry tracer provider:
+
+```csharp
+services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing
+        .AddSource(CosmosClientFactory.OperationActivitySourceName));
+```
+
+The resulting operation activities are children of the current ASP.NET request activity and provide database-client
+duration for direct comparison with API request duration. Cosmos attributes and slow-request diagnostics can also
+expose request charge, status/substatus, retry or throttling evidence, response size, and the SDK's internal request
+timeline, subject to the SDK version and exporter.
+
+Callers can replace the configuration with the SDK type directly. `CosmosClientFactory` snapshots the public
+configuration before caching, so an existing client cannot be mutated indirectly and clients with incompatible
+telemetry settings are not reused:
+
+```csharp
+var client = CosmosClientFactory.Shared.CreateCosmosClient(new CosmosClientFactoryOptions
+{
+    Endpoint = endpoint,
+    TelemetryOptions = new CosmosClientTelemetryOptions
+    {
+        DisableDistributedTracing = false,
+        DisableSendingMetricsToService = true,
+        QueryTextMode = QueryTextMode.None,
+        CosmosThresholdOptions = new CosmosThresholdOptions
+        {
+            PointOperationLatencyThreshold = TimeSpan.FromMilliseconds(500),
+            NonPointOperationLatencyThreshold = TimeSpan.FromSeconds(2)
+        }
+    }
+});
+```
+
+The current stable Cosmos SDK exposes operation/network meter constants in generated documentation but keeps their
+enablement and dimension options internal. Cohesive does not use reflection or a preview SDK to bypass that boundary;
+native client metrics remain deferred until Microsoft publishes a stable public configuration API.
+
 ## Build a safe Cosmos query
 
 The standalone builder validates property paths and operators, creates deterministic parameters, and never accepts
