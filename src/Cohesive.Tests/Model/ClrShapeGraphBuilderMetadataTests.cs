@@ -2,6 +2,7 @@ using System.Collections;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Tests.Model;
 
@@ -54,6 +55,74 @@ public sealed class ClrShapeGraphBuilderMetadataTests
             [nameof(EitherCaseA), nameof(EitherCaseB)],
             union.Cases.Select(x => x.Name));
         Assert.All(union.Cases, unionCase => Assert.IsType<NamedTypeRef>(unionCase.Type));
+    }
+
+    [Fact]
+    public void Build_GeneratedUnionAcceptsItsDiscriminatorWithoutWeakeningCaseFields()
+    {
+        var graph = new ClrShapeGraphBuilder()
+            .AddShape<EitherEnvelope>()
+            .Build(new("graph.either.validation.test"));
+        var shape = Assert.Single(graph.Shapes);
+        var valid = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+        {
+            [nameof(EitherEnvelope.Items)] = ObservationValue.FromArray(
+            [
+                ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+                {
+                    ["Type"] = ObservationValue.FromString(nameof(EitherCaseA)),
+                    [nameof(EitherCaseA.Id)] = ObservationValue.FromString("case-a")
+                })
+            ])
+        });
+        var unknownCaseField = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+        {
+            [nameof(EitherEnvelope.Items)] = ObservationValue.FromArray(
+            [
+                ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+                {
+                    ["Type"] = ObservationValue.FromString(nameof(EitherCaseA)),
+                    [nameof(EitherCaseA.Id)] = ObservationValue.FromString("case-a"),
+                    ["Unexpected"] = ObservationValue.FromString("still-invalid")
+                })
+            ])
+        });
+
+        Assert.True(ObservationValidator.TryValidateAgainstShape(valid, shape, out _, graph));
+        Assert.False(ObservationValidator.TryValidateAgainstShape(
+            unknownCaseField,
+            shape,
+            out var validationError,
+            graph));
+        Assert.Contains("unknown property 'Unexpected'", validationError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Build_CanonicalClrEnumValuesAreExplicitlyOptedInto()
+    {
+        var provider = new SystemTextJsonClrShapeMetadataProvider(new JsonSerializerOptions());
+        var semanticGraph = new ClrShapeGraphBuilder()
+            .AddMetadataProvider(provider)
+            .AddShape<StringEnumEnvelope>()
+            .Build(new("graph.enum.semantic.test"));
+        var wireGraph = new ClrShapeGraphBuilder()
+            .AddMetadataProvider(provider)
+            .UseCanonicalClrEnumValues()
+            .AddShape<StringEnumEnvelope>()
+            .Build(new("graph.enum.wire.test"));
+
+        var semanticEnum = Assert.IsType<TypeDefinition.Enum>(
+            Assert.Single(semanticGraph.NamedTypes, type => type.Name == nameof(StringEnumValue)));
+        var wireEnum = Assert.IsType<TypeDefinition.Enum>(
+            Assert.Single(wireGraph.NamedTypes, type => type.Name == nameof(StringEnumValue)));
+        var canonicalPlainEnum = Assert.IsType<TypeDefinition.Enum>(
+            Assert.Single(wireGraph.NamedTypes, type => type.Name == nameof(PlainEnumValue)));
+
+        Assert.Equal(PrimitiveType.Int32, semanticEnum.Underlying);
+        Assert.Equal(PrimitiveType.String, wireEnum.Underlying);
+        Assert.Equal("wire-value", Assert.Single(wireEnum.Values).Value);
+        Assert.Equal(PrimitiveType.String, canonicalPlainEnum.Underlying);
+        Assert.Equal(nameof(PlainEnumValue.Value), Assert.Single(canonicalPlainEnum.Values).Value);
     }
 
     [Fact]
@@ -250,6 +319,20 @@ public sealed class ClrShapeGraphBuilderMetadataTests
         [property: JsonIgnore] string AlwaysIgnored,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Conditional,
         string Visible);
+
+    sealed record StringEnumEnvelope(StringEnumValue Value, PlainEnumValue Plain);
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    enum StringEnumValue
+    {
+        [JsonStringEnumMemberName("wire-value")]
+        Value
+    }
+
+    enum PlainEnumValue
+    {
+        Value
+    }
 
     sealed record ReferenceCarrier(string Name);
 

@@ -10,6 +10,8 @@ namespace Cohesive.Model;
 public static class ObservationValidator
 {
     const int MaxValidationDepth = 64;
+    static readonly Func<ObjectFieldTypeDef, string> ObjectFieldName = static field => field.Name;
+    static readonly Func<StructuralField, string> StructuralFieldName = static field => field.Name.Value;
 
     /// <summary>Validates that a concrete object value adheres to the supplied shape semantics.</summary>
     /// <param name="value">Concrete object value to validate.</param>
@@ -439,24 +441,21 @@ public static class ObservationValidator
         in ObservationValue value,
         ShapeGraph? graph,
         int maxDepth,
-        ref TDiagnostics diagnostics)
+        ref TDiagnostics diagnostics,
+        string? allowedProperty = null)
         where TDiagnostics : IValidationDiagnostics
     {
         if (value.Kind != ObservationValueKind.Object || value.Fields is null)
             return Fail(ref diagnostics, new(ErrorCode.ExpectedObject));
 
-        var matchedCount = 0;
-        foreach (var field in objectType.Fields)
+        if (TryFindUnknownProperty(
+                value.Fields,
+                objectType.Fields,
+                ObjectFieldName,
+                allowedProperty,
+                diagnostics.RequiresFailureDetails,
+                out var unknown))
         {
-            if (TryGetPropertyIgnoreCase(value.Fields, field.Name, out _))
-                matchedCount++;
-        }
-
-        if (matchedCount != value.Fields.Count)
-        {
-            var unknown = diagnostics.RequiresFailureDetails
-                ? FindUnknownObjectProperty(value.Fields, objectType.Fields)
-                : null;
             return Fail(ref diagnostics, new(ErrorCode.UnknownObjectProperty, unknown));
         }
 
@@ -517,24 +516,21 @@ public static class ObservationValidator
         in ObservationValue value,
         ShapeGraph graph,
         int maxDepth,
-        ref TDiagnostics diagnostics)
+        ref TDiagnostics diagnostics,
+        string? allowedProperty = null)
         where TDiagnostics : IValidationDiagnostics
     {
         if (value.Kind != ObservationValueKind.Object || value.Fields is null)
             return Fail(ref diagnostics, new(ErrorCode.ExpectedStructuralObject, structural.Id.Value));
 
-        var matchedCount = 0;
-        foreach (var field in structural.Fields)
+        if (TryFindUnknownProperty(
+                value.Fields,
+                structural.Fields,
+                StructuralFieldName,
+                allowedProperty,
+                diagnostics.RequiresFailureDetails,
+                out var unknown))
         {
-            if (TryGetPropertyIgnoreCase(value.Fields, field.Name.Value, out _))
-                matchedCount++;
-        }
-
-        if (matchedCount != value.Fields.Count)
-        {
-            var unknown = diagnostics.RequiresFailureDetails
-                ? FindUnknownStructuralProperty(value.Fields, structural)
-                : null;
             return Fail(
                 ref diagnostics,
                 new(ErrorCode.UnknownStructuralProperty, unknown, structural.Id.Value));
@@ -686,6 +682,30 @@ public static class ObservationValidator
             return Fail(
                 ref diagnostics,
                 new(ErrorCode.InvalidUnionDiscriminator, unionType.Id.Value, unionType.Discriminator.FieldName));
+        }
+
+        if (matchingType is ObjectTypeRef objectType)
+        {
+            return TryMatchObject(
+                objectType,
+                value,
+                graph,
+                maxDepth,
+                ref diagnostics,
+                unionType.Discriminator.FieldName);
+        }
+
+        if (matchingType is NamedTypeRef namedType
+            && graph.TryGetType(namedType.TypeId, out var definition)
+            && definition is TypeDefinition.Structural structural)
+        {
+            return TryMatchStructural(
+                structural,
+                value,
+                graph,
+                maxDepth,
+                ref diagnostics,
+                unionType.Discriminator.FieldName);
         }
 
         return TryMatchTypeCore(matchingType, value, graph, maxDepth, ref diagnostics);
@@ -1032,46 +1052,61 @@ public static class ObservationValidator
         return false;
     }
 
-    static string? FindUnknownObjectProperty(
+    static bool TryFindUnknownProperty<TDefinition>(
         IReadOnlyDictionary<string, ObservationValue> fields,
-        IReadOnlyList<ObjectFieldTypeDef> definitions)
+        ImmutableArray<TDefinition> definitions,
+        Func<TDefinition, string> getName,
+        string? allowedProperty,
+        bool includeFailureDetails,
+        out string? unknown)
     {
-        string? unknown = null;
+        unknown = null;
+        var matchedCount = 0;
+        var allowedPropertyIsDefined = false;
+        foreach (var definition in definitions)
+        {
+            var definitionName = getName(definition);
+            if (allowedProperty is not null
+                && string.Equals(definitionName, allowedProperty, StringComparison.OrdinalIgnoreCase))
+            {
+                allowedPropertyIsDefined = true;
+            }
+            if (TryGetPropertyIgnoreCase(fields, definitionName, out _))
+                matchedCount++;
+        }
+        if (allowedProperty is not null
+            && !allowedPropertyIsDefined
+            && TryGetPropertyIgnoreCase(fields, allowedProperty, out _))
+        {
+            matchedCount++;
+        }
+        if (matchedCount == fields.Count)
+            return false;
+        if (!includeFailureDetails)
+            return true;
+
         foreach (var propertyName in fields.Keys)
         {
+            if (allowedProperty is not null
+                && string.Equals(propertyName, allowedProperty, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
             var known = false;
             foreach (var field in definitions)
             {
-                if (!string.Equals(field.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(getName(field), propertyName, StringComparison.OrdinalIgnoreCase))
                     continue;
                 known = true;
                 break;
             }
-            if (!known && (unknown is null || string.CompareOrdinal(propertyName, unknown) < 0))
-                unknown = propertyName;
-        }
-        return unknown;
-    }
+            if (known)
+                continue;
 
-    static string? FindUnknownStructuralProperty(
-        IReadOnlyDictionary<string, ObservationValue> fields,
-        TypeDefinition.Structural structural)
-    {
-        string? unknown = null;
-        foreach (var propertyName in fields.Keys)
-        {
-            var known = false;
-            foreach (var field in structural.Fields)
-            {
-                if (!string.Equals(field.Name.Value, propertyName, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                known = true;
-                break;
-            }
-            if (!known && (unknown is null || string.CompareOrdinal(propertyName, unknown) < 0))
+            if (unknown is null || string.CompareOrdinal(propertyName, unknown) < 0)
                 unknown = propertyName;
         }
-        return unknown;
+        return true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -246,6 +246,10 @@ var evaluation = author
 var outcome = await evaluator.EvaluateAsync(evaluation, cancellationToken);
 ```
 
+Typed `Supply` values are projected directly into canonical observations. CLR enums use their member names unless
+the enum declares a standard System.Text.Json string converter, in which case its declared wire names are retained;
+the inferred relation shape and expression literals use the same catalog.
+
 `IRelationQueryEvaluator` is application-host infrastructure configured once with source placement, bounded planning
 policy, and source readers. It performs static compilation, capability realization, physical planning, acquisition,
 and canonical interpretation. The evaluation remains target-neutral and carries exact parameter and supplied-root

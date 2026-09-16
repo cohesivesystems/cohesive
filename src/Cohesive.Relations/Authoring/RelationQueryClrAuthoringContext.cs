@@ -1531,7 +1531,8 @@ public sealed class RelationQueryClrAuthoringContext
     }
 
     ClrShapeGraphBuilder CreateBuilder() => new ClrShapeGraphBuilder()
-        .AddMetadataProviders(Profile.Providers);
+        .AddMetadataProviders(Profile.Providers)
+        .UseCanonicalClrEnumValues();
 
     internal TypeRef GetTypeRef(ShapeRegistration registration)
     {

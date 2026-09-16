@@ -127,6 +127,55 @@ public sealed class RelationQueryExpressionAuthoringTests
     }
 
     [Fact]
+    public void TypedRelationEvaluation_UsesCanonicalClrProjectionForNestedEnumWireValues()
+    {
+        var author = RelationQuery.Expression();
+        var inputs = author.Source<TypedSupplyInput>();
+        var filtered = author.Filter(
+            inputs.Node,
+            (TypedSupplyInput input) => input.Role == TypedSupplyRole.Training,
+            inputs.Binding);
+        var outputs = author.Project(
+            filtered,
+            (TypedSupplyInput input) => new TypedSupplyOutput(input.Id),
+            inputs.Binding);
+        var relation = author.BuildRelation(
+            inputs,
+            outputs,
+            (TypedSupplyOutput output) => output.Id);
+        var input = new TypedSupplyInput(
+            "input-1",
+            TypedSupplyRole.Training,
+            new([new(TypedSupplyRole.Training)]));
+        var projectedInput = ObservationValue.FromObject(input);
+        var projectedBinding = Assert.Single(projectedInput
+            .GetProperty(nameof(TypedSupplyInput.Plan))
+            .GetProperty(nameof(TypedSupplyPlan.Bindings))
+            .EnumerateArray());
+        Assert.Equal(
+            "training-data",
+            projectedBinding.GetProperty(nameof(TypedSupplyBinding.Role)).GetString());
+
+        var evaluation = author.Evaluate(
+                relation,
+                new RelationQueryEvaluationId("tests/typed-supply/enum"))
+            .Supply([input], static value => value.Id)
+            .Build();
+
+        var supplied = Assert.Single(evaluation.SuppliedRoots!.Observations);
+        var binding = Assert.Single(supplied.Fields[nameof(TypedSupplyInput.Plan)]
+            .GetProperty(nameof(TypedSupplyPlan.Bindings))
+            .EnumerateArray());
+        Assert.Equal(
+            "training-data",
+            binding.GetProperty(nameof(TypedSupplyBinding.Role)).GetString());
+        var enumLiteral = Assert.Single(
+            Descendants(Assert.Single(relation.Definition.Body.Nodes.OfType<FilterQueryNode>()).Predicate)
+                .OfType<LiteralExpr>());
+        Assert.Equal(ObservationValue.FromString("training-data"), enumLiteral.Value);
+    }
+
+    [Fact]
     public void EagerCollectionProjectionAndInt64Count_AuthorThroughTheFluentSurface()
     {
         var author = RelationQuery.Expression();
@@ -1120,6 +1169,21 @@ public sealed class RelationQueryExpressionAuthoringTests
     }
 
     sealed record ParameterObject(string Name);
+
+    sealed record TypedSupplyInput(string Id, TypedSupplyRole Role, TypedSupplyPlan Plan);
+
+    sealed record TypedSupplyPlan(TypedSupplyBinding[] Bindings);
+
+    sealed record TypedSupplyBinding(TypedSupplyRole Role);
+
+    sealed record TypedSupplyOutput(string Id);
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    enum TypedSupplyRole
+    {
+        [JsonStringEnumMemberName("training-data")]
+        Training
+    }
 
     sealed record ParameterRoot(
         ParameterObject Value,

@@ -751,7 +751,7 @@ public sealed class RelationQueryExpressionLowerer
     {
         var constant = (ConstantExpression)expression;
         var value = (Enum)Enum.ToObject(enumType, constant.Value!);
-        if (!TryGetUnambiguousEnumMember(value, out var member))
+        if (!TryGetUnambiguousEnumMember(value, out _))
         {
             throw Fail(
                 RelationQueryExpressionDiagnosticCodes.LiteralUnsupported,
@@ -762,7 +762,7 @@ public sealed class RelationQueryExpressionLowerer
                 suggestion: "Compare against one uniquely named enum member or author the intended numeric/flags semantics structurally.");
         }
 
-        return CreateTypedLiteralOrConstant(enumType, ObservationValue.FromString(member));
+        return CreateTypedLiteralOrConstant(enumType, ObservationValue.FromObject(value));
     }
 
     Expr TranslateExactCoalesce(
@@ -2182,8 +2182,8 @@ public sealed class RelationQueryExpressionLowerer
             case Uri uri when value.GetType() == typeof(Uri):
                 observed = ObservationValue.FromString(uri.ToString());
                 return true;
-            case Enum enumeration when TryGetUnambiguousEnumMember(enumeration, out var member):
-                observed = ObservationValue.FromString(member);
+            case Enum enumeration when TryGetUnambiguousEnumMember(enumeration, out _):
+                observed = ObservationValue.FromObject(enumeration);
                 return true;
             case Enum:
                 observed = default;
