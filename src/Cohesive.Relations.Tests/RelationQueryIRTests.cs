@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.IR;
 using IRQueryDefinition = Cohesive.Relations.IR.QueryDefinition;
@@ -33,6 +34,24 @@ public sealed class RelationQueryIRTests
         Assert.Equal(document.DefinitionFingerprint, roundTripped.DefinitionFingerprint);
         Assert.True(RelationQueryDocumentSemanticValidator.Validate(roundTripped).IsValid);
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse(json), JsonNode.Parse(roundTrippedJson)));
+    }
+
+    [Fact]
+    public void RelationDefinition_ProjectsAsCanonicalPortableJsonValue()
+    {
+        var definition = CreateLoadSearchRelation();
+
+        var type = Assert.IsType<JsonTypeRef>(
+            new DefaultClrTypeRefMapper().Map(typeof(IRRelationDefinition), nullability: null));
+        var observed = ObservationValue.FromObject(definition);
+        var roundTripped = observed.Deserialize<IRRelationDefinition>();
+
+        Assert.Equal(JsonTypeKind.Object, type.Kind);
+        Assert.Equal(ObservationValueKind.Object, observed.Kind);
+        Assert.NotNull(roundTripped);
+        Assert.Equal(
+            RelationQueryDocument.FromDefinition(definition).DefinitionFingerprint,
+            RelationQueryDocument.FromDefinition(roundTripped!).DefinitionFingerprint);
     }
 
     [Fact]
