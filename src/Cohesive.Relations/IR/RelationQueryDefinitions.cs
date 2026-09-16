@@ -324,6 +324,7 @@ public sealed record RelationOutputDefinition
 /// <summary>
 /// Canonical, portable relation definition.
 /// </summary>
+[PortableJsonValue(JsonTypeKind.Object)]
 public sealed record RelationDefinition : RelationQueryDefinition
 {
     /// <summary>Creates a canonical relation definition.</summary>
