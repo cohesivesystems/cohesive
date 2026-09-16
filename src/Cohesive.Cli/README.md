@@ -94,3 +94,13 @@ runtime and trusted integrations rather than the public context constructors.
 Use `Cohesive.Cli.Testing.CliApplicationTestHarness` to invoke a command tree with captured output channels. Add
 `Cohesive.Host` only when a command needs host lifecycle and dependency-injection scope integration through
 `Cohesive.Host.Cli.UseHostContext`.
+
+## Explicit invocation policy
+
+Boolean options accept a bare switch (`--json`) as true or an explicit value (`--json false`).
+An omitted switch does not override a configured/default value, including a nullable boolean.
+Allowed-value and required constraints still apply during configuration binding.
+
+Applications requiring explicit inputs can call `WithoutEnvironmentVariables()` to disable automatic
+environment binding. Registered configuration providers remain active. Calling
+`WithEnvironmentVariablePrefix(...)` subsequently re-enables environment binding; the last call wins.
