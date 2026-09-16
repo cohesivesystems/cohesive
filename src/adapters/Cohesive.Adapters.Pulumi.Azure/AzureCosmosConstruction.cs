@@ -43,17 +43,8 @@ public static class AzureCosmosConstruction
             Evidence: new(stage: "pulumi-azure-construction", subject: policy.Resource.Value ?? "unset-resource",
                 sourceReferences: [deployment.Manifest.Fingerprint.Value,
                     .. policy.SourceReferences.IsDefault ? [] : policy.SourceReferences.Select(s => s.Value)])));
-        if (!deployment.IsComplete || deployment.Realization?.IsReadinessObligationComplete != true)
-        {
-            Error("incomplete", "Compile a complete capability, witness and readiness realization before construction.");
-            errors.AddRange(deployment.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error));
-        }
-        if (deployment.Manifest.TargetFacilities.Profile.Target.Value != Target)
-            Error("target", $"This adapter supports only '{Target}'.");
-        if (subscriptionId == Guid.Empty || subscriptionId != policy.SubscriptionId)
-            Error("subscription", "Match the explicit non-empty host and policy subscriptions.");
-        if (policy.SourceReferences.IsDefaultOrEmpty || policy.SourceReferences.Any(s => string.IsNullOrWhiteSpace(s.Value)))
-            Error("provenance", "Attribute provider, topology and access decisions with non-empty source references.");
+        AzureConstructionPolicy.ValidateDeployment(deployment, Target, policy.SubscriptionId, subscriptionId,
+            policy.SourceReferences, errors, Error);
         if (!AzureConstructionPolicy.ValidResourceGroup(policy.ResourceGroupName) || string.IsNullOrWhiteSpace(policy.Location))
             Error("location", "Supply a valid explicit resource group and region.");
         if (string.IsNullOrWhiteSpace(policy.AccountName) || string.IsNullOrWhiteSpace(policy.DatabaseName))

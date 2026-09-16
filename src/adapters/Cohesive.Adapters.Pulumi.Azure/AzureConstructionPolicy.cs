@@ -2,12 +2,32 @@ using System.Collections.Immutable;
 using System.Text.RegularExpressions;
 using Cohesive.Infra;
 using Cohesive.Infra.Realization;
+using Cohesive.Model;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Adapters.Pulumi.Azure;
 
 // Shared Azure scope syntax; facility-specific topology and admission remain with each constructor.
 internal static class AzureConstructionPolicy
 {
+    // Common proof/scope checks at the third facility. Target topology and admission stay facility-specific.
+    internal static void ValidateDeployment(InfrastructureTargetDeploymentPlan deployment, string target,
+        Guid declaredSubscription, Guid hostSubscription, ImmutableArray<SourceReference> sources,
+        ImmutableArray<DocumentValidationDiagnostic>.Builder diagnostics, Action<string, string> error)
+    {
+        if (!deployment.IsComplete || deployment.Realization?.IsReadinessObligationComplete != true)
+        {
+            error("incomplete", "Compile a complete capability, physical-witness and readiness realization before construction.");
+            diagnostics.AddRange(deployment.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error));
+        }
+        if (deployment.Manifest.TargetFacilities.Profile.Target.Value != target)
+            error("target", $"This adapter supports only target '{target}'.");
+        if (hostSubscription == Guid.Empty || declaredSubscription != hostSubscription)
+            error("subscription", "Match the explicit non-empty host and policy subscriptions.");
+        if (sources.IsDefaultOrEmpty || sources.Any(s => string.IsNullOrWhiteSpace(s.Value)))
+            error("provenance", "Supply non-empty source references attributing provider scope and policy.");
+    }
+
     internal static bool ValidResourceGroup(string? name) => !string.IsNullOrWhiteSpace(name) &&
         Regex.IsMatch(name, @"\A[\p{L}\p{N}_().-]{1,90}\z") && !name.EndsWith('.');
 
