@@ -10,8 +10,6 @@ namespace Cohesive.Model;
 public static class ObservationValidator
 {
     const int MaxValidationDepth = 64;
-    static readonly Func<ObjectFieldTypeDef, string> ObjectFieldName = static field => field.Name;
-    static readonly Func<StructuralField, string> StructuralFieldName = static field => field.Name.Value;
 
     /// <summary>Validates that a concrete object value adheres to the supplied shape semantics.</summary>
     /// <param name="value">Concrete object value to validate.</param>
@@ -448,10 +446,9 @@ public static class ObservationValidator
         if (value.Kind != ObservationValueKind.Object || value.Fields is null)
             return Fail(ref diagnostics, new(ErrorCode.ExpectedObject));
 
-        if (TryFindUnknownProperty(
+        if (TryFindUnknownProperty<ObjectFieldTypeDef, ObjectFieldNameAccessor>(
                 value.Fields,
                 objectType.Fields,
-                ObjectFieldName,
                 allowedProperty,
                 diagnostics.RequiresFailureDetails,
                 out var unknown))
@@ -523,10 +520,9 @@ public static class ObservationValidator
         if (value.Kind != ObservationValueKind.Object || value.Fields is null)
             return Fail(ref diagnostics, new(ErrorCode.ExpectedStructuralObject, structural.Id.Value));
 
-        if (TryFindUnknownProperty(
+        if (TryFindUnknownProperty<StructuralField, StructuralFieldNameAccessor>(
                 value.Fields,
                 structural.Fields,
-                StructuralFieldName,
                 allowedProperty,
                 diagnostics.RequiresFailureDetails,
                 out var unknown))
@@ -1052,20 +1048,20 @@ public static class ObservationValidator
         return false;
     }
 
-    static bool TryFindUnknownProperty<TDefinition>(
+    static bool TryFindUnknownProperty<TDefinition, TNameAccessor>(
         IReadOnlyDictionary<string, ObservationValue> fields,
         ImmutableArray<TDefinition> definitions,
-        Func<TDefinition, string> getName,
         string? allowedProperty,
         bool includeFailureDetails,
         out string? unknown)
+        where TNameAccessor : struct, IFieldNameAccessor<TDefinition>
     {
         unknown = null;
         var matchedCount = 0;
         var allowedPropertyIsDefined = false;
         foreach (var definition in definitions)
         {
-            var definitionName = getName(definition);
+            var definitionName = TNameAccessor.GetName(definition);
             if (allowedProperty is not null
                 && string.Equals(definitionName, allowedProperty, StringComparison.OrdinalIgnoreCase))
             {
@@ -1095,7 +1091,7 @@ public static class ObservationValidator
             var known = false;
             foreach (var field in definitions)
             {
-                if (!string.Equals(getName(field), propertyName, StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(TNameAccessor.GetName(field), propertyName, StringComparison.OrdinalIgnoreCase))
                     continue;
                 known = true;
                 break;
@@ -1107,6 +1103,21 @@ public static class ObservationValidator
                 unknown = propertyName;
         }
         return true;
+    }
+
+    interface IFieldNameAccessor<TDefinition>
+    {
+        static abstract string GetName(TDefinition definition);
+    }
+
+    readonly struct ObjectFieldNameAccessor : IFieldNameAccessor<ObjectFieldTypeDef>
+    {
+        public static string GetName(ObjectFieldTypeDef definition) => definition.Name;
+    }
+
+    readonly struct StructuralFieldNameAccessor : IFieldNameAccessor<StructuralField>
+    {
+        public static string GetName(StructuralField definition) => definition.Name.Value;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

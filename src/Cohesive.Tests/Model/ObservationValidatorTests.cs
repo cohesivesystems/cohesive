@@ -4,6 +4,8 @@ namespace Cohesive.Tests.Model;
 
 public sealed class ObservationValidatorTests
 {
+    const int AllocationWarmupIterations = 1_000;
+
     [Fact]
     public void RequiredNullableOrdinalValidationDoesNotAllocateAfterWarmup()
     {
@@ -13,7 +15,7 @@ public sealed class ObservationValidatorTests
         var layout = ObservationLayout.Create(shape, ["note"]);
         ObservationValue[] values = [ObservationValue.Null];
         ulong[] present = [1];
-        for (var iteration = 0; iteration < 100; iteration++)
+        for (var iteration = 0; iteration < AllocationWarmupIterations; iteration++)
             _ = ObservationValidator.TryValidateAgainstShape(shape, layout, values, present, out _);
         var valid = true;
         var before = GC.GetAllocatedBytesForCurrentThread();
@@ -44,7 +46,7 @@ public sealed class ObservationValidatorTests
             presence[ordinal >> 6] |= 1UL << (ordinal & 63);
         }
 
-        for (var iteration = 0; iteration < 100; iteration++)
+        for (var iteration = 0; iteration < AllocationWarmupIterations; iteration++)
             _ = ObservationValidator.TryValidateAgainstShape(shape, layout, values, presence, out _);
 
         var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
@@ -113,7 +115,7 @@ public sealed class ObservationValidatorTests
     public void TryValidateAgainstShape_ValidComplexValue_DoesNotAllocateAfterWarmup()
     {
         var (graph, shape, value) = CreateComplexFixture();
-        for (var iteration = 0; iteration < 100; iteration++)
+        for (var iteration = 0; iteration < AllocationWarmupIterations; iteration++)
         {
             _ = ObservationValidator.TryValidateAgainstShape(
                 value,
@@ -179,7 +181,7 @@ public sealed class ObservationValidatorTests
             ("decimal", ObservationValue.FromDecimal(12.5m)),
             ("binary", ObservationValue.FromBytes(bytes)));
 
-        for (var iteration = 0; iteration < 100; iteration++)
+        for (var iteration = 0; iteration < AllocationWarmupIterations; iteration++)
             _ = ObservationValidator.TryValidateAgainstShape(value, shape, out _, graph);
 
         var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
