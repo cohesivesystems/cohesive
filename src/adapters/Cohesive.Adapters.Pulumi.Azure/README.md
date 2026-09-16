@@ -1,5 +1,12 @@
 # Cohesive.Adapters.Pulumi.Azure
 
+Construct Azure facilities from exact Cohesive Infra plans through the existing Pulumi lifecycle.
+
+- [Cosmos SQL construction](COSMOS.md): account/database/container policy and explicit data-plane grant scopes.
+- Durable Task construction is described below.
+
+## Durable Task
+
 Construct one Azure Durable Task Consumption scheduler and task hub from an exact
 `InfrastructureTargetDeploymentPlan` inside an existing Pulumi program. The adapter returns
 managed-identity connection outputs and canonical worker binding access-grant inputs.

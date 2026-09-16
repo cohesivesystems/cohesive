@@ -57,8 +57,7 @@ public static class AzureDurableTaskConstruction
             Error("subscription", "The program subscription must be non-empty and equal the explicit provider policy subscription.");
         if (policy.SourceReferences.IsDefaultOrEmpty || policy.SourceReferences.Any(s => string.IsNullOrWhiteSpace(s.Value)))
             Error("provenance", "Supply non-empty source references attributing provider scope and network policy.");
-        if (string.IsNullOrWhiteSpace(policy.ResourceGroupName) ||
-            !Regex.IsMatch(policy.ResourceGroupName, @"\A[\p{L}\p{N}_().-]{1,90}\z") || policy.ResourceGroupName.EndsWith('.'))
+        if (!AzureConstructionPolicy.ValidResourceGroup(policy.ResourceGroupName))
             Error("resource-group", "Supply an Azure resource-group name of 1–90 valid characters without a trailing period.");
         if (string.IsNullOrWhiteSpace(policy.Location))
             Error("location", "Supply an explicit Azure location.");
@@ -66,26 +65,15 @@ public static class AzureDurableTaskConstruction
             Error("logical-name", "Supply explicit Pulumi provider, scheduler, and task-hub logical names; preserve existing names during migration.");
         if (policy.IpAllowlist.IsDefault || policy.IpAllowlist.Any(rule => !ValidNetwork(rule)))
             Error("network", "Supply an explicit IPv4 address/CIDR allowlist (empty denies public access); IPv6 and private networking are unsupported by this slice.");
-        if (policy.Tags is null || policy.Tags.Count > 50 || policy.Tags.Any(t =>
-            string.IsNullOrWhiteSpace(t.Key) || t.Key.Length > 512 || t.Value is null || t.Value.Length > 256 ||
-            t.Key.IndexOfAny(['<', '>', '%', '&', '\\', '?', '/']) >= 0) ||
-            policy.Tags.Keys.Distinct(StringComparer.OrdinalIgnoreCase).Count() != policy.Tags.Count)
+        if (!AzureConstructionPolicy.ValidTags(policy.Tags))
             Error("tags", "Supply at most 50 non-secret Azure tags with unique case-insensitive keys (1–512 characters) and values of at most 256 characters.");
 
-        var resource = deployment.Manifest.Resources.SingleOrDefault(r => r.Resource == policy.Resource);
-        if (resource is null || resource.Facility.Value != Facility)
-            Error("facility", $"Select a canonical resource deployed by facility '{Facility}'.");
-        else
+        var resource = AzureConstructionPolicy.SelectManagedResource(deployment, policy.Resource, Facility,
+            policy.LifecycleAuthority, Target, Error);
+        if (resource is not null)
         {
             if (!ParsePhysical(resource.PhysicalResource.Value).Success)
                 Error("physical-identity", "Expected 'azure/durable-task/schedulers/<scheduler>/task-hubs/<hub>' with valid Azure names.");
-            var lifecycle = deployment.Realization?.Lifecycle.Bindings
-                .Where(b => b.Resource == policy.Resource).ToArray() ?? [];
-            if (resource.Authority != policy.LifecycleAuthority || resource.ManagingInterpreter is not null ||
-                lifecycle.Length != 1 || lifecycle[0].Disposition != InfrastructureLifecycleDisposition.Managed ||
-                lifecycle[0].Interpreter.Value != Target || lifecycle[0].Authority != policy.LifecycleAuthority ||
-                lifecycle[0].PhysicalResource != resource.PhysicalResource)
-                Error("lifecycle", "The selected resource must be managed exclusively by this target and the expected Pulumi state authority.");
             var schedulerName = ParsePhysical(resource.PhysicalResource.Value).Groups[1].Value;
             if (deployment.Manifest.Resources.Any(r => r.Resource != resource.Resource &&
                 (r.PhysicalResource == resource.PhysicalResource || schedulerName.Length > 0 &&
@@ -152,8 +140,7 @@ public static class AzureDurableTaskConstruction
     }
 
     static IEnumerable<InfrastructureBindingDefinition> Bindings(InfrastructureTargetDeploymentPlan deployment,
-        AzureDurableTaskPolicy policy) => deployment.FacilityPlan.Definition.Definition.Bindings
-        .Where(b => b.Target == policy.Resource || b.Source == policy.Resource);
+        AzureDurableTaskPolicy policy) => AzureConstructionPolicy.Bindings(deployment, policy.Resource);
 
     static Match ParsePhysical(string value) => Regex.Match(value,
         @"\Aazure/durable-task/schedulers/([a-zA-Z0-9-]{3,64})/task-hubs/([a-zA-Z0-9-]{3,64})\z");

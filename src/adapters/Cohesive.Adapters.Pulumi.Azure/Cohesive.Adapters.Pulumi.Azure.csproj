@@ -4,11 +4,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <Description>Exact Cohesive.Infra Azure Durable Task construction through Pulumi.</Description>
+    <Description>Exact Cohesive.Infra Azure Durable Task and Cosmos construction through Pulumi.</Description>
     <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);BundleDurableTaskSdk</TargetsForTfmSpecificBuildOutput>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="*.cs" />
+    <None Update="COSMOS.md" Pack="true" PackagePath="/" />
     <PackageReference Include="Pulumi" Version="3.113.1" />
     <PackageReference Include="Pulumi.AzureNative" Version="3.16.0" />
     <ProjectReference Include="../../Cohesive.Infra/Cohesive.Infra.csproj" />
