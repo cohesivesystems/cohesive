@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Authoring;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Model;
 
@@ -18,6 +19,23 @@ public sealed class ClrShapeGraphBuilder
     readonly List<IClrShapeMetadataProvider> metadataProviders = [ClrShapeAttributeMetadataProvider.Instance];
     readonly Dictionary<TypeId, TypeDefinition> contributedNamedTypes = [];
     readonly List<ClrEntityReferenceRegistration> entityReferences = [];
+    bool useCanonicalClrEnumValues;
+
+    /// <summary>
+    /// Projects CLR enums as canonical string-valued member catalogs.
+    /// </summary>
+    /// <returns>This builder for continued configuration.</returns>
+    /// <remarks>
+    /// CLR member names are used by default. When a <see cref="SystemTextJsonClrShapeMetadataProvider"/>
+    /// supplies an explicit string-valued wire catalog, those values become canonical instead. The default
+    /// builder projection remains numeric so existing semantic graphs do not change merely because this
+    /// authoring-oriented option exists.
+    /// </remarks>
+    public ClrShapeGraphBuilder UseCanonicalClrEnumValues()
+    {
+        useCanonicalClrEnumValues = true;
+        return this;
+    }
 
     /// <summary>
     /// Adds a CLR metadata provider used while deriving shapes, named types, and fields.
@@ -570,9 +588,49 @@ public sealed class ClrShapeGraphBuilder
             role: shapeMetadata.ShapeRole ?? root.Role);
     }
 
-    static TypeDefinition.Enum BuildEnumType(Type clrType, ClrTypeIdentity identity, ClrShapeMetadata typeMetadata)
+    TypeDefinition.Enum BuildEnumType(Type clrType, ClrTypeIdentity identity, ClrShapeMetadata typeMetadata)
     {
         var names = Enum.GetNames(clrType);
+        if (useCanonicalClrEnumValues)
+        {
+            JsonObject? wireValues = null;
+            if (typeMetadata.Annotations.TryGetValue(
+                    new(SystemTextJsonShapeAnnotations.EnumValues),
+                    out var serializedMembers))
+            {
+                wireValues = serializedMembers.Value as JsonObject
+                    ?? throw new InvalidOperationException(
+                        $"CLR enum type '{clrType.FullName}' has an invalid System.Text.Json enum-values annotation.");
+            }
+
+            var stringValues = new EnumValue[names.Length];
+            for (var i = 0; i < names.Length; i++)
+            {
+                var wireName = names[i];
+                if (wireValues is not null
+                    && (!wireValues.TryGetPropertyValue(names[i], out var wireValue)
+                        || wireValue is not JsonValue jsonValue
+                        || !jsonValue.TryGetValue<string>(out wireName)))
+                {
+                    throw new InvalidOperationException(
+                        $"CLR enum member '{clrType.FullName}.{names[i]}' has no canonical System.Text.Json wire name.");
+                }
+                var field = clrType.GetField(names[i], BindingFlags.Public | BindingFlags.Static);
+                stringValues[i] = new(
+                    Name: names[i],
+                    Value: wireName,
+                    Label: GetEnumValueLabel(field),
+                    Description: GetEnumValueDescription(field));
+            }
+
+            return new(
+                id: identity.TypeId,
+                name: GetSimpleTypeName(clrType),
+                underlying: PrimitiveType.String,
+                values: [.. stringValues],
+                annotations: typeMetadata.Annotations);
+        }
+
         var underlyingType = Enum.GetUnderlyingType(clrType);
         var values = new EnumValue[names.Length];
         for (var i = 0; i < names.Length; i++)

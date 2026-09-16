@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
@@ -792,7 +791,7 @@ public sealed class RelationQueryEvaluationBuilder
             ArgumentException.ThrowIfNullOrWhiteSpace(identity);
             var observation = CoreObservation.Create(
                 shape,
-                ObservationValue.FromJsonNode(JsonSerializer.SerializeToNode(value, value.GetType())));
+                ObservationValue.FromObject(value));
             observations.Add(RelationQuerySuppliedRoot.FromObservation(identity, observation));
         }
 

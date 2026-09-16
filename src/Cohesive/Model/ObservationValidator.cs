@@ -439,23 +439,36 @@ public static class ObservationValidator
         in ObservationValue value,
         ShapeGraph? graph,
         int maxDepth,
-        ref TDiagnostics diagnostics)
+        ref TDiagnostics diagnostics,
+        string? allowedProperty = null)
         where TDiagnostics : IValidationDiagnostics
     {
         if (value.Kind != ObservationValueKind.Object || value.Fields is null)
             return Fail(ref diagnostics, new(ErrorCode.ExpectedObject));
 
         var matchedCount = 0;
+        var allowedPropertyIsDefined = false;
         foreach (var field in objectType.Fields)
         {
+            if (allowedProperty is not null
+                && string.Equals(field.Name, allowedProperty, StringComparison.OrdinalIgnoreCase))
+            {
+                allowedPropertyIsDefined = true;
+            }
             if (TryGetPropertyIgnoreCase(value.Fields, field.Name, out _))
                 matchedCount++;
+        }
+        if (allowedProperty is not null
+            && !allowedPropertyIsDefined
+            && TryGetPropertyIgnoreCase(value.Fields, allowedProperty, out _))
+        {
+            matchedCount++;
         }
 
         if (matchedCount != value.Fields.Count)
         {
             var unknown = diagnostics.RequiresFailureDetails
-                ? FindUnknownObjectProperty(value.Fields, objectType.Fields)
+                ? FindUnknownObjectProperty(value.Fields, objectType.Fields, allowedProperty)
                 : null;
             return Fail(ref diagnostics, new(ErrorCode.UnknownObjectProperty, unknown));
         }
@@ -517,23 +530,36 @@ public static class ObservationValidator
         in ObservationValue value,
         ShapeGraph graph,
         int maxDepth,
-        ref TDiagnostics diagnostics)
+        ref TDiagnostics diagnostics,
+        string? allowedProperty = null)
         where TDiagnostics : IValidationDiagnostics
     {
         if (value.Kind != ObservationValueKind.Object || value.Fields is null)
             return Fail(ref diagnostics, new(ErrorCode.ExpectedStructuralObject, structural.Id.Value));
 
         var matchedCount = 0;
+        var allowedPropertyIsDefined = false;
         foreach (var field in structural.Fields)
         {
+            if (allowedProperty is not null
+                && string.Equals(field.Name.Value, allowedProperty, StringComparison.OrdinalIgnoreCase))
+            {
+                allowedPropertyIsDefined = true;
+            }
             if (TryGetPropertyIgnoreCase(value.Fields, field.Name.Value, out _))
                 matchedCount++;
+        }
+        if (allowedProperty is not null
+            && !allowedPropertyIsDefined
+            && TryGetPropertyIgnoreCase(value.Fields, allowedProperty, out _))
+        {
+            matchedCount++;
         }
 
         if (matchedCount != value.Fields.Count)
         {
             var unknown = diagnostics.RequiresFailureDetails
-                ? FindUnknownStructuralProperty(value.Fields, structural)
+                ? FindUnknownStructuralProperty(value.Fields, structural, allowedProperty)
                 : null;
             return Fail(
                 ref diagnostics,
@@ -686,6 +712,30 @@ public static class ObservationValidator
             return Fail(
                 ref diagnostics,
                 new(ErrorCode.InvalidUnionDiscriminator, unionType.Id.Value, unionType.Discriminator.FieldName));
+        }
+
+        if (matchingType is ObjectTypeRef objectType)
+        {
+            return TryMatchObject(
+                objectType,
+                value,
+                graph,
+                maxDepth,
+                ref diagnostics,
+                unionType.Discriminator.FieldName);
+        }
+
+        if (matchingType is NamedTypeRef namedType
+            && graph.TryGetType(namedType.TypeId, out var definition)
+            && definition is TypeDefinition.Structural structural)
+        {
+            return TryMatchStructural(
+                structural,
+                value,
+                graph,
+                maxDepth,
+                ref diagnostics,
+                unionType.Discriminator.FieldName);
         }
 
         return TryMatchTypeCore(matchingType, value, graph, maxDepth, ref diagnostics);
@@ -1034,11 +1084,17 @@ public static class ObservationValidator
 
     static string? FindUnknownObjectProperty(
         IReadOnlyDictionary<string, ObservationValue> fields,
-        IReadOnlyList<ObjectFieldTypeDef> definitions)
+        IReadOnlyList<ObjectFieldTypeDef> definitions,
+        string? allowedProperty = null)
     {
         string? unknown = null;
         foreach (var propertyName in fields.Keys)
         {
+            if (allowedProperty is not null
+                && string.Equals(propertyName, allowedProperty, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
             var known = false;
             foreach (var field in definitions)
             {
@@ -1055,11 +1111,17 @@ public static class ObservationValidator
 
     static string? FindUnknownStructuralProperty(
         IReadOnlyDictionary<string, ObservationValue> fields,
-        TypeDefinition.Structural structural)
+        TypeDefinition.Structural structural,
+        string? allowedProperty = null)
     {
         string? unknown = null;
         foreach (var propertyName in fields.Keys)
         {
+            if (allowedProperty is not null
+                && string.Equals(propertyName, allowedProperty, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
             var known = false;
             foreach (var field in structural.Fields)
             {
