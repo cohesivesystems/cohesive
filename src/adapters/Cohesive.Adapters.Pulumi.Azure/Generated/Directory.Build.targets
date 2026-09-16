@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup><PackageReference Update="Pulumi" Version="3.113.1" /></ItemGroup>
+</Project>
