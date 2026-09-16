@@ -154,6 +154,11 @@ jobs:
           COHESIVE_NUGET_LOCAL_FEED: ${{ github.workspace }}/artifacts/nuget
         run: bash ./eng/test-api-package-consumer.sh "${{ steps.version.outputs.version }}"
 
+      - name: Test Azure Pulumi package consumer
+        env:
+          COHESIVE_NUGET_LOCAL_FEED: ${{ github.workspace }}/artifacts/nuget
+        run: bash ./eng/test-pulumi-azure-package-consumer.sh "${{ steps.version.outputs.version }}"
+
       - name: Test CLI package consumer
         env:
           COHESIVE_NUGET_LOCAL_FEED: ${{ github.workspace }}/artifacts/nuget

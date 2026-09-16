@@ -15,7 +15,8 @@
     <ProjectReference Include="Generated/dotnet/Pulumi.AzureNative_durabletask_v20251101.csproj" PrivateAssets="all" />
   </ItemGroup>
   <!-- This generated SDK is bundled, never independently published under Pulumi's package identity. -->
-  <Target Name="BundleDurableTaskSdk" DependsOnTargets="BuildOnlySettings;ResolveReferences">
+  <!-- Pack consumes prior build output, including when the release disables building. -->
+  <Target Name="BundleDurableTaskSdk" DependsOnTargets="BuildOnlySettings">
     <ItemGroup>
       <BuildOutputInPackage Include="$(OutputPath)Pulumi.AzureNative_durabletask_v20251101.dll" />
     </ItemGroup>
