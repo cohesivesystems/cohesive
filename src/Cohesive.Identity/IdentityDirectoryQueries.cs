@@ -304,13 +304,31 @@ public static class IdentityDirectoryQueries
                     $"{diagnostic.Code}: {diagnostic.Message}")));
     }
 
-    sealed class ParameterizedRowsQuery(
-        RelationQueryAuthoringResult<QueryDefinition> query,
-        ImmutableArray<RelationQueryParameterHandle> parameters,
-        RelationQueryResultHandle<RowsQueryResultDefinition> rows,
-        ImmutableArray<RelationQueryFieldReference> selectedFields)
+    sealed class ParameterizedRowsQuery
     {
-        public RelationQueryDocument Document { get; } = query.CreateDocument();
+        readonly RelationQueryAuthoringResult<QueryDefinition> query;
+        readonly ImmutableArray<RelationQueryParameterHandle> parameters;
+        readonly RelationQueryCompilationRequest compilation;
+
+        public ParameterizedRowsQuery(
+            RelationQueryAuthoringResult<QueryDefinition> query,
+            ImmutableArray<RelationQueryParameterHandle> parameters,
+            RelationQueryResultHandle<RowsQueryResultDefinition> rows,
+            ImmutableArray<RelationQueryFieldReference> selectedFields)
+        {
+            this.query = query;
+            this.parameters = parameters;
+            Document = query.CreateDocument();
+            compilation = new(
+                Document,
+                [IdentityDomainModel.ShapeGraphDocument],
+                demand: RelationQueryCompilationDemand.ForQueryResults(
+                [
+                    QueryResultDemand.SelectedFields(rows.Id, selectedFields)
+                ]));
+        }
+
+        public RelationQueryDocument Document { get; }
 
         public RelationQueryEvaluation Evaluate(
             RelationQueryEvaluationId evaluationId,
@@ -323,9 +341,7 @@ public static class IdentityDirectoryQueries
                     nameof(values));
             }
 
-            var builder = Document.Evaluate(
-                evaluationId,
-                [IdentityDomainModel.ShapeGraphDocument]);
+            var builder = compilation.Evaluate(evaluationId);
             for (var index = 0; index < parameters.Length; index++)
             {
                 builder.Set(
@@ -334,7 +350,7 @@ public static class IdentityDirectoryQueries
                     evidenceReference: "cohesive.identity/directory-parameter");
             }
 
-            return builder.Select(rows.Id, selectedFields).Build();
+            return builder.Build();
         }
     }
 }

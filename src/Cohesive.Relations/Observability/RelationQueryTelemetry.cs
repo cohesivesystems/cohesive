@@ -89,6 +89,12 @@ public static class RelationQueryTelemetry
     /// <summary>Activity and metric tag identifying the phase that terminated canonical evaluation.</summary>
     public const string TerminalPhaseTagName = "cohesive.relations.terminal_phase";
 
+    /// <summary>
+    /// Trace attribute indicating whether immutable evaluation preparation was already available for the exact
+    /// compilation request. This is never a core metric dimension.
+    /// </summary>
+    public const string PreparationCacheHitTagName = "cohesive.relations.preparation.cache_hit";
+
     /// <summary>Activity and metric tag distinguishing a bound request from an already-native request.</summary>
     public const string RequestKindTagName = "cohesive.relations.request_kind";
 
