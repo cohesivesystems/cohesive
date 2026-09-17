@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
@@ -317,6 +318,7 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
     readonly IRelationQueryInterpreter interpreter;
     readonly RelationQueryPhysicalExecutor physicalExecutor;
     readonly IRelationRequirementGapPolicy requirementGapPolicy;
+    readonly ConditionalWeakTable<RelationQueryCompilationRequest, PreparationCacheEntry> preparations = new();
 
     /// <summary>
     /// Creates a convention-configured evaluator for relations whose only input is a supplied root set.
@@ -360,6 +362,13 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
     }
 
     /// <summary>Creates a canonical evaluator over explicit placement policy and source readers.</summary>
+    /// <remarks>
+    /// Static compilation, realization, placement, and physical planning are weakly cached for the lifetime of an
+    /// exact <see cref="RelationQueryCompilationRequest"/> instance. <paramref name="createPlacement"/> must
+    /// therefore be deterministic for a compiled plan and return an immutable reusable placement. Runtime inputs,
+    /// source reads, execution, and interpretation are never cached. A preparation exception removes the entry so a
+    /// later evaluation may retry.
+    /// </remarks>
     /// <param name="createPlacement">
     /// Resolves one exact plan-scoped source placement. The returned artifact must cite the supplied plan and use
     /// <see cref="RelationQuerySourceAcquisitionKind.Supplied"/> for a relation-root input.
@@ -434,6 +443,7 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
         CancellationToken cancellationToken)
     {
         var activity = RelationQueryTelemetryRuntime.StartActivity(RelationQueryTelemetry.EvaluationActivityName);
+        var preparationCacheHit = preparations.TryGetValue(evaluation.Compilation, out _);
         var started = RelationQueryTelemetryRuntime.StartTimer();
         Exception? failure = null;
         RelationQueryEvaluationOutcome? outcome = null;
@@ -442,6 +452,9 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
             outcome = await EvaluateCoreAsync(evaluation, cancellationToken).ConfigureAwait(false);
             if (activity?.IsAllDataRequested == true)
             {
+                activity.SetTag(
+                    RelationQueryTelemetry.PreparationCacheHitTagName,
+                    preparationCacheHit);
                 RelationQueryTelemetry.TrySetFingerprintTag(
                     activity,
                     RelationQueryTelemetry.DefinitionFingerprintTagName,
@@ -515,8 +528,21 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
         RelationQueryEvaluation evaluation,
         CancellationToken cancellationToken)
     {
+        var pending = preparations.GetValue(
+            evaluation.Compilation,
+            request => new(this, request));
+        RelationQueryCompilationResult compilation;
+        try
+        {
+            compilation = pending.Compilation.Value;
+        }
+        catch
+        {
+            preparations.Remove(evaluation.Compilation);
+            throw;
+        }
 
-        var compilation = RelationQueryStaticCompiler.Compile(evaluation.Compilation);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!compilation.IsSuccessful)
             return new(evaluation, compilation);
 
@@ -539,21 +565,24 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
             }
         }
 
+        EvaluationPreparation preparation;
+        try
+        {
+            preparation = pending.Preparation.Value;
+        }
+        catch
+        {
+            preparations.Remove(evaluation.Compilation);
+            throw;
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
-        var realization = interpreter.Realize(plan);
+        var realization = preparation.Realization!;
         if (!realization.IsRealizable)
             return new(evaluation, compilation, realization);
 
-        cancellationToken.ThrowIfCancellationRequested();
-        var placement = createPlacement(plan);
-        cancellationToken.ThrowIfCancellationRequested();
-        var physicalPlanning = RelationQueryPhysicalPlanner.Compile(
-            plan,
-            realization,
-            placement,
-            physicalPlanningPolicy,
-            interpreter
-            );
+        var placement = preparation.Placement!;
+        var physicalPlanning = preparation.PhysicalPlanning!;
         if (!physicalPlanning.IsSuccessful)
             return new(
                 evaluation,
@@ -585,6 +614,46 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
             physicalPlanning,
             execution
             );
+    }
+
+    EvaluationPreparation Prepare(RelationQueryCompilationResult compilation)
+    {
+        var plan = compilation.Plan!;
+        var realization = interpreter.Realize(plan);
+        if (!realization.IsRealizable)
+            return new(compilation, realization);
+
+        var placement = createPlacement(plan);
+        var physicalPlanning = RelationQueryPhysicalPlanner.Compile(
+            plan,
+            realization,
+            placement,
+            physicalPlanningPolicy,
+            interpreter);
+        return new(compilation, realization, placement, physicalPlanning);
+    }
+
+    sealed record EvaluationPreparation(
+        RelationQueryCompilationResult Compilation,
+        RelationQueryRealizationReport? Realization = null,
+        RelationQuerySourcePlacement? Placement = null,
+        RelationQueryPhysicalPlanningResult? PhysicalPlanning = null);
+
+    sealed class PreparationCacheEntry
+    {
+        public PreparationCacheEntry(RelationQueryEvaluator evaluator, RelationQueryCompilationRequest request)
+        {
+            Compilation = new(
+                () => RelationQueryStaticCompiler.Compile(request),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            Preparation = new(
+                () => evaluator.Prepare(Compilation.Value),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+        }
+
+        public Lazy<RelationQueryCompilationResult> Compilation { get; }
+
+        public Lazy<EvaluationPreparation> Preparation { get; }
     }
 
     static string TerminalPhase(RelationQueryEvaluationOutcome? outcome, Exception? failure)

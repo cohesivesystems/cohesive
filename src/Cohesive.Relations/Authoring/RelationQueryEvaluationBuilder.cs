@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
@@ -140,6 +141,9 @@ public sealed record RelationQuerySuppliedRootSet
 /// </remarks>
 public sealed class RelationQueryEvaluation
 {
+    static readonly ConditionalWeakTable<RelationQueryCompilationRequest, DocumentValidationResult>
+        CompilationValidations = new();
+
     /// <summary>Current portable canonical evaluation schema version.</summary>
     public const string CurrentSchemaVersion = "relation-query-evaluation/v3";
 
@@ -198,7 +202,9 @@ public sealed class RelationQueryEvaluation
         if (!string.Equals(SchemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
             throw new ArgumentException($"Unsupported relation/query evaluation schema version '{SchemaVersion}'.", nameof(schemaVersion));
         Compilation = Guard.RequireNotNull(compilation);
-        var documentValidation = RelationQueryDocumentSemanticValidator.Validate(Compilation.DefinitionDocument);
+        var documentValidation = CompilationValidations.GetValue(
+            Compilation,
+            static request => RelationQueryDocumentSemanticValidator.Validate(request.DefinitionDocument));
         if (!documentValidation.IsValid)
         {
             throw new ArgumentException(
@@ -386,6 +392,7 @@ public sealed class RelationQueryEvaluation
 /// </remarks>
 public sealed class RelationQueryEvaluationBuilder
 {
+    readonly RelationQueryCompilationRequest? fixedCompilation;
     readonly RelationQueryDocument document;
     readonly RelationQueryDefinition definition;
     readonly ImmutableArray<ShapeGraphDocument> shapeDocuments;
@@ -459,6 +466,55 @@ public sealed class RelationQueryEvaluationBuilder
         results = definition is QueryDefinition query
             ? query.Results.Select(static result => result.Id).ToHashSet()
             : new HashSet<QueryResultId>();
+    }
+
+    /// <summary>
+    /// Creates an evaluation builder over one reusable immutable static-compilation request.
+    /// </summary>
+    /// <remarks>
+    /// Reusing the request preserves the exact semantic snapshot across invocations and allows an evaluator to
+    /// reuse derived immutable preparation artifacts. Runtime parameter evidence, supplied roots, and evaluation
+    /// identity remain invocation-specific and are never retained by the request.
+    /// </remarks>
+    /// <param name="compilation">Exact immutable definition, shape, relationship, and demand snapshot.</param>
+    /// <param name="evaluation">Caller-assigned evaluation identity.</param>
+    /// <param name="planReference">Optional exact compiled-plan attribution.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="compilation"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="evaluation"/> is default, the compilation document is invalid, or
+    /// <paramref name="planReference"/> identifies another definition or demand.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The compilation demand or document contains a value that cannot be canonically fingerprinted.
+    /// </exception>
+    /// <exception cref="System.Text.Json.JsonException">
+    /// The compilation demand or document cannot be written using the strict portable JSON contract.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// The compilation demand or document contains an unsupported serialization type.
+    /// </exception>
+    public RelationQueryEvaluationBuilder(
+        RelationQueryCompilationRequest compilation,
+        RelationQueryEvaluationId evaluation,
+        RelationQueryCompiledPlanReference? planReference = null)
+        : this(
+            Guard.RequireNotNull(compilation).DefinitionDocument,
+            evaluation,
+            compilation.ShapeDocuments,
+            compilation.RelationshipCatalogDocument,
+            planReference)
+    {
+        if (planReference is not null
+            && !Equals(
+                planReference.DemandFingerprint,
+                RelationQueryCompiledPlanFingerprinter.ComputeDemand(compilation.Demand)))
+        {
+            throw new ArgumentException(
+                "The compiled-plan reference does not identify the compilation request's effective demand.",
+                nameof(planReference));
+        }
+
+        fixedCompilation = compilation;
     }
 
     /// <summary>
@@ -821,7 +877,17 @@ public sealed class RelationQueryEvaluationBuilder
             RelationDefinition when relationDemand is not null => relationDemand,
             _ => null
         };
-        var demand = explicitDemand ?? RelationQueryCompilationDemand.AllDeclaredOutputs;
+        var demand = explicitDemand ?? fixedCompilation?.Demand ?? RelationQueryCompilationDemand.AllDeclaredOutputs;
+
+        if (fixedCompilation is not null
+            && explicitDemand is not null
+            && !Equals(
+                RelationQueryCompiledPlanFingerprinter.ComputeDemand(explicitDemand),
+                RelationQueryCompiledPlanFingerprinter.ComputeDemand(fixedCompilation.Demand)))
+        {
+            throw new InvalidOperationException(
+                "The authored evaluation demand does not match the reusable compilation request.");
+        }
 
         if (planReference is not null
             && !Equals(
@@ -838,7 +904,7 @@ public sealed class RelationQueryEvaluationBuilder
                 .Select(CreateEvidence)
                 .OrderBy(static item => item.Input.Value, StringComparer.Ordinal)
         ];
-        RelationQueryCompilationRequest compilation = new(
+        var compilation = fixedCompilation ?? new RelationQueryCompilationRequest(
             document,
             shapeDocuments,
             relationshipCatalogDocument,
@@ -975,6 +1041,31 @@ public sealed class RelationQueryEvaluationBuilder
 /// <summary>Convenience entry points for target-neutral canonical relation/query evaluation authoring.</summary>
 public static class RelationQueryEvaluationAuthoringExtensions
 {
+    /// <summary>Begins an evaluation over one reusable immutable static-compilation request.</summary>
+    /// <param name="compilation">Exact definition, shape, relationship, and demand snapshot to evaluate.</param>
+    /// <param name="evaluation">Caller-assigned evaluation identity.</param>
+    /// <param name="planReference">Optional exact compiled-plan attribution.</param>
+    /// <returns>A target-neutral evaluation builder that retains <paramref name="compilation"/> by reference.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="compilation"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="evaluation"/> is default, the compilation document is invalid, or
+    /// <paramref name="planReference"/> identifies another definition or demand.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The compilation demand or document contains a value that cannot be canonically fingerprinted.
+    /// </exception>
+    /// <exception cref="System.Text.Json.JsonException">
+    /// The compilation demand or document cannot be written using the strict portable JSON contract.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// The compilation demand or document contains an unsupported serialization type.
+    /// </exception>
+    public static RelationQueryEvaluationBuilder Evaluate(
+        this RelationQueryCompilationRequest compilation,
+        RelationQueryEvaluationId evaluation,
+        RelationQueryCompiledPlanReference? planReference = null) =>
+        new(compilation, evaluation, planReference);
+
     /// <summary>Begins an evaluation of an exact persisted canonical relation/query document.</summary>
     /// <param name="document">Exact relation/query document to evaluate.</param>
     /// <param name="evaluation">Caller-assigned evaluation identity.</param>

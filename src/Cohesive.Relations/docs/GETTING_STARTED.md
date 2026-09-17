@@ -255,6 +255,23 @@ policy, and source readers. It performs static compilation, capability realizati
 and canonical interpretation. The evaluation remains target-neutral and carries exact parameter and supplied-root
 evidence.
 
+For a repeatedly invoked definition with the same shapes, catalog, and output demand, retain the immutable
+`RelationQueryCompilationRequest` and author each invocation from it:
+
+```csharp
+var reusableCompilation = evaluation.Compilation;
+
+var nextEvaluation = reusableCompilation
+    .Evaluate(new("load-search/load-43"))
+    .Supply([nextLoad], static load => load.Id)
+    .Build();
+```
+
+An evaluator weakly associates immutable compilation, realization, placement, and physical-planning artifacts with
+that exact request. Runtime parameters, supplied roots, source reads, and interpreted results are always evaluated
+per invocation. Failed preparation is removed rather than poisoning later attempts. The
+`cohesive.relations.preparation.cache_hit` trace attribute makes reuse visible without adding a metric dimension.
+
 Map successful or partial canonical rows with the compiled DTO kernel:
 
 ```csharp

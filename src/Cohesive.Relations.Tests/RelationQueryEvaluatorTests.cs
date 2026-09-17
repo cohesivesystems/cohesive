@@ -302,6 +302,94 @@ public sealed class RelationQueryEvaluatorTests
     }
 
     [Fact]
+    public async Task EvaluateAsync_ReusesPreparationForTheExactCompilationRequestWithoutRetainingParameters()
+    {
+        RelationQueryCompilationRequest compilation = new(
+            CreateParameterizedQueryDocument(),
+            LoadCustomerRelationFixture.ShapeGraphDocuments,
+            LoadCustomerRelationFixture.RelationshipCatalogDocument);
+        var open = compilation
+            .Evaluate(new("tests/query/open"))
+            .Set(LoadCustomerRelationFixture.StatusParameterId, ObservationValue.FromString("Open"))
+            .Build();
+        var closed = compilation
+            .Evaluate(new("tests/query/closed"))
+            .Set(LoadCustomerRelationFixture.StatusParameterId, ObservationValue.FromString("Closed"))
+            .Build();
+        var placementCount = 0;
+        var evaluator = CreateEvaluator(
+            open,
+            loadRows:
+            [
+                Load("load-1", "customer-1", "Open", 12m),
+                Load("load-2", "customer-2", "Closed", 30m)
+            ],
+            customerRows:
+            [
+                Customer("customer-1", "Acme", "Priority"),
+                Customer("customer-2", "Beta", "Standard")
+            ],
+            afterPlacement: () => placementCount++);
+
+        var openOutcome = await evaluator.EvaluateAsync(open);
+        var closedOutcome = await evaluator.EvaluateAsync(closed);
+
+        Assert.Equal(1, placementCount);
+        Assert.Same(compilation, open.Compilation);
+        Assert.Same(compilation, closed.Compilation);
+        Assert.Same(openOutcome.Compilation, closedOutcome.Compilation);
+        Assert.Same(openOutcome.Realization, closedOutcome.Realization);
+        Assert.Same(openOutcome.Placement, closedOutcome.Placement);
+        Assert.Same(openOutcome.PhysicalPlanning, closedOutcome.PhysicalPlanning);
+        Assert.NotSame(openOutcome.PhysicalExecution, closedOutcome.PhysicalExecution);
+        Assert.Equal("load-1", QueryRow(openOutcome));
+        Assert.Equal("load-2", QueryRow(closedOutcome));
+
+        static string? QueryRow(RelationQueryEvaluationOutcome outcome)
+        {
+            var result = Assert.IsType<RelationQueryExecutionResult>(outcome.Result);
+            var rows = Assert.Single(
+                result.QueryResults,
+                branch => branch.Result == LoadCustomerRelationFixture.RowsResultId);
+            return Assert.Single(rows.Rows).Value
+                .GetProperty(LoadCustomerRelationFixture.SearchIdFieldName).String;
+        }
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_CoalescesConcurrentPreparationForTheExactCompilationRequest()
+    {
+        RelationQueryCompilationRequest compilation = new(
+            CreateParameterizedQueryDocument(),
+            LoadCustomerRelationFixture.ShapeGraphDocuments,
+            LoadCustomerRelationFixture.RelationshipCatalogDocument);
+        var evaluation = compilation
+            .Evaluate(new("tests/query/concurrent"))
+            .Set(LoadCustomerRelationFixture.StatusParameterId, ObservationValue.FromString("Open"))
+            .Build();
+        var placementCount = 0;
+        var evaluator = CreateEvaluator(
+            evaluation,
+            loadRows: [Load("load-1", "customer-1", "Open", 12m)],
+            customerRows: [Customer("customer-1", "Acme", "Priority")],
+            afterPlacement: () =>
+            {
+                Interlocked.Increment(ref placementCount);
+                Thread.Sleep(25);
+            });
+
+        var outcomes = await Task.WhenAll(
+            Enumerable.Range(0, 8)
+                .Select(_ => Task.Run(async () => await evaluator.EvaluateAsync(evaluation))));
+
+        Assert.Equal(1, placementCount);
+        Assert.All(outcomes, static outcome => Assert.True(outcome.IsSuccessful));
+        Assert.All(outcomes, outcome => Assert.Same(outcomes[0].Compilation, outcome.Compilation));
+        Assert.All(outcomes, outcome => Assert.Same(outcomes[0].PhysicalPlanning, outcome.PhysicalPlanning));
+        Assert.Equal(8, outcomes.Select(static outcome => outcome.PhysicalExecution).Distinct().Count());
+    }
+
+    [Fact]
     public async Task EvaluateAsync_UsesTheConfiguredInterpreterRealizationForPhysicalPlanning()
     {
         var evaluation = RelationEvaluation("tests/restricted-interpreter", "customer-1");
@@ -629,7 +717,8 @@ public sealed class RelationQueryEvaluatorTests
         ImmutableArray<DeterministicRelationQuerySourceReader.SourceRow> loadRows = default,
         ImmutableArray<DeterministicRelationQuerySourceReader.SourceRow> customerRows = default,
         Action? afterLoadRead = null,
-        RelationQueryInMemoryInterpreter? interpreter = null)
+        RelationQueryInMemoryInterpreter? interpreter = null,
+        Action? afterPlacement = null)
     {
         var compilation = RelationQueryStaticCompiler.Compile(evaluation.Compilation);
         var plan = Assert.IsType<CompiledRelationQueryPlan>(compilation.Plan);
@@ -665,7 +754,11 @@ public sealed class RelationQueryEvaluatorTests
         }
 
         return new(
-            static plan => LoadCustomerRelationFixture.CreatePhysicalPlacement(plan),
+            plan =>
+            {
+                afterPlacement?.Invoke();
+                return LoadCustomerRelationFixture.CreatePhysicalPlacement(plan);
+            },
             FederatedLoadPhysicalExecutionFixture.CreatePolicy(),
             readers,
             interpreter);

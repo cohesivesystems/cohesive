@@ -72,6 +72,9 @@ public sealed class RelationQueryTelemetryTests
             RelationQueryTelemetry.SucceededStatus,
             evaluationActivity.Tags[RelationQueryTelemetry.StatusTagName]);
         Assert.Equal(
+            bool.FalseString,
+            evaluationActivity.Tags[RelationQueryTelemetry.PreparationCacheHitTagName]);
+        Assert.Equal(
             evaluation.Fingerprint.Value,
             evaluationActivity.Tags[RelationQueryTelemetry.EvaluationFingerprintTagName]);
         Assert.Equal(
@@ -87,6 +90,41 @@ public sealed class RelationQueryTelemetryTests
                 .Select(static tag => $"{tag.Key}={tag.Value}"));
         Assert.DoesNotContain(PrivatePayload, emitted, StringComparison.Ordinal);
         Assert.DoesNotContain("evidence/private", emitted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Evaluation_ReportsPreparationReuseWithoutRepeatingPreparationSpans()
+    {
+        using ActivityCollector collector = new(RelationQueryTelemetry.ActivitySourceName);
+        var evaluation = CreateEvaluation(PrivatePayload);
+        var evaluator = CreateEvaluator(evaluation, PrivatePayload);
+
+        _ = await evaluator.EvaluateAsync(evaluation);
+        _ = await evaluator.EvaluateAsync(evaluation);
+
+        var evaluations = collector.Snapshots
+            .Where(static snapshot => snapshot.Name == RelationQueryTelemetry.EvaluationActivityName)
+            .ToArray();
+        Assert.Equal(2, evaluations.Length);
+        Assert.Equal(bool.FalseString, evaluations[0].Tags[RelationQueryTelemetry.PreparationCacheHitTagName]);
+        Assert.Equal(bool.TrueString, evaluations[1].Tags[RelationQueryTelemetry.PreparationCacheHitTagName]);
+        var evaluationSpanIds = evaluations.Select(static evaluation => evaluation.SpanId).ToHashSet();
+        Assert.Single(
+            collector.Snapshots,
+            snapshot => snapshot.Name == RelationQueryTelemetry.StaticCompilationActivityName
+                        && evaluationSpanIds.Contains(snapshot.ParentSpanId));
+        Assert.Single(
+            collector.Snapshots,
+            snapshot => snapshot.Name == RelationQueryTelemetry.ProfileFeasibilityActivityName
+                        && evaluationSpanIds.Contains(snapshot.ParentSpanId));
+        Assert.Single(
+            collector.Snapshots,
+            snapshot => snapshot.Name == RelationQueryTelemetry.PhysicalPlanningActivityName
+                        && evaluationSpanIds.Contains(snapshot.ParentSpanId));
+        Assert.Equal(
+            2,
+            collector.Snapshots.Count(
+                static snapshot => snapshot.Name == RelationQueryTelemetry.PhysicalExecutionActivityName));
     }
 
     [Fact]

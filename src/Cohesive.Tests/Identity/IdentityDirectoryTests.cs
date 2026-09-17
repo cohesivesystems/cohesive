@@ -59,6 +59,30 @@ public sealed class IdentityDirectoryTests
     }
 
     [Fact]
+    public async Task IdentityDirectoryQueries_ReuseStaticCompilationWithoutSharingInvocationEvidence()
+    {
+        FailedCanonicalEvaluator evaluator = new();
+        EntityRepositoryIdentityDirectory directory = new(evaluator);
+
+        await Assert.ThrowsAsync<IdentityDirectoryEvaluationException>(async () =>
+            await directory.FindPrincipalAsync(new(PrincipalId: "principal-1")));
+        await Assert.ThrowsAsync<IdentityDirectoryEvaluationException>(async () =>
+            await directory.FindPrincipalAsync(new(PrincipalId: "principal-2")));
+
+        var first = evaluator.Evaluations[0];
+        var second = evaluator.Evaluations[1];
+
+        Assert.Same(first.Compilation, second.Compilation);
+        Assert.NotEqual(first.Fingerprint, second.Fingerprint);
+        Assert.Equal(
+            ObservationValue.FromString("principal-1"),
+            Assert.Single(first.Parameters).Value);
+        Assert.Equal(
+            ObservationValue.FromString("principal-2"),
+            Assert.Single(second.Parameters).Value);
+    }
+
+    [Fact]
     public async Task InMemoryIdentityDomainRepositories_ResolveActivePrincipalScopeGrants()
     {
         var directory = InMemoryIdentityDomainRepositoryFactory
@@ -290,12 +314,15 @@ public sealed class IdentityDirectoryTests
 
         public RelationQueryEvaluationOutcome? Outcome { get; private set; }
 
+        public List<RelationQueryEvaluation> Evaluations { get; } = [];
+
         public ValueTask<RelationQueryEvaluationOutcome> EvaluateAsync(
             RelationQueryEvaluation evaluation,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(evaluation);
             cancellationToken.ThrowIfCancellationRequested();
+            Evaluations.Add(evaluation);
             var compilation = RelationQueryStaticCompiler.Compile(evaluation.Compilation);
             if (!compilation.IsSuccessful)
                 throw new InvalidOperationException("The Identity fixture requires a statically valid query.");
