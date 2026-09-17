@@ -1190,6 +1190,12 @@ public sealed class ClrShapeGraphBuilder
 
     static bool TryMapJsonType(Type clrType, out TypeRef typeRef)
     {
+        if (PortableJsonValueAttribute.TryGetKind(clrType, out var portableJsonKind))
+        {
+            typeRef = new JsonTypeRef(portableJsonKind);
+            return true;
+        }
+
         if (clrType == typeof(ObservationValue))
         {
             typeRef = new JsonTypeRef(JsonTypeKind.Any);
