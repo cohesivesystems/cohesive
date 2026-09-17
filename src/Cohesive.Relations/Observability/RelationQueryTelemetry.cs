@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Cohesive.Model;
+using Cohesive.Observability;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
@@ -473,7 +474,7 @@ public sealed class RelationQueryTelemetryEmitter : IDisposable
 {
     readonly ActivitySource? source;
     readonly Meter meter;
-    readonly Histogram<double>? operationDuration;
+    readonly OperationTelemetryEmitter operations;
 
     /// <summary>Creates an emitter with matching activity-source and meter names.</summary>
     /// <param name="instrumentationName">Stable package-owned activity-source and meter name.</param>
@@ -498,6 +499,7 @@ public sealed class RelationQueryTelemetryEmitter : IDisposable
             // Activity registration observers run synchronously during construction and are strictly best effort.
         }
         meter = new(InstrumentationName, Version);
+        Histogram<double>? operationDuration = null;
         try
         {
             operationDuration = meter.CreateHistogram<double>(
@@ -509,6 +511,7 @@ public sealed class RelationQueryTelemetryEmitter : IDisposable
         {
             // Instrument-publication observers also run synchronously and cannot prevent package initialization.
         }
+        operations = new(source, operationDuration);
     }
 
     /// <summary>Stable package-owned activity-source and meter name.</summary>
@@ -518,7 +521,7 @@ public sealed class RelationQueryTelemetryEmitter : IDisposable
     public string? Version { get; }
 
     /// <summary>Whether an activity listener or duration-measurement listener currently observes this emitter.</summary>
-    public bool IsEnabled => (source?.HasListeners() ?? false) || (operationDuration?.Enabled ?? false);
+    public bool IsEnabled => operations.IsEnabled;
 
     internal Counter<T>? CreateCounter<T>(string name, string? unit, string? description)
         where T : struct
@@ -543,29 +546,15 @@ public sealed class RelationQueryTelemetryEmitter : IDisposable
     /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="name"/> is empty or white space.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
-    public Activity? StartActivity(string name, ActivityKind kind = ActivityKind.Internal)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        if (!Enum.IsDefined(kind))
-            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported activity kind.");
-
-        try
-        {
-            return source?.StartActivity(name, kind);
-        }
-        catch (Exception exception) when (RelationQueryTelemetry.IsRecoverableObservabilityFailure(exception))
-        {
-            // Observers are application extensions. A failing observer must not alter relation/query semantics.
-            return null;
-        }
-    }
+    public Activity? StartActivity(string name, ActivityKind kind = ActivityKind.Internal) =>
+        operations.StartActivity(name, kind);
 
     /// <summary>Captures a duration start timestamp only when the duration histogram is enabled.</summary>
     /// <returns>
     /// A monotonic timestamp accepted by <see cref="CompleteOperation"/>, or zero when duration measurement is
     /// disabled. The returned value has no wall-clock interpretation.
     /// </returns>
-    public long StartTimer() => operationDuration?.Enabled == true ? Stopwatch.GetTimestamp() : 0L;
+    public long StartTimer() => operations.StartTimer();
 
     /// <summary>
     /// Completes one activity and optional duration measurement without projecting semantic payload values.
@@ -600,47 +589,17 @@ public sealed class RelationQueryTelemetryEmitter : IDisposable
         if (terminalPhase is not null)
             ArgumentException.ThrowIfNullOrWhiteSpace(terminalPhase);
 
-        try
-        {
-            if (activity is not null)
-            {
-                activity.SetTag(RelationQueryTelemetry.OperationTagName, operation);
-                activity.SetTag(RelationQueryTelemetry.StatusTagName, status);
-                if (terminalPhase is not null)
-                    activity.SetTag(RelationQueryTelemetry.TerminalPhaseTagName, terminalPhase);
-                if (exception is not null)
-                    activity.SetTag(RelationQueryTelemetry.ErrorTypeTagName, exception.GetType().FullName);
-                if (exception is not null
-                    || string.Equals(status, RelationQueryTelemetry.FailedStatus, StringComparison.Ordinal)
-                    || string.Equals(status, RelationQueryTelemetry.InvalidStatus, StringComparison.Ordinal))
-                {
-                    activity.SetStatus(ActivityStatusCode.Error);
-                }
-            }
-
-            if (started != 0L && operationDuration is not null)
-            {
-                TagList tags = default;
-                tags.Add(RelationQueryTelemetry.OperationTagName, operation);
-                tags.Add(RelationQueryTelemetry.StatusTagName, status);
-                if (terminalPhase is not null)
-                    tags.Add(RelationQueryTelemetry.TerminalPhaseTagName, terminalPhase);
-                operationDuration.Record(Stopwatch.GetElapsedTime(started).TotalSeconds, tags);
-            }
-        }
-        catch (Exception telemetryException) when (RelationQueryTelemetry.IsRecoverableObservabilityFailure(telemetryException))
-        {
-            // Metrics listeners run synchronously. Contain observer failures at the observability boundary.
-        }
-
-        try
-        {
-            activity?.Dispose();
-        }
-        catch (Exception telemetryException) when (RelationQueryTelemetry.IsRecoverableObservabilityFailure(telemetryException))
-        {
-            // Activity stop listeners also run synchronously and are strictly best effort.
-        }
+        TagList tags = default;
+        tags.Add(RelationQueryTelemetry.OperationTagName, operation);
+        tags.Add(RelationQueryTelemetry.StatusTagName, status);
+        if (terminalPhase is not null)
+            tags.Add(RelationQueryTelemetry.TerminalPhaseTagName, terminalPhase);
+        var activityStatus = exception is not null
+            || string.Equals(status, RelationQueryTelemetry.FailedStatus, StringComparison.Ordinal)
+            || string.Equals(status, RelationQueryTelemetry.InvalidStatus, StringComparison.Ordinal)
+                ? ActivityStatusCode.Error
+                : ActivityStatusCode.Unset;
+        operations.CompleteOperation(activity, started, activityStatus, tags, exception);
     }
 
     /// <summary>Releases the package-owned activity source and meter.</summary>

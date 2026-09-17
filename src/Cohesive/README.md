@@ -39,6 +39,7 @@ It can be persisted, validated, generated into another host language, or interpr
 - Explicit `EntityObservationSnapshot` values when identity and version apply.
 - Portable `Expr` definitions and expression-site analysis shared by compilers and interpreters.
 - Canonical execution-definition, interaction, control, trace, explain, provenance, and compatibility contracts.
+- Native operation-telemetry emission with failure isolation for caller-owned activities and instruments.
 - Common typed quantities, identifiers, codes, paths, diagnostics, and deterministic serialization helpers.
 
 The package does not define Relations, Transitions, Processes, APIs, presentation, storage, or provider behavior.
@@ -61,6 +62,52 @@ var snapshot = new EntityObservationSnapshot(
 Physical layouts, source placement, relation occurrences, and storage concurrency tokens belong to the interpreting
 block or adapter.
 
+## Native operation telemetry
+
+Library instrumentation can compose `OperationTelemetryEmitter` over its own native .NET diagnostic objects. The
+instrumentation owner still defines every scope, instrument, operation, status, tag, and log; the emitter only pairs
+activity completion with duration/failure measurements and prevents synchronous observers from changing the measured
+operation. Duration histograms use seconds.
+
+```csharp
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
+using Cohesive.Observability;
+
+ActivitySource activities = new("Example.Library");
+Meter meter = new("Example.Library");
+Histogram<double> duration = meter.CreateHistogram<double>("example.operation.duration", "s");
+Counter<long> failures = meter.CreateCounter<long>("example.operation.failures", "{failure}");
+OperationTelemetryEmitter operations = new(activities, duration, failures);
+
+var activity = operations.StartActivity("example.operation");
+var started = operations.StartTimer();
+Exception? failure = null;
+try
+{
+    RunOperation();
+}
+catch (Exception exception)
+{
+    failure = exception;
+    throw;
+}
+finally
+{
+    TagList tags = default;
+    tags.Add("example.operation.kind", "compile");
+    operations.CompleteOperation(
+        activity,
+        started,
+        failure is null ? ActivityStatusCode.Ok : ActivityStatusCode.Error,
+        tags,
+        failure);
+}
+```
+
+Hosts collect the source and meter with their native OpenTelemetry configuration. The emitter neither references the
+OpenTelemetry SDK nor owns logging, export, sampling, or service-level policy.
+
 ## Go deeper
 
 - [Core internals](INTERNALS.md) covers observations, portable JSON values, execution catalogs, interactions,
@@ -69,6 +116,8 @@ block or adapter.
 - [Semantic model](../../docs/concepts/semantic-model.md) introduces the shared vocabulary.
 - [Observation identity decision](../../docs/decisions/observation-identity-snapshot-and-occurrence-semantics.md)
   records the ownership boundary between values, snapshots, and occurrences.
+- [Native OpenTelemetry registration decision](../../docs/decisions/native-opentelemetry-registration.md) records the
+  boundary between library emission, host collection, and adapter/provider scopes.
 
 Related application blocks include
 [`Cohesive.Relations`](../Cohesive.Relations/README.md),
