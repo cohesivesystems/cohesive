@@ -684,6 +684,28 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
 
         static bool TryGetPrimitiveSchema(Type type, out JsonObject schema)
         {
+            if (PortableJsonValueAttribute.TryGetKind(type, out var portableJsonKind))
+            {
+                schema = portableJsonKind switch
+                {
+                    JsonTypeKind.Any => [],
+                    JsonTypeKind.Object => new JsonObject { ["type"] = "object" },
+                    JsonTypeKind.Array => new JsonObject
+                    {
+                        ["type"] = "array",
+                        ["items"] = new JsonObject()
+                    },
+                    JsonTypeKind.String => new JsonObject { ["type"] = "string" },
+                    JsonTypeKind.Number => new JsonObject { ["type"] = "number" },
+                    JsonTypeKind.Boolean => new JsonObject { ["type"] = "boolean" },
+                    _ => throw new ArgumentOutOfRangeException(
+                        nameof(portableJsonKind),
+                        portableJsonKind,
+                        "A portable JSON value requires a known JSON kind.")
+                };
+                return true;
+            }
+
             if (type == typeof(string) || type == typeof(char))
             {
                 schema = new JsonObject { ["type"] = "string" };

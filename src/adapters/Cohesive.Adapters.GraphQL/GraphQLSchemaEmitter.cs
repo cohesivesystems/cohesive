@@ -948,6 +948,13 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
 
         bool TryGetScalarName(Type type, out string name)
         {
+            if (PortableJsonValueAttribute.TryGetKind(type, out _))
+            {
+                CustomScalars.Add("JSON");
+                name = "JSON";
+                return true;
+            }
+
             if (type == typeof(void))
             {
                 CustomScalars.Add("Void");

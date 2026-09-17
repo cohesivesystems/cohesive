@@ -123,6 +123,25 @@ public sealed class GraphQlSchemaEmitterTests
     }
 
     [Fact]
+    public void Emit_PortableJsonValue_UsesJsonScalarWithoutStructuralExpansion()
+    {
+        var definition = Cohesive.Api.Api.Define("Documents")
+            .Query("Get")
+                .Route("GET", "/documents")
+                .Returns<PortableJsonEnvelope>()
+                .Done()
+            .Build();
+
+        var emission = new GraphQLSchemaEmitter().Emit(new ApiCodeGenerationRequest(definition));
+        var sdl = Assert.Single(
+            emission.Documents,
+            static document => document.FileName.EndsWith(".graphql", StringComparison.Ordinal)).Text;
+
+        Assert.Contains("document: JSON!", sdl, StringComparison.Ordinal);
+        Assert.DoesNotContain($"type {nameof(PortableJsonDocument)}", sdl, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Emit_ScopePolicies_GeneratesScopeDirective()
     {
         var definition = Cohesive.Api.Api.Define("Shipping")
@@ -328,6 +347,11 @@ public sealed class GraphQlSchemaEmitterTests
     sealed record Shipment(string Id);
 
     sealed record ShipmentDto(string Id, ShipmentStatus Status, string[] Tags);
+
+    sealed record PortableJsonEnvelope(PortableJsonDocument Document);
+
+    [PortableJsonValue(JsonTypeKind.Object)]
+    sealed record PortableJsonDocument(string Value);
 
     sealed record ApiProblem(string Code, string Message);
 

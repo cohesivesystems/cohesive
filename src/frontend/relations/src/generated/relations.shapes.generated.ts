@@ -467,18 +467,10 @@ export interface RelationDraftDocumentMetadata {
 
 export type RelationQueryDefinition = {
   readonly $definition: 'relation';
-} & RelationDefinition | {
+  readonly value: unknown;
+} | {
   readonly $definition: 'query';
 } & QueryDefinition;
-
-export interface RelationDefinition {
-  id: RelationId;
-  name: RelationName;
-  rootBinding: ValueBindingId;
-  output: RelationOutputDefinition;
-  invariants: InvariantDefinition[];
-  body: LogicalQueryDefinition;
-}
 
 export interface QueryDefinition {
   id: QueryId;
@@ -1368,13 +1360,6 @@ export interface RelationDraftConventionDecision {
   sourceBinding: ValueBindingId;
   source?: FieldPath | null;
   target: FieldPath;
-}
-
-export interface RelationOutputDefinition {
-  node: QueryNodeId;
-  shape: QualifiedShapeId;
-  mode: RelationOutputMode;
-  key?: Expr | null;
 }
 
 export type QueryId = string;
