@@ -33,6 +33,8 @@ exercise the same semantic definitions, runtime evidence, and CLR DTO contracts.
 - **Execution stages:** requirement analysis, evidence indexing, in-memory execution, observation projection,
   warm CLR materialization, and canonical JSON output over simple and joined scenarios. Caller-owned JSON buffers
   isolate serialization work from result-buffer allocation.
+- **Evaluation fingerprinting:** the monolithic v3 canonical-document reference compared with segmented hashing that
+  reuses the exact immutable compilation snapshot while always reserializing per-evaluation evidence.
 
 The successful warm cases cover a single-source `LoadSummaryDto` and a flattened
 `Load + Customer + Equipment -> LoadSearchDto` relation at 1, 32, and 1,024 rows. The kernel-only
@@ -114,7 +116,9 @@ dotnet run \
 The broad `*` filter discovers every benchmark group. Use `*Observation*` for the observation lifecycle or a
 class-name filter such as `*ObservationCreationBenchmarks*`, `*ObservationProjectionBenchmarks*`,
 `*ObservationMaterializerCompilationBenchmarks*`, `*RelationDtoWarmBenchmarks*`, or
-`*RelationQueryExecutionStageBenchmarks*` when measuring one concern in isolation. The projection benchmarks
+`*RelationQueryExecutionStageBenchmarks*` when measuring one concern in isolation. Use
+`*RelationQueryEvaluationFingerprintBenchmarks*` to compare the v3 reference and warm segmented fingerprint paths.
+The projection benchmarks
 independently track returned UTF-8, returned strings, reusable caller-owned JSON buffers, streamed fingerprints,
 and warm CLR materialization so allocation and CPU tradeoffs remain visible. Use
 `*RelationQueryExecutionStageBenchmarks.Execute*` for a focused execution-kernel comparison after the stage suite

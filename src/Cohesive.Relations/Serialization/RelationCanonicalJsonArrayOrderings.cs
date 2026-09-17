@@ -5,7 +5,8 @@ namespace Cohesive.Relations.Serialization;
 /// <summary>Stable structural-path policies for set-like arrays in canonical relation documents.</summary>
 internal static class RelationCanonicalJsonArrayOrderings
 {
-    const string EvaluationDefinitionPrefix = "/compilation/definitionDocument/definition";
+    const string CompilationDefinitionPrefix = "/definitionDocument/definition";
+    const string EvaluationDefinitionPrefix = "/compilation" + CompilationDefinitionPrefix;
 
     internal static CanonicalJsonArrayOrdering Definition(CanonicalJsonArrayPath path) =>
         ResolveDefinition(path.Value);
@@ -50,6 +51,19 @@ internal static class RelationCanonicalJsonArrayOrderings
             ? CanonicalJsonArrayOrdering.ObjectSet("id")
             : CanonicalJsonArrayOrdering.Sequence;
     }
+
+    internal static CanonicalJsonArrayOrdering Compilation(CanonicalJsonArrayPath path)
+    {
+        var value = path.Value.AsSpan();
+        return value.StartsWith(CompilationDefinitionPrefix, StringComparison.Ordinal)
+            ? ResolveDefinition(value[CompilationDefinitionPrefix.Length..])
+            : CanonicalJsonArrayOrdering.Sequence;
+    }
+
+    internal static CanonicalJsonArrayOrdering SuppliedRoots(CanonicalJsonArrayPath path) =>
+        path.Value.Equals("/observations", StringComparison.Ordinal)
+            ? CanonicalJsonArrayOrdering.ObjectSet("id")
+            : CanonicalJsonArrayOrdering.Sequence;
 
     internal static CanonicalJsonArrayOrdering ShapeGraph(CanonicalJsonArrayPath path) =>
         path.Value is "/shapes" or "/namedTypes"

@@ -1,3 +1,7 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Serialization;
 
@@ -94,6 +98,46 @@ public sealed class RelationQueryEvaluationSerializationTests
     }
 
     [Fact]
+    public void SegmentedCanonicalizationExactlyMatchesThePersistedV3ReferenceProfile()
+    {
+        var queryWithoutPlan = Query("serialization/equivalence/query", "load-1", "request/1", rows: true);
+        var queryWithPlan = QueryWithPlan("serialization/equivalence/query-plan");
+        var relationWithRoots = Relation(
+            "serialization/equivalence/relation",
+            "customer-1",
+            "change-feed/17");
+
+        AssertEquivalent(queryWithoutPlan);
+        AssertEquivalent(queryWithPlan);
+        AssertEquivalent(relationWithRoots);
+
+        static void AssertEquivalent(RelationQueryEvaluation evaluation)
+        {
+            var reference = ReferenceCanonicalBytes(evaluation);
+            Assert.Equal(
+                reference,
+                RelationQueryEvaluationFingerprinter.GetCanonicalBytes(evaluation));
+            Assert.Equal(
+                new RelationQueryEvaluationFingerprint(
+                    RelationQueryEvaluationFingerprinter.Algorithm,
+                    RelationQueryEvaluationFingerprinter.Canonicalization,
+                    Convert.ToHexStringLower(SHA256.HashData(reference))),
+                RelationQueryEvaluationFingerprinter.Compute(evaluation));
+        }
+
+        static byte[] ReferenceCanonicalBytes(RelationQueryEvaluation evaluation)
+        {
+            var options = RelationQueryEvaluationJsonSerializer.CreateOptions();
+            var node = Assert.IsType<JsonObject>(JsonSerializer.SerializeToNode(evaluation, options));
+            Assert.True(node.Remove("fingerprint"));
+            return CanonicalJsonWriter.GetCanonicalBytes(
+                node,
+                options,
+                RelationCanonicalJsonArrayOrderings.Evaluation);
+        }
+    }
+
+    [Fact]
     public void DeserializeRejectsAStaleEvaluationFingerprint()
     {
         var json = RelationQueryEvaluationJsonSerializer.Serialize(
@@ -124,6 +168,42 @@ public sealed class RelationQueryEvaluationSerializationTests
         return (rows
                 ? builder.Select(LoadCustomerRelationFixture.RowsResultId)
                 : builder.Select(LoadCustomerRelationFixture.AggregationResultId))
+            .Build();
+    }
+
+    static RelationQueryEvaluation QueryWithPlan(string evaluation)
+    {
+        RelationQueryFieldReference[] fields =
+        [
+            new(LoadCustomerRelationFixture.LoadSearchShapeId, LoadCustomerRelationFixture.SearchIdPath),
+            new(
+                LoadCustomerRelationFixture.LoadSearchShapeId,
+                LoadCustomerRelationFixture.SearchCustomerNamePath)
+        ];
+        var compilationRequest = new RelationQueryCompilationRequest(
+            LoadCustomerRelationFixture.RepresentativeQueryDocument,
+            LoadCustomerRelationFixture.ShapeGraphDocuments,
+            LoadCustomerRelationFixture.RelationshipCatalogDocument,
+            RelationQueryCompilationDemand.ForQueryResults(
+            [
+                QueryResultDemand.SelectedFields(LoadCustomerRelationFixture.RowsResultId, fields)
+            ]));
+        var compilation = RelationQueryStaticCompiler.Compile(compilationRequest);
+        Assert.True(compilation.IsSuccessful);
+        var planReference = RelationQueryCompiledPlanReference.From(
+            Assert.IsType<CompiledRelationQueryPlan>(compilation.Plan));
+
+        return LoadCustomerRelationFixture.RepresentativeQueryDocument
+            .Evaluate(
+                new(evaluation),
+                LoadCustomerRelationFixture.ShapeGraphDocuments,
+                LoadCustomerRelationFixture.RelationshipCatalogDocument,
+                planReference)
+            .Set(
+                LoadCustomerRelationFixture.CursorParameterId,
+                ObservationValue.FromString("load-1"),
+                "request/plan")
+            .Select(LoadCustomerRelationFixture.RowsResultId, fields)
             .Build();
     }
 

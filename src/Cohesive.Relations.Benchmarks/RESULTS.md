@@ -1,5 +1,30 @@
 # Cohesive Benchmark Results
 
+## 2026-09-17: warm relation/query evaluation fingerprinting
+
+Measured on the working revision of `codex/evaluation-fingerprint-streaming`; BenchmarkDotNet 0.15.8 ShortRun,
+.NET 10.0.5 / SDK 10.0.201, macOS 26.6.2, Apple M5 Max. One launch, three warmups, and three measured iterations.
+The representative evaluation contains the federated Load fixture's exact definition, two shape-graph snapshots,
+relationship catalog, demand, and runtime evidence. Setup constructs the evaluation and warms the weak
+exact-compilation cache before either timed operation.
+
+```sh
+dotnet run --project src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj -c Release --no-build -- \
+  --filter '*RelationQueryEvaluationFingerprintBenchmarks*' --job short
+```
+
+| Method | Mean | Allocated |
+| --- | ---: | ---: |
+| Monolithic v3 reference | 4.487 ms | 2,344.98 KB |
+| Segmented, warm exact compilation | 3.033 μs | 2.59 KB |
+
+The optimized path incrementally hashes the same canonical property stream and weakly retains only canonical bytes
+for the exact immutable `RelationQueryCompilationRequest`. Evaluation identity, parameters, plan attribution, and
+supplied-root evidence are serialized and hashed on every call. Direct differential tests assert byte-for-byte
+equality with the monolithic declared v3 profile for query evaluations with and without plan attribution and a
+relation evaluation with supplied roots. The result is a warm shared-compilation measurement, not a claim about
+first-use canonicalization or complete evaluation latency.
+
 ## SQLite native representative selection
 
 Measured 2026-09-06 on Apple M5 Max, macOS 26.6.2, .NET SDK 10.0.201/runtime 10.0.5, BenchmarkDotNet 0.15.8,
