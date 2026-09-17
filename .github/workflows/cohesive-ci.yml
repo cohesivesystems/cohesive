@@ -35,6 +35,9 @@ jobs:
         with:
           node-version: 24
 
+      - name: Test package release preflight
+        run: node --test ./eng/check-package-version-availability.test.mjs
+
       - name: Enable pnpm
         run: |
           corepack enable
