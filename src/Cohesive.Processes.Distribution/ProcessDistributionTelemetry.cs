@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using Cohesive.Observability;
 
 namespace Cohesive.Processes.Distribution;
 
@@ -151,7 +152,7 @@ public static class ProcessDistributionTelemetry
         }
     }
 
-    internal static long StartTimer() => Runtime.IsEnabled ? Stopwatch.GetTimestamp() : 0L;
+    internal static long StartTimer() => Runtime.OperationEmitter.StartTimer();
 
     internal static Activity? StartWorkerTurn(
         OperationContext context,
@@ -279,19 +280,8 @@ public static class ProcessDistributionTelemetry
         }
     }
 
-    static Activity? StartActivity(OperationContext context, string name, ActivityKind kind)
-    {
-        try
-        {
-            return context.TraceContext is { } parent
-                ? Runtime.Source?.StartActivity(name, kind, parent)
-                : Runtime.Source?.StartActivity(name, kind);
-        }
-        catch (Exception exception) when (IsRecoverable(exception))
-        {
-            return null;
-        }
-    }
+    static Activity? StartActivity(OperationContext context, string name, ActivityKind kind) =>
+        Runtime.OperationEmitter.StartActivity(name, kind, context.TraceContext);
 
     static void CompleteActivity(
         Activity? activity,
@@ -301,36 +291,14 @@ public static class ProcessDistributionTelemetry
         ProcessWorkerPoolId? pool,
         Exception? exception)
     {
-        try
-        {
-            activity?.SetTag(OperationTagName, operation);
-            activity?.SetTag(DispositionTagName, disposition);
-            if (exception is not null)
-            {
-                activity?.SetTag("error.type", exception.GetType().FullName);
-                activity?.SetStatus(ActivityStatusCode.Error);
-            }
-            RecordOperationCore(
-                operation,
-                disposition,
-                started == 0L ? TimeSpan.Zero : Stopwatch.GetElapsedTime(started),
-                pool);
-        }
-        catch (Exception telemetryException) when (IsRecoverable(telemetryException))
-        {
-            // Activity and metrics are subordinate to the operation being observed.
-        }
-        finally
-        {
-            try
-            {
-                activity?.Dispose();
-            }
-            catch (Exception telemetryException) when (IsRecoverable(telemetryException))
-            {
-                // Stop observers are best effort.
-            }
-        }
+        var tags = OperationTags(operation, disposition, pool);
+        Runtime.OperationEmitter.CompleteOperation(
+            activity,
+            started,
+            exception is null ? ActivityStatusCode.Unset : ActivityStatusCode.Error,
+            tags,
+            exception);
+        RecordOperationCount(tags);
     }
 
     static void RecordOperationCore(
@@ -339,15 +307,36 @@ public static class ProcessDistributionTelemetry
         TimeSpan duration,
         ProcessWorkerPoolId? pool)
     {
+        var tags = OperationTags(operation, disposition, pool);
+        RecordOperationCount(tags);
         try
         {
-            TagList tags = default;
-            tags.Add(OperationTagName, operation);
-            tags.Add(DispositionTagName, disposition);
-            if (pool is { } poolId)
-                tags.Add(PoolTagName, poolId.Value);
-            Runtime.Operations?.Add(1, tags);
             Runtime.OperationDuration?.Record(duration.TotalSeconds, tags);
+        }
+        catch (Exception exception) when (IsRecoverable(exception))
+        {
+            // Synchronous observers cannot alter the observed distribution operation.
+        }
+    }
+
+    static TagList OperationTags(
+        string operation,
+        string disposition,
+        ProcessWorkerPoolId? pool)
+    {
+        TagList tags = default;
+        tags.Add(OperationTagName, operation);
+        tags.Add(DispositionTagName, disposition);
+        if (pool is { } poolId)
+            tags.Add(PoolTagName, poolId.Value);
+        return tags;
+    }
+
+    static void RecordOperationCount(in TagList tags)
+    {
+        try
+        {
+            Runtime.Operations?.Add(1, tags);
         }
         catch (Exception exception) when (IsRecoverable(exception))
         {
@@ -421,6 +410,7 @@ public static class ProcessDistributionTelemetry
         internal static readonly Gauge<long>? PoolWork;
         internal static readonly Gauge<long>? PoolWorkers;
         internal static readonly Gauge<long>? PoolReservedCapacity;
+        internal static readonly OperationTelemetryEmitter OperationEmitter;
 
         static Runtime()
         {
@@ -443,18 +433,7 @@ public static class ProcessDistributionTelemetry
             {
                 // Instrument publication is an application extension and cannot prevent package initialization.
             }
+            OperationEmitter = new(Source, OperationDuration);
         }
-
-        internal static bool IsEnabled => (Source?.HasListeners() ?? false)
-            || (Operations?.Enabled ?? false)
-            || (OperationDuration?.Enabled ?? false)
-            || (QueueDuration?.Enabled ?? false)
-            || (Attempts?.Enabled ?? false)
-            || (LeaseEvents?.Enabled ?? false)
-            || (StoreRetries?.Enabled ?? false)
-            || (TerminalOutcomes?.Enabled ?? false)
-            || (PoolWork?.Enabled ?? false)
-            || (PoolWorkers?.Enabled ?? false)
-            || (PoolReservedCapacity?.Enabled ?? false);
     }
 }

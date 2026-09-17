@@ -3,8 +3,8 @@ kind: decision
 status: implemented
 authority: cohesive.opentelemetry.registration
 owners: [cohesive-core]
-applies_to: [cohesive-adapters-opentelemetry, cohesive-execution, cohesive-relations, cohesive-processes-distribution]
-last_verified: 2026-09-15
+applies_to: [cohesive-core, cohesive-adapters-opentelemetry, cohesive-execution, cohesive-relations, cohesive-processes-distribution]
+last_verified: 2026-09-17
 supersedes: []
 ---
 
@@ -49,6 +49,17 @@ Activity parentage remains native. Cohesive activities start beneath `Activity.C
 activities are their parents and provider-client operations started during logical work are their children. The
 registration package does not create wrapper activities or modify propagation.
 
+Core instrumentation owners may compose `OperationTelemetryEmitter` over caller-owned `ActivitySource`, duration
+histogram, and optional failure counter. This component centralizes one distinct runtime guarantee: synchronous
+diagnostic observers are best effort and cannot change the operation being observed. It accepts and returns native
+`System.Diagnostics` types, does not create or own scopes or instruments, and does not define names, tags, status,
+cardinality, logging, collection, or export policy. Duration histograms supplied to it record elapsed seconds.
+
+Instrumentation owners retain their semantic catalogs and explicit control flow. They start activities and timers,
+run the operation, derive the domain-specific status and bounded tags, and complete the emission. The component does
+not execute application delegates or provide sync/async wrappers because exception, cancellation, logging, result,
+and retry semantics belong to the observed operation.
+
 ## Alternatives considered
 
 ### Put OpenTelemetry registration in every instrumentation owner
@@ -69,7 +80,8 @@ convenience. Adapter selection is a host responsibility and its scope constants 
 ### Abstract OpenTelemetry or System.Diagnostics
 
 Rejected because the native APIs already provide the required emission and collection contracts. A Cohesive facade
-would add translation without a distinct semantic guarantee.
+would add translation without a distinct semantic guarantee. The native operation-emission component is narrower:
+it preserves those native contracts while enforcing failure isolation consistently across instrumentation owners.
 
 ### Define service objectives in the registration package
 
@@ -81,6 +93,7 @@ changing the collection contract.
 
 - Hosts can collect every core Cohesive scope with one native builder call or select only the blocks they use.
 - Existing instrumentation packages remain the authorities for emitted names and semantics.
+- Library instrumentation can share observer-failure isolation without sharing or translating domain telemetry policy.
 - Trace and metric aggregate membership is paired in one place and tested against explicit block composition.
 - Export, sampling, resources, sensitive-data policy, and Application Insights configuration remain host-owned.
 - Other adapter scopes require explicit native registration from their package constants, preventing hidden
