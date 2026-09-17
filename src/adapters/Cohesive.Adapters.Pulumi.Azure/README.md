@@ -2,6 +2,7 @@
 
 Construct Azure facilities from exact Cohesive Infra plans through the existing Pulumi lifecycle.
 
+- [Key Vault construction](KEY-VAULT.md): exact vault identity, explicit retention/network settings and attributed consumer access decisions.
 - [Shared Blob Storage construction](BLOB-STORAGE.md): one account owner, exact containers and explicit/coalesced blob grants.
 - [Cosmos SQL construction](COSMOS.md): account/database/container policy and explicit data-plane grant scopes.
 - Durable Task construction is described below.
