@@ -304,6 +304,11 @@ The normalized request is a portable `relation-query-evaluation/v3` document wit
 the complete compilation snapshots, demand and its origin, evaluation identity, parameter and root evidence,
 provenance references, and optional plan attribution. Use `RelationQueryEvaluationJsonSerializer` for strict
 round trips and `HasSameSemantics` when a host must compare independently reconstructed requests.
+Fingerprint computation incrementally hashes that same v3 canonical byte stream. Because one exact immutable
+`RelationQueryCompilationRequest` is commonly shared by many runtime evaluations, its canonical bytes are retained
+in a weak identity cache; evaluation identity, parameter evidence, supplied roots, provenance, and optional plan
+attribution are never reused. Exact-byte differential tests keep the segmented writer equivalent to the declared
+canonical profile.
 
 For expression-authored relations, the common DTO-enrichment case is concise:
 
