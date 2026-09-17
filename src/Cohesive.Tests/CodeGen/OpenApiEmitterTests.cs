@@ -148,6 +148,28 @@ public sealed class OpenApiEmitterTests
     }
 
     [Fact]
+    public void Emit_PortableJsonValue_UsesDeclaredJsonContractWithoutStructuralExpansion()
+    {
+        var definition = Cohesive.Api.Api.Define("Documents")
+            .Query("Get")
+                .Route("GET", "/documents")
+                .Returns<PortableJsonEnvelope>()
+                .Done()
+            .Build();
+
+        var emission = new OpenApiEmitter().Emit(new ApiCodeGenerationRequest(definition));
+        using var json = JsonDocument.Parse(Assert.Single(emission.Documents).Text);
+        var schemas = json.RootElement.GetProperty("components").GetProperty("schemas");
+        var document = schemas
+            .GetProperty(nameof(PortableJsonEnvelope))
+            .GetProperty("properties")
+            .GetProperty(nameof(PortableJsonEnvelope.Document));
+
+        Assert.Equal("object", document.GetProperty("type").GetString());
+        Assert.False(schemas.TryGetProperty(nameof(PortableJsonDocument), out _));
+    }
+
+    [Fact]
     public void Emit_ScopePolicies_GeneratesOpenApiExtensionsAndScopeParameters()
     {
         var definition = Cohesive.Api.Api.Define("Shipping")
@@ -357,6 +379,11 @@ public sealed class OpenApiEmitterTests
     sealed record Shipment(string Id);
 
     sealed record ShipmentDto(string Id, string Status);
+
+    sealed record PortableJsonEnvelope(PortableJsonDocument Document);
+
+    [PortableJsonValue(JsonTypeKind.Object)]
+    sealed record PortableJsonDocument(string Value);
 
     sealed record ApiProblem(string Code, string Message);
 
