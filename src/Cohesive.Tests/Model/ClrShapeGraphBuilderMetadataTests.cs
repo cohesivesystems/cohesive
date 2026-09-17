@@ -203,6 +203,23 @@ public sealed class ClrShapeGraphBuilderMetadataTests
     }
 
     [Fact]
+    public void Build_MapsDeclaredPortableJsonValuesToTheirJsonContract()
+    {
+        var graph = new ClrShapeGraphBuilder()
+            .AddShape<PortableJsonEnvelope>()
+            .Build(new("graph.portable-json.test"));
+
+        var shape = Assert.Single(graph.Shapes);
+        var document = Assert.IsType<JsonTypeRef>(
+            shape.GetField(nameof(PortableJsonEnvelope.Document)).Type);
+
+        Assert.Equal(JsonTypeKind.Object, document.Kind);
+        Assert.DoesNotContain(
+            graph.NamedTypes,
+            type => type.Id.Value.Contains(nameof(PortableJsonDocument), StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Build_IncludesConditionallyIgnoredJsonPropertiesAndExcludesAlwaysIgnoredProperties()
     {
         var graph = new ClrShapeGraphBuilder()
@@ -314,6 +331,11 @@ public sealed class ClrShapeGraphBuilderMetadataTests
     sealed record CanonicalScalarEnvelope(long Count, DateOnly Date, byte[] Payload);
 
     sealed record JsonEnvelope(JsonElement Element, JsonNode? Node, JsonObject Object, JsonArray Array);
+
+    sealed record PortableJsonEnvelope(PortableJsonDocument Document);
+
+    [PortableJsonValue(JsonTypeKind.Object)]
+    sealed record PortableJsonDocument(string Value);
 
     sealed record JsonIgnoreEnvelope(
         [property: JsonIgnore] string AlwaysIgnored,
