@@ -17,6 +17,10 @@ on:
         options:
           - 'all'
           - 'dotnet'
+      npm_package:
+        description: 'Optional exact @cohesivesystems/* npm package for a targeted publish or recovery run'
+        required: false
+        type: string
 
 jobs:
   publish:
@@ -32,15 +36,21 @@ jobs:
       - name: Resolve version
         id: version
         shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_RELEASE_SCOPE: ${{ github.event.inputs.release_scope }}
+          INPUT_NPM_PACKAGE: ${{ github.event.inputs.npm_package }}
         run: |
           set -euo pipefail
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            version="${{ github.event.inputs.version }}"
-            release_scope="${{ github.event.inputs.release_scope }}"
+            version="$INPUT_VERSION"
+            release_scope="$INPUT_RELEASE_SCOPE"
+            npm_package="$INPUT_NPM_PACKAGE"
           else
             version="${GITHUB_REF_NAME#v}"
             release_scope="all"
+            npm_package=""
           fi
 
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
@@ -49,6 +59,14 @@ jobs:
           fi
           if [[ "$release_scope" != "all" && "$release_scope" != "dotnet" ]]; then
             echo "Invalid release scope: $release_scope" >&2
+            exit 1
+          fi
+          if [[ -n "$npm_package" && ! "$npm_package" =~ ^@cohesivesystems/[a-z0-9-]+$ ]]; then
+            echo "Invalid npm package selector: $npm_package" >&2
+            exit 1
+          fi
+          if [[ -n "$npm_package" && "$release_scope" != "all" ]]; then
+            echo "An npm package selector requires release scope 'all'." >&2
             exit 1
           fi
 
@@ -66,6 +84,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "npm_tag=$npm_tag" >> "$GITHUB_OUTPUT"
           echo "release_scope=$release_scope" >> "$GITHUB_OUTPUT"
+          echo "npm_package=$npm_package" >> "$GITHUB_OUTPUT"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -134,8 +153,14 @@ jobs:
       - name: Pack npm packages
         if: steps.version.outputs.release_scope == 'all'
         run: |
+          set -euo pipefail
           mkdir -p artifacts/npm
-          corepack pnpm -r --filter '@cohesivesystems/*' pack --pack-destination artifacts/npm
+          npm_package="${{ steps.version.outputs.npm_package }}"
+          if [[ -n "$npm_package" ]]; then
+            corepack pnpm --filter "$npm_package" pack --pack-destination artifacts/npm
+          else
+            corepack pnpm -r --filter '@cohesivesystems/*' pack --pack-destination artifacts/npm
+          fi
 
       - name: Pack NuGet packages
         run: |
