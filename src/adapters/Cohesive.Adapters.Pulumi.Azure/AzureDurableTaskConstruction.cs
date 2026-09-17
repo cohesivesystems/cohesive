@@ -46,17 +46,8 @@ public static class AzureDurableTaskConstruction
                 sourceReferences: [deployment.Manifest.Fingerprint.Value,
                     .. policy.SourceReferences.IsDefault ? [] : policy.SourceReferences.Select(s => s.Value)])));
 
-        if (!deployment.IsComplete || deployment.Realization?.IsReadinessObligationComplete != true)
-        {
-            Error("incomplete", "Compile a complete capability, physical-witness, and readiness realization before construction.");
-            errors.AddRange(deployment.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error));
-        }
-        if (deployment.Manifest.TargetFacilities.Profile.Target.Value != Target)
-            Error("target", $"This adapter supports only target '{Target}'.");
-        if (subscriptionId == Guid.Empty || policy.SubscriptionId != subscriptionId)
-            Error("subscription", "The program subscription must be non-empty and equal the explicit provider policy subscription.");
-        if (policy.SourceReferences.IsDefaultOrEmpty || policy.SourceReferences.Any(s => string.IsNullOrWhiteSpace(s.Value)))
-            Error("provenance", "Supply non-empty source references attributing provider scope and network policy.");
+        AzureConstructionPolicy.ValidateDeployment(deployment, Target, policy.SubscriptionId, subscriptionId,
+            policy.SourceReferences, errors, Error);
         if (!AzureConstructionPolicy.ValidResourceGroup(policy.ResourceGroupName))
             Error("resource-group", "Supply an Azure resource-group name of 1–90 valid characters without a trailing period.");
         if (string.IsNullOrWhiteSpace(policy.Location))
