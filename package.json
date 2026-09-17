@@ -14,7 +14,8 @@
     "nuget:pack": "dotnet pack Cohesive.sln -c Release",
     "npm:pack": "bash ./eng/pack-npm.sh",
     "npm:publish:dry-run": "bash ./eng/pack-npm.sh",
-    "npm:publish-local:dry-run": "COHESIVE_NPM_DRY_RUN=true bash ./eng/publish-local-npm.sh"
+    "npm:publish-local:dry-run": "COHESIVE_NPM_DRY_RUN=true bash ./eng/publish-local-npm.sh",
+    "release:preflight:test": "node --test ./eng/check-package-version-availability.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.12.0",

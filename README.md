@@ -171,6 +171,8 @@ The `release-packages` workflow publishes packages from a tag such as `v0.1.0-al
 
 - NuGet packages publish with NuGet trusted publishing through `NuGet/login`.
 - npm packages are packed with pnpm, then published to npmjs.org with npm trusted publishing.
+- Release runs are serialized and verify every requested NuGet and npm coordinate before publishing. If any coordinate already exists or registry availability cannot be established, the run fails before publishing begins.
+- Public versions are immutable coherent release sets. Do not retry a partially published version; select a new repo-wide version so a successful workflow cannot silently combine artifacts from different commits.
 - npm prerelease dist-tags map as follows: `alpha.*` to `alpha`, `preview.*` to `preview`, `rc.*` to `rc`, and other prereleases to `next`.
 - Stable npm versions publish with the `latest` dist-tag.
 

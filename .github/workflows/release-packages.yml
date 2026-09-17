@@ -18,9 +18,13 @@ on:
           - 'all'
           - 'dotnet'
       npm_package:
-        description: 'Optional exact @cohesivesystems/* npm package for a targeted publish or recovery run'
+        description: 'Optional exact @cohesivesystems/* npm package for a targeted publish'
         required: false
         type: string
+
+concurrency:
+  group: release-packages
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -204,6 +208,21 @@ jobs:
             artifacts/nuget/*.snupkg
             artifacts/npm/*.tgz
 
+      - name: Verify package versions are unpublished
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          arguments=(
+            --version "${{ steps.version.outputs.version }}"
+            --nuget-dir artifacts/nuget
+          )
+          if [[ "${{ steps.version.outputs.release_scope }}" == "all" ]]; then
+            arguments+=(--npm-dir artifacts/npm)
+          fi
+
+          node ./eng/check-package-version-availability.mjs "${arguments[@]}"
+
       - name: NuGet login
         uses: NuGet/login@v1
         id: nuget-login
@@ -217,8 +236,7 @@ jobs:
           for package in artifacts/nuget/*.nupkg; do
             dotnet nuget push "$package" \
               --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
-              --source https://api.nuget.org/v3/index.json \
-              --skip-duplicate
+              --source https://api.nuget.org/v3/index.json
           done
 
       - name: Publish npm packages
