@@ -1,108 +1,118 @@
-# Exact Key Vault construction
+# Key Vault binding seam
 
-`AzureKeyVaultConstruction` constructs one Standard, RBAC-authorized, soft-delete-enabled vault
-inside an existing Pulumi program. It never retrieves, sets or exports secret values, creates a
-provider, or creates role assignments automatically.
+Cohesive.Infra declares the vault, its identity, ownership and consumer bindings. Pulumi's native
+`VaultArgs`, `VaultPropertiesArgs` and `CustomResourceOptions` configure and create it. This adapter
+connects those authorities; it does not maintain a second SKU, retention, networking or resource-options API.
 
-## Authority and flow
+## Declaration → native configuration → association
 
-The exact `InfrastructureTargetDeploymentPlan` is the authority for canonical resource identity,
-consumer bindings, physical placement, capability/readiness obligations and lifecycle ownership.
-The resource must use `azure/key-vault`, target `pulumi-azure-native/3.16.0`, and a single managed
-Pulumi authority. Physical identity is `azure/key-vault/vaults/<vault-name>`; there is no second
-physical-name property. Case-insensitive aliases and external ownership are rejected.
-
-`AzureKeyVaultPolicy` supplies attributable subscription, tenant, resource group, location, logical
-name, RBAC selection, retention, public network setting and per-consumer access decisions. Host
-subscription and tenant must match before any registration. These are **declared scope checks**:
-the caller must obtain the actual host scope and use the matching default or explicit provider.
-The adapter cannot attest arbitrary provider credentials or map a principal to a workload.
-
-Call the existing Aspire handoff's `RequireExactPlan(plan)` before `Register`. Pass the original
-parent and provider, plus `resourceGroupDependency` when the group is created in the program.
-No implicit component changes resource URNs. The returned typed `Vault.Id` retains dependencies
-for consumers such as ML workspaces; `VaultUri` comes from the provider's actual properties, so
-sovereign-cloud endpoints are not reconstructed. Unknown outputs stay unknown. Pulumi secret
-classification propagates through URI and principal projections; a missing resolved URI faults
-with `InvalidOperationException` rather than manufacturing an endpoint.
-
-## Access decisions are not access observations
-
-Every participating incoming binding must use the explicitly selected secret-read contract and
-have exactly one `AzureKeyVaultBindingAccess` decision. Nonparticipating workloads cannot acquire
-grants. Decisions require a non-secret reason and references to evidence or a concrete unresolved
-access follow-up. Missing, duplicate, unknown or unattributed decisions fail before registration.
-
-- `AssignSecretsUser` authorizes `AccessGrant` to produce the built-in
-  [Key Vault Secrets User](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/security#key-vault-secrets-user)
-  role arguments at the **actual vault ID**. This reads all secrets in that vault; selecting it is
-  an explicit vault-wide decision, not a least-privilege inference from an individual secret.
-- `NoManagedGrant` deliberately preserves absence of a managed role. It does **not** assert that
-  an external role exists, that the workload can read secrets, or that runtime readiness is proven.
-  `AccessGrant` rejects such a binding. The original decision remains inspectable in `Policy` and
-  the canonical consumer remains visible in `SecretBindings`.
-
-The caller owns the principal/workload association, role logical name, GUID, parent, provider and
-extra dependencies. `AccessGrant` requires the same subscription and tenant and a non-empty
-assignment GUID. It cannot broaden scope to a resource group/subscription, substitute another role,
-or authorize an undeclared/nonparticipating consumer. Role creation remains explicit:
+1. The existing Aspire handoff verifies the exact `InfrastructureTargetDeploymentPlan`.
+2. `AzureKeyVaultBinding.VaultName` validates the semantic selection and returns the manifest name.
+3. The host constructs a normal Pulumi `Vault`, supplying all native configuration and options.
+4. `Attach` associates that resource with the canonical declaration and produces identity-checked
+   outputs and explicit access-grant arguments. It registers no resources and invokes no provider.
 
 ```csharp
-var vault = AzureKeyVaultConstruction.Register(plan, policy, subscriptionId, tenantId,
-    provider: azureProvider, parent: existingParent, resourceGroupDependency: resourceGroup);
-var grant = new RoleAssignment(existingRoleName,
-    vault.AccessGrant(secretReaderBinding, subscriptionId, tenantId, workloadPrincipal, existingRoleId),
+var name = AzureKeyVaultBinding.VaultName(plan, policy, subscriptionId, tenantId);
+var nativeVault = new Vault("existing-vault", new VaultArgs
+{
+    VaultName = name,
+    ResourceGroupName = resourceGroup.Name,
+    Location = location,
+    Properties = new VaultPropertiesArgs
+    {
+        TenantId = tenantId.ToString("D"),
+        EnableRbacAuthorization = true,
+        EnableSoftDelete = true,
+        SoftDeleteRetentionInDays = 7,
+        PublicNetworkAccess = "Enabled",
+        Sku = new SkuArgs { Family = "A", Name = SkuName.Standard }
+    }
+}, new CustomResourceOptions { Provider = azureProvider, Parent = existingParent });
+var bound = AzureKeyVaultBinding.Attach(plan, policy, subscriptionId, tenantId, nativeVault);
+// Use bound.VaultId / bound.VaultUri for checked downstream projections.
+```
+
+The fragment assumes existing plan, policy, scope and host variables. The seven-day Standard profile
+is only example host policy. Premium, purge protection, retention, firewall/private networking,
+access policies, tags, native dependencies, imports, aliases and protection remain native Pulumi
+configuration. The host must ensure those settings satisfy the capabilities its target declares.
+Azure/Pulumi retain their validation and lifecycle contracts; this seam does not certify every
+native setting or claim that attached resource properties prove general readiness.
+
+The selected canonical resource must use `azure/key-vault`, target `pulumi-azure-native/3.16.0`, and
+one managed Pulumi authority. Physical identity is `azure/key-vault/vaults/<vault-name>`. The manifest
+remains the sole physical-name authority. Ambiguous aliases, external ownership, incomplete plans,
+foreign targets and mismatched declared subscription/tenant are rejected. Group and region are
+native target configuration, not a second placement catalog in the binding policy.
+
+## Explicit access decisions
+
+Each participating incoming secret-read binding needs exactly one attributed decision:
+
+- `AssignSecretsUser` permits `AccessGrant` to produce
+  [Key Vault Secrets User](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/security#key-vault-secrets-user)
+  role arguments at the identity-checked actual vault ID. The resolved vault must use RBAC.
+  This is an explicit vault-wide read grant, not inferred least privilege for an individual secret.
+- `NoManagedGrant` creates no grant and cannot produce grant arguments. It does not claim external
+  access exists or the workload is ready. Its non-secret reason and evidence/follow-up references
+  remain inspectable alongside the canonical consumer.
+
+Missing, duplicate, unknown or unattributed decisions fail semantic validation. Nonparticipating
+workloads cannot receive grants. The host owns principal-to-workload association and retains the
+role's native logical name, GUID, provider, parent and additional dependencies:
+
+```csharp
+var role = new RoleAssignment(existingRoleName,
+    bound.AccessGrant(readerBinding, subscriptionId, tenantId, workloadPrincipal, existingRoleId),
     new CustomResourceOptions { Provider = azureProvider, Parent = existingParent });
 ```
 
-This fragment assumes an existing verified plan and explicit policy. Preserve existing access
-absence during mechanical migration; reconcile runtime consumers and authorization evidence in a
-separate policy decision before adding permissions. Ari's adoption is ARI-546, separately from the
-COH-119 reusable provider deliverable.
+Other authorization mechanisms can remain native with an attributed `NoManagedGrant` decision.
+The helper intentionally authorizes only this supported canonical secret-reader/RBAC relationship;
+it is not a general Azure permission catalog. No secret values are accepted, retrieved or exported.
 
-## Supported profile and failure contract
+## Validation timing and outputs
 
-The profile fixes Standard/A SKU, RBAC, soft delete enabled, and deployment/disk-encryption/template
-integration flags disabled. Retention is explicitly 7–90 days, matching
-[Azure's soft-delete contract](https://learn.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview).
-`AuthorizationMode` must be `Rbac`; `PublicNetworkAccess` must be `Enabled` or `Disabled`.
-Purge protection is left unspecified, preserving the provider/default behavior; this API does not
-claim to configure it. Private endpoints, firewall rules, legacy access policies, HSM/Premium,
-secret-specific scopes, secret/key/certificate contents, imports/aliases and other resource options
-are outside this slice. A disabled public endpoint does not provision a private network or prove
-reachability. Extend policy explicitly before adopting a vault needing unsupported options.
+`Validate` is pure and returns normalized `azure.key-vault.*` diagnostics, canonical location,
+manifest fingerprint and non-secret source references. `VaultName` throws
+`AzureKeyVaultValidationException` before the host constructs a vault if semantic validation fails.
+`Attach` repeats those checks, but the native resource supplied by the caller may already have been
+registered. This API makes no fail-before-registration promise for caller-owned resource creation.
 
-Policies are immutable target configuration, not a parallel infrastructure IR. Persist them with
-`StrictDocumentJson.CreateOptions()` so unsupported fields fail rather than disappear. No credentials
-belong in tags, reasons, identifiers or source references. Diagnostics do not interpolate arbitrary
-policy values or rationale; they contain canonical resource/binding identifiers, fingerprint and
-non-secret provenance. `Validate` returns normalized `azure.key-vault.*` errors; `Register` repeats
-it and throws `AzureKeyVaultValidationException` before resource registration on failure.
+Resolved native name, resource ID subscription/provider/type/name and tenant must match the
+association. `VaultId` and `VaultUri` fault with `InvalidOperationException` on mismatch, without
+including resolved values in the message. A missing resolved URI also faults. Grant scope additionally
+faults if the resolved vault is not RBAC-authorized. Unknown preview outputs remain unknown, and
+Pulumi dependencies and secret classification propagate. Provider outputs are not reconstructed from
+public-cloud hostname assumptions. The typed `Vault` remains available for native operations; its
+raw outputs bypass these checked projections, so consumers needing the checked contract must use
+the bound outputs. Post-registration checks cannot roll back resources or guarantee cloud atomicity.
 
-Cancellation is checked before registration. Pulumi owns subsequent cancellation, retries, state,
-partial progress and recovery; the adapter adds no lifecycle engine or transactional guarantee.
+Persist the immutable **binding policy** with `StrictDocumentJson.CreateOptions()`. It contains only
+canonical selection, declared scope, access decisions and provenance, with no callback or provider
+object in semantic IR. Native configuration stays in the host's target refinement. Credentials must
+not appear in identifiers, reasons, tags or provenance; diagnostics do not echo access rationale.
+Pulumi owns reconciliation, state, retries and cancellation of native operations. `Attach` cancellation
+only prevents association and cannot cancel a vault that the caller has already registered.
 
-## Design decision and verification
+## Design and verification
 
-Reuse the exact Infra deployment/binding/lifecycle contracts and `AzureConstructionPolicy` admission
-checks used by Durable Task, Cosmos and Storage. Extend the Azure provider adapter rather than core
-Infra or the provider-neutral Aspire bridge. No existing runtime secret client is a provisioning
-mechanism. Per-binding decisions are provider authorization policy attached to canonical bindings,
-not a second consumer catalog. A no-grant decision is intentionally separate from observed access,
-which requires evidence outside resource construction. No product secret names or principal lookup
-rules enter the reusable component.
+Reuse exact Infra plans/bindings/lifecycle and `AzureConstructionPolicy` admission checks. Extend the
+existing Azure adapter at the semantic/native-resource seam. Avoid a parallel vault-options record,
+resource factory callback, generic lowering framework or copied provider model. Aspire's existing
+handoff/executor remains unchanged; no SDK dependency enters core Infra. Product topology and native
+configuration remain with Ari, whose adoption is ARI-546 after COH-119 publication.
 
-Source and package-only tests cover valid retention/network profiles, early scope/ownership/policy
-rejection, aliases, missing access evidence, explicit absence, nonparticipation, strict JSON,
-credential classification, parent/provider/group dependencies, exact scope and stable role GUIDs,
-cancellation, and zero provider invokes. Run:
+Source and package-only tests cover semantic rejection, native option preservation, parent/provider
+and dependency behavior, explicit no-grant decisions, identity/tenant mismatches, RBAC prerequisites,
+exact grant identity/scope, strict JSON, secret propagation, cancellation and zero provider invokes.
 
 ```bash
 dotnet test src/Cohesive.Adapters.Pulumi.Azure.Tests -c Release
 COHESIVE_NUGET_LOCAL_FEED=artifacts/nuget bash eng/test-pulumi-azure-package-consumer.sh <version>
 ```
 
-The same tests are linked into the package consumer. Pack after building with `--no-build` to verify
-the published boundary, including the bundled Durable Task SDK. Azure SDK dependencies stay in this
-adapter. Live migration preview equivalence, actual identity evidence and authorized deployment are
-consumer responsibilities; offline tests do not prove cloud permissions or availability.
+Build then pack with `--no-build`; the package-only consumer repeats the same tests. Native live
+preview equivalence and runtime access observations remain consumer qualification, not claims of
+these offline tests.

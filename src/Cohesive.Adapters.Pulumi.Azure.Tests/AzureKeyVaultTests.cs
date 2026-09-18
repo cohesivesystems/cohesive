@@ -10,6 +10,7 @@ using Cohesive.Model.Serialization;
 using Pulumi;
 using Pulumi.AzureNative.Authorization;
 using Pulumi.AzureNative.KeyVault;
+using Pulumi.AzureNative.KeyVault.Inputs;
 using Pulumi.Testing;
 
 namespace Cohesive.Adapters.Pulumi.Azure.Tests;
@@ -31,11 +32,9 @@ public sealed class AzureKeyVaultTests
     static AzureKeyVaultPolicy Policy() => new()
     {
         Resource = Secrets, SecretReadContract = Contract, LifecycleAuthority = Authority,
-        SubscriptionId = Subscription, TenantId = Tenant, ResourceGroupName = "test-rg", Location = "westus",
-        VaultName = "existing-vault", AuthorizationMode = "Rbac", SoftDeleteRetentionInDays = 7,
-        PublicNetworkAccess = "Enabled", SourceReferences = [Source],
-        Access = [new(Binding, AzureKeyVaultAccessAction.AssignSecretsUser, "Approved workload reader.", [Source])],
-        Tags = ImmutableSortedDictionary<string, string>.Empty.Add("environment", "test")
+        SubscriptionId = Subscription, TenantId = Tenant, SourceReferences = [Source],
+        Access = [new(Binding, AzureKeyVaultAccessAction.AssignSecretsUser, "Approved workload reader.", [Source])]
+
     };
 
     [Theory]
@@ -44,7 +43,7 @@ public sealed class AzureKeyVaultTests
     public async Task Preserves_vault_identity_policy_dependencies_and_exact_explicit_grant(string network, int retention)
     {
         var plan = Plan();
-        var policy = Policy() with { PublicNetworkAccess = network, SoftDeleteRetentionInDays = retention };
+        var policy = Policy();
         Assert.True(plan.IsComplete);
         var mocks = new Mocks();
         var checkedDependencies = false;
@@ -67,7 +66,8 @@ public sealed class AzureKeyVaultTests
             });
             var provider = new global::Pulumi.AzureNative.Provider("existing-provider", new()
             { SubscriptionId = Subscription.ToString("D"), TenantId = Tenant.ToString("D") });
-            var resources = AzureKeyVaultConstruction.Register(plan, policy, Subscription, Tenant, provider, parent, group);
+            var vault = NativeVault(plan, policy, network, retention, new() { Provider = provider, Parent = parent, DependsOn = { group } });
+            var resources = AzureKeyVaultBinding.Attach(plan, policy, Subscription, Tenant, vault);
             Assert.Same(plan, resources.Deployment);
             Assert.Same(policy, resources.Policy);
             Assert.Equal(Binding, Assert.Single(resources.SecretBindings).Id);
@@ -104,7 +104,7 @@ public sealed class AzureKeyVaultTests
         Assert.Equal("A", sku["family"]);
         var grant = Assert.Single(mocks.Resources, r => r.Type == "azure-native:authorization:RoleAssignment");
         Assert.Equal(VaultId, grant.Inputs["scope"]);
-        Assert.Equal($"/subscriptions/{Subscription:D}/providers/Microsoft.Authorization/roleDefinitions/{AzureKeyVaultConstruction.SecretsUserRole}", grant.Inputs["roleDefinitionId"]);
+        Assert.Equal($"/subscriptions/{Subscription:D}/providers/Microsoft.Authorization/roleDefinitions/{AzureKeyVaultBinding.SecretsUserRole}", grant.Inputs["roleDefinitionId"]);
         Assert.Equal("9da6bc9c-60e4-4e3c-99cf-2fe700670ded", grant.Inputs["roleAssignmentName"]);
         Assert.Equal(vault.Provider, grant.Provider);
         Assert.DoesNotContain(mocks.Resources, r => r.Type?.Contains(":Secret", StringComparison.Ordinal) == true);
@@ -115,7 +115,7 @@ public sealed class AzureKeyVaultTests
     {
         await Deployment.TestAsync(new Mocks(secretProperties: true), new TestOptions(), async () =>
         {
-            var resources = AzureKeyVaultConstruction.Register(Plan(), Policy(), Subscription, Tenant);
+            var resources = AzureKeyVaultBinding.Attach(Plan(), Policy(), Subscription, Tenant, NativeVault(Plan(), Policy()));
             Assert.True(await Output.IsSecretAsync(resources.VaultUri));
         });
     }
@@ -124,13 +124,6 @@ public sealed class AzureKeyVaultTests
     [InlineData("subscription")]
     [InlineData("tenant")]
     [InlineData("lifecycle")]
-    [InlineData("resource-group")]
-    [InlineData("location")]
-    [InlineData("logical-name")]
-    [InlineData("authorization")]
-    [InlineData("retention")]
-    [InlineData("network")]
-    [InlineData("tags")]
     [InlineData("provenance")]
     [InlineData("secret-contract")]
     [InlineData("binding")]
@@ -140,20 +133,13 @@ public sealed class AzureKeyVaultTests
     [InlineData("alias")]
     [InlineData("access")]
     [InlineData("access-evidence")]
-    public async Task Invalid_inputs_fail_before_any_registration(string failure)
+    public async Task Invalid_semantic_selection_fails_before_native_construction(string failure)
     {
         var policy = failure switch
         {
             "subscription" => Policy() with { SubscriptionId = Guid.NewGuid() },
             "tenant" => Policy() with { TenantId = Guid.NewGuid() },
             "lifecycle" => Policy() with { LifecycleAuthority = new("pulumi/other/stack") },
-            "resource-group" => Policy() with { ResourceGroupName = "invalid/rg" },
-            "location" => Policy() with { Location = " " },
-            "logical-name" => Policy() with { VaultName = " " },
-            "authorization" => Policy() with { AuthorizationMode = "AccessPolicies" },
-            "retention" => Policy() with { SoftDeleteRetentionInDays = 91 },
-            "network" => Policy() with { PublicNetworkAccess = "" },
-            "tags" => Policy() with { Tags = ImmutableSortedDictionary<string, string>.Empty.Add("invalid/key", "value") },
             "provenance" => Policy() with { SourceReferences = [] },
             "secret-contract" => Policy() with { SecretReadContract = default },
             "binding" => Policy() with { SecretReadContract = new("unsupported/contract") },
@@ -162,13 +148,13 @@ public sealed class AzureKeyVaultTests
             _ => Policy()
         };
         var plan = Plan(physical: failure == "physical-identity" ? "azure/key-vault/wrong" : Physical,
-            target: failure == "target" ? "other-target" : AzureKeyVaultConstruction.Target,
+            target: failure == "target" ? "other-target" : AzureKeyVaultBinding.Target,
             incomplete: failure == "incomplete", alias: failure == "alias");
         var mocks = new Mocks();
         await Deployment.TestAsync(mocks, new TestOptions(), () =>
         {
             var error = Assert.Throws<AzureKeyVaultValidationException>(() =>
-                AzureKeyVaultConstruction.Register(plan, policy, Subscription, Tenant));
+                AzureKeyVaultBinding.VaultName(plan, policy, Subscription, Tenant));
             Assert.Contains(error.Diagnostics, d => d.Code == "azure.key-vault." + failure);
             Assert.All(error.Diagnostics, d => Assert.NotNull(d.Evidence));
         });
@@ -182,7 +168,7 @@ public sealed class AzureKeyVaultTests
     [InlineData("bad--vault")]
     [InlineData("a-name-that-is-too-long-for-a-vault")]
     public void Invalid_physical_names_are_rejected(string name) => Assert.Contains(
-        AzureKeyVaultConstruction.Validate(Plan(physical: "azure/key-vault/vaults/" + name), Policy(), Subscription, Tenant),
+        AzureKeyVaultBinding.Validate(Plan(physical: "azure/key-vault/vaults/" + name), Policy(), Subscription, Tenant),
         d => d.Code == "azure.key-vault.physical-identity");
 
     [Fact]
@@ -193,11 +179,9 @@ public sealed class AzureKeyVaultTests
             [decision with { Binding = new("unknown") }], [decision with { Action = default }],
             [decision with { Action = (AzureKeyVaultAccessAction)999 }]];
         foreach (var access in invalid)
-            Assert.Contains(AzureKeyVaultConstruction.Validate(Plan(), Policy() with { Access = access }, Subscription, Tenant),
+            Assert.Contains(AzureKeyVaultBinding.Validate(Plan(), Policy() with { Access = access }, Subscription, Tenant),
                 d => d.Code == "azure.key-vault.access");
-        Assert.Contains(AzureKeyVaultConstruction.Validate(Plan(), Policy() with { SoftDeleteRetentionInDays = 6 }, Subscription, Tenant),
-            d => d.Code == "azure.key-vault.retention");
-        Assert.Contains(AzureKeyVaultConstruction.Validate(Plan(), Policy(), Subscription, Guid.Empty), d => d.Code == "azure.key-vault.tenant");
+        Assert.Contains(AzureKeyVaultBinding.Validate(Plan(), Policy(), Subscription, Guid.Empty), d => d.Code == "azure.key-vault.tenant");
     }
 
     [Theory]
@@ -211,22 +195,22 @@ public sealed class AzureKeyVaultTests
         var mocks = new Mocks();
         await Deployment.TestAsync(mocks, new TestOptions(), () =>
         {
-            var resources = AzureKeyVaultConstruction.Register(plan, policy, Subscription, Tenant);
+            var resources = AzureKeyVaultBinding.Attach(plan, policy, Subscription, Tenant, NativeVault(plan, policy));
             Assert.Equal(nonparticipating ? 0 : 1, resources.SecretBindings.Length);
             Assert.Throws<ArgumentException>(() => resources.AccessGrant(Binding, Subscription, Tenant, "principal", Guid.NewGuid()));
         });
         Assert.Single(mocks.Resources, r => r.Type == "azure-native:keyvault:Vault");
         Assert.DoesNotContain(mocks.Resources, r => r.Type == "azure-native:authorization:RoleAssignment");
         if (nonparticipating)
-            Assert.Contains(AzureKeyVaultConstruction.Validate(plan, Policy(), Subscription, Tenant), d => d.Code == "azure.key-vault.access");
+            Assert.Contains(AzureKeyVaultBinding.Validate(plan, Policy(), Subscription, Tenant), d => d.Code == "azure.key-vault.access");
     }
 
     [Fact]
     public void External_ownership_and_cancellation_are_rejected()
     {
-        Assert.Contains(AzureKeyVaultConstruction.Validate(Plan(external: true), Policy(), Subscription, Tenant),
+        Assert.Contains(AzureKeyVaultBinding.Validate(Plan(external: true), Policy(), Subscription, Tenant),
             d => d.Code == "azure.key-vault.lifecycle");
-        Assert.Throws<OperationCanceledException>(() => AzureKeyVaultConstruction.Register(Plan(), Policy(), Subscription, Tenant,
+        Assert.Throws<OperationCanceledException>(() => AzureKeyVaultBinding.Attach(Plan(), Policy(), Subscription, Tenant, null!,
             cancellationToken: new CancellationToken(true)));
     }
 
@@ -237,20 +221,85 @@ public sealed class AzureKeyVaultTests
         var json = JsonSerializer.Serialize(Policy(), options);
         var restored = JsonSerializer.Deserialize<AzureKeyVaultPolicy>(json, options)!;
         Assert.Equal(json, JsonSerializer.Serialize(restored, options));
-        Assert.Empty(AzureKeyVaultConstruction.Validate(Plan(), restored, Subscription, Tenant));
+        Assert.Empty(AzureKeyVaultBinding.Validate(Plan(), restored, Subscription, Tenant));
         var omitted = JsonNode.Parse(json)!.AsObject();
         omitted["access"]![0]!.AsObject().Remove("action");
         var noAction = JsonSerializer.Deserialize<AzureKeyVaultPolicy>(omitted.ToJsonString(), options)!;
-        Assert.Contains(AzureKeyVaultConstruction.Validate(Plan(), noAction, Subscription, Tenant), d => d.Code == "azure.key-vault.access");
+        Assert.Contains(AzureKeyVaultBinding.Validate(Plan(), noAction, Subscription, Tenant), d => d.Code == "azure.key-vault.access");
         omitted["secretValue"] = "must-not-be-consumed";
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<AzureKeyVaultPolicy>(omitted.ToJsonString(), options));
-        var diagnostics = AzureKeyVaultConstruction.Validate(Plan(), Policy() with
+        var diagnostics = AzureKeyVaultBinding.Validate(Plan(), Policy() with
         { Access = [new(Binding, AzureKeyVaultAccessAction.Unspecified, "sensitive-rationale-marker", [Source])] }, Subscription, Tenant);
         Assert.DoesNotContain("sensitive-rationale-marker", JsonSerializer.Serialize(diagnostics, options));
     }
 
+    [Theory]
+    [InlineData("name")]
+    [InlineData("subscription")]
+    [InlineData("tenant")]
+    [InlineData("id-name")]
+    [InlineData("id-kind")]
+    [InlineData("rbac")]
+    public async Task Resolved_native_identity_and_grant_mode_must_match_the_association(string mismatch)
+    {
+        var error = await Assert.ThrowsAnyAsync<Exception>(() => Deployment.TestAsync(new Mocks(mismatch: mismatch),
+            new TestOptions { IsPreview = false }, () =>
+            {
+                var resources = AzureKeyVaultBinding.Attach(Plan(), Policy(), Subscription, Tenant, NativeVault(Plan(), Policy()));
+                _ = new RoleAssignment("reader", resources.AccessGrant(Binding, Subscription, Tenant, "principal", Guid.NewGuid()));
+            }));
+        Assert.Contains(mismatch == "rbac" ? "RBAC authorization" : "canonical association", error.ToString());
+    }
+
+    [Fact]
+    public async Task Native_configuration_is_unrestricted_when_no_managed_RBAC_grant_is_requested()
+    {
+        var policy = Policy() with { Access = [new(Binding, AzureKeyVaultAccessAction.NoManagedGrant,
+            "Access-policy management is retained by the native host.", [Source])] };
+        var mocks = new Mocks();
+        await Deployment.TestAsync(mocks, new TestOptions { IsPreview = false }, () =>
+        {
+            var vault = new Vault("native-vault", new()
+            {
+                VaultName = AzureKeyVaultBinding.VaultName(Plan(), policy, Subscription, Tenant),
+                ResourceGroupName = "native-group", Location = "westus",
+                Properties = new VaultPropertiesArgs
+                {
+                    TenantId = Tenant.ToString("D"), EnableRbacAuthorization = false,
+                    EnableSoftDelete = true, EnablePurgeProtection = true, SoftDeleteRetentionInDays = 30,
+                    PublicNetworkAccess = "Disabled", Sku = new SkuArgs { Family = "A", Name = SkuName.Premium },
+                    AccessPolicies = []
+                }
+            }, new() { Protect = true });
+            var resources = AzureKeyVaultBinding.Attach(Plan(), policy, Subscription, Tenant, vault);
+            Assert.Same(vault, resources.Vault);
+            resources.VaultId.Apply(id => { Assert.Equal(VaultId, id); return id; });
+        });
+        var resource = Assert.Single(mocks.Resources, r => r.Type == "azure-native:keyvault:Vault");
+        Assert.Equal("native-group", resource.Inputs["resourceGroupName"]);
+        var properties = Assert.IsAssignableFrom<ImmutableDictionary<string, object>>(resource.Inputs["properties"]);
+        Assert.Equal(true, properties["enablePurgeProtection"]);
+        Assert.Equal(false, properties["enableRbacAuthorization"]);
+        Assert.Equal("premium", ((ImmutableDictionary<string, object>)properties["sku"])["name"]);
+        Assert.DoesNotContain(mocks.Resources, r => r.Type == "azure-native:authorization:RoleAssignment");
+    }
+
+    static Vault NativeVault(InfrastructureTargetDeploymentPlan plan, AzureKeyVaultPolicy policy,
+        string network = "Enabled", int retention = 7, CustomResourceOptions? options = null) => new("existing-vault", new()
+    {
+        VaultName = AzureKeyVaultBinding.VaultName(plan, policy, Subscription, Tenant),
+        ResourceGroupName = "test-rg", Location = "westus",
+        Properties = new VaultPropertiesArgs
+        {
+            TenantId = Tenant.ToString("D"), EnableRbacAuthorization = true, EnableSoftDelete = true,
+            SoftDeleteRetentionInDays = retention, PublicNetworkAccess = network,
+            EnabledForDeployment = false, EnabledForDiskEncryption = false, EnabledForTemplateDeployment = false,
+            Sku = new SkuArgs { Family = "A", Name = SkuName.Standard }
+        }
+    }, options);
+
     static InfrastructureTargetDeploymentPlan Plan(string physical = Physical,
-        string target = AzureKeyVaultConstruction.Target, bool incomplete = false,
+        string target = AzureKeyVaultBinding.Target, bool incomplete = false,
         bool nonparticipating = false, bool external = false, bool alias = false)
     {
         InfrastructureCapabilityId execution = new("test/execution");
@@ -270,7 +319,7 @@ public sealed class AzureKeyVaultTests
             {
                 facility.Workload(new("test/worker")).Provides(new(new("test/execution/evidence"), execution,
                     CapabilityRealizationKind.Native, sourceReferences: [Source]));
-                facility.Resource(new(AzureKeyVaultConstruction.Facility)).Provides(new(new("test/secrets/evidence"), retrieval,
+                facility.Resource(new(AzureKeyVaultBinding.Facility)).Provides(new(new("test/secrets/evidence"), retrieval,
                     CapabilityRealizationKind.Native, sourceReferences: [Source]));
             });
         var manifest = InfrastructureTargetDeployments.Define(new("test/deployment/v1"), semantic.Definition, facilities,
@@ -278,14 +327,14 @@ public sealed class AzureKeyVaultTests
             {
                 if (nonparticipating) deployment.NonParticipatingWorkload(Worker, "No reader in this environment.", [Source.Value]);
                 else deployment.Workload(Worker, new("test/worker"), new("test/workers/worker"), [Source]);
-                deployment.Resource(Secrets, new(AzureKeyVaultConstruction.Facility), new(physical), Authority, [Source]);
-                if (alias) deployment.Resource(new("resources/other"), new(AzureKeyVaultConstruction.Facility),
+                deployment.Resource(Secrets, new(AzureKeyVaultBinding.Facility), new(physical), Authority, [Source]);
+                if (alias) deployment.Resource(new("resources/other"), new(AzureKeyVaultBinding.Facility),
                     new(physical.ToUpperInvariant()), Authority, [Source]);
             });
         return InfrastructureTargetDeploymentCompiler.Compile(semantic, manifest);
     }
 
-    sealed class Mocks(bool secretProperties = false) : IMocks
+    sealed class Mocks(bool secretProperties = false, string? mismatch = null) : IMocks
     {
         public ConcurrentBag<MockResourceArgs> Resources { get; } = [];
         public Task<object> CallAsync(MockCallArgs args) => throw new InvalidOperationException("Vault construction must never invoke a provider or retrieve secrets.");
@@ -295,12 +344,21 @@ public sealed class AzureKeyVaultTests
             var state = args.Inputs.ToDictionary();
             if (args.Type == "azure-native:keyvault:Vault")
             {
-                state["name"] = args.Inputs["vaultName"];
+                state["name"] = mismatch == "name" ? "wrong-vault" : args.Inputs["vaultName"];
                 var properties = ((ImmutableDictionary<string, object>)args.Inputs["properties"]).ToDictionary();
                 properties["vaultUri"] = ActualUri;
+                if (mismatch == "tenant") properties["tenantId"] = Guid.NewGuid().ToString("D");
+                if (mismatch == "rbac") properties["enableRbacAuthorization"] = false;
                 state["properties"] = secretProperties ? Output.CreateSecret(properties) : properties;
             }
-            return Task.FromResult<(string?, object)>((args.Type == "azure-native:keyvault:Vault" ? VaultId : args.Name + "-id", state));
+            var id = mismatch switch
+            {
+                "subscription" => VaultId.Replace(Subscription.ToString("D"), Guid.NewGuid().ToString("D")),
+                "id-name" => VaultId.Replace("test-vault", "wrong-vault"),
+                "id-kind" => VaultId.Replace("Microsoft.KeyVault", "Other.Provider"),
+                _ => VaultId
+            };
+            return Task.FromResult<(string?, object)>((args.Type == "azure-native:keyvault:Vault" ? id : args.Name + "-id", state));
         }
     }
 }

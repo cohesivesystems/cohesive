@@ -5,7 +5,7 @@ using Cohesive.Model;
 
 namespace Cohesive.Adapters.Pulumi.Azure;
 
-/// <summary>Explicit construction policy for one Standard, RBAC-authorized, soft-delete-enabled vault.</summary>
+/// <summary>Semantic association and explicit consumer access policy for a native Pulumi vault.</summary>
 /// <remarks>Physical identity and consumers remain canonical Infra data. This policy never contains secret values.</remarks>
 public sealed record AzureKeyVaultPolicy
 {
@@ -17,25 +17,11 @@ public sealed record AzureKeyVaultPolicy
     public required InfrastructureLifecycleAuthorityId LifecycleAuthority { get; init; }
     /// <summary>Explicit Azure subscription, checked against the host.</summary>
     public required Guid SubscriptionId { get; init; }
-    /// <summary>Explicit vault tenant, checked against the host's declared tenant before registration.</summary>
+    /// <summary>Explicit vault tenant, checked against the host's declared tenant during association.</summary>
     public required Guid TenantId { get; init; }
-    /// <summary>Existing or separately managed Azure resource group.</summary>
-    public required string ResourceGroupName { get; init; }
-    /// <summary>Explicit Azure region.</summary>
-    public required string Location { get; init; }
-    /// <summary>Pulumi logical name; preserve the existing name during migration.</summary>
-    public required string VaultName { get; init; }
-    /// <summary>Authorization model. Only the explicit value <c>Rbac</c> is supported; access policies are rejected.</summary>
-    public required string AuthorizationMode { get; init; }
-    /// <summary>Soft-delete retention in days, from 7 through 90 inclusive.</summary>
-    public required int SoftDeleteRetentionInDays { get; init; }
-    /// <summary>Explicit Azure public network setting: <c>Enabled</c> or <c>Disabled</c>.</summary>
-    public required string PublicNetworkAccess { get; init; }
     /// <summary>Exactly one attributed decision for each participating canonical secret consumer.</summary>
     public required ImmutableArray<AzureKeyVaultBindingAccess> Access { get; init; }
-    /// <summary>Non-secret Azure tags. An empty dictionary explicitly requests no tags.</summary>
-    public ImmutableSortedDictionary<string, string> Tags { get; init; } = ImmutableSortedDictionary<string, string>.Empty;
-    /// <summary>Non-empty references attributing provider scope, retention and network policy.</summary>
+    /// <summary>Non-empty references attributing declared scope and binding policy.</summary>
     public required ImmutableArray<SourceReference> SourceReferences { get; init; }
 }
 

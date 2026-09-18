@@ -4,7 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <Description>Exact Cohesive.Infra Azure Durable Task, Cosmos, shared Blob Storage and Key Vault construction through Pulumi.</Description>
+    <Description>Exact Cohesive.Infra Azure resource construction and native resource binding seams through Pulumi.</Description>
     <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);BundleDurableTaskSdk</TargetsForTfmSpecificBuildOutput>
   </PropertyGroup>
   <ItemGroup>

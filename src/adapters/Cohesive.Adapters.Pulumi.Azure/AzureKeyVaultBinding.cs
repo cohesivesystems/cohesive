@@ -6,12 +6,11 @@ using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Pulumi;
 using Pulumi.AzureNative.KeyVault;
-using Pulumi.AzureNative.KeyVault.Inputs;
 
 namespace Cohesive.Adapters.Pulumi.Azure;
 
-/// <summary>Constructs one exact, exclusively owned Key Vault without retrieving or writing secrets.</summary>
-public static class AzureKeyVaultConstruction
+/// <summary>Binds native Pulumi Key Vault resources to canonical Infra declarations without wrapping provider configuration.</summary>
+public static class AzureKeyVaultBinding
 {
     /// <summary>Exact supported interpretation target.</summary>
     public const string Target = "pulumi-azure-native/3.16.0";
@@ -20,12 +19,12 @@ public static class AzureKeyVaultConstruction
     /// <summary>Built-in read-only secret data role; never assigned without an explicit binding decision.</summary>
     public const string SecretsUserRole = "4633458b-17de-408a-b874-0445c86b69e6";
 
-    /// <summary>Checks the exact plan, ownership, host scope, retention, network and every participating access decision.</summary>
+    /// <summary>Checks the exact plan, ownership, declared host scope and every participating access decision.</summary>
     /// <param name="deployment">Canonical compiled deployment and topology authority.</param>
-    /// <param name="policy">Explicit non-secret, attributable construction policy.</param>
+    /// <param name="policy">Explicit non-secret canonical association and access policy.</param>
     /// <param name="subscriptionId">Host's declared Azure provider subscription.</param>
     /// <param name="tenantId">Host's declared Azure provider tenant.</param>
-    /// <returns>Deterministically ordered errors; empty means construction policy is valid, not that cloud access is proven.</returns>
+    /// <returns>Deterministically ordered errors; empty means binding policy is valid, not that cloud access is proven.</returns>
     /// <exception cref="ArgumentNullException">Deployment or policy is null.</exception>
     public static ImmutableArray<DocumentValidationDiagnostic> Validate(InfrastructureTargetDeploymentPlan deployment,
         AzureKeyVaultPolicy policy, Guid subscriptionId, Guid tenantId)
@@ -35,24 +34,13 @@ public static class AzureKeyVaultConstruction
         var errors = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>();
         void Error(string code, string message) => errors.Add(new("azure.key-vault." + code,
             DiagnosticSeverity.Error, message, SchemaLocation: policy.Resource.Value,
-            Evidence: new(stage: "pulumi-azure-construction", subject: policy.Resource.Value ?? "unset-resource",
+            Evidence: new(stage: "pulumi-azure-binding", subject: policy.Resource.Value ?? "unset-resource",
                 sourceReferences: [deployment.Manifest.Fingerprint.Value,
                     .. policy.SourceReferences.IsDefault ? [] : policy.SourceReferences.Select(s => s.Value)])));
         AzureConstructionPolicy.ValidateDeployment(deployment, Target, policy.SubscriptionId, subscriptionId,
             policy.SourceReferences, errors, Error);
         if (tenantId == Guid.Empty || policy.TenantId != tenantId)
             Error("tenant", "Match the explicit non-empty host and policy tenants.");
-        if (!AzureConstructionPolicy.ValidResourceGroup(policy.ResourceGroupName))
-            Error("resource-group", "Supply a valid Azure resource-group name.");
-        if (string.IsNullOrWhiteSpace(policy.Location)) Error("location", "Supply an explicit Azure region.");
-        if (string.IsNullOrWhiteSpace(policy.VaultName)) Error("logical-name", "Supply an explicit Pulumi vault name.");
-        if (policy.AuthorizationMode != "Rbac")
-            Error("authorization", "This construction slice requires explicit Rbac authorization; legacy access policies are unsupported.");
-        if (policy.SoftDeleteRetentionInDays is < 7 or > 90)
-            Error("retention", "Supply soft-delete retention from 7 through 90 days.");
-        if (policy.PublicNetworkAccess is not ("Enabled" or "Disabled"))
-            Error("network", "Select explicit Enabled or Disabled public network access.");
-        if (!AzureConstructionPolicy.ValidTags(policy.Tags)) Error("tags", "Supply valid non-secret Azure tags.");
         var resource = AzureConstructionPolicy.SelectManagedResource(deployment, policy.Resource, Facility,
             policy.LifecycleAuthority, Target, Error);
         if (resource is not null)
@@ -93,44 +81,40 @@ public static class AzureKeyVaultConstruction
         return DocumentValidationDiagnostics.Normalize(errors.ToImmutable());
     }
 
-    /// <summary>Registers the validated vault in the existing Pulumi lifecycle. No secret or role resource is registered.</summary>
-    /// <param name="deployment">Exact compiled deployment, checked by the host handoff.</param>
-    /// <param name="policy">Attributable vault and consumer policy.</param>
-    /// <param name="subscriptionId">Host provider subscription, checked before registration.</param>
-    /// <param name="tenantId">Host provider tenant, checked before registration.</param>
-    /// <param name="provider">Existing Azure Native provider; null uses the host's default provider.</param>
-    /// <param name="parent">Existing parent, or null for a root resource. No implicit component is created.</param>
-    /// <param name="resourceGroupDependency">Separately managed group to preserve creation/deletion ordering, or null for an existing group.</param>
-    /// <param name="cancellationToken">Checked before registration; afterwards Pulumi owns cancellation.</param>
-    /// <returns>Typed vault, canonical consumers, URI and explicit grant argument construction.</returns>
+    /// <summary>Returns the canonical physical name after validating the declaration and access decisions.</summary>
+    /// <param name="deployment">Exact compiled deployment.</param>
+    /// <param name="policy">Explicit canonical association and access policy.</param>
+    /// <param name="subscriptionId">Declared host subscription.</param>
+    /// <param name="tenantId">Declared host tenant.</param>
+    /// <returns>The manifest's vault name for native <see cref="VaultArgs.VaultName"/> configuration.</returns>
     /// <exception cref="ArgumentNullException">Deployment or policy is null.</exception>
-    /// <exception cref="AzureKeyVaultValidationException">Policy or plan validation failed; nothing was registered.</exception>
-    /// <exception cref="OperationCanceledException">Cancellation was requested before registration.</exception>
-    public static AzureKeyVaultResources Register(InfrastructureTargetDeploymentPlan deployment, AzureKeyVaultPolicy policy,
-        Guid subscriptionId, Guid tenantId, global::Pulumi.AzureNative.Provider? provider = null, Resource? parent = null,
-        Resource? resourceGroupDependency = null, CancellationToken cancellationToken = default)
+    /// <exception cref="AzureKeyVaultValidationException">Semantic association validation failed.</exception>
+    public static string VaultName(InfrastructureTargetDeploymentPlan deployment, AzureKeyVaultPolicy policy,
+        Guid subscriptionId, Guid tenantId)
     {
-        cancellationToken.ThrowIfCancellationRequested();
         var diagnostics = Validate(deployment, policy, subscriptionId, tenantId);
         if (!diagnostics.IsEmpty) throw new AzureKeyVaultValidationException(diagnostics);
-        var physical = deployment.Manifest.Resources.Single(r => r.Resource == policy.Resource).PhysicalResource.Value;
+        return ParsePhysical(deployment.Manifest.Resources.Single(r => r.Resource == policy.Resource).PhysicalResource.Value).Groups[1].Value;
+    }
+
+    /// <summary>Associates a caller-created native vault with its canonical declaration. Registers no resources.</summary>
+    /// <param name="deployment">Exact compiled deployment, checked by the host handoff.</param>
+    /// <param name="policy">Canonical association and explicit consumer access decisions.</param>
+    /// <param name="subscriptionId">Host's declared provider subscription.</param>
+    /// <param name="tenantId">Host's declared provider tenant.</param>
+    /// <param name="vault">Native resource constructed with the canonical name; caller owns all SDK arguments and options.</param>
+    /// <param name="cancellationToken">Checked before association; native registration and its cancellation remain caller/Pulumi-owned.</param>
+    /// <returns>Canonical consumers and identity-checked output/grant projections.</returns>
+    /// <exception cref="ArgumentNullException">Deployment, policy or vault is null.</exception>
+    /// <exception cref="AzureKeyVaultValidationException">Semantic association is invalid. The caller's native resource may already be registered.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation was requested before association.</exception>
+    public static AzureKeyVaultResources Attach(InfrastructureTargetDeploymentPlan deployment, AzureKeyVaultPolicy policy,
+        Guid subscriptionId, Guid tenantId, Vault vault, CancellationToken cancellationToken = default)
+    {
         cancellationToken.ThrowIfCancellationRequested();
-        var vault = new Vault(policy.VaultName, new()
-        {
-            VaultName = ParsePhysical(physical).Groups[1].Value,
-            ResourceGroupName = policy.ResourceGroupName, Location = policy.Location,
-            Tags = policy.Tags.ToDictionary(t => t.Key, t => t.Value),
-            Properties = new VaultPropertiesArgs
-            {
-                TenantId = policy.TenantId.ToString("D"), EnableRbacAuthorization = true, EnableSoftDelete = true,
-                SoftDeleteRetentionInDays = policy.SoftDeleteRetentionInDays,
-                PublicNetworkAccess = policy.PublicNetworkAccess,
-                EnabledForDeployment = false, EnabledForDiskEncryption = false, EnabledForTemplateDeployment = false,
-                Sku = new SkuArgs { Family = "A", Name = SkuName.Standard }
-            }
-        }, new() { Provider = provider, Parent = parent,
-            DependsOn = resourceGroupDependency is null ? [] : [resourceGroupDependency] });
-        return new(deployment, policy, vault,
+        ArgumentNullException.ThrowIfNull(vault);
+        var name = VaultName(deployment, policy, subscriptionId, tenantId);
+        return new(deployment, policy, vault, name,
             [.. AzureConstructionPolicy.Bindings(deployment, policy.Resource)
                 .Where(b => deployment.Manifest.Workloads.Any(w => w.Workload == b.Source))
                 .OrderBy(b => b.Id.Value, StringComparer.Ordinal)]);
@@ -140,7 +124,7 @@ public static class AzureKeyVaultConstruction
         @"\Aazure/key-vault/vaults/([a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9])\z");
 }
 
-/// <summary>Structured rejection before any vault resource registration.</summary>
+/// <summary>Structured rejection of a canonical vault association.</summary>
 public sealed class AzureKeyVaultValidationException : ArgumentException
 {
     internal AzureKeyVaultValidationException(ImmutableArray<DocumentValidationDiagnostic> diagnostics)
