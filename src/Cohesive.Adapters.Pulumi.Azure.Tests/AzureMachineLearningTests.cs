@@ -93,6 +93,27 @@ public sealed class AzureMachineLearningTests
     }
 
     [Theory]
+    [InlineData("Identity")]
+    [InlineData("identity")]
+    [InlineData("IDENTITY")]
+    public async Task Azure_datastore_auth_response_casing_preserves_identity_authentication(string responseMode)
+    {
+        var mocks = new Mocks(workspaceAuthMode: responseMode);
+        var resolved = false;
+        await Deployment.TestAsync(mocks, Options(), () =>
+        {
+            var (storage, vault, telemetry) = Supports();
+            var workspace = new ML.Workspace("workspace", AzureMachineLearningBinding.ConfigureWorkspace(
+                Plan(), Policy(), Subscription, WorkspaceArgs(), storage, vault, telemetry));
+            AzureMachineLearningBinding.AttachWorkspace(Plan(), Policy(), Subscription, workspace, storage, vault, telemetry)
+                .WorkspaceId.Apply(value => { Assert.Equal(WorkspaceId, value); resolved = true; return value; });
+        });
+        Assert.True(resolved);
+        var native = Assert.Single(mocks.Resources, r => r.Type == "azure-native:machinelearningservices:Workspace");
+        Assert.Equal("Identity", native.Inputs["systemDatastoresAuthMode"]);
+    }
+
+    [Theory]
     [InlineData("dependency")]
     [InlineData("owner")]
     [InlineData("alias")]
@@ -128,6 +149,8 @@ public sealed class AzureMachineLearningTests
     [InlineData("telemetry-link")]
     [InlineData("workspace-network")]
     [InlineData("workspace-auth")]
+    [InlineData("workspace-auth-empty")]
+    [InlineData("workspace-auth-whitespace")]
     [InlineData("workspace-identity")]
     public async Task Native_workspace_mismatches_fault_outputs(string mismatch)
     {
@@ -389,7 +412,7 @@ public sealed class AzureMachineLearningTests
         return InfrastructureTargetDeploymentCompiler.Compile(semantic, manifest);
     }
 
-    sealed class Mocks(string? mismatch = null, bool sharedEnabled = true) : IMocks
+    sealed class Mocks(string? mismatch = null, bool sharedEnabled = true, string? workspaceAuthMode = null) : IMocks
     {
         public ConcurrentBag<MockResourceArgs> Resources { get; } = [];
         public Task<object> CallAsync(MockCallArgs args) => throw new InvalidOperationException("No provider invokes are permitted.");
@@ -429,6 +452,8 @@ public sealed class AzureMachineLearningTests
             }
             if (kind == "workspace")
             {
+                // Azure's existing workspace response can use "identity" for the SDK's "Identity" input.
+                if (workspaceAuthMode is not null) state["systemDatastoresAuthMode"] = workspaceAuthMode;
                 state["storageAccount"] = Output.CreateSecret((string)state["storageAccount"]);
                 if (mismatch == "unknown") state.Remove("storageAccount");
                 if (mismatch == "storage-link") state["storageAccount"] = "private-provider-marker";
@@ -436,6 +461,8 @@ public sealed class AzureMachineLearningTests
                 if (mismatch == "telemetry-link") state["applicationInsights"] = "private-provider-marker";
                 if (mismatch == "workspace-network") state["publicNetworkAccess"] = "unexpected";
                 if (mismatch == "workspace-auth") state["systemDatastoresAuthMode"] = "AccessKey";
+                if (mismatch == "workspace-auth-empty") state["systemDatastoresAuthMode"] = "";
+                if (mismatch == "workspace-auth-whitespace") state["systemDatastoresAuthMode"] = " Identity ";
                 if (mismatch == "workspace-identity") state["identity"] = new Dictionary<string, object> { ["type"] = "None" };
             }
             return Task.FromResult<(string?, object)>((id, state));

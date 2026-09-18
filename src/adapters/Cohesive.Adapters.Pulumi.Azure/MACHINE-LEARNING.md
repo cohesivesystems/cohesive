@@ -43,6 +43,11 @@ not supported by this first association contract.
    ARM identity and scope, Pulumi stack/project/type, supporting IDs, network and identity auth.
    The original workspace remains available as an explicit raw-output escape hatch.
 
+Azure can return lowercase `identity` for the SDK's `Identity` datastore authentication input.
+Attachment compares that response value case-insensitively while preserving the explicit input.
+Empty, whitespace-padded and other authentication modes remain invalid. This accommodates provider
+response spelling; it does not permit key-based authentication or skip dependency validation.
+
 Network/authentication settings are native inputs rather than duplicate policy enums. This seam
 requires a supported explicit setting, but does not claim it independently audits an organization's
 network policy. Azure ML job submission, datasets and training orchestration remain outside it.

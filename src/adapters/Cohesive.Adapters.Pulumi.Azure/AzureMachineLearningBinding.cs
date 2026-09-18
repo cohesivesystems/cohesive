@@ -130,8 +130,11 @@ public static class AzureMachineLearningBinding
             if (!AzureConstructionPolicy.ValidResourceIdentity(values[1], values[0], name, policy.SubscriptionId, "Microsoft.MachineLearningServices", "workspaces", policy.ResourceGroupName)
                 || !AzureConstructionPolicy.ValidPulumiUrn(values[2], policy.LifecycleAuthority, "azure-native:machinelearningservices:Workspace")
                 || !Equal(values[3], values[6]) || !Equal(values[4], values[7]) || !Equal(values[5], values[8])
-                || values[10] != "Identity" || values[11] != "SystemAssigned")
+                || values[11] != "SystemAssigned")
                 throw new InvalidOperationException("Native ML workspace identity, owner, dependencies or identity authentication differs from its canonical association.");
+            // Azure returns "identity" for existing workspaces even when the SDK input is "Identity".
+            if (!Equal(values[10], "Identity"))
+                throw new InvalidOperationException("Native ML workspace datastore authentication differs from its canonical association; expected identity authentication.");
             Network(values[9]);
             return values[0];
         });
