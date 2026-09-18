@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="*.cs" />
+    <None Update="MACHINE-LEARNING.md" Pack="true" PackagePath="/" />
     <None Update="APP-SERVICE.md" Pack="true" PackagePath="/" />
     <None Update="BLOB-STORAGE.md" Pack="true" PackagePath="/" />
     <None Update="ENTRA.md" Pack="true" PackagePath="/" />
