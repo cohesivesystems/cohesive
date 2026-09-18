@@ -155,6 +155,43 @@ public sealed class InfrastructureLocalDeploymentAuthoringTests
     }
 
     [Fact]
+    public void Hosting_binding_to_local_control_plane_does_not_invent_a_service_or_health_wait()
+    {
+        InfrastructureNodeId host = new("resources/host");
+        InfrastructureCapabilityId hosting = new("execution/hosting");
+        InfrastructureTargetFacilityId hostFacility = new("local/control-plane");
+        InfrastructurePhysicalResourceId hostPhysical = new("local/control-plane/host");
+        var semantic = Infrastructure.Define(new("test/hosting"), new("v1"), new("test/hosting/bindings"), infra =>
+        {
+            var api = infra.Workload(Api).Requires(Https);
+            var pool = infra.Resource(host).Persistent().Requires(hosting);
+            var hostedBy = infra.Contract(new("contracts/hosted-by"), new("rules/hosted-by"))
+                .Requires(hosting).SourcedFrom(EnvironmentSource.Value);
+            infra.Bind(api).To(pool).As(hostedBy);
+        });
+        var facilities = InfrastructureTargetFacilities.Define(new("hosting/facilities"), new("hosting/profile"),
+            Aspire, new("local"), [InfrastructureDefinitionDocument.CurrentSchemaVersion], target =>
+            {
+                target.Workload(ProjectFacility).Provides(new(new("https-proof"), Https,
+                    CapabilityRealizationKind.Native, sourceReferences: [AdapterSource]));
+                target.Resource(hostFacility).Provides(new(new("host-proof"), hosting,
+                    CapabilityRealizationKind.Native, sourceReferences: [AdapterSource]));
+            });
+        var authored = InfrastructureLocalDeployments.Define(new("hosting/deployment"), semantic.Definition,
+            facilities, local => local
+                .ProjectService(Api, ProjectFacility, ApiPhysical, ApiProject)
+                .Resource(host, hostFacility, hostPhysical, AspireAuthority, [EnvironmentSource]));
+        var deployment = InfrastructureTargetDeploymentCompiler.Compile(semantic, authored.TargetDeployment);
+        Assert.True(deployment.IsComplete, Format(deployment.Diagnostics));
+        var realization = Assert.IsType<InfrastructureRealization>(deployment.Realization);
+        var local = InfrastructureLocalRealizationCompiler.Compile(realization, Environment(), authored.Topology, [Conventions()]);
+        Assert.True(local.IsValid, Format(local.Diagnostics));
+        Assert.Empty(Assert.Single(local.Topology.Services).ReadyDependencies);
+        Assert.Single(semantic.Definition.Definition.Bindings);
+        Assert.Equal(hostPhysical, authored.TargetDeployment.FindResource(host).PhysicalResource);
+    }
+
+    [Fact]
     public void Explicit_non_participation_takes_precedence_over_the_closed_world_default()
     {
         var semantic = Semantic(includeWorker: true);

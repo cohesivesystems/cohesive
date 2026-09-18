@@ -49,6 +49,8 @@ public static class AzureAppServiceBinding
         var contracts = policy.EndpointContracts.IsDefault ? [] : policy.EndpointContracts;
         if (policy.EndpointContracts.IsDefault || contracts.Any(c => string.IsNullOrWhiteSpace(c.Value)) || contracts.Distinct().Count() != contracts.Length)
             Error("endpoint-contracts", "Supply explicit distinct endpoint contracts, including an empty set when none are authorized.");
+        if (string.IsNullOrWhiteSpace(policy.HostingContract.Value) || contracts.Contains(policy.HostingContract))
+            Error("hosting-contract", "Select an explicit hosting contract distinct from endpoint contracts.");
         var workloads = deployment.Manifest.Workloads.Where(w => w.Facility.Value == SiteFacility).ToDictionary(w => w.Workload);
         var seen = new HashSet<InfrastructureNodeId>();
         var selectedPlans = new HashSet<InfrastructureNodeId>();
@@ -68,8 +70,9 @@ public static class AzureAppServiceBinding
             if (deployment.Manifest.Workloads.Any(w => w.Workload != workload.Workload &&
                 string.Equals(w.PhysicalResource.Value, workload.PhysicalResource.Value, StringComparison.OrdinalIgnoreCase)))
                 Error("alias", "Multiple workloads claim the same native site.");
-            if (!definition.ReadinessDependencies.Any(d => d.Subject == placement.Workload && d.Dependency == placement.Plan))
-                Error("plan-dependency", "Declare the workload's dependency on its hosting plan canonically.");
+            var hostingBindings = definition.Bindings.Where(b => b.Source == placement.Workload && b.Contract == policy.HostingContract).ToArray();
+            if (hostingBindings.Length != 1 || hostingBindings[0].Target != placement.Plan)
+                Error("plan-binding", "Declare exactly one directed hosting binding from the workload to its selected plan using the policy hosting contract.");
             if (selectedPlans.Add(placement.Plan))
             {
                 var plan = AzureConstructionPolicy.SelectManagedResource(deployment, placement.Plan, PlanFacility,
