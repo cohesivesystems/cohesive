@@ -15,6 +15,15 @@ internal static class AzureConstructionPolicy
         Guid declaredSubscription, Guid hostSubscription, ImmutableArray<SourceReference> sources,
         ImmutableArray<DocumentValidationDiagnostic>.Builder diagnostics, Action<string, string> error)
     {
+        ValidatePlan(deployment, target, sources, diagnostics, error);
+        if (hostSubscription == Guid.Empty || declaredSubscription != hostSubscription)
+            error("subscription", "Match the explicit non-empty host and policy subscriptions.");
+    }
+
+    internal static void ValidatePlan(InfrastructureTargetDeploymentPlan deployment, string target,
+        ImmutableArray<SourceReference> sources, ImmutableArray<DocumentValidationDiagnostic>.Builder diagnostics,
+        Action<string, string> error)
+    {
         if (!deployment.IsComplete || deployment.Realization?.IsReadinessObligationComplete != true)
         {
             error("incomplete", "Compile a complete capability, physical-witness and readiness realization before construction.");
@@ -22,8 +31,6 @@ internal static class AzureConstructionPolicy
         }
         if (deployment.Manifest.TargetFacilities.Profile.Target.Value != target)
             error("target", $"This adapter supports only target '{target}'.");
-        if (hostSubscription == Guid.Empty || declaredSubscription != hostSubscription)
-            error("subscription", "Match the explicit non-empty host and policy subscriptions.");
         if (sources.IsDefaultOrEmpty || sources.Any(s => string.IsNullOrWhiteSpace(s.Value)))
             error("provenance", "Supply non-empty source references attributing provider scope and policy.");
     }
