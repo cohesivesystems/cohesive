@@ -93,6 +93,14 @@ services.AddCohesiveDurableTaskProcessExecutionRepository(serviceProvider => new
     .AddExecutionExplainRepository(_ => deployedPlanCatalog);
 ```
 
+Paged repository queries emit one native parent activity with separate provider-page acquisition and canonical
+projection children. The matching duration histogram uses the bounded phases `total`, `provider_read`, and
+`projection`; item histograms distinguish provider-page count from returned canonical count. This split preserves
+the repository as one semantic boundary while making provider/network wait distinguishable from Cohesive validation,
+mapping, and filtering beneath an enclosing ASP.NET request. The package never records task-hub names, continuation
+tokens, Process or definition identities, or retained payloads. Hosts register the adapter-owned activity source and
+meter explicitly as shown in the [adapter telemetry overview](README.md#telemetry).
+
 An application that needs a policy-bearing execution view can call `DecorateExecutionRepository<TRepository>`.
 The decorator changes only the application-facing `IProcessExecutionRepository`; the underlying Durable Task
 repository remains the sole canonical value and trace authority.

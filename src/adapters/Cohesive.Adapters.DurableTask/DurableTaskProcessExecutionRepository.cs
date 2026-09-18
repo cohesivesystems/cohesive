@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Cohesive.Execution;
 using DurableTask.Core;
 using DurableTask.Core.Query;
@@ -317,25 +318,79 @@ public sealed class DurableTaskProcessExecutionRepository :
             result.State.Terminal));
     }
 
-    async ValueTask<ProcessExecutionQueryResult> QueryCurrentAsync(
+    ValueTask<ProcessExecutionQueryResult> QueryCurrentAsync(
         OperationContext context,
         ProcessExecutionQuery query)
     {
+        const string client = DurableTaskProcessExecutionRepositoryTelemetry.StandaloneClient;
+        return DurableTaskProcessExecutionRepositoryTelemetry.ObserveAsync(
+            DurableTaskProcessExecutionRepositoryTelemetry.QueryActivityName,
+            client,
+            DurableTaskProcessExecutionRepositoryTelemetry.TotalPhase,
+            ActivityKind.Internal,
+            context.CancellationToken,
+            () => QueryCurrentCoreAsync(context, query, client));
+    }
+
+    async ValueTask<ProcessExecutionQueryResult> QueryCurrentCoreAsync(
+        OperationContext context,
+        ProcessExecutionQuery query,
+        string client)
+    {
         var pageable = currentClient!.GetAllInstancesAsync(CreateCurrentQuery(query));
-        await foreach (var page in pageable.AsPages()
-                           .WithCancellation(context.CancellationToken)
-                           .ConfigureAwait(false))
+        var page = await DurableTaskProcessExecutionRepositoryTelemetry.ObserveAsync<
+            Microsoft.DurableTask.Page<ModernOrchestrationMetadata>?>(
+            DurableTaskProcessExecutionRepositoryTelemetry.QueryProviderReadActivityName,
+            client,
+            DurableTaskProcessExecutionRepositoryTelemetry.ProviderReadPhase,
+            ActivityKind.Client,
+            context.CancellationToken,
+            async () =>
+            {
+                await using var pages = pageable.AsPages()
+                    .WithCancellation(context.CancellationToken)
+                    .ConfigureAwait(false)
+                    .GetAsyncEnumerator();
+                return await pages.MoveNextAsync() ? pages.Current : null;
+            }).ConfigureAwait(false);
+
+        if (page is null)
         {
-            var requestedStatuses = RequestedStatuses(query);
-            var items = page.Values
-                .Where(IsCurrentProcess)
-                .Select(MapCurrent)
-                .Where(execution => MatchesQuery(execution, query, requestedStatuses))
-                .ToArray();
-            return new(items, page.ContinuationToken);
+            DurableTaskProcessExecutionRepositoryTelemetry.RecordItems(
+                client,
+                DurableTaskProcessExecutionRepositoryTelemetry.ProviderItems,
+                0);
+            DurableTaskProcessExecutionRepositoryTelemetry.RecordItems(
+                client,
+                DurableTaskProcessExecutionRepositoryTelemetry.ReturnedItems,
+                0);
+            return new([], ContinuationToken: null);
         }
 
-        return new([], ContinuationToken: null);
+        DurableTaskProcessExecutionRepositoryTelemetry.RecordItems(
+            client,
+            DurableTaskProcessExecutionRepositoryTelemetry.ProviderItems,
+            page.Values.Count);
+        var items = DurableTaskProcessExecutionRepositoryTelemetry.Observe(
+            DurableTaskProcessExecutionRepositoryTelemetry.QueryProjectionActivityName,
+            client,
+            DurableTaskProcessExecutionRepositoryTelemetry.ProjectionPhase,
+            ActivityKind.Internal,
+            context.CancellationToken,
+            () =>
+            {
+                var requestedStatuses = RequestedStatuses(query);
+                return page.Values
+                    .Where(IsCurrentProcess)
+                    .Select(MapCurrent)
+                    .Where(execution => MatchesQuery(execution, query, requestedStatuses))
+                    .ToArray();
+            });
+        DurableTaskProcessExecutionRepositoryTelemetry.RecordItems(
+            client,
+            DurableTaskProcessExecutionRepositoryTelemetry.ReturnedItems,
+            items.Length);
+        return new(items, page.ContinuationToken);
     }
 
     ModernOrchestrationQuery CreateCurrentQuery(ProcessExecutionQuery query) => new(
@@ -577,20 +632,57 @@ public sealed class DurableTaskProcessExecutionRepository :
         return null;
     }
 
-    async ValueTask<ProcessExecutionQueryResult> QueryHistoricalAsync(
+    ValueTask<ProcessExecutionQueryResult> QueryHistoricalAsync(
         OperationContext context,
         ProcessExecutionQuery query)
     {
-        var orchestrationQuery = CreateHistoricalQuery(query);
-        var result = await historicalQueryClient!.GetOrchestrationWithQueryAsync(
-            orchestrationQuery,
-            context.CancellationToken).ConfigureAwait(false);
-        var requestedStatuses = RequestedStatuses(query);
-        var items = result.OrchestrationState
-            .Select(MapHistorical)
-            .Where(execution => MatchesQuery(execution, query, requestedStatuses))
-            .ToArray();
+        const string client = DurableTaskProcessExecutionRepositoryTelemetry.CoreClient;
+        return DurableTaskProcessExecutionRepositoryTelemetry.ObserveAsync(
+            DurableTaskProcessExecutionRepositoryTelemetry.QueryActivityName,
+            client,
+            DurableTaskProcessExecutionRepositoryTelemetry.TotalPhase,
+            ActivityKind.Internal,
+            context.CancellationToken,
+            () => QueryHistoricalCoreAsync(context, query, client));
+    }
 
+    async ValueTask<ProcessExecutionQueryResult> QueryHistoricalCoreAsync(
+        OperationContext context,
+        ProcessExecutionQuery query,
+        string client)
+    {
+        var result = await DurableTaskProcessExecutionRepositoryTelemetry.ObserveAsync<OrchestrationQueryResult>(
+            DurableTaskProcessExecutionRepositoryTelemetry.QueryProviderReadActivityName,
+            client,
+            DurableTaskProcessExecutionRepositoryTelemetry.ProviderReadPhase,
+            ActivityKind.Client,
+            context.CancellationToken,
+            async () => await historicalQueryClient!.GetOrchestrationWithQueryAsync(
+                CreateHistoricalQuery(query),
+                context.CancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+
+        DurableTaskProcessExecutionRepositoryTelemetry.RecordItems(
+            client,
+            DurableTaskProcessExecutionRepositoryTelemetry.ProviderItems,
+            result.OrchestrationState.Count);
+        var items = DurableTaskProcessExecutionRepositoryTelemetry.Observe(
+            DurableTaskProcessExecutionRepositoryTelemetry.QueryProjectionActivityName,
+            client,
+            DurableTaskProcessExecutionRepositoryTelemetry.ProjectionPhase,
+            ActivityKind.Internal,
+            context.CancellationToken,
+            () =>
+            {
+                var requestedStatuses = RequestedStatuses(query);
+                return result.OrchestrationState
+                    .Select(MapHistorical)
+                    .Where(execution => MatchesQuery(execution, query, requestedStatuses))
+                    .ToArray();
+            });
+        DurableTaskProcessExecutionRepositoryTelemetry.RecordItems(
+            client,
+            DurableTaskProcessExecutionRepositoryTelemetry.ReturnedItems,
+            items.Length);
         return new(items, ContinuationToken: result.ContinuationToken);
     }
 
