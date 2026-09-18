@@ -1,5 +1,6 @@
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
+using Cohesive.Processes.Compilation;
 using Cohesive.Processes.IR;
 using Cohesive.Transitions.IR;
 using CanonicalTransitionDefinition = Cohesive.Transitions.IR.TransitionDefinition;
@@ -110,6 +111,27 @@ public sealed class ProcessDefinitionLinkTests
         Assert.Equal(contract, exactLink.Result);
         Assert.True(exactLink.HasCompleteProcessDependencyEvidence);
         Assert.Equal(ProcessRecoveryPolicy.ContinueAttempt, exactLink.RecoveryPolicy);
+    }
+
+    [Fact]
+    public void CompiledPlan_DefinitionLink_EqualsTheValidatedDocumentProjection()
+    {
+        var document = ProcessDefinitionDocuments.Create(
+            new("process/compiled-link"),
+            new("revision/1"),
+            ProcessDefinition(InputContract),
+            Provenance());
+        var context = new ProcessDefinitionValidationContext();
+
+        var compilation = ProcessStaticCompiler.Compile(document, context);
+        var linkValidation = ProcessDefinitionLink.TryCreateProcess(document, context, out var link);
+
+        Assert.True(compilation.IsSuccessful, FormatDiagnostics(compilation.Validation));
+        Assert.True(linkValidation.IsValid, FormatDiagnostics(linkValidation));
+        var plan = Assert.IsType<CompiledProcessPlan>(compilation.Plan);
+        Assert.Equal(Assert.IsType<ProcessDefinitionLink>(link), plan.DefinitionLink);
+        Assert.True(plan.DefinitionLink.HasCompleteProcessDependencyEvidence);
+        Assert.Empty(plan.DefinitionLink.ProcessDependencies);
     }
 
     [Fact]

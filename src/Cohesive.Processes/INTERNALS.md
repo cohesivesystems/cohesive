@@ -84,6 +84,12 @@ Generation still emits the unchanged canonical `EvaluateRelationProcessNode`, an
 `CreateProcessDefinitionLink()` derives validation evidence from that one authority. Runtime registration is a
 separate interpretation of the exact hosted-Query document.
 
+When compiling a Process closure bottom-up, use `CompiledProcessPlan.DefinitionLink` as the child evidence supplied
+to a parent `ProcessDefinitionValidationContext`. The plan exists only after complete canonical validation, so this
+projection preserves the same exact identity, contracts, recovery policy, and direct child dependencies without
+serializing, projecting, and validating the child document again. The plan and link remain derived views;
+`ExecutionDefinitionDocument` is still the semantic authority.
+
 Processes can also emit canonical one-way interactions directly. The typed calls accept exact contract references
 and portable C# expressions, then lower to the existing event and Signal nodes:
 

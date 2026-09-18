@@ -344,6 +344,16 @@ public sealed record ProcessDefinitionLink
         }
 
         var definition = document.GetDefinition<CanonicalProcessDefinition>();
+        link = FromValidatedProcess(document, definition);
+        return validation;
+    }
+
+    internal static ProcessDefinitionLink FromValidatedProcess(
+        ExecutionDefinitionDocument document,
+        CanonicalProcessDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(definition);
         var dependencies = ImmutableArray.CreateBuilder<ExecutionDefinitionReference>();
         HashSet<ExecutionDefinitionReference> observedDependencies = [];
         foreach (var node in definition.Nodes)
@@ -359,7 +369,7 @@ public sealed record ProcessDefinitionLink
             ? dependencies.MoveToImmutable()
             : dependencies.ToImmutable();
 
-        link = new(
+        return new(
             new(
                 document.Metadata.DefinitionId,
                 document.Metadata.RevisionId,
@@ -369,7 +379,6 @@ public sealed record ProcessDefinitionLink
             definition.Result,
             document.Extensions.IsDefaultOrEmpty ? normalizedDependencies : null,
             definition.RecoveryPolicy);
-        return validation;
     }
 
     static int CompareReferences(ExecutionDefinitionReference? left, ExecutionDefinitionReference? right)
