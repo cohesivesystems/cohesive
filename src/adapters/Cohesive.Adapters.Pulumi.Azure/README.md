@@ -7,6 +7,7 @@ Cohesive; ordinary provider configuration and resource options belong to native 
 construction helpers only where they enforce a meaningful cross-resource invariant or remove repeated
 integration friction. A parallel wrapper for every provider option is not an adoption requirement.
 
+- [Telemetry binding seam](TELEMETRY.md): canonical Application Insights/Log Analytics association and secret consumer outputs.
 - [Key Vault binding seam](KEY-VAULT.md): associate a native Pulumi vault with canonical identity and explicit consumer decisions.
 - [Shared Blob Storage construction](BLOB-STORAGE.md): one account owner, exact containers and explicit/coalesced blob grants.
 - [Cosmos SQL construction](COSMOS.md): account/database/container policy and explicit data-plane grant scopes.

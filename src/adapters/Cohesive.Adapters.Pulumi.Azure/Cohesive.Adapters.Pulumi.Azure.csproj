@@ -10,6 +10,7 @@
   <ItemGroup>
     <Compile Include="*.cs" />
     <None Update="BLOB-STORAGE.md" Pack="true" PackagePath="/" />
+    <None Update="TELEMETRY.md" Pack="true" PackagePath="/" />
     <None Update="KEY-VAULT.md" Pack="true" PackagePath="/" />
     <None Update="COSMOS.md" Pack="true" PackagePath="/" />
     <PackageReference Include="Pulumi" Version="3.113.1" />
