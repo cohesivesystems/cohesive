@@ -175,7 +175,7 @@ public sealed class ExecutionDefinitionDocumentProjection<TDefinition>
         ExecutionDefinitionDocument document,
         TDefinition definition)
     {
-        var options = ExecutionDefinitionJsonSerializer.CreateOptions();
+        var options = ExecutionDefinitionJsonSerializer.GetReadOnlyOptions();
         var projected = JsonSerializer.SerializeToElement(definition, options);
         var persistedBytes = ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document);
         var projectedBytes = ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(

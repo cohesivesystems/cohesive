@@ -110,10 +110,9 @@ public sealed class HostedQuery<TInput, TResult>
         ArgumentNullException.ThrowIfNull(provenance);
 
         var configurationContract = new ValueContract(TypeMapper.Map(typeof(TConfiguration), null));
-        var configurationOptions = ExecutionDefinitionJsonSerializer.CreateOptions();
         // CLR contract inference uses explicit JsonPropertyName values or stable CLR property names and deliberately
         // excludes ambient naming policies. Serialize the value through that same durable property identity policy.
-        configurationOptions.PropertyNamingPolicy = null;
+        var configurationOptions = ExecutionDefinitionJsonSerializer.GetClrContractReadOnlyOptions();
         var configurationElement = JsonSerializer.SerializeToElement(
             configuration,
             configurationOptions);

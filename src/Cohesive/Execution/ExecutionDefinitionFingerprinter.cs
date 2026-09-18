@@ -145,7 +145,7 @@ public static class ExecutionDefinitionFingerprinter
         }
         ValidateDefinitionProperties(definition);
 
-        var options = ExecutionDefinitionJsonSerializer.CreateOptions();
+        var options = ExecutionDefinitionJsonSerializer.GetReadOnlyOptions();
         var definitionNode = JsonNode.Parse(definition.GetRawText())
             ?? throw new InvalidOperationException("Failed to materialize canonical execution-definition JSON.");
         var canonical = CanonicalJsonWriter.GetCanonicalSequenceBytes(
@@ -166,7 +166,7 @@ public static class ExecutionDefinitionFingerprinter
         if (normalizedExtensions.IsDefault)
             throw new ArgumentException("Normalized execution extensions must be initialized.", nameof(normalizedExtensions));
 
-        var options = ExecutionDefinitionJsonSerializer.CreateOptions();
+        var options = ExecutionDefinitionJsonSerializer.GetReadOnlyOptions();
         var definitionNode = JsonNode.Parse(canonicalDefinition.GetRawText())
             ?? throw new InvalidOperationException("Failed to materialize canonical execution-definition JSON.");
         var extensionNode = CreateSemanticExtensionsNode(normalizedExtensions, options);

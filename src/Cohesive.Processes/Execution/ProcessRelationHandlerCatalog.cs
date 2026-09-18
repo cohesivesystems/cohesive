@@ -278,7 +278,8 @@ public abstract class ProcessRelationHandlerRegistration
         where TInput : notnull
         where TResult : notnull
     {
-        static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+        static readonly JsonSerializerOptions JsonOptions =
+            ExecutionDefinitionJsonSerializer.GetClrContractReadOnlyOptions();
         readonly ProcessRelationOutcomeHandler<TInput, TResult> handler;
 
         internal TypedProcessRelationHandlerRegistration(
@@ -369,13 +370,6 @@ public abstract class ProcessRelationHandlerRegistration
                     ProcessRelationHandlerDiagnosticCodes.ResultValueInvalid,
                     $"The typed Relation/Query result violates its canonical contract: {resultError.Message}",
                     "/result");
-        }
-
-        static JsonSerializerOptions CreateJsonOptions()
-        {
-            var options = ExecutionDefinitionJsonSerializer.CreateOptions();
-            options.PropertyNamingPolicy = null;
-            return options;
         }
 
         static bool IsConversionFailure(Exception exception) => exception is

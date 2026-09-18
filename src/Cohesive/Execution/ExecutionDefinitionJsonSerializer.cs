@@ -12,16 +12,40 @@ public static class ExecutionDefinitionJsonSerializer
 {
     static readonly ExecutionIrSchemaCompatibilityDeclaration SupportedSchemaVersions =
         new([ExecutionDefinitionDocument.CurrentSchemaVersion]);
+    static readonly JsonSerializerOptions CompactReadOnlyOptions =
+        CreateReadOnlyOptions(PortableDocumentJsonFormatting.Compact);
+    static readonly JsonSerializerOptions IndentedReadOnlyOptions =
+        CreateReadOnlyOptions(PortableDocumentJsonFormatting.Indented);
+    static readonly JsonSerializerOptions ClrContractReadOnlyOptions = CreateClrContractReadOnlyOptions();
 
     /// <summary>Creates serializer options for the closed execution-definition wire contract.</summary>
     /// <param name="formatting">Desired output formatting.</param>
-    /// <returns>Strict, case-sensitive serializer options for execution-definition documents.</returns>
+    /// <returns>
+    /// A new independently mutable strict, case-sensitive options instance for execution-definition documents.
+    /// </returns>
+    /// <remarks>
+    /// Framework-owned serialization paths use internal read-only profiles so repeated document operations reuse
+    /// System.Text.Json contract metadata. This factory remains the customization boundary for callers.
+    /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="formatting"/> is not recognized.</exception>
     public static JsonSerializerOptions CreateOptions(
         PortableDocumentJsonFormatting formatting = PortableDocumentJsonFormatting.Compact)
     {
         return StrictDocumentJson.CreateOptions(formatting);
     }
+
+    internal static JsonSerializerOptions GetReadOnlyOptions(
+        PortableDocumentJsonFormatting formatting = PortableDocumentJsonFormatting.Compact) => formatting switch
+        {
+            PortableDocumentJsonFormatting.Compact => CompactReadOnlyOptions,
+            PortableDocumentJsonFormatting.Indented => IndentedReadOnlyOptions,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(formatting),
+                formatting,
+                "Unsupported JSON formatting mode.")
+        };
+
+    internal static JsonSerializerOptions GetClrContractReadOnlyOptions() => ClrContractReadOnlyOptions;
 
     /// <summary>Serializes an execution-definition document using the requested strict wire format.</summary>
     /// <param name="document">Portable execution-definition document to serialize.</param>
@@ -40,7 +64,7 @@ public static class ExecutionDefinitionJsonSerializer
         if (formatting == PortableDocumentJsonFormatting.Compact)
             return Encoding.UTF8.GetString(GetCanonicalBytes(document));
 
-        return JsonSerializer.Serialize(document, CreateOptions(formatting));
+        return JsonSerializer.Serialize(document, GetReadOnlyOptions(formatting));
     }
 
     /// <summary>Gets canonical UTF-8 JSON for the complete persisted document.</summary>
@@ -53,7 +77,7 @@ public static class ExecutionDefinitionJsonSerializer
     public static byte[] GetCanonicalBytes(ExecutionDefinitionDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        var options = CreateOptions();
+        var options = GetReadOnlyOptions();
         var node = JsonSerializer.SerializeToNode(document, options)
             ?? throw new InvalidOperationException("Failed to materialize execution-definition document JSON.");
         return CanonicalJsonWriter.GetCanonicalBytes(
@@ -234,7 +258,7 @@ public static class ExecutionDefinitionJsonSerializer
     public static TDefinition DeserializeDefinition<TDefinition>(ExecutionDefinitionDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        return document.Definition.Deserialize<TDefinition>(CreateOptions())
+        return document.Definition.Deserialize<TDefinition>(GetReadOnlyOptions())
             ?? throw new JsonException(
                 $"Execution definition payload deserialized to null for '{typeof(TDefinition).FullName}'.");
     }
@@ -292,7 +316,7 @@ public static class ExecutionDefinitionJsonSerializer
 
         try
         {
-            document = JsonSerializer.Deserialize<ExecutionDefinitionDocument>(json, CreateOptions());
+            document = JsonSerializer.Deserialize<ExecutionDefinitionDocument>(json, GetReadOnlyOptions());
             if (document is null)
             {
                 return Error(
@@ -335,6 +359,21 @@ public static class ExecutionDefinitionJsonSerializer
         return DocumentValidationResult.Combine(
             integrity,
             ExecutionDefinitionCompatibilityValidator.Validate(document, compatibility));
+    }
+
+    static JsonSerializerOptions CreateReadOnlyOptions(PortableDocumentJsonFormatting formatting)
+    {
+        var options = CreateOptions(formatting);
+        options.MakeReadOnly(populateMissingResolver: true);
+        return options;
+    }
+
+    static JsonSerializerOptions CreateClrContractReadOnlyOptions()
+    {
+        var options = CreateOptions();
+        options.PropertyNamingPolicy = null;
+        options.MakeReadOnly(populateMissingResolver: true);
+        return options;
     }
 
     static DocumentValidationResult ValidateEnvelope(JsonElement root)
