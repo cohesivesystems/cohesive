@@ -17,15 +17,7 @@ public sealed class AzureKeyVaultResources
         var identity = Output.Tuple(vault.Name, vault.Id, vault.Properties).Apply(values =>
         {
             var (name, id, properties) = values;
-            var parts = id.Split('/');
-            if (!string.Equals(name, expectedName, StringComparison.OrdinalIgnoreCase) || parts.Length != 9 || parts[0].Length != 0 ||
-                !string.Equals(parts[1], "subscriptions", StringComparison.OrdinalIgnoreCase) ||
-                !Guid.TryParse(parts[2], out var subscription) || subscription != policy.SubscriptionId ||
-                !string.Equals(parts[3], "resourceGroups", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(parts[4]) ||
-                !string.Equals(parts[5], "providers", StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(parts[6], "Microsoft.KeyVault", StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(parts[7], "vaults", StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(parts[8], expectedName, StringComparison.OrdinalIgnoreCase) ||
+            if (!AzureConstructionPolicy.ValidResourceIdentity(name, id, expectedName, policy.SubscriptionId, "Microsoft.KeyVault", "vaults") ||
                 !Guid.TryParse(properties.TenantId, out var tenant) || tenant != policy.TenantId)
                 throw new InvalidOperationException("The attached vault's resolved name, resource ID or tenant does not match its canonical association.");
             return (id, properties);

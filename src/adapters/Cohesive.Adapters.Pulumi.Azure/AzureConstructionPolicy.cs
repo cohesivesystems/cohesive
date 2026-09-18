@@ -35,6 +35,22 @@ internal static class AzureConstructionPolicy
             error("provenance", "Supply non-empty source references attributing provider scope and policy.");
     }
 
+    // Shared ARM identity grammar; a caller may additionally constrain the resource group.
+    internal static bool ValidResourceIdentity(string name, string id, string expected, Guid subscriptionId,
+        string provider, string kind, string? resourceGroup = null)
+    {
+        var parts = id.Split('/');
+        return string.Equals(name, expected, StringComparison.OrdinalIgnoreCase) && parts.Length == 9 && parts[0].Length == 0 &&
+            string.Equals(parts[1], "subscriptions", StringComparison.OrdinalIgnoreCase) &&
+            Guid.TryParse(parts[2], out var subscription) && subscription == subscriptionId &&
+            string.Equals(parts[3], "resourceGroups", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(parts[4]) &&
+            (resourceGroup is null || string.Equals(parts[4], resourceGroup, StringComparison.OrdinalIgnoreCase)) &&
+            string.Equals(parts[5], "providers", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(parts[6], provider, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(parts[7], kind, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(parts[8], expected, StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static bool ValidResourceGroup(string? name) => !string.IsNullOrWhiteSpace(name) &&
         Regex.IsMatch(name, @"\A[\p{L}\p{N}_().-]{1,90}\z") && !name.EndsWith('.');
 
