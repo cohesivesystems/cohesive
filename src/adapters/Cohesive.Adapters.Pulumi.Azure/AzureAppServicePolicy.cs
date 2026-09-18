@@ -45,6 +45,8 @@ public sealed record AzureAppServicePolicy
     public required string ResourceGroupName { get; init; }
     /// <summary>One decision for every participating App Service workload; excludes non-participating workloads.</summary>
     public required ImmutableArray<AzureAppServicePlacement> Placements { get; init; }
+    /// <summary>Canonical directed workload-to-plan contract; hosting does not imply runtime health readiness.</summary>
+    public required InfrastructureBindingContractId HostingContract { get; init; }
     /// <summary>Canonical contracts explicitly permitted to consume HTTPS site endpoints.</summary>
     public required ImmutableArray<InfrastructureBindingContractId> EndpointContracts { get; init; }
     /// <summary>Host-selected positive setting-name character budget, checked before native registration; not a universal Azure limit.</summary>

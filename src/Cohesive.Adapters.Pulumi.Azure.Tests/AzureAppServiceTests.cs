@@ -19,6 +19,7 @@ public sealed class AzureAppServiceTests
     const string Principal = "6a4517a1-3c0f-4c19-a398-08c46eefc9ef";
     static readonly InfrastructureNodeId Api = new("workloads/api"), Ui = new("workloads/ui"), Hosting = new("resources/plan");
     static readonly InfrastructureBindingId Edge = new("bindings/ui-api");
+    static readonly InfrastructureBindingContractId HostedBy = new("contracts/hosted-by");
     static readonly InfrastructureBindingContractId Http = new("contracts/http");
     static readonly InfrastructureLifecycleAuthorityId Authority = new("pulumi/test/production");
     static readonly SourceReference Source = SourceReference.Create("test", "app-service");
@@ -84,7 +85,14 @@ public sealed class AzureAppServiceTests
     [InlineData("settings-budget")]
     [InlineData("secret-settings")]
     [InlineData("binding-settings")]
-    [InlineData("plan-dependency")]
+    [InlineData("plan-binding")]
+    [InlineData("readiness-only")]
+    [InlineData("reversed-hosting")]
+    [InlineData("wrong-hosting-contract")]
+    [InlineData("ambiguous-hosting")]
+    [InlineData("hosting-contract")]
+    [InlineData("hosting-endpoint-overlap")]
+    [InlineData("wrong-selected-plan")]
     [InlineData("plan-identity")]
     [InlineData("site-identity")]
     [InlineData("owner")]
@@ -96,6 +104,9 @@ public sealed class AzureAppServiceTests
         var policy = Policy(); var first = policy.Placements[0];
         policy = failure switch
         {
+            "hosting-contract" => policy with { HostingContract = default },
+            "hosting-endpoint-overlap" => policy with { HostingContract = Http },
+            "wrong-selected-plan" => policy with { Placements = [first with { Plan = new("resources/other-plan") }, policy.Placements[1]] },
             "subscription" => policy with { SubscriptionId = Guid.Empty },
             "authority" => policy with { LifecycleAuthority = new("wrong") },
             "resource-group" => policy with { ResourceGroupName = "invalid/rg" },
@@ -111,6 +122,10 @@ public sealed class AzureAppServiceTests
         var deployment = DeploymentPlan(failure);
         var diagnostics = AzureAppServiceBinding.Validate(deployment, policy, Subscription);
         Assert.NotEmpty(diagnostics);
+        if (failure is "plan-binding" or "readiness-only" or "reversed-hosting" or "wrong-hosting-contract" or "ambiguous-hosting" or "wrong-selected-plan")
+            Assert.Contains(diagnostics, d => d.Code == "azure.app-service.plan-binding" && d.SchemaLocation == Api.Value);
+        if (failure is "hosting-contract" or "hosting-endpoint-overlap")
+            Assert.Contains(diagnostics, d => d.Code == "azure.app-service.hosting-contract");
         Assert.All(diagnostics, d => Assert.NotNull(d.Evidence));
         if (failure == "activation") Assert.Contains(diagnostics, d => d.SchemaLocation == Api.Value);
         Assert.Throws<AzureAppServiceValidationException>(() => AzureAppServiceBinding.Names(deployment, policy, Api, Subscription));
@@ -229,13 +244,23 @@ public sealed class AzureAppServiceTests
         Assert.Equal("P1v3", sizing.GetProperty("name").GetString()); Assert.Equal(2, sizing.GetProperty("capacity").GetInt32());
     }
 
+    [Fact]
+    public void Hosting_is_a_canonical_binding_without_a_runtime_readiness_obligation()
+    {
+        var deployment = DeploymentPlan();
+        Assert.True(deployment.IsComplete);
+        Assert.Empty(deployment.FacilityPlan.Definition.Definition.ReadinessDependencies);
+        Assert.Equal(2, deployment.FacilityPlan.Definition.Definition.Bindings.Count(b => b.Contract == HostedBy));
+        Assert.Empty(AzureAppServiceBinding.Validate(deployment, Policy(), Subscription));
+    }
+
     static WebApp Site(string name, AppServicePlan plan, bool enabled, CustomResourceOptions? options = null) => new("existing-" + name,
         new() { Name = name, ResourceGroupName = "rg-test", ServerFarmId = plan.Id, Enabled = enabled, HttpsOnly = true }, options);
 
     static AzureAppServicePolicy Policy() => new()
     {
         LifecycleAuthority = Authority, SubscriptionId = Subscription, ResourceGroupName = "rg-test", MaximumSettingNameLength = 100,
-        EndpointContracts = [Http], SourceReferences = [Source],
+        HostingContract = HostedBy, EndpointContracts = [Http], SourceReferences = [Source],
         Placements = [new() { Workload = Api, Plan = Hosting, Activation = AzureAppServiceActivation.Enabled, SourceReferences = [Source] },
             new() { Workload = Ui, Plan = Hosting, Activation = AzureAppServiceActivation.Enabled, SourceReferences = [Source],
                 SecretSettings = [Secret], BindingSettings = [new(Address, Edge)] }]
@@ -249,11 +274,21 @@ public sealed class AzureAppServiceTests
             var resource = infra.Resource(Hosting).Requires(hosting);
             if (failure == "external-plan") resource.External(); else resource.Persistent();
             var api = infra.Workload(Api).Requires(executable); var ui = infra.Workload(Ui).Requires(executable);
-            if (failure != "plan-dependency")
+            var hostedBy = failure is "readiness-only" or "plan-binding" ? null : infra.Contract(failure == "wrong-hosting-contract" ? new("contracts/other") : HostedBy,
+                new("hosting-rule")).Requires(hosting).SourcedFrom(Source.Value);
+            if (failure == "readiness-only") { api.RequiresReady(resource); ui.RequiresReady(resource); }
+            else if (failure == "reversed-hosting")
             {
-                api.RequiresReady(resource);
-                if (failure == "dedicated") ui.RequiresReady(infra.Resource(new("resources/dedicated-plan")).Persistent().Requires(hosting));
-                else ui.RequiresReady(resource);
+                infra.Bind(resource).To(api).As(hostedBy!);
+                infra.Bind(resource).To(ui).As(hostedBy!);
+            }
+            else if (failure != "plan-binding")
+            {
+                infra.Bind(api).To(resource).As(hostedBy!);
+                if (failure == "dedicated") infra.Bind(ui).To(infra.Resource(new("resources/dedicated-plan")).Persistent().Requires(hosting)).As(hostedBy!);
+                else infra.Bind(ui).To(resource).As(hostedBy!);
+                if (failure == "ambiguous-hosting")
+                    infra.Bind(api).To(infra.Resource(new("resources/dedicated-plan")).Persistent().Requires(hosting)).As(hostedBy!);
             }
             var contract = infra.Contract(Http, new("http-rule")).Requires(executable).SourcedFrom(Source.Value);
             infra.Bind(Edge, ui).To(api).As(contract);
@@ -270,7 +305,7 @@ public sealed class AzureAppServiceTests
             deployment.Workload(Api, new(AzureAppServiceBinding.SiteFacility), new(failure == "site-identity" ? "wrong" : "azure/app-service/sites/api"), [Source]);
             if (failure == "excluded") deployment.NonParticipatingWorkload(Ui, "No UI in this environment", [Source.Value]);
             else deployment.Workload(Ui, new(AzureAppServiceBinding.SiteFacility), new("azure/app-service/sites/ui"), [Source]);
-            if (failure == "dedicated") deployment.Resource(new("resources/dedicated-plan"), new(AzureAppServiceBinding.PlanFacility),
+            if (failure is "dedicated" or "ambiguous-hosting") deployment.Resource(new("resources/dedicated-plan"), new(AzureAppServiceBinding.PlanFacility),
                 new("azure/app-service/plans/dedicated-plan"), Authority, [Source]);
             deployment.Resource(Hosting, new(AzureAppServiceBinding.PlanFacility), new(failure == "plan-identity" ? "wrong" : "azure/app-service/plans/shared-plan"),
                 failure == "owner" ? new("pulumi/foreign/stack") : Authority, [Source]);

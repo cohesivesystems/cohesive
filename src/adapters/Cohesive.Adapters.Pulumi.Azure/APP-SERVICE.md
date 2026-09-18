@@ -9,13 +9,13 @@ Pulumi owns sizing, platform, startup, health paths, provider options, execution
 
 Declare each hosting plan as a managed persistent resource at facility `azure/app-service-plan`,
 with locator `azure/app-service/plans/<physical-plan-name>`. Workloads use facility
-`azure/app-service` and locator `azure/app-service/sites/<physical-site-name>`. Each workload
-requires its selected plan to be ready in the canonical definition. Shared sites reference the
+`azure/app-service` and locator `azure/app-service/sites/<physical-site-name>`. Each workload has exactly one directed
+canonical binding to its selected plan using `AzureAppServicePolicy.HostingContract`. Shared sites reference the
 same canonical plan; dedicated sites reference a distinct plan. Aliased physical identities and
 foreign/external plan ownership are rejected.
 
 `AzureAppServicePolicy` covers every participating App Service workload exactly once. It selects
-one explicit subscription, resource group and `pulumi/<project>/<stack>` lifecycle authority.
+one explicit hosting contract (distinct from endpoint contracts), subscription, resource group and `pulumi/<project>/<stack>` lifecycle authority.
 `AzureAppServicePlacement` adds only the missing association and activation decisions, plus
 setting-to-binding attribution. It is not a second native site/options model. Non-participating
 workloads have no placement; disabled sites are participating, deliberately retained resources.
@@ -115,11 +115,27 @@ configuration, attribution, secret classification, disabled/excluded placement a
 and identity mismatches, explicit provider-read failures, cancellation and unknown fresh previews.
 The package consumer reuses the same tests, including the no-build packaging path.
 
-ARI-549 must adopt the published seam, first adding shared/dedicated plan resources and dependencies
+ARI-549 must adopt the published seam, first adding shared/dedicated plan resources and hosting bindings
 to its canonical declaration. Preserve all six existing sites, `cohesive:ari:WebApp` parent tokens,
 logical names, sizing/platform/startup/health settings, disabled-site configuration, principal lookup
 behavior and grant identities. Project attributed product settings once. Qualify the stopped-site
-policy explicitly; do not silently turn prepared settings into active endpoint admission. Refine local
-Aspire plan dependencies through its existing semantic facilities rather than adding fake Azure services.
+policy explicitly; do not silently turn prepared settings into active endpoint admission. Local Aspire can realize the hosting resource through its control-plane facility without inventing a
+service or health probe.
 Compare fresh same-backend previews. Bootstrap, custom domains and runtime readiness remain separate.
 No apply, destroy, DNS or state mutation belongs to this library change.
+
+## Hosting association versus runtime readiness
+
+ARI-549 exposed that the initial seam required `RequiresReady(plan)` to prove hosting. That conflated
+allocation with runtime health: the local compiler correctly projects readiness obligations into
+service health waits, but a hosting pool is not itself a service. The seam now uses the existing
+canonical binding model, with a host-selected hosting contract and exactly one outgoing relationship
+per participating site. A missing, reversed, ambiguous or differently contracted relationship fails
+before registration. A readiness edge alone is insufficient, and selecting an endpoint contract as
+the hosting contract is rejected. Existing source provenance and binding capability checks still apply.
+
+Native `ServerFarmId = plan.Id` establishes Pulumi creation ordering. Its resolved value is checked
+against the attached plan as before. Explicit canonical readiness declarations retain their original
+meaning and are neither ignored nor rewritten. No core IR, local compiler, SDK wrapper or assumed
+readiness mechanism is added. This corrects the initial App Service policy contract: consumers must
+supply `HostingContract` and declare hosting bindings instead of adding artificial readiness edges.
