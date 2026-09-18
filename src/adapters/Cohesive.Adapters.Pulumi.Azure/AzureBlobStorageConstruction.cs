@@ -142,7 +142,7 @@ public static class AzureBlobStorageConstruction
         return deployment.FacilityPlan.Definition.Definition.Bindings.Where(b => selected.Contains(b.Target) || selected.Contains(b.Source));
     }
 
-    static Match ParsePhysical(string value) => Regex.Match(value,
+    internal static Match ParsePhysical(string value) => Regex.Match(value,
         @"\Aazure/storage/accounts/([a-z0-9]{3,24})/blob-services/default/containers/([a-z0-9](?:[a-z0-9]|-(?!-)){1,61}[a-z0-9])\z");
 }
 

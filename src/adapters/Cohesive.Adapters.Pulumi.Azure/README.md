@@ -7,6 +7,7 @@ Cohesive; ordinary provider configuration and resource options belong to native 
 construction helpers only where they enforce a meaningful cross-resource invariant or remove repeated
 integration friction. A parallel wrapper for every provider option is not an adoption requirement.
 
+- [Machine Learning binding seam](MACHINE-LEARNING.md): workspace supporting identities and explicit disabled, managed or externally owned registry selection.
 - [App Service hosting seam](APP-SERVICE.md): canonical shared/dedicated plans, workload activation, classified native settings and explicit identity observations.
 - [Entra binding seam](ENTRA.md): external tenant versus managed registrations, explicit permission actions and classified credentials.
 - [Telemetry binding seam](TELEMETRY.md): canonical Application Insights/Log Analytics association and secret consumer outputs.

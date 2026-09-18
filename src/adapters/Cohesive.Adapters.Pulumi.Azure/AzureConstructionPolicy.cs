@@ -51,6 +51,16 @@ internal static class AzureConstructionPolicy
             string.Equals(parts[8], expected, StringComparison.OrdinalIgnoreCase);
     }
 
+    // Parent chains remain native; Entra additionally fences the logical resource name.
+    internal static bool ValidPulumiUrn(string urn, InfrastructureLifecycleAuthorityId authority, string type, string? name = null)
+    {
+        var owner = authority.Value?.Split('/') ?? [];
+        var parts = urn.Split("::", StringSplitOptions.None);
+        return owner.Length == 3 && owner[0] == "pulumi" && parts.Length == 4 &&
+            parts[0] == "urn:pulumi:" + owner[2] && parts[1] == owner[1] && parts[2].Split('$')[^1] == type &&
+            (name is null || parts[3] == name);
+    }
+
     internal static bool ValidResourceGroup(string? name) => !string.IsNullOrWhiteSpace(name) &&
         Regex.IsMatch(name, @"\A[\p{L}\p{N}_().-]{1,90}\z") && !name.EndsWith('.');
 

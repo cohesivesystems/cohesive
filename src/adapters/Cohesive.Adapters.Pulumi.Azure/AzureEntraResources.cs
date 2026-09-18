@@ -15,7 +15,6 @@ public sealed class AzureEntraResources
         ServicePrincipal? principal, (string Application, string? ServicePrincipal) names, ImmutableArray<InfrastructureBindingDefinition> bindings)
     {
         Deployment = deployment; Policy = policy; Application = application; ServicePrincipal = principal; AccessBindings = bindings;
-        var authority = policy.LifecycleAuthority.Value.Split('/');
         var appIdentity = Output.Tuple(application.Urn, application.Id, application.ObjectId, application.ClientId).Apply(value =>
         {
             if (!ValidUrn(value.Item1, "azuread:index/application:Application", names.Application) ||
@@ -45,12 +44,7 @@ public sealed class AzureEntraResources
                 $"Binding '{p.Binding.Value}' requests a delegated scope; user/admin consent is not established by this association.",
                 global::Cohesive.Model.DiagnosticSeverity.Warning))];
 
-        bool ValidUrn(string urn, string type, string name)
-        {
-            var parts = urn.Split("::", StringSplitOptions.None);
-            return parts.Length == 4 && parts[0] == "urn:pulumi:" + authority[2] && parts[1] == authority[1] &&
-                parts[2].Split('$')[^1] == type && parts[3] == name;
-        }
+        bool ValidUrn(string urn, string type, string name) => AzureConstructionPolicy.ValidPulumiUrn(urn, policy.LifecycleAuthority, type, name);
     }
     readonly Output<string?> principalObjectId;
     /// <summary>Exact canonical plan retained with its provenance.</summary>

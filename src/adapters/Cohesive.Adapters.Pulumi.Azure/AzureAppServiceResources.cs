@@ -13,7 +13,6 @@ public sealed class AzureAppServiceResources
         AzureAppServicePlacement placement, (string Site, string Plan) names, AppServicePlan plan, WebApp site)
     {
         Deployment = deployment; Policy = policy; Placement = placement; Plan = plan; Site = site;
-        var authority = policy.LifecycleAuthority.Value.Split('/');
         var planId = Output.Tuple(plan.Name, plan.Id, plan.Urn).Apply(value =>
             ValidIdentity(value.Item1, value.Item2, names.Plan, "serverfarms") && ValidUrn(value.Item3, "azure-native:web:AppServicePlan") ? value.Item2 :
                 throw new InvalidOperationException("The native hosting plan does not match its canonical identity and owner."));
@@ -26,11 +25,7 @@ public sealed class AzureAppServiceResources
 
         bool ValidIdentity(string name, string id, string expected, string kind) => AzureConstructionPolicy.ValidResourceIdentity(
             name, id, expected, policy.SubscriptionId, "Microsoft.Web", kind, policy.ResourceGroupName);
-        bool ValidUrn(string urn, string type)
-        {
-            var parts = urn.Split("::", StringSplitOptions.None);
-            return parts.Length == 4 && parts[0] == "urn:pulumi:" + authority[2] && parts[1] == authority[1] && parts[2].Split('$')[^1] == type;
-        }
+        bool ValidUrn(string urn, string type) => AzureConstructionPolicy.ValidPulumiUrn(urn, policy.LifecycleAuthority, type);
     }
     /// <summary>Exact canonical topology and provenance.</summary>
     public InfrastructureTargetDeploymentPlan Deployment { get; }
