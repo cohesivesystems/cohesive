@@ -31,18 +31,8 @@ public sealed class AzureTelemetryResources
             !string.IsNullOrWhiteSpace(value.Item2) ? value.Item2 :
                 throw new InvalidOperationException("The telemetry provider returned no connection string.")));
 
-        bool ValidIdentity(string name, string id, string expected, string provider, string kind)
-        {
-            var parts = id.Split('/');
-            return string.Equals(name, expected, StringComparison.OrdinalIgnoreCase) && parts.Length == 9 && parts[0].Length == 0 &&
-                string.Equals(parts[1], "subscriptions", StringComparison.OrdinalIgnoreCase) &&
-                Guid.TryParse(parts[2], out var subscription) && subscription == policy.SubscriptionId &&
-                string.Equals(parts[3], "resourceGroups", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(parts[4]) &&
-                string.Equals(parts[5], "providers", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(parts[6], provider, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(parts[7], kind, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(parts[8], expected, StringComparison.OrdinalIgnoreCase);
-        }
+        bool ValidIdentity(string name, string id, string expected, string provider, string kind) =>
+            AzureConstructionPolicy.ValidResourceIdentity(name, id, expected, policy.SubscriptionId, provider, kind);
     }
     readonly Output<string> connectionString;
     /// <summary>Original canonical deployment and provenance.</summary>
