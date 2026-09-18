@@ -144,12 +144,11 @@ public static class AzureMachineLearningBinding
         ((Output<ML.Inputs.ManagedServiceIdentityArgs>)identity).Apply(value =>
         {
             if (value?.Type is null) throw new InvalidOperationException("Select an explicit system-assigned ML identity.");
-            return new ML.Inputs.ManagedServiceIdentityArgs
-            {
-                Type = ((Output<Union<string, ML.ManagedServiceIdentityType>>)value.Type).Apply(type =>
-                    type.Match(v => v, v => v.ToString()) == "SystemAssigned" ? "SystemAssigned" : throw new InvalidOperationException("This association requires a system-assigned ML identity.")),
-                UserAssignedIdentities = value.UserAssignedIdentities
-            };
+            // The SDK's optional-map getter materializes an empty map. Preserve its absent state
+            // by validating the original native object without reading unrelated optional fields.
+            value.Type = ((Output<Union<string, ML.ManagedServiceIdentityType>>)value.Type).Apply(type =>
+                type.Match(v => v, v => v.ToString()) == "SystemAssigned" ? "SystemAssigned" : throw new InvalidOperationException("This association requires a system-assigned ML identity."));
+            return value;
         });
 
     static (Output<string> Storage, Output<string> Vault, Output<string> Telemetry) Dependencies(InfrastructureTargetDeploymentPlan deployment,

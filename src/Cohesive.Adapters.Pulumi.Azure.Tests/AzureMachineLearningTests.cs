@@ -83,6 +83,7 @@ public sealed class AzureMachineLearningTests
         Assert.True(checkedOptions);
         var native = Assert.Single(mocks.Resources, r => r.Type == "azure-native:machinelearningservices:Workspace");
         Assert.Contains("provider", native.Provider); Assert.Equal("existing-workspace", native.Name);
+        Assert.Equal("{\"type\":\"SystemAssigned\"}", JsonSerializer.Serialize(native.Inputs["identity"]));
         Assert.Equal(network, native.Inputs["publicNetworkAccess"]); Assert.Equal("Identity", native.Inputs["systemDatastoresAuthMode"]);
         Assert.Equal("native friendly name", native.Inputs["friendlyName"]); Assert.Equal(false, native.Inputs["hbiWorkspace"]);
         Assert.Equal(Prefix + "Microsoft.Storage/storageAccounts/teststorage", native.Inputs["storageAccount"]);
@@ -198,6 +199,7 @@ public sealed class AzureMachineLearningTests
         });
         var native = Assert.Single(mocks.Resources, r => r.Type?.StartsWith("azure-native:") == true);
         Assert.Equal("existing-registry", native.Name);
+        Assert.Equal("{\"type\":\"SystemAssigned\"}", JsonSerializer.Serialize(native.Inputs["identity"]));
         var json = JsonSerializer.Serialize(native.Inputs["regionDetails"]);
         Assert.Contains("explicitacr", json); Assert.Contains("Premium", json); Assert.Contains("explicitstorage", json); Assert.Contains("Standard_LRS", json);
         Assert.Contains("\"allowBlobPublicAccess\":false", json); Assert.Contains("\"storageAccountHnsEnabled\":false", json);
