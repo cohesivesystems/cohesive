@@ -10,10 +10,12 @@
   <ItemGroup>
     <Compile Include="*.cs" />
     <None Update="BLOB-STORAGE.md" Pack="true" PackagePath="/" />
+    <None Update="ENTRA.md" Pack="true" PackagePath="/" />
     <None Update="TELEMETRY.md" Pack="true" PackagePath="/" />
     <None Update="KEY-VAULT.md" Pack="true" PackagePath="/" />
     <None Update="COSMOS.md" Pack="true" PackagePath="/" />
     <PackageReference Include="Pulumi" Version="3.113.1" />
+    <PackageReference Include="Pulumi.AzureAD" Version="6.9.0" />
     <PackageReference Include="Pulumi.AzureNative" Version="3.16.0" />
     <ProjectReference Include="../../Cohesive.Infra/Cohesive.Infra.csproj" />
     <ProjectReference Include="Generated/dotnet/Pulumi.AzureNative_durabletask_v20251101.csproj" PrivateAssets="all" />
