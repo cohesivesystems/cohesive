@@ -2061,6 +2061,24 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
+    public void CompiledPlan_DefinitionLinkRetainsCompleteChildEvidence()
+    {
+        var fixture = CompileChildParentPlan();
+
+        var validation = ProcessDefinitionLink.TryCreateProcess(
+            fixture.Parent.Document,
+            fixture.Parent.ValidationContext,
+            out var validatedLink);
+
+        Assert.True(validation.IsValid, Format(validation.Diagnostics));
+        Assert.Equal(Assert.IsType<ProcessDefinitionLink>(validatedLink), fixture.Parent.DefinitionLink);
+        Assert.True(fixture.Parent.DefinitionLink.HasCompleteProcessDependencyEvidence);
+        Assert.Equal(
+            fixture.Child.DefinitionReference,
+            Assert.Single(fixture.Parent.DefinitionLink.ProcessDependencies));
+    }
+
+    [Fact]
     public async Task ChildRequest_UsesChildExecutorAndAdmitsOnlyExactTerminalLineage()
     {
         var fixture = CompileChildParentPlan();
@@ -5614,13 +5632,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 ],
                 recoveryPolicy),
             interactions.Catalog,
-            [new(
-                child.DefinitionReference,
-                ProcessDefinitionLinkKind.Process,
-                child.Definition.Input,
-                child.Definition.Result,
-                [],
-                child.Definition.RecoveryPolicy)],
+            [child.DefinitionLink],
             "process/durable-task-child-parent");
         return new(parent, child, interactions.Binding);
     }
@@ -5839,13 +5851,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 new(new($"outcome/{id}/terminated"), ChildOutcomeMapping.Terminated, new(Edge($"edge/{id}/terminated", "join")))
             ]);
 
-        static ProcessDefinitionLink Link(CompiledProcessPlan child) => new(
-            child.DefinitionReference,
-            ProcessDefinitionLinkKind.Process,
-            child.Definition.Input,
-            child.Definition.Result,
-            [],
-            child.Definition.RecoveryPolicy);
+        static ProcessDefinitionLink Link(CompiledProcessPlan child) => child.DefinitionLink;
     }
 
     static ChildProcessFixture CompilePartitionParentPlan()

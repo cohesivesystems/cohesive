@@ -27,6 +27,7 @@ public sealed class CompiledProcessPlan
         ValidationContext = validationContext;
         Options = options;
         EffectSummary = effectSummary;
+        DefinitionLink = ProcessDefinitionLink.FromValidatedProcess(document, definition);
         nodes = definition.Nodes.ToDictionary(static node => node.Id);
     }
 
@@ -49,6 +50,14 @@ public sealed class CompiledProcessPlan
     /// effect may conservatively represent host-operation emissions whose resource set is not statically closed.
     /// </summary>
     public ProcessEffectSummary EffectSummary { get; }
+
+    /// <summary>Exact child-Process linking evidence projected from this successfully compiled plan.</summary>
+    /// <remarks>
+    /// The canonical <see cref="Document"/> remains semantic authority. This immutable projection reuses the
+    /// compiler's completed validation and is suitable for a parent Process validation context without revalidating
+    /// or reprojecting the child document.
+    /// </remarks>
+    public ProcessDefinitionLink DefinitionLink { get; }
 
     /// <summary>Exact identity, revision, and semantic fingerprint of the compiled Process.</summary>
     public ExecutionDefinitionReference DefinitionReference => new(
