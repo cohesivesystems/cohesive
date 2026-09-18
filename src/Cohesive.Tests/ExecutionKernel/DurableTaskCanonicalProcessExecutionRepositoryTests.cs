@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
@@ -11,6 +13,13 @@ using CanonicalProcessDefinition = Cohesive.Processes.IR.ProcessDefinition;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
+[CollectionDefinition(TelemetryCollectionName, DisableParallelization = true)]
+public sealed class DurableTaskProcessExecutionRepositoryTelemetryTestCollection
+{
+    public const string TelemetryCollectionName = "Durable Task Process execution repository telemetry";
+}
+
+[Collection(DurableTaskProcessExecutionRepositoryTelemetryTestCollection.TelemetryCollectionName)]
 public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
 {
     [Fact]
@@ -664,6 +673,185 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
     }
 
     [Fact]
+    public async Task QueryAsync_SeparatesProviderAndProjectionTelemetryWithoutIdentityDimensions()
+    {
+        List<Activity> activities = [];
+        using ActivityListener activityListener = new()
+        {
+            ShouldListenTo = source => string.Equals(
+                source.Name,
+                DurableTaskProcessExecutionRepositoryTelemetry.ActivitySourceName,
+                StringComparison.Ordinal),
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activities.Add
+        };
+        ActivitySource.AddActivityListener(activityListener);
+
+        List<(double Value, Dictionary<string, object?> Tags)> durations = [];
+        List<(long Value, Dictionary<string, object?> Tags)> itemCounts = [];
+        using MeterListener meterListener = new();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (string.Equals(
+                    instrument.Meter.Name,
+                    DurableTaskProcessExecutionRepositoryTelemetry.MeterName,
+                    StringComparison.Ordinal))
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<double>((instrument, value, tags, _) =>
+        {
+            if (string.Equals(
+                    instrument.Name,
+                    DurableTaskProcessExecutionRepositoryTelemetry.QueryDurationInstrumentName,
+                    StringComparison.Ordinal))
+            {
+                durations.Add((value, Tags(tags)));
+            }
+        });
+        meterListener.SetMeasurementEventCallback<long>((instrument, value, tags, _) =>
+        {
+            if (string.Equals(
+                    instrument.Name,
+                    DurableTaskProcessExecutionRepositoryTelemetry.QueryItemsInstrumentName,
+                    StringComparison.Ordinal))
+            {
+                itemCounts.Add((value, Tags(tags)));
+            }
+        });
+        meterListener.Start();
+
+        var fixture = CreateFixture();
+        var current = Metadata(fixture, fixture.WaitingStatus, OrchestrationRuntimeStatus.Running);
+        var unrelated = new OrchestrationMetadata("unrelated", "other-instance")
+        {
+            DataConverter = fixture.Converter,
+            RuntimeStatus = OrchestrationRuntimeStatus.Running,
+            CreatedAt = fixture.WaitingStatus.CreatedAtUtc,
+            LastUpdatedAt = fixture.WaitingStatus.UpdatedAtUtc,
+            SerializedInput = fixture.Converter.Serialize("unrelated"),
+            SerializedCustomStatus = fixture.Converter.Serialize("unrelated")
+        };
+        var repository = new DurableTaskProcessExecutionRepository(
+            new FakeDurableTaskClient([current, unrelated]),
+            taskHubName: "sensitive-task-hub");
+
+        var result = await repository.QueryAsync(OperationContext.Create(), new()
+        {
+            ProcessIdPrefix = "sensitive-process-prefix",
+            Limit = 25,
+            ContinuationToken = "sensitive-continuation-token"
+        });
+
+        Assert.Single(result.Items);
+        var query = Assert.Single(activities, activity => string.Equals(
+            activity.OperationName,
+            DurableTaskProcessExecutionRepositoryTelemetry.QueryActivityName,
+            StringComparison.Ordinal));
+        var provider = Assert.Single(activities, activity => string.Equals(
+            activity.OperationName,
+            DurableTaskProcessExecutionRepositoryTelemetry.QueryProviderReadActivityName,
+            StringComparison.Ordinal));
+        var projection = Assert.Single(activities, activity => string.Equals(
+            activity.OperationName,
+            DurableTaskProcessExecutionRepositoryTelemetry.QueryProjectionActivityName,
+            StringComparison.Ordinal));
+        Assert.Equal(ActivityKind.Client, provider.Kind);
+        Assert.Equal(query.SpanId, provider.ParentSpanId);
+        Assert.Equal(query.SpanId, projection.ParentSpanId);
+        Assert.All(activities, activity =>
+        {
+            Assert.Equal("standalone", activity.GetTagItem(DurableTaskProcessExecutionRepositoryTelemetry.ClientTagName));
+            var values = string.Join('|', activity.TagObjects.Select(static tag => tag.Value));
+            Assert.DoesNotContain("sensitive", values, StringComparison.Ordinal);
+            Assert.DoesNotContain(fixture.PhysicalInstanceId, values, StringComparison.Ordinal);
+        });
+
+        Assert.Equal(3, durations.Count);
+        Assert.All(durations, measurement => Assert.True(measurement.Value >= 0));
+        Assert.Equal(
+            ["projection", "provider_read", "total"],
+            durations
+                .Select(measurement => Assert.IsType<string>(
+                    measurement.Tags[DurableTaskProcessExecutionRepositoryTelemetry.PhaseTagName]))
+                .Order(StringComparer.Ordinal));
+        Assert.Equal(
+            [("provider", 2L), ("returned", 1L)],
+            itemCounts
+                .Select(measurement => (
+                    Assert.IsType<string>(measurement.Tags[DurableTaskProcessExecutionRepositoryTelemetry.ItemKindTagName]),
+                    measurement.Value))
+                .OrderBy(static measurement => measurement.Item1, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task QueryAsync_ReportsProviderFailureOnProviderAndEnclosingQuery()
+    {
+        List<Activity> activities = [];
+        using ActivityListener activityListener = new()
+        {
+            ShouldListenTo = source => string.Equals(
+                source.Name,
+                DurableTaskProcessExecutionRepositoryTelemetry.ActivitySourceName,
+                StringComparison.Ordinal),
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activities.Add
+        };
+        ActivitySource.AddActivityListener(activityListener);
+
+        List<Dictionary<string, object?>> failureTags = [];
+        using MeterListener meterListener = new();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (string.Equals(
+                    instrument.Meter.Name,
+                    DurableTaskProcessExecutionRepositoryTelemetry.MeterName,
+                    StringComparison.Ordinal))
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((instrument, _, tags, _) =>
+        {
+            if (string.Equals(
+                    instrument.Name,
+                    DurableTaskProcessExecutionRepositoryTelemetry.QueryFailuresInstrumentName,
+                    StringComparison.Ordinal))
+            {
+                failureTags.Add(Tags(tags));
+            }
+        });
+        meterListener.Start();
+
+        var expected = new InvalidOperationException("Provider unavailable.");
+        var repository = new DurableTaskProcessExecutionRepository(
+            new FakeDurableTaskClient([], queryFailure: expected));
+
+        var actual = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await repository.QueryAsync(OperationContext.Create(), new()));
+
+        Assert.Same(expected, actual);
+        Assert.Equal(2, activities.Count);
+        Assert.All(activities, activity =>
+        {
+            Assert.Equal(ActivityStatusCode.Error, activity.Status);
+            Assert.Equal(typeof(InvalidOperationException).FullName, activity.GetTagItem("error.type"));
+            Assert.Equal(
+                DurableTaskProcessExecutionRepositoryTelemetry.FailedOutcome,
+                activity.GetTagItem(DurableTaskProcessExecutionRepositoryTelemetry.OutcomeTagName));
+        });
+        Assert.Equal(
+            ["provider_read", "total"],
+            failureTags
+                .Select(tags => Assert.IsType<string>(
+                    tags[DurableTaskProcessExecutionRepositoryTelemetry.PhaseTagName]))
+                .Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public async Task CurrentProjection_FailsClosedOnMalformedOrConflictingEvidence()
     {
         var fixture = CreateFixture();
@@ -1024,9 +1212,18 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         CurrentFixture Fixture,
         DurableTaskSequentialProcessResult Result);
 
+    static Dictionary<string, object?> Tags<T>(ReadOnlySpan<KeyValuePair<string, T>> tags)
+    {
+        Dictionary<string, object?> result = new(StringComparer.Ordinal);
+        foreach (var tag in tags)
+            result[tag.Key] = tag.Value;
+        return result;
+    }
+
     sealed class FakeDurableTaskClient(
         IReadOnlyList<OrchestrationMetadata> metadata,
-        string? continuationToken = null) : DurableTaskClient("fake")
+        string? continuationToken = null,
+        Exception? queryFailure = null) : DurableTaskClient("fake")
     {
         public OrchestrationQuery? LastQuery { get; private set; }
 
@@ -1065,6 +1262,8 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             return Pageable.Create<OrchestrationMetadata>((continuation, pageSize, cancellation) =>
             {
                 cancellation.ThrowIfCancellationRequested();
+                if (queryFailure is not null)
+                    throw queryFailure;
                 LastPageContinuationToken = continuation ?? filter?.ContinuationToken;
                 return Task.FromResult(new Page<OrchestrationMetadata>(metadata, continuationToken));
             });

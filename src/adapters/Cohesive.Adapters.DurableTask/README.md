@@ -59,6 +59,25 @@ separate trusted value repository and never enter generic monitoring records.
 
 The migration reader does not fabricate canonical evidence that historical runs did not retain.
 
+## Telemetry
+
+The Process execution repository emits native .NET activities and metrics from
+`Cohesive.Adapters.DurableTask.ProcessExecutionRepository`. Register the package-owned scopes directly with the
+host's OpenTelemetry pipeline:
+
+```csharp
+tracing.AddSource(DurableTaskProcessExecutionRepositoryTelemetry.ActivitySourceName);
+metrics.AddMeter(DurableTaskProcessExecutionRepositoryTelemetry.MeterName);
+```
+
+One repository query produces a parent query activity plus separate provider-read and Cohesive-projection children.
+The `cohesive.durable_task.process_execution.query.duration` histogram exposes the same split through its bounded
+`cohesive.durable_task.query.phase` dimension. Provider and returned item-count histograms help distinguish page size
+from provider latency without exporting task hubs, continuation tokens, Process identities, definitions, or payloads.
+
+This adapter scope is intentionally not part of `AddCohesiveInstrumentation`: applications opt into the providers
+they actually use by registering their package constants.
+
 ## Continue
 
 - [Internals](INTERNALS.md) contains monitoring, trusted value retrieval, planning, worker registration, execution,
