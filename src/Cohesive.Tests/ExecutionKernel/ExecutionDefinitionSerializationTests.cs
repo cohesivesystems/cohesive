@@ -462,6 +462,40 @@ public sealed class ExecutionDefinitionSerializationTests
     }
 
     [Fact]
+    public void Create_ReusesSerializerMetadataAcrossDocuments()
+    {
+        _ = CreateDocument(definitionId: "definition/warmup");
+        const int documentCount = 16;
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+
+        for (var index = 0; index < documentCount; index++)
+        {
+            _ = CreateDocument(
+                definitionId: $"definition/measured/{index}",
+                revisionId: $"revision/{index}");
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Assert.True(
+            allocated <= 256 * 1024,
+            $"Allocated {allocated} bytes across {documentCount} documents.");
+    }
+
+    [Fact]
+    public void CreateOptions_ReturnsIndependentMutableOptions()
+    {
+        var first = ExecutionDefinitionJsonSerializer.CreateOptions();
+        var second = ExecutionDefinitionJsonSerializer.CreateOptions();
+
+        first.PropertyNamingPolicy = null;
+
+        Assert.NotSame(first, second);
+        Assert.Null(first.PropertyNamingPolicy);
+        Assert.NotNull(second.PropertyNamingPolicy);
+    }
+
+    [Fact]
     public void TryDeserialize_DistinguishesUnsupportedSchemaAndFingerprintFailures()
     {
         var json = ExecutionDefinitionJsonSerializer.Serialize(CreateDocument());

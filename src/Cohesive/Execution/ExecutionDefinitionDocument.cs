@@ -184,7 +184,7 @@ public sealed record ExecutionDefinitionDocument
         var definitionElement = ExecutionDefinitionFingerprinter.NormalizeDefinition(
             JsonSerializer.SerializeToElement(
                 definition,
-                ExecutionDefinitionJsonSerializer.CreateOptions()));
+                ExecutionDefinitionJsonSerializer.GetReadOnlyOptions()));
 
         var fingerprint = ExecutionDefinitionFingerprinter.ComputeNormalized(
             CurrentSchemaVersion,
