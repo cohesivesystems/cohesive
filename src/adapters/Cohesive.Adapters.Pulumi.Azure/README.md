@@ -1,7 +1,13 @@
 # Cohesive.Adapters.Pulumi.Azure
 
-Construct Azure facilities from exact Cohesive Infra plans through the existing Pulumi lifecycle.
+Connect exact Cohesive Infra declarations to native Pulumi resources and their existing lifecycle.
 
+Tailor at the seams: canonical identity, relationships, ownership and validated projections belong to
+Cohesive; ordinary provider configuration and resource options belong to native Pulumi APIs. Add
+construction helpers only where they enforce a meaningful cross-resource invariant or remove repeated
+integration friction. A parallel wrapper for every provider option is not an adoption requirement.
+
+- [Key Vault binding seam](KEY-VAULT.md): associate a native Pulumi vault with canonical identity and explicit consumer decisions.
 - [Shared Blob Storage construction](BLOB-STORAGE.md): one account owner, exact containers and explicit/coalesced blob grants.
 - [Cosmos SQL construction](COSMOS.md): account/database/container policy and explicit data-plane grant scopes.
 - Durable Task construction is described below.
