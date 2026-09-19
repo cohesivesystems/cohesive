@@ -74,7 +74,16 @@ public static class IngestionLedgerDocuments
             IngestionLedgerAddress.Require(advance.Publication.ContentFingerprint);
             IngestionLedgerAddress.Require(advance.Publication.ReceiptReference);
             if (advance.ExpectedRevision is < 0 or long.MaxValue) return Error("revision", "Expected revision must be nonnegative with room to advance.");
-            switch (advance.Position)
+            return ValidatePosition(advance.Position);
+        }
+        catch (ArgumentException) { return Error("identity", "Ledger scope, definition and publication evidence must be complete valid identities."); }
+    }
+
+    internal static DocumentValidationResult ValidatePosition(IngestionPosition? position)
+    {
+        try
+        {
+            switch (position)
             {
                 case IngestionDateRangePosition range when range.EndExclusive > range.StartInclusive:
                     break;
