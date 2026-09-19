@@ -13,3 +13,12 @@ Authoritative contracts checked on 2026-09-19:
 | `taskhub.json` | [Task Hubs GET, 2025-11-01](https://learn.microsoft.com/en-us/rest/api/durabletask/task-hubs/get?view=rest-durabletask-2025-11-01): root ARM id/type and properties.provisioningState. |
 
 All fixtures prove parsing, routing and management evidence only. They do not establish application health, data-plane access, worker admission, live permissions or provider service availability. Unknown state values are omitted rather than copied into retained artifacts. Tests separately cover failure bodies, wrong identities, duplicate fields, oversized bodies and cancellation.
+
+## Resource Health availability
+
+`availability.json` is an original, hand-authored synthetic fixture under the repository license, not a copied Azure response. Its replacement marker identifies an exact reviewed resource; the returned ID identifies that resource's `availabilityStatuses/current` extension. The source timestamp is intentionally earlier than capture time. The extra summary is a synthetic redaction sentinel.
+
+- [Resource Health GET contract, API 2025-05-01](https://learn.microsoft.com/en-us/rest/api/resourcehealth/availability-statuses/get-by-resource?view=rest-resourcehealth-2025-05-01): extension identity/type, four availability tokens and `reportedTime` as the last health-check time.
+- [Resource Health supported resource types](https://learn.microsoft.com/en-us/azure/service-health/resource-health-checks-resource-types): consulted 2026-09-19 for App Service sites and Cosmos accounts. Neither scope is application admission. SQL database children, Durable Task schedulers/task hubs and Blob containers are deliberately unsupported in this adapter slice; no parent-health substitution occurs.
+
+Tests vary state, source time, identity, malformed fields and duplicates. They cover healthy, unhealthy, degraded, unknown, stale/future, unavailable collection and unsupported coverage without claiming live qualification.

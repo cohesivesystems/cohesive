@@ -1,0 +1,10 @@
+{
+  "id": "{{RESOURCE_ID}}/providers/Microsoft.ResourceHealth/availabilityStatuses/current",
+  "name": "current",
+  "type": "Microsoft.ResourceHealth/AvailabilityStatuses",
+  "properties": {
+    "availabilityState": "Available",
+    "reportedTime": "2026-09-19T11:59:30Z",
+    "summary": "synthetic-provider-detail-not-for-artifacts"
+  }
+}
