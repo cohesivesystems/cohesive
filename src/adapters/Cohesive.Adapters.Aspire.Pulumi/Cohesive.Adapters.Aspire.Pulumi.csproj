@@ -8,6 +8,9 @@
     <PackageTags>cohesive;infrastructure;aspire;pulumi;automation;deployment</PackageTags>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Cohesive.Adapters.Aspire.Pulumi.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Aspire.Hosting" Version="13.5.2" />
     <PackageReference Include="Pulumi.Automation" Version="3.113.1" />
   </ItemGroup>
