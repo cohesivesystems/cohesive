@@ -222,3 +222,55 @@ receipt in one immediate transaction. It requires `SqliteDurability.Full`. Apply
 can include multiple logical targets and partitions within that database; it does not enlist
 existing repository tables. Exact retries return the original receipt even after later state changes.
 See the [commit contract and query guard protocol](../../../docs/decisions/declarative-storage-commits.md).
+
+## Retained ingestion work
+
+`SqliteIngestionWorkStore` binds Integrations' canonical request/acquisition/preparation documents to
+physical write-once retention. It uses `SqliteStorageCommitExecutor` and its existing versioned schema;
+there is no separate journal schema or command emitter.
+
+```csharp
+var database = new SqliteDatabase(new(path, durability: SqliteDurability.Full));
+SqliteIngestionWorkStore.Schema.Apply(database);
+var work = new SqliteIngestionWorkStore(database);
+var result = await work.RetainAsync(context, requestDocument, exactSelectionBytes);
+var reopened = await work.ReadAsync(context,
+    requestDocument.Metadata.DefinitionId, requestDocument.Metadata.RevisionId);
+```
+
+Each boundary atomically retains its canonical document, exact payload and original receipt. Its identity
+is the document ID plus attempt revision inside an adapter-owned target namespace. The target must remain
+exclusive to this adapter. Acquisition requires its retained request; preparation requires the exact retained
+request/acquisition chain and pinned transformation. Reopening also verifies the predecessor chain,
+content digest/length, original transaction tokens and original receipt. Exact retries return `Replayed`;
+a different candidate at the same boundary returns `IdentityConflict`. Failed native preconditions and
+unsupported limits retain the existing Storage outcomes; neither authorizes a fresh source operation.
+
+The content locator is an opaque label for this retained boundary, not a filesystem path that this adapter
+opens. External manifest children are **not** automatically resolved: callers must close and verify those
+references before using them. This first profile is intended for one bounded inline payload per boundary.
+Neither successful retention nor a complete prefix is proof of source completeness, sink publication,
+ledger advancement or settlement. A missing acquisition boundary is not permission to reacquire: dispatch
+may have completed before retention, and the source/Process binding must reconcile that ambiguity.
+
+Defaults bound content to 4 MiB and canonical document JSON to 1 MiB. Content is checked before copying.
+The adapter derives a conservative encoded-row bound accounting for JSON/base64 expansion and addresses;
+the shared executor checks native `OCTET_LENGTH` before materializing stored payload text, including receipt
+rows. Native transfer is bounded to twice the UTF-8 row budget to accommodate UTF-16 databases; the exact
+UTF-8 budget is then checked before JSON decoding. `SqliteStorageCommitExecutor.MaximumStoredPayloadBytes` exposes this optional per-row bound, and
+its `Validate` checks encoded candidate rows and receipt before any write. These are per-row limits, not
+an assertion that a transaction or the database has bounded total storage. Generic executor callers retain
+unbounded-row behavior unless they configure a limit. Streaming payloads are not supported here.
+
+The profile uses FULL synchronization and WAL, survives tested process kills after each retained boundary,
+and retains every receipt indefinitely unless external administration deletes the database. It has no cleanup,
+TTL, dispatcher, lease or scheduler. Protect evidence for the full recovery horizon; do not use another writer
+to edit the reserved target. Reverification deliberately costs additional bounded reads and hashes and is
+intended for acquisition units, not per-tick high-throughput logging. Read results expose read-only content
+memory owned by that result; do not mutate it. Cancellation around commit can still leave durable work:
+retry the identical retained input and identity.
+
+ITO-27 still requires application differential adoption and durable Process dispatch/reconciliation. Existing
+file journals are not migrated by constructing this adapter. Tests cover exact reopen/replay, metadata/content
+conflict, orphan lineage, corrupted bytes/tokens/receipts, concurrency, cancellation, native row bounds,
+pre-commit rollback after a killed writer, and process kills after request/acquisition/preparation retention.

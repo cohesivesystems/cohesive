@@ -8,6 +8,7 @@
     <ProjectReference Include="../Cohesive.Adapters.Sql/Cohesive.Adapters.Sql.csproj" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <ProjectReference Include="../../Cohesive.Storage/Cohesive.Storage.csproj" />
+    <ProjectReference Include="../../Cohesive.Integrations/Cohesive.Integrations.csproj" />
     <ProjectReference Include="../../Cohesive.Relations/Cohesive.Relations.csproj" />
   </ItemGroup>
   <ItemGroup>
