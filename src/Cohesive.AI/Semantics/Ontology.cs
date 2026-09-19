@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Diagnostics;
 
 namespace Cohesive.AI.Semantics;
 
@@ -11,6 +10,12 @@ public sealed record Ontology
     /// <summary>
     /// Creates one ontology.
     /// </summary>
+    /// <param name="concepts">Concept definitions keyed by their exact identity; null means empty.</param>
+    /// <param name="relationTypes">Authored relation types augmenting the standard types; null means defaults.</param>
+    /// <param name="relations">Authored relations, normalized for ordering, duplicates, and symmetric laws.</param>
+    /// <param name="rules">Authored rules augmenting standard rules; normalized by the existing rule identity.</param>
+    /// <exception cref="ArgumentException">A concept key differs from its identity, or a concept or relation is null.</exception>
+    /// <exception cref="InvalidOperationException">A rule kind is unsupported or violates its constructor invariants.</exception>
     public Ontology(
         ImmutableDictionary<string, Concept>? concepts = null,
         ImmutableDictionary<string, RelationType>? relationTypes = null,
@@ -25,7 +30,6 @@ public sealed record Ontology
         Relations = NormalizeRelations(relations, BuildRelationLawFlags(Rules));
     }
 
-    [Conditional("DEBUG")]
     static void ValidateConcepts(ImmutableDictionary<string, Concept>? concepts)
     {
         if (concepts is null)
@@ -33,6 +37,8 @@ public sealed record Ontology
         
         foreach (var (conceptId, concept) in concepts)
         {
+            if (concept is null)
+                throw new ArgumentException($"Concept key {conceptId} has a null definition.", nameof(concepts));
             if (conceptId != concept.ConceptId)
                 throw new ArgumentException($"Concept key {conceptId} doesn't match concept value id {concept.ConceptId}");
         }   
@@ -164,6 +170,9 @@ public sealed record Ontology
     {
         if (relations.IsDefaultOrEmpty)
             return [];
+
+        if (relations.Any(static relation => relation is null))
+            throw new ArgumentException("Ontology relations cannot contain null entries.", nameof(relations));
 
         return [..
             relations

@@ -16,6 +16,41 @@ dotnet add package Cohesive.AI
 
 ## Example
 
+### Ontology interchange
+
+`Ontology` and its existing rule records remain the semantic authority. `OntologyJson.SerializeCanonical`
+writes their normalized representation, including every concrete rule payload; `OntologyJson.Deserialize`
+reads that complete representation. Rules use a `kind` discriminator declared on `OntologyRule`.
+This also preserves rule payloads when an ontology is serialized with ordinary `System.Text.Json`.
+
+```csharp
+var json = OntologyJson.SerializeCanonical(ontology);
+var restored = OntologyJson.Deserialize(json);
+OntologyValidator.Validate(restored); // after assembling any externally referenced ontology slices
+```
+
+The wire profile uses camel-case properties, strict string enums, ordinal object-key ordering, and
+the shared `StrictDocumentJson` canonical number representation. Existing ontology constructors own
+rule and relation normalization; the codec does not define another model or normalization catalog.
+Serializer metadata is frozen and reused; ontology values and canonical payloads are never globally cached.
+
+Reads accept different whitespace and object-key order but reject unknown fields/kinds, duplicate
+properties, omitted defaults, and content that constructor normalization would discard or change.
+Use the writer to materialize the complete interchange representation from authored models. Malformed
+wire data throws `JsonException` with the shared wire failure classification and location. Concept
+dictionary keys must match concept identities in both Debug and Release builds. Referential validation
+remains a separate step so an ontology slice can retain references resolved by an application import graph.
+
+This introduces a rule-preserving wire contract: older JSON that encoded rules as `{}` cannot recover
+their lost meanings and must be regenerated from its semantic source. Existing fingerprints obtained
+from that older serialization must also be regenerated and reviewed. Applications own revision identity,
+hash profile/version, tenant isolation, import resolution, persistence, and immutable publication policy.
+
+`OntologyJsonTests` covers every concrete rule kind, scoped-meaning closure behavior, canonical order,
+rule-sensitive SHA-256 evidence, malformed/lossy inputs, and unresolved reference preservation.
+
+### Ontology authoring
+
 ```csharp
 using Cohesive.AI.Semantics;
 
