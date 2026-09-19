@@ -265,3 +265,7 @@ The division of responsibility is:
 - Tests, analyzers, and CI establish mechanically verifiable evidence.
 - Pull requests record material judgment and evidence.
 - Decision records preserve exceptional or durable architectural choices.
+
+## Application adoption acceptance
+
+Framework adoption must reduce the coordination complexity owned by its consumer relative to a direct implementation with the same guarantees. The declaration and domain handlers must explain successful flow and recovery without requiring readers to inspect runtime mechanics. New sources should supply behavior and bindings rather than duplicate coordinators. The canonical graph owns sequence and failure branches. Leases, dispatch envelopes and reply admission belong to shared execution infrastructure; guarantees remain explicit and diagnosable. Review net conceptual burden and debugging effort rather than minimizing lines or maximizing extraction. Apply this criterion continuously while co-developing Cohesive and Ito, backed by the same recovery tests.
