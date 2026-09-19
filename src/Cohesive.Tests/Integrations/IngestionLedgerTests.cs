@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Cohesive.Model.Serialization;
 using Cohesive.Execution;
 using Cohesive.Integrations;
@@ -19,6 +20,34 @@ public class IngestionLedgerTests
         new(address ?? Address, Definition(), expected, position ?? new IngestionDateRangePosition(new(2026, 9, day), new(2026, 9, day + 1)),
             new(operation, "publisher-fingerprint/" + operation, "receipt/" + operation));
     static ExecutionDefinitionDocument Document(IngestionLedgerAdvance advance) => IngestionLedgerDocuments.Create(advance, Provenance);
+
+    [Fact]
+    public void ResultsRoundTripForDurableRequestOutcomesWithoutLosingReceiptOrDisposition()
+    {
+        var document = Document(Advance());
+        var committed = IngestionLedgerReduction.Evaluate(null, null, document);
+        IngestionLedgerResult[] results = [committed, IngestionLedgerReduction.Evaluate(null, committed.Receipt, document),
+            IngestionLedgerReduction.Evaluate(committed.Receipt!.Entry, null, Document(Advance("other"))), IngestionLedgerResult.Unknown()];
+        var options = StrictDocumentJson.CreateOptions();
+        foreach (var result in results)
+        {
+            var json = JsonSerializer.Serialize(result, options);
+            var restored = JsonSerializer.Deserialize<IngestionLedgerResult>(json, options);
+            Assert.Equal(result, restored);
+            Assert.Equal(json, JsonSerializer.Serialize(restored, options));
+        }
+    }
+
+    [Fact]
+    public void ResultWireRejectsContradictoryEvidence()
+    {
+        var result = IngestionLedgerResult.Unknown();
+        var options = StrictDocumentJson.CreateOptions();
+        var json = JsonSerializer.Serialize(result, options);
+        var forged = System.Text.Json.Nodes.JsonNode.Parse(json)!;
+        forged["disposition"] = JsonSerializer.SerializeToNode(IngestionLedgerDisposition.Advanced, options);
+        Assert.Throws<ArgumentException>(() => JsonSerializer.Deserialize<IngestionLedgerResult>(forged.ToJsonString(), options));
+    }
 
     [Fact]
     public void PositionsRoundTripThroughCanonicalDocumentsWithDistinctMeanings()
