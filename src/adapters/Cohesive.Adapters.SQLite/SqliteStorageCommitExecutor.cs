@@ -66,8 +66,18 @@ public sealed class SqliteStorageCommitExecutor : IStorageCommitExecutor
         using var connection = database.OpenConnection(context.CancellationToken);
         using var transaction = connection.BeginTransaction(deferred: false);
         using var commands = new SqliteCommandScope(database, connection, transaction);
+        var result = CommitInTransaction(context, commands, intent);
+        if (result.Disposition == StorageCommitDisposition.Committed) transaction.Commit();
+        return ValueTask.FromResult(result);
+    }
+
+    // Adapter-owned transactions can compose semantic reduction with the same physical write/receipt authority.
+    // Callers must roll back on rejection and must not expose success before their transaction commits.
+    internal StorageCommitResult CommitInTransaction(OperationContext context, SqliteCommandScope commands, StorageCommitIntent intent)
+    {
+        if (Validate(intent) is { } unsupported) return unsupported;
         var existing = ReadReceipt(commands, intent.ReceiptAddress, context.CancellationToken);
-        if (existing is not null) return ValueTask.FromResult(existing.Reconcile(intent.Reference));
+        if (existing is not null) return existing.Reconcile(intent.Reference);
         for (var index = 0; index < intent.Writes.Length; index++)
         {
             var write = intent.Writes[index];
@@ -75,15 +85,14 @@ public sealed class SqliteStorageCommitExecutor : IStorageCommitExecutor
             var affected = Write(commands, write.Address, SqliteStorageCommitSql.ItemKind,
                 payload, intent.Fingerprint, write.ExpectedToken, context.CancellationToken);
             if (affected != 1)
-                return ValueTask.FromResult(StorageCommitResult.PreconditionFailed($"/writes/{index}"));
+                return StorageCommitResult.PreconditionFailed($"/writes/{index}");
         }
         var receipt = new StorageCommitReceipt(intent.Reference, intent.Result);
         if (Write(commands, intent.ReceiptAddress, SqliteStorageCommitSql.ReceiptKind,
             JsonSerializer.Serialize(receipt, Json), intent.Fingerprint, expected: null, context.CancellationToken) != 1)
             throw new InvalidOperationException("The operation receipt changed inside an exclusive writer transaction.");
         context.CancellationToken.ThrowIfCancellationRequested();
-        transaction.Commit();
-        return ValueTask.FromResult(StorageCommitResult.Success(receipt, StorageCommitDisposition.Committed));
+        return StorageCommitResult.Success(receipt, StorageCommitDisposition.Committed);
     }
 
     /// <inheritdoc />
@@ -94,9 +103,11 @@ public sealed class SqliteStorageCommitExecutor : IStorageCommitExecutor
         using var connection = database.OpenConnection(context.CancellationToken);
         using var transaction = connection.BeginTransaction(deferred: true);
         using var commands = new SqliteCommandScope(database, connection, transaction);
-        return ValueTask.FromResult(ReadReceipt(commands, commit.Address, context.CancellationToken)?.Reconcile(commit)
-            ?? StorageCommitResult.Unknown());
+        return ValueTask.FromResult(ReconcileInTransaction(context, commands, commit));
     }
+
+    internal StorageCommitResult ReconcileInTransaction(OperationContext context, SqliteCommandScope commands, StorageCommitReference commit) =>
+        ReadReceipt(commands, commit.Address, context.CancellationToken)?.Reconcile(commit) ?? StorageCommitResult.Unknown();
 
     /// <summary>Reads a committed item and its opaque version for a later conditional intent.</summary>
     /// <param name="context">Cancellation and operation context.</param>
@@ -112,10 +123,15 @@ public sealed class SqliteStorageCommitExecutor : IStorageCommitExecutor
         using var connection = database.OpenConnection(context.CancellationToken);
         using var transaction = connection.BeginTransaction(deferred: true);
         using var commands = new SqliteCommandScope(database, connection, transaction);
+        return ValueTask.FromResult(ReadInTransaction(context, commands, address));
+    }
+
+    internal StorageCommitItem? ReadInTransaction(OperationContext context, SqliteCommandScope commands, StorageCommitAddress address)
+    {
         using var reader = Read(commands, address, SqliteStorageCommitSql.ItemKind, context.CancellationToken);
-        return ValueTask.FromResult(reader.Read()
+        return reader.Read()
             ? new StorageCommitItem(JsonSerializer.Deserialize<PortableValue>(ReadPayload(reader), Json)!, new(reader.GetString(1)))
-            : null);
+            : null;
     }
 
     StorageCommitReceipt? ReadReceipt(SqliteCommandScope commands, StorageCommitAddress address, CancellationToken cancellation)

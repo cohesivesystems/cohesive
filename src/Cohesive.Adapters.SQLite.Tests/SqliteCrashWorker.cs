@@ -6,6 +6,20 @@ internal static class SqliteCrashWorker
 {
     static async Task<int> Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--process-retain-worker")
+        {
+            var fixture = Cohesive.Tests.ExecutionKernel.ProcessDurabilityTestFixture.Create();
+            var store = SqliteProcessDurableStoreTests.Open(args[1]);
+            var host = new SqliteProcessDurableStoreTests.Host(fixture.OperationResult);
+            var runtime = SqliteProcessDurableStoreTests.Runtime(store, fixture, host);
+            var initialized = await runtime.InitializeAsync(OperationContext.Create(), fixture.Plan, fixture.Start);
+            var result = await runtime.ActivateAsync(OperationContext.Create(), fixture.Plan, initialized.Snapshot!.Checkpoint.ContinuationIdentity, fixture.Activation);
+            if (result.Disposition != Cohesive.Storage.Processes.ProcessDurableRuntimeDisposition.Applied) return 4;
+            Console.WriteLine("activated");
+            await Console.Out.FlushAsync();
+            await Task.Delay(Timeout.InfiniteTimeSpan);
+            return 3;
+        }
         if (args.Length == 3 && args[0] == "--ingestion-retain-worker")
         {
             var store = new SqliteIngestionWorkStore(new(new(args[1], durability: SqliteDurability.Full)));

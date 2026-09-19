@@ -1,3 +1,4 @@
+using Cohesive.Model;
 using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
