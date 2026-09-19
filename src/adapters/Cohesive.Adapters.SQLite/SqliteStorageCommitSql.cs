@@ -35,6 +35,7 @@ static class SqliteStorageCommitSql
         var builder = new SqlSelectBuilder(new SqlQualifiedTable(Table), "item");
         builder.Select(SqlExpression.UnqualifiedColumn(Payload), Payload);
         builder.Select(SqlExpression.UnqualifiedColumn(Token), Token);
+        builder.Select(SqlExpression.Intrinsic(SqliteSqlDialect.OctetLengthIntrinsic, SqlExpression.UnqualifiedColumn(Payload)), "payload_bytes");
         foreach (var key in Keys) builder.Where(Match(key, key));
         return new(builder.BuildTemplate(SqliteSqlDialect.Instance));
     }

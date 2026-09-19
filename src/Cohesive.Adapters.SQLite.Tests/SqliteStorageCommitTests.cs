@@ -40,6 +40,41 @@ public sealed class SqliteStorageCommitTests
     }
 
     [Fact]
+    public async Task ConfiguredRowLimitRejectsBeforeCommitAndIncludesOriginalReceipts()
+    {
+        using var file = new DatabaseFixture();
+        var database = new SqliteDatabase(new(file.Path, durability: SqliteDurability.Full));
+        SqliteStorageCommitExecutor.Schema.Apply(database);
+        var executor = new SqliteStorageCommitExecutor(database, maximumStoredPayloadBytes: 64);
+        var intent = StorageCommitConformance.Intent("bounded", new StorageCommitWrite(StorageCommitConformance.Address("state"), StorageCommitConformance.Value("value")));
+        Assert.Equal("storage.commit.row-payload-limit", Assert.Single(executor.Validate(intent)!.Diagnostics).Code);
+        Assert.Equal(StorageCommitDisposition.Unsupported, (await executor.CommitAsync(StorageCommitConformance.Context, intent)).Disposition);
+        Assert.Null(await executor.ReadAsync(StorageCommitConformance.Context, StorageCommitConformance.Address("state")));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SqliteStorageCommitExecutor(database, maximumStoredPayloadBytes: 0));
+    }
+
+    [Fact]
+    public async Task BoundedPayloadsAlsoReopenFromUtf16Databases()
+    {
+        using var file = new DatabaseFixture();
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + file.Path))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA encoding = 'UTF-16le'; CREATE TABLE encoding_marker (id INTEGER);";
+            command.ExecuteNonQuery();
+        }
+        var database = new SqliteDatabase(new(file.Path, durability: SqliteDurability.Full));
+        SqliteStorageCommitExecutor.Schema.Apply(database);
+        var executor = new SqliteStorageCommitExecutor(database, maximumStoredPayloadBytes: 2048);
+        var value = StorageCommitConformance.Value(new string('a', 1500));
+        var address = StorageCommitConformance.Address("utf16");
+        var intent = StorageCommitConformance.Intent("utf16", new StorageCommitWrite(address, value));
+        Assert.Equal(StorageCommitDisposition.Committed, (await executor.CommitAsync(StorageCommitConformance.Context, intent)).Disposition);
+        Assert.Equal(value, (await executor.ReadAsync(StorageCommitConformance.Context, address))!.Value);
+    }
+
+    [Fact]
     public async Task ReopenReconcilesReceiptWithoutChangingLaterState()
     {
         var path = Path.Combine(Path.GetTempPath(), $"cohesive-reopen-{Guid.NewGuid():N}.db");

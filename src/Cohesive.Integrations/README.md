@@ -237,8 +237,8 @@ publication cannot supply that receipt. Atomic-profile work has no separate ledg
 application's native atomic publication can still include its own domain coverage guard in prepared bytes.
 
 This is the contract extraction, **not completion of ITO-27**. It adds no scheduler or parallel Process
-state machine. Physical write-once retention, durable dispatch, ambiguous acquisition reconciliation, and
-restart behavior still need the native adapter and Ito conformance proof described in
+state machine. Bounded inline write-once retention is available through `SqliteIngestionWorkStore`. Durable dispatch,
+ambiguous acquisition reconciliation and application recovery parity still need the Ito conformance proof described in
 [the extraction plan](../../docs/architecture/ingestion-acquisition-extraction.md). The existing unqualified
 realization diagnostic remains in force. Records are draft producers; their persisted, validated documents
 are the inspectable authority. A fluent projection is unnecessary for these data-only boundaries.
