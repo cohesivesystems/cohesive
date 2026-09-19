@@ -1,6 +1,6 @@
 # Cohesive.Adapters.Azure.Infra
 
-The first COH-112 slice admits exact, attributable Azure evidence into the existing Infra readiness evaluator. It performs no Azure I/O and does not authenticate evidence producers. Native collection, service-specific runtime normalization, bounded request scheduling, cancellation and live qualification remain follow-ups before COH-112 is complete. No Ari-specific concepts or new external dependencies are introduced.
+This COH-112 slice admits exact, attributable Azure evidence into the existing Infra readiness evaluator and collects bounded read-only ARM management evidence. Service-specific runtime normalization and live qualification remain follow-ups before COH-112 is complete. No Ari-specific concepts or new external dependencies are introduced.
 
 ## Authority and data flow
 
@@ -36,6 +36,20 @@ dotnet test src/Cohesive.Adapters.Azure.Infra.Tests/Cohesive.Adapters.Azure.Infr
 
 The tests reuse the real compiler/evaluator to prove dependency blocking, exact scope, freshness boundaries, missing/provisioning/failed evidence, canonical status preservation, native identity rejection, deterministic provenance and JSON round-trip revalidation. CI also runs the same tests through `eng/package-smoke/Cohesive.Adapters.Azure.Infra.Consumer` with package references only, after packing the solution. These synthetic fixtures make no claims about Azure wire payloads or live readiness.
 
+## Native collection
+
+`AzureInfrastructureCollector.CollectAsync` validates the reviewed scope/bindings with the existing admission boundary before issuing requests. The caller owns a tenant-authenticated HttpClient for the public Azure ARM audience, with redirects disabled and cancellation-aware transport. The collector uses only `https://management.azure.com`, performs no authentication discovery, and never mutates client configuration. Caller credentials and handlers remain invocation-trust boundaries; a scope record alone cannot authenticate a tenant. Sovereign endpoints are outside this initial contract.
+
+Supported GETs: App Service sites (2025-03-01), Cosmos database accounts/SQL databases (2025-10-15), and Durable Task schedulers/task hubs (2025-11-01). API versions and response identity/type fields are pinned against [documented contracts and synthetic fixtures](../../Cohesive.Adapters.Azure.Infra.Tests/Fixtures/README.md). Root ARM identity and resource type must match the exact requested association; native response IDs and equivalent reads use ARM case-insensitive identity comparison. Reviewed binding equality at normalization remains exact. Unsupported types, including Blob containers, get explicit Unknown collection-failure evidence without network calls.
+
+The capture retains exact scope, start/end times, per-resource request-completion timestamps, allowlisted provisioning/site tokens and redacted per-resource diagnostics. Successful GETs always produce `Provisioning` evidence with Unknown health/readiness—even `Succeeded`, `Running`, an endpoint or a stopped site is not projected into a claim about application admission. The caller feeds capture evidence into `Normalize`, retaining capture diagnostics alongside the canonical assessment. There is no competing runtime health protocol or inferred Ready state.
+
+Unique ARM reads are deduplicated case-insensitively within one capture using its shared caller identity and fixed GET API. Each canonical binding retains its own provenance. No data crosses captures. The explicit concurrency limit is 1–32, each scheduled read receives a positive timeout of at most ten minutes, and response bodies are capped at 256 KiB even without Content-Length. No automatic retries or list/fan-out queries occur. Reconciliation of multiple runtime sources is still a separate, explicit producer responsibility.
+
+Access denial, missing resource, other HTTP failures, timeout, malformed/oversized responses, response identity mismatch and transport failure become stable collector-owned diagnostics; no headers, bodies or exception text is retained. Unsupported native state tokens are omitted. Other resources can complete after one fails. Caller cancellation propagates and returns no completed capture. Requests, responses and streams are disposed; the injected client is never disposed. The transport must honor cancellation and disable redirects; redirected responses are rejected defensively but that check does not replace safe client configuration.
+
+Tests cover request count, concurrency bounds, timeout, cancellation during send/body reads, disposal, bounded response handling, native identity, partial failures and redaction. The same fixtures run in the package-only consumer. No live Azure qualification has occurred.
+
 ## Dependency-ordered follow-up
 
-COH-112 must next provide native collection and normalization for explicit service protocols with pinned source fixtures, request deadlines/bounds, cancellation and resource-scoped collection failures. Preserve provisioning/runtime separation and obtain supported Blob evidence or explicitly report it unknown. Publish and qualify the independently consumable package before ARI-536 adoption; Ari must not copy this source or add a parallel provider-state mapper. No release or live Azure qualification is performed by this slice.
+COH-112 must next define and normalize operational health/admission evidence for explicit service protocols; management collection alone cannot satisfy readiness. Preserve provisioning/runtime separation and obtain supported Blob evidence or explicitly report it unknown. Publish and qualify the independently consumable package before ARI-536 adoption; Ari must not copy this source or add a parallel provider-state mapper. No release or live Azure qualification is performed by this slice.

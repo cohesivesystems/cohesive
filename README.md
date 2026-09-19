@@ -49,7 +49,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | --- | --- |
 | `Cohesive.Adapters.AspNet` | ASP.NET Core endpoints and request binding for Cohesive APIs, entities, relations, processes, and identity. |
 | `Cohesive.Adapters.AzureAppConfiguration` | Azure App Configuration integration for Cohesive configuration. |
-| [`Cohesive.Adapters.Azure.Infra`](src/adapters/Cohesive.Adapters.Azure.Infra/README.md) | Exact Azure evidence admission, freshness and provenance for canonical readiness assessment; native collection remains a follow-up. |
+| [`Cohesive.Adapters.Azure.Infra`](src/adapters/Cohesive.Adapters.Azure.Infra/README.md) | Exact Azure evidence admission plus bounded read-only ARM management collection; runtime health/admission qualification remains a follow-up. |
 | [`Cohesive.Adapters.Pulumi.Azure`](src/adapters/Cohesive.Adapters.Pulumi.Azure/README.md) | Exact Infra Durable Task, Cosmos and shared Blob Storage construction; native Key Vault, telemetry, Entra, App Service and ML binding seams; connection outputs and explicit data-plane grants through Pulumi. |
 | `Cohesive.Adapters.AzureML` | Azure Machine Learning model training and dataset registry integration. |
 | `Cohesive.Adapters.AzureStorage` | Azure Blob Storage training artifacts, dataset streams, and target resolution. |

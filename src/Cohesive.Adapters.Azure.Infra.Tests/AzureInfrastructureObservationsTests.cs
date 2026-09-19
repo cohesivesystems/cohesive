@@ -11,17 +11,17 @@ namespace Cohesive.Adapters.Azure.Infra.Tests;
 
 public sealed class AzureInfrastructureObservationsTests
 {
-    static readonly Guid Subscription = Guid.Parse("11111111-1111-1111-1111-111111111111");
-    static readonly Guid Tenant = Guid.Parse("22222222-2222-2222-2222-222222222222");
-    static readonly DateTimeOffset Now = new(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
-    static readonly InfrastructurePhysicalResourceId Api = new("azure/app-service/sites/api");
-    static readonly InfrastructurePhysicalResourceId State = new("azure/cosmos/db/state");
-    static readonly InfrastructureNodeId ApiNode = new("workloads/api");
-    static readonly SourceReference Source = SourceReference.Create("test", "pinned-fixture/v1");
-    static readonly InfrastructureRealization Realization = CreateRealization();
-    static readonly AzureInfrastructureObservationScope Scope = new("dev", Tenant, Subscription, Realization.ToReference(), SourceReference.Create("handoff", "sha256/exact-v1"));
-    static readonly AzureInfrastructureObservationBinding ApiBinding = Binding(Api, "Microsoft.Web/sites/api");
-    static readonly AzureInfrastructureObservationBinding StateBinding = Binding(State, "Microsoft.DocumentDB/databaseAccounts/account/sqlDatabases/state");
+    internal static readonly Guid Subscription = Guid.Parse("11111111-1111-1111-1111-111111111111");
+    internal static readonly Guid Tenant = Guid.Parse("22222222-2222-2222-2222-222222222222");
+    internal static readonly DateTimeOffset Now = new(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
+    internal static readonly InfrastructurePhysicalResourceId Api = new("azure/app-service/sites/api");
+    internal static readonly InfrastructurePhysicalResourceId State = new("azure/cosmos/db/state");
+    internal static readonly InfrastructureNodeId ApiNode = new("workloads/api");
+    internal static readonly SourceReference Source = SourceReference.Create("test", "pinned-fixture/v1");
+    internal static readonly InfrastructureRealization Realization = CreateRealization();
+    internal static readonly AzureInfrastructureObservationScope Scope = new("dev", Tenant, Subscription, Realization.ToReference(), SourceReference.Create("handoff", "sha256/exact-v1"));
+    internal static readonly AzureInfrastructureObservationBinding ApiBinding = Binding(Api, "Microsoft.Web/sites/api");
+    internal static readonly AzureInfrastructureObservationBinding StateBinding = Binding(State, "Microsoft.DocumentDB/databaseAccounts/account/sqlDatabases/state");
 
     [Fact]
     public void Fresh_runtime_evidence_uses_existing_evaluator_and_retains_identity_time_and_provenance()

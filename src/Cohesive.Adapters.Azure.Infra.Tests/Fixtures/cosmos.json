@@ -1,0 +1,7 @@
+{
+  "id": "{{RESOURCE_ID}}",
+  "type": "Microsoft.DocumentDB/databaseAccounts",
+  "properties": {
+    "provisioningState": "Succeeded"
+  }
+}

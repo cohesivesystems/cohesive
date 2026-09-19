@@ -1,0 +1,7 @@
+{
+  "id": "{{RESOURCE_ID}}",
+  "type": "Microsoft.DurableTask/schedulers",
+  "properties": {
+    "provisioningState": "Succeeded"
+  }
+}
