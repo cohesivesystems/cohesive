@@ -6,6 +6,17 @@ internal static class SqliteCrashWorker
 {
     static async Task<int> Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--ingestion-retain-worker")
+        {
+            var store = new SqliteIngestionWorkStore(new(new(args[1], durability: SqliteDurability.Full)));
+            var count = int.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture);
+            foreach (var boundary in IngestionWorkFixture.Chain().Take(count))
+                await store.RetainAsync(OperationContext.Create(), boundary.Document, boundary.Content);
+            Console.WriteLine("retained");
+            await Console.Out.FlushAsync();
+            await Task.Delay(Timeout.InfiniteTimeSpan);
+            return 3;
+        }
         if (args.Length != 3 || args[0] != "--sqlite-crash-worker") return 2;
         var database = new SqliteDatabase(new(args[1]));
         using var connection = database.OpenConnection();

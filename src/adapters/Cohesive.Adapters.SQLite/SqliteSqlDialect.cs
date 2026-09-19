@@ -1,10 +1,24 @@
 using Cohesive.Adapters.Sql;
+using System.Collections.Immutable;
 
 namespace Cohesive.Adapters.SQLite;
 
 /// <summary>SQLite construction policy for the adapter's required modern SQLite engine profile.</summary>
 public sealed class SqliteSqlDialect : SqlDialect
 {
+    /// <summary>Native byte length of a text/blob value without transferring its payload to managed memory.</summary>
+    public const string OctetLengthIntrinsic = "sqlite.octet-length";
+
+    /// <inheritdoc />
+    public override void WriteIntrinsic(string intrinsic, ImmutableArray<SqlExpression> arguments, SqlExpressionWriter writer)
+    {
+        if (intrinsic != OctetLengthIntrinsic) { base.WriteIntrinsic(intrinsic, arguments, writer); return; }
+        if (arguments.IsDefault || arguments.Length != 1) throw new ArgumentException("Octet length requires one operand.", nameof(arguments));
+        writer.WriteSyntax("OCTET_LENGTH(");
+        writer.WriteExpression(arguments[0]);
+        writer.WriteSyntax(")");
+    }
+
     /// <summary>Shared immutable SQLite policy.</summary>
     public static SqliteSqlDialect Instance { get; } = new();
     private SqliteSqlDialect() { }

@@ -1,6 +1,6 @@
 # Durable acquisition extraction
 
-Status: first contract slice; physical realization and application adoption remain pending.
+Status: canonical contracts and bounded SQLite retention implemented; application adoption and durable dispatch remain pending.
 
 ## Current boundary
 
@@ -59,3 +59,19 @@ an unimplemented adapter. Expensive domain transforms must not rerun once a prep
 
 The first tests are portable contract tests using the reference ledger. They do not claim native crash
 recovery, source deduplication, durable retention, or that the trusted publisher actually committed.
+
+## SQLite retention slice
+
+`SqliteIngestionWorkStore` now realizes bounded inline document/content retention through the existing
+Storage commit executor. This qualifies atomic retention and original receipt recovery on SQLite's FULL/WAL
+profile, including real child-process kill/reopen tests. It does not qualify acquisition dispatch, provider
+idempotence, complete manifest resolution, or the end-to-end workflow. There is no new mutable progress or
+workflow state. Reserved write-once records retain all evidence; cleanup and retention expiry are not implemented.
+
+The initial target-specific mapping remains inside the SQLite adapter. A second target should compare its
+native placement and visibility obligations before promoting a shared retention facade; it must preserve
+atomic metadata/content/receipt retention or diagnose the mismatch. Generic commit intent/result semantics,
+SQL construction and the storage schema remain existing authorities.
+
+Next: application adoption against shared synthetic fixtures, followed by the existing durable Process binding.
+A workflow must never interpret absence in this store as proof that an external request did not execute.

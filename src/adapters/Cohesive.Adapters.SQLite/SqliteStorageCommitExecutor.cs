@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text;
 using Cohesive.Execution;
 using Cohesive.Storage;
 using Cohesive.Storage.Commits;
@@ -17,15 +18,21 @@ namespace Cohesive.Adapters.SQLite;
 public sealed class SqliteStorageCommitExecutor : IStorageCommitExecutor
 {
     readonly SqliteDatabase database;
+    /// <summary>Configured per-row UTF-8 serialized byte bound, or null for no adapter row limit.</summary>
+    public long? MaximumStoredPayloadBytes { get; }
     static readonly JsonSerializerOptions Json = StorageCommitJson.CreateOptions();
 
     /// <summary>Creates a commit executor without opening or migrating the database.</summary>
     /// <param name="database">Database authority; must use FULL durability.</param>
+    /// <param name="maximumStoredPayloadBytes">Optional positive per-row UTF-8 payload limit. Native reads are bounded to twice this value to accommodate UTF-16 databases, then checked as UTF-8 before JSON decoding. Includes receipt rows.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The payload limit is not positive.</exception>
     /// <exception cref="ArgumentNullException">The database is null.</exception>
     /// <exception cref="ArgumentException">The database uses a weaker durability profile.</exception>
-    public SqliteStorageCommitExecutor(SqliteDatabase database)
+    public SqliteStorageCommitExecutor(SqliteDatabase database, long? maximumStoredPayloadBytes = null)
     {
         this.database = database ?? throw new ArgumentNullException(nameof(database));
+        if (maximumStoredPayloadBytes is <= 0) throw new ArgumentOutOfRangeException(nameof(maximumStoredPayloadBytes));
+        MaximumStoredPayloadBytes = maximumStoredPayloadBytes;
         if (database.Options.Durability != SqliteDurability.Full)
             throw new ArgumentException("Atomic durable receipts require SQLite FULL synchronization.", nameof(database));
     }
@@ -38,7 +45,18 @@ public sealed class SqliteStorageCommitExecutor : IStorageCommitExecutor
         SupportsMultiplePartitions: true, SupportsQueryGuards: true);
 
     /// <inheritdoc />
-    public StorageCommitResult? Validate(StorageCommitIntent intent) => Capabilities.Validate(intent);
+    public StorageCommitResult? Validate(StorageCommitIntent intent)
+    {
+        if (Capabilities.Validate(intent) is { } unsupported) return unsupported;
+        if (MaximumStoredPayloadBytes is not { } maximum) return null;
+        foreach (var write in intent.Writes)
+            if (Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(write.Value, Json)) > maximum) return TooLarge();
+        return Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(new StorageCommitReceipt(intent.Reference, intent.Result), Json)) > maximum
+            ? TooLarge() : null;
+    }
+
+    static StorageCommitResult TooLarge() => StorageCommitResult.Rejected(StorageCommitDisposition.Unsupported,
+        "storage.commit.row-payload-limit", "A serialized item or receipt exceeds the configured per-row byte limit.");
 
     /// <inheritdoc />
     public ValueTask<StorageCommitResult> CommitAsync(OperationContext context, StorageCommitIntent intent)
@@ -84,6 +102,7 @@ public sealed class SqliteStorageCommitExecutor : IStorageCommitExecutor
     /// <param name="context">Cancellation and operation context.</param>
     /// <param name="address">Logical item identity.</param>
     /// <returns>The committed portable item, or null when absent.</returns>
+    /// <exception cref="InvalidDataException">A persisted item exceeds the configured per-row byte limit.</exception>
     /// <exception cref="SqliteException">Reading or acquiring the configured database fails.</exception>
     /// <exception cref="OperationCanceledException">Cancellation is observed before reading.</exception>
     public ValueTask<StorageCommitItem?> ReadAsync(OperationContext context, StorageCommitAddress address)
@@ -95,15 +114,27 @@ public sealed class SqliteStorageCommitExecutor : IStorageCommitExecutor
         using var commands = new SqliteCommandScope(database, connection, transaction);
         using var reader = Read(commands, address, SqliteStorageCommitSql.ItemKind, context.CancellationToken);
         return ValueTask.FromResult(reader.Read()
-            ? new StorageCommitItem(JsonSerializer.Deserialize<PortableValue>(reader.GetString(0), Json)!, new(reader.GetString(1)))
+            ? new StorageCommitItem(JsonSerializer.Deserialize<PortableValue>(ReadPayload(reader), Json)!, new(reader.GetString(1)))
             : null);
     }
 
-    static StorageCommitReceipt? ReadReceipt(SqliteCommandScope commands, StorageCommitAddress address, CancellationToken cancellation)
+    StorageCommitReceipt? ReadReceipt(SqliteCommandScope commands, StorageCommitAddress address, CancellationToken cancellation)
     {
         using var reader = Read(commands, address, SqliteStorageCommitSql.ReceiptKind, cancellation);
-        return reader.Read() ? JsonSerializer.Deserialize<StorageCommitReceipt>(reader.GetString(0), Json)
+        return reader.Read() ? JsonSerializer.Deserialize<StorageCommitReceipt>(ReadPayload(reader), Json)
             ?? throw new JsonException("A durable receipt cannot be null.") : null;
+    }
+
+    string ReadPayload(SqliteDataReader reader)
+    {
+        // SQLite may store text in UTF-8 or UTF-16. UTF-16 needs at most twice the UTF-8 byte count.
+        // Bound native transfer first, then enforce the exact UTF-8 budget before JSON decoding.
+        if (MaximumStoredPayloadBytes is { } maximum && reader.GetInt64(2) > (maximum > long.MaxValue / 2 ? long.MaxValue : maximum * 2))
+            throw new InvalidDataException("Stored commit payload exceeds the configured per-row byte limit.");
+        var payload = reader.GetString(0);
+        if (MaximumStoredPayloadBytes is { } budget && Encoding.UTF8.GetByteCount(payload) > budget)
+            throw new InvalidDataException("Stored commit payload exceeds the configured per-row byte limit.");
+        return payload;
     }
 
     static SqliteDataReader Read(SqliteCommandScope commands, StorageCommitAddress address, string kind, CancellationToken cancellation) =>
