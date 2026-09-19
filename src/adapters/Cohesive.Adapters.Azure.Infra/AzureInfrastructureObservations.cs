@@ -31,7 +31,9 @@ public enum AzureInfrastructureEvidenceKind
     /// <summary>Operational evidence normalized by a trusted runtime-specific producer.</summary>
     Runtime,
     /// <summary>Collection failed; this does not imply the resource itself is unhealthy.</summary>
-    CollectionFailed
+    CollectionFailed,
+    /// <summary>Platform availability only; does not establish application admission.</summary>
+    PlatformHealth
 }
 
 /// <summary>Payload-free evidence from a trusted source, fenced before canonical assessment.</summary>
@@ -116,6 +118,8 @@ public static class AzureInfrastructureObservations
             else if (item.Kind == AzureInfrastructureEvidenceKind.Provisioning) reason = "provisioningOnly";
             else if (item.Kind == AzureInfrastructureEvidenceKind.CollectionFailed) reason = "collectionFailed";
 
+            var platformOnly = reason is null && item.Kind == AzureInfrastructureEvidenceKind.PlatformHealth;
+            var diagnosticReason = reason ?? (platformOnly ? "platformHealthOnly" : null);
             var sources = new HashSet<SourceReference>
             {
                 binding.Source, expectedScope.Handoff,
@@ -126,10 +130,10 @@ public static class AzureInfrastructureObservations
             sources.UnionWith(observation.SourceReferences);
             observations.Add(new(observation.PhysicalResource,
                 reason is null ? observation.Health : ExecutionHealthStatus.Unknown,
-                reason is null ? observation.Readiness : ExecutionReadinessStatus.Unknown,
+                reason is null && !platformOnly ? observation.Readiness : ExecutionReadinessStatus.Unknown,
                 observation.ObservedAtUtc, SourceReference.NormalizeSet([.. sources], requireNonEmpty: true),
-                reason is null ? [] : [new DocumentValidationDiagnostic(
-                    Code: $"infra.azure.observation.{reason}", Severity: DiagnosticSeverity.Warning,
+                diagnosticReason is null ? [] : [new DocumentValidationDiagnostic(
+                    Code: $"infra.azure.observation.{diagnosticReason}", Severity: DiagnosticSeverity.Warning,
                     Message: "Azure evidence does not establish current operational readiness.",
                     Location: "/observations", SchemaLocation: observation.PhysicalResource.Value)]));
         }

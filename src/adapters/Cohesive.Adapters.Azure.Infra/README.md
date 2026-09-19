@@ -1,6 +1,6 @@
 # Cohesive.Adapters.Azure.Infra
 
-This COH-112 slice admits exact, attributable Azure evidence into the existing Infra readiness evaluator and collects bounded read-only ARM management evidence. Service-specific runtime normalization and live qualification remain follow-ups before COH-112 is complete. No Ari-specific concepts or new external dependencies are introduced.
+This COH-112 slice admits exact, attributable Azure evidence into the existing Infra readiness evaluator and collects bounded read-only ARM management and Resource Health evidence. Application admission normalization and live qualification remain follow-ups before COH-112 is complete. No Ari-specific concepts or new external dependencies are introduced.
 
 ## Authority and data flow
 
@@ -13,6 +13,7 @@ The three new record boundaries describe distinct information: deployment scope,
 ## Evidence semantics
 
 - `Runtime` preserves canonical health/readiness from a trusted service-specific producer. This package does not define an Azure App Service/Cosmos/Durable Task health protocol and cannot establish that a producer's runtime claim is true.
+- `PlatformHealth` retains fresh platform health but always projects Unknown readiness with `platformHealthOnly`. Provider availability cannot attest to application admission; stale/future evidence still loses both health and readiness.
 - `Provisioning` always projects Unknown health/readiness, even if supplied statuses say Healthy/Ready. Resource creation or an endpoint is insufficient operational evidence.
 - `CollectionFailed` projects Unknown, not Unhealthy; unavailable collection is not proof of resource failure.
 - Stale and future evidence project Unknown with stable diagnostics and retain the original source timestamp. Exact age/tolerance boundaries are admitted.
@@ -20,7 +21,7 @@ The three new record boundaries describe distinct information: deployment scope,
 
 Normalize rejects wrong scope/realization/native association, duplicate bindings or evidence, unsupported kinds, malformed ARM IDs and provider diagnostics. It never copies arbitrary exception messages or provider payloads into returned diagnostics. Producer-provided source references are trusted non-secret provenance and must be sanitized before calling; this boundary is not a general-purpose secret scanner. Native ID comparison is deliberately exact, including casing, against the reviewed binding; it does not infer equivalence or rewrite Azure IDs.
 
-The initial ARM binding subset is subscription/resource-group-scoped resources with explicit provider and type/name pairs. Tenant-level identities and extension-resource conventions are not inferred. Provider type and supported health protocol must be verified by the future native producer against the reviewed binding. This normalization slice is not proof of provider collection coverage.
+The initial ARM binding subset is subscription/resource-group-scoped resources with explicit provider and type/name pairs. Tenant-level identities and extension-resource conventions are not inferred. Native collectors verify response resource type and identity against the reviewed binding; application runtime producers must separately verify their protocol and authority. This normalization slice is not proof of provider collection coverage.
 
 ## Usage and lifetime
 
@@ -50,6 +51,25 @@ Access denial, missing resource, other HTTP failures, timeout, malformed/oversiz
 
 Tests cover request count, concurrency bounds, timeout, cancellation during send/body reads, disposal, bounded response handling, native identity, partial failures and redaction. The same fixtures run in the package-only consumer. No live Azure qualification has occurred.
 
+## Platform health collection
+
+`CollectPlatformHealthAsync` uses the same validated, deduplicated, bounded GET pipeline as provisioning collection. It supports `Microsoft.Web/sites` and `Microsoft.DocumentDB/databaseAccounts` through the Resource Health `availabilityStatuses/current` extension resource (API 2025-05-01). Response identity must match the full requested extension resource, and response type must be `Microsoft.ResourceHealth/availabilityStatuses`. The [pinned contract and coverage sources](../../Cohesive.Adapters.Azure.Infra.Tests/Fixtures/README.md) define the evidence boundary.
+
+| Native availability | Canonical health | Canonical readiness |
+| --- | --- | --- |
+| Available | Healthy | Unknown |
+| Unavailable | Unhealthy | Unknown |
+| Degraded | Degraded | Unknown |
+| Unknown | Unknown | Unknown |
+
+The native `reportedTime` is the observation time, never the request completion time or last state-change time. It must be an explicit UTC timestamp; missing/invalid timestamps or unrecognized/missing state tokens fail collection with stable diagnostics. Feed results through `Normalize` with the capture's explicit freshness policy before assessment. Stale health is not admitted merely because the GET just succeeded. Summaries, actions, incident details and arbitrary provider strings are discarded.
+
+The new `PlatformHealth` authority is distinct from both provisioning and application runtime evidence. It reuses canonical health/readiness enums and the existing evaluator; there is no second graph or mutable status authority. The shared transport was extended rather than copied, preserving request limits, cancellation, redaction and response disposal for both operations. No external dependency was added.
+
+Cosmos SQL databases, Durable Task schedulers/task hubs and Blob containers are explicitly unsupported by this platform collector. It does not replace a child binding with a parent account, infer another resource's health, list resource groups, or query application endpoints. An account-level Cosmos report does not prove database authorization; site platform health does not prove worker admission. Unsupported coverage produces Unknown without a request.
+
+Keep provisioning and platform captures as separate evidence sources in the inspection artifact. They are different GETs and are never deduplicated together. Select one evidence source per physical resource for a given call to `Normalize`; passing conflicting or duplicate evidence still fails. Do not silently overwrite runtime failures with platform health. A multi-source reconciliation policy remains a separate caller responsibility.
+
 ## Dependency-ordered follow-up
 
-COH-112 must next define and normalize operational health/admission evidence for explicit service protocols; management collection alone cannot satisfy readiness. Preserve provisioning/runtime separation and obtain supported Blob evidence or explicitly report it unknown. Publish and qualify the independently consumable package before ARI-536 adoption; Ari must not copy this source or add a parallel provider-state mapper. No release or live Azure qualification is performed by this slice.
+COH-112 must next qualify and publish the package, retaining explicit coverage gaps. Application admission requires a reviewed runtime producer and product health contract; management collection alone cannot satisfy readiness. Preserve provisioning/runtime separation and obtain supported Blob evidence or explicitly report it unknown. Publish and qualify the independently consumable package before ARI-536 adoption; Ari must not copy this source or add a parallel provider-state mapper. No release or live Azure qualification is performed by this slice. Platform health collection does not complete COH-112 or establish a promotion gate.
