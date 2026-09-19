@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 
 namespace Cohesive.AI.Semantics;
 
@@ -39,6 +40,15 @@ public enum RelationLawFlags
 /// <summary>
 /// Higher-order ontology rule over relation types, scoped symbols, or relation families.
 /// </summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
+[JsonDerivedType(typeof(RelationLawRule), "relationLaw")]
+[JsonDerivedType(typeof(RelationDomainRule), "relationDomain")]
+[JsonDerivedType(typeof(RelationRangeRule), "relationRange")]
+[JsonDerivedType(typeof(SubRelationRule), "subRelation")]
+[JsonDerivedType(typeof(RelationCardinalityRule), "relationCardinality")]
+[JsonDerivedType(typeof(ScopedSymbolMeaningRule), "scopedSymbolMeaning")]
+[JsonDerivedType(typeof(ScopedDefaultMeaningRule), "scopedDefaultMeaning")]
+[JsonDerivedType(typeof(ScopedAllowedSymbolsRule), "scopedAllowedSymbols")]
 public abstract record OntologyRule;
 
 /// <summary>
