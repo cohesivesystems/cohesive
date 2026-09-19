@@ -1,0 +1,9 @@
+{
+  "id": "{{RESOURCE_ID}}",
+  "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+  "properties": {
+    "resource": {
+      "id": "state"
+    }
+  }
+}

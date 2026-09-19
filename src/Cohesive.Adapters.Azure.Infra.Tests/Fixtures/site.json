@@ -1,0 +1,8 @@
+{
+  "id": "{{RESOURCE_ID}}",
+  "type": "Microsoft.Web/sites",
+  "properties": {
+    "state": "Running",
+    "defaultHostName": "not-a-health-claim.invalid"
+  }
+}
