@@ -72,6 +72,13 @@ jobs:
       - name: Pack NuGet packages
         run: bash ./eng/pack-local.sh 0.1.0-ci.${{ github.run_number }}
 
+      - name: Test Azure observation package consumer
+        run: >-
+          dotnet test eng/package-smoke/Cohesive.Adapters.Azure.Infra.Consumer/Cohesive.Adapters.Azure.Infra.Consumer.csproj
+          -c Release
+          -p:CohesivePackageVersion=0.1.0-ci.${{ github.run_number }}
+          -p:CohesivePackageFeed="$GITHUB_WORKSPACE/../.feeds/nuget/cohesive-local"
+
       - name: Test generic API package consumer
         run: bash ./eng/test-api-package-consumer.sh 0.1.0-ci.${{ github.run_number }}
 
