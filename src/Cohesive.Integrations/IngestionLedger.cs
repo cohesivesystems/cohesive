@@ -91,8 +91,17 @@ public enum IngestionLedgerDisposition
 /// <summary>Ledger outcome with either original committed evidence or an actionable diagnostic.</summary>
 public sealed record IngestionLedgerResult
 {
+    [JsonConstructor]
     private IngestionLedgerResult(IngestionLedgerDisposition disposition, IngestionLedgerReceipt? receipt, string? diagnosticCode)
-    { Disposition = disposition; Receipt = receipt; DiagnosticCode = diagnosticCode; }
+    {
+        if (!Enum.IsDefined(disposition)) throw new ArgumentOutOfRangeException(nameof(disposition));
+        var succeeded = disposition is IngestionLedgerDisposition.Advanced or IngestionLedgerDisposition.Replayed;
+        if (succeeded ? receipt is null || diagnosticCode is not null : receipt is not null || string.IsNullOrWhiteSpace(diagnosticCode))
+            throw new ArgumentException("Successful ledger results require a receipt only; conflict/unknown results require a diagnostic only.");
+        Disposition = disposition;
+        Receipt = receipt;
+        DiagnosticCode = diagnosticCode;
+    }
     /// <summary>Outcome classification.</summary>
     public IngestionLedgerDisposition Disposition { get; }
     /// <summary>Original committed evidence on advancement/replay only.</summary>
