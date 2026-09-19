@@ -122,11 +122,25 @@ public static class IngestionWorkDocuments
     static ExecutionDefinitionReference Reference(ExecutionDefinitionDocument document) =>
         new(document.Metadata.DefinitionId, document.Metadata.RevisionId, document.Metadata.Fingerprint);
 
+    /// <summary>Derives the stable request lookup identity without reading mutable progress or manufacturing a draft request.</summary>
+    /// <param name="address">Independent flow/source/destination/partition scope.</param>
+    /// <param name="operationId">Original logical publication identity.</param>
+    /// <returns>The identity used by Create for every attempt of this operation; lookup also requires its original attempt revision.</returns>
+    /// <exception cref="ArgumentNullException">Address is null.</exception>
+    /// <exception cref="ArgumentException">Scope or operation identity is invalid.</exception>
+    public static ExecutionDefinitionId RequestId(IngestionLedgerAddress address, string operationId)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        address.Validate();
+        IngestionLedgerAddress.Require(operationId);
+        return new("ingestion-work/" + Uri.EscapeDataString(address.Flow) + "/"
+            + Uri.EscapeDataString(address.Source) + "/" + Uri.EscapeDataString(address.Destination) + "/"
+            + Uri.EscapeDataString(address.Partition) + "/" + Uri.EscapeDataString(operationId));
+    }
+
     static (ExecutionDefinitionId, ExecutionRevisionId) Identity(IngestionWorkItem item) => item switch
     {
-        IngestionAcquisitionRequest request => (new("ingestion-work/" + Uri.EscapeDataString(request.Address.Flow) + "/"
-            + Uri.EscapeDataString(request.Address.Source) + "/" + Uri.EscapeDataString(request.Address.Destination) + "/"
-            + Uri.EscapeDataString(request.Address.Partition) + "/" + Uri.EscapeDataString(request.OperationId)), new(request.AttemptId)),
+        IngestionAcquisitionRequest request => (RequestId(request.Address, request.OperationId), new(request.AttemptId)),
         IngestionAcquisitionReceipt acquired => (new(acquired.Request.DefinitionId.Value + "/acquired"), acquired.Request.RevisionId),
         IngestionPreparedPublication prepared => (new(prepared.Acquisition.DefinitionId.Value + "/prepared"), prepared.Acquisition.RevisionId),
         _ => throw new ArgumentException("Unsupported ingestion boundary.", nameof(item))
