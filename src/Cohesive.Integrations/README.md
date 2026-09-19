@@ -202,3 +202,43 @@ position semantics or automatically enlist pre-existing domain tables. The next 
 explicit SQLite mapping and Process binding, preserving domain publication receipts and keeping
 combined atomic sink/ledger transactions as a separate optional realization. Cosmos, generic UoW,
 compensation, scheduling and native broker transports are outside this PR.
+
+## Retained acquisition and prepared work (ITO-27, first extraction)
+
+`IngestionWorkDocuments` defines `integration.ingestion.work.v1` in the existing canonical execution
+container. It separates three immutable facts:
+
+1. `IngestionAcquisitionRequest`: flow scope, original operation and attempt, exact flow and transformation
+   references, source-selection content, original optional ledger revision, and selection observation.
+2. `IngestionAcquisitionReceipt`: exact request reference, acquired content and receipt observation time.
+3. `IngestionPreparedPublication`: exact acquisition and transformation references, authoritative sink
+   input, proposed optional source position, and preparation observation.
+
+`IngestionContentReference` binds an opaque locator, exact SHA-256, byte length and media type. `Describe`
+does not store bytes. `Matches` checks exact bytes after resolution; it does not infer metadata, parse
+payloads, fetch a locator, or establish source completeness. Descriptors are bounded, but adapters must
+apply their own payload/manifest limits **before allocation**. Secrets and expiring signed URLs do not
+belong in locators or retained requests. An acquired manifest must close over separately verified source
+payloads; validating only the manifest does not validate its children.
+
+`Create` / `TryRead` / `TryDeserialize` use the existing canonical serializer, fingerprint and structured
+diagnostics. `ValidateChain` verifies exact lineage, chronology, the pinned transformation, and agreement
+between the ledger expectation and proposed position. Its input is a retained prefix; a missing acquisition
+receipt is **not** permission to reissue a possibly completed source operation. A source adapter must
+reconcile ambiguous acquisition with the same identity or surface uncertainty. Once preparation is
+retained, the host must reuse its exact bytes and skip acquisition and transformation. Fingerprints detect
+inconsistent evidence, not malicious replacement of a whole trusted store; store ownership and write-once
+admission remain physical obligations.
+
+After a trusted sink handler confirms the original receipt, `CreateLedgerAdvance` binds its publication
+identity and exact prepared-byte digest to the frozen request and proposed position. It invokes the existing
+ledger document authority; no second CAS or receipt-before-revision algorithm is introduced. Inconclusive
+publication cannot supply that receipt. Atomic-profile work has no separate ledger advancement. The
+application's native atomic publication can still include its own domain coverage guard in prepared bytes.
+
+This is the contract extraction, **not completion of ITO-27**. It adds no scheduler or parallel Process
+state machine. Physical write-once retention, durable dispatch, ambiguous acquisition reconciliation, and
+restart behavior still need the native adapter and Ito conformance proof described in
+[the extraction plan](../../docs/architecture/ingestion-acquisition-extraction.md). The existing unqualified
+realization diagnostic remains in force. Records are draft producers; their persisted, validated documents
+are the inspectable authority. A fluent projection is unnecessary for these data-only boundaries.
