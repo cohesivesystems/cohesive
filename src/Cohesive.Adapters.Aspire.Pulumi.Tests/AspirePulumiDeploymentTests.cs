@@ -14,7 +14,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cohesive.Adapters.Aspire.Pulumi.Tests;
 
-public sealed class AspirePulumiDeploymentTests
+public sealed partial class AspirePulumiDeploymentTests
 {
     static readonly InfrastructureCapabilityId Https = new("test/workload/https");
     static readonly InfrastructureCapabilityId Storage = new("test/resource/storage");
@@ -286,6 +286,16 @@ public sealed class AspirePulumiDeploymentTests
             Assert.DoesNotContain("provider-owned failure detail", failure.Message, StringComparison.Ordinal);
             Assert.Contains(reporting.Messages, message =>
                 message.Contains(AspirePulumiDeploymentDiagnosticCodes.ExecutionFailed, StringComparison.Ordinal));
+
+            executor.Failure = MissingStackFailure();
+            var missing = await Assert.ThrowsAsync<AspirePulumiDeploymentException>(() => destroyStep.Action(stepContext));
+            Assert.Equal(AspirePulumiDeploymentDiagnosticCodes.ExecutionFailed, missing.Diagnostic.Code);
+            Assert.Equal(AspirePulumiDeploymentOperation.Destroy, missing.Operation);
+            Assert.Equal(resource.Resource.Handoff.PulumiStackName, missing.PulumiStackName);
+            Assert.Contains(missing.PulumiStackName, missing.Message, StringComparison.Ordinal);
+            Assert.Equal(Authority, missing.LifecycleAuthority);
+            Assert.Equal(resource.Resource.Handoff.Fingerprint, missing.HandoffFingerprint);
+            Assert.DoesNotContain("secret-provider-marker", missing.Message, StringComparison.Ordinal);
 
             executor.Failure = new OperationCanceledException();
             await Assert.ThrowsAsync<OperationCanceledException>(() => previewStep.Action(stepContext));

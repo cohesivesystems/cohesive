@@ -3,6 +3,7 @@ using Cohesive.Infra.Realization;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Pulumi.Automation;
+using Pulumi.Automation.Commands;
 
 namespace Cohesive.Adapters.Aspire.Pulumi;
 
@@ -28,7 +29,7 @@ public enum AspirePulumiDeploymentOperation
     /// <summary>Reconcile the existing Pulumi program with <c>pulumi up</c>.</summary>
     Apply = 1,
 
-    /// <summary>Destroy resources owned by the Pulumi stack.</summary>
+    /// <summary>Destroy resources owned by an existing Pulumi stack; an absent stack is a failure.</summary>
     Destroy = 2
 }
 
@@ -62,6 +63,7 @@ public sealed class AspirePulumiDeploymentException : InvalidOperationException
         : base($"{diagnostic.Code}: {diagnostic.Message}", innerException)
     {
         Operation = request.Operation;
+        PulumiStackName = request.Handoff.PulumiStackName;
         LifecycleAuthority = request.Handoff.LifecycleAuthority;
         HandoffFingerprint = request.Handoff.Fingerprint;
         Diagnostic = diagnostic;
@@ -70,6 +72,9 @@ public sealed class AspirePulumiDeploymentException : InvalidOperationException
     /// <summary>Exact lifecycle operation that failed.</summary>
     public AspirePulumiDeploymentOperation Operation { get; }
 
+    /// <summary>Exact requested Pulumi stack identity, including when stack selection fails.</summary>
+    public string PulumiStackName { get; }
+
     /// <summary>Canonical lifecycle authority selected by the exact deployment realization.</summary>
     public InfrastructureLifecycleAuthorityId LifecycleAuthority { get; }
 
@@ -77,7 +82,7 @@ public sealed class AspirePulumiDeploymentException : InvalidOperationException
     public AspirePulumiDeploymentHandoffFingerprint HandoffFingerprint { get; }
 
     /// <summary>
-    /// Stable non-secret diagnostic identifying the requested operation, lifecycle authority, and exact handoff.
+    /// Stable non-secret diagnostic identifying the requested operation, stack, lifecycle authority, and exact handoff.
     /// </summary>
     public DocumentValidationDiagnostic Diagnostic { get; }
 
@@ -88,7 +93,7 @@ public sealed class AspirePulumiDeploymentException : InvalidOperationException
         return new(
             AspirePulumiDeploymentDiagnosticCodes.ExecutionFailed,
             DiagnosticSeverity.Error,
-            $"Pulumi {operation} failed for lifecycle authority '{request.Handoff.LifecycleAuthority.Value}'. "
+            $"Pulumi {operation} failed for stack '{request.Handoff.PulumiStackName}' and lifecycle authority '{request.Handoff.LifecycleAuthority.Value}'. "
             + "Inspect the Pulumi diagnostics forwarded by Aspire for the provider-owned cause.",
             Evidence: new(
                 stage: ExecutionStage,
@@ -220,10 +225,13 @@ public interface IAspirePulumiDeploymentExecutor
 /// <remarks>
 /// This adapter does not implement provider reconciliation or maintain deployment state. It validates the local
 /// Pulumi project before selecting a stack, forwards the exact Cohesive handoff through stable environment-variable
-/// names, and delegates apply/destroy semantics to Pulumi.
+/// names, and delegates apply/destroy semantics to Pulumi. Preview/apply may create a stack; destroy selects
+/// only an existing stack and propagates a missing-stack failure to the Aspire failure boundary.
 /// </remarks>
 public sealed class PulumiAutomationDeploymentExecutor : IAspirePulumiDeploymentExecutor
 {
+    readonly PulumiCommand? command;
+
     static readonly ImmutableArray<string> PulumiProjectFiles = ["Pulumi.yaml", "Pulumi.yml", "Pulumi.json"];
 
     /// <summary>Creates an executor using the Pulumi CLI discovered by Pulumi Automation.</summary>
@@ -231,7 +239,18 @@ public sealed class PulumiAutomationDeploymentExecutor : IAspirePulumiDeployment
     {
     }
 
+    // Exercise the real Automation workspace and stack lifecycle with a deterministic command transport.
+    internal PulumiAutomationDeploymentExecutor(PulumiCommand command)
+    {
+        this.command = Guard.RequireNotNull(command);
+    }
+
     /// <inheritdoc />
+    /// <exception cref="global::Pulumi.Automation.Commands.Exceptions.StackNotFoundException">
+    /// Destroy targets a stack that does not exist in the selected backend. No replacement stack is created.
+    /// The Aspire pipeline normalizes this native exception into <see cref="AspirePulumiDeploymentException"/>.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">Cancellation interrupts validation, selection, or execution.</exception>
     public async Task<AspirePulumiDeploymentResult> ExecuteAsync(
         AspirePulumiDeploymentRequest request,
         CancellationToken cancellationToken)
@@ -251,6 +270,7 @@ public sealed class PulumiAutomationDeploymentExecutor : IAspirePulumiDeployment
             new LocalWorkspaceOptions
             {
                 WorkDir = programDirectory,
+                PulumiCommand = command,
                 EnvironmentVariables = environment
             },
             cancellationToken).ConfigureAwait(false);
@@ -263,10 +283,10 @@ public sealed class PulumiAutomationDeploymentExecutor : IAspirePulumiDeployment
                 + $"'{project?.Name ?? "none"}', expected '{request.Handoff.PulumiProjectName}'.");
         }
 
-        var stack = await WorkspaceStack.CreateOrSelectAsync(
-            request.Handoff.PulumiStackName,
-            workspace,
-            cancellationToken).ConfigureAwait(false);
+        // Creating an empty replacement would make a typo look like successful destruction.
+        var stack = request.Operation == AspirePulumiDeploymentOperation.Destroy
+            ? await WorkspaceStack.SelectAsync(request.Handoff.PulumiStackName, workspace, cancellationToken).ConfigureAwait(false)
+            : await WorkspaceStack.CreateOrSelectAsync(request.Handoff.PulumiStackName, workspace, cancellationToken).ConfigureAwait(false);
         return request.Operation switch
         {
             AspirePulumiDeploymentOperation.Preview => await PreviewAsync(stack, request, cancellationToken).ConfigureAwait(false),

@@ -41,7 +41,9 @@ The resource contributes four named Aspire pipeline steps:
 `aspire publish` writes `cohesive.infra.pulumi.json` as a deterministic one-way artifact. The named preview step
 performs a refresh-backed Pulumi preview without applying changes. `aspire deploy` and `aspire destroy` materialize the
 same artifact and invoke the existing Pulumi program through Automation API with refresh enabled. The Pulumi project
-name is validated before a stack is selected or created.
+name is validated before a stack is selected or created. Preview and apply use Pulumi's create-or-select
+acquisition; destroy uses existing-stack-only selection. A missing or mistyped destroy target fails before any
+stack creation or destroy command. It is not treated as an idempotent successful deletion.
 The Pulumi lifecycle authority is derived from the selected target's managed resource bindings; the bridge rejects
 plans with no managed authority or more than one instead of asking the AppHost to restate canonical ownership.
 
@@ -68,8 +70,21 @@ Handoff creation fails before Aspire registers the target when capability witnes
 
 If Pulumi cannot complete an operation, its native output remains the provider-owned detailed diagnosis. The adapter
 also reports `infra.aspire.pulumi.execution.failed` and throws `AspirePulumiDeploymentException`; its structured,
-non-secret diagnostic attributes the failure to the requested operation, lifecycle authority, and exact handoff.
+non-secret diagnostic attributes the failure to the requested operation, exact Pulumi stack identity (`PulumiStackName`), lifecycle authority, and exact handoff.
 The adapter does not parse provider messages into a parallel error model. Cancellation remains cancellation and is
 not reclassified as an execution failure.
 
 The Aspire pipeline APIs used by version 13.5 are still marked for evaluation by Aspire. This package isolates that dependency from `Cohesive.Infra` and `Cohesive.Adapters.Aspire`; future Aspire pipeline changes or a native Pulumi deployment target can therefore be absorbed in this adapter without changing the canonical infrastructure IR.
+
+## Lifecycle regression coverage
+
+`PulumiStackSelectionTests` runs the production executor with the real Pulumi Automation workspace/stack code and
+an internal command-transport seam. It proves existing-only destroy, no creation or destruction after missing-stack
+selection, unchanged preview/apply acquisition, exact target identity, refresh, secret suppression, output forwarding,
+project validation, and cancellation propagation. The pipeline test proves missing-stack failures retain the existing
+normalized failure contract without echoing provider details in the public diagnostic. No provider message parsing,
+new lifecycle model, or public workspace abstraction is introduced.
+
+These deterministic tests do not perform a live destroy. Applications adopting the published fix should separately
+qualify their disposable-stack lifecycle before removing compatibility entry points. A missing-stack failure calls for
+checking the exact handoff, backend, and stack identity; never create an empty replacement to force destroy success.
