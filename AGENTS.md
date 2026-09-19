@@ -425,3 +425,7 @@ The building blocks can work piecemeal as well as together. Users should be able
 - Adopt the semantic AI components when the problem warrants them.
 
 Design for this gradient of adoption. The system should reward partial use and composability, not require an all-in rewrite.
+
+## Adoption clarity acceptance criteria
+
+When co-developing Cohesive and consuming applications such as Ito, require the framework integration to reduce application-owned coordination compared with a direct implementation. A reviewer must understand the successful flow and recovery policy from the declaration and domain handlers without reading the durable runtime. Adding a source should require source behavior and bindings, not another coordinator. Canonical Process graphs own sequencing; do not duplicate their order in application control flow. Keep guarantees inspectable through declarations and diagnostics. Assess conceptual burden and debugging effort, not line count; avoid replacing dense code with many forwarding types. Preserve executable recovery evidence when simplifying. Record remaining adoption friction explicitly in PRs.
