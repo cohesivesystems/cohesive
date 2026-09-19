@@ -50,6 +50,9 @@ public sealed class IngestionWorkTests
     [Fact]
     public void RequestLookupUsesTheSameAuthorityAsDocumentCreation()
     {
+        var chain = Chain();
+        Assert.Equal(chain.Acquisition.Metadata.DefinitionId, IngestionWorkDocuments.AcquisitionId(Reference(chain.Request)));
+        Assert.Equal(chain.Prepared.Metadata.DefinitionId, IngestionWorkDocuments.PreparationId(Reference(chain.Acquisition)));
         var request = Request();
         Assert.Equal(Document(request).Metadata.DefinitionId, IngestionWorkDocuments.RequestId(request.Address, request.OperationId));
         Assert.Throws<ArgumentException>(() => IngestionWorkDocuments.RequestId(request.Address, " "));

@@ -138,11 +138,31 @@ public static class IngestionWorkDocuments
             + Uri.EscapeDataString(address.Partition) + "/" + Uri.EscapeDataString(operationId));
     }
 
+    /// <summary>Derives the acquired boundary identity from its original request.</summary>
+    /// <param name="request">Exact original request reference.</param>
+    /// <returns>Acquisition identity; use the request revision when looking up the boundary.</returns>
+    /// <exception cref="ArgumentNullException">Request is null.</exception>
+    public static ExecutionDefinitionId AcquisitionId(ExecutionDefinitionReference request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return new(request.DefinitionId.Value + "/acquired");
+    }
+
+    /// <summary>Derives the prepared boundary identity from its original acquisition.</summary>
+    /// <param name="acquisition">Exact original acquisition reference.</param>
+    /// <returns>Preparation identity; use the acquisition revision when looking up the boundary.</returns>
+    /// <exception cref="ArgumentNullException">Acquisition is null.</exception>
+    public static ExecutionDefinitionId PreparationId(ExecutionDefinitionReference acquisition)
+    {
+        ArgumentNullException.ThrowIfNull(acquisition);
+        return new(acquisition.DefinitionId.Value + "/prepared");
+    }
+
     static (ExecutionDefinitionId, ExecutionRevisionId) Identity(IngestionWorkItem item) => item switch
     {
         IngestionAcquisitionRequest request => (RequestId(request.Address, request.OperationId), new(request.AttemptId)),
-        IngestionAcquisitionReceipt acquired => (new(acquired.Request.DefinitionId.Value + "/acquired"), acquired.Request.RevisionId),
-        IngestionPreparedPublication prepared => (new(prepared.Acquisition.DefinitionId.Value + "/prepared"), prepared.Acquisition.RevisionId),
+        IngestionAcquisitionReceipt acquired => (AcquisitionId(acquired.Request), acquired.Request.RevisionId),
+        IngestionPreparedPublication prepared => (PreparationId(prepared.Acquisition), prepared.Acquisition.RevisionId),
         _ => throw new ArgumentException("Unsupported ingestion boundary.", nameof(item))
     };
 
