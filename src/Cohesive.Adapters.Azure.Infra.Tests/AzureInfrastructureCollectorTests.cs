@@ -124,6 +124,7 @@ public sealed class AzureInfrastructureCollectorTests
     }
 
     [Theory]
+    [InlineData("{\"id\":\"wrong\",\"properties\":{}}", "identityMismatch")]
     [InlineData("bad-json", "invalidResponse")]
     [InlineData("[]", "invalidResponse")]
     [InlineData("{\"id\":\"wrong\",\"type\":\"Microsoft.Web/sites\",\"properties\":{}}", "identityMismatch")]
@@ -134,6 +135,37 @@ public sealed class AzureInfrastructureCollectorTests
         using var client = Client((_, _) => Task.FromResult(Response(json.Replace("{{RESOURCE_ID}}", ApiBinding.ResourceId))));
         var result = await Collector(client).CollectAsync(Realization, Scope, [ApiBinding], 1, TimeSpan.FromSeconds(5));
         Assert.Equal("infra.azure.collection." + expected, Assert.Single(Assert.Single(result.Resources).Diagnostics).Code);
+    }
+
+    [Theory]
+    [InlineData("Microsoft.Web/sites/api")]
+    [InlineData("Microsoft.DurableTask/schedulers/scheduler/taskHubs/hub")]
+    public async Task Missing_type_is_incomplete_evidence_and_never_admits_success(string native)
+    {
+        var binding = ApiBinding with { ResourceId = Prefix + native };
+        var json = JsonSerializer.Serialize(new { id = binding.ResourceId,
+            properties = new { provisioningState = "Succeeded", state = "Running", secret = "redaction-sentinel" } });
+        using var client = Client((_, _) => Task.FromResult(Response(json)));
+        var capture = await Collector(client).CollectAsync(Realization, Scope, [binding], 1, TimeSpan.FromSeconds(5));
+        var result = Assert.Single(capture.Resources);
+        Assert.Equal("infra.azure.collection.missingResourceType", Assert.Single(result.Diagnostics).Code);
+        Assert.Equal(AzureInfrastructureEvidenceKind.CollectionFailed, result.Evidence.Kind);
+        Assert.Equal(ExecutionReadinessStatus.Unknown, result.Evidence.Observation.Readiness);
+        Assert.Null(result.ProvisioningState);
+        Assert.Null(result.SiteState);
+        Assert.DoesNotContain("redaction-sentinel", JsonSerializer.Serialize(capture));
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("123")]
+    [InlineData("\"wrong/type\"")]
+    public async Task Present_invalid_type_remains_an_identity_mismatch(string type)
+    {
+        var json = "{\"id\":\"" + ApiBinding.ResourceId + "\",\"type\":" + type + ",\"properties\":{}}";
+        using var client = Client((_, _) => Task.FromResult(Response(json)));
+        var capture = await Collector(client).CollectAsync(Realization, Scope, [ApiBinding], 1, TimeSpan.FromSeconds(5));
+        Assert.Equal("infra.azure.collection.identityMismatch", Assert.Single(Assert.Single(capture.Resources).Diagnostics).Code);
     }
 
     [Fact]
