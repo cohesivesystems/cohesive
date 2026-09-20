@@ -178,8 +178,11 @@ public sealed class AzureInfrastructureCollector
             var root = json.RootElement;
             if (root.ValueKind != JsonValueKind.Object || HasDuplicates(root)) return Failure("invalidResponse");
             if (!root.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.String
-                || !string.Equals(id.GetString(), responseId, StringComparison.OrdinalIgnoreCase)
-                || !root.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String
+                || !string.Equals(id.GetString(), responseId, StringComparison.OrdinalIgnoreCase)) return Failure("identityMismatch");
+            // Absence is incomplete provider evidence, not evidence of a different resource.
+            // Keep admission strict: a matching ID alone never substitutes for the response contract.
+            if (!root.TryGetProperty("type", out var type)) return Failure("missingResourceType");
+            if (type.ValueKind != JsonValueKind.String
                 || !string.Equals(type.GetString(), responseType, StringComparison.OrdinalIgnoreCase)) return Failure("identityMismatch");
             if (!root.TryGetProperty("properties", out var properties) || properties.ValueKind != JsonValueKind.Object || HasDuplicates(properties))
                 return Failure("invalidResponse");
