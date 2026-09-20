@@ -3,6 +3,10 @@
 `Cohesive.Relations` lets applications describe relationships, projections, filters, and queries in typed C# while
 leaving storage placement and execution strategy to compilers and adapters.
 
+Portable [relation drafts](docs/internals/RELATIONS_AND_QUERIES.md#portable-relation-drafts) support
+explicit nested field candidates with shape-aware acceptance, preserving ancestor presence and
+nullability. Collection traversal and transformed expressions require further acceptance support.
+
 ## Install
 
 ```bash

@@ -448,7 +448,7 @@ public static class DirectFieldRelationDraftConventionMatcher
             var value = Expr.Field(request.Source.Binding, sourcePath);
             var candidateId = RelationDraftIdentityConvention.CreateCandidateId(slotId, value);
             var issues = DirectFieldAssignmentCompatibility.Evaluate(
-                sourceField,
+                ValueContract.FromField(sourceField),
                 request.Source.Shape.GraphId,
                 targetField,
                 request.TargetShape.GraphId);
@@ -701,14 +701,14 @@ readonly record struct DirectFieldCompatibilityIssue(
 static class DirectFieldAssignmentCompatibility
 {
     public static ImmutableArray<DirectFieldCompatibilityIssue> Evaluate(
-        FieldDefinition source,
+        ValueContract source,
         GraphId sourceGraph,
         FieldDefinition target,
         GraphId targetGraph)
     {
         var issues = ImmutableArray.CreateBuilder<DirectFieldCompatibilityIssue>();
 
-        if (source.Type != target.Type)
+        if (source.Type is null || source.Type != target.Type)
         {
             issues.Add(new(
                 "relationDraft.assignment.typeIncompatible",

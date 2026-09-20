@@ -171,6 +171,25 @@ across revisions, while its content fingerprint changes as candidates and resolu
 The result retains the consumed draft fingerprint and relationship-catalog fingerprint as
 provenance, separately from the accepted relation's canonical fingerprint.
 
+Explicit binding-qualified field candidates may navigate nested inline or graph-local named
+structural fields, for example `load.Header.ShipmentId`. Acceptance reuses the canonical query
+shape resolver and compares the effective `ValueContract`; optional or nullable ancestors weaken
+the resulting value even when the leaf itself is required and non-null. Optional relationship
+bindings remain a separate absence check. The terminal field retains its type and cardinality,
+and graph-local named types are not equated across different graphs.
+
+This capability does not infer a traversal or restructure values. Every path segment must name a
+field, and intermediate values must be single-valued structures. Collection elements, indexes,
+scalar descent, absent members and unknown structures remain rejected. Collection projection,
+object construction and conversion expressions remain unsupported by draft acceptance; producers
+may retain them in draft documents, but acceptance must not silently weaken their guarantees.
+Target slots remain top-level output fields and convention matching remains top-level only.
+
+The resolver is created once per acceptance invocation over validated exact graphs, with no
+process-wide cache or new expression/path IR. `RelationDraftAcceptanceTests` exercises inline and
+named nesting through native serialization, acceptance, compilation and supplied-root execution,
+as well as ancestor absence/nullability and unsafe type/cardinality/collection paths.
+
 Three kinds of incomplete information remain distinct:
 
 - A **definition hole** is an unresolved, ambiguous, or unsafe draft assignment and prevents

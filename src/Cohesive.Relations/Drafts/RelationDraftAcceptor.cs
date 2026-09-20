@@ -91,6 +91,12 @@ public sealed class RelationDraftAcceptanceResult
 public static class RelationDraftAcceptor
 {
     /// <summary>Attempts to accept a draft against exact shape and relationship snapshots.</summary>
+    /// <remarks>
+    /// Selected candidates must be explicit binding-qualified field expressions. Field paths may navigate
+    /// single-valued inline or named structures; ancestor presence and nullability are preserved. The final
+    /// field may be a whole collection when target contracts match. Element/index traversal, computed
+    /// transformations and nested target slots are not admitted by this acceptance profile.
+    /// </remarks>
     /// <param name="draft">Portable relation draft to accept.</param>
     /// <param name="shapeGraphs">Exact shape-graph snapshots referenced by the draft and relationship catalog.</param>
     /// <param name="relationshipCatalog">
@@ -210,6 +216,7 @@ public static class RelationDraftAcceptor
             targetShape!,
             canonicalValidation.BindingShapes,
             graphIndex.ById,
+            new RelationQueryShapeResolver([.. graphIndex.ValidGraphs]),
             diagnostics);
 
         if (HasErrors(diagnostics))
@@ -337,6 +344,7 @@ public static class RelationDraftAcceptor
         Shape targetShape,
         ImmutableArray<RelationQueryBindingShape> bindingShapes,
         IReadOnlyDictionary<GraphId, ShapeGraph> graphs,
+        RelationQueryShapeResolver shapeResolver,
         List<DocumentValidationDiagnostic> diagnostics)
     {
         var visibleBindings = bindingShapes
@@ -355,12 +363,13 @@ public static class RelationDraftAcceptor
                     $"{location}/value");
                 continue;
             }
-            if (!TryGetTopLevelField(field.Path, out var sourceFieldName))
+            if (field.Path.Segments.IsDefaultOrEmpty
+                || field.Path.Segments.Any(static segment => segment.Kind != SegmentKind.Field))
             {
                 Add(
                     diagnostics,
                     "relationDraft.assignment.structureUnsupported",
-                    $"V1 acceptance supports only top-level source fields; '{field.Path}' requires structural transformation.",
+                    $"Direct field acceptance supports only field-name navigation; '{field.Path}' requires an explicit collection or other structural transformation.",
                     $"{location}/value/path");
                 continue;
             }
@@ -391,12 +400,12 @@ public static class RelationDraftAcceptor
                 diagnostics);
             if (sourceShape is null)
                 continue;
-            if (!sourceShape.TryGetField(sourceFieldName, out var sourceField))
+            if (!shapeResolver.TryGetFieldContract(sourceBinding.Shape.Value, field.Path, out var sourceContract))
             {
                 Add(
                     diagnostics,
                     "relationDraft.candidate.pathUnknown",
-                    $"Candidate source shape '{sourceShape.Id.Value}' does not contain top-level field '{sourceFieldName}'.",
+                    $"Candidate path '{field.Path}' cannot be resolved from source shape '{sourceShape.Id.Value}' through single-valued structural fields.",
                     $"{location}/value/path");
                 continue;
             }
@@ -412,7 +421,7 @@ public static class RelationDraftAcceptor
             }
 
             foreach (var issue in DirectFieldAssignmentCompatibility.Evaluate(
-                         sourceField,
+                         sourceContract,
                          sourceBinding.Shape.Value.GraphId,
                          assignment.TargetField,
                          draft.Projection.ResultShape.GraphId))
@@ -420,7 +429,7 @@ public static class RelationDraftAcceptor
                 Add(
                     diagnostics,
                     issue.Code,
-                    $"Source field '{sourceShape.Id.Value}.{sourceFieldName}' cannot safely populate target field '{targetShape.Id.Value}.{assignment.TargetField.Name.Value}': {issue.Message}",
+                    $"Source field '{sourceShape.Id.Value}.{field.Path}' cannot safely populate target field '{targetShape.Id.Value}.{assignment.TargetField.Name.Value}': {issue.Message}",
                     location);
             }
 
