@@ -311,6 +311,114 @@ public sealed class RelationDraftAcceptanceTests
             "relationDraft.assignment.bindingPresenceUnsafe");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NestedField_AcceptsInlineAndNamedStructures(bool named)
+    {
+        var (graph, draft) = NestedFixture(named: named);
+        var document = RelationDraftDocument.FromDraft(draft);
+        var restored = RelationDraftJsonSerializer.Deserialize(RelationDraftJsonSerializer.Serialize(document));
+        var accepted = RelationDraftAcceptor.Accept(restored.Draft, [graph]);
+        Assert.True(accepted.IsAccepted, FormatDiagnostics(accepted.Diagnostics));
+        Assert.Equal(document.DraftFingerprint, accepted.Provenance.DraftFingerprint);
+        Assert.Equal(RelationQueryDefinitionFingerprinter.Compute(CreateHandAuthoredRelation(draft)), accepted.DefinitionFingerprint);
+        var values = ImmutableDictionary<string, ObservationValue>.Empty.Add("Header",
+            ObservationValue.FromObject(ImmutableDictionary<string, ObservationValue>.Empty.Add("Id", ObservationValue.FromString("shipment-42"))));
+        var evaluation = RelationQueryDocument.FromDefinition(accepted.Definition!)
+            .Evaluate(new("tests/nested-draft"), [ShapeGraphDocument.FromGraph(graph)])
+            .Supply([new RelationQuerySuppliedRoot("root-1", LoadShapeId, values)])
+            .Build();
+        var outcome = await RelationQueryEvaluator.CreateSuppliedOnly().EvaluateAsync(evaluation);
+        Assert.True(outcome.IsSuccessful);
+        var row = Assert.Single(Assert.IsType<RelationQueryExecutionResult>(outcome.Result).Relation!.Rows);
+        Assert.Equal("shipment-42", row.Value.GetProperty("Id").GetString());
+    }
+
+    [Theory]
+    [InlineData(FieldPresence.Optional, FieldNullability.NonNullable, "relationDraft.assignment.presenceUnsafe")]
+    [InlineData(FieldPresence.Required, FieldNullability.Nullable, "relationDraft.assignment.nullabilityUnsafe")]
+    public void NestedField_PropagatesAncestorWeakness(FieldPresence presence, FieldNullability nullability, string code)
+    {
+        var (graph, draft) = NestedFixture(parentPresence: presence, parentNullability: nullability);
+        var accepted = RelationDraftAcceptor.Accept(draft, [graph]);
+        Assert.False(accepted.IsAccepted);
+        AssertDiagnostic(accepted.Validation, code);
+    }
+
+    [Fact]
+    public void NestedField_OptionalNullableAncestorsCanPopulatePermissiveTarget()
+    {
+        var (graph, draft) = NestedFixture(parentPresence: FieldPresence.Optional,
+            parentNullability: FieldNullability.Nullable, targetPresence: FieldPresence.Optional,
+            targetNullability: FieldNullability.Nullable);
+        var accepted = RelationDraftAcceptor.Accept(draft, [graph]);
+        Assert.True(accepted.IsAccepted, FormatDiagnostics(accepted.Diagnostics));
+    }
+
+    [Theory]
+    [InlineData("Header.Missing", FieldCardinality.Single, "relationDraft.candidate.pathUnknown")]
+    [InlineData("Header.Id", FieldCardinality.Many, "relationDraft.candidate.pathUnknown")]
+    [InlineData("Header.[].Id", FieldCardinality.Many, "relationDraft.assignment.structureUnsupported")]
+    public void NestedField_RejectsUnknownPathsAndImplicitCollectionNavigation(string path, FieldCardinality parentCardinality, string code)
+    {
+        var (graph, draft) = NestedFixture(path: path, parentCardinality: parentCardinality);
+        var accepted = RelationDraftAcceptor.Accept(draft, [graph]);
+        Assert.False(accepted.IsAccepted);
+        AssertDiagnostic(accepted.Validation, code);
+    }
+
+    [Fact]
+    public void NestedField_RetainsTypeAndCardinalityChecks()
+    {
+        var (graph, draft) = NestedFixture(leafType: new ScalarTypeRef(ScalarTypeKind.Int64), leafCardinality: FieldCardinality.Many);
+        var accepted = RelationDraftAcceptor.Accept(draft, [graph]);
+        Assert.False(accepted.IsAccepted);
+        AssertDiagnostic(accepted.Validation, "relationDraft.assignment.typeIncompatible");
+        AssertDiagnostic(accepted.Validation, "relationDraft.assignment.cardinalityUnsafe");
+    }
+
+    [Fact]
+    public void NestedField_CanCopyAWholeCollectionWithoutElementTraversal()
+    {
+        var (graph, draft) = NestedFixture(leafCardinality: FieldCardinality.Many, targetCardinality: FieldCardinality.Many);
+        var accepted = RelationDraftAcceptor.Accept(draft, [graph]);
+        Assert.True(accepted.IsAccepted, FormatDiagnostics(accepted.Diagnostics));
+    }
+
+    static (ShapeGraph Graph, RelationDraft Draft) NestedFixture(
+        bool named = false,
+        string path = "Header.Id",
+        FieldPresence parentPresence = FieldPresence.Required,
+        FieldNullability parentNullability = FieldNullability.NonNullable,
+        FieldCardinality parentCardinality = FieldCardinality.Single,
+        FieldPresence targetPresence = FieldPresence.Required,
+        FieldNullability targetNullability = FieldNullability.NonNullable,
+        TypeRef? leafType = null,
+        FieldCardinality leafCardinality = FieldCardinality.Single,
+        FieldCardinality targetCardinality = FieldCardinality.Single)
+    {
+        leafType ??= new ScalarTypeRef(ScalarTypeKind.String);
+        var typeId = new TypeId("Header");
+        TypeRef header = named ? new NamedTypeRef(typeId) : new ObjectTypeRef(
+            [new ObjectFieldTypeDef("Id", leafType, cardinality: leafCardinality)]);
+        var graph = new ShapeGraph(GraphId,
+            [ShapeOf("Load", new FieldDefinition(new("Header"), header, presence: parentPresence,
+                nullability: parentNullability, cardinality: parentCardinality)),
+             ShapeOf("LoadDto", new FieldDefinition(new("Id"), new ScalarTypeRef(ScalarTypeKind.String),
+                presence: targetPresence, nullability: targetNullability, cardinality: targetCardinality))],
+            named ? [new TypeDefinition.Structural(typeId, [new StructuralField(new("Id"), leafType, cardinality: leafCardinality)])] : []);
+        var initial = DirectFieldRelationDraftConventionMatcher.Match(DirectRequest(LoadShapeId, LoadDtoShapeId), [graph]).Draft!;
+        var draft = initial with
+        {
+            Projection = initial.Projection with
+            {
+                Assignments = [SelectedSlot(LoadDtoShapeId, "Id", LoadBinding, path)]
+            }
+        };
+        return (graph, draft);
+    }
+
     static DirectFieldRelationDraftConventionRequest DirectRequest(
         QualifiedShapeId sourceShape,
         QualifiedShapeId targetShape) =>
