@@ -41,11 +41,12 @@ public sealed record AzureInfrastructureReadinessBindings(string SchemaVersion, 
 /// <param name="MaximumAge">Freshness policy applied to source timestamps.</param>
 /// <param name="FutureTolerance">Permitted source-clock lead.</param>
 /// <param name="Provisioning">Companion native management evidence; never used to manufacture readiness.</param>
-/// <param name="PlatformHealth">Platform evidence selected for assessment, including coverage/collection failures.</param>
-/// <param name="Assessment">Canonical assessment over the entire supplied realization.</param>
+/// <param name="PlatformHealth">Companion platform evidence, used for assessment only when Runtime is absent. Includes coverage/collection failures.</param>
+/// <param name="Assessment">Canonical assessment over the entire supplied realization, using runtime evidence when Runtime is present, otherwise platform evidence.</param>
+/// <param name="Runtime">Optional separately collected runtime evidence; never reconciled with platform or provisioning results.</param>
 public sealed record AzureInfrastructureReadinessInspection(AzureInfrastructureReadinessBindings Bindings, DateTimeOffset AssessedAtUtc,
     TimeSpan MaximumAge, TimeSpan FutureTolerance, AzureInfrastructureCollection Provisioning,
-    AzureInfrastructureCollection PlatformHealth, InfrastructureReadinessAssessment Assessment);
+    AzureInfrastructureCollection PlatformHealth, InfrastructureReadinessAssessment Assessment, AzureInfrastructureRuntimeInspection? Runtime = null);
 
 /// <summary>Native binding projection and bounded platform inspection over the canonical infrastructure realization.</summary>
 public static class AzureInfrastructureReadiness
@@ -123,4 +124,40 @@ public static class AzureInfrastructureReadiness
         cancellationToken.ThrowIfCancellationRequested();
         return new(bindings, assessedAt, maximumAge, futureTolerance, provisioning, platform, assessment);
     }
+    /// <summary>Collects companion platform evidence and selects runtime evidence exclusively for canonical readiness.</summary>
+    /// <param name="realization">Independently trusted complete realization.</param>
+    /// <param name="expectedScope">Explicit trusted deployment scope.</param>
+    /// <param name="bindings">Exact retained native deployment associations.</param>
+    /// <param name="runtimeBindings">Independently reviewed runtime contracts/endpoints, validated before any I/O.</param>
+    /// <param name="collector">Authenticated ARM collector, separate from runtime credentials.</param>
+    /// <param name="runtimeCollector">Dedicated runtime HTTPS collector.</param>
+    /// <param name="maximumConcurrency">Maximum simultaneous reads per capture, 1–32.</param>
+    /// <param name="requestTimeout">Positive per-read deadline, at most ten minutes.</param>
+    /// <param name="maximumAge">Positive source-age limit.</param>
+    /// <param name="futureTolerance">Nonnegative source-clock tolerance.</param>
+    /// <param name="clock">Explicit UTC validation clock.</param>
+    /// <param name="cancellationToken">Cancellation aborts without returning a completed partial inspection.</param>
+    /// <returns>Separate native and runtime captures with runtime-only assessment. Missing runtime coverage stays unknown.</returns>
+    /// <exception cref="ArgumentNullException">A required reference is null.</exception>
+    /// <exception cref="ArgumentException">Declarations, scope or identities are invalid.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Collection or freshness limits are invalid.</exception>
+    /// <exception cref="OperationCanceledException">Caller cancellation was requested.</exception>
+    public static async Task<AzureInfrastructureReadinessInspection> InspectRuntimeAsync(InfrastructureRealization realization,
+        AzureInfrastructureObservationScope expectedScope, AzureInfrastructureReadinessBindings bindings,
+        AzureInfrastructureRuntimeBindings runtimeBindings, AzureInfrastructureCollector collector,
+        AzureInfrastructureRuntimeCollector runtimeCollector, int maximumConcurrency, TimeSpan requestTimeout,
+        TimeSpan maximumAge, TimeSpan futureTolerance, TimeProvider clock, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(runtimeBindings);
+        ArgumentNullException.ThrowIfNull(runtimeCollector);
+        ArgumentNullException.ThrowIfNull(clock);
+        runtimeBindings.Validate(realization, expectedScope, bindings, clock.GetUtcNow(), maximumAge, futureTolerance);
+        var report = await InspectPlatformHealthAsync(realization, expectedScope, bindings, collector,
+            maximumConcurrency, requestTimeout, maximumAge, futureTolerance, clock, cancellationToken).ConfigureAwait(false);
+        var runtime = await runtimeCollector.InspectAsync(realization, expectedScope, runtimeBindings.Endpoints,
+            maximumConcurrency, requestTimeout, maximumAge, futureTolerance, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return report with { Runtime = runtime, Assessment = runtime.Assessment, AssessedAtUtc = runtime.AssessedAtUtc };
+    }
+
 }

@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Net;
 using System.Text.Json;
 using Cohesive.Execution;
 using Cohesive.Infra.Realization;
@@ -35,7 +34,6 @@ public sealed record AzureInfrastructureCollection(
 /// </remarks>
 public sealed class AzureInfrastructureCollector
 {
-    const int MaximumResponseBytes = 262144;
     readonly HttpClient client;
     readonly TimeProvider clock;
 
@@ -155,27 +153,10 @@ public sealed class AzureInfrastructureCollector
             var responseType = platform ? "Microsoft.ResourceHealth/availabilityStatuses" : resourceType;
             var path = string.Join('/', responseId.Split('/').Select(Uri.EscapeDataString));
             var uri = new Uri("https://management.azure.com" + path + "?api-version=" + version);
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            request.Headers.Accept.ParseAdd("application/json");
-            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
-            // A caller misconfigured redirect handling must never admit the redirected response.
-            if (response.RequestMessage?.RequestUri is { } effective && effective != uri) return Failure("unexpectedEndpoint");
-            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) return Failure("accessDenied");
-            if (response.StatusCode == HttpStatusCode.NotFound) return Failure("notFound");
-            if (response.StatusCode != HttpStatusCode.OK) return Failure("httpFailure");
-            if (response.Content.Headers.ContentLength > MaximumResponseBytes) return Failure("responseTooLarge");
-            await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token);
-            using var buffer = new MemoryStream();
-            var chunk = new byte[8192];
-            while (true)
-            {
-                var count = await stream.ReadAsync(chunk, deadline.Token);
-                if (count == 0) break;
-                if (buffer.Length + count > MaximumResponseBytes) return Failure("responseTooLarge");
-                buffer.Write(chunk, 0, count);
-            }
-            using var json = JsonDocument.Parse(buffer.GetBuffer().AsMemory(0, checked((int)buffer.Length)));
-            var root = json.RootElement;
+            var result = await AzureInfrastructureHttpReader.ReadAsync(client, uri, deadline.Token);
+            using var json = result.Document;
+            if (result.Error is not null) return Failure(result.Error);
+            var root = json!.RootElement;
             if (root.ValueKind != JsonValueKind.Object || HasDuplicates(root)) return Failure("invalidResponse");
             if (!root.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.String
                 || !string.Equals(id.GetString(), responseId, StringComparison.OrdinalIgnoreCase)) return Failure("identityMismatch");
