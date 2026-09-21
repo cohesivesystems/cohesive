@@ -120,7 +120,10 @@ public enum ExprFunctionResultRule
     FirstArgument = 2,
 
     /// <summary>Return a collection whose element contract is derived from a scoped selector when known.</summary>
-    CollectionOfSelector = 3
+    CollectionOfSelector = 3,
+
+    /// <summary>Join the present, non-null first argument with the fallback value's contract.</summary>
+    FirstNonNullish = 4
 }
 
 /// <summary>One function argument evaluated with an explicit current-item scope.</summary>
@@ -236,6 +239,13 @@ public sealed class ExprFunctionDefinition
             throw new ArgumentException(
                 "The fixed result contract does not satisfy the declared function result category.",
                 nameof(fixedResult));
+        }
+        if (ResultRule == ExprFunctionResultRule.FirstNonNullish)
+        {
+            if (Arity.Minimum != 2 || Arity.Maximum != 2)
+                throw new ArgumentException("A first-non-nullish result rule requires exactly two arguments.", nameof(arity));
+            if (FixedResult is not null)
+                throw new ArgumentException("A first-non-nullish result rule cannot declare an ignored fixed result.", nameof(fixedResult));
         }
         if (ResultRule == ExprFunctionResultRule.FirstArgument)
         {
@@ -629,6 +639,7 @@ public sealed class ExprSemanticsCatalog
                     resultRule: ExprFunctionResultRule.Fixed,
                     fixedResult: decimalNumber,
                     scoped: [new(1, 0)]),
+                Function(ExprFunctionNames.Coalesce, 2, 2, [ExprResultCategory.Any, ExprResultCategory.Any], resultRule: ExprFunctionResultRule.FirstNonNullish),
                 Function(ExprFunctionNames.Concat, 1, null, argumentCategories: [], variadicCategory: ExprResultCategory.Text, resultCategory: ExprResultCategory.Text, resultRule: ExprFunctionResultRule.Fixed, fixedResult: @string),
                 Function(ExprFunctionNames.Contains, 2, 2, [ExprResultCategory.Collection, ExprResultCategory.Any], resultCategory: ExprResultCategory.Boolean, resultRule: ExprFunctionResultRule.Fixed, fixedResult: boolean),
                 Function(ExprFunctionNames.Count, 1, 1, [ExprResultCategory.Countable], resultCategory: ExprResultCategory.Integer, resultRule: ExprFunctionResultRule.Fixed, fixedResult: int64),

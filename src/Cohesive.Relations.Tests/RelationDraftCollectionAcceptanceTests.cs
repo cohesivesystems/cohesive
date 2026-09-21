@@ -97,7 +97,7 @@ public sealed class RelationDraftCollectionAcceptanceTests
     [InlineData("element-path", "relationDraft.assignment.structureUnsupported")]
     [InlineData("arity", "relationDraft.select.argumentsInvalid")]
     [InlineData("return-type", "relationDraft.select.returnTypeMismatch")]
-    [InlineData("constant-selector", "relationDraft.candidate.expressionUnsupported")]
+    [InlineData("constant-selector", "relationDraft.constant.incompatible")]
     public void Select_RejectsUnsafeOrUnsupportedContracts(string scenario, string diagnostic)
     {
         var expression = scenario switch
@@ -108,7 +108,7 @@ public sealed class RelationDraftCollectionAcceptanceTests
             "element-path" => Select(Expr.Field(Binding, FieldPath.Parse("Items.[].Id")), ItemId),
             "arity" => Expr.Call(ExprFunctionNames.Select, SourceItems),
             "return-type" => new CallExpr(ExprFunctionNames.Select, [SourceItems, ItemId], Text),
-            "constant-selector" => Select(SourceItems, Expr.Const("constant")),
+            "constant-selector" => Select(SourceItems, Expr.Const(123)),
             _ => Select(SourceItems, ItemId)
         };
         var itemType = new ObjectTypeRef([new("Id", Text,

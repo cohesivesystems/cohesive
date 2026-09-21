@@ -40,6 +40,10 @@ public static class ExprFunctionNames
     /// </summary>
     public const string Avg = "avg";
 
+    /// <summary>Function name for returning the first value unless it is missing or null, otherwise evaluating a fallback.</summary>
+    /// <remarks>The fallback is lazy. False, zero, empty text and empty collections are present values.</remarks>
+    public const string Coalesce = "coalesce";
+
     /// <summary>
     /// Function name for concatenating string arguments.
     /// </summary>

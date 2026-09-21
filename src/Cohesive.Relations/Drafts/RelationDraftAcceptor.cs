@@ -98,7 +98,9 @@ public static class RelationDraftAcceptor
     /// structures; ancestor presence and nullability are preserved. Object children are checked against their
     /// own target contracts, even when the containing target is optional. Whole collection fields can be copied
     /// when contracts match. Collection select establishes an isolated current-item scope and checks each
-    /// selector against the target element contract. Its source must be present and non-null. Implicit
+    /// selector against the target element contract. Its source must be present and non-null, including through
+    /// an explicit coalesce with a compatible constant fallback. Portable scalar, null and empty-collection
+    /// constants are checked against their target contracts. Named scalar and structural literals are excluded. Implicit
     /// element/index traversal, conversions, dynamic object keys and nested target slots are not admitted.
     /// </remarks>
     /// <param name="draft">Portable relation draft to accept.</param>
@@ -364,6 +366,11 @@ public static class RelationDraftAcceptor
         void ValidateValue(Expr expression, ValueContract target, FieldPath targetPath, string location,
             (GraphId Graph, ValueContract Contract)? item = null)
         {
+            if (expression is ConstantExpr constant)
+            {
+                ValidateConstant(constant.Value, target, location);
+                return;
+            }
             if (expression is CallExpr { Function: ExprFunctionNames.Object } construction)
             {
                 ValidateObject(construction, target, targetPath, location, item);
@@ -390,6 +397,29 @@ public static class RelationDraftAcceptor
         {
             contract = null!;
             graph = default;
+            if (expression is CallExpr { Function: ExprFunctionNames.Coalesce } coalesce)
+            {
+                if (coalesce.Arguments.IsDefault || coalesce.Arguments.Length != 2)
+                {
+                    Add(diagnostics, "relationDraft.default.argumentsInvalid", "Coalesce requires a source value and one fallback.", location);
+                    return false;
+                }
+                if (coalesce.Arguments[1] is not ConstantExpr fallback)
+                {
+                    Add(diagnostics, "relationDraft.default.fallbackUnsupported", "Draft defaults require an explicit portable constant fallback.", $"{location}/arguments/1");
+                    return false;
+                }
+                if (!TryResolveValue(coalesce.Arguments[0], $"{location}/arguments/0", item, out var source, out graph))
+                    return false;
+                var present = new ValueContract(source.Type, source.Shape, source.Cardinality);
+                if (coalesce.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
+                    && coalesce.ReturnType != source.GetEffectiveType())
+                    Add(diagnostics, "relationDraft.default.returnTypeMismatch", "Declared default result type must match the source's effective type.", $"{location}/returnType");
+                if (!ValidateConstant(fallback.Value, present, $"{location}/arguments/1"))
+                    return false;
+                contract = present;
+                return true;
+            }
             if (expression is CurrentItemExpr
                 || expression is FieldExpr { Binding: null } itemField
                     && !itemField.Path.Segments.IsDefaultOrEmpty
@@ -410,7 +440,7 @@ public static class RelationDraftAcceptor
             if (expression is not FieldExpr { Binding: { } binding } field)
             {
                 Add(diagnostics, "relationDraft.candidate.expressionUnsupported",
-                    "Acceptance supports binding-qualified fields, scoped item reads, static objects and collection select expressions.", location);
+                    "Acceptance supports binding-qualified fields, scoped item reads, explicit constant defaults, portable literals, static objects and collection select expressions.", location);
                 return false;
             }
             if (field.Path.Segments.IsDefaultOrEmpty
@@ -451,6 +481,28 @@ public static class RelationDraftAcceptor
             contract = sourceBinding.Availability == RelationQueryBindingAvailability.MayBeAbsent
                 ? new(sourceContract.Type, sourceContract.Shape, sourceContract.Cardinality, FieldPresence.Optional, sourceContract.Nullability)
                 : sourceContract;
+            return true;
+        }
+
+        bool ValidateConstant(ObservationValue value, ValueContract target, string location)
+        {
+            // Undefined has no distinct portable JSON encoding. Never admit it as an authored default.
+            var supported = value.Kind == ObservationValueKind.Null
+                || (value.Kind == ObservationValueKind.Array && value.Array.IsEmpty
+                    && target.GetEffectiveType() is ArrayTypeRef)
+                || (target.Cardinality == FieldCardinality.Single
+                    && target.Type is ScalarTypeRef or EnumTypeRef or QuantityTypeRef or EntityReferenceTypeRef or JsonTypeRef
+                    && value.Kind is not (ObservationValueKind.Array or ObservationValueKind.Object or ObservationValueKind.Undefined));
+            if (!supported)
+            {
+                Add(diagnostics, "relationDraft.constant.unsupported", "Accepted constants are portable scalars, null or an empty collection; named or structural values need further admission semantics.", location);
+                return false;
+            }
+            if (!target.IsSatisfiedByConstant(value))
+            {
+                Add(diagnostics, "relationDraft.constant.incompatible", "Constant does not satisfy the target's type, cardinality or nullability contract.", location);
+                return false;
+            }
             return true;
         }
 

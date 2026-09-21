@@ -53,7 +53,6 @@ public sealed class RelationDraftObjectAcceptanceTests
     [InlineData("dynamic", "relationDraft.object.keyUnsupported")]
     [InlineData("empty", "relationDraft.object.keyUnsupported")]
     [InlineData("odd", "relationDraft.object.argumentsInvalid")]
-    [InlineData("constant-value", "relationDraft.candidate.expressionUnsupported")]
     [InlineData("unknown-source", "relationDraft.candidate.pathUnknown")]
     [InlineData("unbound-source", "relationDraft.candidate.expressionUnsupported")]
     [InlineData("return-type", "relationDraft.object.returnTypeMismatch")]
@@ -68,7 +67,6 @@ public sealed class RelationDraftObjectAcceptanceTests
             "dynamic" => Object(SourceId, SourceId),
             "empty" => Object(Expr.Const(" "), SourceId),
             "odd" => Object(Expr.Const("Id")),
-            "constant-value" => Object(Expr.Const("Id"), Expr.Const("value")),
             "unknown-source" => Object(Expr.Const("Id"), Expr.Field(SourceBinding, FieldPath.Parse("Header.Missing"))),
             "unbound-source" => Object(Expr.Const("Id"), Expr.Field(FieldPath.Parse("Header.Id"))),
             "return-type" => new CallExpr(ExprFunctionNames.Object, [Expr.Const("Id"), SourceId], Text),

@@ -232,6 +232,14 @@ public abstract record Expr
             Guard.RequireNotNull(collection),
             Guard.RequireNotNull(predicate));
 
+    /// <summary>Creates an explicit missing-or-null fallback expression.</summary>
+    /// <param name="value">Value evaluated once. Missing and null select the fallback.</param>
+    /// <param name="fallback">Expression evaluated only when the first value is missing or null.</param>
+    /// <returns>A portable coalesce call; present values, including false, zero and empty collections, are retained.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> or <paramref name="fallback"/> is null.</exception>
+    public static Expr Coalesce(Expr value, Expr fallback) =>
+        Call(ExprFunctionNames.Coalesce, Guard.RequireNotNull(value), Guard.RequireNotNull(fallback));
+
     /// <summary>Creates a conditional expression.</summary>
     public static Expr If(Expr test, Expr ifTrue, Expr ifFalse) => new ConditionalExpr(test, ifTrue, ifFalse);
 

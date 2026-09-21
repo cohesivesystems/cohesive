@@ -615,6 +615,42 @@ public sealed class RelationQueryExpressionEvaluatorTests
         Assert.Equal(RelationQueryExpressionEvaluationError.InvalidFunctionArity, arity.Error);
     }
 
+    [Fact]
+    public void Coalesce_IsLazyAndPreservesFalseZeroAndEmptyValues()
+    {
+        var context = Context();
+        var invalidFallback = Expr.Call("not-supported");
+        foreach (var value in new[] { ObservationValue.FromBool(false), ObservationValue.FromInt64(0),
+                     ObservationValue.FromString(""), ObservationValue.FromArray([]), Object(("id", ObservationValue.FromString("a"))) })
+            Assert.Equal(value, evaluator.Evaluate(Expr.Coalesce(Expr.Const(value), invalidFallback), context));
+        Assert.Equal("fallback", evaluator.Evaluate(Expr.Coalesce(Expr.Null(), Expr.Const("fallback")), context).GetString());
+        Assert.Throws<RelationQueryExpressionEvaluationException>(() =>
+            evaluator.Evaluate(Expr.Coalesce(Expr.Null(), invalidFallback), context));
+        Assert.Throws<RelationQueryExpressionEvaluationException>(() =>
+            evaluator.Evaluate(Expr.Coalesce(Expr.Field("unavailable"), Expr.Const("fallback")), context));
+    }
+
+    [Fact]
+    public void Coalesce_DoesNotCopyPresentCollectionPayloads()
+    {
+        var value = ObservationValue.FromArray([.. Enumerable.Range(0, 1024).Select(i => ObservationValue.FromInt64(i))]);
+        var expression = Expr.Coalesce(Expr.Const(value), Expr.Const(ObservationValue.FromArray([])));
+        var context = Context();
+        for (var i = 0; i < 1000; i++) evaluator.Evaluate(expression, context);
+        long Measure(Expr input)
+        {
+            for (var i = 0; i < 1000; i++) evaluator.Evaluate(input, context);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 10000; i++) evaluator.Evaluate(input, context);
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        var empty = Expr.Coalesce(Expr.Const(ObservationValue.FromArray([])), Expr.Null());
+        var smallAllocation = Measure(empty);
+        var largeAllocation = Measure(expression);
+        Assert.InRange(largeAllocation - smallAllocation, -1024, 1024);
+        Assert.Equal(value.Array, evaluator.Evaluate(expression, context).Array);
+    }
+
     static RelationQueryExpressionContext Context(
         IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding>? bindings = null,
         ValueBindingId? implicitBinding = null,
