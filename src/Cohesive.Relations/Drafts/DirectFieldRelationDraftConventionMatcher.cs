@@ -450,7 +450,7 @@ public static class DirectFieldRelationDraftConventionMatcher
             var issues = DirectFieldAssignmentCompatibility.Evaluate(
                 ValueContract.FromField(sourceField),
                 request.Source.Shape.GraphId,
-                targetField,
+                ValueContract.FromField(targetField),
                 request.TargetShape.GraphId);
             candidates.Add(new(
                 new RelationDraftCandidate(candidateId, value),
@@ -703,7 +703,7 @@ static class DirectFieldAssignmentCompatibility
     public static ImmutableArray<DirectFieldCompatibilityIssue> Evaluate(
         ValueContract source,
         GraphId sourceGraph,
-        FieldDefinition target,
+        ValueContract target,
         GraphId targetGraph)
     {
         var issues = ImmutableArray.CreateBuilder<DirectFieldCompatibilityIssue>();

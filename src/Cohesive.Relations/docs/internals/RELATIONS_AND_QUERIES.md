@@ -180,15 +180,42 @@ and graph-local named types are not equated across different graphs.
 
 This capability does not infer a traversal or restructure values. Every path segment must name a
 field, and intermediate values must be single-valued structures. Collection elements, indexes,
-scalar descent, absent members and unknown structures remain rejected. Collection projection,
-object construction and conversion expressions remain unsupported by draft acceptance; producers
-may retain them in draft documents, but acceptance must not silently weaken their guarantees.
-Target slots remain top-level output fields and convention matching remains top-level only.
+scalar descent, absent members and unknown structures remain rejected. Target slots remain top-level
+output fields and convention matching remains top-level only.
+
+Selected `object` calls may construct single-valued inline or named structures from constant string
+keys and binding-qualified fields or recursively nested `object` calls. Every supplied key must be
+unique and declared by the target; computed children cannot be assigned. Every required, non-computed
+child must be supplied. Optional child omission is explicit in the authored expression. An optional
+or nullable *containing target* does not weaken its children: constructing an object always creates
+a present, non-null object whose required children must meet their own contracts. Source ancestor
+weakness and optional relationship bindings are still checked at every leaf. Copying a complete
+collection-valued child is allowed only when its exact type/cardinality/presence/nullability match.
+Declared object return types must match the target type, or use the normal unknown metadata marker.
+
+The acceptor extends its existing conservative assignment policy rather than adding another
+expression IR or an application validator. The query expression analyzer remains authoritative for
+scope, capability, arity and declared-expression checks; its general `object` result category alone
+does not prove child contracts. Acceptance uses the existing shape resolver's one-level structural
+view and the same direct-field compatibility routine as convention matching. Named child identities
+remain graph-local; structural construction does not license direct assignment between named types
+from different graphs. The semantic draft and exact supplied shape snapshots remain authoritative.
+
+Dynamic keys, scalar constant values, conversions and collection element projection remain outside
+this bounded acceptance profile. They can remain in portable draft documents and receive structured
+unsupported diagnostics on acceptance. Static acceptance does not prove input-dependent field or
+shape constraints, business meaning, or operational correctness; execution still admits observations
+against their exact graphs. This is the object-construction slice of Ari's ARI-569; collection and
+conversion acceptance and published-package adoption are separate deliverables.
 
 The resolver is created once per acceptance invocation over validated exact graphs, with no
 process-wide cache or new expression/path IR. `RelationDraftAcceptanceTests` exercises inline and
 named nesting through native serialization, acceptance, compilation and supplied-root execution,
 as well as ancestor absence/nullability and unsafe type/cardinality/collection paths.
+`RelationDraftObjectAcceptanceTests` covers inline/named and nested construction, omission, malformed
+keys/arity, source weakness, child cardinality, exact provenance and execution. Object validation
+visits each constructed node and child once per acceptance, with invocation-owned field indexes;
+there is no per-row preparation or persistent cache.
 
 Three kinds of incomplete information remain distinct:
 

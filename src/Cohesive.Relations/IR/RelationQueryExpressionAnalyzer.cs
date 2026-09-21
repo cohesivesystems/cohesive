@@ -1533,6 +1533,38 @@ sealed class RelationQueryShapeResolver
         }
     }
 
+    /// <summary>Resolves one structural level without weakening child contracts through parent optionality.</summary>
+    /// <param name="graphId">Graph that owns any named type identities.</param>
+    /// <param name="type">Inline or named structural type to inspect.</param>
+    /// <param name="fields">Canonical children, retaining named child types and their graph-local identity.</param>
+    /// <returns>Whether the type denotes a known structure in the supplied snapshots.</returns>
+    public bool TryGetStructuralFields(GraphId graphId, TypeRef? type, out ImmutableArray<StructuralField> fields)
+    {
+        fields = [];
+        if (!graphs.ContainsKey(graphId))
+            return false;
+        switch (type)
+        {
+            case ObjectTypeRef inline:
+                if (inline.Fields.IsDefault || inline.Fields.Any(field => field is null
+                    || string.IsNullOrWhiteSpace(field.Name) || field.Type is null
+                    || !Enum.IsDefined(field.Cardinality) || !Enum.IsDefined(field.Presence) || !Enum.IsDefined(field.Nullability)))
+                    return false;
+                fields = [.. inline.Fields.Select(field => new StructuralField(
+                    new(field.Name), field.Type, field.Cardinality, field.Presence, field.Nullability,
+                    annotations: field.Annotations))];
+                return true;
+            case NamedTypeRef named when graphs.TryGetValue(graphId, out var graph)
+                && graph.TryGetType(named.TypeId, out var definition)
+                && definition is TypeDefinition.Structural structural:
+                fields = structural.Fields;
+                return fields.All(field => field.Type is not null && Enum.IsDefined(field.Cardinality)
+                    && Enum.IsDefined(field.Presence) && Enum.IsDefined(field.Nullability) && Enum.IsDefined(field.Role));
+            default:
+                return false;
+        }
+    }
+
     static ValueContract ComposePathValue(
         ValueContract parent,
         ValueContract child) => new(

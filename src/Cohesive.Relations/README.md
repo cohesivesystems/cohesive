@@ -4,8 +4,9 @@
 leaving storage placement and execution strategy to compilers and adapters.
 
 Portable [relation drafts](docs/internals/RELATIONS_AND_QUERIES.md#portable-relation-drafts) support
-explicit nested field candidates with shape-aware acceptance, preserving ancestor presence and
-nullability. Collection traversal and transformed expressions require further acceptance support.
+explicit nested field candidates and statically keyed object construction with shape-aware acceptance,
+preserving source presence/nullability and each target child's contract. Collection traversal and
+conversion expressions require further acceptance support.
 
 ## Install
 
