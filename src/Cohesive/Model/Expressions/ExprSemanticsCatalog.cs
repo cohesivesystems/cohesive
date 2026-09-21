@@ -123,7 +123,10 @@ public enum ExprFunctionResultRule
     CollectionOfSelector = 3,
 
     /// <summary>Join the present, non-null first argument with the fallback value's contract.</summary>
-    FirstNonNullish = 4
+    FirstNonNullish = 4,
+
+    /// <summary>Return a present collection retaining the scoped source's element contract.</summary>
+    CollectionOfScopedSource = 5
 }
 
 /// <summary>One function argument evaluated with an explicit current-item scope.</summary>
@@ -272,24 +275,24 @@ public sealed class ExprFunctionDefinition
                     nameof(resultCategory));
             }
         }
-        if (ResultRule == ExprFunctionResultRule.CollectionOfSelector)
+        if (ResultRule is ExprFunctionResultRule.CollectionOfSelector or ExprFunctionResultRule.CollectionOfScopedSource)
         {
             if (ResultCategory != ExprResultCategory.Collection)
             {
                 throw new ArgumentException(
-                    "A collection-of-selector result rule must declare a collection result category.",
+                    "A scoped-collection result rule must declare a collection result category.",
                     nameof(resultCategory));
             }
             if (FixedResult is not null)
             {
                 throw new ArgumentException(
-                    "A collection-of-selector result rule cannot declare an ignored fixed result.",
+                    "A scoped-collection result rule cannot declare an ignored fixed result.",
                     nameof(fixedResult));
             }
             if (ScopedArguments.Length != 1)
             {
                 throw new ArgumentException(
-                    "A collection-of-selector result rule must declare exactly one scoped selector argument.",
+                    "A scoped-collection result rule must declare exactly one scoped selector argument.",
                     nameof(scopedArguments));
             }
         }
@@ -651,7 +654,7 @@ public sealed class ExprSemanticsCatalog
                 Function(ExprFunctionNames.GroupByRows, 2, 2, [ExprResultCategory.Collection, ExprResultCategory.Any], resultCategory: ExprResultCategory.Collection, scoped: [new(1, 0)]),
                 Function(ExprFunctionNames.InsertAt, 3, 3, [ExprResultCategory.Collection, ExprResultCategory.Integer, ExprResultCategory.Any], resultCategory: ExprResultCategory.Collection, resultRule: ExprFunctionResultRule.FirstArgument),
                 Function(ExprFunctionNames.InsertRangeAt, 3, 3, [ExprResultCategory.Collection, ExprResultCategory.Integer, ExprResultCategory.Collection], resultCategory: ExprResultCategory.Collection, resultRule: ExprFunctionResultRule.FirstArgument),
-                Function(ExprFunctionNames.Join, 3, 3, [ExprResultCategory.Any, ExprResultCategory.Any, ExprResultCategory.Collection], resultCategory: ExprResultCategory.Collection, scoped: [new(1, 2)]),
+                Function(ExprFunctionNames.Join, 3, 3, [ExprResultCategory.Any, ExprResultCategory.Any, ExprResultCategory.Collection], resultCategory: ExprResultCategory.Collection, resultRule: ExprFunctionResultRule.CollectionOfScopedSource, scoped: [new(1, 2)]),
                 Function(ExprFunctionNames.Key, 0, 0, resultCategory: ExprResultCategory.Text, resultRule: ExprFunctionResultRule.Fixed, fixedResult: @string, ambient: [ExprCapabilities.RootKey]),
                 Function(ExprFunctionNames.Max, 1, 2, [ExprResultCategory.Collection, ExprResultCategory.Comparable], ExprResultCategory.Any, ExprResultCategory.Scalar, scoped: [new(1, 0)]),
                 Function(ExprFunctionNames.Min, 1, 2, [ExprResultCategory.Collection, ExprResultCategory.Comparable], ExprResultCategory.Any, ExprResultCategory.Scalar, scoped: [new(1, 0)]),

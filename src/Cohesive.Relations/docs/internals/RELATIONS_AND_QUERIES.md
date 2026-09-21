@@ -364,3 +364,58 @@ Remote client
 → Cohesive.Relations result projection
 → remote API response
 ```
+
+## Key-qualified collection mapping
+
+The existing canonical `Expr.Join(leftKey, rightKey, rightCollection)` filters a collection by
+key equality. The in-memory evaluator now realizes it, and native draft acceptance supports a bounded
+constant-key profile. For example:
+
+```text
+select(
+  join("PO", item.qualifier, coalesce(source.references, [])),
+  item => item.value)
+```
+
+For references `[{"qualifier":"PO","value":"A"},{"qualifier":"BN","value":"B"},
+{"qualifier":"PO","value":"A"}]`, this returns `["A","A"]`. An empty source or no matching keys
+returns `[]`. The source must be present and non-null unless an explicit coalesce supplies it.
+Filtering does not assert that a qualifying item has a required value; selector acceptance still
+checks its original contract. This is a reusable key-selection mechanism, not an inferred EDI policy.
+
+The left key is evaluated once in the enclosing scope, then the right collection is evaluated once.
+Each right key is evaluated in that item's scope; nested operations do not overwrite the enclosing
+scope. Equality delegates to canonical `ObservationValueSemantics`: numeric equality is preserved,
+text is ordinal/case-sensitive, and missing and null remain distinct. Runtime errors and unavailable
+inputs propagate. General expression execution supports arbitrary key expressions; draft acceptance
+currently requires a non-null portable scalar literal on the left and a resolvable field/current-item
+read (or admitted coalesce) on the right. The literal must inhabit the right key's present contract.
+Named scalar literals, arbitrary predicates, implicit conversions and single-result selection remain
+outside this profile. Optional qualifier fields can simply fail to match the non-null key, but no
+other field is refined by that comparison.
+
+The canonical function catalog owns arity and scoped argument metadata. Its collection-of-scoped-source
+result rule preserves the source's element type for subsequent selectors. Acceptance preserves exact
+source graph identity and cardinality. Native documents, candidate fingerprints and capability evidence
+remain authoritative; no new wire node, Ari validator or protocol-specific identifier table is added.
+Adapters without the join capability continue to reject it.
+
+Cohesive fit: `Expr.Join` already declares exactly the required key-filter semantics. A new filter
+function would duplicate that responsibility for this use case. `FilterQueryNode` filters relation rows,
+and `ExpandCollectionQueryNode` expands them; composing those would change row grain and require
+regrouping to preserve per-parent collection outputs. Extending the existing expression interpreter
+and draft acceptor is the narrower fit. Ari still owns explicit qualifier selection and later compiler/
+CLI adoption; no automatic business policy is supplied here.
+
+Execution scans once and evaluates each right key once, with invocation-owned storage growing only
+with matches. Result elements retain existing immutable payload storage; builder buffers are temporary,
+and the final collection contains matching values in source order. There is no cache, backend query
+or per-row acceptance preparation. Benchmark results cover scalar, nested, collection-heavy and
+4,096-item inputs with no matches and half matching. This is new-function cost evidence, not an
+end-to-end latency or optimization claim.
+
+`RelationDraftJoinAcceptanceTests` covers native roundtrip, exact fingerprints, direct filtering and
+selection, ordered duplicates, no matches, optional sources/defaults, key/type/arity rejection and the
+absence of inferred presence refinement. Runtime tests cover enclosing/item scopes, canonical equality,
+null/missing source rejection, propagated key errors and shared payload storage. Core analysis tests
+check the retained element contract, capability requirement and scoped-key boundary.

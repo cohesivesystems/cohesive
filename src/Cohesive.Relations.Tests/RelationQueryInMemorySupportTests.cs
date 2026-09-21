@@ -240,7 +240,6 @@ public sealed class RelationQueryInMemorySupportTests
             ExprFunctionNames.EntityId,
             ExprFunctionNames.GroupBy,
             ExprFunctionNames.GroupByRows,
-            ExprFunctionNames.Join,
             ExprFunctionNames.Key,
             ExprFunctionNames.SourceRows
         ];

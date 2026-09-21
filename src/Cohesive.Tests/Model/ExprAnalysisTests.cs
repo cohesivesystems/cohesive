@@ -1427,6 +1427,10 @@ public sealed class ExprAnalysisTests
     public void SemanticContractsRejectInternallyContradictoryDefinitions()
     {
         Assert.Throws<ArgumentException>(() => new ExprFunctionDefinition(
+            new("invalid.scoped-source"), new(3, 3), resultCategory: ExprResultCategory.Collection,
+            resultRule: ExprFunctionResultRule.CollectionOfScopedSource));
+
+        Assert.Throws<ArgumentException>(() => new ExprFunctionDefinition(
             new("invalid.coalesce"), new(1, 1), resultRule: ExprFunctionResultRule.FirstNonNullish));
         Assert.Throws<ArgumentException>(() => new ExprFunctionDefinition(
             new("invalid.fixed-coalesce"), new(2, 2), resultRule: ExprFunctionResultRule.FirstNonNullish,
@@ -1589,6 +1593,21 @@ public sealed class ExprAnalysisTests
         Assert.Equal(StringType, result.KnownResult!.Type);
         AssertDiagnostic(Analyze(Expr.Call(ExprFunctionNames.Coalesce, Expr.Null()), ExprScope.Empty, "arity"),
             ExprAnalysisDiagnosticCodes.FunctionArityInvalid);
+    }
+
+    [Fact]
+    public void Join_RetainsCollectionElementContractAndScopesOnlyRightKey()
+    {
+        var itemType = new ObjectTypeRef([new("Qualifier", StringType, presence: FieldPresence.Optional)]);
+        var scope = Scope(bindings: [new(LoadBinding, new(new ObjectTypeRef([new("References", new ArrayTypeRef(itemType))])))]);
+        var join = Expr.Join(Expr.Const("PO"), Expr.Field("item.Qualifier"), Expr.Field(LoadBinding, "References"));
+        var result = Analyze(join, scope, "qualified-references");
+        Assert.True(result.IsValid, string.Join("; ", result.Validation.Diagnostics.Select(d => d.Message)));
+        Assert.Equal(new ArrayTypeRef(itemType), result.KnownResult!.GetEffectiveType());
+        Assert.Contains(result.Requirements.Capabilities, c => c.Capability == ExprCapabilities.ForFunction(ExprFunctionNames.Join));
+        Assert.False(Analyze(Expr.Join(Expr.Field("item.Qualifier"), Expr.Field("item.Qualifier"),
+            Expr.Field(LoadBinding, "References")), scope, "unscoped-left-key").IsValid);
+        Assert.False(Analyze(Expr.Call(ExprFunctionNames.Join, Expr.Const("PO")), scope, "arity").IsValid);
     }
 
     static ExprAnalysisResult Analyze(

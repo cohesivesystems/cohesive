@@ -248,7 +248,13 @@ public abstract record Expr
     /// </summary>
     public static Expr Call(string function, params Expr[] arguments) => new CallExpr(function, [.. arguments]);
 
-    /// <summary>Creates a join expression.</summary>
+    /// <summary>Filters a right collection by canonical key equality, retaining source order and duplicates.</summary>
+    /// <param name="leftKey">Key evaluated once in the enclosing scope.</param>
+    /// <param name="rightKey">Key evaluated in a fresh current-item scope for each right item.</param>
+    /// <param name="rightCollection">Present, non-null collection to filter.</param>
+    /// <returns>A portable join call; no match produces an empty collection.</returns>
+    /// <remarks>Uses canonical value equality, including numeric equality and distinct missing/null values.
+    /// Missing/null/non-array collections and evaluation errors are not treated as empty results.</remarks>
     public static Expr Join(Expr leftKey, Expr rightKey, Expr rightCollection) =>
         Call(function: ExprFunctionNames.Join, leftKey, rightKey, rightCollection);
 
