@@ -415,6 +415,35 @@ public sealed class RelationDraftAcceptanceTests
             && diagnostic.Message.Contains("CustomerName.Name") && diagnostic.Location!.EndsWith("/value/arguments/1", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void CollectionSelect_RequiresPresentRelationshipBindingEvenForOptionalTarget()
+    {
+        var fixture = CreateTraversalFixture(QueryInputRequirement.Optional);
+        var graph = new ShapeGraph(fixture.Graph.Id, [.. fixture.Graph.Shapes.Select(shape =>
+            new Shape(shape.Id, [.. shape.Fields.Select(field =>
+                field.Name.Value == "Name" || field.Name.Value == "CustomerName"
+                    ? field with { Cardinality = FieldCardinality.Many,
+                        Presence = field.Name.Value == "CustomerName" ? FieldPresence.Optional : FieldPresence.Required }
+                    : field)]))]);
+        var value = Expr.Call(ExprFunctionNames.Select,
+            Expr.Field(CustomerBinding, FieldPath.Parse("Name")), Expr.CurrentItem());
+        var draft = fixture.Draft with
+        {
+            Projection = fixture.Draft.Projection with
+            {
+                Assignments = [.. fixture.Draft.Projection.Assignments.Select(slot =>
+                {
+                    if (slot.Target.ToString() != "CustomerName") return slot;
+                    var candidate = RelationDraftIdentityConvention.CreateCandidateId(slot.Id, value);
+                    return slot with { Candidates = [new(candidate, value)], Resolution = new SelectedRelationDraftAssignmentResolution(candidate) };
+                })]
+            }
+        };
+        var accepted = RelationDraftAcceptor.Accept(draft, [graph], fixture.Catalog);
+        Assert.False(accepted.IsAccepted);
+        Assert.Contains(accepted.Diagnostics, diagnostic => diagnostic.Code == "relationDraft.select.sourceMayBeAbsent");
+    }
+
     static (ShapeGraph Graph, RelationDraft Draft) NestedFixture(
         bool named = false,
         string path = "Header.Id",

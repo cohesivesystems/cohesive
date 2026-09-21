@@ -184,7 +184,7 @@ scalar descent, absent members and unknown structures remain rejected. Target sl
 output fields and convention matching remains top-level only.
 
 Selected `object` calls may construct single-valued inline or named structures from constant string
-keys and binding-qualified fields or recursively nested `object` calls. Every supplied key must be
+keys and supported field, object or collection-selector expressions. Every supplied key must be
 unique and declared by the target; computed children cannot be assigned. Every required, non-computed
 child must be supplied. Optional child omission is explicit in the authored expression. An optional
 or nullable *containing target* does not weaken its children: constructing an object always creates
@@ -201,12 +201,26 @@ view and the same direct-field compatibility routine as convention matching. Nam
 remain graph-local; structural construction does not license direct assignment between named types
 from different graphs. The semantic draft and exact supplied shape snapshots remain authoritative.
 
-Dynamic keys, scalar constant values, conversions and collection element projection remain outside
-this bounded acceptance profile. They can remain in portable draft documents and receive structured
+Selected `select(source, selector)` calls project ordered collections. The source must be a statically
+resolved binding-qualified field or a current-item read inside an enclosing selector. Both `Many`
+fields and explicit array types use their canonical effective element contract. Every source must
+be required and non-null, including containing fields and relationship binding availability: the
+canonical evaluator rejects missing/null collections, so acceptance never substitutes an empty one.
+The target must be a collection. Its optionality does not weaken its elements. A declared return type
+must equal the effective target collection type, or retain the normal unknown metadata marker.
+
+The selector can read `CurrentItem()` or `item.Field`, construct an object, read an explicit outer
+binding, or select a nested collection. Nested selectors replace the current-item scope; outer
+binding reads remain explicit. Item paths use the existing graph-aware resolver and direct value
+compatibility, preserving required/nullable children and named-type identity. Repeated values, empty
+collections and ordering are preserved by the existing canonical evaluator. No new IR, runtime
+operator or implicit path-to-projection rewrite is introduced; authors must declare `select`.
+
+Dynamic keys, scalar constant values and conversions remain outside this bounded acceptance profile. They can remain in portable draft documents and receive structured
 unsupported diagnostics on acceptance. Static acceptance does not prove input-dependent field or
 shape constraints, business meaning, or operational correctness; execution still admits observations
-against their exact graphs. This is the object-construction slice of Ari's ARI-569; collection and
-conversion acceptance and published-package adoption are separate deliverables.
+against their exact graphs. This extends Ari's ARI-569 acceptance profile; conversion acceptance,
+publication and Ari compiler adoption remain separate deliverables.
 
 The resolver is created once per acceptance invocation over validated exact graphs, with no
 process-wide cache or new expression/path IR. `RelationDraftAcceptanceTests` exercises inline and
@@ -215,7 +229,11 @@ as well as ancestor absence/nullability and unsafe type/cardinality/collection p
 `RelationDraftObjectAcceptanceTests` covers inline/named and nested construction, omission, malformed
 keys/arity, source weakness, child cardinality, exact provenance and execution. Object validation
 visits each constructed node and child once per acceptance, with invocation-owned field indexes;
-there is no per-row preparation or persistent cache.
+there is no per-row preparation or persistent cache. `RelationDraftCollectionAcceptanceTests` covers
+portable roundtrip/provenance, scalar/object item projection, inline/named item structures, nested
+scope/correlation, empty/repeated/ordered results, source absence, child safety and graph-local type
+identity. Acceptance traverses selector syntax and contracts once, independent of observation count;
+execution continues to use the existing select evaluator.
 
 Three kinds of incomplete information remain distinct:
 

@@ -1478,6 +1478,27 @@ sealed class RelationQueryShapeResolver
         return true;
     }
 
+    /// <summary>Resolves a field-only path relative to an already established value contract.</summary>
+    /// <param name="graphId">Graph owning named identities in the value.</param>
+    /// <param name="value">Value that establishes the current-item scope.</param>
+    /// <param name="segments">Relative field-name segments; an empty path denotes the value itself.</param>
+    /// <param name="contract">Resolved contract, preserving ancestor presence and nullability.</param>
+    /// <returns>Whether every segment resolves through a single-valued structure.</returns>
+    public bool TryGetValueContract(GraphId graphId, ValueContract value,
+        ReadOnlySpan<FieldPathSegment> segments, out ValueContract contract)
+    {
+        contract = value;
+        if (!graphs.TryGetValue(graphId, out var graph))
+            return false;
+        foreach (var segment in segments)
+        {
+            if (segment.Kind != SegmentKind.Field || !TryNavigate(graph, contract, segment, out var next))
+                return false;
+            contract = next!;
+        }
+        return true;
+    }
+
     static bool TryNavigate(
         ShapeGraph graph,
         ValueContract current,
