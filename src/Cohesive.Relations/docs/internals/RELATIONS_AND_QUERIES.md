@@ -202,7 +202,7 @@ remain graph-local; structural construction does not license direct assignment b
 from different graphs. The semantic draft and exact supplied shape snapshots remain authoritative.
 
 Selected `select(source, selector)` calls project ordered collections. The source must be a statically
-resolved binding-qualified field or a current-item read inside an enclosing selector. Both `Many`
+resolved binding-qualified field, a current-item read inside an enclosing selector, or an explicit default over either. Both `Many`
 fields and explicit array types use their canonical effective element contract. Every source must
 be required and non-null, including containing fields and relationship binding availability: the
 canonical evaluator rejects missing/null collections, so acceptance never substitutes an empty one.
@@ -216,7 +216,33 @@ compatibility, preserving required/nullable children and named-type identity. Re
 collections and ordering are preserved by the existing canonical evaluator. No new IR, runtime
 operator or implicit path-to-projection rewrite is introduced; authors must declare `select`.
 
-Dynamic keys, scalar constant values and conversions remain outside this bounded acceptance profile. They can remain in portable draft documents and receive structured
+Explicit defaults use the canonical `coalesce(value, fallback)` call, also authored with
+`Expr.Coalesce`. For example, `select(coalesce(source.references, []), item => item)`
+returns an empty collection for a missing or null field and preserves supplied references in order.
+Without the authored default, the optional-to-required assignment remains unsafe. False, zero,
+empty strings and empty collections are present values; they do not select the fallback.
+
+The evaluator evaluates the source once and evaluates the fallback only for missing or null values.
+Unavailable input and evaluation errors propagate. Static dependency analysis still records both
+branches, so lazy evaluation does not promise lazy backend acquisition. General expression analysis
+joins the present source contract with the fallback contract without refining other reads.
+
+Native draft acceptance admits a narrower profile: the source must resolve through an explicit
+binding or current-item scope, and the fallback must be a portable constant satisfying the source's
+present, non-null contract. The resulting value retains source graph identity and cardinality.
+Computed fallbacks and named scalar literals need further admission semantics. Standalone literals
+may populate known scalar, enum, quantity, entity-reference or JSON contracts; null requires a
+nullable target, and an empty array requires a collection target. Nonempty arrays, object literals
+and undefined literals are not admitted. Undefined cannot be a portable default literal because
+the current value wire format serializes it as null.
+
+This is reusable expression semantics and acceptance, not a product default-selection policy.
+Ari must separately expose and retain an explicit policy decision before generating defaults.
+Existing `CallExpr`, value-contract compatibility, native serialization and capability declarations
+remain authoritative; no alternate expression IR or backend-specific default rewrite is introduced.
+Other interpreters must declare support before realizing this function.
+
+Dynamic keys and conversions remain outside this bounded acceptance profile. They can remain in portable draft documents and receive structured
 unsupported diagnostics on acceptance. Static acceptance does not prove input-dependent field or
 shape constraints, business meaning, or operational correctness; execution still admits observations
 against their exact graphs. This extends Ari's ARI-569 acceptance profile; conversion acceptance,
@@ -233,7 +259,11 @@ there is no per-row preparation or persistent cache. `RelationDraftCollectionAcc
 portable roundtrip/provenance, scalar/object item projection, inline/named item structures, nested
 scope/correlation, empty/repeated/ordered results, source absence, child safety and graph-local type
 identity. Acceptance traverses selector syntax and contracts once, independent of observation count;
-execution continues to use the existing select evaluator.
+execution continues to use the existing select evaluator. `RelationDraftDefaultAcceptanceTests`
+covers native roundtrip, deterministic provenance, missing/null/present execution and unsafe fallback
+rejection. Core analysis tests protect contract refinement; runtime tests protect lazy evaluation,
+error propagation and payload reuse independent of collection size. BenchmarkDotNet exercises scalar,
+nested and collection values with preparation outside measurement.
 
 Three kinds of incomplete information remain distinct:
 

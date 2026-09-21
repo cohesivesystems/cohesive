@@ -4,7 +4,7 @@
 leaving storage placement and execution strategy to compilers and adapters.
 
 Portable [relation drafts](docs/internals/RELATIONS_AND_QUERIES.md#portable-relation-drafts) support
-explicit nested fields, statically keyed object construction and collection `select` with shape-aware
+explicit nested fields, statically keyed object construction, explicit `coalesce` defaults and collection `select` with shape-aware
 acceptance. Selectors preserve item scope and each target child's contract; source collections must
 be present and non-null. Implicit element traversal and conversion expressions remain unsupported.
 

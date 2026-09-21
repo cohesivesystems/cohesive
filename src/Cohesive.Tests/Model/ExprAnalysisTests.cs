@@ -1426,6 +1426,11 @@ public sealed class ExprAnalysisTests
     [Fact]
     public void SemanticContractsRejectInternallyContradictoryDefinitions()
     {
+        Assert.Throws<ArgumentException>(() => new ExprFunctionDefinition(
+            new("invalid.coalesce"), new(1, 1), resultRule: ExprFunctionResultRule.FirstNonNullish));
+        Assert.Throws<ArgumentException>(() => new ExprFunctionDefinition(
+            new("invalid.fixed-coalesce"), new(2, 2), resultRule: ExprFunctionResultRule.FirstNonNullish,
+            fixedResult: new(new ScalarTypeRef(ScalarTypeKind.String))));
         Assert.Throws<ArgumentOutOfRangeException>(() => new ExprFunctionArity(1, 1, 2));
         Assert.Throws<InvalidOperationException>(() => default(ExprFunctionArity).Accepts(0));
         Assert.Throws<InvalidOperationException>(() => default(ExprFunctionArity).Describe());
@@ -1551,6 +1556,39 @@ public sealed class ExprAnalysisTests
         {
             CultureInfo.CurrentCulture = originalCulture;
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Coalesce_RetainsTheSourceTypeAndProvesPresenceOnlyWithSafeFallback(bool collection)
+    {
+        TypeRef type = collection ? new ArrayTypeRef(StringType) : StringType;
+        var scope = Scope(bindings: [new(LoadBinding, new(new ObjectTypeRef(
+            [new("Value", type, presence: FieldPresence.Optional, nullability: FieldNullability.Nullable)])))]);
+        var value = Expr.Field(LoadBinding, "Value");
+        var fallback = collection ? Expr.Const(ObservationValue.FromArray([])) : Expr.Const("fallback");
+        var accepted = Analyze(Expr.Coalesce(value, fallback), scope, "default");
+        Assert.True(accepted.IsValid);
+        Assert.Equal(type, accepted.KnownResult!.GetEffectiveType());
+        Assert.Equal(FieldPresence.Required, accepted.KnownResult.Presence);
+        Assert.Equal(FieldNullability.NonNullable, accepted.KnownResult.Nullability);
+        Assert.Contains(accepted.Requirements.Capabilities, c => c.Capability == ExprCapabilities.ForFunction(ExprFunctionNames.Coalesce));
+        var nullable = Analyze(Expr.Coalesce(value, Expr.Null()), scope, "nullable-default");
+        Assert.Equal(FieldNullability.Nullable, nullable.KnownResult!.Nullability);
+        Assert.Equal(FieldPresence.Optional, Analyze(value, scope, "unchanged").KnownResult!.Presence);
+        var mismatch = Analyze(Expr.Coalesce(value, Expr.Const(true)), scope, "different-types");
+        Assert.Null(mismatch.KnownResult?.Type);
+    }
+
+    [Fact]
+    public void Coalesce_NullFirstArgumentUsesFallbackContractAndArityIsChecked()
+    {
+        var result = Analyze(Expr.Coalesce(Expr.Null(), Expr.Const("fallback")), ExprScope.Empty, "constant-default");
+        Assert.True(result.IsValid);
+        Assert.Equal(StringType, result.KnownResult!.Type);
+        AssertDiagnostic(Analyze(Expr.Call(ExprFunctionNames.Coalesce, Expr.Null()), ExprScope.Empty, "arity"),
+            ExprAnalysisDiagnosticCodes.FunctionArityInvalid);
     }
 
     static ExprAnalysisResult Analyze(

@@ -1,5 +1,32 @@
 # Cohesive Benchmark Results
 
+## 2026-09-21: explicit default evaluation
+
+Measured on the working revision of `codex/ari-569-explicit-defaults`; BenchmarkDotNet 0.15.8,
+.NET 10.0.5 / SDK 10.0.201, macOS 27.0 (26A428), Apple M5 Max. One launch, one warmup,
+three measured iterations. Immutable expressions and payloads are prepared outside measurement.
+Nested values contain eight object levels; collections contain 64 or 4,096 two-level objects.
+Each operation includes normal expression function capability dispatch.
+
+```sh
+dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- \
+  --filter '*ExpressionDefaultBenchmarks*' --job short --warmupCount 1 --iterationCount 3 --launchCount 1
+```
+
+| Payload | Present source mean | Fallback mean | Allocated per evaluation, both branches |
+| --- | ---: | ---: | ---: |
+| Scalar | 28.90 ns | 25.61 ns | 72 B |
+| Eight-level object | 23.57 ns | 26.75 ns | 72 B |
+| 64-item collection | 21.77 ns | 27.26 ns | 72 B |
+| 4,096-item collection | 23.03 ns | 27.31 ns | 72 B |
+
+Both branches return existing immutable storage; allocation does not grow with payload size.
+This includes a fixed function-dispatch allocation and is not a zero-allocation claim. A deterministic
+test compares empty and 1,024-item payload allocations and verifies shared array storage. Short-run
+timings are diagnostic only: the scalar/source case had a 111.89 ns confidence interval half-width
+and 6.13 ns standard deviation. These are new-operator microbenchmarks, not a before/after
+optimization or end-to-end mapping latency claim.
+
 ## 2026-09-17: warm relation/query evaluation fingerprinting
 
 Measured on the working revision of `codex/evaluation-fingerprint-streaming`; BenchmarkDotNet 0.15.8 ShortRun,

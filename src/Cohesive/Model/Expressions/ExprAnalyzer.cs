@@ -670,6 +670,7 @@ public static class ExprAnalyzer
                     new(definition.ResultCategory, null),
                 ExprFunctionResultRule.CollectionOfSelector =>
                     CollectionResult(argumentResults, definition),
+                ExprFunctionResultRule.FirstNonNullish => CoalesceResult(argumentResults),
                 _ => new(definition.ResultCategory, null)
             };
             return ReconcileDeclaredResult(
@@ -1130,6 +1131,27 @@ public static class ExprAnalyzer
                     array.ElementType,
                     collection.Shape)
                 : null;
+        }
+
+        static NodeResult CoalesceResult(NodeResult[] arguments)
+        {
+            if (arguments.Length != 2)
+                return NodeResult.Unknown;
+            var source = arguments[0];
+            var fallback = arguments[1];
+            if (source.ConstantValue is { Kind: ObservationValueKind.Undefined or ObservationValueKind.Null })
+                return fallback;
+            if (source.Value is not { } value)
+                return JoinConditionalResults(source, fallback);
+            if (value.Presence == FieldPresence.Required && value.Nullability == FieldNullability.NonNullable)
+                return source;
+            var present = NodeResult.FromValue(new(value.Type, value.Shape, value.Cardinality));
+            // Constants such as [] or small integer literals can inhabit the source contract without
+            // erasing its element type or widening its numeric domain to the literal's storage type.
+            if (fallback.ConstantValue is { } constant && value.GetEffectiveType() is { } type
+                && ValueContractSemantics.Evaluate(type, constant) == ValueConstantCompatibility.Compatible)
+                fallback = NodeResult.FromValue(new(value.Type, value.Shape, value.Cardinality));
+            return JoinConditionalResults(present, fallback);
         }
 
         static NodeResult JoinConditionalResults(NodeResult ifTrue, NodeResult ifFalse)

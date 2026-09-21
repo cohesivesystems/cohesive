@@ -330,6 +330,7 @@ sealed class RelationQueryExpressionEvaluator
     static readonly ImmutableHashSet<string> SupportedFunctionNames =
         ImmutableHashSet.Create(
             StringComparer.Ordinal,
+            ExprFunctionNames.Coalesce,
             ExprFunctionNames.Contains,
             ExprFunctionNames.Count,
             ExprFunctionNames.EndsWith,
@@ -587,6 +588,7 @@ sealed class RelationQueryExpressionEvaluator
 
         return call.Function switch
         {
+            ExprFunctionNames.Coalesce => EvaluateCoalesce(call, context),
             ExprFunctionNames.Contains => EvaluateContains(call, context),
             ExprFunctionNames.Count => EvaluateCount(call, context),
             ExprFunctionNames.EndsWith => EvaluateEndsWith(call, context),
@@ -664,6 +666,14 @@ sealed class RelationQueryExpressionEvaluator
         var value = RequireString(Evaluate(call.Arguments[0], context), call.Function);
         var substring = RequireString(Evaluate(call.Arguments[1], context), call.Function);
         return ObservationValue.FromBool(value.Contains(substring, StringComparison.Ordinal));
+    }
+
+    ObservationValue EvaluateCoalesce(CallExpr call, in RelationQueryExpressionContext context)
+    {
+        var value = Evaluate(call.Arguments[0], context);
+        return value.Kind is ObservationValueKind.Undefined or ObservationValueKind.Null
+            ? Evaluate(call.Arguments[1], context)
+            : value;
     }
 
     ObservationValue EvaluateObject(CallExpr call, in RelationQueryExpressionContext context)
