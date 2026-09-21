@@ -102,7 +102,9 @@ public static class RelationDraftAcceptor
     /// an explicit coalesce with a compatible constant fallback. Portable scalar, null and empty-collection
     /// constants are checked against their target contracts. Named scalar and structural literals are excluded.
     /// Collection join may retain items matching a non-null scalar constant against a resolved item key.
-    /// Filtering preserves source element contracts without refining optional children.
+    /// Filtering preserves source element contracts without refining optional children. Conditional candidates
+    /// may compare a present resolved source with a non-null scalar constant; both branches must independently
+    /// satisfy the target contract. Predicates do not refine either branch.
     /// Implicit element/index traversal, conversions, dynamic object keys and nested target slots are not admitted.
     /// </remarks>
     /// <param name="draft">Portable relation draft to accept.</param>
@@ -368,6 +370,11 @@ public static class RelationDraftAcceptor
         void ValidateValue(Expr expression, ValueContract target, FieldPath targetPath, string location,
             (GraphId Graph, ValueContract Contract)? item = null)
         {
+            if (expression is ConditionalExpr conditional)
+            {
+                ValidateConditional(conditional, target, targetPath, location, item);
+                return;
+            }
             if (expression is ConstantExpr constant)
             {
                 ValidateConstant(constant.Value, target, location);
@@ -516,6 +523,31 @@ public static class RelationDraftAcceptor
                 ? new(sourceContract.Type, sourceContract.Shape, sourceContract.Cardinality, FieldPresence.Optional, sourceContract.Nullability)
                 : sourceContract;
             return true;
+        }
+
+        void ValidateConditional(ConditionalExpr conditional, ValueContract target, FieldPath targetPath,
+            string location, (GraphId Graph, ValueContract Contract)? item)
+        {
+            if (conditional.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
+                && conditional.ReturnType != target.GetEffectiveType())
+                Add(diagnostics, "relationDraft.conditional.returnTypeMismatch",
+                    "Declared conditional result type must match the target's effective type.", $"{location}/returnType");
+            // Keep admission bounded to explicit code decisions; the canonical evaluator owns equality and laziness.
+            if (conditional.Test is not BinaryExpr { Operator: BinaryOperator.Eq, Right: ConstantExpr key } equality
+                || key.Value.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined or ObservationValueKind.Array or ObservationValueKind.Object)
+                Add(diagnostics, "relationDraft.conditional.testUnsupported",
+                    "Conditional acceptance requires equality between a resolved source value and a non-null portable scalar constant.", $"{location}/test");
+            else if (TryResolveValue(equality.Left, $"{location}/test/left", item, out var source, out _))
+            {
+                // Canonical equality fails on missing input; null is a concrete nonmatching value.
+                if (source.Presence != FieldPresence.Required)
+                    Add(diagnostics, "relationDraft.conditional.sourceMayBeAbsent",
+                        "Conditional equality requires a present source; declare a missing-value default explicitly.", $"{location}/test/left");
+                ValidateConstant(key.Value, new(source.Type, source.Shape, source.Cardinality), $"{location}/test/right");
+            }
+            // Neither branch inherits refinements from the predicate. Both must meet the complete target contract.
+            ValidateValue(conditional.IfTrue, target, targetPath, $"{location}/ifTrue", item);
+            ValidateValue(conditional.IfFalse, target, targetPath, $"{location}/ifFalse", item);
         }
 
         bool ValidateConstant(ObservationValue value, ValueContract target, string location)

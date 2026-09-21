@@ -419,3 +419,46 @@ selection, ordered duplicates, no matches, optional sources/defaults, key/type/a
 absence of inferred presence refinement. Runtime tests cover enclosing/item scopes, canonical equality,
 null/missing source rejection, propagated key errors and shared payload storage. Core analysis tests
 check the retained element contract, capability requirement and scoped-key boundary.
+
+
+### Explicit code decisions in draft candidates
+
+Native draft acceptance supports existing `ConditionalExpr` / `Expr.If` candidates with a bounded
+predicate: `Eq(resolved source, non-null portable scalar constant)`. For example:
+
+```csharp
+var code = Expr.Coalesce(Expr.Field(new ValueBindingId("source"), "purposeCode"), Expr.Const("missing"));
+var purpose = Expr.If(Expr.Eq(code, Expr.Const("00")), Expr.Const("Original"),
+    Expr.If(Expr.Eq(code, Expr.Const("01")), Expr.Const("Cancel"), Expr.Const("Unknown")));
+```
+
+Before this admission extension, that portable expression could be retained but not accepted as a
+relation draft candidate. It now maps `00` to `Original`, `01` to `Cancel`, and other/missing/null
+codes to `Unknown` under the explicit fallback decisions above. These are illustrative authored
+codes, not protocol rules. Ari owns any protocol-specific data and the decision to apply it.
+
+The source resolves through existing binding/item scope and default rules. Canonical equality
+fails on missing values, so optional source reads require an explicit default. Present nullable
+values can be compared: null does not equal a non-null code. The literal must satisfy the source's
+present scalar contract; there are no implicit numeric/text conversions or named-scalar escapes.
+
+Both branches are validated against the complete target contract, including every enum member,
+required object child, graph-local type identity, presence and collection element contract.
+Predicates never refine branch contracts. Nested conditionals, objects and collection selectors
+reuse the same recursive validation. A declared conditional return type must match the effective
+target type or retain the normal unknown metadata marker. Computed/dynamic keys, arbitrary
+predicates, reversed equality and general conversion functions remain outside this bounded profile.
+
+The existing canonical evaluator retains equality and lazy branch execution; no evaluator,
+expression kind, wire format, type conversion model or backend capability is added. Static
+analysis still records both branches, so lazy evaluation does not imply lazy backend acquisition.
+Admission remains invocation-owned preparation with no per-row work or persistent cache. Each
+conditional validates its predicate once and visits each branch once; existing canonical analysis,
+validation and fingerprinting retain their own costs. Code tables lower to ordered conditional
+chains, so evaluation cost grows with the number of attempted cases; this is not an indexed lookup.
+
+`RelationDraftConditionalAcceptanceTests` covers native document roundtrip, exact fingerprint
+provenance, supplied-observation execution, source defaults, null and unmatched codes, collection
+item scope and duplicates, nested branches, target enums, required object children and rejected
+unsafe/malformed policies. Full protocol-to-canonical acceptance and application authoring policy
+remain consumer deliverables; successful native acceptance alone is not business approval.
