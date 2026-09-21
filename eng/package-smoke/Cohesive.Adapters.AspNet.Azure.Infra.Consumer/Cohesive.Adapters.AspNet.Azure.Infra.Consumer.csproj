@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <RestoreSources>$(CohesivePackageFeed);https://api.nuget.org/v3/index.json</RestoreSources>
+  </PropertyGroup>
+  <Target Name="ValidateSmokeProperties" BeforeTargets="Restore">
+    <Error Condition="'$(CohesivePackageVersion)' == ''" Text="CohesivePackageVersion is required." />
+    <Error Condition="'$(CohesivePackageFeed)' == ''" Text="CohesivePackageFeed is required." />
+  </Target>
+  <ItemGroup>
+    <PackageReference Include="Cohesive.Adapters.AspNet.Azure.Infra" Version="$(CohesivePackageVersion)" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <Using Include="Xunit" />
+    <Compile Include="../../../src/Cohesive.Adapters.AspNet.Azure.Infra.Tests/*.cs" Link="%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup><Compile Include="../../../src/Cohesive.Adapters.Azure.Infra.Tests/AzureInfrastructureObservationsTests.cs" Link="AzureInfrastructureObservationsTests.cs" /></ItemGroup>
+  <ItemGroup><None Include="../../../src/Cohesive.Adapters.Azure.Infra.Tests/Fixtures/*.json" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+</Project>

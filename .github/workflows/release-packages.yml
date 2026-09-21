@@ -178,6 +178,13 @@ jobs:
       - name: Validate NuGet package APIs
         run: bash ./eng/api-check.sh
 
+      - name: Test ASP.NET Azure runtime producer package consumer
+        run: >-
+          dotnet test eng/package-smoke/Cohesive.Adapters.AspNet.Azure.Infra.Consumer/Cohesive.Adapters.AspNet.Azure.Infra.Consumer.csproj
+          -c Release
+          -p:CohesivePackageVersion=${{ steps.version.outputs.version }}
+          -p:CohesivePackageFeed="$GITHUB_WORKSPACE/artifacts/nuget"
+
       - name: Test generic API package consumer
         env:
           COHESIVE_NUGET_LOCAL_FEED: ${{ github.workspace }}/artifacts/nuget
