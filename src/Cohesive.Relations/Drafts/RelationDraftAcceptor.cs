@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Cohesive.Model.Serialization;
+using Cohesive.Model.Expressions;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 using Cohesive.Relations.Serialization;
@@ -96,8 +97,9 @@ public static class RelationDraftAcceptor
     /// composed from those fields and nested objects. Field paths may navigate single-valued inline or named
     /// structures; ancestor presence and nullability are preserved. Object children are checked against their
     /// own target contracts, even when the containing target is optional. Whole collection fields can be copied
-    /// when contracts match. Element/index traversal, conversions, dynamic object keys and nested target slots
-    /// are not admitted by this acceptance profile.
+    /// when contracts match. Collection select establishes an isolated current-item scope and checks each
+    /// selector against the target element contract. Its source must be present and non-null. Implicit
+    /// element/index traversal, conversions, dynamic object keys and nested target slots are not admitted.
     /// </remarks>
     /// <param name="draft">Portable relation draft to accept.</param>
     /// <param name="shapeGraphs">Exact shape-graph snapshots referenced by the draft and relationship catalog.</param>
@@ -359,18 +361,57 @@ public static class RelationDraftAcceptor
                 assignment.Slot.Target, $"{SlotLocation(assignment.Slot.Id)}/candidates/{assignment.Candidate.Id.Value}/value");
         }
 
-        void ValidateValue(Expr expression, ValueContract target, FieldPath targetPath, string location)
+        void ValidateValue(Expr expression, ValueContract target, FieldPath targetPath, string location,
+            (GraphId Graph, ValueContract Contract)? item = null)
         {
             if (expression is CallExpr { Function: ExprFunctionNames.Object } construction)
             {
-                ValidateObject(construction, target, targetPath, location);
+                ValidateObject(construction, target, targetPath, location, item);
                 return;
+            }
+            if (expression is CallExpr { Function: ExprFunctionNames.Select } selection)
+            {
+                ValidateSelect(selection, target, targetPath, location, item);
+                return;
+            }
+            if (TryResolveValue(expression, location, item, out var source, out var sourceGraph))
+            {
+                if (expression is FieldExpr { Binding: { } binding }
+                    && visibleBindings[binding].Availability == RelationQueryBindingAvailability.MayBeAbsent
+                    && target.Presence == FieldPresence.Required)
+                    Add(diagnostics, "relationDraft.assignment.bindingPresenceUnsafe",
+                        $"Binding '{binding.Value}' is optional and cannot safely populate required target '{targetShape.Id.Value}.{targetPath}'.", location);
+                ValidateCompatibility(source, sourceGraph, target, targetPath, location);
+            }
+        }
+
+        bool TryResolveValue(Expr expression, string location,
+            (GraphId Graph, ValueContract Contract)? item, out ValueContract contract, out GraphId graph)
+        {
+            contract = null!;
+            graph = default;
+            if (expression is CurrentItemExpr
+                || expression is FieldExpr { Binding: null } itemField
+                    && !itemField.Path.Segments.IsDefaultOrEmpty
+                    && itemField.Path.Segments[0] is { Kind: SegmentKind.Field, Segment: ExprFieldRoots.CurrentItem })
+            {
+                if (item is null)
+                {
+                    Add(diagnostics, "relationDraft.candidate.itemScopeMissing", "Current-item reads require a collection selector scope.", location);
+                    return false;
+                }
+                graph = item.Value.Graph;
+                var path = expression is FieldExpr fieldRead ? fieldRead.Path.Segments.AsSpan()[1..] : [];
+                if (shapeResolver.TryGetValueContract(graph, item.Value.Contract, path, out contract))
+                    return true;
+                Add(diagnostics, "relationDraft.candidate.pathUnknown", "Current-item path does not resolve through single-valued structural fields.", location);
+                return false;
             }
             if (expression is not FieldExpr { Binding: { } binding } field)
             {
                 Add(diagnostics, "relationDraft.candidate.expressionUnsupported",
-                    "Acceptance supports explicit binding-qualified fields and statically keyed object construction from those fields.", location);
-                return;
+                    "Acceptance supports binding-qualified fields, scoped item reads, static objects and collection select expressions.", location);
+                return false;
             }
             if (field.Path.Segments.IsDefaultOrEmpty
                 || field.Path.Segments.Any(static segment => segment.Kind != SegmentKind.Field))
@@ -378,52 +419,82 @@ public static class RelationDraftAcceptor
                 Add(diagnostics, "relationDraft.assignment.structureUnsupported",
                     $"Direct field acceptance supports only field-name navigation; '{field.Path}' requires an explicit collection or other structural transformation.",
                     $"{location}/path");
-                return;
+                return false;
             }
             if (!visibleBindings.TryGetValue(binding, out var sourceBinding))
             {
                 Add(diagnostics, "relationDraft.candidate.bindingMissing",
                     $"Candidate references binding '{binding.Value}' that is not visible at projection input '{draft.Projection.Input.Value}'.",
                     $"{location}/binding");
-                return;
+                return false;
             }
             if (sourceBinding.Shape is null)
             {
                 Add(diagnostics, "relationDraft.candidate.bindingShapeUnknown",
                     $"The semantic shape of binding '{binding.Value}' cannot be established statically.", $"{location}/binding");
-                return;
+                return false;
             }
 
             var sourceShape = ResolveShape(sourceBinding.Shape.Value, graphs, role: "candidate source",
                 location: $"{location}/binding", diagnostics);
             if (sourceShape is null)
-                return;
+                return false;
             if (!shapeResolver.TryGetFieldContract(sourceBinding.Shape.Value, field.Path, out var sourceContract))
             {
                 Add(diagnostics, "relationDraft.candidate.pathUnknown",
                     $"Candidate path '{field.Path}' cannot be resolved from source shape '{sourceShape.Id.Value}' through single-valued structural fields.",
                     $"{location}/path");
-                return;
+                return false;
             }
 
-            if (sourceBinding.Availability == RelationQueryBindingAvailability.MayBeAbsent
-                && target.Presence == FieldPresence.Required)
-            {
-                Add(diagnostics, "relationDraft.assignment.bindingPresenceUnsafe",
-                    $"Binding '{binding.Value}' is optional at the projection input and cannot safely populate required target field '{targetShape.Id.Value}.{targetPath}'.",
-                    location);
-            }
-
-            foreach (var issue in DirectFieldAssignmentCompatibility.Evaluate(
-                         sourceContract, sourceBinding.Shape.Value.GraphId, target, draft.Projection.ResultShape.GraphId))
-            {
-                Add(diagnostics, issue.Code,
-                    $"Source field '{sourceShape.Id.Value}.{field.Path}' cannot safely populate target field '{targetShape.Id.Value}.{targetPath}': {issue.Message}",
-                    location);
-            }
+            graph = sourceBinding.Shape.Value.GraphId;
+            contract = sourceBinding.Availability == RelationQueryBindingAvailability.MayBeAbsent
+                ? new(sourceContract.Type, sourceContract.Shape, sourceContract.Cardinality, FieldPresence.Optional, sourceContract.Nullability)
+                : sourceContract;
+            return true;
         }
 
-        void ValidateObject(CallExpr construction, ValueContract target, FieldPath targetPath, string location)
+        void ValidateCompatibility(ValueContract source, GraphId sourceGraph, ValueContract target,
+            FieldPath targetPath, string location)
+        {
+            foreach (var issue in DirectFieldAssignmentCompatibility.Evaluate(
+                         source, sourceGraph, target, draft.Projection.ResultShape.GraphId))
+                Add(diagnostics, issue.Code,
+                    $"Source value cannot safely populate target '{targetShape.Id.Value}.{targetPath}': {issue.Message}", location);
+        }
+
+        void ValidateSelect(CallExpr selection, ValueContract target, FieldPath targetPath, string location,
+            (GraphId Graph, ValueContract Contract)? item)
+        {
+            if (selection.Arguments.IsDefault || selection.Arguments.Length != 2)
+            {
+                Add(diagnostics, "relationDraft.select.argumentsInvalid", "Collection select requires a source and one selector expression.", location);
+                return;
+            }
+            if (target.GetEffectiveType() is not ArrayTypeRef targetArray)
+            {
+                Add(diagnostics, "relationDraft.select.targetUnsupported", "Collection select requires a collection target.", location);
+                return;
+            }
+            if (selection.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
+                && selection.ReturnType != target.GetEffectiveType())
+                Add(diagnostics, "relationDraft.select.returnTypeMismatch", "Declared select result type does not match the target collection.", $"{location}/returnType");
+            if (!TryResolveValue(selection.Arguments[0], $"{location}/arguments/0", item, out var source, out var sourceGraph))
+                return;
+            if (source.GetEffectiveType() is not ArrayTypeRef sourceArray)
+            {
+                Add(diagnostics, "relationDraft.select.sourceUnsupported", "Collection select requires a statically known collection source.", $"{location}/arguments/0");
+                return;
+            }
+            // The canonical evaluator requires an array. Optional/nullable input cannot be treated as empty.
+            if (source.Presence != FieldPresence.Required || source.Nullability != FieldNullability.NonNullable)
+                Add(diagnostics, "relationDraft.select.sourceMayBeAbsent", "Collection select requires a present, non-null source, including its containing fields and binding.", $"{location}/arguments/0");
+            ValidateValue(selection.Arguments[1], new(targetArray.ElementType), targetPath,
+                $"{location}/arguments/1", (sourceGraph, new(sourceArray.ElementType)));
+        }
+
+        void ValidateObject(CallExpr construction, ValueContract target, FieldPath targetPath, string location,
+            (GraphId Graph, ValueContract Contract)? item)
         {
             if (target.Cardinality != FieldCardinality.Single
                 || !shapeResolver.TryGetStructuralFields(draft.Projection.ResultShape.GraphId, target.Type, out var children))
@@ -486,7 +557,7 @@ public static class RelationDraftAcceptor
                 // An object call always constructs a present object. Its optional parent never weakens required children.
                 ValidateValue(arguments[index + 1], new(child.Type, cardinality: child.Cardinality,
                         presence: child.Presence, nullability: child.Nullability),
-                    targetPath.Append(FieldPathSegment.ForField(name)), $"{location}/arguments/{index + 1}");
+                    targetPath.Append(FieldPathSegment.ForField(name)), $"{location}/arguments/{index + 1}", item);
             }
             foreach (var child in children)
             {
