@@ -429,3 +429,9 @@ Design for this gradient of adoption. The system should reward partial use and c
 ## Adoption clarity acceptance criteria
 
 When co-developing Cohesive and consuming applications such as Ito, require the framework integration to reduce application-owned coordination compared with a direct implementation. A reviewer must understand the successful flow and recovery policy from the declaration and domain handlers without reading the durable runtime. Adding a source should require source behavior and bindings, not another coordinator. Canonical Process graphs own sequencing; do not duplicate their order in application control flow. Keep guarantees inspectable through declarations and diagnostics. Assess conceptual burden and debugging effort, not line count; avoid replacing dense code with many forwarding types. Preserve executable recovery evidence when simplifying. Record remaining adoption friction explicitly in PRs.
+
+## Review cadence and concrete examples
+
+Prefer one coherent capability per PR, including implementation, tests, documentation and relevant qualification. Prepare dependency-ordered cross-repository PRs together for joint review when practical; avoid separate findings-only PRs when those findings belong with the implementation. Keep destructive actions and publication subject to their existing authorization requirements.
+
+Every PR description must include a concrete example of the issue it addresses: the triggering situation, prior behavior or limitation, and the resulting behavior. Use synthetic identities where real data is private. Distinguish tested examples from intended or still-unqualified live behavior. Keep the example current when the PR scope changes.
