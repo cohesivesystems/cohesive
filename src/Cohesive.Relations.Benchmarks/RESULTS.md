@@ -1,5 +1,32 @@
 # Cohesive Benchmark Results
 
+## 2026-09-21: key-qualified collection expression
+
+Measured on the working revision of `codex/ari-569-qualified-collections`, BenchmarkDotNet 0.15.8,
+.NET 10.0.5 / SDK 10.0.201, macOS 27.0 (26A428), Apple M5 Max. One launch, one warmup,
+three measured iterations. Expressions and immutable input payloads are prepared outside measurement.
+Normal expression dispatch and field lookup are included; no backend reads or compilation are timed.
+
+```sh
+dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- \
+  --filter '*ExpressionJoinBenchmarks*' --job short --warmupCount 1 --iterationCount 3 --launchCount 1
+```
+
+| Source | No matches mean / allocated | Half matching mean / allocated |
+| --- | ---: | ---: |
+| 64 scalar keys | 1.038 μs / 64 B | 1.195 μs / 3,008 B |
+| 64 nested objects | 3.273 μs / 10,304 B | 3.439 μs / 13,248 B |
+| 64 objects with collection payloads | 2.423 μs / 5,184 B | 2.531 μs / 8,128 B |
+| 4,096 objects with collection payloads | 170.943 μs / 327,744 B | 168.742 μs / 524,368 B |
+
+Each collection payload contains 64 scalar values. Nested keys traverse two fields rather than one.
+The existing field-read path allocates temporary traversal state, visible even with no matches; this
+is not a zero-allocation claim. Match storage grows with the number of retained values, and a
+regression test verifies reuse of the underlying nested payload storage. Results establish bounded,
+linear traversal cost for this workload, not an optimization or end-to-end latency improvement.
+Short-run timings have uncertainty (the large no-match case has a 16.71 μs confidence interval
+half-width); do not treat small differences between match ratios as performance conclusions.
+
 ## 2026-09-21: explicit default evaluation
 
 Measured on the working revision of `codex/ari-569-explicit-defaults`; BenchmarkDotNet 0.15.8,

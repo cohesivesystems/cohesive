@@ -100,8 +100,10 @@ public static class RelationDraftAcceptor
     /// when contracts match. Collection select establishes an isolated current-item scope and checks each
     /// selector against the target element contract. Its source must be present and non-null, including through
     /// an explicit coalesce with a compatible constant fallback. Portable scalar, null and empty-collection
-    /// constants are checked against their target contracts. Named scalar and structural literals are excluded. Implicit
-    /// element/index traversal, conversions, dynamic object keys and nested target slots are not admitted.
+    /// constants are checked against their target contracts. Named scalar and structural literals are excluded.
+    /// Collection join may retain items matching a non-null scalar constant against a resolved item key.
+    /// Filtering preserves source element contracts without refining optional children.
+    /// Implicit element/index traversal, conversions, dynamic object keys and nested target slots are not admitted.
     /// </remarks>
     /// <param name="draft">Portable relation draft to accept.</param>
     /// <param name="shapeGraphs">Exact shape-graph snapshots referenced by the draft and relationship catalog.</param>
@@ -397,6 +399,38 @@ public static class RelationDraftAcceptor
         {
             contract = null!;
             graph = default;
+            if (expression is CallExpr { Function: ExprFunctionNames.Join } join)
+            {
+                if (join.Arguments.IsDefault || join.Arguments.Length != 3)
+                {
+                    Add(diagnostics, "relationDraft.join.argumentsInvalid", "Collection join requires a left key, item key and source collection.", location);
+                    return false;
+                }
+                if (!TryResolveValue(join.Arguments[2], $"{location}/arguments/2", item, out var source, out graph))
+                    return false;
+                if (source.GetEffectiveType() is not ArrayTypeRef array)
+                {
+                    Add(diagnostics, "relationDraft.join.sourceUnsupported", "Collection join requires a statically known collection.", location);
+                    return false;
+                }
+                if (source.Presence != FieldPresence.Required || source.Nullability != FieldNullability.NonNullable)
+                    Add(diagnostics, "relationDraft.join.sourceMayBeAbsent", "Collection join requires a present, non-null source; declare any default explicitly.", location);
+                if (join.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
+                    && join.ReturnType != source.GetEffectiveType())
+                    Add(diagnostics, "relationDraft.join.returnTypeMismatch", "Declared join result type must retain the source collection type.", $"{location}/returnType");
+                if (join.Arguments[0] is not ConstantExpr left
+                    || left.Value.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined or ObservationValueKind.Array or ObservationValueKind.Object)
+                {
+                    Add(diagnostics, "relationDraft.join.keyUnsupported", "Draft collection joins require an explicit non-null scalar constant left key.", $"{location}/arguments/0");
+                    return false;
+                }
+                if (!TryResolveValue(join.Arguments[1], $"{location}/arguments/1", (graph, new(array.ElementType)), out var key, out _)
+                    || !ValidateConstant(left.Value, new(key.Type, key.Shape, key.Cardinality), $"{location}/arguments/0"))
+                    return false;
+                // Filtering does not refine child presence/nullability or change graph-local type identity.
+                contract = new(source.Type, source.Shape, source.Cardinality);
+                return true;
+            }
             if (expression is CallExpr { Function: ExprFunctionNames.Coalesce } coalesce)
             {
                 if (coalesce.Arguments.IsDefault || coalesce.Arguments.Length != 2)
@@ -440,7 +474,7 @@ public static class RelationDraftAcceptor
             if (expression is not FieldExpr { Binding: { } binding } field)
             {
                 Add(diagnostics, "relationDraft.candidate.expressionUnsupported",
-                    "Acceptance supports binding-qualified fields, scoped item reads, explicit constant defaults, portable literals, static objects and collection select expressions.", location);
+                    "Acceptance supports binding-qualified fields, scoped item reads, explicit constant defaults, portable literals, static objects and collection select/join expressions.", location);
                 return false;
             }
             if (field.Path.Segments.IsDefaultOrEmpty

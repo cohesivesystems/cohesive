@@ -651,6 +651,54 @@ public sealed class RelationQueryExpressionEvaluatorTests
         Assert.Equal(value.Array, evaluator.Evaluate(expression, context).Array);
     }
 
+    [Fact]
+    public void Join_UsesCanonicalEqualityAndPreservesDuplicateValues()
+    {
+        var values = ObservationValue.FromArray([ObservationValue.FromInt64(1), ObservationValue.FromDecimal(1m), ObservationValue.FromInt64(2)]);
+        var result = evaluator.Evaluate(Expr.Join(Expr.Const(1), Expr.CurrentItem(), Expr.Const(values)), Context());
+        Assert.Equal(values.Array.Take(2), result.Array);
+        var nullish = evaluator.Evaluate(Expr.Join(Expr.Null(), Expr.CurrentItem(),
+            Expr.Const(ObservationValue.FromArray([ObservationValue.Null, ObservationValue.Undefined]))), Context());
+        Assert.Equal(ObservationValue.Null, Assert.Single(nullish.Array));
+    }
+
+    [Fact]
+    public void Join_SeparatesEnclosingAndRightItemScopes()
+    {
+        var key = Expr.Field("item.key");
+        var collection = Expr.Const(ObservationValue.FromArray([
+            Object(("key", ObservationValue.FromString("PO"))),
+            Object(("key", ObservationValue.FromString("BN")))]));
+        var context = Context().WithCurrentItem(Object(("key", ObservationValue.FromString("PO"))));
+        var result = evaluator.Evaluate(Expr.Join(key, key, collection), context);
+        Assert.Equal("PO", Assert.Single(result.Array).GetProperty("key").GetString());
+        Assert.Equal("PO", context.CurrentItem!.Value.GetProperty("key").GetString());
+    }
+
+    [Fact]
+    public void Join_RejectsMissingNullAndNonCollectionSourcesAndPropagatesKeyFailures()
+    {
+        foreach (var value in new[] { ObservationValue.Undefined, ObservationValue.Null, ObservationValue.FromInt64(1) })
+            Assert.Throws<RelationQueryExpressionEvaluationException>(() => evaluator.Evaluate(
+                Expr.Join(Expr.Const("PO"), Expr.CurrentItem(), Expr.Const(value)), Context()));
+        Assert.Throws<RelationQueryExpressionEvaluationException>(() => evaluator.Evaluate(
+            Expr.Join(Expr.Call("unsupported"), Expr.CurrentItem(), Expr.Const(ObservationValue.FromArray([]))), Context()));
+        Assert.Throws<RelationQueryExpressionEvaluationException>(() => evaluator.Evaluate(
+            Expr.Join(Expr.Const(1), Expr.Call("unsupported"), Expr.Const(Array(1))), Context()));
+    }
+
+    [Fact]
+    public void Join_RetainsMatchingPayloadStorage()
+    {
+        var payload = Array(Enumerable.Range(0, 1024).Select(i => (long)i).ToArray());
+        var row = Object(("qualifier", ObservationValue.FromString("PO")), ("payload", payload));
+        var result = evaluator.Evaluate(Expr.Join(Expr.Const("PO"), Expr.Field("item.qualifier"),
+            Expr.Const(ObservationValue.FromArray([row, row]))), Context());
+        Assert.Equal(2, result.Array.Length);
+        Assert.Equal(payload.Array, result.Array[0].GetProperty("payload").Array);
+        Assert.Equal(payload.Array, result.Array[1].GetProperty("payload").Array);
+    }
+
     static RelationQueryExpressionContext Context(
         IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding>? bindings = null,
         ValueBindingId? implicitBinding = null,

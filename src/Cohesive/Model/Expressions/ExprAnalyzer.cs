@@ -670,6 +670,10 @@ public static class ExprAnalyzer
                     new(definition.ResultCategory, null),
                 ExprFunctionResultRule.CollectionOfSelector =>
                     CollectionResult(argumentResults, definition),
+                ExprFunctionResultRule.CollectionOfScopedSource
+                    when definition.ScopedArguments[0].SourceArgumentIndex < argumentResults.Length
+                         && argumentResults[definition.ScopedArguments[0].SourceArgumentIndex].Value is { } collectionSource =>
+                    NodeResult.FromValue(new(collectionSource.Type, collectionSource.Shape, collectionSource.Cardinality)),
                 ExprFunctionResultRule.FirstNonNullish => CoalesceResult(argumentResults),
                 _ => new(definition.ResultCategory, null)
             };
