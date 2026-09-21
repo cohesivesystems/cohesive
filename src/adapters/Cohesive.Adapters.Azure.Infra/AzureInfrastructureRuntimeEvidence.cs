@@ -63,10 +63,13 @@ public static class AzureInfrastructureRuntimeObservations
                 throw new ArgumentException("Runtime evidence does not match an independently trusted admission contract.");
             var observation = item.Observation;
             // Add only checked attribution. The common boundary still owns identity, duplicates, diagnostics and freshness.
+            var sources = observation.SourceReferences.ToHashSet();
+            sources.Add(contract.Producer);
+            sources.Add(contract.CheckContract);
+            sources.Add(contract.Deployment);
             admitted.Add(new(contract.Binding, AzureInfrastructureEvidenceKind.Runtime,
                 new(observation.PhysicalResource, observation.Health, observation.Readiness, observation.ObservedAtUtc,
-                    SourceReference.NormalizeSet([.. observation.SourceReferences, contract.Producer, contract.CheckContract, contract.Deployment],
-                        requireNonEmpty: true), observation.Diagnostics)));
+                    SourceReference.NormalizeSet([.. sources], requireNonEmpty: true), observation.Diagnostics)));
         }
         return AzureInfrastructureObservations.Normalize(realization, expectedScope, observedScope,
             bindings.MoveToImmutable(), admitted.MoveToImmutable(), assessedAtUtc, maximumAge, futureTolerance);
