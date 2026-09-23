@@ -361,6 +361,7 @@ public static class RelationDraftAcceptor
             .Where(binding => binding.Node == draft.Projection.Input)
             .ToDictionary(static binding => binding.Binding);
 
+        Dictionary<Expr, ValueContract> guardedFields = [];
         foreach (var assignment in selected)
         {
             ValidateValue(assignment.Candidate.Value, ValueContract.FromField(assignment.TargetField),
@@ -394,7 +395,7 @@ public static class RelationDraftAcceptor
             {
                 if (expression is FieldExpr { Binding: { } binding }
                     && visibleBindings[binding].Availability == RelationQueryBindingAvailability.MayBeAbsent
-                    && target.Presence == FieldPresence.Required)
+                    && target.Presence == FieldPresence.Required && source.Presence != FieldPresence.Required)
                     Add(diagnostics, "relationDraft.assignment.bindingPresenceUnsafe",
                         $"Binding '{binding.Value}' is optional and cannot safely populate required target '{targetShape.Id.Value}.{targetPath}'.", location);
                 ValidateCompatibility(source, sourceGraph, target, targetPath, location);
@@ -406,6 +407,13 @@ public static class RelationDraftAcceptor
         {
             contract = null!;
             graph = default;
+            if (expression is FieldExpr { Binding: { } guardedBinding }
+                && guardedFields.TryGetValue(expression, out var refined))
+            {
+                contract = refined;
+                graph = visibleBindings[guardedBinding].Shape!.Value.GraphId;
+                return true;
+            }
             if (expression is CallExpr { Function: ExprFunctionNames.Select } projection)
             {
                 if (!TryResolveSelectSource(projection, location, item, out var sourceItem, out graph))
@@ -588,22 +596,50 @@ public static class RelationDraftAcceptor
                 && conditional.ReturnType != target.GetEffectiveType())
                 Add(diagnostics, "relationDraft.conditional.returnTypeMismatch",
                     "Declared conditional result type must match the target's effective type.", $"{location}/returnType");
-            // Keep admission bounded to explicit code decisions; the canonical evaluator owns equality and laziness.
-            if (conditional.Test is not BinaryExpr { Operator: BinaryOperator.Eq, Right: ConstantExpr key } equality
+            // Presence guards stay bounded to a binding-qualified field and a null fallback.
+            // Shared canonical refinement owns the guaranteed facts; they never escape a branch.
+            var presenceGuard = conditional.Test is BinaryExpr
+                { Operator: BinaryOperator.Eq or BinaryOperator.Ne, Right: ConstantExpr { Value.Kind: ObservationValueKind.Null },
+                  Left: CallExpr { Function: ExprFunctionNames.Coalesce, Arguments.Length: 2 } guard }
+                && guard.Arguments[0] is FieldExpr { Binding: not null }
+                && guard.Arguments[1] is ConstantExpr { Value.Kind: ObservationValueKind.Null };
+            if (presenceGuard)
+            {
+                _ = TryResolveValue(((BinaryExpr)conditional.Test).Left, $"{location}/test/left", item, out _, out _);
+            }
+            else if (conditional.Test is not BinaryExpr { Operator: BinaryOperator.Eq, Right: ConstantExpr key } equality
                 || key.Value.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined or ObservationValueKind.Array or ObservationValueKind.Object)
                 Add(diagnostics, "relationDraft.conditional.testUnsupported",
-                    "Conditional acceptance requires equality between a resolved source value and a non-null portable scalar constant.", $"{location}/test");
+                    "Conditional acceptance requires a scalar code equality or an explicit coalesce(field, null) null comparison.", $"{location}/test");
             else if (TryResolveValue(equality.Left, $"{location}/test/left", item, out var source, out var sourceGraph))
             {
-                // Canonical equality fails on missing input; null is a concrete nonmatching value.
                 if (source.Presence != FieldPresence.Required)
                     Add(diagnostics, "relationDraft.conditional.sourceMayBeAbsent",
                         "Conditional equality requires a present source; declare a missing-value default explicitly.", $"{location}/test/left");
                 ValidateConstant(key.Value, new(source.Type, source.Shape, source.Cardinality), sourceGraph, $"{location}/test/right");
             }
-            // Neither branch inherits refinements from the predicate. Both must meet the complete target contract.
-            ValidateValue(conditional.IfTrue, target, targetPath, $"{location}/ifTrue", item);
-            ValidateValue(conditional.IfFalse, target, targetPath, $"{location}/ifFalse", item);
+            ValidateBranch(conditional.IfTrue, true, "ifTrue");
+            ValidateBranch(conditional.IfFalse, false, "ifFalse");
+
+            void ValidateBranch(Expr branch, bool whenTrue, string name)
+            {
+                if (!presenceGuard)
+                {
+                    ValidateValue(branch, target, targetPath, $"{location}/{name}", item);
+                    return;
+                }
+                var previous = guardedFields;
+                guardedFields = new(previous);
+                try
+                {
+                    if (presenceGuard)
+                        ExprGuardRefinement.Apply(conditional.Test, whenTrue,
+                            expression => TryResolveValue(expression, $"{location}/test", item, out var value, out _) ? value : null,
+                            (expression, value) => guardedFields[expression] = value);
+                    ValidateValue(branch, target, targetPath, $"{location}/{name}", item);
+                }
+                finally { guardedFields = previous; }
+            }
         }
 
         bool ValidateConstant(ObservationValue value, ValueContract target, GraphId graphId, string location)

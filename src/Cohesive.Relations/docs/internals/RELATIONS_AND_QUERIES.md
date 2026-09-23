@@ -447,7 +447,7 @@ present scalar contract; there are no implicit numeric/text conversions or named
 
 Both branches are validated against the complete target contract, including every enum member,
 required object child, graph-local type identity, presence and collection element contract.
-Predicates never refine branch contracts. Nested conditionals, objects and collection selectors
+Code-table predicates do not refine branch contracts; the explicit nullable-source profile below uses branch-local presence facts. Nested conditionals, objects and collection selectors
 reuse the same recursive validation. A declared conditional return type must match the effective
 target type or retain the normal unknown metadata marker. Computed/dynamic keys, arbitrary
 predicates, reversed equality and general conversion functions remain outside this bounded profile.
@@ -546,3 +546,20 @@ source type, graph identity and cardinality. Its result remains nullable unless 
 required and non-null (making the fallback unreachable). Target nullability still governs assignment,
 and a nullable result cannot be passed to `single`, `select` or `parseDecimal` as if it were non-null.
 A fallback does not catch evaluation errors.
+
+
+### Guarded optional conversion
+
+Drafts can compare `coalesce(binding.field, null)` with null using `eq` or `ne`. On the
+non-null branch only, the original binding-qualified field is proven required and non-null.
+For example, `if coalesce(source.Weight, null) != null then parseDecimal(source.Weight) else null`
+returns null for missing/null weight, parses present numeric text, and fails on malformed present
+text (including empty text). The target must admit the fallback; a null branch cannot populate
+a non-null target. Both branches remain validated and dependency analysis still records both.
+
+The shared `ExprGuardRefinement` authority derives these facts for core conditional analysis and
+native draft admission. Facts do not escape a branch or refine another field. The bounded draft
+profile requires a binding-qualified field, a literal null coalesce fallback and a literal null
+comparison; current-item guards and arbitrary computed guards remain unsupported. No parser,
+runtime evaluator, wire construct, cache or backend read is added. Refinement dictionaries are
+invocation-owned preparation state. Ari owns operator decisions to emit these canonical expressions.
