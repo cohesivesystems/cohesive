@@ -126,7 +126,10 @@ public enum ExprFunctionResultRule
     FirstNonNullish = 4,
 
     /// <summary>Return a present collection retaining the scoped source's element contract.</summary>
-    CollectionOfScopedSource = 5
+    CollectionOfScopedSource = 5,
+
+    /// <summary>Return the element contract of the sole collection argument.</summary>
+    CollectionElement = 6
 }
 
 /// <summary>One function argument evaluated with an explicit current-item scope.</summary>
@@ -250,6 +253,9 @@ public sealed class ExprFunctionDefinition
             if (FixedResult is not null)
                 throw new ArgumentException("A first-non-nullish result rule cannot declare an ignored fixed result.", nameof(fixedResult));
         }
+        if (ResultRule == ExprFunctionResultRule.CollectionElement
+            && (Arity.Minimum != 1 || Arity.Maximum != 1 || FixedResult is not null))
+            throw new ArgumentException("A collection-element result requires exactly one argument and no fixed result.", nameof(resultRule));
         if (ResultRule == ExprFunctionResultRule.FirstArgument)
         {
             if (Arity.Minimum < 1)
@@ -642,6 +648,8 @@ public sealed class ExprSemanticsCatalog
                     resultRule: ExprFunctionResultRule.Fixed,
                     fixedResult: decimalNumber,
                     scoped: [new(1, 0)]),
+                Function(ExprFunctionNames.ParseDecimal, 1, 1, [ExprResultCategory.Text], resultCategory: ExprResultCategory.Numeric, resultRule: ExprFunctionResultRule.Fixed, fixedResult: decimalNumber),
+                Function(ExprFunctionNames.Single, 1, 1, [ExprResultCategory.Collection], resultRule: ExprFunctionResultRule.CollectionElement),
                 Function(ExprFunctionNames.Coalesce, 2, 2, [ExprResultCategory.Any, ExprResultCategory.Any], resultRule: ExprFunctionResultRule.FirstNonNullish),
                 Function(ExprFunctionNames.Concat, 1, null, argumentCategories: [], variadicCategory: ExprResultCategory.Text, resultCategory: ExprResultCategory.Text, resultRule: ExprFunctionResultRule.Fixed, fixedResult: @string),
                 Function(ExprFunctionNames.Contains, 2, 2, [ExprResultCategory.Collection, ExprResultCategory.Any], resultCategory: ExprResultCategory.Boolean, resultRule: ExprFunctionResultRule.Fixed, fixedResult: boolean),

@@ -824,6 +824,32 @@ public sealed class ExprAnalysisTests
         AssertDiagnostic(wideInteger, ExprAnalysisDiagnosticCodes.ResultTypeMismatch);
     }
 
+    [Theory]
+    [InlineData(-2147483648L, true)]
+    [InlineData(2147483647L, true)]
+    [InlineData(-2147483649L, false)]
+    [InlineData(2147483648L, false)]
+    public void Analyze_ContextualConditionalChecksEveryLiteralBeforeNarrowing(long value, bool valid)
+    {
+        var int32 = new ScalarTypeRef(ScalarTypeKind.Int32);
+        var result = Analyze(
+            Expr.If(Expr.Const(true), Expr.Const(0),
+                Expr.If(Expr.Const(false), Expr.Const(value), Expr.Const(1))),
+            ExprScope.Empty, "contextual-conditional", new(value: new(int32)));
+        Assert.Equal(valid, result.IsValid);
+        if (valid) Assert.Equal(int32, result.KnownResult?.Type);
+        else AssertDiagnostic(result, ExprAnalysisDiagnosticCodes.ResultTypeMismatch);
+    }
+
+    [Fact]
+    public void Analyze_ContextualConditionalCannotNarrowAnUnknownIntegerValue()
+    {
+        var result = Analyze(Expr.If(Expr.Const(true), Expr.Const(1), Expr.CurrentItem()),
+            Scope(currentItem: new(Int64Type)), "contextual-field",
+            new(value: new(new ScalarTypeRef(ScalarTypeKind.Int32))));
+        AssertDiagnostic(result, ExprAnalysisDiagnosticCodes.ResultTypeMismatch);
+    }
+
     [Fact]
     public void Analyze_ConditionalReturnTypeDoesNotInventPresenceOrNullabilityGuarantees()
     {
@@ -1608,6 +1634,26 @@ public sealed class ExprAnalysisTests
         Assert.False(Analyze(Expr.Join(Expr.Field("item.Qualifier"), Expr.Field("item.Qualifier"),
             Expr.Field(LoadBinding, "References")), scope, "unscoped-left-key").IsValid);
         Assert.False(Analyze(Expr.Call(ExprFunctionNames.Join, Expr.Const("PO")), scope, "arity").IsValid);
+    }
+
+    [Fact]
+    public void ExplicitConversionsCarryResultContractsWithoutErasingSourceRequirements()
+    {
+        var parsed = Analyze(Expr.Call(ExprFunctionNames.ParseDecimal, Expr.CurrentItem()),
+            Scope(currentItem: new(StringType)), "decimal");
+        Assert.True(parsed.IsValid);
+        Assert.Equal(new ScalarTypeRef(ScalarTypeKind.Decimal), parsed.KnownResult?.Type);
+        Assert.False(Analyze(Expr.Call(ExprFunctionNames.ParseDecimal, Expr.CurrentItem()),
+            Scope(currentItem: new(StringType, presence: FieldPresence.Optional)), "optional-decimal").IsValid);
+        var named = new NamedTypeRef(new("Party"));
+        var single = Analyze(Expr.Call(ExprFunctionNames.Single, Expr.CurrentItem()),
+            Scope(currentItem: new(new ArrayTypeRef(named))), "single");
+        Assert.True(single.IsValid);
+        Assert.Equal(named, single.KnownResult?.Type);
+        Assert.False(Analyze(Expr.Call(ExprFunctionNames.Single, Expr.Const("x")), ExprScope.Empty, "not-array").IsValid);
+        Assert.False(Analyze(Expr.Call(ExprFunctionNames.Single), ExprScope.Empty, "arity").IsValid);
+        Assert.Throws<ArgumentException>(() => new ExprFunctionDefinition(new("bad.element"), new(0, 0),
+            resultRule: ExprFunctionResultRule.CollectionElement));
     }
 
     static ExprAnalysisResult Analyze(

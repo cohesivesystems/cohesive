@@ -122,6 +122,107 @@ public sealed class RelationDraftConditionalAcceptanceTests
         }
     }
 
+    [Theory]
+    [InlineData("00", "Original")]
+    [InlineData("01", "Cancel")]
+    [InlineData("02", "Unknown")]
+    public async Task NamedEnumCodesUseTheirOwningGraphs(string code, string expected)
+    {
+        // Both graphs deliberately use the same local type id with different allowed values.
+        var named = new NamedTypeRef(new("Code"));
+        var (graphs, draft) = Fixture(Translate(Read), optional: false, targetType: named, sourceTypeOverride: named);
+        graphs[0] = new(graphs[0].Id, graphs[0].Shapes,
+            [new TypeDefinition.Enum(new("Code"), PrimitiveType.String, [new("Original", "00"), new("Cancel", "01"), new("Other", "02")])]);
+        graphs[1] = new(graphs[1].Id, graphs[1].Shapes,
+            [new TypeDefinition.Enum(new("Code"), PrimitiveType.String, [new("Original"), new("Cancel"), new("Unknown")])]);
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.True(accepted.IsAccepted, Diagnostics(accepted));
+        var result = await Execute(accepted, graphs, ImmutableDictionary<string, ObservationValue>.Empty.Add("value", ObservationValue.FromString(code)));
+        Assert.Equal(expected, result.GetString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NamedEnumRejectsInvalidSourceKeysAndTargetLiterals(bool invalidKey)
+    {
+        var named = new NamedTypeRef(new("Code"));
+        var expression = Expr.If(Expr.Eq(Read, Expr.Const(invalidKey ? "bad" : "00")),
+            Expr.Const("Original"), Expr.Const(invalidKey ? "Original" : "bad"));
+        var (graphs, draft) = Fixture(expression, optional: false, targetType: named, sourceTypeOverride: named);
+        graphs[0] = new(graphs[0].Id, graphs[0].Shapes,
+            [new TypeDefinition.Enum(new("Code"), PrimitiveType.String, [new("Source", "00")])]);
+        graphs[1] = new(graphs[1].Id, graphs[1].Shapes,
+            [new TypeDefinition.Enum(new("Code"), PrimitiveType.String, [new("Original")])]);
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.False(accepted.IsAccepted);
+        Assert.Contains(accepted.Diagnostics, d => d.Code == "relationDraft.constant.incompatible"
+            && d.Location!.EndsWith(invalidKey ? "/test/right" : "/ifFalse", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("00", 1)]
+    [InlineData("01", 2)]
+    [InlineData("other", 0)]
+    public async Task IntegerCodeBranchesRetainValidatedInt32Contract(string code, int expected)
+    {
+        var expression = Expr.If(Expr.Eq(Read, Expr.Const("00")), Expr.Const(1),
+            Expr.If(Expr.Eq(Read, Expr.Const("01")), Expr.Const(2), Expr.Const(0)));
+        var (graphs, draft) = Fixture(expression, optional: false, targetType: new ScalarTypeRef(ScalarTypeKind.Int32));
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.True(accepted.IsAccepted, Diagnostics(accepted));
+        var result = await Execute(accepted, graphs, ImmutableDictionary<string, ObservationValue>.Empty.Add("value", ObservationValue.FromString(code)));
+        Assert.Equal(expected, result.GetInt64());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task QualifiedSelectionAndExactDecimalConversionComposeInPortableDrafts(bool reversed)
+    {
+        var sourceType = new ArrayTypeRef(new ObjectTypeRef([new("role", Text), new("weight", Text)]));
+        var selected = Expr.Call(ExprFunctionNames.Join, Expr.Const("SH"), Expr.Field("item.role"), Read);
+        var weights = Expr.Call(ExprFunctionNames.Select, selected,
+            Expr.Call(ExprFunctionNames.ParseDecimal, Expr.Field("item.weight")));
+        var expression = Expr.Call(ExprFunctionNames.Single, weights);
+        var (graphs, draft) = Fixture(expression, optional: false, sourceTypeOverride: sourceType,
+            targetType: new ScalarTypeRef(ScalarTypeKind.Decimal));
+        // The source is non-null for these operations; no implicit default is introduced.
+        graphs[0] = new(graphs[0].Id, [new Shape(Source.ShapeId, [new(new("value"), sourceType)])]);
+        var restored = RelationDraftJsonSerializer.Deserialize(RelationDraftJsonSerializer.Serialize(RelationDraftDocument.FromDraft(draft)));
+        var accepted = RelationDraftAcceptor.Accept(restored.Draft, graphs);
+        Assert.True(accepted.IsAccepted, Diagnostics(accepted));
+        var source = ObservationValue.FromArray([
+            ObservationValue.FromObject(ImmutableDictionary<string, ObservationValue>.Empty
+                .Add("role", ObservationValue.FromString("CN")).Add("weight", ObservationValue.FromString("999"))),
+            ObservationValue.FromObject(ImmutableDictionary<string, ObservationValue>.Empty
+                .Add("role", ObservationValue.FromString("SH")).Add("weight", ObservationValue.FromString("0012.50")))]);
+        if (reversed) source = ObservationValue.FromArray([.. source.Array.Reverse()]);
+        var result = await Execute(accepted, graphs, ImmutableDictionary<string, ObservationValue>.Empty.Add("value", source));
+        Assert.Equal(12.50m, result.GetDecimal());
+    }
+
+    [Theory]
+    [InlineData("arity", "relationDraft.conversion.argumentsInvalid")]
+    [InlineData("absent", "relationDraft.conversion.sourceMayBeAbsent")]
+    [InlineData("wrong-source", "relationDraft.conversion.sourceUnsupported")]
+    [InlineData("declared-type", "relationDraft.conversion.returnTypeMismatch")]
+    [InlineData("wrong-target", "relationDraft.assignment.typeIncompatible")]
+    public void ExplicitConversionsRejectUnprovenContracts(string scenario, string code)
+    {
+        Expr expression = scenario == "arity" ? Expr.Call(ExprFunctionNames.ParseDecimal)
+            : scenario == "declared-type" ? new CallExpr(ExprFunctionNames.ParseDecimal, [Read], Text)
+            : Expr.Call(ExprFunctionNames.ParseDecimal, Read);
+        var sourceType = scenario == "wrong-source" ? new ScalarTypeRef(ScalarTypeKind.Int64) : Text;
+        var (graphs, draft) = Fixture(expression, optional: false, sourceTypeOverride: sourceType,
+            targetType: scenario == "wrong-target" ? Text : new ScalarTypeRef(ScalarTypeKind.Decimal));
+        if (scenario != "absent")
+            graphs[0] = new(graphs[0].Id, [new Shape(Source.ShapeId, [new(new("value"), sourceType)])]);
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.False(accepted.IsAccepted);
+        Assert.Contains(accepted.Diagnostics, d => d.Code == code);
+    }
+
     static async Task<ObservationValue> Execute(RelationDraftAcceptanceResult accepted, ShapeGraph[] graphs,
         ImmutableDictionary<string, ObservationValue> fields)
     {
@@ -133,11 +234,11 @@ public sealed class RelationDraftConditionalAcceptanceTests
         return Assert.Single(Assert.IsType<RelationQueryExecutionResult>(outcome.Result).Relation!.Rows).Value.GetProperty("value");
     }
 
-    static (ShapeGraph[] Graphs, RelationDraft Draft) Fixture(Expr expression, bool collection = false, bool optional = true, TypeRef? targetType = null)
+    static (ShapeGraph[] Graphs, RelationDraft Draft) Fixture(Expr expression, bool collection = false, bool optional = true, TypeRef? targetType = null, TypeRef? sourceTypeOverride = null)
     {
         var presence = optional ? FieldPresence.Optional : FieldPresence.Required;
         var sourceType = collection ? (TypeRef)new ArrayTypeRef(new ObjectTypeRef([
-            new("code", Text, presence: presence, nullability: FieldNullability.Nullable)])) : Text;
+            new("code", Text, presence: presence, nullability: FieldNullability.Nullable)])) : sourceTypeOverride ?? Text;
         var source = new ShapeGraph(Source.GraphId, [new Shape(Source.ShapeId,
             [new FieldDefinition(new("value"), sourceType, presence: collection ? FieldPresence.Required : presence,
                 nullability: collection ? FieldNullability.NonNullable : FieldNullability.Nullable)])]);

@@ -44,6 +44,12 @@ public static class ExprFunctionNames
     /// <remarks>The fallback is lazy. False, zero, empty text and empty collections are present values.</remarks>
     public const string Coalesce = "coalesce";
 
+    /// <summary>Parses invariant signed decimal text exactly; rejects whitespace, exponents, grouping, overflow and rounding.</summary>
+    public const string ParseDecimal = "parseDecimal";
+
+    /// <summary>Returns the sole collection item; fails on empty or ambiguous collections rather than choosing by position.</summary>
+    public const string Single = "single";
+
     /// <summary>
     /// Function name for concatenating string arguments.
     /// </summary>

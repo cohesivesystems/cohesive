@@ -377,7 +377,7 @@ public static class RelationDraftAcceptor
             }
             if (expression is ConstantExpr constant)
             {
-                ValidateConstant(constant.Value, target, location);
+                ValidateConstant(constant.Value, target, draft.Projection.ResultShape.GraphId, location);
                 return;
             }
             if (expression is CallExpr { Function: ExprFunctionNames.Object } construction)
@@ -406,6 +406,59 @@ public static class RelationDraftAcceptor
         {
             contract = null!;
             graph = default;
+            if (expression is CallExpr { Function: ExprFunctionNames.Select } projection)
+            {
+                if (projection.Arguments.IsDefault || projection.Arguments.Length != 2)
+                {
+                    Add(diagnostics, "relationDraft.select.argumentsInvalid", "Collection select requires a source and one selector expression.", location);
+                    return false;
+                }
+                if (!TryResolveValue(projection.Arguments[0], $"{location}/arguments/0", item, out var source, out graph))
+                    return false;
+                if (source.GetEffectiveType() is not ArrayTypeRef array)
+                {
+                    Add(diagnostics, "relationDraft.select.sourceUnsupported", "Collection select requires a statically known collection source.", location);
+                    return false;
+                }
+                if (source.Presence != FieldPresence.Required || source.Nullability != FieldNullability.NonNullable)
+                    Add(diagnostics, "relationDraft.select.sourceMayBeAbsent", "Collection select requires a present, non-null source.", location);
+                if (!TryResolveValue(projection.Arguments[1], $"{location}/arguments/1", (graph, new(array.ElementType)), out var element, out var elementGraph))
+                    return false;
+                if (element.Presence != FieldPresence.Required || element.Nullability != FieldNullability.NonNullable)
+                    Add(diagnostics, "relationDraft.select.elementMayBeAbsent", "Selected elements must be present and non-null; declare any default explicitly.", location);
+                contract = new(new ArrayTypeRef(element.GetEffectiveType()!));
+                graph = elementGraph;
+                if (projection.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
+                    && projection.ReturnType != contract.GetEffectiveType())
+                    Add(diagnostics, "relationDraft.select.returnTypeMismatch", "Declared select result must retain its element type.", $"{location}/returnType");
+                return true;
+            }
+            if (expression is CallExpr { Function: ExprFunctionNames.Single or ExprFunctionNames.ParseDecimal } conversion)
+            {
+                if (conversion.Arguments.IsDefault || conversion.Arguments.Length != 1)
+                {
+                    Add(diagnostics, "relationDraft.conversion.argumentsInvalid", "Conversion requires exactly one source argument.", location);
+                    return false;
+                }
+                if (!TryResolveValue(conversion.Arguments[0], $"{location}/arguments/0", item, out var source, out graph))
+                    return false;
+                if (source.Presence != FieldPresence.Required || source.Nullability != FieldNullability.NonNullable)
+                    Add(diagnostics, "relationDraft.conversion.sourceMayBeAbsent", "Conversion requires a present, non-null source; declare any default explicitly.", location);
+                var type = source.GetEffectiveType();
+                if (conversion.Function == ExprFunctionNames.Single && type is ArrayTypeRef array)
+                    contract = new(array.ElementType);
+                else if (conversion.Function == ExprFunctionNames.ParseDecimal && type is ScalarTypeRef { Kind: ScalarTypeKind.String })
+                    contract = new(new ScalarTypeRef(ScalarTypeKind.Decimal));
+                else
+                {
+                    Add(diagnostics, "relationDraft.conversion.sourceUnsupported", "Single requires a collection; parseDecimal requires text.", location);
+                    return false;
+                }
+                if (conversion.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
+                    && conversion.ReturnType != contract.GetEffectiveType())
+                    Add(diagnostics, "relationDraft.conversion.returnTypeMismatch", "Declared conversion result must retain the operation's result type.", $"{location}/returnType");
+                return true;
+            }
             if (expression is CallExpr { Function: ExprFunctionNames.Join } join)
             {
                 if (join.Arguments.IsDefault || join.Arguments.Length != 3)
@@ -431,8 +484,8 @@ public static class RelationDraftAcceptor
                     Add(diagnostics, "relationDraft.join.keyUnsupported", "Draft collection joins require an explicit non-null scalar constant left key.", $"{location}/arguments/0");
                     return false;
                 }
-                if (!TryResolveValue(join.Arguments[1], $"{location}/arguments/1", (graph, new(array.ElementType)), out var key, out _)
-                    || !ValidateConstant(left.Value, new(key.Type, key.Shape, key.Cardinality), $"{location}/arguments/0"))
+                if (!TryResolveValue(join.Arguments[1], $"{location}/arguments/1", (graph, new(array.ElementType)), out var key, out var keyGraph)
+                    || !ValidateConstant(left.Value, new(key.Type, key.Shape, key.Cardinality), keyGraph, $"{location}/arguments/0"))
                     return false;
                 // Filtering does not refine child presence/nullability or change graph-local type identity.
                 contract = new(source.Type, source.Shape, source.Cardinality);
@@ -456,7 +509,7 @@ public static class RelationDraftAcceptor
                 if (coalesce.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
                     && coalesce.ReturnType != source.GetEffectiveType())
                     Add(diagnostics, "relationDraft.default.returnTypeMismatch", "Declared default result type must match the source's effective type.", $"{location}/returnType");
-                if (!ValidateConstant(fallback.Value, present, $"{location}/arguments/1"))
+                if (!ValidateConstant(fallback.Value, present, graph, $"{location}/arguments/1"))
                     return false;
                 contract = present;
                 return true;
@@ -481,7 +534,7 @@ public static class RelationDraftAcceptor
             if (expression is not FieldExpr { Binding: { } binding } field)
             {
                 Add(diagnostics, "relationDraft.candidate.expressionUnsupported",
-                    "Acceptance supports binding-qualified fields, scoped item reads, explicit constant defaults, portable literals, static objects and collection select/join expressions.", location);
+                    "Acceptance supports binding-qualified fields, scoped item reads, explicit defaults and literals, static objects, collection select/join/single and exact decimal parsing.", location);
                 return false;
             }
             if (field.Path.Segments.IsDefaultOrEmpty
@@ -537,34 +590,39 @@ public static class RelationDraftAcceptor
                 || key.Value.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined or ObservationValueKind.Array or ObservationValueKind.Object)
                 Add(diagnostics, "relationDraft.conditional.testUnsupported",
                     "Conditional acceptance requires equality between a resolved source value and a non-null portable scalar constant.", $"{location}/test");
-            else if (TryResolveValue(equality.Left, $"{location}/test/left", item, out var source, out _))
+            else if (TryResolveValue(equality.Left, $"{location}/test/left", item, out var source, out var sourceGraph))
             {
                 // Canonical equality fails on missing input; null is a concrete nonmatching value.
                 if (source.Presence != FieldPresence.Required)
                     Add(diagnostics, "relationDraft.conditional.sourceMayBeAbsent",
                         "Conditional equality requires a present source; declare a missing-value default explicitly.", $"{location}/test/left");
-                ValidateConstant(key.Value, new(source.Type, source.Shape, source.Cardinality), $"{location}/test/right");
+                ValidateConstant(key.Value, new(source.Type, source.Shape, source.Cardinality), sourceGraph, $"{location}/test/right");
             }
             // Neither branch inherits refinements from the predicate. Both must meet the complete target contract.
             ValidateValue(conditional.IfTrue, target, targetPath, $"{location}/ifTrue", item);
             ValidateValue(conditional.IfFalse, target, targetPath, $"{location}/ifFalse", item);
         }
 
-        bool ValidateConstant(ObservationValue value, ValueContract target, string location)
+        bool ValidateConstant(ObservationValue value, ValueContract target, GraphId graphId, string location)
         {
             // Undefined has no distinct portable JSON encoding. Never admit it as an authored default.
+            graphs.TryGetValue(graphId, out var graph);
+            var namedEnum = target.Cardinality == FieldCardinality.Single && target.Type is NamedTypeRef named
+                && graph is not null && graph.TryGetType(named.TypeId, out var definition) && definition is TypeDefinition.Enum;
             var supported = value.Kind == ObservationValueKind.Null
                 || (value.Kind == ObservationValueKind.Array && value.Array.IsEmpty
                     && target.GetEffectiveType() is ArrayTypeRef)
                 || (target.Cardinality == FieldCardinality.Single
-                    && target.Type is ScalarTypeRef or EnumTypeRef or QuantityTypeRef or EntityReferenceTypeRef or JsonTypeRef
+                    && (namedEnum || target.Type is ScalarTypeRef or EnumTypeRef or QuantityTypeRef or EntityReferenceTypeRef or JsonTypeRef)
                     && value.Kind is not (ObservationValueKind.Array or ObservationValueKind.Object or ObservationValueKind.Undefined));
             if (!supported)
             {
-                Add(diagnostics, "relationDraft.constant.unsupported", "Accepted constants are portable scalars, null or an empty collection; named or structural values need further admission semantics.", location);
+                Add(diagnostics, "relationDraft.constant.unsupported", "Accepted constants are portable scalars, null or an empty collection; structural values need explicit construction.", location);
                 return false;
             }
-            if (!target.IsSatisfiedByConstant(value))
+            if (!target.IsSatisfiedByConstant(value)
+                || (namedEnum && value.Kind != ObservationValueKind.Null
+                    && !ObservationValidator.TryValidateAgainstType(value, target.Type!, out _, graph)))
             {
                 Add(diagnostics, "relationDraft.constant.incompatible", "Constant does not satisfy the target's type, cardinality or nullability contract.", location);
                 return false;

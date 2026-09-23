@@ -331,6 +331,8 @@ sealed class RelationQueryExpressionEvaluator
         ImmutableHashSet.Create(
             StringComparer.Ordinal,
             ExprFunctionNames.Coalesce,
+            ExprFunctionNames.ParseDecimal,
+            ExprFunctionNames.Single,
             ExprFunctionNames.Contains,
             ExprFunctionNames.Count,
             ExprFunctionNames.EndsWith,
@@ -589,6 +591,8 @@ sealed class RelationQueryExpressionEvaluator
 
         return call.Function switch
         {
+            ExprFunctionNames.ParseDecimal => EvaluateParseDecimal(call, context),
+            ExprFunctionNames.Single => EvaluateSingle(call, context),
             ExprFunctionNames.Coalesce => EvaluateCoalesce(call, context),
             ExprFunctionNames.Contains => EvaluateContains(call, context),
             ExprFunctionNames.Count => EvaluateCount(call, context),
@@ -668,6 +672,41 @@ sealed class RelationQueryExpressionEvaluator
         var value = RequireString(Evaluate(call.Arguments[0], context), call.Function);
         var substring = RequireString(Evaluate(call.Arguments[1], context), call.Function);
         return ObservationValue.FromBool(value.Contains(substring, StringComparison.Ordinal));
+    }
+
+    ObservationValue EvaluateSingle(CallExpr call, in RelationQueryExpressionContext context)
+    {
+        var values = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
+        if (values.Count != 1)
+            throw InvalidOperand($"Expression function 'single' requires exactly one item; received {values.Count}.");
+        return values[0];
+    }
+
+    ObservationValue EvaluateParseDecimal(CallExpr call, in RelationQueryExpressionContext context)
+    {
+        var text = RequireString(Evaluate(call.Arguments[0], context), call.Function).AsSpan();
+        var index = !text.IsEmpty && text[0] is '+' or '-' ? 1 : 0;
+        var integerStart = index;
+        while (index < text.Length && text[index] is >= '0' and <= '9') index++;
+        var valid = index > integerStart;
+        if (index < text.Length && text[index] == '.')
+        {
+            var fractionStart = ++index;
+            while (index < text.Length && text[index] is >= '0' and <= '9') index++;
+            valid &= index > fractionStart;
+        }
+        if (!valid || index != text.Length)
+            throw InvalidOperand("Expression function 'parseDecimal' requires invariant decimal text without grouping, whitespace or exponents.");
+        var negative = text[0] == '-';
+        var magnitude = (text[0] is '+' or '-' ? text[1..] : text).TrimStart('0');
+        var point = magnitude.IndexOf('.');
+        if (point >= 0) magnitude = magnitude.TrimEnd('0');
+        // Bound exact arithmetic to the Decimal domain, even for very long zero-padded inputs.
+        var digits = magnitude.Length - (point >= 0 ? 1 : 0);
+        var scale = point >= 0 ? magnitude.Length - point - 1 : 0;
+        if (digits > 29 || scale > 28 || !ObservationValue.TryParseExactJsonDecimal(magnitude, out var value))
+            throw InvalidOperand("Expression function 'parseDecimal' cannot represent the value exactly as Decimal.");
+        return ObservationValue.FromDecimal(negative ? -value : value);
     }
 
     ObservationValue EvaluateCoalesce(CallExpr call, in RelationQueryExpressionContext context)

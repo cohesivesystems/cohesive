@@ -6,6 +6,43 @@ public sealed class ObservationValidatorTests
 {
     const int AllocationWarmupIterations = 1_000;
 
+    [Theory]
+    [InlineData("00", true)]
+    [InlineData("Original", true)]
+    [InlineData("original", false)]
+    [InlineData("unknown", false)]
+    public void TypeValidationSharesNamedEnumObservationSemantics(string text, bool valid)
+    {
+        var type = new NamedTypeRef(new("Code"));
+        var shape = new Shape(new("root"), [new(new("value"), type)]);
+        var graph = new ShapeGraph(new("codes"), [shape],
+            [new TypeDefinition.Enum(new("Code"), PrimitiveType.String, [new("Original", "00")])]);
+        var value = ObservationValue.FromString(text);
+        Assert.Equal(valid, ObservationValidator.TryValidateAgainstType(value, type, out _, graph));
+        Assert.Equal(valid, ObservationValidator.TryValidateAgainstShape(
+            ImmutableDictionary<string, ObservationValue>.Empty.Add("value", value), shape, out _, graph));
+        Assert.False(ObservationValidator.TryValidateAgainstType(value, type, out _));
+    }
+
+    [Fact]
+    public void NamedEnumTypeValidationDoesNotAllocateAfterWarmup()
+    {
+        var type = new NamedTypeRef(new("Code"));
+        var graph = new ShapeGraph(new("codes"), [],
+            [new TypeDefinition.Enum(new("Code"), PrimitiveType.String, [new("Original", "00")])]);
+        var value = ObservationValue.FromString("00");
+        for (var i = 0; i < AllocationWarmupIterations; i++)
+            Assert.True(ObservationValidator.TryValidateAgainstType(value, type, out _, graph));
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var success = true;
+        for (var i = 0; i < 10_000; i++)
+            success &= ObservationValidator.TryValidateAgainstType(value, type, out _, graph);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(success);
+        Assert.Equal(0, allocated);
+    }
+
+
     [Fact]
     public void RequiredNullableOrdinalValidationDoesNotAllocateAfterWarmup()
     {

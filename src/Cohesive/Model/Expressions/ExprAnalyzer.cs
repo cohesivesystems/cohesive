@@ -95,7 +95,7 @@ public static class ExprAnalyzer
                 LiteralExpr literal => AnalyzeLiteral(literal, expressionPath),
                 UnaryExpr unary => AnalyzeUnary(unary, scope, expressionPath),
                 BinaryExpr binary => AnalyzeBinary(binary, scope, expressionPath),
-                ConditionalExpr conditional => AnalyzeConditional(conditional, scope, expressionPath),
+                ConditionalExpr conditional => AnalyzeConditional(conditional, scope, expectation, expressionPath),
                 CallExpr call => AnalyzeCall(call, scope, expressionPath),
                 AggregateExpr aggregate => AnalyzeAggregate(aggregate, scope, expressionPath),
                 _ => AnalyzeUnsupported(expression, expressionPath)
@@ -507,6 +507,7 @@ public static class ExprAnalyzer
         NodeResult AnalyzeConditional(
             ConditionalExpr conditional,
             ExprScope scope,
+            ExprExpectation expectation,
             string expressionPath)
         {
             RequireOperation(ExprCapabilities.Conditional, expressionPath);
@@ -523,9 +524,12 @@ public static class ExprAnalyzer
                 ExprExpectation.Boolean,
                 Child(expressionPath, "test"));
             var hasDeclaredResult = TryGetDeclaredType(conditional.ReturnType, out var declared);
-            var branchExpectation = hasDeclaredResult
+            // A site contract can type literal branches, but never coerce a source field.
+            // Validate each branch before retaining that type across the join.
+            var contextualType = hasDeclaredResult ? declared : expectation.Value?.GetEffectiveType();
+            var branchExpectation = contextualType is not null
                 ? new ExprExpectation(value: new(
-                    declared,
+                    contextualType,
                     presence: FieldPresence.Optional,
                     nullability: FieldNullability.Nullable))
                 : ExprExpectation.Any;
@@ -552,12 +556,14 @@ public static class ExprAnalyzer
                 ifFalseDiagnosticStart,
                 ifFalsePath);
 
-            if (hasDeclaredResult)
+            if (contextualType is not null)
             {
-                var declaredResult = NodeResult.FromValue(new(declared));
-                if (ifTrueSatisfiesDeclaredResult)
+                var declaredResult = NodeResult.FromValue(new(contextualType));
+                if (ifTrueSatisfiesDeclaredResult
+                    && (hasDeclaredResult || ifTrue.ConstantValue is not null || ifTrue.Value?.Type is not null))
                     ifTrue = ApplyValidatedDeclaredResult(ifTrue, declaredResult);
-                if (ifFalseSatisfiesDeclaredResult)
+                if (ifFalseSatisfiesDeclaredResult
+                    && (hasDeclaredResult || ifFalse.ConstantValue is not null || ifFalse.Value?.Type is not null))
                     ifFalse = ApplyValidatedDeclaredResult(ifFalse, declaredResult);
             }
 
@@ -675,6 +681,8 @@ public static class ExprAnalyzer
                          && argumentResults[definition.ScopedArguments[0].SourceArgumentIndex].Value is { } collectionSource =>
                     NodeResult.FromValue(new(collectionSource.Type, collectionSource.Shape, collectionSource.Cardinality)),
                 ExprFunctionResultRule.FirstNonNullish => CoalesceResult(argumentResults),
+                ExprFunctionResultRule.CollectionElement when argumentResults.Length == 1
+                    && GetCollectionElement(argumentResults[0].Value) is { } element => NodeResult.FromValue(element),
                 _ => new(definition.ResultCategory, null)
             };
             return ReconcileDeclaredResult(
