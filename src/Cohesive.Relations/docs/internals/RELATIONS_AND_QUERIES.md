@@ -537,3 +537,9 @@ to the consolidated exact parser, retaining their existing non-Decimal fallback 
 a decimal, while invalid input fails execution. It does not reuse the optional Decimal contract of
 `avg`, whose empty-input result can be absent. This distinction permits direct required projection
 assignments, including `parseDecimal(single(values))`, without changing the target's presence contract.
+
+Draft `coalesce(source, null)` explicitly converts absent input to a present null while retaining its
+source type, graph identity and cardinality. Its result remains nullable unless the source is already
+required and non-null (making the fallback unreachable). Target nullability still governs assignment,
+and a nullable result cannot be passed to `single`, `select` or `parseDecimal` as if it were non-null.
+A fallback does not catch evaluation errors.

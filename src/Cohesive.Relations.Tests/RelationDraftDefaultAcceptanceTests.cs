@@ -44,8 +44,60 @@ public sealed class RelationDraftDefaultAcceptanceTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NullDefault_PreservesTypeAndProducesPresentNullForAbsentInput(bool collection)
+    {
+        var (graphs, draft) = Fixture(Expr.Coalesce(Read, Expr.Null()), collection);
+        var cardinality = collection ? FieldCardinality.Many : FieldCardinality.Single;
+        graphs[1] = new(Target.GraphId, [new Shape(Target.ShapeId,
+            [new(new("value"), Text, cardinality: cardinality, nullability: FieldNullability.Nullable)])]);
+        var document = RelationDraftDocument.FromDraft(draft);
+        var restored = RelationDraftJsonSerializer.Deserialize(RelationDraftJsonSerializer.Serialize(document));
+        var accepted = RelationDraftAcceptor.Accept(restored.Draft, graphs);
+        Assert.True(accepted.IsAccepted, Diagnostics(accepted));
+        foreach (var input in new[] { ObservationValue.Undefined, ObservationValue.Null,
+            collection ? ObservationValue.FromArray([ObservationValue.FromString("")]) : ObservationValue.FromString("") })
+        {
+            var fields = input.Kind == ObservationValueKind.Undefined ? ImmutableDictionary<string, ObservationValue>.Empty
+                : ImmutableDictionary<string, ObservationValue>.Empty.Add("value", input);
+            var evaluation = RelationQueryDocument.FromDefinition(accepted.Definition!)
+                .Evaluate(new("tests/null-default"), [.. graphs.Select(g => ShapeGraphDocument.FromGraph(g))])
+                .Supply([new RelationQuerySuppliedRoot("row", Source, fields)]).Build();
+            var outcome = await RelationQueryEvaluator.CreateSuppliedOnly().EvaluateAsync(evaluation);
+            Assert.True(outcome.IsSuccessful, outcome.ToString());
+            var row = Assert.Single(Assert.IsType<RelationQueryExecutionResult>(outcome.Result).Relation!.Rows);
+            var result = row.Value.GetProperty("value");
+            Assert.Equal(input.Kind == ObservationValueKind.Undefined ? ObservationValue.Null : input, result);
+            _ = Observation.Create(new(graphs[1], Target.ShapeId), row.Value);
+        }
+    }
+
+    [Fact]
+    public void UnreachableNullDefault_RetainsRequiredNonNullSourceGuarantee()
+    {
+        var (graphs, draft) = Fixture(Expr.Coalesce(Read, Expr.Null()));
+        graphs[0] = new(Source.GraphId, [new Shape(Source.ShapeId, [new(new("value"), Text)])]);
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.True(accepted.IsAccepted, Diagnostics(accepted));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NullDefault_DoesNotMakeAConversionSourceNonNull(bool collection)
+    {
+        var expression = Expr.Call(collection ? ExprFunctionNames.Single : ExprFunctionNames.ParseDecimal,
+            Expr.Coalesce(Read, Expr.Null()));
+        var (graphs, draft) = Fixture(expression, collection);
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.False(accepted.IsAccepted);
+        Assert.Contains(accepted.Diagnostics, d => d.Code == "relationDraft.conversion.sourceMayBeAbsent");
+    }
+
+    [Theory]
     [InlineData("wrong-fallback", "relationDraft.constant.incompatible")]
-    [InlineData("null-fallback", "relationDraft.constant.incompatible")]
+    [InlineData("null-fallback", "relationDraft.assignment.nullabilityUnsafe")]
     [InlineData("computed-fallback", "relationDraft.default.fallbackUnsupported")]
     [InlineData("arity", "relationDraft.default.argumentsInvalid")]
     [InlineData("return-type", "relationDraft.default.returnTypeMismatch")]

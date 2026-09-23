@@ -502,13 +502,19 @@ public static class RelationDraftAcceptor
                 }
                 if (!TryResolveValue(coalesce.Arguments[0], $"{location}/arguments/0", item, out var source, out graph))
                     return false;
-                var present = new ValueContract(source.Type, source.Shape, source.Cardinality);
+                var fallbackContract = new ValueContract(source.Type, source.Shape, source.Cardinality,
+                    nullability: fallback.Value.Kind == ObservationValueKind.Null
+                        ? FieldNullability.Nullable : FieldNullability.NonNullable);
                 if (coalesce.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
                     && coalesce.ReturnType != source.GetEffectiveType())
                     Add(diagnostics, "relationDraft.default.returnTypeMismatch", "Declared default result type must match the source's effective type.", $"{location}/returnType");
-                if (!ValidateConstant(fallback.Value, present, graph, $"{location}/arguments/1"))
+                if (!ValidateConstant(fallback.Value, fallbackContract, graph, $"{location}/arguments/1"))
                     return false;
-                contract = present;
+                // Null is an explicit present fallback, not evidence that a non-null value exists.
+                // Retain a stronger source guarantee when the fallback cannot be reached.
+                var canUseFallback = source.Presence != FieldPresence.Required || source.Nullability != FieldNullability.NonNullable;
+                contract = new(source.Type, source.Shape, source.Cardinality,
+                    nullability: canUseFallback ? fallbackContract.Nullability : FieldNullability.NonNullable);
                 return true;
             }
             if (expression is CurrentItemExpr
