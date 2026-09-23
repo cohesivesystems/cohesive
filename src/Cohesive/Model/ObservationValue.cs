@@ -3,7 +3,6 @@ using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.Buffers;
 using System.Globalization;
-using System.Numerics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -1141,6 +1140,8 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     /// <see langword="true"/> when the value has an exact decimal representation or contains a valid
     /// invariant-culture decimal string; otherwise <see langword="false"/>.
     /// </returns>
+    /// <remarks>The string coercion retains BCL NumberStyles.Float syntax and rounding behavior.
+    /// Use <see cref="TryParseExactDecimal"/> when text must be representable without precision loss.</remarks>
     public bool TryGetDecimal(out decimal value)
     {
         if (TryGetCanonicalNumericDecimal(out value))
@@ -1717,101 +1718,95 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         return values.MoveToImmutable();
     }
 
-    internal static bool TryParseExactJsonDecimal(ReadOnlySpan<char> text, out decimal result)
-    {
-        var index = 0;
-        var negative = false;
-        if (index < text.Length && text[index] == '-')
-        {
-            negative = true;
-            index++;
-        }
+    /// <summary>Parses invariant signed decimal text without rounding or precision loss.</summary>
+    /// <param name="text">ASCII integer digits, an optional leading sign, and an optional nonempty fraction.</param>
+    /// <param name="result">Exact Decimal value on success; zero on failure.</param>
+    /// <returns>False for malformed text, whitespace, exponents, overflow or a value not exactly representable as Decimal.</returns>
+    /// <remarks>Leading integer zeros and trailing fractional zeros are accepted. Input is scanned without allocation;
+    /// coefficient parsing uses bounded stack storage, independent of input length. No input is retained.</remarks>
+    public static bool TryParseExactDecimal(ReadOnlySpan<char> text, out decimal result) =>
+        TryParseExactDecimalCore(text, allowExponent: false, out result);
 
-        BigInteger coefficient = BigInteger.Zero;
-        var fractionalDigits = 0;
+    // JSON readers own JSON lexical admission (including leading-zero and sign rules).
+    // This entry point shares exact representability with text conversion, while permitting JSON exponents.
+    internal static bool TryParseExactJsonDecimal(ReadOnlySpan<char> text, out decimal result) =>
+        TryParseExactDecimalCore(text, allowExponent: true, out result);
+
+    static bool TryParseExactDecimalCore(ReadOnlySpan<char> text, bool allowExponent, out decimal result)
+    {
+        result = default;
+        var negative = !text.IsEmpty && text[0] == '-';
+        var index = !text.IsEmpty && text[0] is '+' or '-' ? 1 : 0;
+        var digits = 0;
+        var fractionDigits = 0;
         var inFraction = false;
+        var firstNonzero = -1;
+        var lastNonzero = -1;
+        var firstNonzeroOrdinal = 0;
+        var lastNonzeroOrdinal = 0;
         while (index < text.Length)
         {
             var character = text[index];
             if (character is >= '0' and <= '9')
             {
-                coefficient = coefficient * 10 + (character - '0');
-                if (inFraction)
-                    fractionalDigits++;
+                if (character != '0')
+                {
+                    if (firstNonzero < 0)
+                    {
+                        firstNonzero = index;
+                        firstNonzeroOrdinal = digits;
+                    }
+                    lastNonzero = index;
+                    lastNonzeroOrdinal = digits;
+                }
+                digits++;
+                if (inFraction) fractionDigits++;
                 index++;
-                continue;
             }
-
-            if (character == '.' && !inFraction)
+            else if (character == '.' && !inFraction && digits > 0)
             {
                 inFraction = true;
                 index++;
-                continue;
             }
-
-            break;
+            else break;
         }
+        if (digits == 0 || inFraction && fractionDigits == 0)
+            return false;
 
         var exponent = 0;
-        if (index < text.Length && text[index] is 'e' or 'E')
+        if (allowExponent && index < text.Length && text[index] is 'e' or 'E')
         {
-            index++;
-            if (!int.TryParse(
-                    text[index..],
-                    NumberStyles.AllowLeadingSign,
-                    CultureInfo.InvariantCulture,
-                    out exponent))
-            {
-                result = default;
+            if (!int.TryParse(text[(index + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out exponent))
                 return false;
-            }
             index = text.Length;
         }
-
         if (index != text.Length)
-        {
-            result = default;
             return false;
-        }
-
-        if (coefficient.IsZero)
-        {
-            result = decimal.Zero;
+        if (firstNonzero < 0)
             return true;
-        }
 
-        var scale = (long)fractionalDigits - exponent;
-        while (scale > 0 && coefficient % 10 == 0)
-        {
-            coefficient /= 10;
-            scale--;
-        }
-
-        if (scale < 0)
-        {
-            var expansion = -scale;
-            if (expansion > 28)
-            {
-                result = default;
-                return false;
-            }
-
-            coefficient *= BigInteger.Pow(10, (int)expansion);
-            scale = 0;
-        }
-
-        var maximumCoefficient = (BigInteger.One << 96) - BigInteger.One;
-        if (scale > 28 || coefficient > maximumCoefficient)
-        {
-            result = default;
+        var trailingZeros = digits - lastNonzeroOrdinal - 1;
+        var significantDigits = lastNonzeroOrdinal - firstNonzeroOrdinal + 1;
+        var scale = (long)fractionDigits - exponent - trailingZeros;
+        if (scale > 28 || significantDigits > 29 || scale < 0 && significantDigits - scale > 29)
             return false;
-        }
 
-        const ulong WordMask = uint.MaxValue;
-        var low = unchecked((int)(uint)(coefficient & WordMask));
-        var mid = unchecked((int)(uint)((coefficient >> 32) & WordMask));
-        var high = unchecked((int)(uint)((coefficient >> 64) & WordMask));
-        result = new decimal(low, mid, high, negative, (byte)scale);
+        // Delegate numeric parsing to the BCL after bounding the coefficient. A direct decimal.TryParse
+        // could round a 29-digit fractional coefficient above Decimal's 96-bit limit.
+        Span<char> coefficientText = stackalloc char[29];
+        var count = 0;
+        for (var position = firstNonzero; position <= lastNonzero; position++)
+            if (text[position] != '.') coefficientText[count++] = text[position];
+        while (scale < 0)
+        {
+            coefficientText[count++] = '0';
+            scale++;
+        }
+        if (!UInt128.TryParse(coefficientText[..count], NumberStyles.None, CultureInfo.InvariantCulture, out var coefficient)
+            || coefficient > ((UInt128.One << 96) - UInt128.One))
+            return false;
+        result = new decimal(unchecked((int)coefficient), unchecked((int)(coefficient >> 32)),
+            unchecked((int)(coefficient >> 64)), negative, (byte)scale);
         return true;
     }
 

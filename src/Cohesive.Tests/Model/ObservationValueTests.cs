@@ -13,6 +13,110 @@ namespace Cohesive.Tests.Model;
 
 public sealed class ObservationValueTests
 {
+    [Theory]
+    [InlineData("0", "0")]
+    [InlineData("-0.000", "0")]
+    [InlineData("+0012.500", "12.5")]
+    [InlineData("79228162514264337593543950335", "79228162514264337593543950335")]
+    [InlineData("-79228162514264337593543950335", "-79228162514264337593543950335")]
+    [InlineData("0.0000000000000000000000000001", "0.0000000000000000000000000001")]
+    public void ExactDecimalText_PreservesRepresentableValue(string text, string expected)
+    {
+        Assert.True(ObservationValue.TryParseExactDecimal(text, out var result));
+        Assert.Equal(decimal.Parse(expected, CultureInfo.InvariantCulture), result);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("+")]
+    [InlineData("+-1")]
+    [InlineData("1.")]
+    [InlineData(".5")]
+    [InlineData(" 1")]
+    [InlineData("1 ")]
+    [InlineData("1,000")]
+    [InlineData("1e2")]
+    [InlineData("NaN")]
+    [InlineData("79228162514264337593543950336")]
+    [InlineData("7.9228162514264337593543950336")]
+    [InlineData("0.00000000000000000000000000001")]
+    [InlineData("1.00000000000000000000000000001")]
+    public void ExactDecimalText_RejectsSyntaxAndPrecisionLoss(string text)
+    {
+        Assert.False(ObservationValue.TryParseExactDecimal(text, out var result));
+        Assert.Equal(0m, result);
+    }
+
+    [Theory]
+    [InlineData("1e2", "100")]
+    [InlineData("1e-28", "0.0000000000000000000000000001")]
+    [InlineData("100e-30", "0.0000000000000000000000000001")]
+    [InlineData("-123.450e+2", "-12345")]
+    [InlineData("0e-2147483648", "0")]
+    public void ExactJsonDecimal_PreservesExponentProfile(string text, string expected)
+    {
+        Assert.False(ObservationValue.TryParseExactDecimal(text, out _));
+        using var json = JsonDocument.Parse(text);
+        Assert.Equal(decimal.Parse(expected, CultureInfo.InvariantCulture), ObservationValue.FromJsonElement(json.RootElement).GetDecimal());
+    }
+
+    [Theory]
+    [InlineData("1e-29")]
+    [InlineData("1e29")]
+    [InlineData("1e-2147483648")]
+    [InlineData("1e2147483647")]
+    [InlineData("1e2147483648")]
+    public void ExactJsonDecimal_RejectsUnrepresentableExponents(string text)
+    {
+        using var json = JsonDocument.Parse(text);
+        Assert.Equal(ObservationValueKind.Double, ObservationValue.FromJsonElement(json.RootElement).Kind);
+    }
+
+    [Fact]
+    public void ExactDecimalProfiles_AgreeForGeneratedDecimalValues()
+    {
+        var random = new Random(374);
+        for (var i = 0; i < 1000; i++)
+        {
+            var value = new decimal((int)random.NextInt64(int.MinValue, (long)int.MaxValue + 1),
+                (int)random.NextInt64(int.MinValue, (long)int.MaxValue + 1),
+                (int)random.NextInt64(int.MinValue, (long)int.MaxValue + 1), i % 2 == 0, (byte)(i % 29));
+            var text = value.ToString(CultureInfo.InvariantCulture);
+            Assert.True(ObservationValue.TryParseExactDecimal(text, out var plain));
+            using var json = JsonDocument.Parse(text);
+            Assert.Equal(value, plain);
+            Assert.Equal(plain, ObservationValue.FromJsonElement(json.RootElement).GetDecimal());
+        }
+    }
+
+    [Fact]
+    public void ExactDecimalProfiles_UseBoundedStorageForLongInputs()
+    {
+        var plain = new string('0', 100_000) + "12.5" + new string('0', 100_000);
+        var exponent = "1" + new string('0', 100_000) + "e-100000";
+        var overflow = new string('9', 100_000);
+        using var json = JsonDocument.Parse(exponent);
+        for (var i = 0; i < 100; i++)
+        {
+            Assert.True(ObservationValue.TryParseExactDecimal(plain, out _));
+            Assert.Equal(1m, ObservationValue.FromJsonElement(json.RootElement).GetDecimal());
+            Assert.False(ObservationValue.TryParseExactDecimal(overflow, out _));
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var success = ObservationValue.TryParseExactDecimal(plain, out var parsedPlain)
+            && !ObservationValue.TryParseExactDecimal(overflow, out _);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(success);
+        Assert.Equal(12.5m, parsedPlain);
+        Assert.Equal(0, allocated);
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var parsedJson = ObservationValue.FromJsonElement(json.RootElement);
+        allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(1m, parsedJson.GetDecimal());
+        // JsonElement materializes its token once; exact arithmetic must not grow with its coefficient.
+        Assert.InRange(allocated, 0, exponent.Length * 2L + 2048);
+    }
+
     [Fact]
     public void PhysicalSize_RemainsCompactForDenseStateStorage()
     {

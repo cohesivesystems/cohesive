@@ -408,24 +408,15 @@ public static class RelationDraftAcceptor
             graph = default;
             if (expression is CallExpr { Function: ExprFunctionNames.Select } projection)
             {
-                if (projection.Arguments.IsDefault || projection.Arguments.Length != 2)
-                {
-                    Add(diagnostics, "relationDraft.select.argumentsInvalid", "Collection select requires a source and one selector expression.", location);
+                if (!TryResolveSelectSource(projection, location, item, out var sourceItem, out graph))
                     return false;
-                }
-                if (!TryResolveValue(projection.Arguments[0], $"{location}/arguments/0", item, out var source, out graph))
-                    return false;
-                if (source.GetEffectiveType() is not ArrayTypeRef array)
-                {
-                    Add(diagnostics, "relationDraft.select.sourceUnsupported", "Collection select requires a statically known collection source.", location);
-                    return false;
-                }
-                if (source.Presence != FieldPresence.Required || source.Nullability != FieldNullability.NonNullable)
-                    Add(diagnostics, "relationDraft.select.sourceMayBeAbsent", "Collection select requires a present, non-null source.", location);
-                if (!TryResolveValue(projection.Arguments[1], $"{location}/arguments/1", (graph, new(array.ElementType)), out var element, out var elementGraph))
+                if (!TryResolveValue(projection.Arguments[1], $"{location}/arguments/1", (graph, sourceItem), out var element, out var elementGraph))
                     return false;
                 if (element.Presence != FieldPresence.Required || element.Nullability != FieldNullability.NonNullable)
+                {
                     Add(diagnostics, "relationDraft.select.elementMayBeAbsent", "Selected elements must be present and non-null; declare any default explicitly.", location);
+                    return false;
+                }
                 contract = new(new ArrayTypeRef(element.GetEffectiveType()!));
                 graph = elementGraph;
                 if (projection.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
@@ -443,7 +434,10 @@ public static class RelationDraftAcceptor
                 if (!TryResolveValue(conversion.Arguments[0], $"{location}/arguments/0", item, out var source, out graph))
                     return false;
                 if (source.Presence != FieldPresence.Required || source.Nullability != FieldNullability.NonNullable)
+                {
                     Add(diagnostics, "relationDraft.conversion.sourceMayBeAbsent", "Conversion requires a present, non-null source; declare any default explicitly.", location);
+                    return false;
+                }
                 var type = source.GetEffectiveType();
                 if (conversion.Function == ExprFunctionNames.Single && type is ArrayTypeRef array)
                     contract = new(array.ElementType);
@@ -474,7 +468,10 @@ public static class RelationDraftAcceptor
                     return false;
                 }
                 if (source.Presence != FieldPresence.Required || source.Nullability != FieldNullability.NonNullable)
+                {
                     Add(diagnostics, "relationDraft.join.sourceMayBeAbsent", "Collection join requires a present, non-null source; declare any default explicitly.", location);
+                    return false;
+                }
                 if (join.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
                     && join.ReturnType != source.GetEffectiveType())
                     Add(diagnostics, "relationDraft.join.returnTypeMismatch", "Declared join result type must retain the source collection type.", $"{location}/returnType");
@@ -639,14 +636,39 @@ public static class RelationDraftAcceptor
                     $"Source value cannot safely populate target '{targetShape.Id.Value}.{targetPath}': {issue.Message}", location);
         }
 
-        void ValidateSelect(CallExpr selection, ValueContract target, FieldPath targetPath, string location,
-            (GraphId Graph, ValueContract Contract)? item)
+        // Both target-driven assignment admission and inferred nested projections use this source boundary.
+        bool TryResolveSelectSource(CallExpr selection, string location,
+            (GraphId Graph, ValueContract Contract)? item, out ValueContract sourceItem, out GraphId sourceGraph)
         {
+            sourceItem = null!;
+            sourceGraph = default;
             if (selection.Arguments.IsDefault || selection.Arguments.Length != 2)
             {
                 Add(diagnostics, "relationDraft.select.argumentsInvalid", "Collection select requires a source and one selector expression.", location);
-                return;
+                return false;
             }
+            var sourceLocation = $"{location}/arguments/0";
+            if (!TryResolveValue(selection.Arguments[0], sourceLocation, item, out var source, out sourceGraph))
+                return false;
+            if (source.GetEffectiveType() is not ArrayTypeRef sourceArray)
+            {
+                Add(diagnostics, "relationDraft.select.sourceUnsupported", "Collection select requires a statically known collection source.", sourceLocation);
+                return false;
+            }
+            if (source.Presence != FieldPresence.Required || source.Nullability != FieldNullability.NonNullable)
+            {
+                Add(diagnostics, "relationDraft.select.sourceMayBeAbsent", "Collection select requires a present, non-null source, including its containing fields and binding.", sourceLocation);
+                return false;
+            }
+            sourceItem = new(sourceArray.ElementType);
+            return true;
+        }
+
+        void ValidateSelect(CallExpr selection, ValueContract target, FieldPath targetPath, string location,
+            (GraphId Graph, ValueContract Contract)? item)
+        {
+            if (!TryResolveSelectSource(selection, location, item, out var sourceItem, out var sourceGraph))
+                return;
             if (target.GetEffectiveType() is not ArrayTypeRef targetArray)
             {
                 Add(diagnostics, "relationDraft.select.targetUnsupported", "Collection select requires a collection target.", location);
@@ -655,18 +677,8 @@ public static class RelationDraftAcceptor
             if (selection.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
                 && selection.ReturnType != target.GetEffectiveType())
                 Add(diagnostics, "relationDraft.select.returnTypeMismatch", "Declared select result type does not match the target collection.", $"{location}/returnType");
-            if (!TryResolveValue(selection.Arguments[0], $"{location}/arguments/0", item, out var source, out var sourceGraph))
-                return;
-            if (source.GetEffectiveType() is not ArrayTypeRef sourceArray)
-            {
-                Add(diagnostics, "relationDraft.select.sourceUnsupported", "Collection select requires a statically known collection source.", $"{location}/arguments/0");
-                return;
-            }
-            // The canonical evaluator requires an array. Optional/nullable input cannot be treated as empty.
-            if (source.Presence != FieldPresence.Required || source.Nullability != FieldNullability.NonNullable)
-                Add(diagnostics, "relationDraft.select.sourceMayBeAbsent", "Collection select requires a present, non-null source, including its containing fields and binding.", $"{location}/arguments/0");
             ValidateValue(selection.Arguments[1], new(targetArray.ElementType), targetPath,
-                $"{location}/arguments/1", (sourceGraph, new(sourceArray.ElementType)));
+                $"{location}/arguments/1", (sourceGraph, sourceItem));
         }
 
         void ValidateObject(CallExpr construction, ValueContract target, FieldPath targetPath, string location,

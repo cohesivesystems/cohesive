@@ -484,9 +484,10 @@ one with `coalesce` when appropriate, and native admission still checks its cont
 `parseDecimal` accepts an optional leading sign, one or more ASCII integer digits and an optional
 fraction containing one or more digits. Leading integer zeros and trailing fraction zeros are
 allowed. Whitespace, grouping separators, exponents, missing/null values, overflow and any loss of
-precision are rejected. Parsing is culture-independent and uses the core exact-decimal mechanism.
-Lexical validation scans the input once; zero normalization bounds subsequent arithmetic to at most
-29 significant digits and a scale of 28. It does not reinterpret protocol-specific implied scales.
+precision are rejected. Parsing delegates to `ObservationValue.TryParseExactDecimal`. Strict text and JSON-number acquisition
+share the same core scanner and exact representability check, with exponents permitted only by the
+JSON entry point. The scanner retains nonzero digit bounds; at most 29 coefficient digits are passed
+to BCL `UInt128.TryParse` using stack storage. The coefficient must fit 96 bits and scale 0–28. It does not reinterpret protocol-specific implied scales.
 Those are separate, explicitly authored semantics.
 
 `single` retains the exact element type and payload. A read-valued `select` can supply its input,
@@ -515,3 +516,19 @@ a complete EDI 204 mapping, its acquisition boundary or Ari's operational accept
 
 See [operation performance evidence](../../../../docs/performance/relation-value-contracts.md) for
 warm costs, allocation bounds and the reproducible benchmark command.
+
+
+Select's assignment and nested-composition admission share one source boundary for arity, collection
+type, presence, nullability and item scope. Target-driven selector validation remains distinct from
+inferred selector contracts because they prove different things. Select, Join and conversion source
+failures now stop resolution before a required-looking contract can reach a parent expression.
+
+General `ConstantExpr` widening across compositions remains an open follow-up to #370/#372.
+This change retains `IsSatisfiedByConstant` and the existing contextual conditional analysis;
+it does not introduce a graph-aware, generally typed constant representation or close that issue.
+
+The parsing audit also checked `TryGetDecimal`, CLR Single projection, primitive-literal matching,
+and temporal JSON conversion. Those use BCL parsing for their existing coercion or wire-format
+contracts; they are not interchangeable with strict exact-decimal conversion. Their accepted syntax
+and rounding behavior are unchanged here. DOM and streaming JSON numeric acquisition both delegate
+to the consolidated exact parser, retaining their existing non-Decimal fallback behavior.

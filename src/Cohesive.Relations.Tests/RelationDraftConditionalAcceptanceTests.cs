@@ -223,6 +223,47 @@ public sealed class RelationDraftConditionalAcceptanceTests
         Assert.Contains(accepted.Diagnostics, d => d.Code == code);
     }
 
+    [Theory]
+    [InlineData("arity", "relationDraft.select.argumentsInvalid", "")]
+    [InlineData("absent", "relationDraft.select.sourceMayBeAbsent", "/arguments/0")]
+    [InlineData("type", "relationDraft.select.sourceUnsupported", "/arguments/0")]
+    public void SelectSourceAdmission_IsIdenticalAtRootAndInsideSingle(string scenario, string code, string suffix)
+    {
+        string? message = null;
+        foreach (var nested in new[] { false, true })
+        {
+            var sourceType = scenario == "type" ? (TypeRef)Text : new ArrayTypeRef(Text);
+            Expr expression = scenario == "arity" ? Expr.Call(ExprFunctionNames.Select, Read)
+                : Expr.Call(ExprFunctionNames.Select, Read, Expr.Field("item.invalid"));
+            if (nested) expression = Expr.Call(ExprFunctionNames.Single, expression);
+            var (graphs, draft) = Fixture(expression, targetType: nested ? Text : new ArrayTypeRef(Text));
+            graphs[0] = new(graphs[0].Id, [new Shape(Source.ShapeId,
+                [new(new("value"), sourceType, presence: scenario == "absent" ? FieldPresence.Optional : FieldPresence.Required)])]);
+            var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+            Assert.False(accepted.IsAccepted);
+            var diagnostic = Assert.Single(accepted.Diagnostics.Where(d => d.Code.StartsWith("relationDraft.", StringComparison.Ordinal)));
+            Assert.Equal(code, diagnostic.Code);
+            Assert.EndsWith("/value" + (nested ? "/arguments/0" : "") + suffix, diagnostic.Location);
+            if (message is not null) Assert.Equal(message, diagnostic.Message);
+            message = diagnostic.Message;
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MissingCollectionStopsResolutionBeforeInferringARequiredValue(bool join)
+    {
+        Expr collection = join
+            ? Expr.Join(Expr.Const("SH"), Expr.CurrentItem(), Read)
+            : Expr.Call(ExprFunctionNames.Select, Read, Expr.CurrentItem());
+        var (graphs, draft) = Fixture(Expr.Call(ExprFunctionNames.Single, collection), sourceTypeOverride: new ArrayTypeRef(Text));
+        var result = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.False(result.IsAccepted);
+        Assert.Equal(join ? "relationDraft.join.sourceMayBeAbsent" : "relationDraft.select.sourceMayBeAbsent",
+            Assert.Single(result.Diagnostics).Code);
+    }
+
     static async Task<ObservationValue> Execute(RelationDraftAcceptanceResult accepted, ShapeGraph[] graphs,
         ImmutableDictionary<string, ObservationValue> fields)
     {
