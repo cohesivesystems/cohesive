@@ -1636,16 +1636,19 @@ public sealed class ExprAnalysisTests
         Assert.False(Analyze(Expr.Call(ExprFunctionNames.Join, Expr.Const("PO")), scope, "arity").IsValid);
     }
 
-    [Fact]
-    public void ExplicitConversionsCarryResultContractsWithoutErasingSourceRequirements()
+    [Theory]
+    [InlineData(ExprFunctionNames.ParseDecimal, ScalarTypeKind.Decimal)]
+    [InlineData(ExprFunctionNames.ParseInt32, ScalarTypeKind.Int32)]
+    [InlineData(ExprFunctionNames.ParseInt64, ScalarTypeKind.Int64)]
+    public void ExplicitConversionsCarryResultContractsWithoutErasingSourceRequirements(string function, ScalarTypeKind kind)
     {
-        var parsed = Analyze(Expr.Call(ExprFunctionNames.ParseDecimal, Expr.CurrentItem()),
+        var parsed = Analyze(Expr.Call(function, Expr.CurrentItem()),
             Scope(currentItem: new(StringType)), "decimal");
         Assert.True(parsed.IsValid);
-        Assert.Equal(new ScalarTypeRef(ScalarTypeKind.Decimal), parsed.KnownResult?.Type);
+        Assert.Equal(new ScalarTypeRef(kind), parsed.KnownResult?.Type);
         Assert.Equal(FieldPresence.Required, parsed.KnownResult?.Presence);
         Assert.Equal(FieldNullability.NonNullable, parsed.KnownResult?.Nullability);
-        Assert.False(Analyze(Expr.Call(ExprFunctionNames.ParseDecimal, Expr.CurrentItem()),
+        Assert.False(Analyze(Expr.Call(function, Expr.CurrentItem()),
             Scope(currentItem: new(StringType, presence: FieldPresence.Optional)), "optional-decimal").IsValid);
         var named = new NamedTypeRef(new("Party"));
         var single = Analyze(Expr.Call(ExprFunctionNames.Single, Expr.CurrentItem()),

@@ -432,7 +432,7 @@ public static class RelationDraftAcceptor
                     Add(diagnostics, "relationDraft.select.returnTypeMismatch", "Declared select result must retain its element type.", $"{location}/returnType");
                 return true;
             }
-            if (expression is CallExpr { Function: ExprFunctionNames.Single or ExprFunctionNames.ParseDecimal } conversion)
+            if (expression is CallExpr { Function: ExprFunctionNames.Single or ExprFunctionNames.ParseDecimal or ExprFunctionNames.ParseInt32 or ExprFunctionNames.ParseInt64 } conversion)
             {
                 if (conversion.Arguments.IsDefault || conversion.Arguments.Length != 1)
                 {
@@ -449,11 +449,12 @@ public static class RelationDraftAcceptor
                 var type = source.GetEffectiveType();
                 if (conversion.Function == ExprFunctionNames.Single && type is ArrayTypeRef array)
                     contract = new(array.ElementType);
-                else if (conversion.Function == ExprFunctionNames.ParseDecimal && type is ScalarTypeRef { Kind: ScalarTypeKind.String })
-                    contract = new(new ScalarTypeRef(ScalarTypeKind.Decimal));
+                else if (conversion.Function != ExprFunctionNames.Single && type is ScalarTypeRef { Kind: ScalarTypeKind.String }
+                    && ExprSemanticsCatalog.Default.TryGetFunction(conversion.Function, out var definition))
+                    contract = definition.FixedResult!;
                 else
                 {
-                    Add(diagnostics, "relationDraft.conversion.sourceUnsupported", "Single requires a collection; parseDecimal requires text.", location);
+                    Add(diagnostics, "relationDraft.conversion.sourceUnsupported", "Single requires a collection; numeric parsing requires text.", location);
                     return false;
                 }
                 if (conversion.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }

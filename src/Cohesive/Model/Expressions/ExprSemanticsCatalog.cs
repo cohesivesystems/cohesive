@@ -650,6 +650,8 @@ public sealed class ExprSemanticsCatalog
                     scoped: [new(1, 0)]),
                 // Parsing returns a value or fails; unlike an average over an empty collection it cannot be absent.
                 Function(ExprFunctionNames.ParseDecimal, 1, 1, [ExprResultCategory.Text], resultCategory: ExprResultCategory.Numeric, resultRule: ExprFunctionResultRule.Fixed, fixedResult: new(new ScalarTypeRef(ScalarTypeKind.Decimal))),
+                Function(ExprFunctionNames.ParseInt32, 1, 1, [ExprResultCategory.Text], resultCategory: ExprResultCategory.Integer, resultRule: ExprFunctionResultRule.Fixed, fixedResult: new(new ScalarTypeRef(ScalarTypeKind.Int32))),
+                Function(ExprFunctionNames.ParseInt64, 1, 1, [ExprResultCategory.Text], resultCategory: ExprResultCategory.Integer, resultRule: ExprFunctionResultRule.Fixed, fixedResult: new(new ScalarTypeRef(ScalarTypeKind.Int64))),
                 Function(ExprFunctionNames.Single, 1, 1, [ExprResultCategory.Collection], resultRule: ExprFunctionResultRule.CollectionElement),
                 Function(ExprFunctionNames.Coalesce, 2, 2, [ExprResultCategory.Any, ExprResultCategory.Any], resultRule: ExprFunctionResultRule.FirstNonNullish),
                 Function(ExprFunctionNames.Concat, 1, null, argumentCategories: [], variadicCategory: ExprResultCategory.Text, resultCategory: ExprResultCategory.Text, resultRule: ExprFunctionResultRule.Fixed, fixedResult: @string),

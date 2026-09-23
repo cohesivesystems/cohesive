@@ -251,6 +251,68 @@ public sealed class RelationDraftDefaultAcceptanceTests
         }));
     }
 
+    [Theory]
+    [InlineData(ExprFunctionNames.ParseInt32, ScalarTypeKind.Int32, "direct")]
+    [InlineData(ExprFunctionNames.ParseInt64, ScalarTypeKind.Int64, "direct")]
+    [InlineData(ExprFunctionNames.ParseInt32, ScalarTypeKind.Int32, "selected")]
+    [InlineData(ExprFunctionNames.ParseInt64, ScalarTypeKind.Int64, "selected")]
+    [InlineData(ExprFunctionNames.ParseInt32, ScalarTypeKind.Int32, "guarded")]
+    [InlineData(ExprFunctionNames.ParseInt64, ScalarTypeKind.Int64, "guarded")]
+    public async Task IntegerConversion_RoundtripsAcceptsAndExecutes(string function, ScalarTypeKind kind, string mode)
+    {
+        Expr source = mode == "selected"
+            ? Expr.Call(ExprFunctionNames.Single, Expr.Call(ExprFunctionNames.Select, Read, Expr.CurrentItem())) : Read;
+        Expr expression = Expr.Call(function, source);
+        if (mode == "guarded") expression = Expr.If(new BinaryExpr(BinaryOperator.Ne,
+            Expr.Coalesce(Read, Expr.Null()), Expr.Null()), expression, Expr.Null());
+        var (graphs, draft) = Fixture(expression);
+        graphs[0] = new(Source.GraphId, [new Shape(Source.ShapeId,
+            [new(new("value"), Text, cardinality: mode == "selected" ? FieldCardinality.Many : FieldCardinality.Single,
+                presence: mode == "guarded" ? FieldPresence.Optional : FieldPresence.Required,
+                nullability: mode == "guarded" ? FieldNullability.Nullable : FieldNullability.NonNullable)])]);
+        graphs[1] = new(Target.GraphId, [new Shape(Target.ShapeId,
+            [new(new("value"), new ScalarTypeRef(kind), nullability: mode == "guarded" ? FieldNullability.Nullable : FieldNullability.NonNullable)])]);
+        var document = RelationDraftDocument.FromDraft(draft);
+        var restored = RelationDraftJsonSerializer.Deserialize(RelationDraftJsonSerializer.Serialize(document));
+        var accepted = RelationDraftAcceptor.Accept(restored.Draft, graphs);
+        Assert.True(accepted.IsAccepted, Diagnostics(accepted));
+        Assert.Equal(document.DraftFingerprint, accepted.Provenance.DraftFingerprint);
+        foreach (var input in mode == "guarded" ? new[] { ObservationValue.FromString("002"), ObservationValue.Null, ObservationValue.Undefined }
+            : new[] { mode == "selected" ? ObservationValue.FromArray([ObservationValue.FromString("002")]) : ObservationValue.FromString("002") })
+        {
+            var fields = input.Kind == ObservationValueKind.Undefined ? ImmutableDictionary<string, ObservationValue>.Empty
+                : ImmutableDictionary<string, ObservationValue>.Empty.Add("value", input);
+            var evaluation = RelationQueryDocument.FromDefinition(accepted.Definition!)
+                .Evaluate(new("tests/integer"), [.. graphs.Select(g => ShapeGraphDocument.FromGraph(g))])
+                .Supply([new RelationQuerySuppliedRoot("row", Source, fields)]).Build();
+            var outcome = await RelationQueryEvaluator.CreateSuppliedOnly().EvaluateAsync(evaluation);
+            Assert.True(outcome.IsSuccessful, string.Join("; ", outcome.Compilation.Diagnostics.Select(d => d.Message)) + outcome.ToString());
+            var row = Assert.Single(Assert.IsType<RelationQueryExecutionResult>(outcome.Result).Relation!.Rows);
+            Assert.Equal(input.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined ? ObservationValue.Null : ObservationValue.FromInt64(2), row.Value.GetProperty("value"));
+            _ = Observation.Create(new(graphs[1], Target.ShapeId), row.Value);
+        }
+    }
+
+    [Theory]
+    [InlineData("optional", "relationDraft.conversion.sourceMayBeAbsent")]
+    [InlineData("arity", "relationDraft.conversion.argumentsInvalid")]
+    [InlineData("numeric", "relationDraft.conversion.sourceUnsupported")]
+    [InlineData("return", "relationDraft.conversion.returnTypeMismatch")]
+    public void IntegerConversion_RejectsUnprovenContracts(string scenario, string code)
+    {
+        Expr expression = scenario == "arity" ? Expr.Call(ExprFunctionNames.ParseInt32)
+            : scenario == "return" ? new CallExpr(ExprFunctionNames.ParseInt32, [Read], new ScalarTypeRef(ScalarTypeKind.Int64))
+            : Expr.Call(ExprFunctionNames.ParseInt32, Read);
+        var (graphs, draft) = Fixture(expression);
+        graphs[0] = new(Source.GraphId, [new Shape(Source.ShapeId,
+            [new(new("value"), scenario == "numeric" ? new ScalarTypeRef(ScalarTypeKind.Int64) : Text,
+                presence: scenario == "optional" ? FieldPresence.Optional : FieldPresence.Required)])]);
+        graphs[1] = new(Target.GraphId, [new Shape(Target.ShapeId, [new(new("value"), new ScalarTypeRef(ScalarTypeKind.Int32))])]);
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.False(accepted.IsAccepted);
+        Assert.Contains(accepted.Diagnostics, d => d.Code == code);
+    }
+
     static (ShapeGraph[] Graphs, RelationDraft Draft) Fixture(Expr expression, bool collection = false)
     {
         var cardinality = collection ? FieldCardinality.Many : FieldCardinality.Single;

@@ -616,6 +616,49 @@ public sealed class RelationQueryExpressionEvaluatorTests
     }
 
     [Theory]
+    [InlineData(ExprFunctionNames.ParseInt32, "002", 2L)]
+    [InlineData(ExprFunctionNames.ParseInt32, "+2147483647", 2147483647L)]
+    [InlineData(ExprFunctionNames.ParseInt32, "-2147483648", -2147483648L)]
+    [InlineData(ExprFunctionNames.ParseInt64, "9223372036854775807", long.MaxValue)]
+    [InlineData(ExprFunctionNames.ParseInt64, "-9223372036854775808", long.MinValue)]
+    [InlineData(ExprFunctionNames.ParseInt64, "-0", 0L)]
+    public void ParseInteger_PreservesExactRange(string function, string text, long expected)
+    {
+        var value = evaluator.Evaluate(Expr.Call(function, Expr.Const(text)), Context());
+        Assert.Equal(ObservationValue.FromInt64(expected), value);
+    }
+
+    [Theory]
+    [InlineData(ExprFunctionNames.ParseInt32)]
+    [InlineData(ExprFunctionNames.ParseInt64)]
+    public void ParseInteger_RejectsMalformedTextAndNonText(string function)
+    {
+        foreach (var text in new[] { "", "+", "--1", "1.0", "1e2", " 1", "1 ", "1,000", "١", "１", "1\0", "9223372036854775808", "-9223372036854775809" })
+            Assert.Equal(RelationQueryExpressionEvaluationError.InvalidOperand,
+                Assert.Throws<RelationQueryExpressionEvaluationException>(() => evaluator.Evaluate(
+                    Expr.Call(function, Expr.Const(text)), Context())).Error);
+        foreach (var value in new[] { ObservationValue.Null, ObservationValue.Undefined, ObservationValue.FromInt64(1) })
+            Assert.Throws<RelationQueryExpressionEvaluationException>(() => evaluator.Evaluate(Expr.Call(function, Expr.Const(value)), Context()));
+        Assert.Equal(RelationQueryExpressionEvaluationError.InvalidFunctionArity,
+            Assert.Throws<RelationQueryExpressionEvaluationException>(() => evaluator.Evaluate(Expr.Call(function), Context())).Error);
+        if (function == ExprFunctionNames.ParseInt32)
+            foreach (var text in new[] { "2147483648", "-2147483649" })
+                Assert.Throws<RelationQueryExpressionEvaluationException>(() => evaluator.Evaluate(Expr.Call(function, Expr.Const(text)), Context()));
+    }
+
+    [Fact]
+    public void ParseInteger_LongZeroPaddingHasBoundedAllocation()
+    {
+        var expression = Expr.Call(ExprFunctionNames.ParseInt32, Expr.Const(new string('0', 100_000) + "2"));
+        var context = Context();
+        for (var i = 0; i < 100; i++) _ = evaluator.Evaluate(expression, context);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var value = evaluator.Evaluate(expression, context);
+        Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 2048);
+        Assert.Equal(2, value.GetInt64());
+    }
+
+    [Theory]
     [InlineData("0012.50", "12.50")]
     [InlineData("+12.5", "12.5")]
     [InlineData("-0.000", "0")]

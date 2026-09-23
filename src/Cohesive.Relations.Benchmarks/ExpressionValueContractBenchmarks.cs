@@ -14,7 +14,7 @@ public class ExpressionValueContractBenchmarks
     Expr expression = null!;
 
     /// <summary>Short/maximum-precision text and flat/nested/collection-heavy single-item values.</summary>
-    [Params("decimal", "decimal-max", "single-flat", "single-nested", "single-collection")]
+    [Params("decimal", "decimal-max", "int32", "int64-max", "integer-padded", "single-flat", "single-nested", "single-collection")]
     public string Workload { get; set; } = "decimal";
 
     /// <summary>Prepares immutable expressions and retained input values once.</summary>
@@ -28,6 +28,12 @@ public class ExpressionValueContractBenchmarks
             "single-collection" => payload,
             _ => ObservationValue.FromString("a")
         };
+        if (Workload is "int32" or "int64-max" or "integer-padded")
+        {
+            expression = Expr.Call(Workload == "int64-max" ? ExprFunctionNames.ParseInt64 : ExprFunctionNames.ParseInt32,
+                Expr.Const(Workload == "int64-max" ? "9223372036854775807" : Workload == "integer-padded" ? new string('0', 4096) + "2" : "002"));
+            return;
+        }
         expression = Workload.StartsWith("decimal", StringComparison.Ordinal)
             ? Expr.Call(ExprFunctionNames.ParseDecimal, Expr.Const(Workload == "decimal" ? "0012.50" : "79228162514264337593543950335"))
             : Expr.Call(ExprFunctionNames.Single, Expr.Const(ObservationValue.FromArray([value])));

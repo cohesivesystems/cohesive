@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -332,6 +333,8 @@ sealed class RelationQueryExpressionEvaluator
             StringComparer.Ordinal,
             ExprFunctionNames.Coalesce,
             ExprFunctionNames.ParseDecimal,
+            ExprFunctionNames.ParseInt32,
+            ExprFunctionNames.ParseInt64,
             ExprFunctionNames.Single,
             ExprFunctionNames.Contains,
             ExprFunctionNames.Count,
@@ -592,6 +595,7 @@ sealed class RelationQueryExpressionEvaluator
         return call.Function switch
         {
             ExprFunctionNames.ParseDecimal => EvaluateParseDecimal(call, context),
+            ExprFunctionNames.ParseInt32 or ExprFunctionNames.ParseInt64 => EvaluateParseInteger(call, context),
             ExprFunctionNames.Single => EvaluateSingle(call, context),
             ExprFunctionNames.Coalesce => EvaluateCoalesce(call, context),
             ExprFunctionNames.Contains => EvaluateContains(call, context),
@@ -688,6 +692,18 @@ sealed class RelationQueryExpressionEvaluator
         if (!ObservationValue.TryParseExactDecimal(text, out var value))
             throw InvalidOperand("Expression function 'parseDecimal' requires exactly representable invariant decimal text without grouping, whitespace or exponents.");
         return ObservationValue.FromDecimal(value);
+    }
+
+    ObservationValue EvaluateParseInteger(CallExpr call, in RelationQueryExpressionContext context)
+    {
+        var text = RequireString(Evaluate(call.Arguments[0], context), call.Function).AsSpan();
+        var digits = !text.IsEmpty && text[0] is '+' or '-' ? text[1..] : text;
+        // TryParse accepts trailing NUL characters; the portable grammar permits ASCII digits only.
+        if (digits.IsEmpty || digits.IndexOfAnyExceptInRange('0', '9') >= 0
+            || !long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value)
+            || (call.Function == ExprFunctionNames.ParseInt32 && value is < int.MinValue or > int.MaxValue))
+            throw InvalidOperand($"Expression function '{call.Function}' requires in-range signed ASCII integer text without whitespace, fractions or exponents.");
+        return ObservationValue.FromInt64(value);
     }
 
     ObservationValue EvaluateCoalesce(CallExpr call, in RelationQueryExpressionContext context)

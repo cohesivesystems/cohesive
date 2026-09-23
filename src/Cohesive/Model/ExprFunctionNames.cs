@@ -47,6 +47,12 @@ public static class ExprFunctionNames
     /// <summary>Parses invariant signed decimal text exactly; rejects whitespace, exponents, grouping, overflow and rounding.</summary>
     public const string ParseDecimal = "parseDecimal";
 
+    /// <summary>Parses signed ASCII integer text into a required non-null Int32, rejecting overflow.</summary>
+    public const string ParseInt32 = "parseInt32";
+
+    /// <summary>Parses signed ASCII integer text into a required non-null Int64, rejecting overflow.</summary>
+    public const string ParseInt64 = "parseInt64";
+
     /// <summary>Returns the sole collection item; fails on empty or ambiguous collections rather than choosing by position.</summary>
     public const string Single = "single";
 
