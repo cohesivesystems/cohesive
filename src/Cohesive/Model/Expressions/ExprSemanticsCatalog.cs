@@ -648,7 +648,8 @@ public sealed class ExprSemanticsCatalog
                     resultRule: ExprFunctionResultRule.Fixed,
                     fixedResult: decimalNumber,
                     scoped: [new(1, 0)]),
-                Function(ExprFunctionNames.ParseDecimal, 1, 1, [ExprResultCategory.Text], resultCategory: ExprResultCategory.Numeric, resultRule: ExprFunctionResultRule.Fixed, fixedResult: decimalNumber),
+                // Parsing returns a value or fails; unlike an average over an empty collection it cannot be absent.
+                Function(ExprFunctionNames.ParseDecimal, 1, 1, [ExprResultCategory.Text], resultCategory: ExprResultCategory.Numeric, resultRule: ExprFunctionResultRule.Fixed, fixedResult: new(new ScalarTypeRef(ScalarTypeKind.Decimal))),
                 Function(ExprFunctionNames.Single, 1, 1, [ExprResultCategory.Collection], resultRule: ExprFunctionResultRule.CollectionElement),
                 Function(ExprFunctionNames.Coalesce, 2, 2, [ExprResultCategory.Any, ExprResultCategory.Any], resultRule: ExprFunctionResultRule.FirstNonNullish),
                 Function(ExprFunctionNames.Concat, 1, null, argumentCategories: [], variadicCategory: ExprResultCategory.Text, resultCategory: ExprResultCategory.Text, resultRule: ExprFunctionResultRule.Fixed, fixedResult: @string),
