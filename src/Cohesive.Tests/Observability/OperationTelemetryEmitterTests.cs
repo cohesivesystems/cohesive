@@ -89,7 +89,8 @@ public sealed class OperationTelemetryEmitterTests
         const int Iterations = 10_000;
         var unexpectedTelemetry = false;
 
-        for (var index = 0; index < 100; index++)
+        // Warm the same workload that is measured, including tiered/runtime metadata paths.
+        for (var index = 0; index < Iterations; index++)
         {
             unexpectedTelemetry |= emitter.IsEnabled;
             unexpectedTelemetry |= emitter.StartActivity("test.operation") is not null;

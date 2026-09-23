@@ -11,6 +11,30 @@ public static class ObservationValidator
 {
     const int MaxValidationDepth = 64;
 
+    /// <summary>Validates a portable value against a type using the same semantics as observation admission.</summary>
+    /// <param name="value">Concrete value to validate; undefined values are rejected.</param>
+    /// <param name="type">Expected type, including any array or object structure.</param>
+    /// <param name="validationError">Failure reason, or null on success.</param>
+    /// <param name="graph">Exact graph owning any named type references; required for named types.</param>
+    /// <returns>Whether the value satisfies the type. Field presence and nullability remain the caller's responsibility.</returns>
+    /// <remarks>Retains no input state. Successful scalar and named-enum validation allocates no temporary storage.</remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="type"/> is null.</exception>
+    public static bool TryValidateAgainstType(
+        ObservationValue value, TypeRef type, out string? validationError, ShapeGraph? graph = null)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        NoDiagnostics noDiagnostics = default;
+        if (TryMatchType(type, value, graph, MaxValidationDepth, ref noDiagnostics))
+        {
+            validationError = null;
+            return true;
+        }
+        DetailedDiagnostics detailedDiagnostics = new();
+        _ = TryMatchType(type, value, graph, MaxValidationDepth, ref detailedDiagnostics);
+        validationError = detailedDiagnostics.Error ?? "The value does not adhere to the supplied type.";
+        return false;
+    }
+
     /// <summary>Validates that a concrete object value adheres to the supplied shape semantics.</summary>
     /// <param name="value">Concrete object value to validate.</param>
     /// <param name="shape">Expected semantic shape.</param>

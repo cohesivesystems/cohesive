@@ -139,3 +139,17 @@ text. Explicit serializer customizations retain their chosen conversion contract
 can opt into `PortableValueJsonConverter.TaggedObservationValues`, which reuses the PortableValue node encoding to
 preserve byte, temporal, numeric, and undefined kinds. Opting in changes the wire format and requires a versioned profile;
 ordinary observation JSON remains unchanged. Entity receipts use the explicit `EntityStorageJson` profile in Storage.
+
+## Type-level value admission
+
+`ObservationValidator.TryValidateAgainstType(value, type, out error, graph)` exposes the same
+type checks used by observation admission without manufacturing a one-field shape. Named types
+resolve only in the supplied graph. This validates a concrete type; field presence and nullability
+remain the caller's contract. Relation draft admission uses it for graph-owned enum literals.
+
+## Exact decimal text
+
+`ObservationValue.TryParseExactDecimal(text, out value)` validates signed invariant decimal text
+without rounding. It shares bounded coefficient parsing with JSON-number acquisition, while JSON
+alone permits exponent notation. The expression evaluator delegates to this helper. The existing
+`TryGetDecimal` convenience coercion keeps its broader BCL syntax and rounding behavior.

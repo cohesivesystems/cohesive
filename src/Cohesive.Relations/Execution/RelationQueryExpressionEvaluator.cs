@@ -331,6 +331,8 @@ sealed class RelationQueryExpressionEvaluator
         ImmutableHashSet.Create(
             StringComparer.Ordinal,
             ExprFunctionNames.Coalesce,
+            ExprFunctionNames.ParseDecimal,
+            ExprFunctionNames.Single,
             ExprFunctionNames.Contains,
             ExprFunctionNames.Count,
             ExprFunctionNames.EndsWith,
@@ -589,6 +591,8 @@ sealed class RelationQueryExpressionEvaluator
 
         return call.Function switch
         {
+            ExprFunctionNames.ParseDecimal => EvaluateParseDecimal(call, context),
+            ExprFunctionNames.Single => EvaluateSingle(call, context),
             ExprFunctionNames.Coalesce => EvaluateCoalesce(call, context),
             ExprFunctionNames.Contains => EvaluateContains(call, context),
             ExprFunctionNames.Count => EvaluateCount(call, context),
@@ -668,6 +672,22 @@ sealed class RelationQueryExpressionEvaluator
         var value = RequireString(Evaluate(call.Arguments[0], context), call.Function);
         var substring = RequireString(Evaluate(call.Arguments[1], context), call.Function);
         return ObservationValue.FromBool(value.Contains(substring, StringComparison.Ordinal));
+    }
+
+    ObservationValue EvaluateSingle(CallExpr call, in RelationQueryExpressionContext context)
+    {
+        var values = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
+        if (values.Count != 1)
+            throw InvalidOperand($"Expression function 'single' requires exactly one item; received {values.Count}.");
+        return values[0];
+    }
+
+    ObservationValue EvaluateParseDecimal(CallExpr call, in RelationQueryExpressionContext context)
+    {
+        var text = RequireString(Evaluate(call.Arguments[0], context), call.Function);
+        if (!ObservationValue.TryParseExactDecimal(text, out var value))
+            throw InvalidOperand("Expression function 'parseDecimal' requires exactly representable invariant decimal text without grouping, whitespace or exponents.");
+        return ObservationValue.FromDecimal(value);
     }
 
     ObservationValue EvaluateCoalesce(CallExpr call, in RelationQueryExpressionContext context)

@@ -462,3 +462,73 @@ provenance, supplied-observation execution, source defaults, null and unmatched 
 item scope and duplicates, nested branches, target enums, required object children and rejected
 unsafe/malformed policies. Full protocol-to-canonical acceptance and application authoring policy
 remain consumer deliverables; successful native acceptance alone is not business approval.
+
+
+### Qualified scalar selection and exact numeric conversion
+
+Portable drafts can compose `join`, `select`, `single` and `parseDecimal`. For example:
+
+```csharp
+var matching = Expr.Join(Expr.Const("SH"), Expr.Field("item.role"),
+    Expr.Field(new ValueBindingId("source"), "values"));
+var weights = Expr.Call(ExprFunctionNames.Select, matching,
+    Expr.Call(ExprFunctionNames.ParseDecimal, Expr.Field("item.weight")));
+var weight = Expr.Call(ExprFunctionNames.Single, weights);
+```
+
+With `[{role:"CN",weight:"999"},{role:"SH",weight:"0012.50"}]`, the result is Decimal
+`12.50`, independent of ordering. Zero or multiple SH entries fail at execution; identical duplicates
+are still ambiguous. Neither operation invents a missing-value default. The caller must declare
+one with `coalesce` when appropriate, and native admission still checks its contract.
+
+`parseDecimal` accepts an optional leading sign, one or more ASCII integer digits and an optional
+fraction containing one or more digits. Leading integer zeros and trailing fraction zeros are
+allowed. Whitespace, grouping separators, exponents, missing/null values, overflow and any loss of
+precision are rejected. Parsing delegates to `ObservationValue.TryParseExactDecimal`. Strict text and JSON-number acquisition
+share the same core scanner and exact representability check, with exponents permitted only by the
+JSON entry point. The scanner retains nonzero digit bounds; at most 29 coefficient digits are passed
+to BCL `UInt128.TryParse` using stack storage. The coefficient must fit 96 bits and scale 0–28. It does not reinterpret protocol-specific implied scales.
+Those are separate, explicitly authored semantics.
+
+`single` retains the exact element type and payload. A read-valued `select` can supply its input,
+including scoped numeric conversion. Draft admission verifies source presence, nullability, element
+contracts and declared return metadata. It does not claim that a schema proves runtime cardinality
+or that every string is a valid number: those failures remain execution diagnostics. Source reads
+are evaluated once per operation; selectors retain their existing current-item scope.
+
+Named enum keys, fallbacks and output literals use `ObservationValidator` against the **owning**
+graph, including declared names and underlying literals. A source and target may use identical local
+type IDs with different definitions. Direct assignments still require compatible graph identity;
+accepting a literal does not erase that identity. Conditional branches with unknown return metadata
+can use the site type after independent validation, allowing `code == "yes" ? 1 : 0` to populate
+Int32. Out-of-range constants and unknown Int64 field values cannot narrow this way.
+
+These are extensions of the canonical expression catalog, analyzer, evaluator and draft admission;
+no protocol catalog, alternate expression IR or application-specific conversion registry is added.
+Other interpreters must explicitly advertise support. The new calls use the existing portable call
+wire format and are not automatically translated from arbitrary C# methods or pushed into backends.
+
+Qualification: `RelationDraftConditionalAcceptanceTests` roundtrips and executes the composed
+example, graph-local enums and contextual integers; `RelationQueryExpressionEvaluatorTests` covers
+empty/ambiguous selection, exact numeric boundaries, malformed input and bounded allocations.
+`ExprAnalysisTests` covers static source/result contracts. This qualifies generic primitives, **not**
+a complete EDI 204 mapping, its acquisition boundary or Ari's operational acceptance corpus.
+
+See [operation performance evidence](../../../../docs/performance/relation-value-contracts.md) for
+warm costs, allocation bounds and the reproducible benchmark command.
+
+
+Select's assignment and nested-composition admission share one source boundary for arity, collection
+type, presence, nullability and item scope. Target-driven selector validation remains distinct from
+inferred selector contracts because they prove different things. Select, Join and conversion source
+failures now stop resolution before a required-looking contract can reach a parent expression.
+
+General `ConstantExpr` widening across compositions remains an open follow-up to #370/#372.
+This change retains `IsSatisfiedByConstant` and the existing contextual conditional analysis;
+it does not introduce a graph-aware, generally typed constant representation or close that issue.
+
+The parsing audit also checked `TryGetDecimal`, CLR Single projection, primitive-literal matching,
+and temporal JSON conversion. Those use BCL parsing for their existing coercion or wire-format
+contracts; they are not interchangeable with strict exact-decimal conversion. Their accepted syntax
+and rounding behavior are unchanged here. DOM and streaming JSON numeric acquisition both delegate
+to the consolidated exact parser, retaining their existing non-Decimal fallback behavior.

@@ -6,7 +6,9 @@ leaving storage placement and execution strategy to compilers and adapters.
 Portable [relation drafts](docs/internals/RELATIONS_AND_QUERIES.md#portable-relation-drafts) support
 explicit nested fields, statically keyed object construction, explicit `coalesce` defaults, bounded code-conditionals, key-based collection `join` and collection `select` with shape-aware
 acceptance. Selectors preserve item scope and each target child's contract; source collections must
-be present and non-null. Implicit element traversal and conversion expressions remain unsupported.
+be present and non-null. Explicit `single` requires exactly one selected item, and `parseDecimal` converts
+invariant text without rounding. Named enum literals are checked in their owning graph. Implicit
+element traversal and undeclared conversions remain unsupported.
 
 ## Install
 

@@ -615,6 +615,75 @@ public sealed class RelationQueryExpressionEvaluatorTests
         Assert.Equal(RelationQueryExpressionEvaluationError.InvalidFunctionArity, arity.Error);
     }
 
+    [Theory]
+    [InlineData("0012.50", "12.50")]
+    [InlineData("+12.5", "12.5")]
+    [InlineData("-0.000", "0")]
+    [InlineData("79228162514264337593543950335", "79228162514264337593543950335")]
+    [InlineData("0.0000000000000000000000000001", "0.0000000000000000000000000001")]
+    public void ParseDecimal_PreservesExactInvariantValue(string text, string expected)
+    {
+        var result = evaluator.Evaluate(Expr.Call(ExprFunctionNames.ParseDecimal, Expr.Const(text)), Context());
+        Assert.Equal(decimal.Parse(expected, System.Globalization.CultureInfo.InvariantCulture), result.GetDecimal());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("+")]
+    [InlineData("+-1")]
+    [InlineData(".")]
+    [InlineData(".5")]
+    [InlineData("1.")]
+    [InlineData(" 1")]
+    [InlineData("1,000")]
+    [InlineData("1e2")]
+    [InlineData("NaN")]
+    [InlineData("79228162514264337593543950336")]
+    [InlineData("0.00000000000000000000000000001")]
+    [InlineData("1.00000000000000000000000000001")]
+    public void ParseDecimal_RejectsMalformedOverflowAndPrecisionLoss(string text)
+    {
+        Assert.Throws<RelationQueryExpressionEvaluationException>(() => evaluator.Evaluate(
+            Expr.Call(ExprFunctionNames.ParseDecimal, Expr.Const(text)), Context()));
+    }
+
+    [Fact]
+    public void ParseDecimal_BoundsArithmeticForLongZeroPaddedInputs()
+    {
+        var text = new string('0', 100_000) + "12.5" + new string('0', 100_000);
+        var expression = Expr.Call(ExprFunctionNames.ParseDecimal, Expr.Const(text));
+        var context = Context();
+        for (var i = 0; i < 100; i++) _ = evaluator.Evaluate(expression, context);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var value = evaluator.Evaluate(expression, context);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(12.5m, value.GetDecimal());
+        Assert.InRange(allocated, 0, 2048);
+    }
+
+    [Fact]
+    public void Single_RejectsAbsenceAndAmbiguityWithoutChoosingTheFirstItem()
+    {
+        foreach (var source in new[] { ObservationValue.Null, ObservationValue.FromString("x"), Array(), Array(1, 1), Array(1, 2) })
+            Assert.Throws<RelationQueryExpressionEvaluationException>(() => evaluator.Evaluate(
+                Expr.Call(ExprFunctionNames.Single, Expr.Const(source)), Context()));
+        Assert.Equal(1, evaluator.Evaluate(Expr.Call(ExprFunctionNames.Single, Expr.Const(Array(1))), Context()).GetInt64());
+    }
+
+    [Fact]
+    public void Single_DoesNotCopyLargePayloadsAfterWarmup()
+    {
+        var payload = ObservationValue.FromArray([.. Enumerable.Repeat(ObservationValue.FromString("x"), 4096)]);
+        var expression = Expr.Call(ExprFunctionNames.Single, Expr.Const(ObservationValue.FromArray([payload])));
+        var context = Context();
+        for (var i = 0; i < 1000; i++) _ = evaluator.Evaluate(expression, context);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++) _ = evaluator.Evaluate(expression, context);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.InRange(allocated, 0, 128_000);
+        Assert.Equal(payload, evaluator.Evaluate(expression, context));
+    }
+
     [Fact]
     public void Coalesce_IsLazyAndPreservesFalseZeroAndEmptyValues()
     {

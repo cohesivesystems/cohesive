@@ -177,9 +177,13 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
         });
         var replacement = fixture.ReplacementInvocation();
 
+        // The commit hook blocks at a barrier. Give each participant its own worker so a
+        // saturated test-runner thread pool cannot prevent the second participant from starting.
         var results = await Task.WhenAll(
-            Task.Run(async () => await fixture.Adapter.ExecuteAsync(fixture.Context, fixture.Invocation)),
-            Task.Run(async () => await fixture.Adapter.ExecuteAsync(fixture.Context, replacement)));
+            Task.Factory.StartNew(() => fixture.Adapter.ExecuteAsync(fixture.Context, fixture.Invocation).GetAwaiter().GetResult(),
+                CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default),
+            Task.Factory.StartNew(() => fixture.Adapter.ExecuteAsync(fixture.Context, replacement).GetAwaiter().GetResult(),
+                CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default));
 
         Assert.All(results, static result => Assert.True(result.IsSuccessful));
         Assert.Equal(results[0], results[1]);
