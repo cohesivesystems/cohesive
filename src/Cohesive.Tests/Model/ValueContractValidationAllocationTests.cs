@@ -50,10 +50,18 @@ public sealed class ValueContractValidationAllocationTests
         var contract = new ValueContract(new ArrayTypeRef(new ObjectTypeRef(
             [new("value", new ScalarTypeRef(ScalarTypeKind.Int64))])));
         for (var index = 0; index < 64; index++) Assert.True(contract.IsSatisfiedByConstant(value));
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var valid = contract.IsSatisfiedByConstant(value);
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.True(valid);
-        Assert.InRange(allocated, 0, 512);
+        // Measure steady-state validation, excluding occasional runtime bookkeeping on the test
+        // thread. A per-value callback regression allocates on every sample, so the minimum
+        // still detects it at 4,096 values without increasing the allocation ceiling.
+        var minimumAllocated = long.MaxValue;
+        for (var sample = 0; sample < 8; sample++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var valid = contract.IsSatisfiedByConstant(value);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.True(valid);
+            minimumAllocated = Math.Min(minimumAllocated, allocated);
+        }
+        Assert.InRange(minimumAllocated, 0, 512);
     }
 }

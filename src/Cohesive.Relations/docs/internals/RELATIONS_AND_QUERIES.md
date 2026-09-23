@@ -228,8 +228,11 @@ branches, so lazy evaluation does not promise lazy backend acquisition. General 
 joins the present source contract with the fallback contract without refining other reads.
 
 Native draft acceptance admits a narrower profile: the source must resolve through an explicit
-binding or current-item scope, and the fallback must be a portable constant satisfying the source's
-present, non-null contract. The resulting value retains source graph identity and cardinality.
+binding or current-item scope, and the fallback must be a portable constant. Non-null fallbacks
+must satisfy the source's present, non-null contract. A null fallback produces a required nullable
+result unless the source is already required and non-null, making the fallback unreachable.
+The resulting value retains source type, graph identity and cardinality; target compatibility
+and downstream non-null requirements still apply.
 Computed fallbacks and named scalar literals need further admission semantics. Standalone literals
 may populate known scalar, enum, quantity, entity-reference or JSON contracts; null requires a
 nullable target, and an empty array requires a collection target. Nonempty arrays, object literals
