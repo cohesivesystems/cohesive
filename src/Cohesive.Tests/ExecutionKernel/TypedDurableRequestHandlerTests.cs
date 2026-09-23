@@ -230,6 +230,128 @@ public sealed class TypedDurableRequestHandlerTests
         Assert.Contains(protocol.Request.Definition.Fingerprint.Value, exception.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task DeferredRegistration_InspectsCapabilitiesWithoutConstructingHandler_ThenSharesOneActivation()
+    {
+        var protocol = CreateProtocol();
+        var constructions = 0;
+        ServiceCollection services = [];
+        services.AddSingleton(_ =>
+        {
+            Interlocked.Increment(ref constructions);
+            return new CapturingHandler(protocol, HandlerOutcome.Accepted);
+        });
+        services.AddDurableOperation(protocol).HandledBy<CapturingHandler>()
+            .WithIdempotency(DurableOperationIdempotencyEvidence.TargetDeduplication)
+            .WithDeferredHandlerActivation().WithReconciliation();
+        using var provider = services.BuildServiceProvider();
+        var resolver = provider.GetRequiredService<IDurableOperationAdapterResolver>();
+        var capabilities = provider.GetRequiredService<IDurableOperationAdapterCapabilityResolver>();
+        Assert.True(capabilities.TryResolve(protocol.Request, out var evidence));
+        Assert.Equal(DurableOperationReconciliationCapability.Supported, evidence!.Reconciliation);
+        Assert.Equal(0, constructions);
+        var invocation = CreateInvocation(protocol, new SubmitTraining("dataset/42"));
+        Assert.True(resolver.TryResolve(invocation.Request, out var adapter));
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
+            await DurableOperationReferenceExecutor.ExecuteAsync(OperationContext.Create(timeProvider: new FixedTimeProvider(ObservedAtUtc)), invocation, adapter!))));
+        Assert.Equal(1, constructions);
+    }
+
+    [Fact]
+    public void DeferredRegistration_StillRejectsInvalidReconciliationCapabilityWithoutConstructingHandler()
+    {
+        var protocol = CreateProtocol();
+        ServiceCollection services = [];
+        services.AddSingleton<ExecuteOnlyHandler>(_ => throw new Exception("must not construct"));
+        services.AddDurableOperation(protocol).HandledBy<ExecuteOnlyHandler>()
+            .WithIdempotency(DurableOperationIdempotencyEvidence.TargetDeduplication)
+            .WithDeferredHandlerActivation().WithReconciliation();
+        using var provider = services.BuildServiceProvider();
+        var error = Assert.Throws<InvalidOperationException>(() => provider.GetRequiredService<IDurableOperationAdapterResolver>());
+        Assert.Contains("must implement", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeferredRegistration_ReconciliationCanActivateFirst_AndExecutionUsesSameSingleton()
+    {
+        var protocol = CreateProtocol();
+        var constructions = 0;
+        ServiceCollection services = [];
+        services.AddSingleton(_ => { constructions++; return new CapturingHandler(protocol, HandlerOutcome.Accepted); });
+        services.AddDurableOperation(protocol).HandledBy<CapturingHandler>()
+            .WithIdempotency(DurableOperationIdempotencyEvidence.TargetDeduplication)
+            .WithDeferredHandlerActivation().WithReconciliation();
+        using var provider = services.BuildServiceProvider();
+        var adapter = Assert.Single(provider.GetServices<IDurableOperationAdapter>());
+        var (_, state) = CreateReconciliationState(protocol, new SubmitTraining("dataset/42"));
+        var context = OperationContext.Create(timeProvider: new FixedTimeProvider(ObservedAtUtc));
+        await DurableOperationReferenceExecutor.ReconcileAsync(context, state, adapter);
+        Assert.Equal(1, constructions);
+        await adapter.ExecuteAsync(context, CreateInvocation(protocol, new SubmitTraining("dataset/42")));
+        Assert.Equal(1, constructions);
+    }
+
+    [Fact]
+    public async Task DeferredRegistration_InvalidPayloadDoesNotActivate_AndConstructionFailureIsCached()
+    {
+        var protocol = CreateProtocol();
+        var constructions = 0;
+        ServiceCollection services = [];
+        services.AddSingleton<CapturingHandler>(_ => { constructions++; throw new InvalidOperationException("missing provider configuration"); });
+        services.AddDurableOperation(protocol).HandledBy<CapturingHandler>()
+            .WithIdempotency(DurableOperationIdempotencyEvidence.TargetDeduplication)
+            .WithDeferredHandlerActivation().WithoutReconciliation();
+        using var provider = services.BuildServiceProvider();
+        var adapter = Assert.Single(provider.GetServices<IDurableOperationAdapter>());
+        Assert.Equal(DurableOperationReconciliationCapability.Unsupported, adapter.Capabilities.Reconciliation);
+        var context = OperationContext.Create(timeProvider: new FixedTimeProvider(ObservedAtUtc));
+        var malformed = CreateInvocation(protocol, PortableValue.Concrete(protocol.InputContract, ObservationValue.FromString("invalid")));
+        Assert.IsType<DurableOperationFailureObservation>(await adapter.ExecuteAsync(context, malformed));
+        Assert.Equal(0, constructions);
+        var canceled = OperationContext.Create(cancellationToken: new CancellationToken(canceled: true));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => adapter.ExecuteAsync(canceled, malformed).AsTask());
+        Assert.Equal(0, constructions);
+        var valid = CreateInvocation(protocol, new SubmitTraining("dataset/42"));
+        var first = await Assert.ThrowsAsync<InvalidOperationException>(() => adapter.ExecuteAsync(context, valid).AsTask());
+        var second = await Assert.ThrowsAsync<InvalidOperationException>(() => adapter.ExecuteAsync(context, valid).AsTask());
+        Assert.Same(first, second);
+        Assert.Equal(1, constructions);
+    }
+
+    [Fact]
+    public void DefaultRegistration_RetainsEagerDependencyAdmission()
+    {
+        var protocol = CreateProtocol();
+        ServiceCollection services = [];
+        services.AddSingleton<CapturingHandler>(_ => throw new InvalidOperationException("missing provider configuration"));
+        services.AddDurableOperation(protocol).HandledBy<CapturingHandler>()
+            .WithIdempotency(DurableOperationIdempotencyEvidence.TargetDeduplication).WithoutReconciliation();
+        using var provider = services.BuildServiceProvider();
+        Assert.Throws<InvalidOperationException>(() => provider.GetRequiredService<IDurableOperationAdapterCapabilityResolver>());
+    }
+
+    [Fact]
+    public async Task DeferredRegistration_SeparateReconcilerDoesNotActivateExecutionHandler()
+    {
+        var protocol = CreateProtocol();
+        var executionConstructions = 0;
+        var reconciliationConstructions = 0;
+        ServiceCollection services = [];
+        services.AddSingleton<ExecuteOnlyHandler>(_ => { executionConstructions++; throw new InvalidOperationException("execution should remain deferred"); });
+        services.AddSingleton(_ => { reconciliationConstructions++; return new CapturingHandler(protocol, HandlerOutcome.Accepted); });
+        services.AddDurableOperation(protocol).HandledBy<ExecuteOnlyHandler>()
+            .WithIdempotency(DurableOperationIdempotencyEvidence.TargetDeduplication)
+            .WithDeferredHandlerActivation().WithReconciliation<CapturingHandler>();
+        using var provider = services.BuildServiceProvider();
+        var adapter = Assert.Single(provider.GetServices<IDurableOperationAdapter>());
+        Assert.Equal(0, reconciliationConstructions);
+        var (_, state) = CreateReconciliationState(protocol, new SubmitTraining("dataset/42"));
+        await DurableOperationReferenceExecutor.ReconcileAsync(
+            OperationContext.Create(timeProvider: new FixedTimeProvider(ObservedAtUtc)), state, adapter);
+        Assert.Equal(1, reconciliationConstructions);
+        Assert.Equal(0, executionConstructions);
+    }
+
     static RequestProtocol<SubmitTraining, SubmissionOutcome, SubmissionCases> CreateProtocol() =>
         InteractionContractAuthoring.CreateRequestProtocol<SubmitTraining, SubmissionOutcome, SubmissionCases>(
             new("tests/request/typed-durable-training"),
