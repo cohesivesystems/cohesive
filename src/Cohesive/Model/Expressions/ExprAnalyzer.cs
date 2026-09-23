@@ -465,13 +465,18 @@ public static class ExprAnalyzer
         {
             var previousFields = guardedFields;
             var previousBindings = presentBindings;
-            guardedFields = new(previousFields);
-            presentBindings = new(previousBindings);
+            var copied = false;
             try
             {
                 ExprGuardRefinement.Apply(guard, whenTrue, Resolve, (field, contract) =>
                 {
                     if (FieldIdentity(field) is not { } identity) return;
+                    if (!copied)
+                    {
+                        guardedFields = new(previousFields);
+                        presentBindings = new(previousBindings);
+                        copied = true;
+                    }
                     guardedFields[identity] = contract;
                     if (contract.Presence == FieldPresence.Required) presentBindings.Add(identity.Binding);
                 });
@@ -535,22 +540,16 @@ public static class ExprAnalyzer
                 : ExprExpectation.Any;
             var ifTruePath = Child(expressionPath, "ifTrue");
             var ifTrueDiagnosticStart = diagnostics.Count;
-            var ifTrue = AnalyzeNode(
-                conditional.IfTrue,
-                scope,
-                branchExpectation,
-                ifTruePath);
+            var ifTrue = AnalyzeGuarded(
+                conditional.IfTrue, scope, branchExpectation, ifTruePath, conditional.Test, whenTrue: true);
             var ifTrueSatisfiesDeclaredResult = !HasDirectResultMismatch(
                 diagnostics,
                 ifTrueDiagnosticStart,
                 ifTruePath);
             var ifFalsePath = Child(expressionPath, "ifFalse");
             var ifFalseDiagnosticStart = diagnostics.Count;
-            var ifFalse = AnalyzeNode(
-                conditional.IfFalse,
-                scope,
-                branchExpectation,
-                ifFalsePath);
+            var ifFalse = AnalyzeGuarded(
+                conditional.IfFalse, scope, branchExpectation, ifFalsePath, conditional.Test, whenTrue: false);
             var ifFalseSatisfiesDeclaredResult = !HasDirectResultMismatch(
                 diagnostics,
                 ifFalseDiagnosticStart,

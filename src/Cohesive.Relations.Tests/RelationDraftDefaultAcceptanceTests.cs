@@ -189,6 +189,68 @@ public sealed class RelationDraftDefaultAcceptanceTests
         Assert.Contains(result.Diagnostics, d => d.Code == "relationDraft.constant.unsupported");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GuardedOptionalDecimal_RoundtripsAndExecutesLazily(bool equality)
+    {
+        var test = new BinaryExpr(equality ? BinaryOperator.Eq : BinaryOperator.Ne, Expr.Coalesce(Read, Expr.Null()), Expr.Null());
+        var parse = Expr.Call(ExprFunctionNames.ParseDecimal, Read);
+        var expression = Expr.If(test, equality ? Expr.Null() : parse, equality ? parse : Expr.Null());
+        var (graphs, draft) = Fixture(expression);
+        graphs[1] = new(Target.GraphId, [new Shape(Target.ShapeId,
+            [new(new("value"), new ScalarTypeRef(ScalarTypeKind.Decimal), nullability: FieldNullability.Nullable)])]);
+        var restored = RelationDraftJsonSerializer.Deserialize(RelationDraftJsonSerializer.Serialize(RelationDraftDocument.FromDraft(draft)));
+        var accepted = RelationDraftAcceptor.Accept(restored.Draft, graphs);
+        Assert.True(accepted.IsAccepted, Diagnostics(accepted));
+        foreach (var input in new[] { ObservationValue.Undefined, ObservationValue.Null, ObservationValue.FromString("0012.50"), ObservationValue.FromString("bad"), ObservationValue.FromString("") })
+        {
+            var fields = input.Kind == ObservationValueKind.Undefined ? ImmutableDictionary<string, ObservationValue>.Empty
+                : ImmutableDictionary<string, ObservationValue>.Empty.Add("value", input);
+            var evaluation = RelationQueryDocument.FromDefinition(accepted.Definition!)
+                .Evaluate(new("tests/guarded-optional-decimal"), [.. graphs.Select(g => ShapeGraphDocument.FromGraph(g))])
+                .Supply([new RelationQuerySuppliedRoot("row", Source, fields)]).Build();
+            var outcome = await RelationQueryEvaluator.CreateSuppliedOnly().EvaluateAsync(evaluation);
+            if (input.Kind == ObservationValueKind.String && input.String != "0012.50")
+            {
+                Assert.False(outcome.IsSuccessful);
+                continue;
+            }
+            Assert.True(outcome.IsSuccessful, outcome.ToString());
+            var row = Assert.Single(Assert.IsType<RelationQueryExecutionResult>(outcome.Result).Relation!.Rows);
+            Assert.Equal(input.Kind == ObservationValueKind.String ? ObservationValue.FromDecimal(12.5m) : ObservationValue.Null, row.Value.GetProperty("value"));
+            _ = Observation.Create(new(graphs[1], Target.ShapeId), row.Value);
+        }
+    }
+
+    [Theory]
+    [InlineData("wrong-branch")]
+    [InlineData("different-field")]
+    [InlineData("non-null-target")]
+    [InlineData("invented-default")]
+    public void GuardedOptionalDecimal_DoesNotWeakenUnprovenContracts(string scenario)
+    {
+        var test = new BinaryExpr(BinaryOperator.Ne,
+            Expr.Coalesce(Read, scenario == "invented-default" ? Expr.Const("0") : Expr.Null()), Expr.Null());
+        var parse = Expr.Call(ExprFunctionNames.ParseDecimal, scenario == "different-field" ? Expr.Field(Binding, "other") : Read);
+        var expression = Expr.If(test, scenario == "wrong-branch" ? Expr.Null() : parse,
+            scenario == "wrong-branch" ? parse : Expr.Null());
+        var (graphs, draft) = Fixture(expression);
+        graphs[0] = new(Source.GraphId, [new Shape(Source.ShapeId,
+            [new(new("value"), Text, presence: FieldPresence.Optional), new(new("other"), Text, presence: FieldPresence.Optional)])]);
+        graphs[1] = new(Target.GraphId, [new Shape(Target.ShapeId,
+            [new(new("value"), new ScalarTypeRef(ScalarTypeKind.Decimal),
+                nullability: scenario == "non-null-target" ? FieldNullability.NonNullable : FieldNullability.Nullable)])]);
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.False(accepted.IsAccepted);
+        Assert.Contains(accepted.Diagnostics, d => d.Code == (scenario switch
+        {
+            "invented-default" => "relationDraft.conditional.testUnsupported",
+            "non-null-target" => "relationDraft.constant.incompatible",
+            _ => "relationDraft.conversion.sourceMayBeAbsent"
+        }));
+    }
+
     static (ShapeGraph[] Graphs, RelationDraft Draft) Fixture(Expr expression, bool collection = false)
     {
         var cardinality = collection ? FieldCardinality.Many : FieldCardinality.Single;

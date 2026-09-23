@@ -2,7 +2,8 @@ namespace Cohesive.Model.Expressions;
 
 /// <summary>Shared path-sensitive presence and nullability facts for canonical short-circuit guards.</summary>
 /// <remarks>
-/// This analysis recognizes field equality/inequality, negation, true conjunctions and false disjunctions.
+/// This analysis recognizes field equality/inequality, null comparisons of coalesce(field, null),
+/// negation, true conjunctions and false disjunctions.
 /// It does not execute expressions or infer schema constraints. Consumers own field resolution and the
 /// lifetime of refined contracts; facts must remain local to the selected branch. A present field also
 /// proves its containing binding is present, but does not prove other optional fields exist.
@@ -53,6 +54,18 @@ public static class ExprGuardRefinement
 
         void Operand(Expr expression, Expr other, bool equal)
         {
+            // A non-null result of coalesce(field, null) proves both original presence and
+            // non-nullability. Unlike direct equality, this guard safely handles missing input.
+            if (!equal && IsNull(other)
+                && expression is CallExpr { Function: ExprFunctionNames.Coalesce, Arguments.Length: 2 } coalesce
+                && IsNull(coalesce.Arguments[1])
+                && coalesce.Arguments[0] is FieldExpr or FieldRefExpr
+                && resolve(coalesce.Arguments[0]) is { } original)
+            {
+                refine(coalesce.Arguments[0], new(original.Type, original.Shape, original.Cardinality,
+                    FieldPresence.Required, FieldNullability.NonNullable));
+                return;
+            }
             if (expression is not (FieldExpr or FieldRefExpr) || resolve(expression) is not { } value) return;
             var otherValue = Contract(other);
             var present = equal && otherValue?.Presence == FieldPresence.Required;
