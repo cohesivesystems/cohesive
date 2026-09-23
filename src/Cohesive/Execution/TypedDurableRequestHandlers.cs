@@ -840,6 +840,7 @@ public sealed class DurableRequestReconciliationRegistration<TRequest, TOutcome,
     readonly RequestProtocol<TRequest, TOutcome, TOutcomes> protocol;
     readonly JsonSerializerOptions? serializerOptions;
     readonly DurableOperationIdempotencyEvidence idempotencyEvidence;
+    bool deferHandlerActivation;
 
     internal DurableRequestReconciliationRegistration(
         IServiceCollection services,
@@ -851,6 +852,18 @@ public sealed class DurableRequestReconciliationRegistration<TRequest, TOutcome,
         this.protocol = protocol;
         this.serializerOptions = serializerOptions;
         this.idempotencyEvidence = idempotencyEvidence;
+    }
+
+    /// <summary>Defers singleton handler construction until a validated execution or reconciliation first needs it.</summary>
+    /// <remarks>Capability inspection still validates the protocol and handler type. Dependency construction and its
+    /// failures move to first use; each factory runs once, thread-safely, and caches failures. DI owns handler disposal.
+    /// Use the default eager path when adapter resolution is part of worker startup admission. This option does not
+    /// establish provider readiness or authorize execution on a host that only inspects capabilities.</remarks>
+    /// <returns>This registration stage with deferred handler activation selected.</returns>
+    public DurableRequestReconciliationRegistration<TRequest, TOutcome, TOutcomes, THandler> WithDeferredHandlerActivation()
+    {
+        deferHandlerActivation = true;
+        return this;
     }
 
     /// <summary>Completes registration with explicit unsupported reconciliation capability.</summary>
@@ -869,7 +882,7 @@ public sealed class DurableRequestReconciliationRegistration<TRequest, TOutcome,
         provider.GetRequiredService<THandler>() as IDurableRequestReconciliationHandler<TRequest, TOutcome>
         ?? throw new InvalidOperationException(
             $"Typed durable handler '{typeof(THandler)}' for '{Format(protocol.Request)}' must implement "
-            + $"'{typeof(IDurableRequestReconciliationHandler<TRequest, TOutcome>)}' when reconciliation is declared."));
+            + $"'{typeof(IDurableRequestReconciliationHandler<TRequest, TOutcome>)}' when reconciliation is declared."), requireHandlerReconciliation: true);
 
     /// <summary>Completes registration with a separate typed reconciliation handler.</summary>
     /// <typeparam name="TReconciliationHandler">Thread-safe typed reconciliation handler implementation.</typeparam>
@@ -883,12 +896,27 @@ public sealed class DurableRequestReconciliationRegistration<TRequest, TOutcome,
     }
 
     IServiceCollection Register(
-        Func<IServiceProvider, IDurableRequestReconciliationHandler<TRequest, TOutcome>>? reconciliationFactory)
+        Func<IServiceProvider, IDurableRequestReconciliationHandler<TRequest, TOutcome>>? reconciliationFactory,
+        bool requireHandlerReconciliation = false)
     {
         EnsureCatalogResolver(services);
         services.TryAddSingleton<THandler>();
+        var defer = deferHandlerActivation;
         services.AddSingleton<IDurableOperationAdapter>(provider =>
         {
+            if (defer && requireHandlerReconciliation && !typeof(IDurableRequestReconciliationHandler<TRequest, TOutcome>).IsAssignableFrom(typeof(THandler)))
+                throw new InvalidOperationException(
+                    $"Typed durable handler '{typeof(THandler)}' for '{Format(protocol.Request)}' must implement "
+                    + $"'{typeof(IDurableRequestReconciliationHandler<TRequest, TOutcome>)}' when reconciliation is declared.");
+            if (defer)
+            {
+                var deferred = new DeferredDurableRequestHandler<TRequest, TOutcome>(
+                    () => provider.GetRequiredService<THandler>(),
+                    reconciliationFactory is null ? null : () => reconciliationFactory(provider));
+                return reconciliationFactory is null
+                    ? DurableRequestHandlerAdapter.Create(protocol, deferred, idempotencyEvidence, serializerOptions)
+                    : DurableRequestHandlerAdapter.CreateWithReconciliation(protocol, deferred, deferred, idempotencyEvidence, serializerOptions);
+            }
             var handler = provider.GetRequiredService<THandler>();
             return reconciliationFactory is null
                 ? DurableRequestHandlerAdapter.Create(
@@ -947,4 +975,23 @@ public sealed class DurableRequestReconciliationRegistration<TRequest, TOutcome,
     static string Format(RequestContractReference request) =>
         $"{request.Definition.DefinitionId.Value}@{request.Definition.RevisionId.Value}"
         + $"#{request.Definition.Fingerprint.Value}";
+}
+
+// This is an activation policy for the existing typed adapter, not a second protocol/capability authority.
+sealed class DeferredDurableRequestHandler<TRequest, TOutcome>(
+    Func<IDurableRequestHandler<TRequest, TOutcome>> handlerFactory,
+    Func<IDurableRequestReconciliationHandler<TRequest, TOutcome>>? reconciliationFactory)
+    : IDurableRequestHandler<TRequest, TOutcome>, IDurableRequestReconciliationHandler<TRequest, TOutcome>
+    where TOutcome : class
+{
+    readonly Lazy<IDurableRequestHandler<TRequest, TOutcome>> handler = new(handlerFactory);
+    readonly Lazy<IDurableRequestReconciliationHandler<TRequest, TOutcome>>? reconciliation =
+        reconciliationFactory is null ? null : new(reconciliationFactory);
+
+    public ValueTask<DurableRequestOutcome<TOutcome>> ExecuteAsync(
+        DurableRequestExecutionContext<TOutcome> context, TRequest request) => handler.Value.ExecuteAsync(context, request);
+
+    public ValueTask<DurableRequestReconciliationResult<TOutcome>> ReconcileAsync(
+        DurableRequestReconciliationContext<TOutcome> context, TRequest request) =>
+        reconciliation!.Value.ReconcileAsync(context, request);
 }

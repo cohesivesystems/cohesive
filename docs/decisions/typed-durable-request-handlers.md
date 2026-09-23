@@ -96,3 +96,26 @@ wrapper constructs those existing observations without duplicating their case in
 - Handler implementations registered as singletons must be safe for concurrent invocation.
 - Specialized adapters retain the complete raw boundary instead of forcing the typed projection beyond its stated
   materialization and execution guarantees.
+
+## Explicit handler activation
+
+The default DI registration constructs handlers when the adapter catalog is resolved. Workers may rely on this
+for dependency admission before accepting work; this remains the default.
+
+A host that only compiles or explains a remote Process can opt into `WithDeferredHandlerActivation()` after
+`WithIdempotency(...)` and before the reconciliation choice. For example, an API explaining a training Process can
+inspect its exact Request capabilities without constructing an ML client that only the remote worker uses.
+Previously, capability lookup constructed the typed handler and its entire dependency graph. With the option,
+protocol validation, exact routing, overlap checks, and reconciliation-type validation still run during catalog
+resolution; handler dependencies are resolved only after a valid execution or reconciliation reaches the handler.
+
+Each activation factory uses thread-safe, one-time initialization and caches construction failures. The DI provider
+owns singleton handler disposal. Execution and reconciliation using the same handler type share its DI singleton;
+a separately registered reconciliation handler activates independently. Cancellation and malformed payload checks
+still precede activation. This is not a readiness claim: a host opting in must not equate successful capability
+inspection with provider availability. Worker hosts should retain eager registration unless they establish an
+explicit equivalent admission boundary. The option does not cache requests, authorization, results or tenant data.
+
+The implementation reuses the existing typed adapter and exact capability catalog. A second metadata catalog or
+application-local capability mirror was rejected because it could drift from the executable registration. This
+change is a prerequisite for Ari host separation, not evidence that Ari's ML settings can already be removed.
