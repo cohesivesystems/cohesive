@@ -1643,6 +1643,8 @@ public sealed class ExprAnalysisTests
             Scope(currentItem: new(StringType)), "decimal");
         Assert.True(parsed.IsValid);
         Assert.Equal(new ScalarTypeRef(ScalarTypeKind.Decimal), parsed.KnownResult?.Type);
+        Assert.Equal(FieldPresence.Required, parsed.KnownResult?.Presence);
+        Assert.Equal(FieldNullability.NonNullable, parsed.KnownResult?.Nullability);
         Assert.False(Analyze(Expr.Call(ExprFunctionNames.ParseDecimal, Expr.CurrentItem()),
             Scope(currentItem: new(StringType, presence: FieldPresence.Optional)), "optional-decimal").IsValid);
         var named = new NamedTypeRef(new("Party"));

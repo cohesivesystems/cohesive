@@ -203,6 +203,25 @@ public sealed class RelationDraftConditionalAcceptanceTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExactDecimalConversion_CompilesAtARequiredProjectionSite(bool selectSingle)
+    {
+        TypeRef sourceType = selectSingle ? new ArrayTypeRef(Text) : Text;
+        Expr input = selectSingle ? Expr.Call(ExprFunctionNames.Single, Read) : Read;
+        var (graphs, draft) = Fixture(Expr.Call(ExprFunctionNames.ParseDecimal, input), optional: false,
+            targetType: new ScalarTypeRef(ScalarTypeKind.Decimal), sourceTypeOverride: sourceType);
+        graphs[0] = new(graphs[0].Id, [new Shape(Source.ShapeId, [new(new("value"), sourceType)])]);
+        var restored = RelationDraftJsonSerializer.Deserialize(RelationDraftJsonSerializer.Serialize(RelationDraftDocument.FromDraft(draft)));
+        var accepted = RelationDraftAcceptor.Accept(restored.Draft, graphs);
+        Assert.True(accepted.IsAccepted, Diagnostics(accepted));
+        var value = ObservationValue.FromString("0012.50");
+        if (selectSingle) value = ObservationValue.FromArray([value]);
+        var result = await Execute(accepted, graphs, ImmutableDictionary<string, ObservationValue>.Empty.Add("value", value));
+        Assert.Equal(12.50m, result.GetDecimal());
+    }
+
+    [Theory]
     [InlineData("arity", "relationDraft.conversion.argumentsInvalid")]
     [InlineData("absent", "relationDraft.conversion.sourceMayBeAbsent")]
     [InlineData("wrong-source", "relationDraft.conversion.sourceUnsupported")]

@@ -532,3 +532,8 @@ and temporal JSON conversion. Those use BCL parsing for their existing coercion 
 contracts; they are not interchangeable with strict exact-decimal conversion. Their accepted syntax
 and rounding behavior are unchanged here. DOM and streaming JSON numeric acquisition both delegate
 to the consolidated exact parser, retaining their existing non-Decimal fallback behavior.
+
+`parseDecimal` has a required, non-null Decimal result contract: successful evaluation always produces
+a decimal, while invalid input fails execution. It does not reuse the optional Decimal contract of
+`avg`, whose empty-input result can be absent. This distinction permits direct required projection
+assignments, including `parseDecimal(single(values))`, without changing the target's presence contract.
