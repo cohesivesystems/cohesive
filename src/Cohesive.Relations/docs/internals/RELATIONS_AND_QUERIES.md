@@ -587,3 +587,29 @@ owns interpretation; other targets must advertise support or reject the capabili
 protocol definition, startup work, cache or backend read is introduced. Per-value work is linear in
 text length with constant auxiliary memory. Warm dispatch and padded input measurements use
 `ExpressionValueContractBenchmarks`; parser allocation bounds also have a regression test.
+
+## Required values
+
+`requireValue(value)` returns its original present, non-null argument. Missing/undefined and null
+fail with the native invalid-operand diagnostic; false, zero, empty text and empty collections
+succeed. Evaluation reads the argument once and retains its original payload storage. It does not
+validate nested members or catch upstream failures.
+
+The canonical catalog's `PresentArgument` rule preserves exact type, shape and cardinality while
+refining only outer presence and nullability. `ValueContract.AsPresentNonNull` centralizes this
+refinement for proven branches and assertions; it performs no value validation. The result does
+not refine other source reads. A declared return type cannot invent a different result contract.
+Draft acceptance supports the wrapper around its admitted value expressions and preserves their
+source graph provenance; it does not expand the admitted expression profile underneath the wrapper.
+
+For an optional text source, `parseInt32(requireValue(source.sequence))` accepts present `"002"`
+and produces `2`; missing/null fails the assertion and `"bad"` fails parsing. For qualified extraction,
+`single(select(join("SH", item.qualifier, requireValue(source.parties)), requireValue(item.name)))`
+requires the collection and each matching name while retaining `single`'s cardinality check. A missing
+name on a nonmatching party is never evaluated. `coalesce` remains the explicit fallback construct.
+
+Native serialization/fingerprints and capability discovery use the ordinary `CallExpr` representation.
+The in-memory interpreter advertises this capability; other backends must explicitly support or
+reject it. Tests cover portable admission/execution, preserved contracts, malformed calls, nullish
+failures and payload retention; warm allocation evidence is in
+[relation value contracts](../../../../docs/performance/relation-value-contracts.md).

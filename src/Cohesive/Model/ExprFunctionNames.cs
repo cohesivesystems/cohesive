@@ -44,6 +44,10 @@ public static class ExprFunctionNames
     /// <remarks>The fallback is lazy. False, zero, empty text and empty collections are present values.</remarks>
     public const string Coalesce = "coalesce";
 
+    /// <summary>Returns the original value when present and non-null; otherwise evaluation fails.</summary>
+    /// <remarks>Does not reject false, zero, empty text or empty collections, or validate nested members.</remarks>
+    public const string RequireValue = "requireValue";
+
     /// <summary>Parses invariant signed decimal text exactly; rejects whitespace, exponents, grouping, overflow and rounding.</summary>
     public const string ParseDecimal = "parseDecimal";
 

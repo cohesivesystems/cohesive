@@ -129,7 +129,10 @@ public enum ExprFunctionResultRule
     CollectionOfScopedSource = 5,
 
     /// <summary>Return the element contract of the sole collection argument.</summary>
-    CollectionElement = 6
+    CollectionElement = 6,
+
+    /// <summary>Retain the sole argument's type, shape and cardinality with required/non-null outer value guarantees.</summary>
+    PresentArgument = 7
 }
 
 /// <summary>One function argument evaluated with an explicit current-item scope.</summary>
@@ -253,6 +256,10 @@ public sealed class ExprFunctionDefinition
             if (FixedResult is not null)
                 throw new ArgumentException("A first-non-nullish result rule cannot declare an ignored fixed result.", nameof(fixedResult));
         }
+        if (ResultRule == ExprFunctionResultRule.PresentArgument
+            && (Arity.Minimum != 1 || Arity.Maximum != 1 || FixedResult is not null
+                || ResultCategory != ExprResultCategory.Any || GetArgumentCategory(0) != ExprResultCategory.Any))
+            throw new ArgumentException("A present-argument result requires one unconstrained argument and no fixed result or category.", nameof(resultRule));
         if (ResultRule == ExprFunctionResultRule.CollectionElement
             && (Arity.Minimum != 1 || Arity.Maximum != 1 || FixedResult is not null))
             throw new ArgumentException("A collection-element result requires exactly one argument and no fixed result.", nameof(resultRule));
@@ -654,6 +661,7 @@ public sealed class ExprSemanticsCatalog
                 Function(ExprFunctionNames.ParseInt64, 1, 1, [ExprResultCategory.Text], resultCategory: ExprResultCategory.Integer, resultRule: ExprFunctionResultRule.Fixed, fixedResult: new(new ScalarTypeRef(ScalarTypeKind.Int64))),
                 Function(ExprFunctionNames.Single, 1, 1, [ExprResultCategory.Collection], resultRule: ExprFunctionResultRule.CollectionElement),
                 Function(ExprFunctionNames.Coalesce, 2, 2, [ExprResultCategory.Any, ExprResultCategory.Any], resultRule: ExprFunctionResultRule.FirstNonNullish),
+                Function(ExprFunctionNames.RequireValue, 1, 1, [ExprResultCategory.Any], resultRule: ExprFunctionResultRule.PresentArgument),
                 Function(ExprFunctionNames.Concat, 1, null, argumentCategories: [], variadicCategory: ExprResultCategory.Text, resultCategory: ExprResultCategory.Text, resultRule: ExprFunctionResultRule.Fixed, fixedResult: @string),
                 Function(ExprFunctionNames.Contains, 2, 2, [ExprResultCategory.Collection, ExprResultCategory.Any], resultCategory: ExprResultCategory.Boolean, resultRule: ExprFunctionResultRule.Fixed, fixedResult: boolean),
                 Function(ExprFunctionNames.Count, 1, 1, [ExprResultCategory.Countable], resultCategory: ExprResultCategory.Integer, resultRule: ExprFunctionResultRule.Fixed, fixedResult: int64),

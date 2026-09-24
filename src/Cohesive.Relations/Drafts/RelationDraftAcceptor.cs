@@ -414,6 +414,21 @@ public static class RelationDraftAcceptor
                 graph = visibleBindings[guardedBinding].Shape!.Value.GraphId;
                 return true;
             }
+            if (expression is CallExpr { Function: ExprFunctionNames.RequireValue } required)
+            {
+                if (required.Arguments.IsDefault || required.Arguments.Length != 1)
+                {
+                    Add(diagnostics, "relationDraft.requireValue.argumentsInvalid", "RequireValue requires exactly one source argument.", location);
+                    return false;
+                }
+                if (!TryResolveValue(required.Arguments[0], $"{location}/arguments/0", item, out var original, out graph))
+                    return false;
+                contract = original.AsPresentNonNull();
+                if (required.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
+                    && required.ReturnType != contract.GetEffectiveType())
+                    Add(diagnostics, "relationDraft.requireValue.returnTypeMismatch", "RequireValue must retain its source type and cardinality.", $"{location}/returnType");
+                return true;
+            }
             if (expression is CallExpr { Function: ExprFunctionNames.Select } projection)
             {
                 if (!TryResolveSelectSource(projection, location, item, out var sourceItem, out graph))
@@ -546,7 +561,7 @@ public static class RelationDraftAcceptor
             if (expression is not FieldExpr { Binding: { } binding } field)
             {
                 Add(diagnostics, "relationDraft.candidate.expressionUnsupported",
-                    "Acceptance supports binding-qualified fields, scoped item reads, explicit defaults and literals, static objects, collection select/join/single and exact decimal parsing.", location);
+                    "Acceptance supports binding-qualified fields, scoped item reads, explicit defaults and literals, static objects, collection select/join/single, required values and exact numeric parsing.", location);
                 return false;
             }
             if (field.Path.Segments.IsDefaultOrEmpty

@@ -74,6 +74,13 @@ public sealed record ValueContract
             ? new ArrayTypeRef(Type)
             : Type;
 
+    /// <summary>Returns this contract with required presence and non-nullability, preserving type, shape and cardinality.</summary>
+    /// <returns>This instance if already required/non-null; otherwise a refined immutable contract.</returns>
+    /// <remarks>This does not validate a value. Use only where an assertion or branch proves these guarantees;
+    /// nested member contracts and element types remain unchanged.</remarks>
+    public ValueContract AsPresentNonNull() => Presence == FieldPresence.Required && Nullability == FieldNullability.NonNullable
+        ? this : new(Type, Shape, Cardinality);
+
     /// <summary>Tests whether a portable constant satisfies this value contract.</summary>
     /// <param name="value">Constant value to test.</param>
     /// <returns>

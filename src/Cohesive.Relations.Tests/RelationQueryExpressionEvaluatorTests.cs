@@ -811,6 +811,39 @@ public sealed class RelationQueryExpressionEvaluatorTests
         Assert.Equal(payload.Array, result.Array[1].GetProperty("payload").Array);
     }
 
+    [Fact]
+    public void RequireValue_RejectsOnlyNullishValuesAndRetainsPayload()
+    {
+        foreach (var value in new[] { ObservationValue.Undefined, ObservationValue.Null })
+            Assert.Throws<RelationQueryExpressionEvaluationException>(() => evaluator.Evaluate(
+                Expr.Call(ExprFunctionNames.RequireValue, Expr.Const(value)), Context()));
+        foreach (var value in new[] { ObservationValue.FromBool(false), ObservationValue.FromInt64(0),
+            ObservationValue.FromString(""), Array(), Array(1, 2), Object(("nested", Array(1, 2))) })
+        {
+            var result = evaluator.Evaluate(Expr.Call(ExprFunctionNames.RequireValue, Expr.Const(value)), Context());
+            Assert.Equal(value, result);
+            if (value.Kind == ObservationValueKind.Array) Assert.Equal(value.Array, result.Array);
+            if (value.Kind == ObservationValueKind.Object) Assert.Same(value.Fields, result.Fields);
+        }
+    }
+
+    [Fact]
+    public void RequireValue_DoesNotAllocateWithPayloadSize()
+    {
+        var context = Context();
+        long Measure(ObservationValue value)
+        {
+            var expression = Expr.Call(ExprFunctionNames.RequireValue, Expr.Const(value));
+            for (var i = 0; i < 10000; i++) evaluator.Evaluate(expression, context);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 10000; i++) evaluator.Evaluate(expression, context);
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        var small = Measure(Array());
+        var large = Measure(Array(Enumerable.Range(0, 4096).Select(i => (long)i).ToArray()));
+        Assert.InRange(large - small, -1024, 1024);
+    }
+
     static RelationQueryExpressionContext Context(
         IReadOnlyDictionary<ValueBindingId, RelationQueryExpressionBinding>? bindings = null,
         ValueBindingId? implicitBinding = null,

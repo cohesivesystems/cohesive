@@ -14,7 +14,7 @@ public class ExpressionValueContractBenchmarks
     Expr expression = null!;
 
     /// <summary>Short/maximum-precision text and flat/nested/collection-heavy single-item values.</summary>
-    [Params("decimal", "decimal-max", "int32", "int64-max", "integer-padded", "single-flat", "single-nested", "single-collection")]
+    [Params("decimal", "decimal-max", "int32", "int64-max", "integer-padded", "single-flat", "single-nested", "single-collection", "required-flat", "required-nested", "required-collection")]
     public string Workload { get; set; } = "decimal";
 
     /// <summary>Prepares immutable expressions and retained input values once.</summary>
@@ -23,11 +23,16 @@ public class ExpressionValueContractBenchmarks
     {
         var payload = ObservationValue.FromArray([.. Enumerable.Repeat(ObservationValue.FromString("payload"), 4096)]);
         var value = Workload switch {
-            "single-nested" => ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["nested"] =
+            "single-nested" or "required-nested" => ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["nested"] =
                 ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["id"] = ObservationValue.FromString("a") }) }),
-            "single-collection" => payload,
+            "single-collection" or "required-collection" => payload,
             _ => ObservationValue.FromString("a")
         };
+        if (Workload.StartsWith("required-", StringComparison.Ordinal))
+        {
+            expression = Expr.Call(ExprFunctionNames.RequireValue, Expr.Const(value));
+            return;
+        }
         if (Workload is "int32" or "int64-max" or "integer-padded")
         {
             expression = Expr.Call(Workload == "int64-max" ? ExprFunctionNames.ParseInt64 : ExprFunctionNames.ParseInt32,
