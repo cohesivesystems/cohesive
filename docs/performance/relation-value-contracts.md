@@ -63,3 +63,20 @@ The existing decimal cases measured 41.57/87.64 ns and 80 B; these are different
 not a before/after speedup claim. Other validation jobs were active, so these short-run timings are
 exploratory; no end-to-end latency or controlled timing guarantee is claimed. The 100,000-zero input
 regression independently checks bounded allocation. There is no per-input cache or payload copy.
+
+## Required-value assertion (2026-09-23)
+
+The new `requireValue` assertion evaluates its argument once and returns the original
+`ObservationValue`; it does not traverse or copy its payload. The warm benchmark prepares an
+immutable expression and flat text, nested object, or 4,096-element array outside measurement.
+On Apple M5 Max/macOS arm64, .NET SDK 10.0.201/runtime 10.0.5, Release, one warmup and three
+measured iterations, observed means were 29.03 ns (flat), 26.83 ns (nested), and 31.44 ns
+(collection), with **80 B/evaluation** in every case. This includes existing generic evaluator
+dispatch allocation; it is not an allocation-free claim. Compilation, observation validation and
+full relation execution are excluded. Concurrent validation and short runs limit timing precision;
+these are exploratory measurements, not end-to-end latency claims.
+
+Reproduce with the command above and filter `*ExpressionValueContractBenchmarks*required*`.
+The payload-storage identity and 10,000-evaluation allocation-scaling tests protect the mechanism.
+`AsPresentNonNull` runs during preparation, reuses already-refined contracts and otherwise creates
+one immutable contract; it adds no runtime cache or per-row contract analysis.

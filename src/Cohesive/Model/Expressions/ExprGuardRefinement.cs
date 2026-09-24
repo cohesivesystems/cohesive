@@ -62,8 +62,7 @@ public static class ExprGuardRefinement
                 && coalesce.Arguments[0] is FieldExpr or FieldRefExpr
                 && resolve(coalesce.Arguments[0]) is { } original)
             {
-                refine(coalesce.Arguments[0], new(original.Type, original.Shape, original.Cardinality,
-                    FieldPresence.Required, FieldNullability.NonNullable));
+                refine(coalesce.Arguments[0], original.AsPresentNonNull());
                 return;
             }
             if (expression is not (FieldExpr or FieldRefExpr) || resolve(expression) is not { } value) return;

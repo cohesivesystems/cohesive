@@ -332,6 +332,7 @@ sealed class RelationQueryExpressionEvaluator
         ImmutableHashSet.Create(
             StringComparer.Ordinal,
             ExprFunctionNames.Coalesce,
+            ExprFunctionNames.RequireValue,
             ExprFunctionNames.ParseDecimal,
             ExprFunctionNames.ParseInt32,
             ExprFunctionNames.ParseInt64,
@@ -598,6 +599,7 @@ sealed class RelationQueryExpressionEvaluator
             ExprFunctionNames.ParseInt32 or ExprFunctionNames.ParseInt64 => EvaluateParseInteger(call, context),
             ExprFunctionNames.Single => EvaluateSingle(call, context),
             ExprFunctionNames.Coalesce => EvaluateCoalesce(call, context),
+            ExprFunctionNames.RequireValue => EvaluateRequireValue(call, context),
             ExprFunctionNames.Contains => EvaluateContains(call, context),
             ExprFunctionNames.Count => EvaluateCount(call, context),
             ExprFunctionNames.EndsWith => EvaluateEndsWith(call, context),
@@ -704,6 +706,14 @@ sealed class RelationQueryExpressionEvaluator
             || (call.Function == ExprFunctionNames.ParseInt32 && value is < int.MinValue or > int.MaxValue))
             throw InvalidOperand($"Expression function '{call.Function}' requires in-range signed ASCII integer text without whitespace, fractions or exponents.");
         return ObservationValue.FromInt64(value);
+    }
+
+    ObservationValue EvaluateRequireValue(CallExpr call, in RelationQueryExpressionContext context)
+    {
+        var value = Evaluate(call.Arguments[0], context);
+        if (value.Kind is ObservationValueKind.Undefined or ObservationValueKind.Null)
+            throw InvalidOperand("Expression function 'requireValue' requires a present, non-null value.");
+        return value;
     }
 
     ObservationValue EvaluateCoalesce(CallExpr call, in RelationQueryExpressionContext context)

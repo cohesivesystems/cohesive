@@ -13,6 +13,66 @@ public sealed class RelationDraftDefaultAcceptanceTests
     static readonly QualifiedShapeId Target = new(new("target"), new("root"));
     static Expr Read => Expr.Field(Binding, "value");
 
+    [Fact]
+    public void RequireValue_PreservesSourceGraphForNamedTypes()
+    {
+        var named = new NamedTypeRef(new("Code"));
+        var (graphs, draft) = Fixture(Expr.Call(ExprFunctionNames.RequireValue, Read));
+        graphs[0] = new(Source.GraphId, [new Shape(Source.ShapeId, [new(new("value"), named, presence: FieldPresence.Optional)])],
+            [new TypeDefinition.Enum(new("Code"), PrimitiveType.String, [new("Source", "00")])]);
+        graphs[1] = new(Target.GraphId, [new Shape(Target.ShapeId, [new(new("value"), named)])],
+            [new TypeDefinition.Enum(new("Code"), PrimitiveType.String, [new("Target", "01")])]);
+        Assert.False(RelationDraftAcceptor.Accept(draft, graphs).IsAccepted);
+    }
+
+    [Theory]
+    [InlineData("arity")]
+    [InlineData("return")]
+    [InlineData("nested")]
+    [InlineData("cardinality")]
+    public void RequireValue_CannotInventTypesOrNestedGuarantees(string scenario)
+    {
+        var expression = scenario == "arity" ? Expr.Call(ExprFunctionNames.RequireValue)
+            : scenario == "return" ? new CallExpr(ExprFunctionNames.RequireValue, [Read], new ScalarTypeRef(ScalarTypeKind.Int32))
+            : Expr.Call(ExprFunctionNames.RequireValue, Read);
+        var (graphs, draft) = Fixture(expression);
+        if (scenario == "nested")
+        {
+            graphs[0] = new(Source.GraphId, [new Shape(Source.ShapeId, [new(new("value"),
+                new ObjectTypeRef([new("name", Text, presence: FieldPresence.Optional)]), presence: FieldPresence.Optional)])]);
+            graphs[1] = new(Target.GraphId, [new Shape(Target.ShapeId, [new(new("value"),
+                new ObjectTypeRef([new("name", Text)]))])]);
+        }
+        if (scenario == "cardinality")
+            graphs[0] = new(Source.GraphId, [new Shape(Source.ShapeId, [new(new("value"), Text, cardinality: FieldCardinality.Many)])]);
+        Assert.False(RelationDraftAcceptor.Accept(draft, graphs).IsAccepted);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RequireValue_RoundtripsAndRejectsAbsentSourceWithoutInventingValue(bool collection)
+    {
+        var (graphs, draft) = Fixture(Expr.Call(ExprFunctionNames.RequireValue, Read), collection);
+        var restored = RelationDraftJsonSerializer.Deserialize(RelationDraftJsonSerializer.Serialize(RelationDraftDocument.FromDraft(draft)));
+        var accepted = RelationDraftAcceptor.Accept(restored.Draft, graphs);
+        Assert.True(accepted.IsAccepted, Diagnostics(accepted));
+        Assert.Equal(RelationDraftAcceptor.Accept(draft, graphs).DefinitionFingerprint, accepted.DefinitionFingerprint);
+        foreach (var input in new[] { ObservationValue.Undefined, ObservationValue.Null,
+            collection ? ObservationValue.FromArray([]) : ObservationValue.FromString("") })
+        {
+            var fields = input.Kind == ObservationValueKind.Undefined ? ImmutableDictionary<string, ObservationValue>.Empty
+                : ImmutableDictionary<string, ObservationValue>.Empty.Add("value", input);
+            var evaluation = RelationQueryDocument.FromDefinition(accepted.Definition!)
+                .Evaluate(new("tests/required-draft"), [.. graphs.Select(g => ShapeGraphDocument.FromGraph(g))])
+                .Supply([new RelationQuerySuppliedRoot("row", Source, fields)]).Build();
+            var outcome = await RelationQueryEvaluator.CreateSuppliedOnly().EvaluateAsync(evaluation);
+            Assert.Equal(input.Kind is not (ObservationValueKind.Undefined or ObservationValueKind.Null), outcome.IsSuccessful);
+            if (outcome.IsSuccessful)
+                Assert.Equal(input, Assert.Single(Assert.IsType<RelationQueryExecutionResult>(outcome.Result).Relation!.Rows).Value.GetProperty("value"));
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

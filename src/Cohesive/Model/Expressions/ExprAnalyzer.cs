@@ -679,6 +679,8 @@ public static class ExprAnalyzer
                     when definition.ScopedArguments[0].SourceArgumentIndex < argumentResults.Length
                          && argumentResults[definition.ScopedArguments[0].SourceArgumentIndex].Value is { } collectionSource =>
                     NodeResult.FromValue(new(collectionSource.Type, collectionSource.Shape, collectionSource.Cardinality)),
+                ExprFunctionResultRule.PresentArgument when argumentResults.Length == 1 && argumentResults[0].Value is { } original =>
+                    NodeResult.FromValue(original.AsPresentNonNull()),
                 ExprFunctionResultRule.FirstNonNullish => CoalesceResult(argumentResults),
                 ExprFunctionResultRule.CollectionElement when argumentResults.Length == 1
                     && GetCollectionElement(argumentResults[0].Value) is { } element => NodeResult.FromValue(element),
@@ -1156,7 +1158,7 @@ public static class ExprAnalyzer
                 return JoinConditionalResults(source, fallback);
             if (value.Presence == FieldPresence.Required && value.Nullability == FieldNullability.NonNullable)
                 return source;
-            var present = NodeResult.FromValue(new(value.Type, value.Shape, value.Cardinality));
+            var present = NodeResult.FromValue(value.AsPresentNonNull());
             // Constants such as [] or small integer literals can inhabit the source contract without
             // erasing its element type or widening its numeric domain to the literal's storage type.
             if (fallback.ConstantValue is { } constant && value.GetEffectiveType() is { } type

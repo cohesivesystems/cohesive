@@ -1661,6 +1661,31 @@ public sealed class ExprAnalysisTests
             resultRule: ExprFunctionResultRule.CollectionElement));
     }
 
+    [Fact]
+    public void RequireValue_RefinesOnlyOuterPresenceAndRetainsExactContract()
+    {
+        var type = new ObjectTypeRef([new("optional", StringType, presence: FieldPresence.Optional,
+            nullability: FieldNullability.Nullable)]);
+        foreach (TypeRef original in new TypeRef[] { StringType, type, new ArrayTypeRef(type), new NamedTypeRef(new("Party")) })
+        {
+            var contract = new ValueContract(original, presence: FieldPresence.Optional, nullability: FieldNullability.Nullable);
+            var scope = Scope(currentItem: contract);
+            var result = Analyze(Expr.Call(ExprFunctionNames.RequireValue, Expr.CurrentItem()), scope, "required");
+            Assert.True(result.IsValid);
+            Assert.Equal(original, result.KnownResult!.Type);
+            Assert.Equal(FieldPresence.Required, result.KnownResult.Presence);
+            Assert.Equal(FieldNullability.NonNullable, result.KnownResult.Nullability);
+            Assert.Equal(contract, Analyze(Expr.CurrentItem(), scope, "unchanged").KnownResult);
+            Assert.Same(result.KnownResult, result.KnownResult.AsPresentNonNull());
+        }
+        Assert.True(Analyze(Expr.Call(ExprFunctionNames.ParseInt32,
+            Expr.Call(ExprFunctionNames.RequireValue, Expr.CurrentItem())),
+            Scope(currentItem: new(StringType, presence: FieldPresence.Optional)), "parse").IsValid);
+        Assert.False(Analyze(Expr.Call(ExprFunctionNames.RequireValue), ExprScope.Empty, "arity").IsValid);
+        Assert.Throws<ArgumentException>(() => new ExprFunctionDefinition(new("bad.present"), new(0, 0),
+            resultRule: ExprFunctionResultRule.PresentArgument));
+    }
+
     static ExprAnalysisResult Analyze(
         Expr expression,
         ExprScope scope,
