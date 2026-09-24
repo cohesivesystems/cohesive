@@ -48,3 +48,18 @@ dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- \
 
 Executable invariants live in `RelationQueryExpressionEvaluatorTests`, `ObservationValidatorTests`
 `ObservationValueTests` and `ExprAnalysisTests`. Timing thresholds are deliberately excluded from CI.
+
+## Integer parser extension (2026-09-23)
+
+The same warm evaluator benchmark now includes Int32 `"002"`, Int64 maximum and an Int32 input
+with 4,096 leading zeroes. On Apple M5 Max, macOS arm64, .NET SDK 10.0.201/runtime 10.0.5,
+Release, BenchmarkDotNet ShortRun (one warmup, three measured iterations), observed means were
+28.44 ns, 41.08 ns and 1.172 μs respectively, with **72 B/evaluation** for all three.
+Run: `dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --filter '*ExpressionValueContractBenchmarks*' --job short --warmupCount 1 --iterationCount 3`.
+
+Inputs/expressions are prepared once in GlobalSetup; measurement includes normal evaluator dispatch
+and returning the scalar, but excludes compilation, observation lookup and full relation execution.
+The existing decimal cases measured 41.57/87.64 ns and 80 B; these are different semantic workloads,
+not a before/after speedup claim. Other validation jobs were active, so these short-run timings are
+exploratory; no end-to-end latency or controlled timing guarantee is claimed. The 100,000-zero input
+regression independently checks bounded allocation. There is no per-input cache or payload copy.

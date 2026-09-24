@@ -563,3 +563,27 @@ profile requires a binding-qualified field, a literal null coalesce fallback and
 comparison; current-item guards and arbitrary computed guards remain unsupported. No parser,
 runtime evaluator, wire construct, cache or backend read is added. Refinement dictionaries are
 invocation-owned preparation state. Ari owns operator decisions to emit these canonical expressions.
+
+
+## Exact integer conversion
+
+`parseInt32(text)` and `parseInt64(text)` require a present, non-null text source and return a
+required, non-null Int32 or Int64 contract respectively. Their grammar is `[+-]?[0-9]+`:
+`"002"` becomes integer `2`, `"-0"` becomes `0`, and each signed type's exact limits succeed.
+Whitespace, grouping, fractions (including `"2.0"`), exponents, non-ASCII digits, trailing NULs,
+and overflow fail with the evaluator's structured invalid-operand diagnostic. Nothing is rounded.
+The runtime uses .NET's invariant integer parser after a span-based lexical check; it does not
+reuse permissive `ObservationValue.TryGetInt64`, whose broader coercion contract remains unchanged.
+
+These functions compose with native `select`, `single`, explicit defaults and supported conditional
+guards. `select(source.stops, item => parseInt32(item.sequence))` preserves order and duplicates;
+`parseInt32(single(source.sequences))` still rejects zero or multiple values. Optional input needs
+explicit absence policy, and a fallback cannot catch malformed present text. Int64 is not implicitly
+narrowed to Int32. A `CallExpr` return annotation cannot override a function's declared result.
+
+The canonical expression catalog owns argument/result contracts and capability identities. Draft
+admission consumes its fixed result contract for all supported numeric parsers. The in-memory evaluator
+owns interpretation; other targets must advertise support or reject the capability. No new IR node,
+protocol definition, startup work, cache or backend read is introduced. Per-value work is linear in
+text length with constant auxiliary memory. Warm dispatch and padded input measurements use
+`ExpressionValueContractBenchmarks`; parser allocation bounds also have a regression test.
