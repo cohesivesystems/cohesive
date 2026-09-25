@@ -17,6 +17,31 @@ public sealed class RelationDraftCollectionAcceptanceTests
     static Expr Select(Expr source, Expr selector) => Expr.Call(ExprFunctionNames.Select, source, selector);
     static TypeRef ItemType => new ObjectTypeRef([new("Id", Text)]);
 
+    [Fact]
+    public async Task SingleConstructedSelection_PreservesRequiredChildrenAndCardinality()
+    {
+        var expression = Expr.Call(ExprFunctionNames.Single, Select(SourceItems, Object(Expr.Const("Code"), ItemId)));
+        var (graphs, draft) = Fixture(expression);
+        graphs[1] = new(Target.GraphId, [new Shape(Target.ShapeId, [new(new("Results"), new ObjectTypeRef([new("Code", Text)]))])]);
+        var restored = RelationDraftJsonSerializer.Deserialize(RelationDraftJsonSerializer.Serialize(RelationDraftDocument.FromDraft(draft)));
+        var accepted = RelationDraftAcceptor.Accept(restored.Draft, graphs);
+        Assert.True(accepted.IsAccepted, Diagnostics(accepted));
+        foreach (var count in new[] { 0, 1, 2 })
+        {
+            var values = ImmutableDictionary<string, ObservationValue>.Empty.Add("Items", ObservationValue.FromArray(
+                Enumerable.Range(0, count).Select(_ => ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["Id"] = ObservationValue.FromString("id") })).ToArray()));
+            var evaluation = RelationQueryDocument.FromDefinition(accepted.Definition!)
+                .Evaluate(new("tests/single-object"), [.. graphs.Select(g => ShapeGraphDocument.FromGraph(g))])
+                .Supply([new RelationQuerySuppliedRoot("row", Source, values)]).Build();
+            var outcome = await RelationQueryEvaluator.CreateSuppliedOnly().EvaluateAsync(evaluation);
+            Assert.Equal(count == 1, outcome.IsSuccessful);
+            if (count == 1)
+                Assert.Equal("id", Assert.Single(Assert.IsType<RelationQueryExecutionResult>(outcome.Result).Relation!.Rows).Value.GetProperty("Results").GetProperty("Code").GetString());
+        }
+        graphs[1] = new(Target.GraphId, [new Shape(Target.ShapeId, [new(new("Results"), new ObjectTypeRef([new("Code", Text), new("Required", Text)]))])]);
+        Assert.False(RelationDraftAcceptor.Accept(draft, graphs).IsAccepted);
+    }
+
     [Theory]
     [InlineData(false, false, false)]
     [InlineData(true, false, false)]
@@ -190,6 +215,122 @@ public sealed class RelationDraftCollectionAcceptanceTests
         var accepted = RelationDraftAcceptor.Accept(draft, graphs);
         Assert.False(accepted.IsAccepted);
         Assert.Contains(accepted.Diagnostics, d => d.Code == "relationDraft.select.sourceMayBeAbsent" && d.Location!.EndsWith("/arguments/1/arguments/0"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Count_UsesCollectionCardinalityIncludingEmpty(bool optional)
+    {
+        var collection = optional ? Expr.Coalesce(SourceItems, Expr.Const(ObservationValue.FromArray([]))) : SourceItems;
+        var (graphs, draft) = Fixture(Expr.Call(ExprFunctionNames.Count, collection),
+            sourcePresence: optional ? FieldPresence.Optional : FieldPresence.Required,
+            targetItem: new ScalarTypeRef(ScalarTypeKind.Int64), targetCardinality: FieldCardinality.Single);
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.True(accepted.IsAccepted, Diagnostics(accepted));
+        foreach (var count in new[] { 0, 1, 3 })
+        {
+            var values = ImmutableDictionary<string, ObservationValue>.Empty.Add("Items", ObservationValue.FromArray(
+                Enumerable.Range(0, count).Select(_ => ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["Id"] = ObservationValue.FromString("id") })).ToArray()));
+            var evaluation = RelationQueryDocument.FromDefinition(accepted.Definition!)
+                .Evaluate(new("tests/count"), [.. graphs.Select(g => ShapeGraphDocument.FromGraph(g))])
+                .Supply([new RelationQuerySuppliedRoot("row", Source, values)]).Build();
+            var outcome = await RelationQueryEvaluator.CreateSuppliedOnly().EvaluateAsync(evaluation);
+            Assert.True(outcome.IsSuccessful);
+            Assert.Equal(count, Assert.Single(Assert.IsType<RelationQueryExecutionResult>(outcome.Result).Relation!.Rows).Value.GetProperty("Results").GetInt64());
+        }
+    }
+
+    [Theory]
+    [InlineData("count", "text", "relationDraft.conversion.sourceUnsupported")]
+    [InlineData("count", "optional", "relationDraft.conversion.sourceMayBeAbsent")]
+    [InlineData("count", "arity", "relationDraft.conversion.argumentsInvalid")]
+    [InlineData("count", "return", "relationDraft.conversion.returnTypeMismatch")]
+    [InlineData("concat", "number", "relationDraft.conversion.sourceUnsupported")]
+    [InlineData("concat", "opaque", "relationDraft.conversion.sourceUnsupported")]
+    [InlineData("concat", "arity", "relationDraft.conversion.argumentsInvalid")]
+    [InlineData("concat", "return", "relationDraft.conversion.returnTypeMismatch")]
+    public void UnaryCollectionAndTextOperations_RejectUnsafeContracts(string function, string scenario, string code)
+    {
+        Expr expression = new CallExpr(function, scenario == "arity" ? [SourceItems, SourceItems] : [SourceItems],
+            scenario == "return" ? new ScalarTypeRef(ScalarTypeKind.Bool) : new OpaqueRuntimeTypeRef("unknown"));
+        var sourceType = scenario == "number" ? new ScalarTypeRef(ScalarTypeKind.Int64)
+            : scenario == "opaque" ? (TypeRef)new OpaqueRuntimeTypeRef("PrivateType") : Text;
+        var (graphs, draft) = Fixture(expression, sourceItem: sourceType,
+            sourceCardinality: function == ExprFunctionNames.Count && scenario != "text" ? FieldCardinality.Many : FieldCardinality.Single,
+            sourcePresence: scenario == "optional" ? FieldPresence.Optional : FieldPresence.Required,
+            targetItem: function == ExprFunctionNames.Count ? new ScalarTypeRef(ScalarTypeKind.Int64) : Text, targetCardinality: FieldCardinality.Single);
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.False(accepted.IsAccepted);
+        Assert.Contains(accepted.Diagnostics, d => d.Code == code);
+    }
+
+    [Fact]
+    public async Task UnaryConcat_ExplicitlyProjectsNamedStringCodeToText()
+    {
+        var (graphs, draft) = Fixture(Expr.Call(ExprFunctionNames.Concat, SourceItems),
+            sourceItem: new NamedTypeRef(new("Code")), sourceCardinality: FieldCardinality.Single, targetCardinality: FieldCardinality.Single);
+        graphs[0] = new(Source.GraphId, graphs[0].Shapes, [new TypeDefinition.Enum(new("Code"), PrimitiveType.String, [new("Appointment", "37")])]);
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.True(accepted.IsAccepted, Diagnostics(accepted));
+        var evaluation = RelationQueryDocument.FromDefinition(accepted.Definition!)
+            .Evaluate(new("tests/text"), [.. graphs.Select(g => ShapeGraphDocument.FromGraph(g))])
+            .Supply([new RelationQuerySuppliedRoot("row", Source, ImmutableDictionary<string, ObservationValue>.Empty.Add("Items", ObservationValue.FromString("37")))]).Build();
+        var outcome = await RelationQueryEvaluator.CreateSuppliedOnly().EvaluateAsync(evaluation);
+        Assert.True(outcome.IsSuccessful);
+        Assert.Equal("37", Assert.Single(Assert.IsType<RelationQueryExecutionResult>(outcome.Result).Relation!.Rows).Value.GetProperty("Results").GetString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ScopedNullGuard_RequiresExplicitPresentValueBeforeConversion(bool explicitlyRequired)
+    {
+        var value = explicitlyRequired ? Expr.Call(ExprFunctionNames.RequireValue, ItemId) : ItemId;
+        var expression = Select(SourceItems, Object(Expr.Const("Amount"),
+            Expr.If(Expr.Eq(Expr.Coalesce(ItemId, Expr.Null()), Expr.Null()), Expr.Null(), Expr.Call(ExprFunctionNames.ParseDecimal, value))));
+        var (graphs, draft) = Fixture(expression,
+            sourceItem: new ObjectTypeRef([new("Id", Text, presence: FieldPresence.Optional)]),
+            targetItem: new ObjectTypeRef([new("Amount", new ScalarTypeRef(ScalarTypeKind.Decimal), nullability: FieldNullability.Nullable)]));
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.Equal(explicitlyRequired, accepted.IsAccepted);
+        if (!explicitlyRequired)
+            Assert.Contains(accepted.Diagnostics, d => d.Code == "relationDraft.conversion.sourceMayBeAbsent");
+    }
+
+    [Theory]
+    [InlineData("optional-array", "relationDraft.select.sourceMayBeAbsent")]
+    [InlineData("optional-child", "relationDraft.assignment.presenceUnsafe")]
+    [InlineData("forged-result", "relationDraft.conversion.returnTypeMismatch")]
+    public void SingleConstructedSelection_DoesNotRelaxInputOrChildContracts(string scenario, string code)
+    {
+        var resultType = new ObjectTypeRef([new("Code", Text)]);
+        var expression = new CallExpr(ExprFunctionNames.Single, [Select(SourceItems, Object(Expr.Const("Code"), ItemId))],
+            scenario == "forged-result" ? Text : new OpaqueRuntimeTypeRef("unknown"));
+        var (graphs, draft) = Fixture(expression,
+            sourcePresence: scenario == "optional-array" ? FieldPresence.Optional : FieldPresence.Required,
+            sourceItem: new ObjectTypeRef([new("Id", Text, presence: scenario == "optional-child" ? FieldPresence.Optional : FieldPresence.Required)]),
+            targetCardinality: FieldCardinality.Single, targetItem: resultType);
+        // A nullable/optional outer result never makes its structural children optional.
+        graphs[1] = new(Target.GraphId, [new Shape(Target.ShapeId,
+            [new(new("Results"), resultType, presence: FieldPresence.Optional, nullability: FieldNullability.Nullable)])]);
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.False(accepted.IsAccepted);
+        Assert.Contains(accepted.Diagnostics, d => d.Code == code);
+    }
+
+    [Fact]
+    public void ItemPresenceGuard_DoesNotRefineAnotherSelectorScope()
+    {
+        var child = new ObjectTypeRef([new("Id", Text, presence: FieldPresence.Optional)]);
+        var item = new ObjectTypeRef([new("Id", Text, presence: FieldPresence.Optional), new("Children", child, cardinality: FieldCardinality.Many)]);
+        var expression = Select(SourceItems, Expr.If(Expr.Eq(Expr.Coalesce(ItemId, Expr.Null()), Expr.Null()),
+            Expr.Const(ObservationValue.FromArray([])),
+            Select(Expr.Field("item.Children"), Expr.Call(ExprFunctionNames.ParseDecimal, ItemId))));
+        var (graphs, draft) = Fixture(expression, sourceItem: item, targetItem: new ArrayTypeRef(new ScalarTypeRef(ScalarTypeKind.Decimal)));
+        var accepted = RelationDraftAcceptor.Accept(draft, graphs);
+        Assert.False(accepted.IsAccepted);
+        Assert.Contains(accepted.Diagnostics, d => d.Code == "relationDraft.conversion.sourceMayBeAbsent");
     }
 
     static (ShapeGraph[] Graphs, RelationDraft Draft) Fixture(Expr expression, bool named = false, bool arrayType = false,
