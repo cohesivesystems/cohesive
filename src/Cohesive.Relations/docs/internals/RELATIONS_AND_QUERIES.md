@@ -559,8 +559,11 @@ a non-null target. Both branches remain validated and dependency analysis still 
 
 The shared `ExprGuardRefinement` authority derives these facts for core conditional analysis and
 native draft admission. Facts do not escape a branch or refine another field. The bounded draft
-profile requires a binding-qualified field, a literal null coalesce fallback and a literal null
-comparison; current-item guards and arbitrary computed guards remain unsupported. No parser,
+profile requires a field, a literal null coalesce fallback and a literal null comparison.
+Current-item guards are accepted but do not introduce inferred presence facts: use
+`parseDecimal(requireValue(item.weight))` in the non-null branch. Item paths are relative to
+the current selector; refining them without scope identity could leak facts into a nested selector.
+Arbitrary computed null guards remain unsupported. No parser,
 runtime evaluator, wire construct, cache or backend read is added. Refinement dictionaries are
 invocation-owned preparation state. Ari owns operator decisions to emit these canonical expressions.
 
@@ -613,3 +616,30 @@ The in-memory interpreter advertises this capability; other backends must explic
 reject it. Tests cover portable admission/execution, preserved contracts, malformed calls, nullish
 failures and payload retention; warm allocation evidence is in
 [relation value contracts](../../../../docs/performance/relation-value-contracts.md).
+
+## Singleton object projection and explicit text projection
+
+Draft admission accepts `single(select(collection, object(...)))` against the target element
+contract. For example, a filtered party collection with one `{name: "Origin"}` can populate a
+required target party object. Zero or multiple matches fail `single` at execution; admission
+still checks every required child. A nullable or optional outer target does not relax its children.
+The terminal projection reuses the same target-driven `select`/`object` validator as an array
+assignment. Nested value inference remains separate where no target expectation is available.
+Source checks still share the existing Select boundary; no inferred anonymous object model is added.
+
+The bounded draft profile also admits existing unary `count(collection)` and `concat(text)`.
+Count requires a present, non-null array and returns Int64, permitting explicit empty-collection
+fallback decisions such as `if count(coalesce(source.parties, [])) == 0 then ... else ...`.
+Unary concat deliberately projects a string-backed named enum to plain text while preserving its
+lexeme: named code `"37"` becomes text `"37"`. It does not implicitly equate source and target enum
+identities, stringify arbitrary objects, or validate a different target code set. Its accepted input
+is scalar text or a graph-resolved named enum backed by String. These operations accept exactly one
+argument in this draft profile; return annotations cannot forge another result type. Optional/null
+sources need an explicit fallback or `requireValue`.
+
+Ownership decision: extend `RelationDraftAcceptor` to admit these existing canonical operations.
+The expression catalog, runtime, serialization and capability system already express their behavior;
+an Ari-local expression evaluator, object builder or enum conversion table would duplicate authority.
+This adds preparation-time validation only, with no runtime algorithm, backend read or cache.
+Regression tests cover cardinality, required children, graph-backed text projection, malformed calls,
+source absence, and nested item-scope isolation.

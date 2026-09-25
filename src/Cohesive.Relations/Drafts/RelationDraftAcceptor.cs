@@ -391,6 +391,18 @@ public static class RelationDraftAcceptor
                 ValidateSelect(selection, target, targetPath, location, item);
                 return;
             }
+            // A terminal single(select(...)) supplies an element expectation just as a collection
+            // assignment does. Reuse select/object validation rather than infer a parallel object type.
+            if (expression is CallExpr { Function: ExprFunctionNames.Single, Arguments.Length: 1 } single
+                && single.Arguments[0] is CallExpr { Function: ExprFunctionNames.Select } selectedObject)
+            {
+                if (single.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
+                    && single.ReturnType != target.GetEffectiveType())
+                    Add(diagnostics, "relationDraft.conversion.returnTypeMismatch", "Declared single result must retain its target element contract.", $"{location}/returnType");
+                ValidateSelect(selectedObject, new(new ArrayTypeRef(target.GetEffectiveType()!)), targetPath,
+                    $"{location}/arguments/0", item);
+                return;
+            }
             if (TryResolveValue(expression, location, item, out var source, out var sourceGraph))
             {
                 if (expression is FieldExpr { Binding: { } binding }
@@ -447,7 +459,7 @@ public static class RelationDraftAcceptor
                     Add(diagnostics, "relationDraft.select.returnTypeMismatch", "Declared select result must retain its element type.", $"{location}/returnType");
                 return true;
             }
-            if (expression is CallExpr { Function: ExprFunctionNames.Single or ExprFunctionNames.ParseDecimal or ExprFunctionNames.ParseInt32 or ExprFunctionNames.ParseInt64 } conversion)
+            if (expression is CallExpr { Function: ExprFunctionNames.Single or ExprFunctionNames.Count or ExprFunctionNames.Concat or ExprFunctionNames.ParseDecimal or ExprFunctionNames.ParseInt32 or ExprFunctionNames.ParseInt64 } conversion)
             {
                 if (conversion.Arguments.IsDefault || conversion.Arguments.Length != 1)
                 {
@@ -464,12 +476,21 @@ public static class RelationDraftAcceptor
                 var type = source.GetEffectiveType();
                 if (conversion.Function == ExprFunctionNames.Single && type is ArrayTypeRef array)
                     contract = new(array.ElementType);
-                else if (conversion.Function != ExprFunctionNames.Single && type is ScalarTypeRef { Kind: ScalarTypeKind.String }
+                else if ((conversion.Function switch
+                    {
+                        ExprFunctionNames.Single => false,
+                        ExprFunctionNames.Count => type is ArrayTypeRef,
+                        ExprFunctionNames.Concat => type is ScalarTypeRef { Kind: ScalarTypeKind.String }
+                            || type is NamedTypeRef named && graphs.TryGetValue(graph, out var enumGraph)
+                            && enumGraph.TryGetType(named.TypeId, out var enumType)
+                            && enumType is TypeDefinition.Enum { Underlying: PrimitiveType.String },
+                        _ => type is ScalarTypeRef { Kind: ScalarTypeKind.String }
+                    })
                     && ExprSemanticsCatalog.Default.TryGetFunction(conversion.Function, out var definition))
                     contract = definition.FixedResult!;
                 else
                 {
-                    Add(diagnostics, "relationDraft.conversion.sourceUnsupported", "Single requires a collection; numeric parsing requires text.", location);
+                    Add(diagnostics, "relationDraft.conversion.sourceUnsupported", "Single and count require a collection; unary concat requires text or a string-backed named enum; numeric parsing requires text.", location);
                     return false;
                 }
                 if (conversion.ReturnType is not OpaqueRuntimeTypeRef { RuntimeType: "unknown" }
@@ -612,12 +633,12 @@ public static class RelationDraftAcceptor
                 && conditional.ReturnType != target.GetEffectiveType())
                 Add(diagnostics, "relationDraft.conditional.returnTypeMismatch",
                     "Declared conditional result type must match the target's effective type.", $"{location}/returnType");
-            // Presence guards stay bounded to a binding-qualified field and a null fallback.
-            // Shared canonical refinement owns the guaranteed facts; they never escape a branch.
+            // Presence guards are field/null comparisons, including the current item. Only binding-qualified
+            // facts are refined: item paths are relative and must not leak across nested selector scopes.
             var presenceGuard = conditional.Test is BinaryExpr
                 { Operator: BinaryOperator.Eq or BinaryOperator.Ne, Right: ConstantExpr { Value.Kind: ObservationValueKind.Null },
                   Left: CallExpr { Function: ExprFunctionNames.Coalesce, Arguments.Length: 2 } guard }
-                && guard.Arguments[0] is FieldExpr { Binding: not null }
+                && guard.Arguments[0] is FieldExpr
                 && guard.Arguments[1] is ConstantExpr { Value.Kind: ObservationValueKind.Null };
             if (presenceGuard)
             {
@@ -648,7 +669,7 @@ public static class RelationDraftAcceptor
                 guardedFields = new(previous);
                 try
                 {
-                    if (presenceGuard)
+                    if (((CallExpr)((BinaryExpr)conditional.Test).Left).Arguments[0] is FieldExpr { Binding: not null })
                         ExprGuardRefinement.Apply(conditional.Test, whenTrue,
                             expression => TryResolveValue(expression, $"{location}/test", item, out var value, out _) ? value : null,
                             (expression, value) => guardedFields[expression] = value);
