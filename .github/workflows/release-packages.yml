@@ -185,6 +185,13 @@ jobs:
           -p:CohesivePackageVersion=${{ steps.version.outputs.version }}
           -p:CohesivePackageFeed="$GITHUB_WORKSPACE/artifacts/nuget"
 
+      - name: Test Azure qualification package consumer
+        run: >-
+          dotnet test eng/package-smoke/Cohesive.Adapters.Azure.Qualification.Consumer/Cohesive.Adapters.Azure.Qualification.Consumer.csproj
+          -c Release
+          -p:CohesivePackageVersion=${{ steps.version.outputs.version }}
+          -p:CohesivePackageFeed="$GITHUB_WORKSPACE/artifacts/nuget"
+
       - name: Test generic API package consumer
         env:
           COHESIVE_NUGET_LOCAL_FEED: ${{ github.workspace }}/artifacts/nuget

@@ -86,6 +86,13 @@ jobs:
           -p:CohesivePackageVersion=0.1.0-ci.${{ github.run_number }}
           -p:CohesivePackageFeed="$GITHUB_WORKSPACE/../.feeds/nuget/cohesive-local"
 
+      - name: Test Azure qualification package consumer
+        run: >-
+          dotnet test eng/package-smoke/Cohesive.Adapters.Azure.Qualification.Consumer/Cohesive.Adapters.Azure.Qualification.Consumer.csproj
+          -c Release
+          -p:CohesivePackageVersion=0.1.0-ci.${{ github.run_number }}
+          -p:CohesivePackageFeed="$GITHUB_WORKSPACE/../.feeds/nuget/cohesive-local"
+
       - name: Test generic API package consumer
         run: bash ./eng/test-api-package-consumer.sh 0.1.0-ci.${{ github.run_number }}
 
