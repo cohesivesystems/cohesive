@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><EnableCohesiveGlobalUsings>false</EnableCohesiveGlobalUsings><AzureCosmosDisableNewtonsoftJsonCheck>true</AzureCosmosDisableNewtonsoftJsonCheck></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Azure.Cosmos" Version="3.62.0" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.24.0" />
+    <PackageReference Include="Microsoft.DurableTask.Client.AzureManaged" Version="1.25.0" />
+    <PackageReference Include="Microsoft.DurableTask.Worker.AzureManaged" Version="1.25.0" />
+  </ItemGroup>
+  <ItemGroup><InternalsVisibleTo Include="Cohesive.Adapters.Azure.Qualification.Tests" /></ItemGroup>
+</Project>
