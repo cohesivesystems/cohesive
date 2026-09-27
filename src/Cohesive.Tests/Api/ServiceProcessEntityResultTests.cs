@@ -10,6 +10,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Api;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Api.Services;
+using Cohesive.Relations.Authoring;
+using Cohesive.Relations.IR;
+using Cohesive.Relations.Execution;
 using Cohesive.Execution;
 using Cohesive.Identity;
 using Cohesive.Model;
@@ -32,9 +35,10 @@ public sealed class ServiceProcessEntityResultTests
     [Theory]
     [InlineData(true, 200)]
     [InlineData(false, 403)]
-    public async Task HttpProjectionUsesAuthorizedExactReceiptAndOpaqueToken(bool admitted, int status)
+    [InlineData(true, 400, ApiResultKind.ValidationFailed)]
+    public async Task HttpProjectionUsesAuthorizedExactReceiptAndOpaqueToken(bool admitted, int status, ApiResultKind? classification = null)
     {
-        var fixture = await Create();
+        var fixture = await Create(classification: classification);
         await fixture.Repository.Upsert(fixture.Context, new(fixture.Repository.EntityDefinition
             .CreateState("note/1", new Note("note/1", "tenant-a", "later"), 2).Snapshot, fixture.Committed.ConcurrencyToken));
         var builder = WebApplication.CreateSlimBuilder();
@@ -56,14 +60,23 @@ public sealed class ServiceProcessEntityResultTests
         http.Response.Body = new MemoryStream();
         await endpoint.RequestDelegate!(http);
         Assert.Equal(status, http.Response.StatusCode);
-        Assert.Equal(admitted ? 1 : 0, projections);
+        Assert.Equal(status == 200 ? 1 : 0, projections);
         Assert.Equal(admitted ? 1 : 0, fixture.Values.Reads);
-        if (admitted)
+        if (status == 200)
         {
             Assert.Equal(fixture.Committed.ConcurrencyToken.Value, http.Response.Headers["X-Concurrency-Token"].ToString());
             http.Response.Body.Position = 0;
             using var json = await JsonDocument.ParseAsync(http.Response.Body);
             Assert.Equal("committed-private", json.RootElement.GetProperty("text").GetString());
+        }
+        if (status == 400)
+        {
+            http.Response.Body.Position = 0;
+            using var json = await JsonDocument.ParseAsync(http.Response.Body);
+            var issue = Assert.Single(json.RootElement.GetProperty("issues").EnumerateArray());
+            Assert.Equal("notes.rejected", issue.GetProperty("code").GetString());
+            Assert.Equal("/note", issue.GetProperty("field").GetString());
+            Assert.False(http.Response.Headers.ContainsKey("X-Concurrency-Token"));
         }
     }
 
@@ -89,6 +102,29 @@ public sealed class ServiceProcessEntityResultTests
             Assert.True(read.GetProperty("responses").TryGetProperty(status, out _), status);
         Assert.Equal(0, fixture.Values.Reads);
         Assert.Equal(0, fixture.Values.RepositoryResolutions);
+    }
+
+    [Theory]
+    [InlineData(ApiResultKind.ValidationFailed)]
+    [InlineData(ApiResultKind.Conflict)]
+    [InlineData(ApiResultKind.NotFound)]
+    [InlineData(ApiResultKind.Success)]
+    public async Task ClassifierSeparatesBusinessRejectionFromMissingCommitEvidence(ApiResultKind classification)
+    {
+        var fixture = await Create(classification: classification);
+        var original = fixture.Values.Result.Values!;
+        fixture.Values.Result = ProcessExecutionValueReadResult.Available(new(original.Definition,
+            original.ProcessInstanceId, original.Input, original.TerminalOutcome, original.TerminalContinuation, []));
+        var denied = await fixture.Runtime.ReadCommittedEntityAsync(OperationContext.Create(), "result", fixture.Instance);
+        Assert.Equal(ApiResultKind.Forbidden, denied.Kind);
+        Assert.Equal(0, fixture.Values.Classifications);
+        var result = await fixture.Read();
+        Assert.Equal(classification == ApiResultKind.Success ? ApiResultKind.InfrastructureError : classification, result.Kind);
+        Assert.Equal(classification == ApiResultKind.Success ? "services.process.receiptUnavailable" : "notes.rejected",
+            Assert.Single(result.Diagnostics).Code);
+        Assert.Equal(1, fixture.Values.Classifications);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+        Assert.Null(result.Outcome);
     }
 
     [Fact]
@@ -169,7 +205,7 @@ public sealed class ServiceProcessEntityResultTests
         Assert.Equal("services.binding.resultSourceMismatch", Assert.Single(error.Validation.Diagnostics).Code);
     }
 
-    static async Task<Fixture> Create(string owner = "tenant-a", string resultNode = "commit")
+    static async Task<Fixture> Create(string owner = "tenant-a", string resultNode = "commit", ApiResultKind? classification = null)
     {
         var actor = new PrincipalRef("reviewer", PrincipalKind.User);
         var scope = new ScopeRef("tenant-a", "tenant", PartitionKey: "shared");
@@ -205,11 +241,22 @@ public sealed class ServiceProcessEntityResultTests
         Assert.Equal(ProcessActivationDisposition.Completed, decision.Disposition);
         var values = new Values(ProcessExecutionValueReadResult.Available(new(plan.DefinitionReference, continuation.ProcessInstanceId,
             terminalOutcome: decision.State.Terminal, terminalContinuation: continuation, evidence: [decision.Evidence])));
+        var classifier = classification is null ? null : HostedQuery<bool, ServiceResultClassification>.Create(
+            new("notes/classify"), new("1"), new("notes/classify", "1"), "test-policy", provenance,
+            evaluationSemantics: HostedQueryEvaluationSemantics.DeterministicComputation);
+        var classifierBinding = classifier is null ? null : DeterministicHostedQueryBinding.Create(classifier,
+            classifier.Implementation, (_, _, _) =>
+            {
+                values.Classifications++;
+                return new ServiceResultClassification(classification!.Value,
+                    classification == ApiResultKind.Success ? [] : [new("notes.rejected", DiagnosticSeverity.Error,
+                        "The note was rejected.", "/note")]);
+            });
         var service = ServiceDefinitionDocuments.Create(new("notes"), new("1"), new([
             new ServiceProcessEntityResultOperation("result", plan.DefinitionReference, new(resultNode), entity.StateShape.QualifiedId,
-                [new("notes.result.read")])]), provenance);
+                [new("notes.result.read")], resultClassifier: classifier?.Reference)]), provenance);
         var binding = new ServiceProcessEntityResultBinding("result", plan, transition,
-            new(entity, _ => { values.RepositoryResolutions++; return repository; }), "notes", values);
+            new(entity, _ => { values.RepositoryResolutions++; return repository; }), "notes", values, classifierBinding);
         var runtime = new ServiceRuntime(service, [binding], new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
         return new(runtime, repository, values, context, continuation.ProcessInstanceId, (await repository.TryGet(context, "note/1"))!);
     }
@@ -226,6 +273,7 @@ public sealed class ServiceProcessEntityResultTests
     {
         public ProcessExecutionValueReadResult Result = result;
         public int Reads;
+        public int Classifications;
         public int RepositoryResolutions;
         public ValueTask<ProcessExecutionValueReadResult> GetValuesAsync(OperationContext context,
             InteractionAuthorityScope authorityScope, ProcessInstanceId processInstanceId)

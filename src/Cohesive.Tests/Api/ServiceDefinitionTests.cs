@@ -36,11 +36,14 @@ public sealed class ServiceDefinitionTests
         Assert.Equal(document.Metadata.Fingerprint, restored!.Metadata.Fingerprint);
     }
 
-    [Fact]
-    public void ProcessEntityResultRoundTripsExactCommitSourceAndIndependentRequirements()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ProcessEntityResultRoundTripsExactCommitSourceAndIndependentRequirements(bool classified)
     {
         var operation = new ServiceProcessEntityResultOperation("result", Reference("notes/publish"),
-            new("commit"), new(new("notes"), new("note")), [new("notes.result.read")]);
+            new("commit"), new(new("notes"), new("note")), [new("notes.result.read")],
+            resultClassifier: classified ? Reference("notes/classify") : null);
         var document = ServiceDefinitionDocuments.Create(new("notes"), new("v1"), new([operation]),
             new(new("tests"), new("tests/services"), DocumentOrigin.Generated));
         Assert.True(ExecutionDefinitionJsonSerializer.TryDeserialize(

@@ -544,3 +544,25 @@ Eleven result-read tests pass, including authorized/denied HTTP invocation and O
 body-free request and outcome projection. Broader focused service coverage passed 53 tests before
 the added OpenAPI case. Generated-client and Ari adoption qualification remain outstanding; this is
 in-memory qualification, not a live-provider claim.
+
+## Declared terminal business classification
+
+A committed-entity result operation may reference an exact deterministic hosted Query through
+`ResultClassifier`. The binding requires that Query's input to equal the Process result contract and
+its output to equal `ServiceResultClassification`. The classifier selects standard API disposition
+and application-approved diagnostics. Success permits exact receipt resolution; it never proves a
+commit on its own. An explicit business rejection returns before repository resolution. Missing or
+incompatible classifier values remain infrastructure failures rather than fabricated business errors.
+
+`DeterministicHostedQueryBinding` belongs to Relations: canonical Query declarations already own
+implementation affinity, portable contracts and immutable configuration. The existing Process
+deterministic registration now delegates to this binding. `HostedQueryValueAdapter` shares input
+admission, conversion and output validation across both invocation paths; historical diagnostic codes
+remain stable. No synthetic Process node/occurrence is created for a service read, and no invocation
+result is cached. The host still attests purity; native code is not sandboxed.
+
+Example (tested): a terminal classifier rejects a note with `notes.rejected` and ValidationFailed
+when no commit receipt exists. The read returns the business diagnostic and HTTP exposes its field
+issue. The same absent receipt with a Success classification remains an infrastructure error. Denied
+callers trigger neither classification nor storage reads. Ari policy classification adoption and
+bounded HTTP completion waiting remain separate integration gates.

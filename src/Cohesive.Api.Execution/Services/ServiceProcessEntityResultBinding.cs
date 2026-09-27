@@ -1,4 +1,8 @@
 using Cohesive.Api.Services;
+using Cohesive.Model.Authoring;
+using Cohesive.Model.Serialization;
+using Cohesive.Prelude;
+using Cohesive.Relations.Execution;
 using Cohesive.Execution;
 using Cohesive.Identity;
 using Cohesive.Model;
@@ -37,7 +41,7 @@ public sealed class ServiceProcessEntityResultBinding : ServiceBinding
     /// <exception cref="ArgumentException">The authority is empty.</exception>
     public ServiceProcessEntityResultBinding(string operationId, CompiledProcessPlan process,
         CompiledTransitionPlan transition, ServiceEntityBinding entity, string authority,
-        IProcessExecutionValueRepository values) : base(operationId)
+        IProcessExecutionValueRepository values, DeterministicHostedQueryBinding? resultClassifier = null) : base(operationId)
     {
         Process = process ?? throw new ArgumentNullException(nameof(process));
         Transition = transition ?? throw new ArgumentNullException(nameof(transition));
@@ -45,6 +49,7 @@ public sealed class ServiceProcessEntityResultBinding : ServiceBinding
         ArgumentException.ThrowIfNullOrWhiteSpace(authority);
         Authority = authority;
         Values = values ?? throw new ArgumentNullException(nameof(values));
+        ResultClassifier = resultClassifier;
     }
     /// <summary>Exact Process plan owning the selected commit node.</summary>
     public CompiledProcessPlan Process { get; }
@@ -55,6 +60,11 @@ public sealed class ServiceProcessEntityResultBinding : ServiceBinding
     /// <summary>Native logical execution authority.</summary>
     public string Authority { get; }
     internal IProcessExecutionValueRepository Values { get; }
+    /// <summary>Exact deterministic classifier, invoked only after result-read admission.</summary>
+    public DeterministicHostedQueryBinding? ResultClassifier { get; }
+    internal static readonly Lazy<ValueContract> ClassificationContract = new(() =>
+        new(new DefaultClrTypeRefMapper().Map(typeof(ServiceResultClassification), nullability: null)));
+
 
     internal override void Validate(ServiceOperation operation)
     {
@@ -65,6 +75,11 @@ public sealed class ServiceProcessEntityResultBinding : ServiceBinding
             || Transition.Definition.Observation != ValueContract.FromShape(Entity.Entity.Shape))
             throw ServiceBindingValidationException.Error("services.binding.resultSourceMismatch",
                 "The result source must identify an exact Transition invocation and its entity authority.", "/bindings/processEntityResult");
+        if (result.ResultClassifier != ResultClassifier?.Reference
+            || (ResultClassifier is not null && (ResultClassifier.InputContract != Process.Definition.Result
+                || ResultClassifier.ResultContract != ClassificationContract.Value)))
+            throw ServiceBindingValidationException.Error("services.binding.resultClassifierMismatch",
+                "The classifier must match the exact declared Query, Process output and standard classification contract.", "/bindings/resultClassifier");
     }
 }
 
@@ -91,6 +106,7 @@ public sealed partial class ServiceRuntime
             results: [new(ApiResultKind.Success, typeof(TResponse), isPrimary: true),
                 new(ApiResultKind.Accepted, typeof(ApiProblem)), new(ApiResultKind.ValidationFailed, typeof(ApiValidationProblem)),
                 new(ApiResultKind.Forbidden, typeof(ApiProblem)),
+                new(ApiResultKind.Conflict, typeof(ApiProblem)), new(ApiResultKind.PreconditionFailed, typeof(ApiProblem)),
                 new(ApiResultKind.NotFound, typeof(ApiProblem)), new(ApiResultKind.DomainError, typeof(ApiProblem)),
                 new(ApiResultKind.InfrastructureError, typeof(ApiProblem))]);
         if (http is not null) projected = projected.WithHttp(http);
@@ -136,6 +152,22 @@ public sealed partial class ServiceRuntime
             evidence.Record("terminalValuesRead");
             if (values.TerminalOutcome!.Kind != ExecutionTerminalOutcomeKind.Completed)
                 return Reject(ApiResultKind.DomainError, "services.process.notCompleted", "The Process did not complete successfully.");
+            if (binding.ResultClassifier is { } classifier)
+            {
+                if (values.TerminalOutcome.Detail?.Value is not PortableValue terminal)
+                    return Reject(ApiResultKind.InfrastructureError, "services.process.resultUnavailable", "The canonical terminal result is unavailable.");
+                var classified = classifier.Evaluate(terminal, trusted.CancellationToken);
+                if (classified.Type == ResultType.Failure)
+                    return Reject(ApiResultKind.InfrastructureError, "services.process.classificationFailed", "The terminal result could not be classified against its declared contract.");
+                var decoded = HostedQueryValueAdapter.Decode<ServiceResultClassification>(classified.Success!,
+                    ServiceProcessEntityResultBinding.ClassificationContract.Value);
+                if (decoded.Type == ResultType.Failure)
+                    return Reject(ApiResultKind.InfrastructureError, "services.process.classificationFailed", "The terminal classification is invalid.");
+                var classification = decoded.Success!;
+                evidence.Record("terminalResultClassified", classification.Kind.ToString());
+                if (classification.Kind != ApiResultKind.Success)
+                    return new(classification.Kind, null, classification.Diagnostics, evidence.Complete(classification.Kind));
+            }
             var candidates = values.Evidence.SelectMany(item => item.Trace).Where(item =>
                 item.Continuation == values.TerminalContinuation && item.Node == operation.CommitNode
                 && item.Kind == ProcessTraceEventKind.OperationCompleted && item.Detail == "completed").Take(2).ToArray();

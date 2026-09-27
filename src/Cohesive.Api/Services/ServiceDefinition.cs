@@ -123,12 +123,14 @@ public sealed record ServiceProcessEntityResultOperation : ServiceOperation
     /// <param name="commitNode">Transition invocation node whose single terminal-attempt receipt supplies the response.</param>
     /// <param name="entity">Exact entity state shape exposed by the result binding.</param>
     /// <param name="authorizationRequirements">Requirements for reading this result, independent of start admission.</param>
+    /// <param name="resultClassifier">Optional exact Query returning standard service classification.</param>
     /// <exception cref="ArgumentException">A node or entity identity is empty.</exception>
     /// <exception cref="ArgumentNullException">The Process reference is null.</exception>
     [JsonConstructor]
     public ServiceProcessEntityResultOperation(string id, ExecutionDefinitionReference process,
         ExecutionNodeId commitNode, QualifiedShapeId entity,
-        ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default) : base(id, authorizationRequirements)
+        ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default,
+        ExecutionDefinitionReference? resultClassifier = null) : base(id, authorizationRequirements)
     {
         Process = process ?? throw new ArgumentNullException(nameof(process));
         ArgumentException.ThrowIfNullOrWhiteSpace(commitNode.Value);
@@ -136,7 +138,11 @@ public sealed record ServiceProcessEntityResultOperation : ServiceOperation
             throw new ArgumentException("An exact entity state shape is required.", nameof(entity));
         CommitNode = commitNode;
         Entity = entity;
+        ResultClassifier = resultClassifier;
     }
+    /// <summary>Optional exact deterministic Query classifying the terminal value before receipt resolution.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExecutionDefinitionReference? ResultClassifier { get; }
     /// <summary>Exact Process authority from which evidence must be read.</summary>
     public ExecutionDefinitionReference Process { get; }
     /// <summary>Declared Transition invocation node; ambiguous repeated occurrences cannot produce a single entity response.</summary>

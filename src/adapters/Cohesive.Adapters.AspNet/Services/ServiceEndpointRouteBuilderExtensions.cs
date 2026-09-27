@@ -114,6 +114,10 @@ public static class ServiceEndpointRouteBuilderExtensions
                 return Results.Json(project(snapshot), statusCode: status);
             }
             var diagnostic = result.Diagnostics.FirstOrDefault();
+            if (result.Kind == ApiResultKind.ValidationFailed)
+                return Results.Json(new ApiValidationProblem(diagnostic?.Code ?? "services.result.invalid",
+                    diagnostic?.Message ?? "The result was rejected.", result.Diagnostics.Select(item =>
+                        new ApiValidationIssue(item.Location, item.Code, item.Message)).ToArray()), statusCode: status);
             return Results.Json(new ApiProblem(diagnostic?.Code ?? "services.result.unavailable",
                 diagnostic?.Message ?? "The committed result is unavailable.", diagnostic?.Location), statusCode: status);
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(runtime.Declaration);
