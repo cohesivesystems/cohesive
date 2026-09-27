@@ -26,6 +26,25 @@ namespace Cohesive.Tests.Api;
 public sealed class ServiceCompositionTests
 {
     [Fact]
+    public async Task PublishingService_ProjectsTheAdmittedReviewerIndependentlyOfWorkerIdentity()
+    {
+        var fixture = await Fixture.Create();
+        var admitted = await fixture.Service.StartAsync(Context(), "publish", fixture.StartRequest());
+        var continuation = admitted.Outcome!.Admission!.Continuation;
+        var worker = Context("physical-worker");
+        var result = await fixture.Runtime().ActivateAsync(worker, fixture.Plan, continuation,
+            fixture.Activation("acquire", ProcessActivationCause.Start));
+        Assert.Equal(ProcessActivationDisposition.DurableCut, result.Decision!.Disposition);
+        Assert.Equal(result.Snapshot!.Checkpoint.Start.Request.Context, fixture.AcquisitionStartContext);
+        Assert.Equal("editor", fixture.AcquisitionStartContext!.Authorization.Actor);
+        Assert.Equal(Now, fixture.AcquisitionStartContext.IssuedAtUtc);
+        var replay = await fixture.Runtime().ActivateAsync(Context("replacement-worker"), fixture.Plan, continuation,
+            fixture.Activation("acquire", ProcessActivationCause.Start));
+        Assert.Equal(ProcessDurableRuntimeDisposition.Replayed, replay.Disposition);
+        Assert.Equal(1, fixture.Reader.Reads);
+    }
+
+    [Fact]
     public async Task PublishingService_RetainsAcquisitionAndComputationAcrossEntityHandoffCrash()
     {
         var fixture = await Fixture.Create();
@@ -122,9 +141,9 @@ public sealed class ServiceCompositionTests
     static readonly ExecutionProvenance Provenance = new(new("tests/publishing", "1"),
         new("tests/services/composition"), DocumentOrigin.Generated);
     static readonly DateTimeOffset Now = new(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
-    static OperationContext Context()
+    static OperationContext Context(string actorId = "editor")
     {
-        var actor = new PrincipalRef("editor", PrincipalKind.User);
+        var actor = new PrincipalRef(actorId, PrincipalKind.User);
         var scope = new ScopeRef("tenant-a", "tenant", PartitionKey: "shared");
         return OperationContext.Create(timeProvider: new FixedClock()).WithIdentityContext(new IdentityContext(actor,
             EffectiveScope: new([scope], ScopeSelectionMode.Single, ScopeSelectionSource.Ambient),
@@ -142,6 +161,7 @@ public sealed class ServiceCompositionTests
         public InMemoryProcessDurableStore Store { get; } = new();
         public ServiceRuntime Service { get; set; } = null!;
         public int Computations { get; set; }
+        public ProcessControlCommandContext? AcquisitionStartContext { get; set; }
 
         public ProcessDurableRuntime Runtime(bool crashAfterFirstCommit = false)
         {
@@ -245,6 +265,7 @@ public sealed class ServiceCompositionTests
             var handlers = new ProcessRelationHandlerCatalog([
                 ProcessRelationHandlerRegistration.Create(acquire, async (context, evaluation, _) =>
                 {
+                    fixture.AcquisitionStartContext = evaluation.StartContext;
                     // This domain projection selects a pair; filtering remains in the canonical query.
                     var request = compilation.Evaluate(new(evaluation.Activation.Value + "/" + evaluation.Node.Value))
                         .Set(tenant.Id, ObservationValue.FromString(evaluation.Context.AuthorityScope.Tenant), "process/authority").Build();

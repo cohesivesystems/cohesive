@@ -40,6 +40,9 @@ public sealed record ProcessTransitionInvocation(
 /// <param name="Occurrence">Zero-based occurrence of the node in the token history.</param>
 /// <param name="ObservedAtUtc">Explicit UTC observation time of the finite activation.</param>
 /// <param name="Context">Authority, correlation, delivery, ordering, causation, and provenance evidence.</param>
+/// <param name="StartContext">Optional retained, server-admitted start command context. Durable runtimes
+/// project this from their start receipt, independently of the current worker identity. It is attribution
+/// evidence, not a new authorization grant or proof of continuing permission. Direct interpreters leave it null.</param>
 public sealed record ProcessRelationEvaluation(
     ExecutionDefinitionReference Definition,
     PortableValue Input,
@@ -49,7 +52,8 @@ public sealed record ProcessRelationEvaluation(
     ExecutionNodeId Node,
     long Occurrence,
     DateTimeOffset ObservedAtUtc,
-    ProcessActivationContext Context);
+    ProcessActivationContext Context,
+    ProcessControlCommandContext? StartContext = null);
 
 /// <summary>Complete context for resolving a portable Signal-target expression.</summary>
 /// <param name="Value">Materialized portable target value.</param>

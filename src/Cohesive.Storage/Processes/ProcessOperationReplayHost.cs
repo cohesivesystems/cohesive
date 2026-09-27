@@ -26,6 +26,7 @@ internal sealed record ProcessOperationReplayObservation(
 /// </remarks>
 internal sealed class ProcessOperationReplayHost : IProcessReferenceHost, IAsyncProcessReferenceHost
 {
+    readonly ProcessControlCommandContext? startContext;
     readonly IProcessReferenceHost? inner;
     readonly IAsyncProcessReferenceHost? asyncInner;
     readonly Dictionary<ProcessOperationOccurrence, ProcessOperationReceipt> receipts;
@@ -35,28 +36,32 @@ internal sealed class ProcessOperationReplayHost : IProcessReferenceHost, IAsync
     /// <summary>Creates an activation-scoped replay wrapper.</summary>
     /// <param name="inner">Host used only for operation occurrences without committed or captured evidence.</param>
     /// <param name="receipts">Committed attempt-scoped operation receipts available for exact replay.</param>
+    /// <param name="startContext">Retained start evidence projected into first-time relation observations.</param>
     /// <exception cref="ArgumentNullException"><paramref name="inner"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="receipts"/> contains a null value or repeats an operation occurrence key.
     /// </exception>
     internal ProcessOperationReplayHost(
         IProcessReferenceHost inner,
-        ImmutableArray<ProcessOperationReceipt> receipts = default)
-        : this(receipts)
+        ImmutableArray<ProcessOperationReceipt> receipts = default,
+        ProcessControlCommandContext? startContext = null)
+        : this(receipts, startContext)
     {
         this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
     }
 
     internal ProcessOperationReplayHost(
         IAsyncProcessReferenceHost inner,
-        ImmutableArray<ProcessOperationReceipt> receipts = default)
-        : this(receipts)
+        ImmutableArray<ProcessOperationReceipt> receipts = default,
+        ProcessControlCommandContext? startContext = null)
+        : this(receipts, startContext)
     {
         asyncInner = inner ?? throw new ArgumentNullException(nameof(inner));
     }
 
-    ProcessOperationReplayHost(ImmutableArray<ProcessOperationReceipt> receipts)
+    ProcessOperationReplayHost(ImmutableArray<ProcessOperationReceipt> receipts, ProcessControlCommandContext? startContext)
     {
+        this.startContext = startContext;
         var normalized = receipts.IsDefault ? [] : receipts;
         this.receipts = new(normalized.Length);
         foreach (var receipt in normalized)
@@ -108,7 +113,7 @@ internal sealed class ProcessOperationReplayHost : IProcessReferenceHost, IAsync
         return Resolve(
             key,
             evaluation.Definition,
-            () => SyncHost.EvaluateRelation(evaluation));
+            () => SyncHost.EvaluateRelation(WithStartContext(evaluation)));
     }
 
     /// <inheritdoc />
@@ -142,7 +147,7 @@ internal sealed class ProcessOperationReplayHost : IProcessReferenceHost, IAsync
         return ResolveAsync(context,
             Key(evaluation.Continuation, evaluation.Activation, evaluation.Token, evaluation.Node, evaluation.Occurrence),
             evaluation.Definition,
-            () => AsyncHost.EvaluateRelationAsync(context, evaluation));
+            () => AsyncHost.EvaluateRelationAsync(context, WithStartContext(evaluation)));
     }
 
     /// <inheritdoc />
@@ -154,6 +159,17 @@ internal sealed class ProcessOperationReplayHost : IProcessReferenceHost, IAsync
         ArgumentNullException.ThrowIfNull(resolution);
         context.ThrowIfCancellationRequested();
         return AsyncHost.ResolveSignalTargetAsync(context, resolution);
+    }
+
+    ProcessRelationEvaluation WithStartContext(ProcessRelationEvaluation evaluation)
+    {
+        if (startContext is null)
+            return evaluation;
+        if (startContext.ProcessInstanceId != evaluation.Continuation.ProcessInstanceId
+            || startContext.Authorization.AuthorityScope != evaluation.Context.AuthorityScope)
+            throw new InvalidOperationException("Retained start evidence must match the evaluation instance and authority scope.");
+        // The persisted admission owns attribution, including on recovery under a different worker.
+        return evaluation with { StartContext = startContext };
     }
 
     ProcessOperationResult Resolve(

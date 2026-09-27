@@ -292,3 +292,28 @@ For example, preparing approval at token `opaque-A` cannot apply after another e
 receipt even though its own commit advanced the token. These cases are tested with in-memory
 atomic receipts, including an adapter that ignores read preconditions; remote-provider qualification
 remains separate.
+
+## Retained start attribution for observations
+
+`ProcessRelationEvaluation.StartContext` optionally exposes the existing
+`ProcessControlCommandContext` retained in the native durable start receipt. The Storage runtime
+projects that exact context into first-time synchronous and asynchronous host observations. It
+checks the logical Process instance and authority scope, replaces any supplied attribution with
+retained evidence, and does not repeat an observation whose result already has a receipt. Direct
+reference interpretation has no admitted start receipt and therefore leaves this field absent.
+
+For example, user `editor` starts a publishing Process and `physical-worker` performs acquisition.
+The acquisition sees `editor` and the original issuance time from the admitted start receipt. A
+replacement worker replays the recorded acquisition without changing attribution or rereading the
+source. Tests cover this real service/runtime path, sync/async host projection, supplied-context
+replacement, and rejection of an unrelated instance.
+
+This is attribution evidence, not delegated identity, an ambient worker identity replacement, or
+a new grant. Current authorization/revocation policy remains the host's responsibility. The
+deterministic computation handler still receives only its explicit typed inputs, configuration
+and cancellation; it cannot inspect the native observation context. An acquisition can explicitly
+project admitted actor/time into a later computation's input.
+
+The reusable ownership is the existing Process host and Storage replay boundary. Adding actor
+fields to public Ari input or reusing the worker principal would create a competing or incorrect
+authority. Reusing the existing start context also avoids another persisted attribution envelope.

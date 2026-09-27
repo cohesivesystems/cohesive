@@ -1341,7 +1341,7 @@ public sealed partial class ProcessDurableRuntime
     {
         if (asyncHost is not null)
         {
-            var replay = new ProcessOperationReplayHost(asyncHost, checkpoint.Operations);
+            var replay = new ProcessOperationReplayHost(asyncHost, checkpoint.Operations, checkpoint.Start.Request.Context);
             var activity = ExecutionTelemetry.StartActivity(ExecutionTelemetryActivityKind.Activation);
             try
             {
@@ -1365,7 +1365,7 @@ public sealed partial class ProcessDurableRuntime
         var transitionHost = transitionOperationAdapter is null
             ? null
             : new ProcessTransitionOperationSuspensionHost(host!);
-        var replayHost = new ProcessOperationReplayHost(transitionHost ?? host!, checkpoint.Operations);
+        var replayHost = new ProcessOperationReplayHost(transitionHost ?? host!, checkpoint.Operations, checkpoint.Start.Request.Context);
         var result = transitionHost is null
             ? Activate(plan, checkpoint.Continuation, activation, replayHost)
             : await ActivateWithTransitionOperationsAsync(
