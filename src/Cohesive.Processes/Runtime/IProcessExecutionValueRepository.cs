@@ -103,7 +103,8 @@ public sealed record ProcessExecutionValues
             foreach (var activation in evidence)
                 if (activation is null || activation.Definition != definition || activation.Trace.IsDefault
                     || activation.Trace.Any(item => item is null || item.Definition != definition
-                        || item.Activation != activation.Activation || item.Continuation.ProcessInstanceId != processInstanceId))
+                        || item.Activation != activation.Activation || item.Continuation is null
+                        || item.Continuation.ProcessInstanceId != processInstanceId))
                     throw new ArgumentException("Retained activation evidence contradicts the exact Process definition or instance.", nameof(evidence));
         }
         ProcessInstanceId = processInstanceId;

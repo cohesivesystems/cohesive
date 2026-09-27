@@ -274,6 +274,11 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
             { Definition = ProcessDurabilityTestFixture.DefinitionReference("process/foreign", 'a') }).ToImmutableArray();
         Assert.Throws<ArgumentException>(() => new ProcessExecutionValues(values.Definition,
             values.ProcessInstanceId, values.Input, values.TerminalOutcome, values.TerminalContinuation, foreignEvidence));
+        var missingContinuation = values.Evidence.Select(item => item with
+            { Trace = item.Trace.Select(trace => trace with { Continuation = null! }).ToImmutableArray() }).ToImmutableArray();
+        var malformed = Assert.Throws<ArgumentException>(() => new ProcessExecutionValues(values.Definition,
+            values.ProcessInstanceId, values.Input, values.TerminalOutcome, values.TerminalContinuation, missingContinuation));
+        Assert.Equal("evidence", malformed.ParamName);
         Assert.Equal(PrivateInput, Assert.IsType<PortableValue>(values.Input).Value?.Deserialize<string>());
         var terminal = Assert.IsType<ExecutionTerminalOutcome>(values.TerminalOutcome);
         Assert.Equal(ExecutionTerminalOutcomeKind.Completed, terminal.Kind);
