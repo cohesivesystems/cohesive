@@ -48,3 +48,19 @@ The declaration must be reviewed as semantic contract metadata. Serializer behav
 deterministic, and changing its root JSON kind is a contract change. Consumers may inspect or replace the complete
 JSON value in portable expressions, but internal document semantics stay behind the document's own schema and
 validator unless explicitly projected into a separate structural contract.
+
+
+## Public discriminator projection
+
+A portable object may also be a case in a native `JsonPolymorphic` contract. Public TypeScript generation must
+retain that serializer's flat discriminator layout even while the case's internal document schema remains opaque.
+For example, a native `RelationQueryDocument` relation case serializes with `$definition: "relation"` beside the
+relation fields. Its conservative generated type is the discriminator intersected with `Record<string, unknown>`;
+a synthetic `value` property would describe a different wire format. Scalar and other non-object union payloads
+retain their existing envelope convention.
+
+`PortableDocumentContractTests` qualifies this layout against actual serialization and generates native draft and
+query documents through the existing graph builder. Native expression cases retain their declared discriminators.
+This does not yet provide the full public relation schema: separating execution admission from an explicitly
+selected public document contract remains part of the declarative service plan. Expanding every portable value
+through CLR reflection would still violate the authority boundary described above.

@@ -650,11 +650,12 @@ public sealed class TypeScriptShapeAstBuilder
 
         if (CanMergeUnionPayload(unionCase.Type))
         {
-            return new TsIntersectionType(
-                [
-                    discriminator,
-                    TranslateType(unionCase.Type)
-                ]);
+            // Object-valued portable documents retain their native flat discriminator layout.
+            // Their opaque members do not imply a synthetic wire-level "value" envelope.
+            var payload = unionCase.Type is JsonTypeRef { Kind: JsonTypeKind.Object }
+                ? new TsRawType("Record<string, unknown>")
+                : TranslateType(unionCase.Type);
+            return new TsIntersectionType([discriminator, payload]);
         }
 
         return new TsTypeLiteral(
@@ -672,7 +673,7 @@ public sealed class TypeScriptShapeAstBuilder
 
     bool CanMergeUnionPayload(TypeRef type)
     {
-        if (type is ObjectTypeRef)
+        if (type is ObjectTypeRef or JsonTypeRef { Kind: JsonTypeKind.Object })
             return true;
 
         if (type is not NamedTypeRef named)
