@@ -112,8 +112,11 @@ public sealed class ServiceTransitionRuntime
         if (bound.Count != definition!.Operations.Length)
             throw ServiceBindingValidationException.Error("services.binding.incomplete", "Each declared operation requires exactly one binding.", "/bindings");
         var linked = new Dictionary<string, (ServiceTransitionOperation, ServiceTransitionBinding)>(StringComparer.Ordinal);
-        foreach (var operation in definition.Operations)
+        foreach (var declared in definition.Operations)
         {
+            if (declared is not ServiceTransitionOperation operation)
+                throw ServiceBindingValidationException.Error("services.binding.operationUnsupported",
+                    "The Transition runtime requires Transition operations only.", "/operations");
             if (!bound.TryGetValue(operation.Id, out var binding) || binding.Plan.DefinitionReference != operation.Transition
                 || binding.Entity.StateShape.QualifiedId != operation.Entity)
                 throw ServiceBindingValidationException.Error("services.binding.inexact", $"Operation '{operation.Id}' requires its exact declared Transition and entity.", "/bindings");

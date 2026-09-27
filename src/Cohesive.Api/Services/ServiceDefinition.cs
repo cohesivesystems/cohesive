@@ -6,68 +6,110 @@ using Cohesive.Model.Serialization;
 
 namespace Cohesive.Api.Services;
 
-/// <summary>
-/// Portable service operation exposing one exact Transition over one entity authority.
-/// Input, observation and outcome contracts remain owned by the referenced Transition.
-/// </summary>
-/// <remarks>HTTP, repositories, policy evaluators and other host objects belong to runtime bindings.</remarks>
-public sealed record ServiceTransitionOperation
+/// <summary>One exposed semantic operation, independent of transport and deployment objects.</summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
+[JsonDerivedType(typeof(ServiceTransitionOperation), "transition")]
+[JsonDerivedType(typeof(ServiceQueryOperation), "query")]
+[JsonDerivedType(typeof(ServiceProcessOperation), "process")]
+public abstract record ServiceOperation
 {
-    /// <summary>Declares one operation and the requirements every invocation must enforce.</summary>
-    /// <exception cref="ArgumentException">An identity is empty or requirements repeat an identity.</exception>
-    /// <exception cref="ArgumentNullException">The exact Transition reference is null.</exception>
-    [JsonConstructor]
-    public ServiceTransitionOperation(string id, QualifiedShapeId entity, ExecutionDefinitionReference transition,
-        ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default)
+    /// <summary>Normalizes common operation identity and authorization requirements.</summary>
+    /// <exception cref="ArgumentException">Identity is empty or requirements contain null or duplicate identities.</exception>
+    private protected ServiceOperation(string id, ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
-        ArgumentNullException.ThrowIfNull(transition);
-        if (string.IsNullOrWhiteSpace(entity.GraphId.Value) || string.IsNullOrWhiteSpace(entity.ShapeId.Value))
-            throw new ArgumentException("An exact entity state shape is required.", nameof(entity));
         var requirements = authorizationRequirements.IsDefault ? [] : authorizationRequirements;
         if (requirements.Any(requirement => requirement is null)
             || requirements.Select(requirement => requirement.Id).Distinct(StringComparer.Ordinal).Count() != requirements.Length)
             throw new ArgumentException("Authorization requirements must have unique identities.", nameof(authorizationRequirements));
         Id = id;
-        Entity = entity;
-        Transition = transition;
         AuthorizationRequirements = [.. requirements.OrderBy(requirement => requirement.Id, StringComparer.Ordinal)];
     }
 
     /// <summary>Stable operation identity within the service; projected API identity derives from this value.</summary>
     public string Id { get; }
-    /// <summary>Graph-qualified entity state authority admitted by the binding.</summary>
-    public QualifiedShapeId Entity { get; }
-    /// <summary>Exact behavior definition; no copy of its contracts or behavior is retained here.</summary>
-    public ExecutionDefinitionReference Transition { get; }
-    /// <summary>Transport-neutral requirements interpreted by the configured authority binding.</summary>
+    /// <summary>Transport-neutral requirements interpreted by every invocation's authority binding.</summary>
     public ImmutableArray<ApiAuthorizationRequirement> AuthorizationRequirements { get; }
 
-    /// <summary>Compares complete persisted operation semantics by value.</summary>
-    public bool Equals(ServiceTransitionOperation? other) => ReferenceEquals(this, other)
-        || other is not null && Id == other.Id && Entity == other.Entity && Transition == other.Transition
+    /// <summary>Compares the shared operation semantics by value, including the operation family.</summary>
+    public virtual bool Equals(ServiceOperation? other) => ReferenceEquals(this, other)
+        || other is not null && EqualityContract == other.EqualityContract && Id == other.Id
         && AuthorizationRequirements.SequenceEqual(other.AuthorizationRequirements);
 
     /// <inheritdoc />
     public override int GetHashCode()
     {
         var hash = new HashCode();
-        hash.Add(Id); hash.Add(Entity); hash.Add(Transition);
+        hash.Add(EqualityContract); hash.Add(Id);
         foreach (var requirement in AuthorizationRequirements) hash.Add(requirement);
         return hash.ToHashCode();
     }
 }
 
+/// <summary>Exposes one exact Transition over one entity authority; referenced contracts remain authoritative.</summary>
+public sealed record ServiceTransitionOperation : ServiceOperation
+{
+    /// <summary>Declares an entity operation and its requirements.</summary>
+    /// <exception cref="ArgumentException">An identity is empty or authorization requirements are invalid.</exception>
+    /// <exception cref="ArgumentNullException">The exact Transition reference is null.</exception>
+    [JsonConstructor]
+    public ServiceTransitionOperation(string id, QualifiedShapeId entity, ExecutionDefinitionReference transition,
+        ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default)
+        : base(id, authorizationRequirements)
+    {
+        ArgumentNullException.ThrowIfNull(transition);
+        if (string.IsNullOrWhiteSpace(entity.GraphId.Value) || string.IsNullOrWhiteSpace(entity.ShapeId.Value))
+            throw new ArgumentException("An exact entity state shape is required.", nameof(entity));
+        Entity = entity;
+        Transition = transition;
+    }
+
+    /// <summary>Graph-qualified entity state authority admitted by the binding.</summary>
+    public QualifiedShapeId Entity { get; }
+    /// <summary>Exact behavior definition; contracts and behavior are not copied into the service.</summary>
+    public ExecutionDefinitionReference Transition { get; }
+}
+
+/// <summary>Exposes an exact relation/query definition whose parameters and results remain authoritative.</summary>
+public sealed record ServiceQueryOperation : ServiceOperation
+{
+    /// <summary>Declares a read operation and the requirements enforced before source acquisition.</summary>
+    /// <exception cref="ArgumentException">Identity or authorization requirements are invalid.</exception>
+    /// <exception cref="ArgumentNullException">The exact query reference is null.</exception>
+    [JsonConstructor]
+    public ServiceQueryOperation(string id, ExecutionDefinitionReference query,
+        ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default)
+        : base(id, authorizationRequirements) => Query = query ?? throw new ArgumentNullException(nameof(query));
+
+    /// <summary>Exact native relation/query authority, including its semantic fingerprint.</summary>
+    public ExecutionDefinitionReference Query { get; }
+}
+
+/// <summary>Exposes admission to an exact Process; its graph owns sequencing and recovery semantics.</summary>
+public sealed record ServiceProcessOperation : ServiceOperation
+{
+    /// <summary>Declares a Process entry operation and its requirements.</summary>
+    /// <exception cref="ArgumentException">Identity or authorization requirements are invalid.</exception>
+    /// <exception cref="ArgumentNullException">The exact Process reference is null.</exception>
+    [JsonConstructor]
+    public ServiceProcessOperation(string id, ExecutionDefinitionReference process,
+        ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default)
+        : base(id, authorizationRequirements) => Process = process ?? throw new ArgumentNullException(nameof(process));
+
+    /// <summary>Exact Process authority; the service does not copy its graph, contracts or control lifecycle.</summary>
+    public ExecutionDefinitionReference Process { get; }
+}
+
 /// <summary>
 /// Portable service composition. Identity, revision, fingerprint and provenance belong to the shared
-/// execution-definition envelope. This initial profile exposes entity Transitions only.
+/// execution-definition envelope. Referenced definitions own behavior and execution contracts.
 /// </summary>
 public sealed record ServiceDefinition
 {
     /// <summary>Creates the exposed operation set in deterministic ordinal identity order.</summary>
     /// <exception cref="ArgumentException">The set is empty, contains null or repeats an operation identity.</exception>
     [JsonConstructor]
-    public ServiceDefinition(ImmutableArray<ServiceTransitionOperation> operations)
+    public ServiceDefinition(ImmutableArray<ServiceOperation> operations)
     {
         if (operations.IsDefaultOrEmpty || operations.Any(operation => operation is null)
             || operations.Select(operation => operation.Id).Distinct(StringComparer.Ordinal).Count() != operations.Length)
@@ -76,7 +118,7 @@ public sealed record ServiceDefinition
     }
 
     /// <summary>Canonical exposed operation order; these declarations own service membership.</summary>
-    public ImmutableArray<ServiceTransitionOperation> Operations { get; }
+    public ImmutableArray<ServiceOperation> Operations { get; }
 
     /// <summary>Compares the canonical operation set by value.</summary>
     public bool Equals(ServiceDefinition? other) => ReferenceEquals(this, other)

@@ -103,6 +103,21 @@ public sealed class ServiceTransitionRuntimeTests
     }
 
     [Fact]
+    public async Task TransitionOnlyExecutorRejectsOtherDeclaredOperationFamiliesBeforeResolvingInfrastructure()
+    {
+        var fixture = await Fixture.Create();
+        var document = ServiceDefinitionDocuments.Create(new("notes"), new("v2"),
+            new([new ServiceQueryOperation("revise", fixture.Plan.DefinitionReference)]),
+            fixture.Document.Metadata.Provenance);
+        var binding = new ServiceTransitionBinding("revise", fixture.Plan, fixture.Repository.EntityDefinition, _ =>
+            throw new InvalidOperationException("Unsupported operations must never resolve infrastructure."));
+        var exception = Assert.Throws<ServiceBindingValidationException>(() =>
+            new ServiceTransitionRuntime(document, [binding], fixture.Authority));
+        Assert.Equal("services.binding.operationUnsupported", Assert.Single(exception.Validation.Diagnostics).Code);
+        Assert.Equal(0, fixture.Resolutions);
+    }
+
+    [Fact]
     public async Task CancellationBeforeAdmissionDoesNotResolveRepository()
     {
         var fixture = await Fixture.Create();
@@ -248,7 +263,7 @@ public sealed class ServiceTransitionRuntimeTests
         var plan = Cohesive.ExecutionKernel.TestFixtures.Storage.RunControlFixture.Start.Compile().Plan!;
         var entity = Cohesive.ExecutionKernel.TestFixtures.Storage.RunControlFixture.Entity;
         var service = ServiceDefinitionDocuments.Create(new("runs"), new("v1"),
-            new([new("start", entity.StateShape.QualifiedId, plan.DefinitionReference)]), plan.Document.Metadata.Provenance);
+            new([new ServiceTransitionOperation("start", entity.StateShape.QualifiedId, plan.DefinitionReference)]), plan.Document.Metadata.Provenance);
         var resolutions = 0;
         var binding = new ServiceTransitionBinding("start", plan, entity, _ =>
         {
@@ -270,7 +285,7 @@ public sealed class ServiceTransitionRuntimeTests
             transition => transition.Return(new("reply"), TransitionOutcomeDisposition.Applied, (_, input) => input));
         var plan = authored.Compile().Plan!;
         var declaration = ServiceDefinitionDocuments.Create(new("reply-service"), new("v1"),
-            new([new("revise", entity.StateShape.QualifiedId, plan.DefinitionReference, [new("notes.revise")])]),
+            new([new ServiceTransitionOperation("revise", entity.StateShape.QualifiedId, plan.DefinitionReference, [new("notes.revise")])]),
             fixture.Document.Metadata.Provenance);
         var runtime = new ServiceTransitionRuntime(declaration, [new("revise", plan, entity, _ => fixture.Repository)], fixture.Authority);
         var http = await InvokeHttp<JsonReply, JsonReply>(runtime, fixture.Initial.ConcurrencyToken, "{\"label\":\"hello\",\"data\":\"AQID\"}");
@@ -352,7 +367,7 @@ public sealed class ServiceTransitionRuntimeTests
             var compiled = authored.Compile();
             Assert.True(compiled.IsSuccessful, string.Join("; ", compiled.Validation.Diagnostics.Select(d => d.Message)));
             var plan = compiled.Plan!;
-            var declaration = new ServiceDefinition([new("revise", entity.StateShape.QualifiedId, plan.DefinitionReference,
+            var declaration = new ServiceDefinition([new ServiceTransitionOperation("revise", entity.StateShape.QualifiedId, plan.DefinitionReference,
                 [new("notes.revise")])]);
             var document = ServiceDefinitionDocuments.Create(new("notes"), new("v1"), declaration,
                 new(new("tests"), new("tests/services"), DocumentOrigin.Generated));

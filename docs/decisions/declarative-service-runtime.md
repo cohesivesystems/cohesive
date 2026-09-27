@@ -54,8 +54,9 @@ exporting shipment contents or credentials. This is a qualification target until
 `Cohesive.Api.Services.ServiceDefinition` is a typed payload in the existing
 `ExecutionDefinitionDocument` envelope. The envelope retains identity, revision, provenance and canonical
 fingerprinting. Operations and authority requirements normalize to ordinal identity order. Each operation
-references one exact Transition and its qualified entity state identity; input, observation and outcome
-contracts stay with that Transition. No service-specific serializer, fingerprint algorithm or metadata
+has a declared semantic family and references its exact Transition, relation/query or Process authority.
+Transition operations also name their qualified entity state identity. Input, observation, result and
+workflow contracts stay with those referenced definitions. No service-specific serializer, fingerprint algorithm or metadata
 envelope is introduced.
 
 `Cohesive.Api.Execution.Services.ServiceTransitionRuntime` validates the document and complete binding
@@ -100,3 +101,24 @@ Native failure diagnostics retain stable code and location but suppress payload-
 at the invocation boundary. Detailed native decision payloads require a separate explicitly authorized
 inspection interpretation; sampled telemetry never exports exception messages. HTTP object naming and
 bytes use the checked CLR outcome view and native response serialization.
+
+
+## Composition work in progress
+
+The service operation set now distinguishes Transition, query and Process references in portable data.
+Common identity and authorization requirements have one owner; operation IDs are unique across all
+families. The existing Transition executor still rejects other families before resolving infrastructure.
+Round-trip tests establish declaration integrity, not query execution or Process recovery qualification.
+
+The composition executor will reuse `RelationQueryCompilationRequest` and `IRelationQueryEvaluator`
+for actual canonical queries, and existing Process start/control admission plus durable executors for
+coordination. A query's compiled semantic snapshot is reusable; its evaluation identity, authorized
+scope, parameter evidence and source reads remain invocation-scoped. Caller parameter values must not
+replace trusted scope bindings. Tests must count physical reads and prove logical scope isolation,
+including shared physical partitions.
+
+Existing `HostedQuery` and `ProcessRelationHandlerCatalog` already provide exact implementation identity,
+typed input/output admission and Process integration. They do not by themselves establish deterministic
+purity. Native acceptance must have an explicit computation contract before it can be treated as pure;
+wrapping review orchestration in a hosted handler would not satisfy that requirement. No new interpreter,
+synthetic Process occurrence, or independently maintained workflow order is planned.
