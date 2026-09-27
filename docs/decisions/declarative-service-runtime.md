@@ -430,8 +430,9 @@ The reference retains no business input but still contains protected tenant/enti
 Authorization and physical placement remain invocation-scoped and must precede response exposure.
 No new cache, state scan or provider fan-out is introduced; Cosmos performs one receipt point read.
 
-Focused qualification passes fifteen non-Cosmos operation-repository tests and twenty-one SQLite
-outbox tests, including serialized reference roundtrip, tampered identity, missing evidence, later
+Full core qualification passes 3,979 tests with 33 skipped
+(`/tmp/cohesive-receipt-reference-full.log`). Focused qualification passes fifteen non-Cosmos
+operation-repository tests and twenty-one SQLite outbox tests, including serialized reference roundtrip, tampered identity, missing evidence, later
 entity writes and reopened SQLite storage. The opt-in Cosmos test now checks reference resolution
 but has not been run live. Process evidence transport and service response projection are still
 required; this lookup API alone does not complete HTTP adoption.
