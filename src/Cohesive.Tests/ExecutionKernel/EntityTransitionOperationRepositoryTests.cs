@@ -210,6 +210,32 @@ public sealed class EntityTransitionOperationRepositoryTests
     }
 
     [Fact]
+    public async Task ExactReceipt_AfterLaterEntityWrite_RetainsOriginalSnapshotAndToken()
+    {
+        var fixture = await Fixture.CreateAsync();
+        var committed = await fixture.Repository.CommitTransitionOperation(fixture.Context, fixture.Commit);
+        var original = Assert.IsType<EntityTransitionOperationReceipt>(committed.Receipt);
+        var laterState = CustomerEntity.Instance.CreateState(
+            fixture.Subject.EntityId.Value,
+            new CustomerState(fixture.Subject.EntityId.Value, "tenant/acme", "suspended"),
+            checked(original.Entity.Entity.Version + 1));
+        var later = await fixture.Repository.Upsert(fixture.Context,
+            new(laterState.Snapshot, original.Entity.ConcurrencyToken));
+
+        var replay = await fixture.Repository.TryGetTransitionOperation(fixture.Context, fixture.Request);
+        var retained = Assert.IsType<EntityTransitionOperationReceipt>(replay.Receipt);
+        Assert.Equal(EntityTransitionOperationDisposition.Replayed, replay.Disposition);
+        Assert.Equal(original.Entity, retained.Entity);
+        Assert.Equal(original.Entity.ConcurrencyToken, retained.Entity.ConcurrencyToken);
+        Assert.NotEqual(later.ConcurrencyToken, retained.Entity.ConcurrencyToken);
+        Assert.Equal("approved", retained.Entity.Entity.Observation.GetField(nameof(CustomerEntity.Status)).GetString());
+        var current = await fixture.Repository.TryGet(fixture.Context, fixture.Subject.EntityId.Value,
+            EntityReadOptions.Full);
+        Assert.Equal(later, current);
+        Assert.Equal("suspended", current!.Entity.Observation.GetField(nameof(CustomerEntity.Status)).GetString());
+    }
+
+    [Fact]
     public async Task CrashBeforeAtomicCommit_RetainsNeitherMutationNorReceipt_AndExactRetryCommitsOnce()
     {
         var crashPending = true;

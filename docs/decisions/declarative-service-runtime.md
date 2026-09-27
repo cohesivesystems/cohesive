@@ -393,3 +393,20 @@ The final pinned local Scheduler emulator run passes all eight integration tests
 rollover and cancellation. No Azure deployment qualification is implied. The full core run after
 the serialization fix passes 3,973 tests with 33 skipped; subsequent fixture changes are qualified
 by the focused interpreter suite and the emulator run.
+
+## Exact committed response evidence
+
+`EntityTransitionOperationReceipt.Entity` remains the authority for the snapshot and opaque token
+produced by an invocation. A new repository regression commits approval, performs a later suspended
+state write, then resolves the original operation receipt. It proves the original approved state and
+token survive while the current repository state is suspended. All eleven non-Cosmos operation
+repository tests pass (`/tmp/cohesive-exact-receipt-after-write.log`). This is an in-memory invariant
+test, not HTTP integration or a new live-provider claim.
+
+The remaining projection gap is in carrying the reference to that retained evidence across the
+Process boundary. `ProcessOperationResult` contains the declared domain value/emissions/failure;
+`ProcessOperationReceipt` retains occurrence and definition but not subject or input, which the
+exact entity receipt lookup requires. Therefore a generic post-completion lookup cannot safely be
+implemented by reconstructing input or choosing the current entity. The service projection must
+retain exact commit evidence through an explicit execution contract; it must not widen a declared
+boolean transition result inside a storage binding or introduce an Ari-specific receipt store.
