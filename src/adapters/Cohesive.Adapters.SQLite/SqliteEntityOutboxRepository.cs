@@ -157,6 +157,24 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
     public Task<EntityTransitionOperationResult> TryGetCreationTransitionOperation(OperationContext context, EntityTransitionOperationRequest request) =>
         Lookup(context, request, creation: true);
 
+    /// <inheritdoc />
+    public Task<EntityTransitionOperationResult> ResolveTransitionOperation(
+        OperationContext context, EntityTransitionOperationReference reference)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(reference);
+        context.ThrowIfCancellationRequested();
+        if (reference.Subject.EntityType.Value != EntityType)
+            throw new ArgumentException("The receipt subject belongs to another entity type.", nameof(reference));
+        SqliteScalarCodec.RequireText(reference.Subject.EntityId.Value);
+        using var connection = database.OpenConnection(context.CancellationToken);
+        using var transaction = connection.BeginTransaction(deferred: true);
+        var id = OperationId(reference.Operation);
+        var receipt = ReadOperation(connection, transaction, id);
+        context.ThrowIfCancellationRequested();
+        return Task.FromResult(receipt is null ? EntityTransitionOperationResult.NotFound() : receipt.Replay(reference));
+    }
+
     /// <summary>Commits candidate state and exact Process handoff evidence under one SQLite transaction.</summary>
     /// <param name="context">Cancellation and UTC physical commit observation.</param>
     /// <param name="commit">Canonical operation intent, state, result, and provenance.</param>
@@ -391,7 +409,8 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
             || !Guid.TryParseExact(id.AsSpan(DirectIdPrefix.Length), "N", out _)) throw InvalidReceipt();
     }
 
-    static string OperationId(EntityTransitionOperationRequest request) => ProcessIdPrefix + HashBytes(StrictDocumentJson.GetCanonicalBytes(request.Operation, JsonOptions));
+    static string OperationId(EntityTransitionOperationRequest request) => OperationId(request.Operation);
+    static string OperationId(Cohesive.Storage.Processes.ProcessOperationOccurrence operation) => ProcessIdPrefix + HashBytes(StrictDocumentJson.GetCanonicalBytes(operation, JsonOptions));
     static string HashBytes(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
     static bool SameEnvelopes(ImmutableArray<InteractionEnvelope> left, ImmutableArray<InteractionEnvelope> right)
     {

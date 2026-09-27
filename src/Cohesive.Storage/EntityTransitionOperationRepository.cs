@@ -62,6 +62,39 @@ public enum EntityTransitionSubjectCondition
     MustBeAbsent = 1
 }
 
+/// <summary>Input-free locator for an exact retained entity Transition receipt.</summary>
+/// <remarks>This is evidence identity, not a bearer authorization grant. Resolve it only through an
+/// authorized repository and operation context. The fingerprint covers the complete original request;
+/// the subject selects physical placement without reading current entity state.</remarks>
+public sealed record EntityTransitionOperationReference
+{
+    /// <summary>Creates an exact receipt locator from retained execution evidence.</summary>
+    /// <param name="operation">Original Process operation occurrence.</param>
+    /// <param name="authorityScope">Original logical authority and tenant.</param>
+    /// <param name="subject">Original entity subject and placement identity.</param>
+    /// <param name="fingerprint">Fingerprint of the complete original request, including input.</param>
+    /// <exception cref="ArgumentNullException">A required reference is null.</exception>
+    /// <exception cref="ArgumentException">The fingerprint is empty.</exception>
+    public EntityTransitionOperationReference(ProcessOperationOccurrence operation,
+        InteractionAuthorityScope authorityScope, InteractionEntityReference subject,
+        ProcessCommitFingerprint fingerprint)
+    {
+        Operation = operation ?? throw new ArgumentNullException(nameof(operation));
+        AuthorityScope = authorityScope ?? throw new ArgumentNullException(nameof(authorityScope));
+        Subject = subject ?? throw new ArgumentNullException(nameof(subject));
+        ArgumentException.ThrowIfNullOrWhiteSpace(fingerprint.Value);
+        Fingerprint = fingerprint;
+    }
+    /// <summary>Exact occurrence identifying the retained receipt.</summary>
+    public ProcessOperationOccurrence Operation { get; }
+    /// <summary>Logical authority that must match the receipt.</summary>
+    public InteractionAuthorityScope AuthorityScope { get; }
+    /// <summary>Entity subject used for placement and exact comparison.</summary>
+    public InteractionEntityReference Subject { get; }
+    /// <summary>Complete original request fingerprint.</summary>
+    public ProcessCommitFingerprint Fingerprint { get; }
+}
+
 /// <summary>Exact replay lookup identity for one Process-invoked Transition operation.</summary>
 public sealed record EntityTransitionOperationRequest
 {
@@ -116,6 +149,10 @@ public sealed record EntityTransitionOperationRequest
     /// </remarks>
     [JsonIgnore]
     public ProcessCommitFingerprint IntentFingerprint { get; }
+
+    /// <summary>Input-free exact receipt locator derived from this canonical request.</summary>
+    [JsonIgnore]
+    public EntityTransitionOperationReference Reference => new(Operation, AuthorityScope, Subject, Fingerprint);
 
     static PortableValue RequireMaterialized(PortableValue value, string parameterName, string description)
     {
@@ -382,6 +419,22 @@ public sealed record EntityTransitionOperationReceipt
                 "The Process operation occurrence is retained for another Transition, subject, or input.", "/request");
     }
 
+    /// <summary>Resolves an exact locator against this immutable receipt, without reading later state.</summary>
+    /// <param name="reference">Locator retained from the original request.</param>
+    /// <returns>The original receipt or identity-conflict evidence.</returns>
+    /// <exception cref="ArgumentNullException">The reference is null.</exception>
+    public EntityTransitionOperationResult Replay(EntityTransitionOperationReference reference)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        return Request.Operation == reference.Operation
+            && Request.AuthorityScope == reference.AuthorityScope
+            && Request.Subject == reference.Subject
+            && Request.Fingerprint == reference.Fingerprint
+            ? EntityTransitionOperationResult.Replayed(this)
+            : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
+                "The receipt reference does not match the retained authority, subject, occurrence or request fingerprint.", "/reference");
+    }
+
     /// <summary>Matches an exact operation and its complete commit content against this receipt.</summary>
     /// <param name="commit">Candidate state, result, guarantees, and provenance to compare.</param>
     /// <returns>The original receipt on an exact match, otherwise structured identity-conflict evidence.</returns>
@@ -540,6 +593,24 @@ public interface IEntityTransitionOperationRepository : IEntityRepository
         OperationContext context,
         EntityTransitionOperationRequest request);
 
+    /// <summary>Resolves retained receipt evidence without original input or a current-state read.</summary>
+    /// <param name="context">Authorized operation context and cancellation.</param>
+    /// <param name="reference">Exact retained receipt locator; not an authorization grant.</param>
+    /// <returns>Missing, exact replay, identity conflict, or unsupported capability evidence.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation is requested.</exception>
+    Task<EntityTransitionOperationResult> ResolveTransitionOperation(
+        OperationContext context, EntityTransitionOperationReference reference)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(reference);
+        context.ThrowIfCancellationRequested();
+        return Task.FromResult(EntityTransitionOperationResult.Rejected(
+            EntityTransitionOperationDisposition.CapabilityInsufficient,
+            new(EntityTransitionOperationDiagnosticCodes.CapabilityInsufficient, DiagnosticSeverity.Error,
+                "This repository does not support exact receipt reference resolution.", "/repository")));
+    }
+
     /// <summary>
     /// Looks up the unique creation receipt for a subject and compares its authority-scoped semantic intent.
     /// </summary>
@@ -592,6 +663,26 @@ public static class EntityTransitionOperationRepositoryExtensions
         return repository is IEntityTransitionOperationRepository atomic
                && repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt
             ? atomic.TryGetTransitionOperation(context, request)
+            : Task.FromResult(CapabilityFailure(repository));
+    }
+
+    /// <summary>Resolves an exact retained receipt through the selected authorized entity repository.</summary>
+    /// <param name="repository">Repository selected by trusted placement policy.</param>
+    /// <param name="context">Authorized context and cancellation.</param>
+    /// <param name="reference">Exact receipt identity, not a bearer grant.</param>
+    /// <returns>Missing, replay, conflict, or capability evidence; never a current-state substitute.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation is requested.</exception>
+    public static Task<EntityTransitionOperationResult> ResolveTransitionOperation(
+        this IEntityRepository repository, OperationContext context, EntityTransitionOperationReference reference)
+    {
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(reference);
+        context.ThrowIfCancellationRequested();
+        return repository is IEntityTransitionOperationRepository atomic
+               && repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt
+            ? atomic.ResolveTransitionOperation(context, reference)
             : Task.FromResult(CapabilityFailure(repository));
     }
 

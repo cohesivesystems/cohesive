@@ -410,3 +410,28 @@ exact entity receipt lookup requires. Therefore a generic post-completion lookup
 implemented by reconstructing input or choosing the current entity. The service projection must
 retain exact commit evidence through an explicit execution contract; it must not widen a declared
 boolean transition result inside a storage binding or introduce an Ari-specific receipt store.
+
+## Native receipt reference resolution
+
+`EntityTransitionOperationRequest.Reference` derives an input-free locator from the existing
+Process occurrence, logical authority, subject and complete request fingerprint. It is neither a
+second receipt nor an authorization grant. `ResolveTransitionOperation` resolves the original
+`EntityTransitionOperationReceipt` through the selected authorized repository. It does not read
+current entity state, reexecute a transition, or interpret missing evidence as non-commit.
+
+This extends the native entity receipt protocol. Generic `StorageCommitReference` was evaluated
+and rejected here: that executor has a different receipt-address and write-token protocol. Replacing
+the native protocol would change storage authority instead of projecting existing evidence.
+
+In-memory, SQLite and Cosmos use their existing occurrence addressing and receipt validation. Typed
+repository wrappers forward the operation. Other implementations return explicit unsupported
+evidence by default. Existing request replay preserves its diagnostics and fingerprint comparison.
+The reference retains no business input but still contains protected tenant/entity identifiers.
+Authorization and physical placement remain invocation-scoped and must precede response exposure.
+No new cache, state scan or provider fan-out is introduced; Cosmos performs one receipt point read.
+
+Focused qualification passes fifteen non-Cosmos operation-repository tests and twenty-one SQLite
+outbox tests, including serialized reference roundtrip, tampered identity, missing evidence, later
+entity writes and reopened SQLite storage. The opt-in Cosmos test now checks reference resolution
+but has not been run live. Process evidence transport and service response projection are still
+required; this lookup API alone does not complete HTTP adoption.

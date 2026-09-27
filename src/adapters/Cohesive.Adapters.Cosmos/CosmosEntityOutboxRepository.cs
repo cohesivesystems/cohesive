@@ -272,6 +272,20 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
     }
 
     /// <inheritdoc />
+    public async Task<EntityTransitionOperationResult> ResolveTransitionOperation(
+        OperationContext context, EntityTransitionOperationReference reference)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(reference);
+        context.ThrowIfCancellationRequested();
+        if (!TryResolveTransitionOperationPartitionKey(context, reference.Subject, out var partitionKey, out var failure))
+            return failure!;
+        var retained = await TryReadTransitionReceipt(context,
+            CreateTransitionOperationReceiptId(reference.Operation), partitionKey!).ConfigureAwait(false);
+        return retained is null ? EntityTransitionOperationResult.NotFound() : retained.Replay(reference);
+    }
+
+    /// <inheritdoc />
     public async Task<EntityTransitionOperationResult> TryGetCreationTransitionOperation(
         OperationContext context,
         EntityTransitionOperationRequest request)
@@ -918,10 +932,15 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
         EntityTransitionOperationRequest request,
         out string? partitionKey,
         out EntityTransitionOperationResult? failure)
+        => TryResolveTransitionOperationPartitionKey(context, request.Subject, out partitionKey, out failure);
+
+    bool TryResolveTransitionOperationPartitionKey(
+        OperationContext context, InteractionEntityReference subject,
+        out string? partitionKey, out EntityTransitionOperationResult? failure)
     {
         partitionKey = partitionKeyPolicy.TryResolvePointReadPartitionKey(
             context,
-            request.Subject.EntityId.Value);
+            subject.EntityId.Value);
         if (!string.IsNullOrWhiteSpace(partitionKey))
         {
             failure = null;
@@ -934,13 +953,16 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
                 EntityTransitionOperationDiagnosticCodes.CapabilityInsufficient,
                 DiagnosticSeverity.Error,
                 $"Cosmos entity repository '{EntityType}' cannot resolve exact Transition receipt placement from "
-                + $"{partitionKeyPolicy.Description} for subject '{request.Subject.EntityId.Value}'.",
+                + $"{partitionKeyPolicy.Description} for subject '{subject.EntityId.Value}'.",
                 "/repository/partitionKeyPolicy"));
         return false;
     }
 
     static string CreateTransitionOperationReceiptId(EntityTransitionOperationRequest request) =>
-        $"entity-transition-operation:v1:{HashIdentity(request.Operation)}";
+        CreateTransitionOperationReceiptId(request.Operation);
+
+    static string CreateTransitionOperationReceiptId(Cohesive.Storage.Processes.ProcessOperationOccurrence operation) =>
+        $"entity-transition-operation:v1:{HashIdentity(operation)}";
 
     static string CreateTransitionCreationReceiptIndexId(InteractionEntityReference subject) =>
         $"entity-transition-creation:v1:{HashIdentity(new { EntityType = subject.EntityType.Value, EntityId = subject.EntityId.Value })}";

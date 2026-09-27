@@ -221,6 +221,10 @@ public sealed class SqliteEntityOutboxRepositoryTests
         var reopened = Reopen(file, repository);
         var replay = await reopened.CommitTransitionOperation(Context, commit);
         var lookup = await reopened.TryGetTransitionOperation(Context, commit.Request);
+        var resolved = await reopened.ResolveTransitionOperation(Context, commit.Request.Reference);
+        Assert.Equal(EntityTransitionOperationDisposition.Replayed, resolved.Disposition);
+        Assert.Equal(committed.Receipt!.Entity, resolved.Receipt!.Entity);
+        Assert.NotEqual(advanced.ConcurrencyToken, resolved.Receipt.Entity.ConcurrencyToken);
         Assert.Equal(EntityTransitionOperationDisposition.Replayed, replay.Disposition);
         Assert.Equal(committed.Receipt!.Entity, replay.Receipt!.Entity);
         Assert.Equal(committed.Receipt.CommittedAtUtc, replay.Receipt.CommittedAtUtc);
