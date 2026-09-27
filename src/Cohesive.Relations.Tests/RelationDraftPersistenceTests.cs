@@ -23,7 +23,8 @@ public sealed class RelationDraftPersistenceTests
     public void EmbeddedDocuments_KeepNativeContractsInsidePascalCaseEnvelope()
     {
         var draft = RelationDraftDocument.FromDraft(CreateDraft());
-        var query = LoadCustomerRelationFixture.CreateRelationDocument();
+        var query = LoadCustomerRelationFixture.CreateRepresentativeQueryDocument();
+        Assert.NotEmpty(query.Definition.Body.Parameters);
         var envelope = new NativeDocumentEnvelope("review", draft, query);
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNamingPolicy = null };
         var json = JsonSerializer.SerializeToElement(envelope, options);
