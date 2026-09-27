@@ -108,7 +108,10 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
             fixture.Request);
         Assert.Equal(EntityTransitionOperationDisposition.Replayed, retained.Disposition);
         Assert.Equal(EntityTransitionSubjectCondition.MustBeAbsent, retained.Receipt!.Commit.SubjectCondition);
-        Assert.Equal(committed, retained.Receipt.Result);
+        Assert.Equal(committed.Value, retained.Receipt.Result.Value);
+        Assert.Equal(committed.Emissions, retained.Receipt.Result.Emissions);
+        Assert.Null(retained.Receipt.Result.ReceiptReference);
+        Assert.Equal(retained.Receipt.Request.Reference, EntityTransitionReceiptReferences.Read(committed.ReceiptReference!));
         Assert.Empty(fixture.Repository.OutboxEnvelopes);
     }
 

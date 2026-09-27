@@ -96,8 +96,14 @@ public sealed record ProcessOperationResult
     ProcessOperationResult(
         PortableValue? value,
         ImmutableArray<InteractionEnvelope> emissions,
-        DocumentValidationDiagnostic? failure)
+        DocumentValidationDiagnostic? failure,
+        PortableValue? receiptReference = null)
     {
+        if (receiptReference is not null && (failure is not null
+            || receiptReference.State != PortableValueState.Concrete
+            || !PortableExecutionValidator.Validate(receiptReference).IsValid))
+            throw new ArgumentException("Receipt references require a successful operation and a valid concrete portable contract.", nameof(receiptReference));
+        ReceiptReference = receiptReference;
         var normalizedEmissions = emissions.IsDefault ? [] : emissions;
         ValidateOutcome(value, normalizedEmissions, failure);
         Value = value;
@@ -113,6 +119,27 @@ public sealed record ProcessOperationResult
 
     /// <summary>Structured failure evidence when the operation did not complete.</summary>
     public DocumentValidationDiagnostic? Failure { get; }
+
+    /// <summary>Optional typed locator for retained authoritative commit evidence, distinct from the domain result.</summary>
+    /// <remarks>The host owns its contract and resolution. A locator is not an authorization grant or current-state
+    /// snapshot. Runtimes retain it for exact response reconciliation; domain continuations still bind only Value.
+    /// Omission preserves the canonical encoding of older results and their receipt fingerprints.</remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PortableValue? ReceiptReference { get; }
+
+    /// <summary>Attaches a typed retained-commit locator without changing the declared outcome or emissions.</summary>
+    /// <param name="reference">Concrete, self-contained portable locator produced by the authoritative commit boundary.</param>
+    /// <returns>A result retaining the same domain outcome and canonical interactions.</returns>
+    /// <exception cref="ArgumentNullException">The reference is null.</exception>
+    /// <exception cref="ArgumentException">The result failed or the reference is not concrete and valid.</exception>
+    /// <exception cref="InvalidOperationException">Different receipt evidence is already attached.</exception>
+    public ProcessOperationResult WithReceiptReference(PortableValue reference)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        if (ReceiptReference is not null && ReceiptReference != reference)
+            throw new InvalidOperationException("A retained receipt reference cannot be replaced by different evidence.");
+        return new(Value, Emissions, Failure, reference);
+    }
 
     /// <summary>Whether the operation completed with a typed value.</summary>
     public bool IsSuccessful => Value is not null && Failure is null;

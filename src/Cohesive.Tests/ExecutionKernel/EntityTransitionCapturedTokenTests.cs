@@ -58,6 +58,14 @@ public sealed class EntityTransitionCapturedTokenTests
         Assert.NotEqual(initial.ConcurrencyToken, after.ConcurrencyToken);
         var replayed = await adapter.ExecuteAsync(context, invocation);
         Assert.True(replayed.IsSuccessful, replayed.Failure?.ToString());
+        Assert.Equal(committed.ReceiptReference, replayed.ReceiptReference);
+        var options = ProcessDurableCheckpointJsonSerializer.CreateOptions();
+        var transported = System.Text.Json.JsonSerializer.Deserialize<ProcessOperationResult>(
+            System.Text.Json.JsonSerializer.Serialize(committed, options), options)!;
+        var reference = EntityTransitionReceiptReferences.Read(transported.ReceiptReference!);
+        var resolved = await repository.ResolveTransitionOperation(context, reference);
+        Assert.Equal(after, resolved.Receipt!.Entity);
+        Assert.Equal(committed.Value, transported.Value);
         Assert.Equal(after.ConcurrencyToken, (await repository.TryGet(context, "one"))!.ConcurrencyToken);
 
         var conflictingReplay = await adapter.ExecuteAsync(context, invocation with

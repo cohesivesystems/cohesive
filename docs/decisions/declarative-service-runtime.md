@@ -436,3 +436,31 @@ operation-repository tests and twenty-one SQLite outbox tests, including seriali
 entity writes and reopened SQLite storage. The opt-in Cosmos test now checks reference resolution
 but has not been run live. Process evidence transport and service response projection are still
 required; this lookup API alone does not complete HTTP adoption.
+
+## Receipt evidence on native operation results
+
+`ProcessOperationResult.ReceiptReference` carries an optional concrete, self-contained portable
+locator alongside the domain value. The authoritative host owns the locator contract. Attaching it
+does not change the Transition outcome, emissions or graph binding. Different attached evidence
+cannot replace an existing locator. Failed outcomes and unresolved locators are rejected.
+
+The entity adapter attaches `EntityTransitionReceiptReferences.Project(receipt.Request.Reference)`
+after commit or exact replay. Its portable contract derives from the native reference type, with
+one lazy preparation. `Read` requires that exact contract before reconstructing the native locator.
+The entity commit itself forbids a receipt locator: its receipt does not exist yet, and including
+its own derived identity would create a circular fingerprint. The Process operation receipt retains
+the enriched result after the entity boundary has committed.
+
+Absent references are omitted from JSON. A canonical-byte regression compares the old result
+shape with the new result and proves that existing receipt fingerprints remain unchanged. Native
+Durable Task converter and retained Process-receipt tests preserve the locator through serialization
+and replay without invoking the host again. This is protected execution evidence, not a telemetry
+label, authorization grant or payload for automatic export.
+
+Focused adapter tests pass 17 cases with one live Cosmos case skipped. Initial wire/replay tests
+and repository tests pass 18 cases. The first broader run exposed two conformance assertions
+comparing enriched adapter results directly with the deliberately un-enriched entity commit result;
+they now compare exact derived evidence while preserving one-effect/one-publication invariants.
+All five final transport/recovery tests pass (`/tmp/cohesive-receipt-evidence-recovery.log`).
+The corrected full run is in progress in `/tmp/cohesive-receipt-evidence-full-corrected.log`.
+Terminal service projection remains outstanding.

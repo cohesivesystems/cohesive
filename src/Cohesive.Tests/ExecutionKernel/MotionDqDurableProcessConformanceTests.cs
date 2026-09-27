@@ -121,7 +121,9 @@ public sealed class MotionDqDurableProcessConformanceTests
                 subject,
                 crashedInvocation.Input));
         Assert.Equal(EntityTransitionOperationDisposition.Replayed, entityReceipt.Disposition);
-        Assert.Equal(crashedResult, entityReceipt.Receipt!.Result);
+        Assert.Equal(crashedResult, entityReceipt.Receipt!.Result.WithReceiptReference(
+            EntityTransitionReceiptReferences.Project(entityReceipt.Receipt.Request.Reference)));
+        Assert.Null(entityReceipt.Receipt.Result.ReceiptReference);
         Assert.Equal(
             EntityTransitionEmissionPublicationAuthority.ProcessOutbox,
             entityReceipt.Receipt.PublicationAuthority);

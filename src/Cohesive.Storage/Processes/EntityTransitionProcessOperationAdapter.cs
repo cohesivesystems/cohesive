@@ -422,7 +422,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
     }
 
     static ProcessOperationResult Result(EntityTransitionOperationResult operation) => operation.Receipt is { } receipt
-        ? receipt.Result
+        ? receipt.Result.WithReceiptReference(EntityTransitionReceiptReferences.Project(receipt.Request.Reference))
         : ProcessOperationResult.Failed(operation.Diagnostics.FirstOrDefault()
             ?? new(
                 ProcessTransitionOperationAdapterDiagnosticCodes.DecisionNotCommittable,

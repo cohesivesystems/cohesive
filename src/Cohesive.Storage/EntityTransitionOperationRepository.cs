@@ -95,6 +95,46 @@ public sealed record EntityTransitionOperationReference
     public ProcessCommitFingerprint Fingerprint { get; }
 }
 
+/// <summary>Portable execution-evidence projection of the native entity receipt locator.</summary>
+public static class EntityTransitionReceiptReferences
+{
+    static readonly Lazy<ValueContract> Contract = new(() =>
+        new(new Cohesive.Model.Authoring.DefaultClrTypeRefMapper().Map(typeof(EntityTransitionOperationReference), null)));
+
+    static readonly Lazy<System.Text.Json.JsonSerializerOptions> Options = new(() =>
+    {
+        var options = StrictDocumentJson.CreateOptions();
+        options.PropertyNamingPolicy = null; // Portable CLR-derived fields retain their declared property names.
+        options.MakeReadOnly(populateMissingResolver: true);
+        return options;
+    });
+
+    /// <summary>Reads a locator only when its exact portable contract and concrete value are valid.</summary>
+    /// <param name="value">Receipt reference retained in operation evidence.</param>
+    /// <returns>The native receipt locator; authorization must still precede repository access.</returns>
+    /// <exception cref="ArgumentNullException">The value is null.</exception>
+    /// <exception cref="ArgumentException">The value does not satisfy the exact locator contract.</exception>
+    public static EntityTransitionOperationReference Read(PortableValue value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (value.Contract != Contract.Value || value.State != PortableValueState.Concrete
+            || !PortableExecutionValidator.Validate(value).IsValid)
+            throw new ArgumentException("Expected the exact concrete entity transition receipt reference contract.", nameof(value));
+        return value.Value!.Value.Deserialize<EntityTransitionOperationReference>(Options.Value)
+            ?? throw new ArgumentException("Receipt reference cannot be null.", nameof(value));
+    }
+
+    /// <summary>Projects the canonical locator into a self-contained portable value without transition input.</summary>
+    /// <param name="reference">Authoritative request-derived locator.</param>
+    /// <returns>Typed execution evidence; it does not grant permission to resolve the receipt.</returns>
+    /// <exception cref="ArgumentNullException">The reference is null.</exception>
+    public static PortableValue Project(EntityTransitionOperationReference reference)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        return PortableValue.Concrete(Contract.Value, ObservationValue.FromObject(reference));
+    }
+}
+
 /// <summary>Exact replay lookup identity for one Process-invoked Transition operation.</summary>
 public sealed record EntityTransitionOperationRequest
 {
@@ -195,6 +235,8 @@ public sealed record EntityTransitionOperationCommit
         Request = request ?? throw new ArgumentNullException(nameof(request));
         Write = write ?? throw new ArgumentNullException(nameof(write));
         Result = result ?? throw new ArgumentNullException(nameof(result));
+        if (result.ReceiptReference is not null)
+            throw new ArgumentException("Entity commit results cannot include a receipt locator before the receipt exists.", nameof(result));
         GuaranteeDemands = guaranteeDemands ?? throw new ArgumentNullException(nameof(guaranteeDemands));
         Evidence = evidence ?? throw new ArgumentNullException(nameof(evidence));
 
