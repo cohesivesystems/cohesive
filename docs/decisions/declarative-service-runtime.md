@@ -566,3 +566,19 @@ when no commit receipt exists. The read returns the business diagnostic and HTTP
 issue. The same absent receipt with a Success classification remains an infrastructure error. Denied
 callers trigger neither classification nor storage reads. Ari policy classification adoption and
 bounded HTTP completion waiting remain separate integration gates.
+
+## Bounded completion waiting (qualification in progress)
+
+`IProcessExecutionCompletionWaiter` is an optional capability of the existing Process value provider.
+The Durable Task repository maps the authorized logical identity through its existing physical identity
+function and uses the native completion wait without requesting payloads. Linked cancellation bounds
+the wait; cancellation never sends a terminate/cancel command to the execution. Timeout returns false,
+caller cancellation propagates, and provider exceptions remain observable.
+
+`ReadCommittedEntityAsync` accepts an optional wait bound. It admits access and reads exact Process
+affinity before waiting, rechecks admission afterward, and rereads canonical values only if completion
+was observed. It waits at most once; expiry returns Accepted. Final receipt and classifier checks remain
+unchanged. Nineteen result-read tests pass, including denied/wrong-instance exclusion, completion versus
+expiry, and read/repository-resolution counts. Native adapter timeout/caller-cancellation and service authorization-revocation tests now pass: 42
+focused result/repository tests in `/tmp/cohesive-wait-boundary-tests.log`. These use a native-client
+fake; remote Scheduler behavior and Ari HTTP adoption remain unqualified.

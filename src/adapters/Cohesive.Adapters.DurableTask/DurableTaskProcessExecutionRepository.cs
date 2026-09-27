@@ -22,7 +22,8 @@ namespace Cohesive.Adapters.DurableTask;
 public sealed class DurableTaskProcessExecutionRepository :
     IProcessExecutionRepository,
     IProcessExecutionTraceRepository,
-    IProcessExecutionValueRepository
+    IProcessExecutionValueRepository,
+    IProcessExecutionCompletionWaiter
 {
     const int DefaultPageSize = 100;
     const int MaxPageSize = 1000;
@@ -149,6 +150,34 @@ public sealed class DurableTaskProcessExecutionRepository :
         return GetCurrentValuesAsync(
             context,
             DurableTaskProcessExecutionIdentity.GetPhysicalInstanceId(authorityScope, processInstanceId));
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<bool> WaitForCompletionAsync(OperationContext context,
+        InteractionAuthorityScope authorityScope, ProcessInstanceId processInstanceId, TimeSpan maximumWait)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(authorityScope);
+        ArgumentException.ThrowIfNullOrWhiteSpace(processInstanceId.Value);
+        if (maximumWait <= TimeSpan.Zero || maximumWait.TotalMilliseconds > uint.MaxValue - 1)
+            throw new ArgumentOutOfRangeException(nameof(maximumWait), "A positive finite timer duration is required.");
+        context.ThrowIfCancellationRequested();
+        if (currentClient is null)
+            throw new NotSupportedException("Canonical completion waiting is unavailable on the migration-only repository.");
+        using var timeout = new CancellationTokenSource(maximumWait);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken, timeout.Token);
+        try
+        {
+            await currentClient.WaitForInstanceCompletionAsync(
+                DurableTaskProcessExecutionIdentity.GetPhysicalInstanceId(authorityScope, processInstanceId),
+                getInputsAndOutputs: false, cancellation.Token).ConfigureAwait(false);
+            context.ThrowIfCancellationRequested();
+            return true;
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !context.CancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
     }
 
     /// <summary>Reads retained canonical traces by trusted authority scope and logical Process identity.</summary>

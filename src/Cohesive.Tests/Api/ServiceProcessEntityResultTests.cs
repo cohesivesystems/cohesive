@@ -127,6 +127,57 @@ public sealed class ServiceProcessEntityResultTests
         Assert.Null(result.Outcome);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task BoundedWaitReadsAgainOnlyAfterProviderCompletion(bool completes)
+    {
+        var fixture = await Create();
+        var terminal = fixture.Values.Result;
+        fixture.Values.Result = ProcessExecutionValueReadResult.InProgress(new(terminal.Values!.Definition, fixture.Instance));
+        fixture.Values.OnWait = () =>
+        {
+            if (completes) fixture.Values.Result = terminal;
+            return completes;
+        };
+        var denied = await fixture.Runtime.ReadCommittedEntityAsync(OperationContext.Create(), "result", fixture.Instance,
+            TimeSpan.FromSeconds(2));
+        Assert.Equal(ApiResultKind.Forbidden, denied.Kind);
+        Assert.Equal(0, fixture.Values.Waits);
+        var result = await fixture.Runtime.ReadCommittedEntityAsync(fixture.Context, "result", fixture.Instance,
+            TimeSpan.FromSeconds(2));
+        Assert.Equal(completes ? ApiResultKind.Success : ApiResultKind.Accepted, result.Kind);
+        Assert.Equal(1, fixture.Values.Waits);
+        Assert.Equal(completes ? 2 : 1, fixture.Values.Reads);
+        Assert.Equal(completes ? 1 : 0, fixture.Values.RepositoryResolutions);
+        Assert.Contains(result.Trace.Events, item => item.Kind == (completes ? "completionWaitFinished" : "completionWaitExpired"));
+    }
+
+    [Fact]
+    public async Task BoundedWaitRechecksRevokedAuthorizationBeforeSecondRead()
+    {
+        var authorization = new RevocableAuthorization();
+        var fixture = await Create(authorization: authorization);
+        var terminal = fixture.Values.Result;
+        fixture.Values.Result = ProcessExecutionValueReadResult.InProgress(new(terminal.Values!.Definition, fixture.Instance));
+        fixture.Values.OnWait = () => { authorization.Revoked = true; fixture.Values.Result = terminal; return true; };
+        var result = await fixture.Runtime.ReadCommittedEntityAsync(fixture.Context, "result", fixture.Instance, TimeSpan.FromSeconds(2));
+        Assert.Equal(ApiResultKind.Forbidden, result.Kind);
+        Assert.Equal(1, fixture.Values.Reads);
+        Assert.Equal(1, fixture.Values.Waits);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+    }
+
+    [Fact]
+    public async Task BoundedWaitRejectsWrongInstanceBeforeWaiting()
+    {
+        var fixture = await Create();
+        fixture.Values.Result = ProcessExecutionValueReadResult.InProgress(new(fixture.Values.Result.Values!.Definition, new("other")));
+        var result = await fixture.Runtime.ReadCommittedEntityAsync(fixture.Context, "result", fixture.Instance, TimeSpan.FromSeconds(2));
+        Assert.Equal(ApiResultKind.NotFound, result.Kind);
+        Assert.Equal(0, fixture.Values.Waits);
+    }
+
     [Fact]
     public async Task ResultReturnsOriginalCommitAfterLaterWrite()
     {
@@ -205,7 +256,7 @@ public sealed class ServiceProcessEntityResultTests
         Assert.Equal("services.binding.resultSourceMismatch", Assert.Single(error.Validation.Diagnostics).Code);
     }
 
-    static async Task<Fixture> Create(string owner = "tenant-a", string resultNode = "commit", ApiResultKind? classification = null)
+    static async Task<Fixture> Create(string owner = "tenant-a", string resultNode = "commit", ApiResultKind? classification = null, IServiceInvocationAuthorization? authorization = null)
     {
         var actor = new PrincipalRef("reviewer", PrincipalKind.User);
         var scope = new ScopeRef("tenant-a", "tenant", PartitionKey: "shared");
@@ -257,7 +308,7 @@ public sealed class ServiceProcessEntityResultTests
                 [new("notes.result.read")], resultClassifier: classifier?.Reference)]), provenance);
         var binding = new ServiceProcessEntityResultBinding("result", plan, transition,
             new(entity, _ => { values.RepositoryResolutions++; return repository; }), "notes", values, classifierBinding);
-        var runtime = new ServiceRuntime(service, [binding], new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
+        var runtime = new ServiceRuntime(service, [binding], authorization ?? new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
         return new(runtime, repository, values, context, continuation.ProcessInstanceId, (await repository.TryGet(context, "note/1"))!);
     }
 
@@ -269,11 +320,32 @@ public sealed class ServiceProcessEntityResultTests
     {
         public ValueTask<ServiceOperationResult<EntitySnapshot>> Read() => Runtime.ReadCommittedEntityAsync(Context, "result", Instance);
     }
-    sealed class Values(ProcessExecutionValueReadResult result) : IProcessExecutionValueRepository
+    sealed class RevocableAuthorization : IServiceInvocationAuthorization
+    {
+        readonly IdentityServiceInvocationAuthorization inner = new("tenant", new("Tenant"));
+        public bool Revoked;
+        public ValueTask<ScopeRef?> AdmitAsync(OperationContext context, ServiceOperation operation) =>
+            Revoked ? ValueTask.FromResult<ScopeRef?>(null) : inner.AdmitAsync(context, operation);
+        public ValueTask<bool> AuthorizeResourceAsync(OperationContext context, ServiceOperation operation, EntitySnapshot snapshot) =>
+            inner.AuthorizeResourceAsync(context, operation, snapshot);
+    }
+    sealed class Values(ProcessExecutionValueReadResult result) : IProcessExecutionValueRepository, IProcessExecutionCompletionWaiter
     {
         public ProcessExecutionValueReadResult Result = result;
         public int Reads;
         public int Classifications;
+        public int Waits;
+        public Func<bool>? OnWait;
+        public ValueTask<bool> WaitForCompletionAsync(OperationContext context, InteractionAuthorityScope authorityScope,
+            ProcessInstanceId processInstanceId, TimeSpan maximumWait)
+        {
+            Assert.Equal(new("notes", "tenant-a"), authorityScope);
+            Assert.Equal(TimeSpan.FromSeconds(2), maximumWait);
+            context.ThrowIfCancellationRequested();
+            Waits++;
+            return ValueTask.FromResult(OnWait!());
+        }
+
         public int RepositoryResolutions;
         public ValueTask<ProcessExecutionValueReadResult> GetValuesAsync(OperationContext context,
             InteractionAuthorityScope authorityScope, ProcessInstanceId processInstanceId)

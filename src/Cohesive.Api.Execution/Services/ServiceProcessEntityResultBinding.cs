@@ -116,15 +116,17 @@ public sealed partial class ServiceRuntime
     /// <summary>Reads the original committed entity for a declared terminal Process result source.</summary>
     /// <remarks>Admission precedes reads; logical resource authorization uses the exact retained snapshot.
     /// Missing, ambiguous or incompatible receipt evidence never falls back to the current entity. This method
-    /// does not start, retry or wait for execution. Medium adapters project the authorized snapshot into their DTO.</remarks>
+    /// does not start or retry execution; an optional bound requests provider-native completion waiting. Medium adapters project the authorized snapshot into their DTO.</remarks>
     /// <exception cref="ArgumentException">The operation or instance identity is invalid.</exception>
     /// <exception cref="InvalidOperationException">A physical binding returns contradictory evidence.</exception>
     /// <exception cref="OperationCanceledException">Invocation cancellation is requested.</exception>
     public async ValueTask<ServiceOperationResult<EntitySnapshot>> ReadCommittedEntityAsync(
-        OperationContext context, string operationId, ProcessInstanceId instance)
+        OperationContext context, string operationId, ProcessInstanceId instance, TimeSpan? maximumWait = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(instance.Value);
+        if (maximumWait is { } duration && (duration <= TimeSpan.Zero || duration.TotalMilliseconds > uint.MaxValue - 1))
+            throw new ArgumentOutOfRangeException(nameof(maximumWait), "A positive finite timer duration is required.");
         if (!operations.TryGetValue(operationId, out var linked)
             || linked.Operation is not ServiceProcessEntityResultOperation operation
             || linked.Binding is not ServiceProcessEntityResultBinding binding)
@@ -140,6 +142,21 @@ public sealed partial class ServiceRuntime
             var trusted = context.WithSingleEffectiveScope(scope.Kind, scope.Id, partitionKey: scope.ResolvePartitionKey());
             var authority = new InteractionAuthorityScope(binding.Authority, scope.Id);
             var read = await binding.Values.GetValuesAsync(trusted, authority, instance).ConfigureAwait(false);
+            if (read.State == ProcessExecutionValueReadState.InProgress && maximumWait is { } wait)
+            {
+                if (read.Values!.Definition != operation.Process || read.Values.ProcessInstanceId != instance)
+                    return Reject(ApiResultKind.NotFound, "services.process.notFound", "No execution is visible at the declared exact definition.");
+                if (binding.Values is not IProcessExecutionCompletionWaiter waiter)
+                    throw new NotSupportedException("The bound Process value provider does not support bounded completion waiting.");
+                evidence.Record("completionWaitStarted");
+                var completed = await waiter.WaitForCompletionAsync(trusted, authority, instance, wait).ConfigureAwait(false);
+                evidence.Record(completed ? "completionWaitFinished" : "completionWaitExpired");
+                var refreshedScope = await authorization.AdmitAsync(context, operation).ConfigureAwait(false);
+                if (refreshedScope is null || refreshedScope != scope)
+                    return Reject(ApiResultKind.Forbidden, "services.authorization.denied", "Result access is no longer authorized.");
+                if (completed)
+                    read = await binding.Values.GetValuesAsync(trusted, authority, instance).ConfigureAwait(false);
+            }
             if (read.State == ProcessExecutionValueReadState.NotFound)
                 return Reject(ApiResultKind.NotFound, "services.process.notFound", "No execution is visible at this target.");
             var values = read.Values!;
