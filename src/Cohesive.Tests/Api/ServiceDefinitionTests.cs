@@ -15,7 +15,7 @@ public sealed class ServiceDefinitionTests
     {
         var transition = new ServiceTransitionOperation("revise", new(new("notes"), new("note")),
             Reference("note/revise"), [new("notes.write")]);
-        var query = new ServiceQueryOperation("search", Reference("notes/by-owner"), [new("notes.read")]);
+        var query = new ServiceQueryOperation("search", Reference("notes/by-owner"), new("tenant"), [new("notes.read")]);
         var process = new ServiceProcessOperation("publish", Reference("notes/publish"), [new("notes.publish")]);
         var definition = new ServiceDefinition([transition, query, process]);
         var document = ServiceDefinitionDocuments.Create(new("notes"), new("v1"), definition,
@@ -38,18 +38,18 @@ public sealed class ServiceDefinitionTests
     public void OperationIdentityIsUniqueAcrossSemanticFamilies()
     {
         Assert.Throws<ArgumentException>(() => new ServiceDefinition([
-            new ServiceQueryOperation("run", Reference("read")),
+            new ServiceQueryOperation("run", Reference("read"), new("tenant")),
             new ServiceProcessOperation("run", Reference("write"))]));
     }
 
     [Fact]
     public void ValueEqualityRetainsFamilyAndExactReferenceWhileNormalizingRequirements()
     {
-        var first = new ServiceQueryOperation("run", Reference("query"), [new("b"), new("a")]);
-        var reordered = new ServiceQueryOperation("run", Reference("query"), [new("a"), new("b")]);
+        var first = new ServiceQueryOperation("run", Reference("query"), new("tenant"), [new("b"), new("a")]);
+        var reordered = new ServiceQueryOperation("run", Reference("query"), new("tenant"), [new("a"), new("b")]);
         Assert.Equal(first, reordered);
         Assert.Equal(first.GetHashCode(), reordered.GetHashCode());
         Assert.NotEqual<ServiceOperation>(first, new ServiceProcessOperation("run", Reference("query"), [new("a"), new("b")]));
-        Assert.NotEqual(first, new ServiceQueryOperation("run", Reference("other"), [new("a"), new("b")]));
+        Assert.NotEqual(first, new ServiceQueryOperation("run", Reference("other"), new("tenant"), [new("a"), new("b")]));
     }
 }

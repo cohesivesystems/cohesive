@@ -59,7 +59,7 @@ Transition operations also name their qualified entity state identity. Input, ob
 workflow contracts stay with those referenced definitions. No service-specific serializer, fingerprint algorithm or metadata
 envelope is introduced.
 
-`Cohesive.Api.Execution.Services.ServiceTransitionRuntime` validates the document and complete binding
+`Cohesive.Api.Execution.Services.ServiceRuntime` validates the document and complete binding
 set once, checks the observation contract against the bound entity, and retains prepared immutable plans.
 Repository factories remain invocation-scoped and are never called during construction or route mapping.
 `Project<TInput,TOutcome>` verifies that CLR API views match the Transition's contracts before projecting
@@ -122,3 +122,47 @@ typed input/output admission and Process integration. They do not by themselves 
 purity. Native acceptance must have an explicit computation contract before it can be treated as pure;
 wrapping review orchestration in a hosted handler would not satisfy that requirement. No new interpreter,
 synthetic Process occurrence, or independently maintained workflow order is planned.
+
+
+### Query invocation qualification
+
+`ServiceRuntime` now admits heterogeneous binding families against one exact service document. The
+normalized-identity authority returns a trusted `ScopeRef`; Transition reads derive physical routing
+from it, while query operations supply its logical identity to their declared `ScopeParameter`.
+That parameter is a native `QueryParameterId`, must be a required string in the pinned query, and
+cannot be supplied or replaced by request values. Query declarations own the actual ownership
+predicate: parameter binding is not a proof that an arbitrary query enforces authorization. Review
+the predicate and all source placements when authoring an exposed query.
+
+`ServiceQueryBinding` retains one immutable native `RelationQueryCompilationRequest` and resolves an
+`IRelationQueryEvaluator` only after authorization and parameter validation. It does not reimplement
+compilation, realization, acquisition or query interpretation. The native phase outcome is retained
+rather than copied into a service-specific row model. Transition and query invocations share one
+payload-free evidence collector, projected to existing execution activities and normalized traces.
+
+The synthetic notes test uses two logical tenants sharing one physical partition. The canonical
+query filters on the server-bound tenant parameter; repeated invocations reuse the same compilation
+snapshot, return only the selected tenant's note and perform one native in-memory source read each.
+Denied callers, supplied scope overrides, unknown parameters and pre-cancellation perform no reads.
+This establishes the in-memory boundary; it does not claim remote-provider predicate pushdown or
+remote page-count qualification. Process invocation and recovery qualification remain in progress.
+
+
+### Process admission qualification
+
+`ServiceProcessBinding` associates an exact compiled Process with the existing
+`ExecutionProcessStartDispatcher`. Service admission preserves the caller's native command,
+idempotency and continuation identities, but replaces authority, issuance and provenance using
+normalized identity, admitted logical scope and the service document. The native dispatcher retains
+ownership of start receipts, replay evidence and scheduling; the service adds no receipt store or
+workflow loop. The result pairs the service trace with the native admission continuation and exact definition. A
+service admission is not itself a Process activation: it has no durable Process token and must not
+populate the normalized trace's owning-Process continuation field.
+
+Focused tests use `InMemoryExecutionControlApiAdapter` to prove accepted admission, exact replay,
+forged-authority replacement and rejection of wrong definitions or invalid input before dispatch.
+The native public `ProcessStartResult` is retained without exposing receipt payloads. A common
+`ServiceOperationResult<TOutcome>` carries native query/Process evidence, structured admission
+failures and a service trace. Runtime failures and cancellation remain observable exceptions.
+These tests qualify admission composition only. Durable multi-entity recovery, Process controls,
+transport projection for new operation families and native deterministic computation remain open.

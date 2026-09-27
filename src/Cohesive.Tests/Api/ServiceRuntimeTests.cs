@@ -20,7 +20,7 @@ using Cohesive.Transitions.IR;
 namespace Cohesive.Tests.Api;
 
 [Collection(Cohesive.Tests.Observability.OperationTelemetryEmitterTestCollection.Name)]
-public sealed class ServiceTransitionRuntimeTests
+public sealed class ServiceRuntimeTests
 {
     [Fact]
     public async Task DeclaredOperationLoadsOnceAndCommitsWithExactReviewedToken()
@@ -96,9 +96,9 @@ public sealed class ServiceTransitionRuntimeTests
         Assert.True(read.IsValid);
         Assert.True(ServiceDefinitionDocuments.ValidateAndProject(restored!, out var definition).IsValid);
         Assert.Equal("revise", Assert.Single(definition!.Operations).Id);
-        Assert.Throws<ServiceBindingValidationException>(() => new ServiceTransitionRuntime(restored!, [], fixture.Authority));
+        Assert.Throws<ServiceBindingValidationException>(() => new ServiceRuntime(restored!, [], fixture.Authority));
         var wrong = new ServiceTransitionBinding("unknown", fixture.Plan, fixture.Repository.EntityDefinition, _ => fixture.Repository);
-        Assert.Throws<ServiceBindingValidationException>(() => new ServiceTransitionRuntime(restored!, [wrong], fixture.Authority));
+        Assert.Throws<ServiceBindingValidationException>(() => new ServiceRuntime(restored!, [wrong], fixture.Authority));
         Assert.Equal(0, fixture.Resolutions);
     }
 
@@ -107,12 +107,12 @@ public sealed class ServiceTransitionRuntimeTests
     {
         var fixture = await Fixture.Create();
         var document = ServiceDefinitionDocuments.Create(new("notes"), new("v2"),
-            new([new ServiceQueryOperation("revise", fixture.Plan.DefinitionReference)]),
+            new([new ServiceQueryOperation("revise", fixture.Plan.DefinitionReference, new("tenant"))]),
             fixture.Document.Metadata.Provenance);
         var binding = new ServiceTransitionBinding("revise", fixture.Plan, fixture.Repository.EntityDefinition, _ =>
             throw new InvalidOperationException("Unsupported operations must never resolve infrastructure."));
         var exception = Assert.Throws<ServiceBindingValidationException>(() =>
-            new ServiceTransitionRuntime(document, [binding], fixture.Authority));
+            new ServiceRuntime(document, [binding], fixture.Authority));
         Assert.Equal("services.binding.operationUnsupported", Assert.Single(exception.Validation.Diagnostics).Code);
         Assert.Equal(0, fixture.Resolutions);
     }
@@ -205,8 +205,8 @@ public sealed class ServiceTransitionRuntimeTests
             [scenario == "selectedPlacement" ? scope with { PartitionKey = "untrusted-selection" } : scope],
             ScopeSelectionMode.Single, ScopeSelectionSource.Ambient),
             Grants: scenario == "noGrant" ? [] : [grant]);
-        var runtime = new ServiceTransitionRuntime(fixture.Document,
-            [new("revise", fixture.Plan, fixture.Repository.EntityDefinition, _ => fixture.Repository)],
+        var runtime = new ServiceRuntime(fixture.Document,
+            [new ServiceTransitionBinding("revise", fixture.Plan, fixture.Repository.EntityDefinition, _ => fixture.Repository)],
             new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
         var result = await runtime.InvokeAsync(OperationContext.Create().WithIdentityContext(identity), "revise", "note-1",
             fixture.Initial.ConcurrencyToken, new("identity-test"), fixture.Input);
@@ -270,7 +270,7 @@ public sealed class ServiceTransitionRuntimeTests
             resolutions++;
             return new InMemoryEntityOutboxRepository(entity, _ => "tenant");
         });
-        var failure = Assert.Throws<ServiceBindingValidationException>(() => new ServiceTransitionRuntime(service, [binding], new Authority()));
+        var failure = Assert.Throws<ServiceBindingValidationException>(() => new ServiceRuntime(service, [binding], new Authority()));
         Assert.Equal("services.binding.capabilityUnsupported", Assert.Single(failure.Validation.Diagnostics).Code);
         Assert.Equal(0, resolutions);
     }
@@ -287,7 +287,7 @@ public sealed class ServiceTransitionRuntimeTests
         var declaration = ServiceDefinitionDocuments.Create(new("reply-service"), new("v1"),
             new([new ServiceTransitionOperation("revise", entity.StateShape.QualifiedId, plan.DefinitionReference, [new("notes.revise")])]),
             fixture.Document.Metadata.Provenance);
-        var runtime = new ServiceTransitionRuntime(declaration, [new("revise", plan, entity, _ => fixture.Repository)], fixture.Authority);
+        var runtime = new ServiceRuntime(declaration, [new ServiceTransitionBinding("revise", plan, entity, _ => fixture.Repository)], fixture.Authority);
         var http = await InvokeHttp<JsonReply, JsonReply>(runtime, fixture.Initial.ConcurrencyToken, "{\"label\":\"hello\",\"data\":\"AQID\"}");
         Assert.Equal(200, http.Response.StatusCode);
         http.Response.Body.Position = 0;
@@ -299,7 +299,7 @@ public sealed class ServiceTransitionRuntimeTests
 
     sealed record JsonReply([property: System.Text.Json.Serialization.JsonPropertyName("label")] string Text, byte[] Data);
 
-    static async Task<DefaultHttpContext> InvokeHttp<TInput, TOutcome>(ServiceTransitionRuntime runtime,
+    static async Task<DefaultHttpContext> InvokeHttp<TInput, TOutcome>(ServiceRuntime runtime,
         EntityConcurrencyToken token, string body, Action? afterMapping = null)
     {
         var builder = WebApplication.CreateSlimBuilder();
@@ -349,7 +349,7 @@ public sealed class ServiceTransitionRuntimeTests
         public required RecordingRepository Repository { get; init; }
         public required EntitySnapshot Initial { get; init; }
         public Authority Authority { get; } = new();
-        public ServiceTransitionRuntime Runtime { get; private set; } = null!;
+        public ServiceRuntime Runtime { get; private set; } = null!;
         public int Resolutions { get; private set; }
         public PortableValue Input => PortableValue.Concrete(Plan.Definition.Input,
             ObservationValue.FromObject(new Note.ReviseInput("after")));
@@ -375,7 +375,7 @@ public sealed class ServiceTransitionRuntimeTests
             var initial = await inner.Upsert(OperationContext.Create(), new(entity.CreateState("note-1",
                 new { Id = "note-1", Tenant = "tenant-a", Text = "before" }).Snapshot));
             var fixture = new Fixture { Plan = plan, Document = document, Repository = new(inner), Initial = initial };
-            fixture.Runtime = new(document, [new("revise", plan, entity, _ =>
+            fixture.Runtime = new(document, [new ServiceTransitionBinding("revise", plan, entity, _ =>
             {
                 fixture.Resolutions++;
                 return fixture.Repository;
@@ -389,10 +389,10 @@ public sealed class ServiceTransitionRuntimeTests
         public bool AllowAdmission { get; set; } = true;
         public bool AllowResource { get; set; } = true;
         public int ResourceChecks { get; private set; }
-        public ValueTask<EntityReadOptions?> AdmitAsync(OperationContext context, ServiceTransitionOperation operation, string subject)
+        public ValueTask<ScopeRef?> AdmitAsync(OperationContext context, ServiceOperation operation)
         {
             Assert.Equal("notes.revise", Assert.Single(operation.AuthorizationRequirements).Id);
-            return ValueTask.FromResult<EntityReadOptions?>(AllowAdmission ? EntityReadOptions.Full.WithPartitionKey("tenant-a") : null);
+            return ValueTask.FromResult<ScopeRef?>(AllowAdmission ? new("tenant-a", "tenant") : null);
         }
         public ValueTask<bool> AuthorizeResourceAsync(OperationContext context, ServiceTransitionOperation operation, EntitySnapshot snapshot)
         {

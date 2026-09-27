@@ -30,11 +30,11 @@ public sealed class IdentityServiceInvocationAuthorization : IServiceInvocationA
     public FieldName OwnershipField { get; }
 
     /// <inheritdoc />
-    public ValueTask<EntityReadOptions?> AdmitAsync(OperationContext context, ServiceTransitionOperation operation, string subject)
+    public ValueTask<ScopeRef?> AdmitAsync(OperationContext context, ServiceOperation operation)
     {
         context.ThrowIfCancellationRequested();
         var scope = Resolve(context, operation);
-        return ValueTask.FromResult(scope is null ? null : EntityReadOptions.Full.WithPartitionKey(scope.ResolvePartitionKey()));
+        return ValueTask.FromResult(scope);
     }
 
     /// <inheritdoc />
@@ -47,7 +47,7 @@ public sealed class IdentityServiceInvocationAuthorization : IServiceInvocationA
             && owner.Kind == ObservationValueKind.String && owner.GetString() == scope.Id);
     }
 
-    ScopeRef? Resolve(OperationContext context, ServiceTransitionOperation operation)
+    ScopeRef? Resolve(OperationContext context, ServiceOperation operation)
     {
         var identity = context.GetIdentityContextOrDefault();
         if (identity is null || identity.Actor.Kind == PrincipalKind.Anonymous || string.IsNullOrWhiteSpace(identity.Actor.Id)

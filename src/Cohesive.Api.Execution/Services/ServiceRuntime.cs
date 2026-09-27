@@ -1,8 +1,8 @@
 using System.Collections.Frozen;
-using System.Diagnostics;
 using System.Collections.Immutable;
 using Cohesive.Api.Services;
 using Cohesive.Execution;
+using Cohesive.Identity;
 using Cohesive.Model;
 using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
@@ -16,15 +16,15 @@ namespace Cohesive.Api.Execution.Services;
 
 /// <summary>Explicit authority binding used by every invocation medium.</summary>
 /// <remarks>
-/// Admission must normalize identity, verify declared requirements and selected scope before returning read
-/// options. Resource authorization must verify logical ownership independently of physical partition routing.
+/// Admission must normalize identity, verify declared requirements and selected scope before returning trusted
+/// scope evidence. Resource authorization must verify logical ownership independently of physical partition routing.
 /// Policy is evaluated at invocation time; an entity token does not fence later permission revocation.
 /// </remarks>
 public interface IServiceInvocationAuthorization
 {
-    /// <summary>Returns authorized full-state read routing, or null when the invocation is forbidden.</summary>
+    /// <summary>Returns the authorized logical scope and its trusted physical placement, or null when forbidden.</summary>
     /// <exception cref="OperationCanceledException">Invocation cancellation was observed.</exception>
-    ValueTask<EntityReadOptions?> AdmitAsync(OperationContext context, ServiceTransitionOperation operation, string subject);
+    ValueTask<ScopeRef?> AdmitAsync(OperationContext context, ServiceOperation operation);
 
     /// <summary>Authorizes the exact runtime-loaded resource; false rejects without evaluating or committing.</summary>
     /// <exception cref="OperationCanceledException">Invocation cancellation was observed.</exception>
@@ -44,16 +44,29 @@ public sealed class ServiceBindingValidationException : ArgumentException
 }
 
 /// <summary>Native realization of a declared operation; factories are never retained in portable IR.</summary>
-public sealed class ServiceTransitionBinding
+public abstract class ServiceBinding
+{
+    /// <summary>Associates a native realization with one operation identity.</summary>
+    /// <exception cref="ArgumentException">The identity is empty.</exception>
+    private protected ServiceBinding(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
+        OperationId = operationId;
+    }
+    /// <summary>Identity from the portable service declaration.</summary>
+    public string OperationId { get; }
+    internal abstract void Validate(ServiceOperation operation);
+}
+
+/// <summary>Exact Transition plan, entity and invocation-scoped repository association.</summary>
+public sealed class ServiceTransitionBinding : ServiceBinding
 {
     /// <summary>Associates an operation with its prepared plan and invocation-scoped repository resolver.</summary>
     /// <exception cref="ArgumentNullException">A dependency is null.</exception>
     /// <exception cref="ArgumentException">The operation identity is empty.</exception>
     public ServiceTransitionBinding(string operationId, CompiledTransitionPlan plan, EntityDefinition entity,
-        Func<OperationContext, IEntityRepository> repository)
+        Func<OperationContext, IEntityRepository> repository) : base(operationId)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
-        OperationId = operationId;
         Plan = plan ?? throw new ArgumentNullException(nameof(plan));
         Entity = entity ?? throw new ArgumentNullException(nameof(entity));
         if (plan.Definition.Observation != ValueContract.FromShape(entity.Shape))
@@ -61,14 +74,32 @@ public sealed class ServiceTransitionBinding
                 "The plan observation contract must match the bound entity state contract.", "/binding/entity");
         Repository = repository ?? throw new ArgumentNullException(nameof(repository));
     }
-    /// <summary>Identity from the service declaration.</summary>
-    public string OperationId { get; }
     /// <summary>Reusable, immutable, exact compiled behavior.</summary>
     public CompiledTransitionPlan Plan { get; }
     /// <summary>Entity declaration against which plan and repository bindings are checked.</summary>
     public EntityDefinition Entity { get; }
     internal Func<OperationContext, IEntityRepository> Repository { get; }
+    internal override void Validate(ServiceOperation operation)
+    {
+        if (operation is not ServiceTransitionOperation transition)
+            throw ServiceBindingValidationException.Error("services.binding.operationUnsupported",
+                "A Transition binding requires a Transition operation.", "/bindings");
+        if (Plan.DefinitionReference != transition.Transition || Entity.StateShape.QualifiedId != transition.Entity)
+            throw ServiceBindingValidationException.Error("services.binding.inexact",
+                "The binding must realize the exact declared Transition and entity.", "/bindings");
+        if (Plan.Definition.SubjectCreation is not null
+            || Plan.Analysis.Requirements.OfType<TransitionEmissionRequirement>().Any())
+            throw ServiceBindingValidationException.Error("services.binding.capabilityUnsupported",
+                "Subject creation and emissions require a qualified commit profile.", "/bindings");
+    }
+
 }
+
+/// <summary>Service admission, native execution outcome and payload-free invocation evidence.</summary>
+/// <typeparam name="TOutcome">Existing native outcome authority, retained without copying its result model.</typeparam>
+public sealed record ServiceOperationResult<TOutcome>(ApiResultKind Kind, TOutcome? Outcome,
+    ImmutableArray<DocumentValidationDiagnostic> Diagnostics, NormalizedExecutionTrace Trace)
+    where TOutcome : class;
 
 /// <summary>Declared portable outcome, storage fence and payload-free evidence of one service invocation.</summary>
 /// <remarks>Internal subject snapshots and decision input/observation payloads are never part of this result.</remarks>
@@ -76,22 +107,23 @@ public sealed record ServiceInvocationResult(ApiResultKind Kind, PortableValue? 
     EntityConcurrencyToken? ConcurrencyToken, ImmutableArray<DocumentValidationDiagnostic> Diagnostics,
     NormalizedExecutionTrace Trace, NormalizedExecutionTrace? TransitionTrace);
 
-/// <summary>Repository-owned, transport-independent invocation of declared entity Transitions.</summary>
+/// <summary>Transport-independent invocation of exact service operations through their native execution authorities.</summary>
 /// <remarks>
-/// The bounded initial profile requires an existing entity, full-state loading and conditional writes, with no
-/// emissions or durable replay. Unsupported requirements fail binding. Preparation is once per runtime; repositories,
+/// Transition operations require an existing entity, full-state loading and conditional writes, with no
+/// emissions or durable replay. Query operations reuse canonical evaluation. Unsupported requirements fail binding.
+/// Preparation is once per runtime; repositories,
 /// authorization, inputs and results are invocation-scoped. The runtime neither retries nor accepts caller snapshots.
 /// </remarks>
-public sealed class ServiceTransitionRuntime
+public sealed partial class ServiceRuntime
 {
-    readonly FrozenDictionary<string, (ServiceTransitionOperation Operation, ServiceTransitionBinding Binding)> operations;
+    readonly FrozenDictionary<string, (ServiceOperation Operation, ServiceBinding Binding)> operations;
     readonly IServiceInvocationAuthorization authorization;
     readonly ExecutionDefinitionReference definitionReference;
 
     /// <summary>Admits a canonical declaration and its exact physical bindings without resolving repositories.</summary>
     /// <exception cref="ArgumentException">The declaration or binding set is invalid or requires unsupported guarantees.</exception>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
-    public ServiceTransitionRuntime(ExecutionDefinitionDocument service, IEnumerable<ServiceTransitionBinding> bindings,
+    public ServiceRuntime(ExecutionDefinitionDocument service, IEnumerable<ServiceBinding> bindings,
         IServiceInvocationAuthorization authorization)
     {
         ArgumentNullException.ThrowIfNull(service);
@@ -105,27 +137,31 @@ public sealed class ServiceTransitionRuntime
                 "This service profile does not support semantic extensions.", "/extensions");
         Declaration = service;
         definitionReference = new(service.Metadata.DefinitionId, service.Metadata.RevisionId, service.Metadata.Fingerprint);
-        var bound = new Dictionary<string, ServiceTransitionBinding>(StringComparer.Ordinal);
+        var bound = new Dictionary<string, ServiceBinding>(StringComparer.Ordinal);
         foreach (var binding in bindings)
             if (binding is null || !bound.TryAdd(binding.OperationId, binding))
                 throw ServiceBindingValidationException.Error("services.binding.duplicate", "Bindings must be non-null and uniquely identified.", "/bindings");
         if (bound.Count != definition!.Operations.Length)
             throw ServiceBindingValidationException.Error("services.binding.incomplete", "Each declared operation requires exactly one binding.", "/bindings");
-        var linked = new Dictionary<string, (ServiceTransitionOperation, ServiceTransitionBinding)>(StringComparer.Ordinal);
-        foreach (var declared in definition.Operations)
+        var linked = new Dictionary<string, (ServiceOperation, ServiceBinding)>(StringComparer.Ordinal);
+        foreach (var operation in definition.Operations)
         {
-            if (declared is not ServiceTransitionOperation operation)
-                throw ServiceBindingValidationException.Error("services.binding.operationUnsupported",
-                    "The Transition runtime requires Transition operations only.", "/operations");
-            if (!bound.TryGetValue(operation.Id, out var binding) || binding.Plan.DefinitionReference != operation.Transition
-                || binding.Entity.StateShape.QualifiedId != operation.Entity)
-                throw ServiceBindingValidationException.Error("services.binding.inexact", $"Operation '{operation.Id}' requires its exact declared Transition and entity.", "/bindings");
-            if (binding.Plan.Definition.SubjectCreation is not null
-                || binding.Plan.Analysis.Requirements.OfType<TransitionEmissionRequirement>().Any())
-                throw ServiceBindingValidationException.Error("services.binding.capabilityUnsupported", $"Operation '{operation.Id}' requires subject creation or emission guarantees unsupported by this runtime profile.", "/bindings");
+            if (!bound.TryGetValue(operation.Id, out var binding))
+                throw ServiceBindingValidationException.Error("services.binding.inexact",
+                    "Every binding must identify a declared operation.", "/bindings");
+            binding.Validate(operation);
             linked.Add(operation.Id, (operation, binding));
         }
         operations = linked.ToFrozenDictionary(StringComparer.Ordinal);
+    }
+
+    (ServiceTransitionOperation Operation, ServiceTransitionBinding Binding) Transition(string operationId)
+    {
+        if (!operations.TryGetValue(operationId, out var linked)
+            || linked.Operation is not ServiceTransitionOperation operation
+            || linked.Binding is not ServiceTransitionBinding binding)
+            throw new ArgumentException("The operation is not a declared Transition.", nameof(operationId));
+        return (operation, binding);
     }
 
     /// <summary>Validated portable authority available for human and agent inspection.</summary>
@@ -136,8 +172,7 @@ public sealed class ServiceTransitionRuntime
     /// <exception cref="ArgumentException">The operation is undeclared or CLR views disagree with its contracts.</exception>
     public ApiEndpoint Project<TInput, TOutcome>(string operationId, HttpBinding? http = null)
     {
-        if (!operations.TryGetValue(operationId, out var linked))
-            throw new ArgumentException("The operation is not declared by this service.", nameof(operationId));
+        var linked = Transition(operationId);
         var mapper = new DefaultClrTypeRefMapper();
         if (Contract(typeof(TInput)) != linked.Binding.Plan.Definition.Input
             || Contract(typeof(TOutcome)) != linked.Binding.Plan.Definition.Outcome)
@@ -164,7 +199,7 @@ public sealed class ServiceTransitionRuntime
 
     /// <summary>Returns the canonical Transition input contract without resolving execution dependencies.</summary>
     /// <exception cref="KeyNotFoundException">The operation is undeclared.</exception>
-    public ValueContract InputContract(string operationId) => operations[operationId].Binding.Plan.Definition.Input;
+    public ValueContract InputContract(string operationId) => Transition(operationId).Binding.Plan.Definition.Input;
 
     /// <summary>Loads, authorizes, decides and conditionally commits one declared operation.</summary>
     /// <param name="context">Normalized identity, time, cancellation and correlation for this invocation.</param>
@@ -186,24 +221,16 @@ public sealed class ServiceTransitionRuntime
         ArgumentException.ThrowIfNullOrWhiteSpace(subject);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedToken.Value);
         ArgumentException.ThrowIfNullOrWhiteSpace(activation.Value);
-        if (!operations.TryGetValue(operationId, out var linked))
-            throw new ArgumentException("The operation is not declared by this service.", nameof(operationId));
-        var activity = ExecutionTelemetry.StartActivity(ExecutionTelemetryActivityKind.Activation);
-        activity?.SetTag("cohesive.service.definition", definitionReference.DefinitionId.Value);
-        activity?.SetTag("cohesive.service.revision", definitionReference.RevisionId.Value);
-        activity?.SetTag("cohesive.service.operation", operationId);
-        var outcome = ExecutionTelemetryOutcome.Failed;
-        Exception? failure = null;
-        List<NormalizedExecutionTraceEvent> events = [];
+        var linked = Transition(operationId);
+        using var evidence = new ServiceInvocationEvidence(definitionReference, operationId, linked.Operation.Transition, activation);
         try
         {
             context.ThrowIfCancellationRequested();
-            var readOptions = await authorization.AdmitAsync(context, linked.Operation, subject).ConfigureAwait(false);
-            if (readOptions is null)
+            var scope = await authorization.AdmitAsync(context, linked.Operation).ConfigureAwait(false);
+            if (scope is null)
                 return Reject(ApiResultKind.Forbidden, "services.authorization.denied", "/authorization", "The caller is not authorized to invoke this operation.");
-            Record("authorityAdmitted");
-            if (readOptions.Fields is not null)
-                throw new InvalidOperationException("Service Transition authorization must permit a full-state read.");
+            evidence.Record("authorityAdmitted");
+            var readOptions = EntityReadOptions.Full.WithPartitionKey(scope.ResolvePartitionKey());
             var repository = linked.Binding.Repository(context)
                 ?? throw new InvalidOperationException("The service repository binding returned null.");
             if (repository.EntityDefinition.StateShape.QualifiedId != linked.Operation.Entity)
@@ -211,14 +238,14 @@ public sealed class ServiceTransitionRuntime
             var snapshot = await repository.TryGet(context, subject, readOptions).ConfigureAwait(false);
             if (snapshot is null)
                 return Reject(ApiResultKind.NotFound, "services.subject.missing", "/subject", "The subject was not found in the authorized scope.");
-            Record("subjectLoaded");
+            evidence.Record("subjectLoaded");
             if (snapshot.Entity.EntityId.Value != subject
                 || (readOptions.PartitionKey is not null && snapshot.PartitionKey != readOptions.PartitionKey)
                 || (snapshot.LoadedFields is not null && repository.EntityDefinition.Shape.Fields.Any(f => !snapshot.LoadedFields.Contains(f.Name.Value))))
                 throw new InvalidOperationException("The repository returned an inexact or partial subject snapshot.");
             if (!await authorization.AuthorizeResourceAsync(context, linked.Operation, snapshot).ConfigureAwait(false))
                 return Reject(ApiResultKind.Forbidden, "services.authorization.resourceDenied", "/authorization/resource", "The caller is not authorized for this resource.");
-            Record("resourceAuthorized");
+            evidence.Record("resourceAuthorized");
             if (snapshot.ConcurrencyToken != expectedToken)
                 return Reject(ApiResultKind.Conflict, "services.concurrency.stale", "/load", "The subject has changed since it was read.");
             context.ThrowIfCancellationRequested();
@@ -226,10 +253,10 @@ public sealed class ServiceTransitionRuntime
             var plan = linked.Binding.Plan;
             var decision = TransitionReferenceInterpreter.DecideFullState(plan, activation, input,
                 PortableValue.Concrete(plan.Definition.Observation, ObservationValue.FromObject(state.Fields)));
-            Record("transitionDecided");
+            evidence.Record("transitionDecided");
             if (decision.Kind is not (TransitionDecisionKind.Applied or TransitionDecisionKind.NoChange))
             {
-                outcome = ExecutionTelemetryOutcome.Rejected;
+
                 return Complete(decision.Kind switch
                 {
                     TransitionDecisionKind.AdmissionRejected or TransitionDecisionKind.DomainRejected => ApiResultKind.DomainError,
@@ -243,7 +270,7 @@ public sealed class ServiceTransitionRuntime
                 throw new InvalidOperationException("An unsupported emission escaped binding admission.");
             if (!decision.GuaranteeDemands.CommitRequired)
             {
-                outcome = ExecutionTelemetryOutcome.Succeeded;
+
                 return Complete(ApiResultKind.Success, snapshot, decision, []);
             }
             var candidate = TransitionStateProjector.Apply(ObservationValue.FromObject(state.Fields), decision);
@@ -252,8 +279,8 @@ public sealed class ServiceTransitionRuntime
             try
             {
                 var committed = await repository.Upsert(context, new(next.Snapshot, snapshot.ConcurrencyToken)).ConfigureAwait(false);
-                outcome = ExecutionTelemetryOutcome.Succeeded;
-                Record("commitCompleted");
+
+                evidence.Record("commitCompleted");
                 return Complete(ApiResultKind.Success, committed, decision, []);
             }
             catch (ObservationConcurrencyConflictException)
@@ -261,39 +288,16 @@ public sealed class ServiceTransitionRuntime
                 return Reject(ApiResultKind.Conflict, "services.concurrency.conflict", "/commit", "The subject changed before the conditional commit.");
             }
         }
-        catch (OperationCanceledException exception)
-        {
-            outcome = ExecutionTelemetryOutcome.Cancelled;
-            Record("invocationCancelled");
-            failure = exception;
-            throw;
-        }
         catch (Exception exception)
         {
-            outcome = ExecutionTelemetryOutcome.Failed;
-            Record("invocationFailed");
-            failure = exception;
+            evidence.Fail(exception);
             throw;
-        }
-        finally
-        {
-            ExecutionTelemetry.CompleteActivity(activity, outcome, failure);
-        }
-
-        void Record(string kind, string? detail = null)
-        {
-            events.Add(new(events.Count, kind, new(operationId), relatedDefinition: linked.Operation.Transition, detail: detail));
-            if (activity?.IsAllDataRequested == true)
-                activity.AddEvent(new ActivityEvent(kind, tags: detail is null ? null
-                    : new ActivityTagsCollection { ["cohesive.service.diagnostic"] = detail }));
         }
 
         ServiceInvocationResult Complete(ApiResultKind kind, EntitySnapshot? snapshot, TransitionDecision? decision,
             ImmutableArray<DocumentValidationDiagnostic> diagnostics)
         {
-            var trace = new NormalizedExecutionTrace(NormalizedExecutionTrace.CurrentSchemaVersion, ServiceDefinitionDocuments.Kind,
-                definitionReference, null, activation, ApiWireNames.ResultKind(kind), null, null, [.. events]);
-            ExecutionTelemetry.CorrelateActivity(activity, trace: trace);
+            var trace = evidence.Complete(kind);
             var transitionTrace = decision is null ? null
                 : TransitionExecutionTraceProjector.Project(linked.Binding.Plan, decision).Trace;
             return new(kind, decision?.Outcome, snapshot?.ConcurrencyToken, diagnostics, trace, transitionTrace);
@@ -301,8 +305,8 @@ public sealed class ServiceTransitionRuntime
 
         ServiceInvocationResult Reject(ApiResultKind kind, string code, string location, string message)
         {
-            outcome = ExecutionTelemetryOutcome.Rejected;
-            Record("invocationRejected", code);
+
+            evidence.Record("invocationRejected", code);
             return Complete(kind, null, null, [new(code, DiagnosticSeverity.Error, message, location)]);
         }
     }

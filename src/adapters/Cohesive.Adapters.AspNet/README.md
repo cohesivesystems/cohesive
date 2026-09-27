@@ -199,7 +199,7 @@ states map to the catalog's opaque not-found, conflict, and precondition-failed 
 
 ## Declared service operations
 
-For an admitted `ServiceTransitionRuntime`, `MapServiceTransition<TInput,TOutcome>` projects the operation
+For an admitted `ServiceRuntime`, `MapServiceTransition<TInput,TOutcome>` projects the operation
 without per-route repository loading or commit callbacks:
 
 ```csharp

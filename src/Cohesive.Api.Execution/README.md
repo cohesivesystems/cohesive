@@ -100,8 +100,8 @@ of the execution-specific public surface.
 
 ## Declared service invocation
 
-`Services.ServiceTransitionRuntime` binds a validated `Cohesive.Api.Services.ServiceDefinition` document
-to exact compiled Transitions, entity definitions and invocation-scoped repositories. Direct calls and
+`Services.ServiceRuntime` binds a validated `Cohesive.Api.Services.ServiceDefinition` document
+to exact Transition/entity/repository, canonical query/evaluator and Process/start-dispatcher associations. Direct calls and
 `Cohesive.Adapters.AspNet.Services.MapServiceTransition` share authoritative loading, mandatory authority,
 decision and conditional commit. API CLR types are checked projections of the Transition contracts.
 
@@ -110,8 +110,11 @@ normalized identity grants and checks logical entity ownership independently of 
 It adds the existing `Cohesive.Identity` dependency to this optional composition package. Generic API
 consumers still do not acquire storage, identity or Process runtime dependencies through `Cohesive.Api`.
 
-The initial profile supports existing subjects without emissions; unsupported creation, emission and
-extension requirements fail binding. No durable replay or stronger permission-revocation guarantee is
-implied. Returned service and Transition traces are payload-free inspection evidence; internal snapshots and
+Transition invocation supports existing subjects without emissions; unsupported creation, emission and
+extension requirements fail binding. `EvaluateAsync` binds the declared query scope parameter from
+trusted identity, and `StartAsync` delegates admission/replay to the existing Process dispatcher. The
+service itself adds no durable receipt store or stronger permission-revocation guarantee. Returned service and Transition traces are payload-free inspection evidence; internal snapshots and
 decision inputs/observations are not invocation results. See [the design and qualification boundary](../../docs/decisions/declarative-service-runtime.md)
-and `ServiceTransitionRuntimeTests` for runnable direct/HTTP examples and failure scenarios.
+and `ServiceRuntimeTests`, `ServiceQueryRuntimeTests` and `ServiceProcessRuntimeTests` for executable
+examples. Query source qualification currently covers native in-memory acquisition; multi-entity
+durable Process recovery and new-family HTTP projections remain in progress.

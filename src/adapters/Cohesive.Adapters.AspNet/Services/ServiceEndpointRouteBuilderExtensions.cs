@@ -26,7 +26,7 @@ public static class ServiceEndpointRouteBuilderExtensions
     /// <exception cref="ArgumentException">The CLR projection or route inputs are invalid.</exception>
     /// <exception cref="InvalidOperationException">Required native policy associations are missing.</exception>
     public static RouteHandlerBuilder MapServiceTransition<TInput, TOutcome>(this IEndpointRouteBuilder endpoints,
-        ServiceTransitionRuntime runtime, string operationId, string route,
+        ServiceRuntime runtime, string operationId, string route,
         AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
         string subjectParameter = "id", string tokenHeader = "X-Expected-Concurrency-Token")
     {

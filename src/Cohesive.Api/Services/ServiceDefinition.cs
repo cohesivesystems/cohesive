@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Model;
+using Cohesive.Relations.IR;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Api.Services;
@@ -77,9 +78,18 @@ public sealed record ServiceQueryOperation : ServiceOperation
     /// <exception cref="ArgumentException">Identity or authorization requirements are invalid.</exception>
     /// <exception cref="ArgumentNullException">The exact query reference is null.</exception>
     [JsonConstructor]
-    public ServiceQueryOperation(string id, ExecutionDefinitionReference query,
+    public ServiceQueryOperation(string id, ExecutionDefinitionReference query, QueryParameterId scopeParameter,
         ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default)
-        : base(id, authorizationRequirements) => Query = query ?? throw new ArgumentNullException(nameof(query));
+        : base(id, authorizationRequirements)
+    {
+        Query = query ?? throw new ArgumentNullException(nameof(query));
+        if (string.IsNullOrWhiteSpace(scopeParameter.Value))
+            throw new ArgumentException("A query operation requires an explicit authorized-scope parameter.", nameof(scopeParameter));
+        ScopeParameter = scopeParameter;
+    }
+
+    /// <summary>Required string parameter populated from trusted logical scope, never caller input.</summary>
+    public QueryParameterId ScopeParameter { get; }
 
     /// <summary>Exact native relation/query authority, including its semantic fingerprint.</summary>
     public ExecutionDefinitionReference Query { get; }
