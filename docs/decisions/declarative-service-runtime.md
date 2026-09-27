@@ -198,3 +198,27 @@ a crash after the entity commit replays its atomic entity receipt, and later Pro
 converge without duplicate logical publication. These are in-memory provider conformance tests, not a remote
 backend durability claim. A combined service with acquisition, computation, an explicit durable cut and mutations
 across multiple entities remains the next qualification gate.
+
+
+### Combined service and multi-entity recovery example
+
+`ServiceCompositionTests` declares a document-publishing service with `revise`, `search` and `publish`
+operations in one service document and binding set. The query filters by the admitted logical tenant in a
+shared physical partition. A Process acquires a pair through that canonical query, computes normalized text,
+and commits an explicit durable cut before invoking the same entity Transition for each document. The hosted
+acquisition declaration pins its query dependency; selecting the pair is domain-specific result projection.
+The native Process owns sequencing, intermediate values, operation identities and recovery.
+
+Tested example: an editor changes document `a` to `revised`, then publishes `a` and `b`. The worker crashes
+after committing `a` but before committing its Process activation. A new runtime reuses the entity receipt,
+updates `b`, and returns `REVISED` / `BETA`. Acquisition and computation ran once; the first document advanced
+only one additional version. A foreign tenant's document is excluded and unchanged. Retrying the completed
+activation performs no source read or computation.
+
+An acquired revision is an explicit Transition precondition, with repository compare-and-swap protecting the
+subsequent write. A newer edit after the cut is retained. Rejection on the first document stops the batch;
+rejection on the second leaves the first update committed and returns false. This example deliberately has
+no authored compensation or cross-entity transaction. Production workflows needing compensation must declare
+it through their Process rather than infer it from service binding. The test's start dispatcher qualifies one
+native admission plus initialization; concurrent durable start-registry behavior remains the deployed dispatcher's
+responsibility and is not inferred from this fixture.
