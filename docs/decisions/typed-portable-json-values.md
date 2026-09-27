@@ -95,3 +95,18 @@ GraphQL public document expansion is not included in this change.
 Qualification includes native draft/query documents, recursive records and expressions, nullable document fields,
 unchanged execution inference, actual JSON discriminator layout, converter opacity, contradictory root kinds,
 unsupported object metadata, deterministic generation, valid OpenAPI references and TypeScript compilation.
+
+## Native documents inside foreign envelopes
+
+`RelationDraftDocumentJsonConverter` and `RelationQueryDocumentJsonConverter` are native document-boundary
+adapters in Cohesive.Relations. Register them on an envelope's serializer options, or on an individual property.
+They retain the native format's own options rather than inheriting outer naming/enum policies. Reads delegate to
+the owning serializer, including version dispatch, duplicate-property detection, semantic validation and
+fingerprint checks. Writes stream using frozen options created by that owner. No replacement document type or
+protocol-specific model is introduced.
+
+Each adapter belongs to its native format because their admission contracts differ; the query serializer also owns
+its specialized query-parameter converter. A generic web naming converter is not sufficient. Read adaptation retains
+the complete nested JSON for the existing string-based native admission API; this is one boundary operation, not a
+row-loop projection. Registering these adapters only on API options keeps persisted aggregate restoration and its
+existing diagnostics unchanged.

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Drafts;
 using Cohesive.Relations.IR;
@@ -17,6 +18,45 @@ public sealed class RelationDraftPersistenceTests
     static readonly QualifiedShapeId SearchShape = new(DomainGraphId, new("LoadSearchDto"));
     static readonly ValueBindingId LoadBinding = new("load");
     static readonly ValueBindingId ResultBinding = new("loadSearch");
+
+    [Fact]
+    public void EmbeddedDocuments_KeepNativeContractsInsidePascalCaseEnvelope()
+    {
+        var draft = RelationDraftDocument.FromDraft(CreateDraft());
+        var query = LoadCustomerRelationFixture.CreateRelationDocument();
+        var envelope = new NativeDocumentEnvelope("review", draft, query);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNamingPolicy = null };
+        var json = JsonSerializer.SerializeToElement(envelope, options);
+        Assert.Equal("review", json.GetProperty("Name").GetString());
+        Assert.Equal(RelationDraftJsonSerializer.Serialize(draft, indented: false), json.GetProperty("Draft").GetRawText());
+        Assert.Equal(RelationQueryJsonSerializer.Serialize(query, indented: false), json.GetProperty("Query").GetRawText());
+        var restored = JsonSerializer.Deserialize<NativeDocumentEnvelope>(json, options)!;
+        Assert.Equal(draft.DraftFingerprint, restored.Draft.DraftFingerprint);
+        Assert.Equal(query.DefinitionFingerprint, restored.Query.DefinitionFingerprint);
+        Assert.Equal(json.GetRawText(), JsonSerializer.Serialize(restored, options));
+    }
+
+    [Theory]
+    [InlineData("Draft", "draftFingerprint")]
+    [InlineData("Query", "definitionFingerprint")]
+    public void EmbeddedDocuments_RetainNativeFingerprintAndDuplicatePropertyAdmission(string member, string fingerprint)
+    {
+        var envelope = new NativeDocumentEnvelope("review", RelationDraftDocument.FromDraft(CreateDraft()),
+            LoadCustomerRelationFixture.CreateRelationDocument());
+        var json = JsonSerializer.SerializeToNode(envelope)!.AsObject();
+        var nested = json[member]!.AsObject();
+        nested[fingerprint]!["value"] = "tampered";
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<NativeDocumentEnvelope>(json));
+
+        var clean = JsonSerializer.SerializeToElement(envelope).GetProperty(member).GetRawText();
+        var duplicate = "{\"" + member + "\":{\"schemaVersion\":\"duplicate\"," + clean[1..] + "}";
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<NativeDocumentEnvelope>(duplicate));
+        Assert.Contains("duplicateProperty", error.Message, StringComparison.Ordinal);
+    }
+
+    sealed record NativeDocumentEnvelope(string Name,
+        [property: JsonConverter(typeof(RelationDraftDocumentJsonConverter))] RelationDraftDocument Draft,
+        [property: JsonConverter(typeof(RelationQueryDocumentJsonConverter))] RelationQueryDocument Query);
 
     [Fact]
     public void Document_RoundTrip_PreservesEveryClosedResolutionVariant()
