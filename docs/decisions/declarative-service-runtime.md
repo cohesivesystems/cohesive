@@ -367,6 +367,29 @@ not an authorization grant or permission-revocation fence.
 
 The differential Durable Task host-operation test verifies the exact retained context, native
 activity serialization, and identical replay scheduling. Existing storage replay tests qualify
-mismatched instance/scope and replacement-context rejection. The focused suite passes 87 tests
+mismatched instance/scope rejection and replacement of supplied context with retained attribution. The focused suite passes 87 tests
 with 8 emulator cases skipped; the full core suite passes 3,972 with 33 skipped. These results do
 not claim a live Scheduler deployment qualification.
+
+## Exact-definition restrictions survive Scheduler transport
+
+The internal JSON constructor of `ExecutionApiInvocationContext` now retains
+`ExpectedProcessDefinition`. Its omission previously widened a transported control invocation
+from one exact Process definition to any definition at the admitted logical address. The public
+constructor and in-memory checks were correct; the Scheduler serialization boundary lost the
+restriction. A direct converter regression now checks preservation and rejection of another
+exact definition. The previously failing lifecycle-control emulator scenario passes after this fix.
+
+Emulator qualification also exposed stale test setup: the cancellation fixture helper supplied
+provenance from another definition, and the broad restart fixture omitted required external
+request bindings/capabilities. Helpers now derive provenance from the actual compiled document;
+the restart fixture uses explicitly admitted adapters, including a controlled reply for restart
+and a native timer for the slow fork child. The timer makes cancellation propagation deterministic;
+it does not imply preemption of an external operation. The rollover fixture waits for the timer
+node rather than an intermediate checkpoint. Runtime admission is not weakened.
+
+The final pinned local Scheduler emulator run passes all eight integration tests in 14 seconds
+(`/tmp/cohesive-scheduler-native-cancellation.log`), covering restart recovery, lifecycle control,
+rollover and cancellation. No Azure deployment qualification is implied. The full core run after
+the serialization fix passes 3,973 tests with 33 skipped; subsequent fixture changes are qualified
+by the focused interpreter suite and the emulator run.

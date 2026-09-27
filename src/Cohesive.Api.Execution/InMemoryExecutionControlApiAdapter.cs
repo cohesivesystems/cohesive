@@ -87,7 +87,8 @@ public sealed class ExecutionApiInvocationContext
         DateTimeOffset issuedAtUtc,
         DateTimeOffset observedAtUtc,
         ImmutableArray<string> grantedRequirements,
-        InteractionEnvelopeContext? signalContext = null)
+        InteractionEnvelopeContext? signalContext = null,
+        ExecutionDefinitionReference? expectedProcessDefinition = null)
         : this(
             authorization,
             provenance,
@@ -98,7 +99,8 @@ public sealed class ExecutionApiInvocationContext
                     "Execution API authorization requirement grants must be materialized.",
                     nameof(grantedRequirements))
                 : (IReadOnlyList<string>)grantedRequirements,
-            signalContext)
+            signalContext,
+            expectedProcessDefinition)
     {
     }
 
