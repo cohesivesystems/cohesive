@@ -462,5 +462,26 @@ and repository tests pass 18 cases. The first broader run exposed two conformanc
 comparing enriched adapter results directly with the deliberately un-enriched entity commit result;
 they now compare exact derived evidence while preserving one-effect/one-publication invariants.
 All five final transport/recovery tests pass (`/tmp/cohesive-receipt-evidence-recovery.log`).
-The corrected full run is in progress in `/tmp/cohesive-receipt-evidence-full-corrected.log`.
+The corrected full run passes 3,982 tests with 33 skipped in
+`/tmp/cohesive-receipt-evidence-full-corrected.log`.
 Terminal service projection remains outstanding.
+
+## Canonical activation attribution and disclosure
+
+Successful `OperationCompleted` events retain the same optional typed receipt reference as the
+host result. This reuses the existing occurrence, activation, continuation and definition attribution
+in canonical execution evidence, rather than adding a second operation ledger. Both durable
+runtimes already retain that evidence; Scheduler resume restores the retained activation list.
+Absent locators remain omitted from the canonical wire representation.
+
+The normalized telemetry projector deliberately excludes receipt locators. Tests verify exclusion
+from normalized traces and public Scheduler status while canonical evidence retains the locator.
+The locator may contain protected tenant/entity identities; access to raw execution evidence and
+receipt resolution must be authorized. Do not use sampled/exported telemetry as response authority.
+
+Trace admission only accepts concrete valid locators on successful operation-completion events.
+Storage checkpoint admission additionally requires exact equality with the corresponding retained
+operation receipt. A mutation that attaches different receipt evidence to an operation is rejected.
+The reference/runtime differential, crash recovery and integrity suite passes nine tests; full core
+qualification is running in `/tmp/cohesive-receipt-terminal-full.log`. Full native Scheduler result
+serialization is included in that run. This is not live Azure qualification or completed HTTP adoption.

@@ -63,8 +63,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.False(restored.MatchesProcessDefinition(DefinitionReference("process/another", 'b')));
     }
 
-    [Fact]
-    public async Task SequentialHostOperations_AreDifferentiallyConformantAndReplayStable()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SequentialHostOperations_AreDifferentiallyConformantAndReplayStable(bool retainReceipt)
     {
         var transition = DefinitionReference("transition/orders/approve", '1');
         var relation = DefinitionReference("relation/orders/summary", '2');
@@ -99,7 +101,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             return Task.FromResult(operation.Kind switch
             {
                 DurableTaskProcessHostOperationKind.Transition =>
-                    ProcessOperationResult.Completed(operation.Transition!.Input),
+                    EchoTransition(operation.Transition!.Input, retainReceipt),
                 DurableTaskProcessHostOperationKind.RelationQuery =>
                     ProcessOperationResult.Completed(operation.RelationQuery!.Input),
                 _ => throw new ArgumentOutOfRangeException()
@@ -114,7 +116,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             plan,
             initial,
             Activation(initial, ProcessActivationCause.Start, start),
-            new EchoHost());
+            new EchoHost(retainReceipt));
 
         Assert.Equal(ProcessActivationDisposition.Completed, actual.Disposition);
         Assert.Equal(
@@ -122,10 +124,20 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             scheduled.Select(static operation => operation.Kind));
         Assert.Equal(Serialize(expected.State), Serialize(actual.State));
         Assert.Equal(Serialize(expected.Evidence), Serialize(Assert.Single(actual.Evidence)));
+        var receiptEvents = actual.Evidence.SelectMany(evidence => evidence.Trace)
+            .Where(item => item.ReceiptReference is not null).ToArray();
+        Assert.Equal(retainReceipt ? 1 : 0, receiptEvents.Length);
+        if (retainReceipt)
+            Assert.Equal("private/receipt-locator", Assert.Single(receiptEvents).ReceiptReference!.Value!.Value.GetString());
+        Assert.DoesNotContain("private/receipt-locator", Serialize(actual.Traces));
+        Assert.DoesNotContain("private/receipt-locator", Serialize(DurableTaskProcessStatus.Project(actual)));
         var expectedTrace = ProcessExecutionTraceProjector.Project(expected);
         Assert.True(expectedTrace.IsSuccessful);
         Assert.Equal(Serialize(expectedTrace.Trace), Serialize(Assert.Single(actual.Traces)));
         var converter = DurableTaskProcessDataConverter.Create();
+        var restoredResult = Assert.IsType<DurableTaskSequentialProcessResult>(
+            converter.Deserialize(converter.Serialize(actual), typeof(DurableTaskSequentialProcessResult)));
+        Assert.Equal(Serialize(actual), Serialize(restoredResult));
         foreach (var operation in scheduled)
         {
             var restored = Assert.IsType<DurableTaskProcessHostOperation>(
@@ -138,7 +150,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         {
             replayed.Add(operation);
             return Task.FromResult(operation.Kind == DurableTaskProcessHostOperationKind.Transition
-                ? ProcessOperationResult.Completed(operation.Transition!.Input)
+                ? EchoTransition(operation.Transition!.Input, retainReceipt)
                 : ProcessOperationResult.Completed(operation.RelationQuery!.Input));
         });
         Assert.Equal(scheduled.Select(Serialize), replayed.Select(Serialize));
@@ -6703,10 +6715,16 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             ?? throw new InvalidOperationException("Unexpected Signal-target resolution.");
     }
 
-    sealed class EchoHost : IProcessReferenceHost
+    static ProcessOperationResult EchoTransition(PortableValue input, bool retainReceipt)
+    {
+        var result = ProcessOperationResult.Completed(input);
+        return retainReceipt ? result.WithReceiptReference(StringValue("private/receipt-locator")) : result;
+    }
+
+    sealed class EchoHost(bool retainReceipt = false) : IProcessReferenceHost
     {
         public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation) =>
-            ProcessOperationResult.Completed(invocation.Input);
+            EchoTransition(invocation.Input, retainReceipt);
 
         public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) =>
             ProcessOperationResult.Completed(evaluation.Input);

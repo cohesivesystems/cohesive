@@ -256,6 +256,17 @@ public static class ProcessExecutionTraceProjector
                 continue;
             }
 
+            if (item.ReceiptReference is { } reference
+                && (item.Kind != ProcessTraceEventKind.OperationCompleted || item.Detail != "completed"
+                    || reference.State != PortableValueState.Concrete
+                    || !PortableExecutionValidator.Validate(reference).IsValid))
+            {
+                diagnostics.Add(Error(ExecutionTraceDiagnosticCodes.EventInvalid,
+                    "Receipt reference requires valid concrete evidence on a successful operation completion.",
+                    $"/trace/{index}/receiptReference", item.Node.Value, sourceReference));
+                continue;
+            }
+
             var requiredOccurrenceKind = RequiredOccurrenceKind(item.Kind);
             if ((requiredOccurrenceKind is null) != (item.ProcessOccurrence is null)
                 || requiredOccurrenceKind is { } requiredKind

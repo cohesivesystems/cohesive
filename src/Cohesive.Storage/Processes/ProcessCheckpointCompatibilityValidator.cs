@@ -1109,17 +1109,18 @@ public static class ProcessCheckpointCompatibilityValidator
                 }
 
                 var exactReceipt = trace.OperationOccurrence is { } occurrence
-                    && receipts.ContainsKey(new(
+                    && receipts.TryGetValue(new(
                         trace.Continuation,
                         trace.Activation,
                         trace.Token,
                         trace.Node,
-                        occurrence));
+                        occurrence), out var operationReceipt)
+                    && trace.ReceiptReference == operationReceipt.Result.ReceiptReference;
                 if (!exactReceipt)
                 {
                     diagnostics.Add(Error(
                         ProcessCheckpointDiagnosticCodes.OperationReceiptIncompatible,
-                        "Committed OperationCompleted trace has no exact attempt-scoped host-operation receipt.",
+                        "Committed OperationCompleted trace has no exact attempt-scoped host-operation receipt with matching commit evidence.",
                         $"/activations/{activationIndex}/evidence/trace/{traceIndex}/operationOccurrence"));
                 }
             }

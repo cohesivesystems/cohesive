@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 
@@ -138,6 +139,8 @@ public enum ProcessTraceEventKind
 /// </param>
 /// <param name="ProcessOccurrence">Typed payload-safe child, partition, or recurrence occurrence evidence.</param>
 /// <param name="RequestOutcome">Exact terminal Request outcome identity when a Reply participated.</param>
+/// <param name="ReceiptReference">Optional typed retained-commit locator on a successful operation completion.
+/// This protected canonical evidence is excluded from the normalized telemetry projection; it is not an access grant.</param>
 public sealed record ProcessTraceEvent(
     int Sequence,
     ProcessTraceEventKind Kind,
@@ -156,7 +159,9 @@ public sealed record ProcessTraceEvent(
     ProcessInputAdmissionReason? InputReason = null,
     ProcessWaitRegistrationId? WaitRegistrationId = null,
     ProcessTraceOccurrenceEvidence? ProcessOccurrence = null,
-    RequestTerminalOutcomeId? RequestOutcome = null);
+    RequestTerminalOutcomeId? RequestOutcome = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    PortableValue? ReceiptReference = null);
 
 /// <summary>Attributable deterministic evidence returned by one finite Process activation.</summary>
 /// <param name="Definition">Exact Process definition identity, revision, and fingerprint.</param>

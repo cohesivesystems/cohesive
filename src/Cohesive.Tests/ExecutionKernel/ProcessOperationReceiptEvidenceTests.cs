@@ -63,6 +63,36 @@ public sealed class ProcessOperationReceiptEvidenceTests
         Assert.Throws<ArgumentException>(() => EntityTransitionReceiptReferences.Read(ProcessDurabilityTestFixture.StringValue("receipt")));
     }
 
+    [Fact]
+    public void Checkpoint_RejectsReceiptReferenceThatDoesNotMatchActivationEvidence()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var original = Assert.Single(fixture.Checkpoint.Operations);
+        var altered = new ProcessOperationReceipt(original.Key, original.OperationDefinition,
+            original.Result.WithReceiptReference(ProcessDurabilityTestFixture.StringValue("unmatched/receipt")),
+            original.RecordedAtUtc);
+        var checkpoint = ProcessDurabilityTestFixture.CopyCheckpoint(fixture.Checkpoint, operations: [altered]);
+        var validation = ProcessCheckpointCompatibilityValidator.Validate(fixture.Plan, checkpoint);
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Diagnostics, item => item.Code == ProcessCheckpointDiagnosticCodes.OperationReceiptIncompatible);
+    }
+
+    [Fact]
+    public void TraceProjection_RejectsReceiptReferenceOnNonOperationEvent()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var activation = Assert.Single(fixture.Checkpoint.Activations);
+        var index = Array.FindIndex(activation.Evidence.Trace.ToArray(), item => item.Kind != ProcessTraceEventKind.OperationCompleted);
+        var trace = activation.Evidence.Trace.SetItem(index, activation.Evidence.Trace[index] with
+            { ReceiptReference = ProcessDurabilityTestFixture.StringValue("unattributed/receipt") });
+        var projected = ProcessExecutionTraceProjector.ProjectCommitted(activation.Evidence with { Trace = trace },
+            activation.Disposition, activation.Sequence, fixture.Checkpoint.Definition, activation.Continuation,
+            fixture.Checkpoint.Emissions.Select(item => item.Envelope));
+        Assert.False(projected.IsSuccessful);
+        Assert.Contains(projected.Validation.Diagnostics, item => item.Code == ExecutionTraceDiagnosticCodes.EventInvalid
+            && item.Location!.EndsWith("/receiptReference", StringComparison.Ordinal));
+    }
+
     sealed class NoOperationsHost : IProcessReferenceHost
     {
         public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation) => throw new InvalidOperationException("Replay must not invoke the host.");
