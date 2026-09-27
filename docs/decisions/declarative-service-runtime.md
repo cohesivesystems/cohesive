@@ -582,3 +582,15 @@ unchanged. Nineteen result-read tests pass, including denied/wrong-instance excl
 expiry, and read/repository-resolution counts. Native adapter timeout/caller-cancellation and service authorization-revocation tests now pass: 42
 focused result/repository tests in `/tmp/cohesive-wait-boundary-tests.log`. These use a native-client
 fake; remote Scheduler behavior and Ari HTTP adoption remain unqualified.
+
+## Local durable result values
+
+`ProcessDurableExecutionValueRepository` projects protected values from `IProcessDurableStore`
+checkpoints. It checks retained admission authority before exact-plan resolution, validates checkpoint
+compatibility, and returns native in-progress or terminal values with activation evidence. Store
+resolution is invocation-scoped and prepared plans remain host-owned. There is no second result
+store, entity reread, background polling or implicit completion driver.
+
+Five composition tests pass, including a real multi-entity Process progressing from admitted to
+completed, foreign-scope exclusion and unavailable exact-plan failure. This closes the local result
+reader gap only; local execution driving and Ari host/HTTP integration remain outstanding.

@@ -9,6 +9,7 @@ using Cohesive.Processes.Authoring;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
+using Cohesive.Processes.Runtime;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
@@ -25,6 +26,35 @@ namespace Cohesive.Tests.Api;
 /// <summary>A non-review domain qualifying all service operation families against native execution boundaries.</summary>
 public sealed class ServiceCompositionTests
 {
+    [Fact]
+    public async Task LocalValueReaderProjectsValidatedCheckpointWithoutAnotherResultStore()
+    {
+        var fixture = await Fixture.Create();
+        var context = Context();
+        var admitted = await fixture.Service.StartAsync(context, "publish", fixture.StartRequest());
+        var continuation = admitted.Outcome!.Admission!.Continuation;
+        var resolutions = 0;
+        var values = new ProcessDurableExecutionValueRepository((_, _) => fixture.Store,
+            reference => { resolutions++; return reference == fixture.Plan.DefinitionReference ? fixture.Plan : null; });
+        var foreign = await values.GetValuesAsync(context, new("documents", "tenant-b"), continuation.ProcessInstanceId);
+        Assert.Equal(ProcessExecutionValueReadState.NotFound, foreign.State);
+        Assert.Equal(0, resolutions);
+        var active = await values.GetValuesAsync(context, new("documents", "tenant-a"), continuation.ProcessInstanceId);
+        Assert.Equal(ProcessExecutionValueReadState.InProgress, active.State);
+        await fixture.Runtime().ActivateAsync(context, fixture.Plan, continuation,
+            fixture.Activation("acquire", ProcessActivationCause.Start));
+        var completed = await fixture.Runtime().ActivateAsync(context, fixture.Plan, continuation,
+            fixture.Activation("publish", ProcessActivationCause.Continue));
+        var terminal = await values.GetValuesAsync(context, new("documents", "tenant-a"), continuation.ProcessInstanceId);
+        Assert.Equal(ProcessExecutionValueReadState.Available, terminal.State);
+        Assert.Equal(continuation, terminal.Values!.TerminalContinuation);
+        Assert.Equal(completed.Decision!.State.Terminal, terminal.Values.TerminalOutcome);
+        Assert.Equal(completed.Snapshot!.Checkpoint.Activations.Select(item => item.Evidence), terminal.Values.Evidence);
+        var unavailablePlan = new ProcessDurableExecutionValueRepository((_, _) => fixture.Store, _ => null);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => unavailablePlan.GetValuesAsync(context,
+            new("documents", "tenant-a"), continuation.ProcessInstanceId).AsTask());
+    }
+
     [Fact]
     public async Task PublishingService_ProjectsTheAdmittedReviewerIndependentlyOfWorkerIdentity()
     {
