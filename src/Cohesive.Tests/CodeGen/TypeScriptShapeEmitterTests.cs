@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Cohesive.Adapters.TypeScript;
 using Cohesive.CodeGen;
 using Cohesive.Execution;
@@ -8,6 +10,34 @@ namespace Cohesive.Tests.CodeGen;
 
 public sealed class TypeScriptShapeEmitterTests
 {
+    [Fact]
+    public void Emit_EnumLabelsRetainEmptyAndWhitespaceWireValues()
+    {
+        var options = new JsonSerializerOptions();
+        var graph = new ClrShapeGraphBuilder()
+            .UsePublicJsonContracts(options)
+            .AddShape<BlankCodeEnvelope>()
+            .Build();
+        var text = Assert.Single(new TypeScriptShapeEmitter()
+            .Emit(new ShapeCodeGenerationRequest(graph)).Documents).Text;
+        Assert.Equal("\"\"", JsonSerializer.Serialize(BlankCode.Empty, options));
+        Assert.Equal("\" \"", JsonSerializer.Serialize(BlankCode.Space, options));
+        Assert.Contains("export type BlankCode = '' | ' ';", text, StringComparison.Ordinal);
+        Assert.Contains("'': 'Empty'", text, StringComparison.Ordinal);
+        Assert.Contains("' ': 'Space'", text, StringComparison.Ordinal);
+    }
+
+    sealed record BlankCodeEnvelope(BlankCode Code);
+    [JsonConverter(typeof(BlankCodeConverter))]
+    enum BlankCode { Empty, Space }
+    sealed class BlankCodeConverter : JsonConverter<BlankCode>
+    {
+        public override BlankCode Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+            reader.GetString() == "" ? BlankCode.Empty : BlankCode.Space;
+        public override void Write(Utf8JsonWriter writer, BlankCode value, JsonSerializerOptions options) =>
+            writer.WriteStringValue(value == BlankCode.Empty ? "" : " ");
+    }
+
     [Fact]
     public void Emit_ExecutionStatusCounters_UsesPortableStringRepresentations()
     {

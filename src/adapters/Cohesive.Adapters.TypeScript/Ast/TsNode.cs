@@ -306,7 +306,11 @@ public sealed record TsObjectProperty : TsNode
     /// <summary>Initializes a new instance of the ts object property type.</summary>
     public TsObjectProperty(string name, TsExpression value, bool isNumericName = false)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        if (isNumericName)
+            ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        else
+            ArgumentNullException.ThrowIfNull(name); // Quoted JSON keys may be empty or whitespace.
+
         Name = name;
         Value = value ?? throw new ArgumentNullException(nameof(value));
         IsNumericName = isNumericName;
