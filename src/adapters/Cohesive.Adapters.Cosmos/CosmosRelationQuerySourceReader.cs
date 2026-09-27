@@ -38,6 +38,9 @@ public sealed class CosmosRelationQuerySourceReader : IEntityRelationQuerySource
     /// <summary>Conventional entity-envelope observation version property.</summary>
     public const string ObservationVersionSourceSelector = "observationVersion";
 
+    /// <summary>Entity token metadata selector; acquisition retains the repository legacy ETag fallback.</summary>
+    public const string ConcurrencyTokenSourceSelector = "$concurrencyToken";
+
     /// <summary>Conventional entity-envelope scalar partition-coordinate property.</summary>
     public const string ObservationPartitionSourceSelector = "partitionKey";
 
@@ -119,6 +122,7 @@ public sealed class CosmosRelationQuerySourceReader : IEntityRelationQuerySource
     /// <param name="observationVersionSemanticPath">
     /// Optional semantic field projected from the entity envelope's exact observation-version metadata.
     /// </param>
+    /// <param name="concurrencyTokenSemanticPath">Optional semantic field projected from repository token metadata.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="source"/>, <paramref name="container"/>, <paramref name="databaseId"/>,
     /// <paramref name="containerId"/>, or <paramref name="policy"/> is <see langword="null"/>.
@@ -143,7 +147,8 @@ public sealed class CosmosRelationQuerySourceReader : IEntityRelationQuerySource
         string? entityDocumentKind = null,
         QualifiedShapeId? persistedObservationType = null,
         string? persistedStreamName = null,
-        FieldPath? observationVersionSemanticPath = null)
+        FieldPath? observationVersionSemanticPath = null,
+        FieldPath? concurrencyTokenSemanticPath = null)
         : this(
             shape: shape,
             source: source,
@@ -159,7 +164,8 @@ public sealed class CosmosRelationQuerySourceReader : IEntityRelationQuerySource
             clientConsistencyLevel: container.Database.Client.ClientOptions.ConsistencyLevel,
             persistedObservationType: persistedObservationType,
             persistedStreamName: persistedStreamName,
-            observationVersionSemanticPath: observationVersionSemanticPath)
+            observationVersionSemanticPath: observationVersionSemanticPath,
+            concurrencyTokenSemanticPath: concurrencyTokenSemanticPath)
     {
     }
 
@@ -178,7 +184,8 @@ public sealed class CosmosRelationQuerySourceReader : IEntityRelationQuerySource
         ConsistencyLevel? clientConsistencyLevel = null,
         QualifiedShapeId? persistedObservationType = null,
         string? persistedStreamName = null,
-        FieldPath? observationVersionSemanticPath = null)
+        FieldPath? observationVersionSemanticPath = null,
+        FieldPath? concurrencyTokenSemanticPath = null)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
             throw new ArgumentException("A Cosmos entity reader requires a graph-qualified shape.", nameof(shape));
@@ -265,6 +272,11 @@ public sealed class CosmosRelationQuerySourceReader : IEntityRelationQuerySource
                 "Observation identity and observation version cannot use the same physical selector.",
                 nameof(identitySourceSelector));
         }
+        if (concurrencyTokenSemanticPath is { } tokenPath
+            && (tokenPath.Segments.IsDefaultOrEmpty || tokenPath == observationVersionSemanticPath
+                || IdentitySourceSelector == ConcurrencyTokenSourceSelector))
+            throw new ArgumentException("A concurrency-token path must be nonempty and distinct from identity and version metadata.", nameof(concurrencyTokenSemanticPath));
+        ConcurrencyTokenSemanticPath = concurrencyTokenSemanticPath;
         ObservationVersionSemanticPath = observationVersionSemanticPath;
         payloadFieldSourceSelector = fieldSourceSelector ?? GetObservationFieldSourceSelector;
         FieldSourceSelector = SelectFieldSource;
@@ -296,6 +308,9 @@ public sealed class CosmosRelationQuerySourceReader : IEntityRelationQuerySource
 
     /// <summary>Semantic field projected from authoritative entity-envelope version metadata, when configured.</summary>
     public FieldPath? ObservationVersionSemanticPath { get; }
+
+    /// <summary>Optional field carrying the exact opaque repository concurrency token.</summary>
+    public FieldPath? ConcurrencyTokenSemanticPath { get; }
 
     /// <inheritdoc />
     public RelationQuerySourceReaderDescriptor Descriptor { get; }
@@ -352,7 +367,9 @@ public sealed class CosmosRelationQuerySourceReader : IEntityRelationQuerySource
     /// </summary>
     public RelationQueryPlacementFieldSelector RelationshipKeySourceSelector { get; }
 
-    string SelectFieldSource(FieldPath semanticPath) => semanticPath == ObservationVersionSemanticPath
+    string SelectFieldSource(FieldPath semanticPath) => semanticPath == ConcurrencyTokenSemanticPath
+        ? ConcurrencyTokenSourceSelector
+        : semanticPath == ObservationVersionSemanticPath
         ? ObservationVersionSourceSelector
         : payloadFieldSourceSelector(semanticPath);
 
@@ -1212,7 +1229,17 @@ public sealed class CosmosRelationQuerySourceReader : IEntityRelationQuerySource
             var binding = selectorBindings[selector];
             if (!string.Equals(binding.Alias, preferredAlias, StringComparison.Ordinal))
                 return;
-            properties.Add(new(binding.Alias, CosmosSqlExpression.Property(RootAlias, binding.Path)));
+            var value = CosmosSqlExpression.Property(RootAlias, binding.Path);
+            if (ConcurrencyTokenSemanticPath is not null && selector == ConcurrencyTokenSourceSelector)
+            {
+                value = CosmosSqlExpression.Property(RootAlias, FieldPath.FromField("entityConcurrencyToken"));
+                var legacy = CosmosSqlExpression.Property(RootAlias, FieldPath.FromField("_etag"));
+                value = CosmosSqlExpression.Conditional(
+                    CosmosSqlExpression.Function(CosmosSqlFunction.IsDefined, value),
+                    CosmosSqlExpression.Conditional(CosmosSqlExpression.Function(CosmosSqlFunction.IsNull, value), legacy, value),
+                    legacy);
+            }
+            properties.Add(new(binding.Alias, value));
             aliases.Add(binding.Alias);
         }
     }
@@ -1305,6 +1332,10 @@ public sealed class CosmosRelationQuerySourceReader : IEntityRelationQuerySource
             request,
             $"field/{Uri.EscapeDataString(field.SemanticPath.ToString())}",
             providerEvidenceReference);
+        if (field.SemanticPath == ConcurrencyTokenSemanticPath
+            && (!values.TryGetValue(alias, out var token) || token.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(token.GetString())))
+            return new(field, RelationQuerySourceReadFieldState.Failed, evidenceReference: evidence);
         if (!values.TryGetValue(alias, out var element) || element.ValueKind == JsonValueKind.Undefined)
         {
             return new(

@@ -27,6 +27,65 @@ public sealed class CosmosRelationQuerySourceReaderTests
     static readonly FieldPath VersionPath = FieldPath.FromField("SourceEntityVersion");
 
     [Fact]
+    public async Task ConcurrencyTokenProjection_DoesNotRewriteAnOrdinaryApplicationTokenProperty()
+    {
+        var rawPath = FieldPath.FromField("RawToken");
+        RecordingFeedFactory feed = new();
+        feed.Enqueue(Json("""{"_identity":"load-a","_field0":"legacy-etag","_field1":null}"""));
+        var fixture = CreateFixture(feed, FixedPolicy(), concurrencyTokenSemanticPath: NamePath,
+            fieldSourceSelector: _ => "entityConcurrencyToken");
+        var result = await fixture.Reader.ReadAsync(Request(fixture,
+            [SemanticField(fixture, NamePath), SemanticField(fixture, rawPath)],
+            new RelationQueryBoundedEnumeration(maximumRows: 10)));
+        var fields = result.Observations.Single().Fields;
+        Assert.Equal("legacy-etag", fields[0].Value!.Value.String);
+        Assert.Equal(RelationQuerySourceReadFieldState.Null, fields[1].State);
+        var query = Assert.Single(feed.Queries).Query.QueryText;
+        Assert.Equal(1, query.Split("IS_DEFINED(c[\"entityConcurrencyToken\"])").Length - 1);
+    }
+
+    [Fact]
+    public void ConcurrencyTokenProjection_ChangesConventionalSourceIdentityAndRejectsMetadataCollisions()
+    {
+        using CosmosClient client = new("https://localhost:8081/", EmulatorMasterKey,
+            new CosmosClientOptions { ConnectionMode = ConnectionMode.Gateway });
+        var container = client.GetContainer("operations", "entities");
+        var plain = CosmosEntityRelationQuerySourceRegistration.Create(Shape, container, "operations", "entities", FixedPolicy());
+        var token = CosmosEntityRelationQuerySourceRegistration.Create(Shape, container, "operations", "entities", FixedPolicy(),
+            concurrencyTokenSemanticPath: NamePath);
+        Assert.NotEqual(plain.Source.Id, token.Source.Id);
+        Assert.Equal(NamePath, token.ConcurrencyTokenSemanticPath);
+        Assert.Throws<ArgumentException>(() => CosmosEntityRelationQuerySourceRegistration.Create(
+            Shape, container, "operations", "entities", FixedPolicy(),
+            identitySemanticPath: NamePath, concurrencyTokenSemanticPath: NamePath));
+    }
+
+    [Theory]
+    [InlineData("\"application-token\"", true)]
+    [InlineData("\"legacy-etag\"", true)]
+    [InlineData("null", false)]
+    [InlineData("\" \"", false)]
+    [InlineData("7", false)]
+    public async Task ConcurrencyTokenProjection_UsesRepositoryFallbackAndRejectsInvalidProjectedTokens(string projectedToken, bool valid)
+    {
+        RecordingFeedFactory feed = new();
+        feed.Enqueue(Json("{\"_identity\":\"load-a\",\"_field0\":" + projectedToken + "}"));
+        var fixture = CreateFixture(feed, FixedPolicy(), concurrencyTokenSemanticPath: NamePath);
+        var result = await fixture.Reader.ReadAsync(Request(fixture,
+            [SemanticField(fixture, NamePath)], new RelationQueryBoundedEnumeration(maximumRows: 10)));
+        var field = result.Observations.Single().Fields.Single();
+        Assert.Equal(valid ? RelationQuerySourceReadFieldState.Value : RelationQuerySourceReadFieldState.Failed, field.State);
+        if (valid)
+            Assert.Equal(Json(projectedToken).GetString(), field.Value!.Value.String);
+        // This fake feed qualifies the emitted SQL and response admission, not live Cosmos evaluation.
+        var query = Assert.Single(feed.Queries).Query.QueryText;
+        Assert.Contains("IS_DEFINED(c[\"entityConcurrencyToken\"])", query, StringComparison.Ordinal);
+        Assert.Contains("IS_NULL(c[\"entityConcurrencyToken\"])", query, StringComparison.Ordinal);
+        Assert.Contains("c[\"_etag\"]", query, StringComparison.Ordinal);
+        Assert.DoesNotContain("c[\"observation\"][\"Name\"]", query, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task SourceView_ProjectsPayloadAndVersionFromExactPersistedObservationType()
     {
         var viewShape = new QualifiedShapeId(new("tests/cosmos-source-view/v1"), new("VersionedLoadView"));
@@ -1412,7 +1471,8 @@ public sealed class CosmosRelationQuerySourceReaderTests
         bool constrainLimits = true,
         FieldPath? observationVersionSemanticPath = null,
         QualifiedShapeId? shape = null,
-        QualifiedShapeId? persistedObservationType = null)
+        QualifiedShapeId? persistedObservationType = null,
+        FieldPath? concurrencyTokenSemanticPath = null)
     {
         var configuredLimits = limits ?? CosmosRelationQuerySourceReader.DefaultLimits;
         var effectiveLimits = constrainLimits
@@ -1438,7 +1498,8 @@ public sealed class CosmosRelationQuerySourceReaderTests
             policy,
             fieldSourceSelector: fieldSourceSelector,
             persistedObservationType: persistedObservationType,
-            observationVersionSemanticPath: observationVersionSemanticPath);
+            observationVersionSemanticPath: observationVersionSemanticPath,
+            concurrencyTokenSemanticPath: concurrencyTokenSemanticPath);
         return new(source, reader);
     }
 

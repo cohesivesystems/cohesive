@@ -70,6 +70,7 @@ public static class CosmosEntityRelationQuerySourceRegistration
     /// Exact graph-qualified entity observation stored in matching envelopes, or <see langword="null"/> when it is
     /// <paramref name="shape"/>. Supply this when <paramref name="shape"/> is a derived query source view.
     /// </param>
+    /// <param name="concurrencyTokenSemanticPath">Optional field for the exact opaque repository token.</param>
     /// <returns>
     /// A canonical Storage registration whose reader, identity, domain, capability profile, limits, and selectors agree.
     /// </returns>
@@ -99,7 +100,8 @@ public static class CosmosEntityRelationQuerySourceRegistration
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
         string? entityDocumentKind = null,
         FieldPath? observationVersionSemanticPath = null,
-        QualifiedShapeId? persistedObservationType = null)
+        QualifiedShapeId? persistedObservationType = null,
+        FieldPath? concurrencyTokenSemanticPath = null)
     {
         ArgumentNullException.ThrowIfNull(container);
         ArgumentNullException.ThrowIfNull(policy);
@@ -165,7 +167,8 @@ public static class CosmosEntityRelationQuerySourceRegistration
             effectiveIdentitySelector,
             effectiveEntityDocumentKind,
             observationVersionSemanticPath,
-            effectivePersistedObservationType);
+            effectivePersistedObservationType,
+            concurrencyTokenSemanticPath);
         var effectiveSource = source ?? new RelationQuerySourceInstanceId(
             $"source/cohesive.adapters.cosmos/{bindingFingerprint}/{shapeKey}");
         var effectiveDomain = executionDomain ?? new RelationQueryExecutionDomainId(
@@ -187,7 +190,8 @@ public static class CosmosEntityRelationQuerySourceRegistration
             relationshipKeySourceSelector,
             effectiveEntityDocumentKind,
             persistedObservationType: effectivePersistedObservationType,
-            observationVersionSemanticPath: observationVersionSemanticPath);
+            observationVersionSemanticPath: observationVersionSemanticPath,
+            concurrencyTokenSemanticPath: concurrencyTokenSemanticPath);
         return new(
             shape: shape,
             source: sourceInstance,
@@ -197,7 +201,8 @@ public static class CosmosEntityRelationQuerySourceRegistration
             fieldSourceSelector: reader.FieldSourceSelector,
             relationshipKeySourceSelector: reader.RelationshipKeySourceSelector,
             observationVersionSemanticPath: observationVersionSemanticPath,
-            persistedObservationType: effectivePersistedObservationType);
+            persistedObservationType: effectivePersistedObservationType,
+            concurrencyTokenSemanticPath: concurrencyTokenSemanticPath);
     }
 
     static string FingerprintBinding(
@@ -210,7 +215,8 @@ public static class CosmosEntityRelationQuerySourceRegistration
         string identitySourceSelector,
         string entityDocumentKind,
         FieldPath? observationVersionSemanticPath,
-        QualifiedShapeId persistedObservationType)
+        QualifiedShapeId persistedObservationType,
+        FieldPath? concurrencyTokenSemanticPath)
     {
         StringBuilder canonical = new();
         Append(persistedObservationType == shape ? SourceBindingProfile : SourceViewBindingProfile);
@@ -248,6 +254,11 @@ public static class CosmosEntityRelationQuerySourceRegistration
         {
             Append("metadata/observation-version");
             Append(versionPath.ToString());
+        }
+        if (concurrencyTokenSemanticPath is { } tokenPath)
+        {
+            Append("metadata/concurrency-token");
+            Append(tokenPath.ToString());
         }
         return CosmosPhysicalAffinity.Fingerprint(canonical.ToString());
 

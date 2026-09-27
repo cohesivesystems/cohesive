@@ -62,6 +62,7 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IEntityRelationQue
     /// repository entity shape; an identity selector is empty; or <paramref name="source"/> does not use
     /// <see cref="TargetProfile"/>.
     /// </exception>
+    /// <param name="concurrencyTokenSemanticPath">Optional field projected from the repository snapshot token.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="source"/>, <paramref name="repository"/>, or <paramref name="logicalPartition"/> is
     /// <see langword="null"/>.
@@ -75,7 +76,8 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IEntityRelationQue
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
         FieldPath? observationVersionSemanticPath = null,
-        QualifiedShapeId? persistedObservationType = null)
+        QualifiedShapeId? persistedObservationType = null,
+        FieldPath? concurrencyTokenSemanticPath = null)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
             throw new ArgumentException("An in-memory entity reader requires a graph-qualified shape.", nameof(shape));
@@ -126,6 +128,11 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IEntityRelationQue
                 "Observation identity and observation version cannot use the same physical selector.",
                 nameof(identitySourceSelector));
         }
+        if (concurrencyTokenSemanticPath is { } tokenPath
+            && (tokenPath.Segments.IsDefaultOrEmpty || tokenPath == observationVersionSemanticPath
+                || IdentitySourceSelector == EntityRelationQuerySourceRegistration.ConcurrencyTokenSourceSelector))
+            throw new ArgumentException("A concurrency-token path must be nonempty and distinct from identity and version metadata.", nameof(concurrencyTokenSemanticPath));
+        ConcurrencyTokenSemanticPath = concurrencyTokenSemanticPath;
         ObservationVersionSemanticPath = observationVersionSemanticPath;
         payloadFieldSourceSelector = fieldSourceSelector ?? EntityRelationQuerySourceRegistration.SelectSemanticPath;
         FieldSourceSelector = SelectFieldSource;
@@ -147,6 +154,9 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IEntityRelationQue
 
     /// <summary>Semantic field projected from authoritative observation-version metadata, when configured.</summary>
     public FieldPath? ObservationVersionSemanticPath { get; }
+
+    /// <summary>Optional field carrying the acquired snapshot's opaque concurrency token.</summary>
+    public FieldPath? ConcurrencyTokenSemanticPath { get; }
 
     /// <summary>Deterministic semantic-to-physical field selector.</summary>
     public RelationQueryPlacementFieldSelector FieldSourceSelector { get; }
@@ -375,6 +385,9 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IEntityRelationQue
         long version)
     {
         var evidence = Evidence(request, $"field/{Uri.EscapeDataString(field.SemanticPath.ToString())}", version);
+        if (field.SemanticPath == ConcurrencyTokenSemanticPath)
+            return new(field, RelationQuerySourceReadFieldState.Value,
+                ObservationValue.FromString(snapshot.ConcurrencyToken.Value), evidence);
         if (field.SemanticPath == ObservationVersionSemanticPath)
         {
             return new(
@@ -489,7 +502,9 @@ public sealed class InMemoryEntityRelationQuerySourceReader : IEntityRelationQue
         return null;
     }
 
-    string SelectFieldSource(FieldPath semanticPath) => semanticPath == ObservationVersionSemanticPath
+    string SelectFieldSource(FieldPath semanticPath) => semanticPath == ConcurrencyTokenSemanticPath
+        ? EntityRelationQuerySourceRegistration.ConcurrencyTokenSourceSelector
+        : semanticPath == ObservationVersionSemanticPath
         ? EntityRelationQuerySourceRegistration.ObservationVersionSourceSelector
         : payloadFieldSourceSelector(semanticPath);
 

@@ -19,6 +19,24 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
     static readonly FieldPath VersionPath = FieldPath.FromField("SourceEntityVersion");
 
     [Fact]
+    public async Task ConcurrencyTokenProjection_UsesSnapshotTokenRatherThanPayloadOrVersion()
+    {
+        var snapshot = VersionedSnapshot("entity-a", 7, ("Name", ObservationValue.FromString("forged-token")));
+        var projected = CreateFixture([snapshot], concurrencyTokenSemanticPath: NamePath);
+        var payload = CreateFixture([snapshot]);
+        var result = await projected.Reader.ReadAsync(Request(projected,
+            [SemanticField(projected, NamePath)], new RelationQueryBoundedEnumeration(maximumRows: 10)));
+        Assert.Equal(RelationQuerySourceReadState.Complete, result.State);
+        Assert.Equal(snapshot.ConcurrencyToken.Value, result.Observations.Single().Fields.Single().Value!.Value.String);
+        Assert.NotEqual(projected.Registration.Source.Id, payload.Registration.Source.Id);
+        Assert.Equal(NamePath, projected.Registration.ConcurrencyTokenSemanticPath);
+        Assert.Equal(EntityRelationQuerySourceRegistration.ConcurrencyTokenSourceSelector,
+            projected.Registration.FieldSourceSelector(NamePath));
+        Assert.Throws<ArgumentException>(() => CreateFixture([snapshot],
+            observationVersionSemanticPath: NamePath, concurrencyTokenSemanticPath: NamePath));
+    }
+
+    [Fact]
     public async Task ObservationVersionProjection_UsesSnapshotMetadataAndChangesConventionalSourceIdentity()
     {
         var projected = CreateFixture(
@@ -409,7 +427,8 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
         RelationQuerySourcePlacementLimits? limits = null,
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
-        FieldPath? observationVersionSemanticPath = null)
+        FieldPath? observationVersionSemanticPath = null,
+        FieldPath? concurrencyTokenSemanticPath = null)
     {
         var repository = new InMemoryEntityOutboxRepository(
             SampleDefinition,
@@ -422,7 +441,8 @@ public sealed class InMemoryEntityRelationQuerySourceReaderTests
             limits: limits,
             fieldSourceSelector: fieldSourceSelector,
             relationshipKeySourceSelector: relationshipKeySourceSelector,
-            observationVersionSemanticPath: observationVersionSemanticPath);
+            observationVersionSemanticPath: observationVersionSemanticPath,
+            concurrencyTokenSemanticPath: concurrencyTokenSemanticPath);
         return new(
             registration,
             Assert.IsType<InMemoryEntityRelationQuerySourceReader>(registration.Reader));

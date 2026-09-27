@@ -317,3 +317,27 @@ project admitted actor/time into a later computation's input.
 The reusable ownership is the existing Process host and Storage replay boundary. Adding actor
 fields to public Ari input or reusing the worker principal would create a competing or incorrect
 authority. Reusing the existing start context also avoids another persisted attribution envelope.
+
+## Exact snapshot tokens in entity query source views
+
+The existing entity-source metadata projection now accepts an optional
+`concurrencyTokenSemanticPath`. The in-memory and Cosmos registrations project that field from
+the same acquired entity snapshot as its payload, independently of observation version and any
+payload field with the same name. Conventional source identity includes the configured token
+path. Empty paths, collisions with identity/version metadata, and conflicting identity selectors
+are rejected. This extends the existing source registration rather than creating an Ari reader
+or persisting a second domain version.
+
+The reserved physical selector `$concurrencyToken` denotes repository metadata, not a payload
+property. In memory it uses `EntitySnapshot.ConcurrencyToken`. Cosmos projects the application
+`entityConcurrencyToken`, falling back to `_etag` only when the application token is undefined
+or null, matching repository reads. Empty or non-string projected tokens produce failed field
+evidence. Raw `entityConcurrencyToken` remains an ordinary property selector, so callers cannot
+accidentally request resolved metadata by naming that property in another field mapping.
+
+For example, a proposal at observation version 7 may carry opaque token `opaque-a`; even if its
+payload contains a forged token, the query returns `opaque-a`. Preparation retains it and the
+existing captured-token Transition binding rejects a subsequent commit if that snapshot changed.
+Source-reader tests qualify payload shadowing, metadata identity, malformed-token admission, and
+emitted Cosmos fallback SQL with a fake feed. Live Cosmos evaluation, physical read/page counts,
+and the complete Ari acquisition-to-commit flow remain qualification gates.
