@@ -101,7 +101,7 @@ of the execution-specific public surface.
 ## Declared service invocation
 
 `Services.ServiceRuntime` binds a validated `Cohesive.Api.Services.ServiceDefinition` document
-to exact Transition/entity/repository, canonical query/evaluator and Process/start-dispatcher associations. Direct calls and
+to exact Transition/entity/repository, canonical query/evaluator and Process/start-or-control-dispatcher associations. Direct calls and
 `Cohesive.Adapters.AspNet.Services.MapServiceTransition` share authoritative loading, mandatory authority,
 decision and conditional commit. API CLR types are checked projections of the Transition contracts.
 
@@ -112,9 +112,14 @@ consumers still do not acquire storage, identity or Process runtime dependencies
 
 Transition invocation supports existing subjects without emissions; unsupported creation, emission and
 extension requirements fail binding. `EvaluateAsync` binds the declared query scope parameter from
-trusted identity, and `StartAsync` delegates admission/replay to the existing Process dispatcher. The
+trusted identity, and `StartAsync` delegates admission/replay to the existing Process dispatcher.
+`ControlAsync` derives its request type and result semantics from the native control API catalog; it binds
+trusted authority and an exact Process-definition restriction before native admission or receipt replay.
+The lifecycle profile supports Pause, Continue, RestartAttempt, Cancel and Terminate; inspection and Signal
+ingress require distinct qualified bindings. The
 service itself adds no durable receipt store or stronger permission-revocation guarantee. Returned service and Transition traces are payload-free inspection evidence; internal snapshots and
 decision inputs/observations are not invocation results. See [the design and qualification boundary](../../docs/decisions/declarative-service-runtime.md)
 and `ServiceRuntimeTests`, `ServiceQueryRuntimeTests` and `ServiceProcessRuntimeTests` for executable
-examples. Query source qualification currently covers native in-memory acquisition; multi-entity
-durable Process recovery and new-family HTTP projections remain in progress.
+examples. `ServiceCompositionTests` qualifies acquisition/computation followed by durable multi-entity
+recovery. Query source qualification currently covers native in-memory acquisition; remote-provider
+filtering and new-family HTTP projections remain in progress.

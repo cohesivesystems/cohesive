@@ -143,6 +143,9 @@ sealed class DurableTaskProcessControlAdmissionOrchestrator
                 "The retained Process-start index conflicts with its trusted logical address.");
         }
 
+        if (!input.Invocation.MatchesProcessDefinition(start.Receipt.Request.Definition))
+            return new(DurableTaskProcessControlResponseKind.NotFound);
+
         var responseId = DurableTaskProcessControlProtocol.Response(scope, input.Request);
         if (await ReadResponseAsync(context, responseId).ConfigureAwait(true) is { } retained)
             return retained;

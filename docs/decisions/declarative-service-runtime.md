@@ -103,14 +103,14 @@ inspection interpretation; sampled telemetry never exports exception messages. H
 bytes use the checked CLR outcome view and native response serialization.
 
 
-## Composition work in progress
+## Composition
 
-The service operation set now distinguishes Transition, query and Process references in portable data.
+The service operation set distinguishes Transition, query, Process-entry and native Process-control references in portable data.
 Common identity and authorization requirements have one owner; operation IDs are unique across all
 families. The existing Transition executor still rejects other families before resolving infrastructure.
-Round-trip tests establish declaration integrity, not query execution or Process recovery qualification.
+Round-trip tests establish declaration integrity; execution and recovery qualification are described below.
 
-The composition executor will reuse `RelationQueryCompilationRequest` and `IRelationQueryEvaluator`
+The composition executor reuses `RelationQueryCompilationRequest` and `IRelationQueryEvaluator`
 for actual canonical queries, and existing Process start/control admission plus durable executors for
 coordination. A query's compiled semantic snapshot is reusable; its evaluation identity, authorized
 scope, parameter evidence and source reads remain invocation-scoped. Caller parameter values must not
@@ -164,8 +164,8 @@ forged-authority replacement and rejection of wrong definitions or invalid input
 The native public `ProcessStartResult` is retained without exposing receipt payloads. A common
 `ServiceOperationResult<TOutcome>` carries native query/Process evidence, structured admission
 failures and a service trace. Runtime failures and cancellation remain observable exceptions.
-These tests qualify admission composition only. Durable multi-entity recovery, Process controls,
-transport projection for new operation families remain open; native computation qualification follows below.
+These tests qualify admission composition only. Native computation, durable recovery and lifecycle control
+qualification follow below. Transport projection for new operation families remains open.
 
 
 ### Native computation qualification
@@ -222,3 +222,28 @@ no authored compensation or cross-entity transaction. Production workflows needi
 it through their Process rather than infer it from service binding. The test's start dispatcher qualifies one
 native admission plus initialization; concurrent durable start-registry behavior remains the deployed dispatcher's
 responsibility and is not inferred from this fixture.
+
+
+### Declared Process controls and exact target admission
+
+`ServiceProcessControlOperation` references an exact Process plus an action from the existing native control
+vocabulary. `ServiceProcessControlBinding` derives the request CLR type from `ExecutionControlApiCatalog`;
+no new action enumeration, request model, receipt store or control reducer is introduced. Start and control
+share normalized identity/scope admission. Control returns the existing safe `ExecutionControlResult` and
+payload-free service evidence. Wrong command kinds and unauthorized callers do not dispatch.
+
+A reusable gap in native admission was the lack of an exact-definition restriction: a command names an
+instance and expected control revision, but a service must also restrict which Process that instance runs.
+`ExecutionApiInvocationContext.ExpectedProcessDefinition` supplies trusted binding evidence. The in-memory
+adapter checks authoritative state before mutation or retained replay; the shared command-rebinding boundary
+also rejects mismatches. Durable Task checks its immutable start index before reading a cached response or
+sending a control event. Unrestricted callers retain the existing behavior; the absent field is omitted from
+serialization. Diagnostic projections verify the definition before returning evidence, and Control-limit
+updates reject a Process-specific restriction because their target is a different authority.
+
+Tested example: `pause` requires `notes.pause`, accepts only the native Pause command and is bound to the
+notes publishing Process. A forged actor/scope is replaced by trusted invocation evidence. A wrong Process
+revision is hidden as NotFound before mutation and cannot retrieve an earlier successful receipt; the exact
+command/definition replays without advancing the control revision. The current lifecycle binding supports
+Pause, Continue, RestartAttempt, Cancel and Terminate. Read projections and Signal ingress require their own
+qualified bindings; unsupported actions fail binding early. HTTP projection remains follow-up work.

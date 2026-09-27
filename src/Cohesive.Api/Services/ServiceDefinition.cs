@@ -12,6 +12,7 @@ namespace Cohesive.Api.Services;
 [JsonDerivedType(typeof(ServiceTransitionOperation), "transition")]
 [JsonDerivedType(typeof(ServiceQueryOperation), "query")]
 [JsonDerivedType(typeof(ServiceProcessOperation), "process")]
+[JsonDerivedType(typeof(ServiceProcessControlOperation), "processControl")]
 public abstract record ServiceOperation
 {
     /// <summary>Normalizes common operation identity and authorization requirements.</summary>
@@ -108,6 +109,28 @@ public sealed record ServiceProcessOperation : ServiceOperation
 
     /// <summary>Exact Process authority; the service does not copy its graph, contracts or control lifecycle.</summary>
     public ExecutionDefinitionReference Process { get; }
+}
+
+/// <summary>Exposes one native lifecycle action restricted to an exact Process definition.</summary>
+public sealed record ServiceProcessControlOperation : ServiceOperation
+{
+    /// <summary>Declares a control action using the existing canonical Process-control vocabulary.</summary>
+    /// <exception cref="ArgumentException">Identity, action or requirements are invalid.</exception>
+    /// <exception cref="ArgumentNullException">The Process reference is null.</exception>
+    [JsonConstructor]
+    public ServiceProcessControlOperation(string id, ExecutionDefinitionReference process, string action,
+        ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default)
+        : base(id, authorizationRequirements)
+    {
+        Process = process ?? throw new ArgumentNullException(nameof(process));
+        _ = ExecutionControlWireNames.CommandPath(action);
+        Action = action;
+    }
+
+    /// <summary>Exact Process definition admitted by this operation.</summary>
+    public ExecutionDefinitionReference Process { get; }
+    /// <summary>Canonical native command action; no service-specific control enumeration is introduced.</summary>
+    public string Action { get; }
 }
 
 /// <summary>

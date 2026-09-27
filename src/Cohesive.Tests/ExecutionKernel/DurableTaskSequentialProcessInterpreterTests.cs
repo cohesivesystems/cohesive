@@ -3691,9 +3691,15 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             running,
             $"control-dispatch/{run}/pause",
             DateTimeOffset.UtcNow);
+        var wrongDefinition = new ExecutionDefinitionReference(restartPlan.DefinitionReference.DefinitionId,
+            new("wrong-revision"), restartPlan.DefinitionReference.Fingerprint);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => firstClient.AdmitCohesiveProcessControlAsync(
+            ControlAdmission(pause, wrongDefinition), timeout.Token));
         var paused = await firstClient.AdmitCohesiveProcessControlAsync(
-            ControlAdmission(pause),
+            ControlAdmission(pause, restartPlan.DefinitionReference),
             timeout.Token);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => firstClient.AdmitCohesiveProcessControlAsync(
+            ControlAdmission(pause, wrongDefinition), timeout.Token));
         Assert.Equal(ProcessControlDecisionDisposition.Applied, paused.Disposition);
         Assert.Equal(ProcessControlMode.Paused, paused.Status.ControlMode);
 
@@ -6187,13 +6193,15 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 [ExecutionControlApiWireNames.AuthorizationRequirement(ProcessStartWireNames.Start)]));
     }
 
-    static DurableTaskProcessControlAdmission ControlAdmission(ProcessControlCommand command) => new(
+    static DurableTaskProcessControlAdmission ControlAdmission(ProcessControlCommand command,
+        ExecutionDefinitionReference? expectedProcessDefinition = null) => new(
         command,
         ControlInvocation(
             DurableTaskProcessControlProtocol.GetAction(command),
             command.Context.Authorization,
             command.Context.Provenance,
-            command.Context.IssuedAtUtc));
+            command.Context.IssuedAtUtc,
+            expectedProcessDefinition));
 
     static ExecutionApiInvocationContext ControlInvocation(
         string action,
@@ -6211,7 +6219,8 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         string action,
         ProcessControlAuthorizationContext authorization,
         ExecutionProvenance provenance,
-        DateTimeOffset issuedAtUtc)
+        DateTimeOffset issuedAtUtc,
+        ExecutionDefinitionReference? expectedProcessDefinition = null)
     {
         var observedAtUtc = DateTimeOffset.UtcNow;
         if (observedAtUtc < issuedAtUtc)
@@ -6221,7 +6230,8 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             provenance,
             issuedAtUtc,
             observedAtUtc,
-            [ExecutionControlApiWireNames.AuthorizationRequirement(action)]);
+            [ExecutionControlApiWireNames.AuthorizationRequirement(action)],
+            expectedProcessDefinition: expectedProcessDefinition);
     }
 
     static async Task<Cohesive.Execution.ProcessStartResult> DispatchStart(

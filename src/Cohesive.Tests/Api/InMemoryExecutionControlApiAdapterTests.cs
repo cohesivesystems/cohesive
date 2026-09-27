@@ -21,6 +21,35 @@ public sealed class InMemoryExecutionControlApiAdapterTests
         new(2026, 7, 29, 20, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public void ExactDefinitionRestriction_RejectsBeforeMutationAndBeforeRetainedReplay()
+    {
+        var fixture = ProcessControlTestFixture.Create();
+        var catalog = ExecutionControlApiCatalog.Create();
+        var adapter = new InMemoryExecutionControlApiAdapter(fixture.Catalog, catalog);
+        var initial = fixture.State();
+        Dispatch<ExecutionProcessStartResult>(adapter, catalog.Start, StartRequest(initial),
+            Invocation(catalog, BaselineUtc.AddSeconds(1), BaselineUtc.AddSeconds(2)));
+        var trusted = Invocation(catalog, BaselineUtc.AddSeconds(3), BaselineUtc.AddSeconds(4));
+        var wrong = new ExecutionDefinitionReference(initial.Definition.DefinitionId, new("other-revision"), initial.Definition.Fingerprint);
+        ExecutionApiInvocationContext Restricted(ExecutionDefinitionReference definition) => new(
+            trusted.Authorization, trusted.Provenance, trusted.IssuedAtUtc, trusted.ObservedAtUtc,
+            trusted.GrantedRequirements, expectedProcessDefinition: definition);
+        var pause = fixture.Pause(initial);
+
+        var rejected = adapter.Dispatch(catalog.Pause, pause, Restricted(wrong));
+        Assert.Equal(ApiResultKind.NotFound, rejected.Result.Kind);
+        var applied = Dispatch<ExecutionControlResult>(adapter, catalog.Pause, pause, Restricted(initial.Definition));
+        Assert.Equal(ProcessControlDecisionDisposition.Applied, applied.Disposition);
+        var hiddenReplay = adapter.Dispatch(catalog.Pause, pause, Restricted(wrong));
+        Assert.Equal(ApiResultKind.NotFound, hiddenReplay.Result.Kind);
+        var replayed = Dispatch<ExecutionControlResult>(adapter, catalog.Pause, pause, Restricted(initial.Definition));
+        Assert.Equal(ProcessControlDecisionDisposition.Replayed, replayed.Disposition);
+        Assert.Equal(applied.Status.ControlRevision, replayed.Status.ControlRevision);
+        Assert.Throws<KeyNotFoundException>(() => ExecutionProcessControlCommandAdmission.Rebind(pause, Restricted(wrong), initial));
+        Assert.NotNull(ExecutionProcessControlCommandAdmission.Rebind(pause, Restricted(initial.Definition), initial));
+    }
+
+    [Fact]
     public void Start_ReplaysAndReportsPreciseIdentityIdempotencyAndInstanceConflicts()
     {
         var fixture = ProcessControlTestFixture.Create();

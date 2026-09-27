@@ -17,7 +17,8 @@ public sealed class ServiceDefinitionTests
             Reference("note/revise"), [new("notes.write")]);
         var query = new ServiceQueryOperation("search", Reference("notes/by-owner"), new("tenant"), [new("notes.read")]);
         var process = new ServiceProcessOperation("publish", Reference("notes/publish"), [new("notes.publish")]);
-        var definition = new ServiceDefinition([transition, query, process]);
+        var control = new ServiceProcessControlOperation("stop", process.Process, ExecutionControlWireNames.Cancel, [new("notes.cancel")]);
+        var definition = new ServiceDefinition([transition, query, process, control]);
         var document = ServiceDefinitionDocuments.Create(new("notes"), new("v1"), definition,
             new(new("tests"), new("tests/services"), DocumentOrigin.Generated));
 
@@ -27,10 +28,11 @@ public sealed class ServiceDefinitionTests
         var projected = ServiceDefinitionDocuments.ValidateAndProject(restored!, out var actual);
         Assert.True(projected.IsValid, string.Join("; ", projected.Diagnostics.Select(d => d.Message)));
         Assert.Equal(definition, actual);
-        Assert.Equal(new[] { "publish", "revise", "search" }, actual!.Operations.Select(o => o.Id));
+        Assert.Equal(new[] { "publish", "revise", "search", "stop" }, actual!.Operations.Select(o => o.Id));
         Assert.Equal(process.Process, Assert.IsType<ServiceProcessOperation>(actual.Operations[0]).Process);
         Assert.Equal(transition.Transition, Assert.IsType<ServiceTransitionOperation>(actual.Operations[1]).Transition);
         Assert.Equal(query.Query, Assert.IsType<ServiceQueryOperation>(actual.Operations[2]).Query);
+        Assert.Equal(control, Assert.IsType<ServiceProcessControlOperation>(actual.Operations[3]));
         Assert.Equal(document.Metadata.Fingerprint, restored!.Metadata.Fingerprint);
     }
 

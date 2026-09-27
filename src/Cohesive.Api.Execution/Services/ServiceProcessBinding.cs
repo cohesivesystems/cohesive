@@ -1,6 +1,5 @@
 using Cohesive.Api.Services;
 using Cohesive.Execution;
-using Cohesive.Identity;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
@@ -68,11 +67,9 @@ public sealed partial class ServiceRuntime
             new(request.Context.CommandId.Value));
         try
         {
-            context.ThrowIfCancellationRequested();
-            var scope = await authorization.AdmitAsync(context, operation).ConfigureAwait(false);
-            var identity = context.GetIdentityContextOrDefault();
-            if (scope is null || identity is null || identity.Actor.Kind == PrincipalKind.Anonymous
-                || string.IsNullOrWhiteSpace(identity.Actor.Id) || identity.Subject is not null)
+            var invocation = await AdmitProcessAsync(context, operation, binding.Authority, ProcessStartWireNames.Start,
+                operation.Process).ConfigureAwait(false);
+            if (invocation is null)
             {
                 evidence.Record("invocationRejected", "services.authorization.denied");
                 return new(ApiResultKind.Forbidden, null,
@@ -86,14 +83,9 @@ public sealed partial class ServiceRuntime
                 || input.Contract != binding.Plan.Definition.Input
                 || !PortableExecutionValidator.Validate(input, binding.Plan.ValidationContext.ShapeGraph).IsValid)
                 return RejectInput("services.process.inputInvalid", "The input must satisfy the exact Process contract.");
-            var now = context.UtcNow;
-            var authorizationEvidence = new ProcessControlAuthorizationContext(identity.Actor.Id,
-                new(binding.Authority, scope.Id), $"service/{definitionReference.Fingerprint.Value}/operation/{operationId}");
-            var invocation = new ExecutionApiInvocationContext(authorizationEvidence, Declaration.Metadata.Provenance, now, now,
-                [ExecutionControlApiWireNames.AuthorizationRequirement(ProcessStartWireNames.Start)]);
             var canonical = new ProcessStartRequest(request.SchemaVersion, operation.Process,
                 new(request.Context.CommandId, request.Context.IdempotencyKey, request.Context.ProcessInstanceId,
-                    authorizationEvidence, now, invocation.Provenance), request.InitialContinuation, input);
+                    invocation.Authorization, invocation.IssuedAtUtc, invocation.Provenance), request.InitialContinuation, input);
             context.ThrowIfCancellationRequested();
             var result = await binding.Start(context, canonical, invocation).ConfigureAwait(false);
             if (result is null || (result.Admission is { } admission

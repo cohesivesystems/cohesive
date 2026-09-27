@@ -53,7 +53,9 @@ public delegate ValueTask<Cohesive.Execution.ProcessStartResult> ExecutionProces
 /// The dispatcher receives the caller request and trusted invocation separately. It must resolve the retained
 /// Process by the trusted authority scope plus logical Process identity, restore retained occurrence evidence for
 /// replay, and return only after the exact safe canonical result is durably recoverable. Provider event admission
-/// alone is not a successful return condition.
+/// alone is not a successful return condition. The dispatcher must enforce
+/// <see cref="ExecutionApiInvocationContext.ExpectedProcessDefinition"/> against authoritative state before
+/// mutation or returning retained evidence; a mismatch is a non-visible target.
 /// </remarks>
 /// <param name="context">Explicit cancellation, time, and tracing context.</param>
 /// <param name="request">Canonical caller request whose authority evidence is not trusted.</param>
@@ -110,6 +112,7 @@ public sealed class ExecutionApiInvocationContext
     /// Optional complete trusted envelope context for a first-time Signal admission. API callers never supply this
     /// value; the transport or identity integration derives it from an authoritative ingress occurrence.
     /// </param>
+    /// <param name="expectedProcessDefinition">Optional exact definition required by the trusted caller's binding.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="authorization"/>, <paramref name="provenance"/>, or
     /// <paramref name="grantedRequirements"/> is <see langword="null"/>.
@@ -125,7 +128,8 @@ public sealed class ExecutionApiInvocationContext
         DateTimeOffset issuedAtUtc,
         DateTimeOffset observedAtUtc,
         IReadOnlyList<string> grantedRequirements,
-        InteractionEnvelopeContext? signalContext = null)
+        InteractionEnvelopeContext? signalContext = null,
+        ExecutionDefinitionReference? expectedProcessDefinition = null)
     {
         ArgumentNullException.ThrowIfNull(authorization);
         ArgumentNullException.ThrowIfNull(provenance);
@@ -166,6 +170,7 @@ public sealed class ExecutionApiInvocationContext
         ObservedAtUtc = observedAtUtc;
         GrantedRequirements = [.. grants.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
         SignalContext = signalContext;
+        ExpectedProcessDefinition = expectedProcessDefinition;
     }
 
     /// <summary>Attributable authorization decision for the admitted caller.</summary>
@@ -185,6 +190,21 @@ public sealed class ExecutionApiInvocationContext
 
     /// <summary>Complete trusted context for first-time Signal admission, when this invocation carries a Signal.</summary>
     public InteractionEnvelopeContext? SignalContext { get; }
+
+    /// <summary>Optional exact Process restriction supplied by a trusted service binding.</summary>
+    /// <remarks>Adapters must check this before mutation or returning retained evidence. Null leaves the native surface unrestricted by definition.</remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExecutionDefinitionReference? ExpectedProcessDefinition { get; }
+
+    /// <summary>Checks the trusted exact-definition restriction against authoritative Process evidence.</summary>
+    /// <param name="definition">Exact definition retained by the target or its native admission evidence.</param>
+    /// <returns>True when unrestricted or when identity, revision and fingerprint all match.</returns>
+    /// <exception cref="ArgumentNullException">Definition is null.</exception>
+    public bool MatchesProcessDefinition(ExecutionDefinitionReference definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        return ExpectedProcessDefinition is null || ExpectedProcessDefinition == definition;
+    }
 
     /// <summary>Determines whether this trusted invocation grants one stable API requirement identity.</summary>
     /// <param name="requirement">Stable authorization requirement identity to test.</param>
@@ -352,7 +372,7 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
                 invocation,
                 prior: null);
             var artifact = explain?.Invoke(canonical);
-            if (artifact is null)
+            if (artifact is null || !invocation.MatchesProcessDefinition(artifact.Definition.Definition))
                 return Problem(endpoint, ApiResultKind.NotFound, ExecutionApiProblemCodes.NotFound);
             if (artifact.RuntimeStatus?.ProcessInstanceId != canonical.Context.ProcessInstanceId
                 || canonical.Expectation is { } expectation
@@ -383,6 +403,8 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
             }
 
             var artifact = read.Artifact!;
+            if (!invocation.MatchesProcessDefinition(artifact.Definition))
+                return Problem(endpoint, ApiResultKind.NotFound, ExecutionApiProblemCodes.NotFound);
             if (artifact.ProcessInstanceId != canonical.Context.ProcessInstanceId)
             {
                 throw new InvalidOperationException(
@@ -394,6 +416,8 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
 
         if (ReferenceEquals(endpoint, catalog.UpdateLimits))
         {
+            if (invocation.ExpectedProcessDefinition is not null)
+                return Problem(endpoint, ApiResultKind.ValidationFailed, ExecutionApiProblemCodes.InvalidRequest);
             if (limitUpdateDispatcher is not null)
             {
                 throw new InvalidOperationException(
@@ -457,6 +481,8 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
             if (request is not ProcessStartRequest start)
                 return TypeMismatch(endpoint);
 
+            if (!invocation.MatchesProcessDefinition(start.Definition))
+                return Problem(endpoint, ApiResultKind.ValidationFailed, ExecutionApiProblemCodes.InvalidRequest);
             var startResult = await startDispatcher(context, start, invocation).ConfigureAwait(false)
                 ?? throw new InvalidOperationException(
                     "The authoritative Process-start dispatcher returned no canonical result.");
@@ -505,6 +531,8 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
             return Problem(endpoint, ApiResultKind.Forbidden, ExecutionApiProblemCodes.Forbidden);
         if (request is not ControlLimitUpdateCommand update)
             return TypeMismatch(endpoint);
+        if (invocation.ExpectedProcessDefinition is not null)
+            return Problem(endpoint, ApiResultKind.ValidationFailed, ExecutionApiProblemCodes.InvalidRequest);
 
         var canonical = Rebind(update, invocation, prior: null);
         ControlLimitUpdateDecision decision;
@@ -607,6 +635,8 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
         ProcessStartRequest request,
         ExecutionApiInvocationContext invocation)
     {
+        if (!invocation.MatchesProcessDefinition(request.Definition))
+            return Problem(catalog.Start, ApiResultKind.ValidationFailed, ExecutionApiProblemCodes.InvalidRequest);
         lock (processRegistryGate)
         {
             var scope = invocation.Authorization.AuthorityScope;
@@ -663,6 +693,8 @@ public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDis
 
         lock (entry.Gate)
         {
+            if (!invocation.MatchesProcessDefinition(entry.State.Definition))
+                return Problem(endpoint, ApiResultKind.NotFound, ExecutionApiProblemCodes.NotFound);
             var canonical = ExecutionProcessControlCommandAdmission.Rebind(request, invocation, entry.State);
             var decision = processExecutor.Apply(entry.State, canonical, invocation.ObservedAtUtc);
             entry.State = decision.State;

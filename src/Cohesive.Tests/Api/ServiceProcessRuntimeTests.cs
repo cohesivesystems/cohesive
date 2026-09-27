@@ -59,13 +59,75 @@ public sealed class ServiceProcessRuntimeTests
         Assert.Equal(0, fixture.Dispatches);
     }
 
+    [Fact]
+    public async Task DeclaredPauseUsesNativeCommandContractExactDefinitionAndReplay()
+    {
+        var fixture = Create();
+        var request = fixture.Request();
+        var started = await fixture.Runtime.StartAsync(Context(), "publish", request);
+        var admission = started.Outcome!.Admission!;
+        var command = new PauseProcessCommand(ProcessControlCommand.CurrentSchemaVersion,
+            new(new("pause"), new("pause"), request.Context.ProcessInstanceId, request.Context.Authorization,
+                DateTimeOffset.UnixEpoch, request.Context.Provenance), new(admission.Continuation, admission.ControlRevision));
+        var denied = await fixture.Runtime.ControlAsync(OperationContext.Create(), "pause", command);
+        Assert.Equal(ApiResultKind.Forbidden, denied.Kind);
+        var wrongCommand = new ContinueProcessCommand(command.SchemaVersion, command.Context, command.Expectation!);
+        var wrong = await fixture.Runtime.ControlAsync(Context(), "pause", wrongCommand);
+        Assert.Equal(ApiResultKind.ValidationFailed, wrong.Kind);
+        Assert.Equal("services.process.commandMismatch", Assert.Single(wrong.Diagnostics).Code);
+        Assert.Equal(0, fixture.ControlDispatches);
+
+        var paused = await fixture.Runtime.ControlAsync(Context(), "pause", command);
+        var replayed = await fixture.Runtime.ControlAsync(Context(), "pause", command);
+        Assert.Equal(ApiResultKind.Success, paused.Kind);
+        Assert.Equal(ProcessControlDecisionDisposition.Applied, paused.Outcome!.Disposition);
+        Assert.Equal(ProcessControlDecisionDisposition.Replayed, replayed.Outcome!.Disposition);
+        Assert.Equal(paused.Outcome.Status.ControlRevision, replayed.Outcome.Status.ControlRevision);
+        Assert.Equal(fixture.Plan.DefinitionReference, fixture.ControlInvocation!.ExpectedProcessDefinition);
+        Assert.Equal("alice", fixture.ControlInvocation.Authorization.Actor);
+        Assert.Equal(new("notes-authority", "tenant-a"), fixture.ControlInvocation.Authorization.AuthorityScope);
+        Assert.Equal(new[] { "authorityAdmitted", "processControlDispatched" }, paused.Trace.Events.Select(e => e.Kind));
+        Assert.DoesNotContain("forged-actor", ExecutionTraceJsonSerializer.Serialize(paused.Trace));
+    }
+
+    [Fact]
+    public async Task MissingControlTargetReturnsSafeNotFoundEvidence()
+    {
+        var fixture = Create();
+        var start = fixture.Request();
+        var command = new PauseProcessCommand(ProcessControlCommand.CurrentSchemaVersion,
+            start.Context, new(start.InitialContinuation, ProcessControlRevision.Initial));
+        var missing = await fixture.Runtime.ControlAsync(Context(), "pause", command);
+        Assert.Equal(ApiResultKind.NotFound, missing.Kind);
+        Assert.Null(missing.Outcome);
+        Assert.Equal("services.process.notFound", Assert.Single(missing.Diagnostics).Code);
+        Assert.Equal(1, fixture.ControlDispatches);
+        Assert.Equal(new[] { "authorityAdmitted", "invocationRejected" }, missing.Trace.Events.Select(e => e.Kind));
+    }
+
+    [Theory]
+    [InlineData(ExecutionControlWireNames.Inspect)]
+    [InlineData(ExecutionControlWireNames.Signal)]
+    public void LifecycleBindingRejectsReadAndIngressActionsBeforeDispatch(string action)
+    {
+        var fixture = Create();
+        var declaration = ServiceDefinitionDocuments.Create(new("notes"), new("1"),
+            new([new ServiceProcessControlOperation("control", fixture.Plan.DefinitionReference, action)]),
+            fixture.Document.Metadata.Provenance);
+        var binding = new ServiceProcessControlBinding("control", fixture.Plan, "notes-authority",
+            static (_, _, _) => throw new InvalidOperationException("Binding must not dispatch."));
+        var failure = Assert.Throws<ServiceBindingValidationException>(() => new ServiceRuntime(declaration, [binding],
+            new IdentityServiceInvocationAuthorization("tenant", new("Tenant"))));
+        Assert.Equal("services.binding.controlUnsupported", Assert.Single(failure.Validation.Diagnostics).Code);
+    }
+
     static OperationContext Context()
     {
         var actor = new PrincipalRef("alice", PrincipalKind.User);
         var scope = new ScopeRef("tenant-a", "tenant", PartitionKey: "shared");
         return OperationContext.Create().WithIdentityContext(new IdentityContext(actor,
             EffectiveScope: new([scope], ScopeSelectionMode.Single, ScopeSelectionSource.Ambient),
-            Grants: [new(actor, scope, ["notes.publish"], "tests")]));
+            Grants: [new(actor, scope, ["notes.publish", "notes.pause"], "tests")]));
     }
 
     static Fixture Create()
@@ -81,7 +143,8 @@ public sealed class ServiceProcessRuntimeTests
         var catalog = ExecutionControlApiCatalog.Create();
         var adapter = new InMemoryExecutionControlApiAdapter(ProcessControlTestFixture.Create().Catalog, catalog);
         var service = ServiceDefinitionDocuments.Create(new("notes"), new("v1"),
-            new([new ServiceProcessOperation("publish", plan.DefinitionReference, [new("notes.publish")])]), provenance);
+            new([new ServiceProcessOperation("publish", plan.DefinitionReference, [new("notes.publish")]),
+                new ServiceProcessControlOperation("pause", plan.DefinitionReference, ExecutionControlWireNames.Pause, [new("notes.pause")])]), provenance);
         var fixture = new Fixture { Plan = plan, Document = service };
         var binding = new ServiceProcessBinding("publish", plan, "notes-authority", async (context, request, invocation) =>
         {
@@ -90,7 +153,16 @@ public sealed class ServiceProcessRuntimeTests
             var result = await adapter.DispatchAsync(context, catalog.Start, request, invocation);
             return Assert.IsType<Cohesive.Execution.ProcessStartResult>(result.Body);
         });
-        fixture.Runtime = new(service, [binding], new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
+        var control = new ServiceProcessControlBinding("pause", plan, "notes-authority", async (context, request, invocation) =>
+        {
+            fixture.ControlDispatches++;
+            fixture.ControlInvocation = invocation;
+            var result = await adapter.DispatchAsync(context, catalog.Pause, request, invocation);
+            if (result.Result.Kind == ApiResultKind.NotFound) throw new KeyNotFoundException();
+            if (result.Result.Kind == ApiResultKind.Forbidden) throw new UnauthorizedAccessException();
+            return Assert.IsType<ExecutionControlResult>(result.Body);
+        });
+        fixture.Runtime = new(service, [binding, control], new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
         return fixture;
     }
 
@@ -100,6 +172,8 @@ public sealed class ServiceProcessRuntimeTests
         public required ExecutionDefinitionDocument Document { get; init; }
         public ServiceRuntime Runtime { get; set; } = null!;
         public int Dispatches { get; set; }
+        public int ControlDispatches { get; set; }
+        public ExecutionApiInvocationContext? ControlInvocation { get; set; }
         public ProcessStartRequest? Received { get; set; }
         public ProcessStartRequest Request() => new(ProcessStartRequest.CurrentSchemaVersion, Plan.DefinitionReference,
             new(new("command"), new("idempotency"), new("instance"), new("forged-actor", new("forged-authority", "tenant-b"), "forged-evidence"),
