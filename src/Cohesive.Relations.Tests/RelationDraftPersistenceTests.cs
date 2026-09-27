@@ -20,6 +20,20 @@ public sealed class RelationDraftPersistenceTests
     static readonly ValueBindingId ResultBinding = new("loadSearch");
 
     [Fact]
+    public void PortableObservation_UsesNativeDocumentProfilesIncludingQueryParameters()
+    {
+        var draft = RelationDraftDocument.FromDraft(CreateDraft());
+        var query = LoadCustomerRelationFixture.CreateRepresentativeQueryDocument();
+        Assert.NotEmpty(query.Definition.Body.Parameters);
+        var draftJson = ObservationValue.FromObject(draft).GetRawText();
+        var queryJson = ObservationValue.FromObject(query).GetRawText();
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(RelationDraftJsonSerializer.Serialize(draft)), JsonNode.Parse(draftJson)));
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(RelationQueryJsonSerializer.Serialize(query)), JsonNode.Parse(queryJson)));
+        Assert.Equal(draft.DraftFingerprint, RelationDraftJsonSerializer.Deserialize(draftJson).DraftFingerprint);
+        Assert.Equal(query.DefinitionFingerprint, RelationQueryJsonSerializer.Deserialize(queryJson).DefinitionFingerprint);
+    }
+
+    [Fact]
     public void EmbeddedDocuments_KeepNativeContractsInsidePascalCaseEnvelope()
     {
         var draft = RelationDraftDocument.FromDraft(CreateDraft());

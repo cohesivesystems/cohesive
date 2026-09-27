@@ -126,3 +126,18 @@ as explicitly selected trusted contract-authoring code. Invalid declarations and
 failures stop generation. A declaration does not make arbitrary custom converters structurally known;
 emitter capability restrictions continue to apply. GraphQL rejects this interpretation until it can
 preserve the declared serializer contract.
+
+## Declared value serializer profiles
+
+A portable value whose native serializer requires non-default options can declare its existing
+factory with type-level `JsonContractOptionsAttribute`. `DeclaredJsonValueConverterFactory`
+projects that native value inside a foreign envelope, and ObservationValue plus typed execution
+contract decoding use it. Profiles are lazily cached per CLR type, snapshotted and frozen; weak keys
+avoid introducing another permanent type-retention catalog. Recursive factory registration fails
+explicitly. Outer envelope conventions remain unchanged.
+
+For example, a draft's output mode remains its canonical string and a query retains its specialized
+parameter encoding during Process preparation. This adapter owns representation only: native
+semantic validation, fingerprint admission and authorization remain mandatory at their boundaries.
+The existing native document HTTP converters still perform full admission on reads. Type-level
+profiles do not yet solve arbitrary property-level converter schema projection in code generation.

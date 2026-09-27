@@ -3,11 +3,11 @@ using System.Text.Json;
 
 namespace Cohesive.Model.Serialization;
 
-/// <summary>Associates a contracts assembly with its authoritative public JSON options factory.</summary>
+/// <summary>Associates a contracts assembly or portable value type with its authoritative JSON options factory.</summary>
 /// <remarks>The factory is trusted authoring code, not portable model behavior. It must be deterministic,
 /// parameterless and independent of services, credentials or runtime requests. Hosts and generators
 /// should use the same factory. Generated schemas remain projections of the returned serializer contract.</remarks>
-[AttributeUsage(AttributeTargets.Assembly, AllowMultiple = false)]
+[AttributeUsage(AttributeTargets.Assembly | AttributeTargets.Class | AttributeTargets.Struct, AllowMultiple = false)]
 public sealed class JsonContractOptionsAttribute(Type providerType, string factoryMethod) : Attribute
 {
     /// <summary>Type owning the public static options factory.</summary>
@@ -24,6 +24,11 @@ public sealed class JsonContractOptionsAttribute(Type providerType, string facto
         ArgumentNullException.ThrowIfNull(assembly);
         var declaration = assembly.GetCustomAttribute<JsonContractOptionsAttribute>()
             ?? throw new InvalidOperationException($"Contracts assembly '{assembly.GetName().Name}' does not declare JSON contract options.");
+        return Resolve(declaration);
+    }
+
+    internal static JsonSerializerOptions Resolve(JsonContractOptionsAttribute declaration)
+    {
         var method = declaration.ProviderType.GetMethod(declaration.FactoryMethod,
             BindingFlags.Public | BindingFlags.Static, binder: null, types: Type.EmptyTypes, modifiers: null);
         if (method is null || method.ContainsGenericParameters || method.ReturnType != typeof(JsonSerializerOptions))

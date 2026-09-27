@@ -111,6 +111,7 @@ public sealed record RelationQueryDefinitionFingerprint
 /// Portable, versioned document envelope for canonical relation/query IR.
 /// </summary>
 [PortableJsonValue(JsonTypeKind.Object)]
+[JsonContractOptions(typeof(RelationQueryJsonSerializer), nameof(RelationQueryJsonSerializer.CreateOptions))]
 public sealed record RelationQueryDocument
 {
     /// <summary>Current relation/query document schema version.</summary>
