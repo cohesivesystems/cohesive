@@ -269,3 +269,26 @@ by trusted service identity, and start input/forged authorization do not appear 
 start returns 403, while an invalid portable input returns the declared 400 problem without dispatch. Tests
 exercise endpoint delegates and generated OpenAPI; they do not claim a deployed authentication middleware or
 live provider qualification. Query transport projection remains open.
+
+### Captured concurrency across preparation
+
+A Process may prepare a mutation from an earlier read. The entity adapter's ordinary read-then-CAS
+protects races during commit, but does not by itself reject changes between preparation and that read.
+`ProcessTransitionOperationBinding.ExpectedConcurrencyTokenField` optionally selects a required,
+non-null string field in the exact Transition input. It carries the opaque repository token captured
+by acquisition; no competing entity-version field or provider-token interpretation is introduced.
+Creation transitions and incompatible input fields fail binding.
+
+The adapter checks exact receipts first, then enforces the captured token through native read options
+and a returned-snapshot comparison. A provider cannot silently weaken the fence by ignoring the read
+option. A stale subject returns structured `subject.changed` evidence without mutation. If the same
+operation commits between receipt lookup and state read, the adapter rechecks its receipt and replays
+the committed result. The existing conditional write still protects changes after the checked read.
+The token participates in exact request identity through the retained input, so changing it cannot
+reuse a receipt. This is a storage binding detail; domain transitions do not interpret opaque tokens.
+
+For example, preparing approval at token `opaque-A` cannot apply after another edit creates
+`opaque-B`. Retrying an already committed approval with its original exact occurrence returns its
+receipt even though its own commit advanced the token. These cases are tested with in-memory
+atomic receipts, including an adapter that ignores read preconditions; remote-provider qualification
+remains separate.

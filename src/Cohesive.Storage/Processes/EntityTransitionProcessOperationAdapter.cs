@@ -22,6 +22,12 @@ public static class ProcessTransitionOperationAdapterDiagnosticCodes
     /// <summary>No authoritative entity state exists for the resolved subject.</summary>
     public const string SubjectMissing = "storage.processes.transitionAdapter.subject.missing";
 
+    /// <summary>The current subject no longer matches the captured opaque concurrency token.</summary>
+    public const string SubjectChanged = "storage.processes.transitionAdapter.subject.changed";
+
+    /// <summary>The declared captured-token field is missing or is not a non-empty string.</summary>
+    public const string CapturedConcurrencyTokenInvalid = "storage.processes.transitionAdapter.concurrencyToken.invalid";
+
     /// <summary>An authoritative entity already exists for a Transition that requires subject absence.</summary>
     public const string SubjectPresent = "storage.processes.transitionAdapter.subject.present";
 
@@ -74,19 +80,34 @@ public sealed class ProcessTransitionOperationBinding
     /// <paramref name="plan"/>, <paramref name="repository"/>, or <paramref name="interactionContracts"/> is
     /// <see langword="null"/>.
     /// </exception>
+    /// <param name="expectedConcurrencyTokenField">Optional required string input field containing the
+    /// captured opaque storage token. Supported only for existing-subject transitions. Exact receipt replay
+    /// precedes the current-state check; a fresh invocation fails when the subject changed.</param>
     public ProcessTransitionOperationBinding(
         CompiledTransitionPlan plan,
         IEntityRepository repository,
         InteractionContractCatalog interactionContracts,
         Func<ProcessTransitionInvocation, InteractionEntityReference>? resolveSubject = null,
         Func<ProcessTransitionInvocation, TransitionEmissionIntent, int, InteractionTarget?>?
-            createRequestTarget = null)
+            createRequestTarget = null,
+        string? expectedConcurrencyTokenField = null)
     {
         Plan = plan ?? throw new ArgumentNullException(nameof(plan));
         Repository = repository ?? throw new ArgumentNullException(nameof(repository));
         InteractionContracts = interactionContracts ?? throw new ArgumentNullException(nameof(interactionContracts));
         this.resolveSubject = resolveSubject;
         this.createRequestTarget = createRequestTarget;
+        if (expectedConcurrencyTokenField is not null)
+        {
+            var field = (plan.Definition.Input.Type as ObjectTypeRef)?.Fields
+                .SingleOrDefault(field => field.Name == expectedConcurrencyTokenField);
+            if (plan.Definition.SubjectCreation is not null || field is null
+                || field.Type is not ScalarTypeRef { Kind: ScalarTypeKind.String }
+                || field.Cardinality != FieldCardinality.Single || field.Presence != FieldPresence.Required
+                || field.Nullability != FieldNullability.NonNullable)
+                throw new ArgumentException("A captured concurrency token requires an existing subject and a required non-null string input field.", nameof(expectedConcurrencyTokenField));
+        }
+        ExpectedConcurrencyTokenField = expectedConcurrencyTokenField;
     }
 
     /// <summary>Exact compiled Transition plan.</summary>
@@ -97,6 +118,20 @@ public sealed class ProcessTransitionOperationBinding
 
     /// <summary>Exact interaction catalog for canonical emission lowering.</summary>
     public InteractionContractCatalog InteractionContracts { get; }
+
+    /// <summary>Optional input field retaining the opaque token captured before preparation. The token
+    /// participates in exact operation identity through the retained Transition input.</summary>
+    public string? ExpectedConcurrencyTokenField { get; }
+
+    internal EntityConcurrencyToken? ResolveExpectedConcurrencyToken(ProcessTransitionInvocation invocation)
+    {
+        if (ExpectedConcurrencyTokenField is not { } field) return null;
+        if (invocation.Input.State != PortableValueState.Concrete || invocation.Input.Value is not { } input
+            || !input.TryGetProperty(field, out var value) || value.Kind != ObservationValueKind.String
+            || string.IsNullOrWhiteSpace(value.GetString()))
+            throw new InvalidOperationException("The captured concurrency token input must contain a non-empty string.");
+        return new(value.GetRequiredString());
+    }
 
     internal InteractionEntityReference ResolveSubject(ProcessTransitionInvocation invocation)
     {
@@ -165,6 +200,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
         }
 
         InteractionEntityReference subject;
+        EntityConcurrencyToken? expectedConcurrencyToken;
         try
         {
             subject = binding.ResolveSubject(invocation);
@@ -175,6 +211,15 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
                 ProcessTransitionOperationAdapterDiagnosticCodes.SubjectInvalid,
                 exception.Message,
                 "/invocation/subject");
+        }
+        try
+        {
+            expectedConcurrencyToken = binding.ResolveExpectedConcurrencyToken(invocation);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            return Failure(ProcessTransitionOperationAdapterDiagnosticCodes.CapturedConcurrencyTokenInvalid,
+                exception.Message, "/invocation/input");
         }
         if (!string.Equals(subject.EntityType.Value, binding.Repository.EntityType, StringComparison.Ordinal))
         {
@@ -203,11 +248,29 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             return Result(lookup);
         }
 
-        var snapshot = await binding.Repository.TryGet(
-                context,
-                subject.EntityId.Value,
-                EntityReadOptions.Full)
-            .ConfigureAwait(false);
+        EntitySnapshot? snapshot;
+        try
+        {
+            snapshot = await binding.Repository.TryGet(context, subject.EntityId.Value,
+                expectedConcurrencyToken is null ? EntityReadOptions.Full
+                    : new EntityReadOptions(expectedConcurrencyToken: expectedConcurrencyToken)).ConfigureAwait(false);
+        }
+        catch (ObservationConcurrencyConflictException) when (expectedConcurrencyToken is not null)
+        {
+            return await ChangedSubjectAsync(binding, context, request).ConfigureAwait(false);
+        }
+        // Preserve the binding's guarantee even when a provider does not enforce read preconditions.
+        if (snapshot is not null && expectedConcurrencyToken is { } expected && snapshot.ConcurrencyToken != expected)
+            return await ChangedSubjectAsync(binding, context, request).ConfigureAwait(false);
+
+        static async ValueTask<ProcessOperationResult> ChangedSubjectAsync(
+            ProcessTransitionOperationBinding binding, OperationContext context, EntityTransitionOperationRequest request)
+        {
+            var raced = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
+            return raced.Disposition != EntityTransitionOperationDisposition.NotFound ? Result(raced)
+                : Failure(ProcessTransitionOperationAdapterDiagnosticCodes.SubjectChanged,
+                    "The authoritative subject changed after its concurrency token was captured.", "/invocation/input");
+        }
         var createsSubject = binding.Plan.Definition.SubjectCreation is not null;
         if (snapshot is null && !createsSubject)
         {
