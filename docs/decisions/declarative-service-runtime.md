@@ -594,3 +594,20 @@ store, entity reread, background polling or implicit completion driver.
 Five composition tests pass, including a real multi-entity Process progressing from admitted to
 completed, foreign-scope exclusion and unavailable exact-plan failure. This closes the local result
 reader gap only; local execution driving and Ari host/HTTP integration remain outstanding.
+
+## Bounded local advancement
+
+`ProcessDurableRuntime.AdvanceAsync` drives an already admitted local Process through at most a
+configured number of immediately runnable durable cuts. It returns the native result at completion,
+quiescence, lifecycle/storage conflict or the activation limit. A final DurableCut still needs another
+call. It does not promise background scheduling, inject external input or implement a second workflow.
+
+Activation identity uses the retained activation count; logical time comes from the preceding
+checkpoint. The trusted activation context must remain stable across recovery. The existing activation
+method continues to own leases, compatibility admission, operation replay and atomic checkpoint commit.
+The convenience driver loads the checkpoint to choose its next identity; `ActivateAsync` performs its
+own guarded load and validation. This is a bounded extra read per attempted activation, not a new cache.
+
+Seven composition tests pass. The local driver stops after one cut, reconstructs after a post-commit
+crash, preserves one acquisition/computation and one version increment per entity, and adds no
+activation after terminal completion. Ari local hosting/HTTP integration remains outstanding.

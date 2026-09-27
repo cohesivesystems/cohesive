@@ -26,6 +26,34 @@ namespace Cohesive.Tests.Api;
 /// <summary>A non-review domain qualifying all service operation families against native execution boundaries.</summary>
 public sealed class ServiceCompositionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LocalAdvancementResumesBoundedCutsAndPostCommitCrash(bool crashAfterCommit)
+    {
+        var fixture = await Fixture.Create();
+        var context = Context();
+        var admitted = await fixture.Service.StartAsync(context, "publish", fixture.StartRequest());
+        var continuation = admitted.Outcome!.Admission!.Continuation;
+        var activationContext = fixture.Activation("binding", ProcessActivationCause.Start).Context;
+        var cut = await fixture.Runtime().AdvanceAsync(context, fixture.Plan, continuation, activationContext, maximumActivations: 1);
+        Assert.Equal(ProcessActivationDisposition.DurableCut, cut.Decision!.Disposition);
+        Assert.Single(cut.Snapshot!.Checkpoint.Activations);
+        if (crashAfterCommit)
+            await Assert.ThrowsAsync<HandoffCrash>(() => fixture.Runtime(crashAfterFirstCommit: true)
+                .AdvanceAsync(context, fixture.Plan, continuation, activationContext));
+        var completed = await fixture.Runtime().AdvanceAsync(context, fixture.Plan, continuation, activationContext);
+        Assert.Equal(ProcessActivationDisposition.Completed, completed.Decision!.Disposition);
+        Assert.Equal(2, completed.Snapshot!.Checkpoint.Activations.Length);
+        Assert.Equal(1, fixture.Reader.Reads);
+        Assert.Equal(1, fixture.Computations);
+        foreach (var id in new[] { "a", "b" })
+            Assert.Equal(1, (await fixture.Repository.TryGet(context, id, EntityReadOptions.Full))!.Entity.Version);
+        var replay = await fixture.Runtime().AdvanceAsync(context, fixture.Plan, continuation, activationContext);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Terminal, replay.Disposition);
+        Assert.Equal(2, replay.Snapshot!.Checkpoint.Activations.Length);
+    }
+
     [Fact]
     public async Task LocalValueReaderProjectsValidatedCheckpointWithoutAnotherResultStore()
     {
