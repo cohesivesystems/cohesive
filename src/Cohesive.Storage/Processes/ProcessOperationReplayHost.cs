@@ -161,16 +161,8 @@ internal sealed class ProcessOperationReplayHost : IProcessReferenceHost, IAsync
         return AsyncHost.ResolveSignalTargetAsync(context, resolution);
     }
 
-    ProcessRelationEvaluation WithStartContext(ProcessRelationEvaluation evaluation)
-    {
-        if (startContext is null)
-            return evaluation;
-        if (startContext.ProcessInstanceId != evaluation.Continuation.ProcessInstanceId
-            || startContext.Authorization.AuthorityScope != evaluation.Context.AuthorityScope)
-            throw new InvalidOperationException("Retained start evidence must match the evaluation instance and authority scope.");
-        // The persisted admission owns attribution, including on recovery under a different worker.
-        return evaluation with { StartContext = startContext };
-    }
+    ProcessRelationEvaluation WithStartContext(ProcessRelationEvaluation evaluation) =>
+        startContext is null ? evaluation : evaluation.WithRetainedStartContext(startContext);
 
     ProcessOperationResult Resolve(
         ProcessOperationOccurrence key,

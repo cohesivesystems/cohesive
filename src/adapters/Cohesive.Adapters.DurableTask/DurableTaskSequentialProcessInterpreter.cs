@@ -214,6 +214,7 @@ static class DurableTaskSequentialProcessInterpreter
                         plan,
                         state,
                         activation,
+                        start.Receipt.Request.Context,
                         executeOperation,
                         resolveSignalTarget,
                         AwaitHostWorkWithControlAsync)
@@ -714,6 +715,7 @@ static class DurableTaskSequentialProcessInterpreter
                             plan,
                             state,
                             cancellationActivation,
+                            start.Receipt.Request.Context,
                             executeOperation,
                             resolveSignalTarget)
                         .ConfigureAwait(true);
@@ -1373,11 +1375,12 @@ static class DurableTaskSequentialProcessInterpreter
         CompiledProcessPlan plan,
         ProcessContinuationState state,
         ProcessActivation activation,
+        ProcessControlCommandContext startContext,
         Func<DurableTaskProcessHostOperation, Task<ProcessOperationResult>> executeOperation,
         Func<ProcessSignalTargetResolution, Task<ProcessSignalTargetResult>>? resolveSignalTarget,
         Func<Task, Task>? awaitHostWork = null)
     {
-        var host = new SuspendingHost();
+        var host = new SuspendingHost(startContext);
         while (true)
         {
             try
@@ -1436,7 +1439,7 @@ static class DurableTaskSequentialProcessInterpreter
     {
     }
 
-    sealed class SuspendingHost : IProcessReferenceHost
+    sealed class SuspendingHost(ProcessControlCommandContext startContext) : IProcessReferenceHost
     {
         readonly Dictionary<OperationKey, MaterializedOperation> materialized = [];
         readonly Dictionary<OperationKey, MaterializedSignalTarget> signalTargets = [];
@@ -1445,7 +1448,7 @@ static class DurableTaskSequentialProcessInterpreter
             Resolve(DurableTaskProcessHostOperation.For(invocation));
 
         public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) =>
-            Resolve(DurableTaskProcessHostOperation.For(evaluation));
+            Resolve(DurableTaskProcessHostOperation.For(evaluation.WithRetainedStartContext(startContext)));
 
         public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution)
         {

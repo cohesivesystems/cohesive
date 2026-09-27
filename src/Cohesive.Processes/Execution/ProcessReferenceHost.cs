@@ -53,7 +53,22 @@ public sealed record ProcessRelationEvaluation(
     long Occurrence,
     DateTimeOffset ObservedAtUtc,
     ProcessActivationContext Context,
-    ProcessControlCommandContext? StartContext = null);
+    ProcessControlCommandContext? StartContext = null)
+{
+    /// <summary>Projects retained admission attribution for this instance and authority, replacing any supplied context.</summary>
+    /// <remarks>The caller must obtain this evidence from the authoritative retained start receipt. This projection
+    /// does not create a grant or establish that the original caller still has permission.</remarks>
+    /// <exception cref="ArgumentNullException">The retained context is null.</exception>
+    /// <exception cref="InvalidOperationException">The retained start belongs to another instance or authority scope.</exception>
+    public ProcessRelationEvaluation WithRetainedStartContext(ProcessControlCommandContext retained)
+    {
+        ArgumentNullException.ThrowIfNull(retained);
+        if (retained.ProcessInstanceId != Continuation.ProcessInstanceId
+            || retained.Authorization.AuthorityScope != Context.AuthorityScope)
+            throw new InvalidOperationException("Retained start evidence must match the evaluation instance and authority scope.");
+        return this with { StartContext = retained };
+    }
+}
 
 /// <summary>Complete context for resolving a portable Signal-target expression.</summary>
 /// <param name="Value">Materialized portable target value.</param>

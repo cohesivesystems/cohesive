@@ -356,3 +356,17 @@ returns the same observation value without traversal, serialization, or new reta
 Closure and execution tests cover a present string, absent/null members, and unavailable input
 states. Process composition must still supply portable expression result types derived from its
 step contracts; declaring a function does not make an opaque runtime type portable.
+
+## Retained attribution in Durable Task observations
+
+The Durable Task suspending host projects the authoritative start receipt into relation/query
+activities, including cancellation activations. It uses `ProcessRelationEvaluation.WithRetainedStartContext`,
+the same instance/scope validation now used by the storage replay host. This prevents review
+acquisition from substituting worker identity for the admitted caller. It remains attribution,
+not an authorization grant or permission-revocation fence.
+
+The differential Durable Task host-operation test verifies the exact retained context, native
+activity serialization, and identical replay scheduling. Existing storage replay tests qualify
+mismatched instance/scope and replacement-context rejection. The focused suite passes 87 tests
+with 8 emulator cases skipped; the full core suite passes 3,972 with 33 skipped. These results do
+not claim a live Scheduler deployment qualification.

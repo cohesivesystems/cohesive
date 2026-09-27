@@ -80,6 +80,9 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             });
         });
 
+        var query = Assert.Single(scheduled, operation => operation.Kind == DurableTaskProcessHostOperationKind.RelationQuery);
+        Assert.Equal(start.Receipt.Request.Context, query.RelationQuery!.StartContext);
+
         var initial = ProcessReferenceInterpreter.Create(plan, start.Receipt);
         var expected = ProcessReferenceInterpreter.Activate(
             plan,
