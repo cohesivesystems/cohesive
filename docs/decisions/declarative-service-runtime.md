@@ -118,9 +118,9 @@ replace trusted scope bindings. Tests must count physical reads and prove logica
 including shared physical partitions.
 
 Existing `HostedQuery` and `ProcessRelationHandlerCatalog` already provide exact implementation identity,
-typed input/output admission and Process integration. They do not by themselves establish deterministic
-purity. Native acceptance must have an explicit computation contract before it can be treated as pure;
-wrapping review orchestration in a hosted handler would not satisfy that requirement. No new interpreter,
+typed input/output admission and Process integration. The hosted Query boundary now carries an explicit deterministic-computation contract and requires a
+matching native registration. Ordinary observation handlers still do not establish purity; wrapping review
+orchestration in one would not satisfy that requirement. No new interpreter,
 synthetic Process occurrence, or independently maintained workflow order is planned.
 
 
@@ -166,3 +166,19 @@ The native public `ProcessStartResult` is retained without exposing receipt payl
 failures and a service trace. Runtime failures and cancellation remain observable exceptions.
 These tests qualify admission composition only. Durable multi-entity recovery, Process controls,
 transport projection for new operation families and native deterministic computation remain open.
+
+
+### Native computation qualification
+
+Extend `HostedQueryDefinition` with explicit `DeterministicComputation` semantics rather than inventing another
+execution language. The existing query document owns input/output, configuration, exact implementation and
+dependencies; its fingerprint now also covers the non-default computation guarantee. The observation default
+retains its established canonical wire shape. `CreateDeterministic` binds that exact capability through the
+existing typed handler/catalog/interpreter path and checks the implementation version. It does not receive
+infrastructure, time or identity context. Purity remains an audited implementation contract, not a CLR sandbox.
+
+The tested example declares acquisition followed by normalization. The native async interpreter produces
+`normalized:ACQUIRED`, invokes each step once and preserves exact query references. Cancellation aborts a
+computation without emitting an alternative successful result. This is the boundary intended for native relation
+acceptance after the Process has acquired exact graph documents and a draft revision. Ari's acceptance-specific
+inputs, retained evidence and commit fence still require adoption qualification.

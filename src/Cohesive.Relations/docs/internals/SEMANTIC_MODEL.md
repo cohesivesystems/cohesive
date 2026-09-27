@@ -211,3 +211,18 @@ registration concerns and never enter canonical content.
 A hosted Query is not a substitute for a portable Relation or Query. Its dependency can point to the portable
 Relation that performs deterministic projection after acquisition, while its own distinct fingerprint truthfully
 attests to the external invocation contract and acquisition policy.
+
+
+A native algorithm whose semantics are not expressed by a portable logical graph can declare
+`evaluationSemantics: HostedQueryEvaluationSemantics.DeterministicComputation`. Its successful result must
+be a deterministic function of its concrete input, pinned configuration and exact implementation contract.
+It performs no I/O or shared mutation and cannot consult ambient identity, clock, randomness or mutable state.
+Required dependency data must be acquired separately and passed as input/configuration; exact references do
+not authorize hidden reads. Cancellation may stop computation but must not select another successful result.
+
+Observation is the established default and is omitted from canonical JSON, preserving existing document
+fingerprints. A deterministic declaration is explicit and fingerprint-bearing. The Process runtime's
+`CreateDeterministic` registration checks the implementation version and supplies only input, canonical
+configuration and cancellation. This is an auditable host capability contract, not a sandbox or a proof of CLR
+purity. Hosts must qualify their implementation. No result cache, skipped receipt, or weaker recovery policy is
+inferred from this flag. Portable logical Relations remain preferred where they can express the algorithm.

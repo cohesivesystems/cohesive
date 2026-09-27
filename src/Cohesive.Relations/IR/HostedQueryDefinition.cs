@@ -6,6 +6,19 @@ using Cohesive.Model.Serialization;
 
 namespace Cohesive.Relations.IR;
 
+/// <summary>Observable execution contract required of a hosted Query implementation.</summary>
+public enum HostedQueryEvaluationSemantics
+{
+    /// <summary>Read-only observation of externally owned state; repeated evaluations may return different values.</summary>
+    Observation = 0,
+    /// <summary>
+    /// A deterministic function of its concrete input, canonical configuration and exact implementation contract.
+    /// It performs no I/O or mutation and reads no ambient identity, time, randomness or mutable state.
+    /// Cancellation may abort evaluation but cannot select another successful result.
+    /// </summary>
+    DeterministicComputation = 1
+}
+
 /// <summary>Stable wire identities for canonical hosted-Query documents.</summary>
 public static class HostedQueryWireNames
 {
@@ -81,6 +94,7 @@ public sealed record HostedQueryDefinition
     /// <param name="implementation">Exact semantic host implementation contract.</param>
     /// <param name="configuration">Concrete portable configuration interpreted by <paramref name="implementation"/>.</param>
     /// <param name="dependencies">Complete direct exact definition dependencies.</param>
+    /// <param name="evaluationSemantics">Required observation or deterministic-computation contract.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="input"/>, <paramref name="result"/>, <paramref name="implementation"/>, or
     /// <paramref name="configuration"/> is <see langword="null"/>.
@@ -88,14 +102,19 @@ public sealed record HostedQueryDefinition
     /// <exception cref="ArgumentException">
     /// <paramref name="dependencies"/> contains a null entry, repeats a role, or repeats an exact definition.
     /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">The evaluation semantics are unknown.</exception>
     [JsonConstructor]
     public HostedQueryDefinition(
         ValueContract input,
         ValueContract result,
         HostedQueryImplementationReference implementation,
         PortableValue configuration,
-        ImmutableArray<HostedQueryDependency> dependencies = default)
+        ImmutableArray<HostedQueryDependency> dependencies = default,
+        HostedQueryEvaluationSemantics evaluationSemantics = HostedQueryEvaluationSemantics.Observation)
     {
+        if (!Enum.IsDefined(evaluationSemantics))
+            throw new ArgumentOutOfRangeException(nameof(evaluationSemantics), evaluationSemantics, "Unknown hosted-Query evaluation semantics.");
+        EvaluationSemantics = evaluationSemantics;
         Input = Guard.RequireNotNull(input);
         Result = Guard.RequireNotNull(result);
         Implementation = Guard.RequireNotNull(implementation);
@@ -126,6 +145,11 @@ public sealed record HostedQueryDefinition
         Dependencies = [.. materialized.OrderBy(static dependency => dependency.Role, StringComparer.Ordinal)];
     }
 
+    /// <summary>Execution contract required of the exact native implementation.</summary>
+    /// <remarks>Omitting the established observation default preserves existing canonical document fingerprints.</remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public HostedQueryEvaluationSemantics EvaluationSemantics { get; }
+
     /// <summary>Portable invocation-input contract.</summary>
     public ValueContract Input { get; }
 
@@ -147,6 +171,7 @@ public sealed record HostedQueryDefinition
     public bool Equals(HostedQueryDefinition? other) =>
         ReferenceEquals(this, other)
         || other is not null
+        && EvaluationSemantics == other.EvaluationSemantics
         && Input == other.Input
         && Result == other.Result
         && Implementation == other.Implementation
@@ -158,6 +183,7 @@ public sealed record HostedQueryDefinition
     public override int GetHashCode()
     {
         var hash = new HashCode();
+        hash.Add(EvaluationSemantics);
         hash.Add(Input);
         hash.Add(Result);
         hash.Add(Implementation);

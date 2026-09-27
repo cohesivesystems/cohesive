@@ -388,6 +388,21 @@ catalog is constructed. `CreateOutcome` preserves a statically typed success whi
 to produce that value to become structured Process failure evidence. Thrown exceptions remain physical execution
 failures. `RegisteredAsyncProcessReferenceHost` composes this catalog with one exact Transition adapter and optional
 Signal-target policy, avoiding application-owned family routers or registration-order selection.
+
+For an explicitly deterministic hosted Query, use
+`ProcessRelationHandlerRegistration.CreateDeterministic(query, implementation, computation)`. The registration
+must match both the canonical evaluation semantics and exact implementation identity/version. Ordinary
+`Create`/`CreateOutcome` observation handlers cannot satisfy that contract. The computation receives typed input,
+immutable pinned configuration and cancellation, with no infrastructure or ambient execution context. Its code
+must satisfy the declared purity contract; the runtime does not sandbox CLR code. Expected domain outcomes
+belong in the declared result contract, while thrown exceptions remain physical failures.
+
+Acquisition and native computation remain separate `EvaluateRelationProcessNode` steps authored through the
+existing `process.Query` surface. `HostedQueryProcessAuthoringTests.DeclaredProcessAcquiresThenComputesThroughExactNativeBindings`
+executes asynchronous acquisition followed by a deterministic normalization through the native interpreter,
+with one call per occurrence. Process effect analysis remains conservative for host operations; purity does not
+silently remove external-effect requirements, bypass receipts, enable caching or claim stronger atomicity.
+
 `SynchronousProcessReferenceHostAdapter` is the explicit bounded compatibility path; it checks cancellation before
 invocation but cannot interrupt a synchronous call already in progress.
 

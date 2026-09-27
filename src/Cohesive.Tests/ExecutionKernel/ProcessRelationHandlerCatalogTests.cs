@@ -17,6 +17,62 @@ public sealed class ProcessRelationHandlerCatalogTests
     static readonly DateTimeOffset ObservedAtUtc = new(2026, 8, 13, 22, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public async Task DeterministicComputationUsesPinnedConfigurationAndExistingTypedAdmission()
+    {
+        var query = Query(evaluationSemantics: HostedQueryEvaluationSemantics.DeterministicComputation);
+        var calls = 0;
+        PortableValue? observedConfiguration = null;
+        var registration = ProcessRelationHandlerRegistration.CreateDeterministic(query, query.Implementation,
+            (input, configuration, cancellation) =>
+            {
+                cancellation.ThrowIfCancellationRequested();
+                calls++;
+                observedConfiguration = configuration;
+                return new QueryResult(input.Id, configuration.Value!.Value.GetProperty("Policy").GetString()!);
+            });
+        Assert.Equal(HostedQueryEvaluationSemantics.DeterministicComputation, registration.EvaluationSemantics);
+        var catalog = new ProcessRelationHandlerCatalog([registration]);
+        var evaluation = Evaluation(query, new QueryInput("source/42"));
+        var first = await catalog.EvaluateAsync(OperationContext.Create(), evaluation);
+        var second = await catalog.EvaluateAsync(OperationContext.Create(), evaluation);
+        Assert.True(first.IsSuccessful);
+        Assert.Equal(first.Value, second.Value);
+        Assert.Equal(ObservationValue.FromObject(new QueryResult("source/42", "exact")), first.Value!.Value);
+        Assert.Equal(query.Configuration, observedConfiguration);
+        Assert.Equal(2, calls); // Purity does not silently introduce caching or elide Process occurrence receipts.
+    }
+
+    [Fact]
+    public void DeterministicCapabilityCannotBeSatisfiedByObservationHandlersOrAnotherImplementation()
+    {
+        var query = Query(evaluationSemantics: HostedQueryEvaluationSemantics.DeterministicComputation);
+        Assert.Throws<ArgumentException>(() => ProcessRelationHandlerRegistration.Create(query,
+            static (_, _, input) => ValueTask.FromResult(new QueryResult(input.Id, "result"))));
+        Assert.Throws<ArgumentException>(() => ProcessRelationHandlerRegistration.CreateOutcome(query,
+            static (_, _, input) => ValueTask.FromResult(ProcessRelationHandlerOutcome<QueryResult>.Completed(new(input.Id, "result")))));
+        Assert.Throws<ArgumentException>(() => ProcessRelationHandlerRegistration.CreateDeterministic(query,
+            new(query.Implementation.Id, "different-version"), static (input, _, _) => new QueryResult(input.Id, "result")));
+        var observed = Query();
+        Assert.Throws<ArgumentException>(() => ProcessRelationHandlerRegistration.CreateDeterministic(observed,
+            observed.Implementation, static (input, _, _) => new QueryResult(input.Id, "result")));
+    }
+
+    [Fact]
+    public async Task DeterministicComputationHonorsCancellationWithoutReturningAnAlternateResult()
+    {
+        var query = Query(evaluationSemantics: HostedQueryEvaluationSemantics.DeterministicComputation);
+        using var cancellation = new CancellationTokenSource();
+        var catalog = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.CreateDeterministic(query, query.Implementation, (input, _, _) =>
+            {
+                cancellation.Cancel();
+                return new QueryResult(input.Id, "must-not-escape");
+            })]);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await catalog.EvaluateAsync(
+            OperationContext.Create(cancellationToken: cancellation.Token), Evaluation(query, new QueryInput("source/42"))));
+    }
+
+    [Fact]
     public async Task TypedHandler_DecodesExactInputAndEncodesCanonicalResult()
     {
         var query = Query();
@@ -517,13 +573,14 @@ public sealed class ProcessRelationHandlerCatalogTests
             static (context, evaluation, input) =>
                 ValueTask.FromResult(new QueryResult(input.Id, "resolved")));
 
-    internal static HostedQuery<QueryInput, QueryResult> Query(string policy = "exact") =>
+    internal static HostedQuery<QueryInput, QueryResult> Query(string policy = "exact",
+        HostedQueryEvaluationSemantics evaluationSemantics = HostedQueryEvaluationSemantics.Observation) =>
         HostedQuery<QueryInput, QueryResult>.Create(
             new("query/tests/async-hosted-query"),
             new("1"),
             new("tests.async-hosted-query", "1"),
             new QueryConfiguration("entity", policy),
-            Provenance());
+            Provenance(), evaluationSemantics: evaluationSemantics);
 
     static HostedQuery<QueryInput, TemporalQueryResult> TemporalQuery() =>
         HostedQuery<QueryInput, TemporalQueryResult>.Create(
