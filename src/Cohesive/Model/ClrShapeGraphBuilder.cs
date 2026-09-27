@@ -20,6 +20,27 @@ public sealed class ClrShapeGraphBuilder
     readonly Dictionary<TypeId, TypeDefinition> contributedNamedTypes = [];
     readonly List<ClrEntityReferenceRegistration> entityReferences = [];
     bool useCanonicalClrEnumValues;
+    SystemTextJsonClrShapeMetadataProvider? publicJsonContracts;
+
+    /// <summary>
+    /// Projects public JSON record contracts, including object-valued portable documents, from explicit
+    /// serializer metadata. Execution and storage contract inference are unaffected.
+    /// </summary>
+    /// <param name="options">Deterministic serializer options defining the public wire contract.</param>
+    /// <returns>This builder for continued configuration.</returns>
+    /// <remarks>
+    /// Configure this once before registering roots. Converter-defined portable values retain their
+    /// opaque JSON contract; their CLR implementation is not an authority for the converter's output.
+    /// The resulting graph describes public representation, not document semantic admission.
+    /// </remarks>
+    public ClrShapeGraphBuilder UsePublicJsonContracts(JsonSerializerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (roots.Count != 0 || publicJsonContracts is not null)
+            throw new InvalidOperationException("Configure public JSON contracts once, before registering roots.");
+        publicJsonContracts = new(options);
+        return AddMetadataProvider(publicJsonContracts);
+    }
 
     /// <summary>
     /// Projects CLR enums as canonical string-valued member catalogs.
@@ -336,14 +357,14 @@ public sealed class ClrShapeGraphBuilder
         return ordered;
     }
 
-    static void CollectReferencedTypes(
+    void CollectReferencedTypes(
         Type clrType,
         HashSet<Type> discovered,
         List<Type> ordered,
         Queue<Type> pending)
     {
         var normalized = UnwrapNullable(clrType);
-        if (TryMapJsonType(normalized, out _))
+        if (TryMapProjectedJsonType(normalized, out _))
             return;
 
         if (TryGetEnumerableElementType(normalized, out var elementType))
@@ -378,7 +399,7 @@ public sealed class ClrShapeGraphBuilder
         EnqueueIfNamedType(normalized, discovered, ordered, pending);
     }
 
-    static void EnqueueIfNamedType(
+    void EnqueueIfNamedType(
         Type clrType,
         HashSet<Type> discovered,
         List<Type> ordered,
@@ -395,13 +416,13 @@ public sealed class ClrShapeGraphBuilder
         pending.Enqueue(clrType);
     }
 
-    static bool ShouldCreateNamedType(Type clrType)
+    bool ShouldCreateNamedType(Type clrType)
     {
         var normalized = UnwrapNullable(clrType);
         if (IsScalarLike(normalized) || IsQuantityType(normalized))
             return false;
 
-        if (TryMapJsonType(normalized, out _))
+        if (TryMapProjectedJsonType(normalized, out _))
             return false;
 
         if (TryGetEitherCaseTypes(normalized, out _))
@@ -419,7 +440,7 @@ public sealed class ClrShapeGraphBuilder
         return IsObjectShapeType(normalized);
     }
 
-    static void EnsureSupportedRootType(Type clrType)
+    void EnsureSupportedRootType(Type clrType)
     {
         if (!IsObjectShapeType(clrType))
         {
@@ -428,9 +449,9 @@ public sealed class ClrShapeGraphBuilder
         }
     }
 
-    static bool IsObjectShapeType(Type clrType)
+    bool IsObjectShapeType(Type clrType)
     {
-        if (TryMapJsonType(UnwrapNullable(clrType), out _))
+        if (TryMapProjectedJsonType(UnwrapNullable(clrType), out _))
             return false;
 
         if (clrType == typeof(object))
@@ -681,7 +702,7 @@ public sealed class ClrShapeGraphBuilder
         var fieldMetadata = GetMetadata(ClrShapeMetadataContext.ForField(propertyMetadata.Property));
         AddContributedNamedTypes(fieldMetadata.NamedTypes);
 
-        var isJsonType = TryMapJsonType(UnwrapNullable(propertyMetadata.PropertyType), out _);
+        var isJsonType = TryMapProjectedJsonType(UnwrapNullable(propertyMetadata.PropertyType), out _);
         var elementType = typeof(void);
         var isMany = !isJsonType && TryGetEnumerableElementType(propertyMetadata.PropertyType, out elementType);
         var cardinality = isMany
@@ -721,7 +742,7 @@ public sealed class ClrShapeGraphBuilder
         var fieldMetadata = GetMetadata(ClrShapeMetadataContext.ForField(propertyMetadata.Property));
         AddContributedNamedTypes(fieldMetadata.NamedTypes);
 
-        var isJsonType = TryMapJsonType(UnwrapNullable(propertyMetadata.PropertyType), out _);
+        var isJsonType = TryMapProjectedJsonType(UnwrapNullable(propertyMetadata.PropertyType), out _);
         var elementType = typeof(void);
         var isMany = !isJsonType && TryGetEnumerableElementType(propertyMetadata.PropertyType, out elementType);
         var cardinality = isMany
@@ -823,6 +844,12 @@ public sealed class ClrShapeGraphBuilder
         var normalized = UnwrapNullable(clrType);
         if (TryMapScalarType(normalized, out var scalar))
             return scalar;
+
+        // A public-contract build may explicitly discover a portable record as a named type.
+        // Reuse that decision when resolving references; ordinary semantic builds never register it.
+        if (PortableJsonValueAttribute.TryGetKind(normalized, out _)
+            && resolveNamedType(normalized) is { } publicTypeId)
+            return new NamedTypeRef(publicTypeId);
 
         if (TryMapJsonType(normalized, out var json))
             return json;
@@ -1187,6 +1214,16 @@ public sealed class ClrShapeGraphBuilder
     }
 
     static bool IsScalarLike(Type clrType) => TryMapScalarType(clrType, out _);
+
+    bool TryMapProjectedJsonType(Type clrType, out TypeRef typeRef)
+    {
+        if (publicJsonContracts?.HasPortableObjectContract(clrType) == true)
+        {
+            typeRef = default!;
+            return false;
+        }
+        return TryMapJsonType(clrType, out typeRef);
+    }
 
     static bool TryMapJsonType(Type clrType, out TypeRef typeRef)
     {

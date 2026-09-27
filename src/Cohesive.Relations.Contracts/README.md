@@ -81,3 +81,8 @@ treating stage identifiers as an independent source of truth.
 
 - `Cohesive.Relations` for relation authoring and execution.
 - `Cohesive.CodeGen.Cli` for contract discovery and code generation.
+
+The canonical-JSON profile expands serializer-backed portable records for public contracts, including the
+native `RelationDefinition` case. It does not change portable value admission in execution or storage.
+Converter-defined values remain opaque unless the shared serializer metadata supplies a known representation.
+See [typed portable JSON values](../../docs/decisions/typed-portable-json-values.md) for this authority boundary.

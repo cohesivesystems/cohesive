@@ -2,6 +2,9 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.Json.Schema;
+using System.Text.Json.Serialization.Metadata;
+using Cohesive.Model.Serialization;
 using Cohesive.Api;
 using Cohesive.Api.CodeGen;
 using Cohesive.CodeGen;
@@ -50,7 +53,7 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
 
     sealed class OpenApiDocumentBuilder(ApiDefinition definition, OpenApiEmitterOptions options)
     {
-        readonly SchemaRegistry schemas = new();
+        readonly SchemaRegistry schemas = new(options.JsonSerializerOptions);
 
         public JsonObject Build()
         {
@@ -550,6 +553,17 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
         readonly Dictionary<Type, string> componentNameByType = new();
         readonly Dictionary<string, Type> typeByComponentName = new(StringComparer.Ordinal);
         readonly JsonObject components = [];
+        readonly JsonSerializerOptions? serializerOptions;
+        readonly SystemTextJsonClrShapeMetadataProvider? jsonMetadata;
+
+        public SchemaRegistry(JsonSerializerOptions? options)
+        {
+            if (options is null)
+                return;
+            serializerOptions = new(options);
+            serializerOptions.MakeReadOnly(populateMissingResolver: true);
+            jsonMetadata = new(serializerOptions);
+        }
 
         public JsonObject SchemaFor(Type type)
         {
@@ -571,6 +585,9 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
         {
             if (type == typeof(void))
                 return [];
+
+            if (serializerOptions is not null)
+                return PublicSchemaFor(type);
 
             if (TryGetPrimitiveSchema(type, out var primitive))
                 return primitive;
@@ -615,8 +632,110 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
             typeByComponentName[componentName] = type;
 
             components[componentName] = new JsonObject();
-            components[componentName] = ObjectSchema(type);
+            components[componentName] = serializerOptions is null
+                ? ObjectSchema(type)
+                : PublicObjectSchema(serializerOptions.GetTypeInfo(type));
             return componentName;
+        }
+
+        JsonObject PublicSchemaFor(Type type)
+        {
+            var info = serializerOptions!.GetTypeInfo(type);
+            switch (info.Kind)
+            {
+                case JsonTypeInfoKind.Object:
+                    return ReferenceSchema(type);
+                case JsonTypeInfoKind.Dictionary when IsDictionary(type, out var valueType, requireStringKey: false):
+                    return new() { ["type"] = "object", ["additionalProperties"] = SchemaFor(valueType) };
+                case JsonTypeInfoKind.Enumerable when TryGetSequenceElementType(type, out var elementType):
+                    return ArraySchema(elementType);
+                case JsonTypeInfoKind.None:
+                    // Native scalar/converter schema export has no constructor defaults to materialize.
+                    // Object graphs use the registry below: native export attempts to serialize CLR
+                    // optional defaults such as default(ImmutableArray<T>), which are not wire defaults.
+                    var native = info.GetJsonSchemaAsNode(new JsonSchemaExporterOptions
+                    {
+                        TreatNullObliviousAsNonNullable = true
+                    });
+                    if (native is JsonObject schema)
+                        return schema;
+                    if (PortableJsonValueAttribute.TryGetKind(type, out _) && TryGetPrimitiveSchema(type, out var portable))
+                        return portable;
+                    var metadata = jsonMetadata!.GetMetadata(ClrShapeMetadataContext.ForType(type));
+                    if (metadata.Annotations.TryGetValue(new(SystemTextJsonShapeAnnotations.Representation), out var representation)
+                        && representation.Value is JsonValue annotation && annotation.TryGetValue<string>(out var kind)
+                        && kind is "string" or "number" or "boolean")
+                        return new() { ["type"] = kind };
+                    if (type.IsEnum)
+                    {
+                        JsonArray values = [];
+                        HashSet<string> seen = new(StringComparer.Ordinal);
+                        foreach (var value in Enum.GetValues(type))
+                        {
+                            var serialized = JsonSerializer.SerializeToNode(value, type, serializerOptions);
+                            if (seen.Add(serialized?.ToJsonString() ?? "null"))
+                                values.Add(serialized);
+                        }
+                        return new() { ["enum"] = values };
+                    }
+                    return new();
+                default:
+                    throw new NotSupportedException($"JSON contract '{type.FullName}' cannot be projected into OpenAPI.");
+            }
+        }
+
+        JsonObject PublicObjectSchema(JsonTypeInfo info, string? discriminatorName = null, object? discriminator = null)
+        {
+            _ = jsonMetadata!.HasPortableObjectContract(info.Type);
+            if (discriminatorName is null && info.PolymorphismOptions is { DerivedTypes.Count: > 0 } polymorphism)
+            {
+                JsonArray cases = [];
+                foreach (var derived in polymorphism.DerivedTypes)
+                {
+                    if (derived.TypeDiscriminator is null)
+                        throw new NotSupportedException($"JSON polymorphic contract '{info.Type.FullName}' requires explicit discriminators.");
+                    cases.Add(PublicObjectSchema(serializerOptions!.GetTypeInfo(derived.DerivedType),
+                        polymorphism.TypeDiscriminatorPropertyName, derived.TypeDiscriminator));
+                }
+                if (!info.Type.IsAbstract && !polymorphism.DerivedTypes.Any(derived => derived.DerivedType == info.Type))
+                    throw new NotSupportedException($"JSON polymorphic contract '{info.Type.FullName}' requires an explicit base-type case.");
+                return new() { ["oneOf"] = cases };
+            }
+            if (info.Kind != JsonTypeInfoKind.Object)
+                throw new NotSupportedException($"JSON polymorphic case '{info.Type.FullName}' must be an object contract.");
+
+            JsonObject properties = [];
+            JsonArray required = [];
+            if (discriminatorName is not null)
+            {
+                properties[discriminatorName] = new JsonObject { ["const"] = JsonSerializer.SerializeToNode(discriminator) };
+                required.Add(discriminatorName);
+            }
+            var hasExtensionData = false;
+            foreach (var property in info.Properties)
+            {
+                if (property.Get is null && property.Set is null)
+                    continue;
+                if (property.IsExtensionData)
+                {
+                    hasExtensionData = true;
+                    continue;
+                }
+                if (property.CustomConverter is not null || property.NumberHandling is not null)
+                    throw new NotSupportedException($"JSON property '{info.Type.FullName}.{property.Name}' requires a converter or number-handling schema projection.");
+                var propertySchema = SchemaFor(property.PropertyType);
+                if (!property.PropertyType.IsValueType && (property.IsGetNullable || property.IsSetNullable))
+                    propertySchema = NullableSchema(propertySchema);
+                properties[property.Name] = propertySchema;
+                if (property.IsRequired || property.AssociatedParameter is { HasDefaultValue: false, IsMemberInitializer: false })
+                    required.Add(property.Name);
+            }
+            JsonObject result = new() { ["type"] = "object", ["properties"] = properties };
+            if (required.Count > 0)
+                result["required"] = required;
+            if (!hasExtensionData && (info.UnmappedMemberHandling ?? serializerOptions!.UnmappedMemberHandling) == JsonUnmappedMemberHandling.Disallow)
+                result["additionalProperties"] = false;
+            return result;
         }
 
         JsonObject ObjectSchema(Type type)
@@ -814,7 +933,7 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
         return false;
     }
 
-    static bool IsDictionary(Type type, out Type valueType)
+    static bool IsDictionary(Type type, out Type valueType, bool requireStringKey = true)
     {
         if (type.IsGenericType)
         {
@@ -822,7 +941,7 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
             if (definition == typeof(Dictionary<,>) || definition == typeof(IReadOnlyDictionary<,>) || definition == typeof(IDictionary<,>))
             {
                 var arguments = type.GetGenericArguments();
-                if (arguments[0] == typeof(string))
+                if (!requireStringKey || arguments[0] == typeof(string))
                 {
                     valueType = arguments[1];
                     return true;
@@ -842,7 +961,7 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
                 continue;
 
             var arguments = candidate.GetGenericArguments();
-            if (arguments[0] != typeof(string))
+            if (requireStringKey && arguments[0] != typeof(string))
                 continue;
 
             valueType = arguments[1];

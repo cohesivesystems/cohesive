@@ -18,7 +18,7 @@ public static class ContractsAssemblyShapeGraphLoader
     /// <param name="moduleName">Logical module name used to qualify the graph.</param>
     /// <returns>A CLR-semantic contract shape graph.</returns>
     public static ShapeGraph Load(string assemblyPath, string moduleName) =>
-        Load(assemblyPath, moduleName, metadataProvider: null);
+        Load(assemblyPath, moduleName, static () => new ClrShapeGraphBuilder());
 
     /// <summary>
     /// Builds a shape graph projected through an explicit System.Text.Json wire contract.
@@ -39,13 +39,13 @@ public static class ContractsAssemblyShapeGraphLoader
         return Load(
             assemblyPath,
             moduleName,
-            new SystemTextJsonClrShapeMetadataProvider(jsonSerializerOptions));
+            () => new ClrShapeGraphBuilder().UsePublicJsonContracts(jsonSerializerOptions));
     }
 
     static ShapeGraph Load(
         string assemblyPath,
         string moduleName,
-        IClrShapeMetadataProvider? metadataProvider)
+        Func<ClrShapeGraphBuilder> createBuilder)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(assemblyPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
@@ -57,16 +57,14 @@ public static class ContractsAssemblyShapeGraphLoader
         try
         {
             var assembly = loadContext.LoadFromAssemblyPath(assemblyPath);
-            var roots = DiscoverRootTypes(assembly);
+            var roots = DiscoverRootTypes(assembly, createBuilder);
             if (roots.Count == 0)
             {
                 throw new InvalidOperationException(
                     $"Assembly '{Path.GetFileName(assemblyPath)}' does not expose any contract types with readable public instance properties.");
             }
 
-            var builder = new ClrShapeGraphBuilder();
-            if (metadataProvider is not null)
-                builder.AddMetadataProvider(metadataProvider);
+            var builder = createBuilder();
             for (var i = 0; i < roots.Count; i++)
                 builder.AddShape(roots[i], ShapeRoles.ValueObject);
 
@@ -78,7 +76,7 @@ public static class ContractsAssemblyShapeGraphLoader
         }
     }
 
-    static List<Type> DiscoverRootTypes(Assembly assembly)
+    static List<Type> DiscoverRootTypes(Assembly assembly, Func<ClrShapeGraphBuilder> createBuilder)
     {
         var exportedTypes = assembly.GetExportedTypes();
         Array.Sort(exportedTypes, static (left, right) =>
@@ -89,44 +87,44 @@ public static class ContractsAssemblyShapeGraphLoader
         for (var i = 0; i < exportedTypes.Length; i++)
         {
             var type = exportedTypes[i];
-            AddRootTypeCandidate(type, roots, seen, validateBuildable: false);
+            AddRootTypeCandidate(type, roots, seen, validateBuildable: false, createBuilder);
         }
 
-        AddApiDefinitionRootTypes(assembly, roots, seen);
+        AddApiDefinitionRootTypes(assembly, roots, seen, createBuilder);
         roots.Sort(static (left, right) =>
             string.Compare(left.FullName, right.FullName, StringComparison.Ordinal));
         return roots;
     }
 
-    static void AddApiDefinitionRootTypes(Assembly assembly, List<Type> roots, HashSet<Type> seen)
+    static void AddApiDefinitionRootTypes(Assembly assembly, List<Type> roots, HashSet<Type> seen, Func<ClrShapeGraphBuilder> createBuilder)
     {
         var definitions = ContractsAssemblyApiDefinitionLoader.DiscoverDefinitions(assembly);
         for (var i = 0; i < definitions.Count; i++)
         {
             var operations = definitions[i].Operations;
             for (var j = 0; j < operations.Count; j++)
-                AddApiOperationRootTypes(operations[j], roots, seen);
+                AddApiOperationRootTypes(operations[j], roots, seen, createBuilder);
         }
     }
 
-    static void AddApiOperationRootTypes(ApiOperation operation, List<Type> roots, HashSet<Type> seen)
+    static void AddApiOperationRootTypes(ApiOperation operation, List<Type> roots, HashSet<Type> seen, Func<ClrShapeGraphBuilder> createBuilder)
     {
-        AddRootTypeCandidate(operation.RequestType, roots, seen, validateBuildable: true);
+        AddRootTypeCandidate(operation.RequestType, roots, seen, validateBuildable: true, createBuilder);
         for (var i = 0; i < operation.Results.Count; i++)
-            AddRootTypeCandidate(operation.Results[i].BodyType, roots, seen, validateBuildable: true);
+            AddRootTypeCandidate(operation.Results[i].BodyType, roots, seen, validateBuildable: true, createBuilder);
 
         if (operation.Http is not { } http)
             return;
 
-        AddRootTypeCandidate(http.Body?.BodyType, roots, seen, validateBuildable: true);
-        AddRootTypeCandidate(http.Query?.QueryType, roots, seen, validateBuildable: true);
+        AddRootTypeCandidate(http.Body?.BodyType, roots, seen, validateBuildable: true, createBuilder);
+        AddRootTypeCandidate(http.Query?.QueryType, roots, seen, validateBuildable: true, createBuilder);
 
         var parameters = http.Parameters;
         for (var i = 0; i < parameters.Count; i++)
-            AddRootTypeCandidate(parameters[i].Type, roots, seen, validateBuildable: true);
+            AddRootTypeCandidate(parameters[i].Type, roots, seen, validateBuildable: true, createBuilder);
     }
 
-    static void AddRootTypeCandidate(Type? type, List<Type> roots, HashSet<Type> seen, bool validateBuildable)
+    static void AddRootTypeCandidate(Type? type, List<Type> roots, HashSet<Type> seen, bool validateBuildable, Func<ClrShapeGraphBuilder> createBuilder)
     {
         if (type is null)
             return;
@@ -134,7 +132,7 @@ public static class ContractsAssemblyShapeGraphLoader
         var normalized = UnwrapType(type);
         if (TryGetEnumerableElementType(normalized, out var elementType))
         {
-            AddRootTypeCandidate(elementType, roots, seen, validateBuildable);
+            AddRootTypeCandidate(elementType, roots, seen, validateBuildable, createBuilder);
             return;
         }
 
@@ -142,17 +140,17 @@ public static class ContractsAssemblyShapeGraphLoader
             return;
 
         if (validateBuildable)
-            EnsureBuildableRootShape(normalized);
+            EnsureBuildableRootShape(normalized, createBuilder);
 
         if (seen.Add(normalized))
             roots.Add(normalized);
     }
 
-    static void EnsureBuildableRootShape(Type type)
+    static void EnsureBuildableRootShape(Type type, Func<ClrShapeGraphBuilder> createBuilder)
     {
         try
         {
-            _ = new ClrShapeGraphBuilder()
+            _ = createBuilder()
                 .AddShape(type, ShapeRoles.ValueObject)
                 .Build();
         }

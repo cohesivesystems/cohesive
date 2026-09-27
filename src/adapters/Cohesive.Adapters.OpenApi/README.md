@@ -37,3 +37,16 @@ app.MapCohesiveOpenApi(api);
 
 - `Cohesive.Api` for API declarations.
 - `Cohesive.CodeGen.Cli` for build-time artifact generation.
+
+## Public JSON contracts
+
+Supply `OpenApiEmitterOptions.JsonSerializerOptions` to project a public document contract from the
+same serializer metadata used on the wire. This supports recursive records, explicit polymorphic
+cases and converter-backed scalar identifiers while keeping portable document storage admission separate.
+The CLI selects this profile with `--shape-projection canonical-json` for OpenAPI as well as shapes.
+
+The profile rejects property-specific converters/number-handling overrides and polymorphic cases
+without explicit discriminators. Unknown converter output stays opaque; CLR implementation members
+are not substituted for a converter schema. Native document semantic validation remains authoritative.
+See [typed portable JSON contracts](../../../docs/decisions/typed-portable-json-values.md) for the
+projection boundary and qualification.

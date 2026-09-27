@@ -84,7 +84,10 @@ public static class ContractsCodeGenerator
                         FileName = $"{SanitizeFileNameSegment(options.ModuleName)}.openapi.generated.json",
                         Title = options.ModuleName,
                         Version = "1.0.0",
-                        WriteIndented = true
+                        WriteIndented = true,
+                        JsonSerializerOptions = options.ShapeProjection == ContractShapeProjection.CanonicalJson
+                            ? CreateCanonicalJsonOptions()
+                            : null
                     }).Emit(new ApiCodeGenerationRequest(definition));
 
                     var document = emission.Documents[0];
@@ -216,12 +219,17 @@ public static class ContractsCodeGenerator
         if (options.ShapeProjection != ContractShapeProjection.CanonicalJson)
             throw new InvalidOperationException($"Unsupported shape projection '{options.ShapeProjection}'.");
 
-        JsonSerializerOptions serializerOptions = new(JsonSerializerDefaults.Web);
-        serializerOptions.Converters.Add(SingleValueWrapperJsonConverter.ScalarOnly);
-        serializerOptions.Converters.Add(new JsonStringEnumConverter());
         return ContractsAssemblyShapeGraphLoader.Load(
             options.ContractsAssemblyPath,
             options.ModuleName,
-            serializerOptions);
+            CreateCanonicalJsonOptions());
+    }
+
+    static JsonSerializerOptions CreateCanonicalJsonOptions()
+    {
+        JsonSerializerOptions serializerOptions = new(JsonSerializerDefaults.Web);
+        serializerOptions.Converters.Add(SingleValueWrapperJsonConverter.ScalarOnly);
+        serializerOptions.Converters.Add(new JsonStringEnumConverter());
+        return serializerOptions;
     }
 }

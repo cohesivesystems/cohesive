@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Cohesive.Adapters.OpenApi;
 
 /// <summary>
@@ -5,6 +7,13 @@ namespace Cohesive.Adapters.OpenApi;
 /// </summary>
 public sealed record OpenApiEmitterOptions
 {
+    /// <summary>
+    /// Optional authoritative JSON serializer contract for public schemas. When supplied, native
+    /// System.Text.Json metadata determines record members, polymorphism, and converter boundaries.
+    /// The emitter snapshots these options; execution and storage admission are unchanged.
+    /// </summary>
+    public JsonSerializerOptions? JsonSerializerOptions { get; init; }
+
     /// <summary>
     /// Generated document file name.
     /// </summary>

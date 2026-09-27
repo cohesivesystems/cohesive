@@ -64,3 +64,34 @@ query documents through the existing graph builder. Native expression cases reta
 This does not yet provide the full public relation schema: separating execution admission from an explicitly
 selected public document contract remains part of the declarative service plan. Expanding every portable value
 through CLR reflection would still violate the authority boundary described above.
+
+## Explicit public record contracts
+
+`ClrShapeGraphBuilder.UsePublicJsonContracts(options)` selects a public representation interpretation of
+serializer-backed records. The normal builder and `DefaultClrTypeRefMapper` retain portable JSON admission.
+The public builder snapshots serializer options, reuses the existing recursive named-type and polymorphic union
+projection, and expands a portable value only when its actual serializer metadata describes an object. An
+incompatible declared root kind fails early. Converter-defined portable values remain opaque; CLR implementation
+properties are not used to guess their serialized representation. Custom object metadata that cannot be described
+by the readable CLR properties is rejected rather than silently approximated.
+
+The canonical-JSON contracts assembly loader uses this interpretation for both discovery validation and final
+projection. This makes a record such as `Review(RelationDraftDocument Draft, RelationQueryDocument? Relation)`
+publicly typed, including the native `RelationDefinition` case, without changing its execution/storage contract or
+adding a parallel review/document model. The regenerated relations artifact is produced by the existing CLI.
+
+OpenAPI accepts the same explicit serializer options. Its existing schema registry consumes native object metadata
+for names, presence, nullable properties, dictionaries and explicit polymorphic discriminators. Recursive references
+remain component references. Scalar/converter schemas use the platform exporter and the existing System.Text.Json
+shape metadata for known wrappers/enums. Constructor default values are deliberately not emitted as wire defaults:
+they may be internal normalization inputs, and native schema export cannot serialize some defaults such as
+`default(ImmutableArray<T>)`. Semantic document validators and strict serializers continue to own acceptance.
+
+This initial OpenAPI public profile rejects property-specific converters/number-handling overrides and
+polymorphic cases without explicit discriminators, rather than claiming an unsupported contract. Converter-defined
+values without a known public scalar representation remain opaque. The default OpenAPI profile is unchanged.
+GraphQL public document expansion is not included in this change.
+
+Qualification includes native draft/query documents, recursive records and expressions, nullable document fields,
+unchanged execution inference, actual JSON discriminator layout, converter opacity, contradictory root kinds,
+unsupported object metadata, deterministic generation, valid OpenAPI references and TypeScript compilation.

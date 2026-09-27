@@ -57,6 +57,32 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
         this.options.MakeReadOnly(populateMissingResolver: true);
     }
 
+    /// <summary>Determines whether a portable JSON value has a projectable public object contract.</summary>
+    /// <param name="clrType">Declared CLR document type to inspect using this provider's frozen options.</param>
+    /// <returns>True for serializer-backed portable records; false for undeclared or converter-defined values.</returns>
+    /// <exception cref="InvalidOperationException">The serializer object contradicts the declared JSON root kind.</exception>
+    /// <exception cref="NotSupportedException">Custom object metadata cannot be represented by readable CLR properties.</exception>
+    public bool HasPortableObjectContract(Type clrType)
+    {
+        if (!PortableJsonValueAttribute.TryGetKind(clrType, out var kind))
+            return false;
+        var typeInfo = options.GetTypeInfo(clrType);
+        if (typeInfo.Kind != JsonTypeInfoKind.Object)
+            return false;
+        if (kind is not (JsonTypeKind.Object or JsonTypeKind.Any))
+            throw new InvalidOperationException(
+                $"Portable JSON type '{clrType.FullName}' declares '{kind}' but its serializer contract is an object.");
+        var properties = ShapeTypeInspector.GetReadableProperties(clrType);
+        var serialized = typeInfo.Properties.Where(static property => property.Get is not null).ToArray();
+        if (serialized.Length != properties.Length
+            || properties.Any(property => !serialized.Any(jsonProperty =>
+                jsonProperty.AttributeProvider is PropertyInfo candidate
+                && ShapeTypeInspector.IsSameProperty(candidate, property))))
+            throw new NotSupportedException(
+                $"Public JSON type '{clrType.FullName}' uses object metadata that cannot be represented by its readable CLR properties.");
+        return true;
+    }
+
     /// <inheritdoc />
     public ClrShapeMetadata GetMetadata(ClrShapeMetadataContext context)
     {
