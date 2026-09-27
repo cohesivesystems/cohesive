@@ -12,6 +12,90 @@ public sealed class ExecutionDefinitionSerializationTests
     static readonly ExecutionDefinitionKind TransitionKind = new("transition");
 
     [Fact]
+    public void DirectSemanticWriter_MatchesNodeReferenceAcrossJsonKindsAndGeneratedDocuments()
+    {
+        string[] numbers = ["-0.00e99", "1e-7", "1e-6", "1e20", "1e21",
+            "123456789012345678901234567890.123456789", "1e999", "-1e-999"];
+        var coveredKinds = new HashSet<JsonValueKind>();
+        Random random = new(73921);
+        for (var iteration = 0; iteration < 64; iteration++)
+        {
+            var rows = new JsonArray();
+            for (var row = 0; row < random.Next(1, 32); row++)
+                rows.Add(JsonNode.Parse($$$"""{"z":null,"a":[true,false,{{{numbers[random.Next(numbers.Length)]}}}],"text":"\u03bb/\\\"<>&","empty":{}}"""));
+            using var json = JsonDocument.Parse(new JsonObject { ["rows"] = rows, ["empty"] = new JsonArray() }.ToJsonString());
+            Visit(json.RootElement);
+            var document = DocumentFromJson(json.RootElement);
+            Assert.Equal(NodeReference(document, json.RootElement), ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document));
+            Assert.Equal(document.Metadata.Fingerprint, ExecutionDefinitionFingerprinter.Compute(document));
+        }
+        Assert.Equal(Enum.GetValues<JsonValueKind>().Where(kind => kind != JsonValueKind.Undefined).Order(), coveredKinds.Order());
+
+        void Visit(JsonElement element)
+        {
+            coveredKinds.Add(element.ValueKind);
+            if (element.ValueKind == JsonValueKind.Object)
+                foreach (var property in element.EnumerateObject()) Visit(property.Value);
+            if (element.ValueKind == JsonValueKind.Array)
+                foreach (var item in element.EnumerateArray()) Visit(item);
+        }
+    }
+
+    [Fact]
+    public void DirectSemanticWriter_AvoidsMutableTreeAllocationForRepeatedStructuredPayloads()
+    {
+        using var json = JsonDocument.Parse("{\"rows\":[" + string.Join(",", Enumerable.Repeat(
+            "{\"z\":\"value\",\"nested\":{\"b\":true,\"a\":[1,2,null]}}", 512)) + "]}");
+        var document = DocumentFromJson(json.RootElement);
+        for (var warmup = 0; warmup < 3; warmup++)
+        {
+            Assert.Equal(NodeReference(document), ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document));
+        }
+        var reference = Allocated(() => NodeReference(document));
+        var direct = Allocated(() => ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document));
+        Assert.True(direct < reference / 2, $"Direct writer allocated {direct} bytes vs mutable reference {reference}.");
+
+        static long Allocated(Func<byte[]> write)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var iteration = 0; iteration < 8; iteration++) _ = write();
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+    }
+
+    [Fact]
+    public void DirectSemanticWriter_PreservesExtensionValuesAndFailureIdentity()
+    {
+        var document = CreateDocument(extensions:
+        [
+            StringExtension("example.mode", "adaptive"),
+            TypeRichExtension(),
+            FailedExtension("failure.code", "Attributable prose", "/location", "/schema")
+        ]);
+        Assert.Equal(NodeReference(document), ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document));
+    }
+
+    // Retain the previous physical implementation as a differential oracle, not a production authority.
+    static byte[] NodeReference(ExecutionDefinitionDocument document, JsonElement? originalDefinition = null)
+    {
+        var options = ExecutionDefinitionJsonSerializer.CreateOptions();
+        var extensions = JsonSerializer.SerializeToNode(document.Extensions, options)!.AsArray();
+        for (var index = 0; index < document.Extensions.Length; index++)
+            if (document.Extensions[index].Value.State == PortableValueState.Failed)
+                extensions[index]!["value"]!["failure"] = new JsonObject
+                {
+                    ["code"] = document.Extensions[index].Value.Failure!.Code
+                };
+        return CanonicalJsonWriter.GetCanonicalSequenceBytes(new JsonObject
+        {
+            ["schemaVersion"] = document.Metadata.SchemaVersion.Value,
+            ["kind"] = document.Kind.Value,
+            ["definition"] = JsonNode.Parse((originalDefinition ?? document.Definition).GetRawText()),
+            ["extensions"] = extensions
+        }, options, CanonicalJsonNumberSemantics.ExactDecimalRational);
+    }
+
+    [Fact]
     public void NormalizedSemanticContent_MatchesKnownCanonicalBytesAndFingerprint()
     {
         var document = CreateDocument();

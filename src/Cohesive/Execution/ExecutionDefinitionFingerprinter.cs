@@ -1,5 +1,7 @@
+using System.Buffers;
 using System.Collections.Immutable;
 using System.Security.Cryptography;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Cohesive.Model.Serialization;
@@ -145,13 +147,10 @@ public static class ExecutionDefinitionFingerprinter
         }
         ValidateDefinitionProperties(definition);
 
-        var options = ExecutionDefinitionJsonSerializer.GetReadOnlyOptions();
-        var definitionNode = JsonNode.Parse(definition.GetRawText())
-            ?? throw new InvalidOperationException("Failed to materialize canonical execution-definition JSON.");
-        var canonical = CanonicalJsonWriter.GetCanonicalSequenceBytes(
-            definitionNode,
-            options,
-            numberSemantics: CanonicalJsonNumberSemantics.ExactDecimalRational);
+        ArrayBufferWriter<byte> buffer = new();
+        using (var writer = CreateCanonicalWriter(buffer))
+            CanonicalJsonWriter.WriteCanonicalSequence(writer, definition);
+        var canonical = buffer.WrittenMemory;
         using var document = JsonDocument.Parse(canonical);
         return document.RootElement.Clone();
     }
@@ -167,22 +166,37 @@ public static class ExecutionDefinitionFingerprinter
             throw new ArgumentException("Normalized execution extensions must be initialized.", nameof(normalizedExtensions));
 
         var options = ExecutionDefinitionJsonSerializer.GetReadOnlyOptions();
-        var definitionNode = JsonNode.Parse(canonicalDefinition.GetRawText())
-            ?? throw new InvalidOperationException("Failed to materialize canonical execution-definition JSON.");
-        var extensionNode = CreateSemanticExtensionsNode(normalizedExtensions, options);
-        JsonObject semanticContent = new()
+        ArrayBufferWriter<byte> buffer = new();
+        using (var writer = CreateCanonicalWriter(buffer))
         {
-            ["schemaVersion"] = schemaVersion.Value,
-            ["kind"] = kind.Value,
-            ["definition"] = definitionNode,
-            ["extensions"] = extensionNode
-        };
-
-        return CanonicalJsonWriter.GetCanonicalSequenceBytes(
-            semanticContent,
-            options,
-            numberSemantics: CanonicalJsonNumberSemantics.ExactDecimalRational);
+            // Envelope keys are fixed and emitted in the same ordinal order as the general writer.
+            writer.WriteStartObject();
+            writer.WritePropertyName("definition");
+            CanonicalJsonWriter.WriteCanonicalSequence(writer, canonicalDefinition);
+            writer.WritePropertyName("extensions");
+            if (normalizedExtensions.IsEmpty)
+            {
+                writer.WriteStartArray();
+                writer.WriteEndArray();
+            }
+            else
+            {
+                var extensions = CreateSemanticExtensionsNode(normalizedExtensions, options);
+                writer.WriteRawValue(CanonicalJsonWriter.GetCanonicalSequenceBytes(
+                    extensions, options, CanonicalJsonNumberSemantics.ExactDecimalRational));
+            }
+            writer.WriteString("kind", kind.Value);
+            writer.WriteString("schemaVersion", schemaVersion.Value);
+            writer.WriteEndObject();
+        }
+        return buffer.WrittenSpan.ToArray();
     }
+
+    static Utf8JsonWriter CreateCanonicalWriter(IBufferWriter<byte> buffer) => new(buffer, new JsonWriterOptions
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        Indented = false
+    });
 
     static JsonNode CreateSemanticExtensionsNode(
         ImmutableArray<ExecutionDefinitionExtension> extensions,
