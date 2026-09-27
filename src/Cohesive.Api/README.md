@@ -65,3 +65,12 @@ of `Microsoft.AspNetCore.App`.
 - `Cohesive.Adapters.OpenApi` for OpenAPI emission.
 - `Cohesive.Adapters.GraphQL` for GraphQL schema emission.
 - `Cohesive.Adapters.TypeScript` for TypeScript client generation.
+
+## Service declarations
+
+`Services.ServiceDefinition` groups exact Transition operations into a portable service authority using
+the existing execution-definition document, provenance and fingerprint contracts. An operation references
+its entity state identity and declared authorization requirements; its input and outcome remain derived
+from the Transition. Native repositories and HTTP routes are runtime/projection bindings, never stored
+callbacks. The optional `Cohesive.Api.Execution` package provides the first direct invocation runtime.
+See [declarative service runtime](../../docs/decisions/declarative-service-runtime.md).

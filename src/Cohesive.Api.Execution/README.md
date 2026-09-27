@@ -97,3 +97,21 @@ of the execution-specific public surface.
 - `Cohesive.Storage` for canonical Control contracts used by the execution-control surface.
 - `Cohesive.Adapters.AspNet` for ASP.NET endpoint projection.
 - `Cohesive.Adapters.OpenApi`, `Cohesive.Adapters.GraphQL`, and `Cohesive.Adapters.TypeScript` for derived API artifacts.
+
+## Declared service invocation
+
+`Services.ServiceTransitionRuntime` binds a validated `Cohesive.Api.Services.ServiceDefinition` document
+to exact compiled Transitions, entity definitions and invocation-scoped repositories. Direct calls and
+`Cohesive.Adapters.AspNet.Services.MapServiceTransition` share authoritative loading, mandatory authority,
+decision and conditional commit. API CLR types are checked projections of the Transition contracts.
+
+`IdentityServiceInvocationAuthorization` interprets declared requirements as explicit capabilities in
+normalized identity grants and checks logical entity ownership independently of physical placement.
+It adds the existing `Cohesive.Identity` dependency to this optional composition package. Generic API
+consumers still do not acquire storage, identity or Process runtime dependencies through `Cohesive.Api`.
+
+The initial profile supports existing subjects without emissions; unsupported creation, emission and
+extension requirements fail binding. No durable replay or stronger permission-revocation guarantee is
+implied. Returned service and Transition traces are payload-free inspection evidence; internal snapshots and
+decision inputs/observations are not invocation results. See [the design and qualification boundary](../../docs/decisions/declarative-service-runtime.md)
+and `ServiceTransitionRuntimeTests` for runnable direct/HTTP examples and failure scenarios.

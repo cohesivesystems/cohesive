@@ -196,3 +196,23 @@ states map to the catalog's opaque not-found, conflict, and precondition-failed 
 - `Cohesive.Api.Execution` for the canonical execution-control catalog and safe result projections.
 - `Cohesive.Identity` for identity context and scope resolution.
 - `Cohesive.Processes`, `Cohesive.Relations`, and `Cohesive.Storage` for the runtime surfaces exposed by endpoints.
+
+## Declared service operations
+
+For an admitted `ServiceTransitionRuntime`, `MapServiceTransition<TInput,TOutcome>` projects the operation
+without per-route repository loading or commit callbacks:
+
+```csharp
+using Cohesive.Adapters.AspNet.Services;
+
+app.MapServiceTransition<ReviseNote, bool>(
+    runtime, "revise", "/notes/{id}/revise",
+    authorizationPolicyResolver: (_, requirement) => requirement.Id);
+```
+
+The CLR types must match the referenced Transition contracts. The caller sends the opaque reviewed token
+in `X-Expected-Concurrency-Token` and receives the next token in the same response header. The response
+body is the Transition outcome. Routes retain standard API metadata and native ASP.NET authorization
+policy associations, while direct and HTTP calls both pass the runtime's mandatory authority binding.
+Repository factories are not resolved during mapping. This initial profile supports existing subjects
+without emissions; see [its guarantees and qualification](../../../docs/decisions/declarative-service-runtime.md).
