@@ -315,7 +315,9 @@ public sealed class DurableTaskProcessExecutionRepository :
             values.Definition,
             values.ProcessInstanceId,
             values.Input,
-            result.State.Terminal));
+            result.State.Terminal,
+            result.State.Continuation,
+            result.Evidence));
     }
 
     ValueTask<ProcessExecutionQueryResult> QueryCurrentAsync(

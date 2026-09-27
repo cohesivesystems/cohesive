@@ -265,6 +265,15 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         var values = Assert.IsType<ProcessExecutionValues>(read.Values);
         Assert.Equal(completed.Result.State.Definition, values.Definition);
         Assert.Equal(completed.Fixture.LogicalInstanceId, values.ProcessInstanceId);
+        Assert.Equal(completed.Result.State.Continuation, values.TerminalContinuation);
+        Assert.Equal(completed.Fixture.Converter.Serialize(completed.Result.Evidence),
+            completed.Fixture.Converter.Serialize(values.Evidence));
+        Assert.Throws<ArgumentException>(() => new ProcessExecutionValues(values.Definition,
+            new("foreign-instance"), values.Input, values.TerminalOutcome, values.TerminalContinuation, values.Evidence));
+        var foreignEvidence = values.Evidence.Select(item => item with
+            { Definition = ProcessDurabilityTestFixture.DefinitionReference("process/foreign", 'a') }).ToImmutableArray();
+        Assert.Throws<ArgumentException>(() => new ProcessExecutionValues(values.Definition,
+            values.ProcessInstanceId, values.Input, values.TerminalOutcome, values.TerminalContinuation, foreignEvidence));
         Assert.Equal(PrivateInput, Assert.IsType<PortableValue>(values.Input).Value?.Deserialize<string>());
         var terminal = Assert.IsType<ExecutionTerminalOutcome>(values.TerminalOutcome);
         Assert.Equal(ExecutionTerminalOutcomeKind.Completed, terminal.Kind);

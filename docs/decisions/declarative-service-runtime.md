@@ -483,5 +483,23 @@ Trace admission only accepts concrete valid locators on successful operation-com
 Storage checkpoint admission additionally requires exact equality with the corresponding retained
 operation receipt. A mutation that attaches different receipt evidence to an operation is rejected.
 The reference/runtime differential, crash recovery and integrity suite passes nine tests; full core
-qualification is running in `/tmp/cohesive-receipt-terminal-full.log`. Full native Scheduler result
-serialization is included in that run. This is not live Azure qualification or completed HTTP adoption.
+qualification passes 3,985 tests with 33 skipped in `/tmp/cohesive-receipt-terminal-full.log`. Full
+native Scheduler result serialization is included in that run. This is not live Azure qualification or completed HTTP adoption.
+
+## Protected terminal-value read
+
+The existing `IProcessExecutionValueRepository` now projects exact terminal continuation identity
+and retained canonical activation evidence through `ProcessExecutionValues`. These are protected
+values, separate from monitoring/status. The Scheduler reader uses the same exact authority-scoped
+point read and already-loaded terminal result; it does not scan history or issue another provider read.
+
+The value artifact validates definition, instance and activation affinity. Default evidence means
+that evidence is unavailable; a materialized empty array means an empty history. Older readers'
+artifacts can omit terminal continuation/evidence, but a receipt response must not infer missing
+attempt identity. Evidence may include earlier attempts, so result selection must match the exact
+terminal continuation before choosing the declared commit node.
+
+Twenty repository tests pass (`/tmp/cohesive-protected-terminal-values.log`), including exact protected
+value projection, foreign authority rejection, in-progress versus missing-terminal-artifact states,
+and malformed definition/instance affinity. Service declaration/binding of the commit result source,
+resource authorization and HTTP response projection remain outstanding.

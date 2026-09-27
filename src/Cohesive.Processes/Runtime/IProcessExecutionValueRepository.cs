@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Text.Json.Serialization;
+using Cohesive.Processes.Execution;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 
@@ -61,6 +63,9 @@ public sealed record ProcessExecutionValues
     /// <param name="processInstanceId">Canonical logical Process identity.</param>
     /// <param name="input">Optional canonical start input.</param>
     /// <param name="terminalOutcome">Canonical terminal outcome when its result artifact is available.</param>
+    /// <param name="terminalContinuation">Exact terminal attempt when retained; null denotes unavailable attempt evidence.</param>
+    /// <param name="evidence">Protected canonical activation evidence. Default denotes unavailable evidence;
+    /// a materialized empty array denotes no retained activations. This is not normalized telemetry.</param>
     /// <exception cref="ArgumentNullException"><paramref name="definition"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="processInstanceId"/> is default or <paramref name="terminalOutcome"/> is nonterminal.
@@ -70,7 +75,9 @@ public sealed record ProcessExecutionValues
         ExecutionDefinitionReference definition,
         ProcessInstanceId processInstanceId,
         PortableValue? input = null,
-        ExecutionTerminalOutcome? terminalOutcome = null)
+        ExecutionTerminalOutcome? terminalOutcome = null,
+        ProcessContinuationIdentity? terminalContinuation = null,
+        ImmutableArray<ProcessExecutionEvidence> evidence = default)
     {
         Definition = definition ?? throw new ArgumentNullException(nameof(definition));
         if (string.IsNullOrWhiteSpace(processInstanceId.Value))
@@ -86,9 +93,24 @@ public sealed record ProcessExecutionValues
                 nameof(terminalOutcome));
         }
 
+        if (terminalContinuation is not null && (terminalOutcome is null
+            || terminalContinuation.ProcessInstanceId != processInstanceId))
+            throw new ArgumentException("Terminal continuation must identify this instance and a retained terminal outcome.", nameof(terminalContinuation));
+        if (!evidence.IsDefaultOrEmpty)
+        {
+            if (terminalContinuation is null)
+                throw new ArgumentException("Retained activation evidence requires exact terminal continuation evidence.", nameof(evidence));
+            foreach (var activation in evidence)
+                if (activation is null || activation.Definition != definition || activation.Trace.IsDefault
+                    || activation.Trace.Any(item => item is null || item.Definition != definition
+                        || item.Activation != activation.Activation || item.Continuation.ProcessInstanceId != processInstanceId))
+                    throw new ArgumentException("Retained activation evidence contradicts the exact Process definition or instance.", nameof(evidence));
+        }
         ProcessInstanceId = processInstanceId;
         Input = input;
         TerminalOutcome = terminalOutcome;
+        TerminalContinuation = terminalContinuation;
+        Evidence = evidence;
     }
 
     /// <summary>Exact pinned Process definition.</summary>
@@ -102,6 +124,16 @@ public sealed record ProcessExecutionValues
 
     /// <summary>Canonical terminal outcome when a terminal result artifact is available.</summary>
     public ExecutionTerminalOutcome? TerminalOutcome { get; }
+
+    /// <summary>Exact attempt producing the terminal result, or null when that evidence is unavailable.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProcessContinuationIdentity? TerminalContinuation { get; }
+
+    /// <summary>Protected canonical activation evidence; default means unavailable, not an empty history.</summary>
+    /// <remarks>May contain receipt locators and protected identities. Do not export as normalized telemetry.
+    /// Evidence can span prior attempts; terminal response selection must use TerminalContinuation.</remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public ImmutableArray<ProcessExecutionEvidence> Evidence { get; }
 }
 
 /// <summary>Explicit outcome of reading retained canonical Process values.</summary>
