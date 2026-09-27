@@ -15,6 +15,15 @@ namespace Cohesive.Tests.CodeGen;
 
 public sealed class RelationsContractProjectionTests
 {
+    [Theory]
+    [InlineData(typeof(RelationDraftDocument))]
+    [InlineData(typeof(RelationQueryDocument))]
+    public void NativeDocument_DeclaresPortableObjectExecutionContract(Type documentType)
+    {
+        var contract = new Cohesive.Model.Authoring.DefaultClrTypeRefMapper().Map(documentType, null);
+        Assert.Equal(new JsonTypeRef(JsonTypeKind.Object), contract);
+    }
+
     [Fact]
     public void DeclaredJsonFactory_ProducesTheNativeWireContractWithoutAParallelProfile()
     {

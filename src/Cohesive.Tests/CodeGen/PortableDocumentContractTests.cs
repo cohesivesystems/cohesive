@@ -12,10 +12,11 @@ namespace Cohesive.Tests.CodeGen;
 public sealed class PortableDocumentContractTests
 {
     [Fact]
-    public void NativeDocumentContracts_PreserveOpaqueRelationCasesAndTypedExpressions()
+    public void NativeDocumentContracts_RequirePublicProjectionAndRetainTypedExpressions()
     {
+        Assert.Throws<InvalidOperationException>(() => new ClrShapeGraphBuilder().AddShape<RelationDraftDocument>());
         var graph = new ClrShapeGraphBuilder()
-            .AddMetadataProvider(new SystemTextJsonClrShapeMetadataProvider(StrictDocumentJson.CreateOptions()))
+            .UsePublicJsonContracts(StrictDocumentJson.CreateOptions())
             .AddShape<RelationDraftDocument>()
             .AddShape<RelationQueryDocument>()
             .Build(new("native-document-contracts"));
@@ -23,7 +24,7 @@ public sealed class PortableDocumentContractTests
         var text = Assert.Single(emission.Documents).Text;
         Assert.Contains("export interface RelationDraftDocument", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationQueryDocument", text, StringComparison.Ordinal);
-        Assert.Contains("readonly $definition: 'relation';\n} & Record<string, unknown>", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $definition: 'relation';\n} & RelationDefinition", text, StringComparison.Ordinal);
         Assert.Contains("export type Expr =", text, StringComparison.Ordinal);
         Assert.Contains("readonly $expr: 'field';", text, StringComparison.Ordinal);
         Assert.Equal(text, Assert.Single(new TypeScriptShapeEmitter()
