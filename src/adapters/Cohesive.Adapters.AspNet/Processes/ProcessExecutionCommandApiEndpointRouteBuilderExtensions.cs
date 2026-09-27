@@ -137,7 +137,7 @@ public static class ProcessExecutionCommandApiEndpointRouteBuilderExtensions
                     statusCode: result.Http.StatusCode);
         };
 
-    static ApiResultDefinition GetProjectedResult(
+    internal static ApiResultDefinition GetProjectedResult(
         ApiOperation operation,
         ApiResultKind kind,
         Type bodyType)

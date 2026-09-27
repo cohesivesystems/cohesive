@@ -122,4 +122,6 @@ decision inputs/observations are not invocation results. See [the design and qua
 and `ServiceRuntimeTests`, `ServiceQueryRuntimeTests` and `ServiceProcessRuntimeTests` for executable
 examples. `ServiceCompositionTests` qualifies acquisition/computation followed by durable multi-entity
 recovery. Query source qualification currently covers native in-memory acquisition; remote-provider
-filtering and new-family HTTP projections remain in progress.
+filtering and query HTTP projection remain in progress. `ProjectProcess<TRequest>` derives Process entry/control
+API contracts from the native catalog. ASP.NET `MapServiceProcessStart` and `MapServiceProcessControl<TCommand>`
+use those projections and the shared runtime, retaining native results and existing admission problems.

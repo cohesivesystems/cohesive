@@ -1,3 +1,12 @@
+using System.Text;
+using System.Text.Json;
+using Cohesive.Adapters.AspNet.Services;
+using Cohesive.Adapters.OpenApi;
+using Cohesive.Api.CodeGen;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Api;
 using Cohesive.Api.Execution;
 using Cohesive.Api.Execution.Services;
@@ -119,6 +128,106 @@ public sealed class ServiceProcessRuntimeTests
         var failure = Assert.Throws<ServiceBindingValidationException>(() => new ServiceRuntime(declaration, [binding],
             new IdentityServiceInvocationAuthorization("tenant", new("Tenant"))));
         Assert.Equal("services.binding.controlUnsupported", Assert.Single(failure.Validation.Diagnostics).Code);
+    }
+
+    [Fact]
+    public async Task HttpStartAndPauseShareNativeAdmissionAndReplay()
+    {
+        var fixture = Create();
+        var start = fixture.Request();
+        var started = await InvokeHttp(fixture.Runtime, "publish", start, Context());
+        Assert.Equal(StatusCodes.Status200OK, started.StatusCode);
+        var admitted = JsonSerializer.Deserialize<ProcessStartResult>(started.Body, HttpJson)!;
+        Assert.Equal(ProcessStartDisposition.Accepted, admitted.Disposition);
+        Assert.DoesNotContain("private-input", started.Body);
+        var pause = new PauseProcessCommand(ProcessControlCommand.CurrentSchemaVersion,
+            new(new("http/pause"), new("http/pause"), start.Context.ProcessInstanceId, start.Context.Authorization,
+                start.Context.IssuedAtUtc, start.Context.Provenance),
+            new(admitted.Admission!.Continuation, admitted.Admission.ControlRevision));
+        var paused = await InvokeHttp(fixture.Runtime, "pause", pause, Context());
+        var replayed = await InvokeHttp(fixture.Runtime, "pause", pause, Context());
+        Assert.Equal(StatusCodes.Status200OK, paused.StatusCode);
+        Assert.Equal(StatusCodes.Status200OK, replayed.StatusCode);
+        var result = JsonSerializer.Deserialize<ExecutionControlResult>(paused.Body, HttpJson)!;
+        var replay = JsonSerializer.Deserialize<ExecutionControlResult>(replayed.Body, HttpJson)!;
+        Assert.Equal(ProcessControlDecisionDisposition.Applied, result.Disposition);
+        Assert.Equal(ProcessControlDecisionDisposition.Replayed, replay.Disposition);
+        Assert.Equal(result.Status.ControlRevision, replay.Status.ControlRevision);
+        Assert.DoesNotContain("forged-actor", paused.Body);
+        Assert.Equal("alice", fixture.ControlInvocation!.Authorization.Actor);
+    }
+
+    [Fact]
+    public async Task HttpAdmissionReturnsDeclaredErrorsWithoutDispatchingInvalidRequests()
+    {
+        var fixture = Create();
+        var request = fixture.Request();
+        var denied = await InvokeHttp(fixture.Runtime, "publish", request, OperationContext.Create());
+        Assert.Equal(StatusCodes.Status403Forbidden, denied.StatusCode);
+        Assert.Equal("services.authorization.denied", JsonSerializer.Deserialize<ExecutionApiProblem>(denied.Body, HttpJson)!.Code);
+        var invalid = new ProcessStartRequest(request.SchemaVersion, request.Definition, request.Context,
+            request.InitialContinuation, PortableValue.Concrete(new(new ScalarTypeRef(ScalarTypeKind.Bool)), ObservationValue.FromBool(true)));
+        var rejected = await InvokeHttp(fixture.Runtime, "publish", invalid, Context());
+        Assert.Equal(StatusCodes.Status400BadRequest, rejected.StatusCode);
+        Assert.Contains("services.process.inputInvalid", rejected.Body);
+        Assert.Equal(0, fixture.Dispatches);
+        Assert.Equal(0, fixture.ControlDispatches);
+    }
+
+    [Fact]
+    public void ProcessProjectionDerivesNativeTypesResultsAndRequirementsWithoutDispatch()
+    {
+        var fixture = Create();
+        var native = ExecutionControlApiCatalog.Create().Pause.Operation;
+        var projected = fixture.Runtime.ProjectProcess<PauseProcessCommand>("pause",
+            new("POST", "/notes/pause", [], new(typeof(PauseProcessCommand)))).Operation;
+        Assert.Equal(native.RequestType, projected.RequestType);
+        Assert.Equal(native.ResponseType, projected.ResponseType);
+        Assert.Equal(native.SemanticReferences, projected.SemanticReferences);
+        Assert.Equal(new[] { "notes.pause" }, projected.AuthorizationRequirements.Select(requirement => requirement.Id));
+        Assert.Equal("service/notes/operation/pause", projected.Id.Value);
+        foreach (var result in native.Results)
+            Assert.Contains(projected.Results, candidate => candidate.Id == result.Id && candidate.Kind == result.Kind
+                && candidate.BodyType == result.BodyType && candidate.IsPrimary == result.IsPrimary && candidate.Http is not null);
+        Assert.Equal(typeof(ExecutionApiProblem), Assert.Single(projected.Results,
+            result => result.Id == "admissionValidationFailed").BodyType);
+        Assert.Equal(2, projected.Results.Count(result => result.Kind == ApiResultKind.ValidationFailed));
+        var start = fixture.Runtime.ProjectProcess<ProcessStartRequest>("publish").Operation;
+        Assert.Equal(ExecutionControlApiCatalog.Create().Start.Operation.Results.Count, start.Results.Count);
+        var emission = new OpenApiEmitter().Emit(new ApiCodeGenerationRequest(new ApiDefinition([projected])));
+        using var document = JsonDocument.Parse(Assert.Single(emission.Documents).Text);
+        var invalidResponse = document.RootElement.GetProperty("paths").GetProperty("/notes/pause").GetProperty("post")
+            .GetProperty("responses").GetProperty("400").GetProperty("content").GetProperty("application/json").GetProperty("schema");
+        Assert.Equal(2, invalidResponse.GetProperty("oneOf").GetArrayLength());
+        Assert.Throws<ArgumentException>(() => fixture.Runtime.ProjectProcess<ContinueProcessCommand>("pause"));
+        Assert.Throws<ArgumentException>(() => fixture.Runtime.ProjectProcess<PauseProcessCommand>("pause",
+            new("POST", "/notes/pause", [], new(typeof(ContinueProcessCommand)))));
+        Assert.Equal(0, fixture.Dispatches);
+        Assert.Equal(0, fixture.ControlDispatches);
+    }
+
+    static readonly JsonSerializerOptions HttpJson = new(JsonSerializerDefaults.Web);
+
+    static async Task<(int StatusCode, string Body)> InvokeHttp<TRequest>(ServiceRuntime runtime,
+        string operationId, TRequest request, OperationContext context)
+    {
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(context);
+        await using var app = builder.Build();
+        app.MapServiceProcessStart(runtime, "publish", "/notes/publish", (_, requirement) => requirement.Id);
+        app.MapServiceProcessControl<PauseProcessCommand>(runtime, "pause", "/notes/pause", (_, requirement) => requirement.Id);
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>().Single(candidate => candidate.RoutePattern.RawText == "/notes/" + operationId);
+        Assert.Same(runtime.Declaration, endpoint.Metadata.GetMetadata<ExecutionDefinitionDocument>());
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(request, HttpJson);
+        var http = new DefaultHttpContext { RequestServices = app.Services };
+        http.Request.Method = "POST";
+        http.Request.ContentType = "application/json";
+        http.Request.ContentLength = bytes.Length;
+        http.Request.Body = new MemoryStream(bytes);
+        http.Response.Body = new MemoryStream();
+        await endpoint.RequestDelegate!(http);
+        return (http.Response.StatusCode, Encoding.UTF8.GetString(((MemoryStream)http.Response.Body).ToArray()));
     }
 
     static OperationContext Context()

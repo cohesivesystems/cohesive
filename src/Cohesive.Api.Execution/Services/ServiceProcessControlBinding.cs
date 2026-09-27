@@ -1,4 +1,3 @@
-using System.Collections.Frozen;
 using Cohesive.Api.Services;
 using Cohesive.Execution;
 using Cohesive.Identity;
@@ -16,9 +15,6 @@ namespace Cohesive.Api.Execution.Services;
 /// </remarks>
 public sealed class ServiceProcessControlBinding : ServiceBinding
 {
-    static readonly Lazy<FrozenDictionary<string, ApiOperation>> NativeOperations = new(() =>
-        ExecutionControlApiCatalog.Create().Definition.Operations.ToFrozenDictionary(operation => operation.Name, StringComparer.Ordinal));
-
     /// <summary>Associates a prepared Process and authority with a native lifecycle dispatcher.</summary>
     /// <exception cref="ArgumentNullException">Plan or dispatcher is null.</exception>
     /// <exception cref="ArgumentException">Operation identity or authority is empty.</exception>
@@ -36,14 +32,13 @@ public sealed class ServiceProcessControlBinding : ServiceBinding
     /// <summary>Native execution authority associated by deployment.</summary>
     public string Authority { get; }
     internal ExecutionProcessControlDispatcher Control { get; }
-    internal static ApiOperation NativeOperation(string action) => NativeOperations.Value[action];
 
     internal override void Validate(ServiceOperation operation)
     {
         if (operation is not ServiceProcessControlOperation control || control.Process != Plan.DefinitionReference)
             throw ServiceBindingValidationException.Error("services.binding.inexact",
                 "The binding must control the exact declared Process.", "/bindings/processControl");
-        var native = NativeOperation(control.Action);
+        var native = ServiceRuntime.NativeProcessOperation(control.Action);
         if (!typeof(ProcessControlCommand).IsAssignableFrom(native.RequestType)
             || native.RequestType == typeof(InspectProcessCommand) || native.RequestType == typeof(SignalProcessCommand))
             throw ServiceBindingValidationException.Error("services.binding.controlUnsupported",
@@ -78,7 +73,7 @@ public sealed partial class ServiceRuntime
             if (invocation is null)
                 return Reject(ApiResultKind.Forbidden, "services.authorization.denied", "The caller is not authorized to invoke this operation.");
             evidence.Record("authorityAdmitted");
-            var native = ServiceProcessControlBinding.NativeOperation(operation.Action);
+            var native = NativeProcessOperation(operation.Action);
             if (request.GetType() != native.RequestType)
                 return Reject(ApiResultKind.ValidationFailed, "services.process.commandMismatch", "The command must match the declared native lifecycle action.");
             context.ThrowIfCancellationRequested();

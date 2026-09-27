@@ -247,3 +247,25 @@ revision is hidden as NotFound before mutation and cannot retrieve an earlier su
 command/definition replays without advancing the control revision. The current lifecycle binding supports
 Pause, Continue, RestartAttempt, Cancel and Terminate. Read projections and Signal ingress require their own
 qualified bindings; unsupported actions fail binding early. HTTP projection remains follow-up work.
+
+
+### Process API and HTTP projection
+
+`ProjectProcess<TRequest>` derives request types, native result variants, scope policies and semantic
+references from `ExecutionControlApiCatalog`. The service document supplies endpoint identity and required
+capabilities. The exact native request type is checked at projection time. No repository or dispatcher is
+resolved during mapping. ASP.NET attaches the full service declaration as route metadata and uses the existing
+Process request reader and result selector.
+
+`MapServiceProcessStart` and `MapServiceProcessControl<TCommand>` call the same shared runtime as direct
+invocation. They retain native start/control result bodies and use the existing `ExecutionApiProblem` for
+service admission failure. Start already declares that validation result; lifecycle controls add it alongside
+the native validation decision. OpenAPI derives both distinct 400-body alternatives from those result declarations.
+No transport-specific command DTO, control-action switch or status-code table is introduced.
+
+Tested example: POST a native Process-start request to `/notes/publish`, then POST the native Pause command to
+`/notes/pause`. The second identical pause replays at the same control revision. A forged actor remains replaced
+by trusted service identity, and start input/forged authorization do not appear in returned bodies. A denied
+start returns 403, while an invalid portable input returns the declared 400 problem without dispatch. Tests
+exercise endpoint delegates and generated OpenAPI; they do not claim a deployed authentication middleware or
+live provider qualification. Query transport projection remains open.

@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Api;
+using Cohesive.Api.Execution;
+using Cohesive.Adapters.AspNet.Processes;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Execution;
 using Cohesive.Model;
@@ -69,6 +71,53 @@ public static class ServiceEndpointRouteBuilderExtensions
             var diagnostic = result.Diagnostics.FirstOrDefault();
             return Results.Json(new ApiProblem(diagnostic?.Code ?? "services.invocation.failed",
                 diagnostic?.Message ?? "Invocation failed.", diagnostic?.Location), statusCode: status);
+        }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(runtime.Declaration);
+    }
+
+    /// <summary>Maps a declared Process entry using its native start request and admission result.</summary>
+    /// <remarks>Authority, exact definition and portable input admission remain in the shared service runtime.</remarks>
+    /// <exception cref="ArgumentException">The operation or route is invalid.</exception>
+    public static RouteHandlerBuilder MapServiceProcessStart(this IEndpointRouteBuilder endpoints,
+        ServiceRuntime runtime, string operationId, string route,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) =>
+        MapProcess<ProcessStartRequest, ProcessStartResult>(endpoints, runtime, operationId, route,
+            (context, request) => runtime.StartAsync(context, operationId, request), authorizationPolicyResolver);
+
+    /// <summary>Maps a declared lifecycle control with its exact native command type and safe native result.</summary>
+    /// <typeparam name="TCommand">Native command type required by the declaration, such as PauseProcessCommand.</typeparam>
+    /// <remarks>Request type mismatch fails mapping; canonical control and replay remain dispatcher-owned.</remarks>
+    /// <exception cref="ArgumentException">The request type, operation or route is invalid.</exception>
+    public static RouteHandlerBuilder MapServiceProcessControl<TCommand>(this IEndpointRouteBuilder endpoints,
+        ServiceRuntime runtime, string operationId, string route,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null)
+        where TCommand : ProcessControlCommand =>
+        MapProcess<TCommand, ExecutionControlResult>(endpoints, runtime, operationId, route,
+            (context, request) => runtime.ControlAsync(context, operationId, request), authorizationPolicyResolver);
+
+    static RouteHandlerBuilder MapProcess<TRequest, TOutcome>(IEndpointRouteBuilder endpoints,
+        ServiceRuntime runtime, string operationId, string route,
+        Func<OperationContext, TRequest, ValueTask<ServiceOperationResult<TOutcome>>> invoke,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver)
+        where TRequest : class where TOutcome : class
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentNullException.ThrowIfNull(runtime);
+        ArgumentException.ThrowIfNullOrWhiteSpace(route);
+        var projection = runtime.ProjectProcess<TRequest>(operationId, new("POST", route, [], new(typeof(TRequest))));
+        return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
+        {
+            var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, projection.Operation,
+                context.CancellationToken).ConfigureAwait(false)
+                ?? throw new BadHttpRequestException("A native Process request body is required.");
+            var result = await invoke(context, request).ConfigureAwait(false);
+            object response = result.Outcome is { } outcome
+                ? outcome
+                : new ExecutionApiProblem(result.Diagnostics.FirstOrDefault()?.Code ?? "services.invocation.failed");
+            var projectedResult = ProcessExecutionCommandApiEndpointRouteBuilderExtensions.GetProjectedResult(
+                projection.Operation, result.Kind, response.GetType());
+            return Results.Json(response, options: null,
+                contentType: projectedResult.Http!.ContentType ?? "application/json",
+                statusCode: projectedResult.Http.StatusCode);
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(runtime.Declaration);
     }
 

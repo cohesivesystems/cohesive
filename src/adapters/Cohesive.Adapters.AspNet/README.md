@@ -216,3 +216,17 @@ body is the Transition outcome. Routes retain standard API metadata and native A
 policy associations, while direct and HTTP calls both pass the runtime's mandatory authority binding.
 Repository factories are not resolved during mapping. This initial profile supports existing subjects
 without emissions; see [its guarantees and qualification](../../../docs/decisions/declarative-service-runtime.md).
+
+Process entries and lifecycle controls project their native command contracts through the same service runtime:
+
+```csharp
+app.MapServiceProcessStart(runtime, "publish", "/notes/publish",
+    authorizationPolicyResolver: (_, requirement) => requirement.Id);
+app.MapServiceProcessControl<PauseProcessCommand>(runtime, "pause", "/notes/pause",
+    authorizationPolicyResolver: (_, requirement) => requirement.Id);
+```
+
+`PauseProcessCommand` is the native `Cohesive.Execution` contract. A mismatched command CLR type fails mapping.
+Native API result definitions determine statuses and response bodies. Service admission failures use the existing
+`ExecutionApiProblem`; native Process decisions retain their own result. Start/control authority and exact-target
+admission run in the shared service runtime, while ASP.NET policy metadata remains an additional host integration.
