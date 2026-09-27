@@ -248,7 +248,7 @@ public static class TypeScriptSyntaxEmitter
         WritePropertyName(property.Name, ref writer);
     }
 
-    static bool IsIdentifier(string value)
+    internal static bool IsIdentifier(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return false;

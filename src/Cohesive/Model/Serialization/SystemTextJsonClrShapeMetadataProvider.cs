@@ -149,7 +149,8 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
         };
     }
 
-    string ResolveJsonPropertyName(PropertyInfo property)
+    /// <summary>Resolves a CLR property to the name in this serializer contract, including configured metadata overrides.</summary>
+    public string ResolveJsonPropertyName(PropertyInfo property)
     {
         var typeInfo = options.GetTypeInfo(property.DeclaringType
             ?? throw new InvalidOperationException($"Property '{property.Name}' has no declaring type."));

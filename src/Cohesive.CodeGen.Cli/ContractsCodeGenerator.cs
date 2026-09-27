@@ -59,9 +59,12 @@ public static class ContractsCodeGenerator
 
                 case CodeGenEmitKind.Apis:
                 {
-                    var definition = ContractsAssemblyApiDefinitionLoader.Load(options.ContractsAssemblyPath);
+                    var definition = ContractsAssemblyApiDefinitionLoader.Load(options.ContractsAssemblyPath,
+                        options.ShapeProjection == ContractShapeProjection.DeclaredJson, out var declaredJsonOptions);
                     var emission = new TypeScriptApiClientEmitter(new TypeScriptApiClientEmitterOptions
                     {
+                        JsonSerializerOptions = declaredJsonOptions ?? (options.ShapeProjection == ContractShapeProjection.CanonicalJson
+                            ? CreateCanonicalJsonOptions() : null),
                         FileName = $"{SanitizeFileNameSegment(options.ModuleName)}.api.generated.ts",
                         ModuleName = options.ModuleName,
                         ShapesImportPath = $"./{SanitizeFileNameSegment(options.ModuleName)}.shapes.generated",
@@ -108,9 +111,12 @@ public static class ContractsCodeGenerator
 
                 case CodeGenEmitKind.ApiPlaywright:
                 {
-                    var definition = ContractsAssemblyApiDefinitionLoader.Load(options.ContractsAssemblyPath);
+                    var definition = ContractsAssemblyApiDefinitionLoader.Load(options.ContractsAssemblyPath,
+                        options.ShapeProjection == ContractShapeProjection.DeclaredJson, out var declaredJsonOptions);
                     var emission = new TypeScriptPlaywrightApiMockEmitter(new TypeScriptPlaywrightApiMockEmitterOptions
                     {
+                        JsonSerializerOptions = declaredJsonOptions ?? (options.ShapeProjection == ContractShapeProjection.CanonicalJson
+                            ? CreateCanonicalJsonOptions() : null),
                         FileName = $"{SanitizeFileNameSegment(options.ModuleName)}.api.playwright.generated.ts",
                         ShapesImportPath = $"./{SanitizeFileNameSegment(options.ModuleName)}.shapes.generated",
                         ModuleName = options.ModuleName,

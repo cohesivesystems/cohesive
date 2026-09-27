@@ -181,3 +181,10 @@ those generated shape types. GraphQL currently rejects this profile before writi
 public serializer projection remains a separate capability. Existing `clr` (default) and
 `canonical-json` modes remain available. Custom converter/schema restrictions of each emitter still
 apply; declaring a factory does not grant an emitter knowledge of arbitrary converter output.
+
+The public JSON profile also governs TypeScript client and Playwright mock query-object member
+names. URL query parameter names still follow the HTTP binding convention. For example, a CLR
+`SearchTerm` property may project to `searchTerm` in the client object while its URL parameter is
+`search_term`. An explicit JSON name overrides the corresponding conventions. Both emitters use
+the same serializer metadata provider as shape generation; punctuation-containing names use
+quoted property access. The default CLR projection remains unchanged.

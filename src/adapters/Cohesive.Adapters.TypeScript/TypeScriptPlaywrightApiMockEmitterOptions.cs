@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Cohesive.Adapters.TypeScript;
 
 /// <summary>
@@ -5,6 +7,8 @@ namespace Cohesive.Adapters.TypeScript;
 /// </summary>
 public sealed record TypeScriptPlaywrightApiMockEmitterOptions
 {
+    /// <summary>Optional public JSON contract used for request member names. Null preserves CLR projection.</summary>
+    public JsonSerializerOptions? JsonSerializerOptions { get; init; }
     /// <summary>
     /// Output file name.
     /// </summary>

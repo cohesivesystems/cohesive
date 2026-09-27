@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Adapters.TypeScript;
 using Cohesive.Api;
@@ -10,6 +11,35 @@ namespace Cohesive.Tests.CodeGen;
 
 public sealed class TypeScriptApiClientEmitterTests
 {
+    [Fact]
+    public void Emit_PublicJsonQueryMembers_AlignClientAndMockWithSerializedContract()
+    {
+        var definition = Cohesive.Api.Api.Define("Search")
+            .Action("Find").Route("GET", "/search")
+            .Query<PublicSearchRequest>().Returns<string>().Done().Build();
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var request = new ApiCodeGenerationRequest(definition);
+        var client = Assert.Single(new TypeScriptApiClientEmitter(new()
+        { JsonSerializerOptions = options }).Emit(request).Documents).Text;
+        var mock = Assert.Single(new TypeScriptPlaywrightApiMockEmitter(new()
+        { JsonSerializerOptions = options }).Emit(request).Documents).Text;
+        using var serialized = JsonDocument.Parse(JsonSerializer.Serialize(new PublicSearchRequest("x", ["a"]), options));
+        Assert.True(serialized.RootElement.TryGetProperty("searchTerm", out _));
+        Assert.True(serialized.RootElement.TryGetProperty("tag-values", out _));
+        Assert.Contains("query.searchTerm", client);
+        Assert.Contains("query['tag-values']", client);
+        Assert.Contains("queryParams.set('search_term'", client);
+        Assert.Contains("queryParams.append('tag-values'", client);
+        Assert.Contains("query.searchTerm =", mock);
+        Assert.Contains("query['tag-values'] =", mock);
+        Assert.Contains("PublicSearchRequest['tag-values']", mock);
+        Assert.DoesNotContain("query.SearchTerm", client);
+        Assert.DoesNotContain("query.Tags", mock);
+    }
+
+    sealed record PublicSearchRequest(string SearchTerm,
+        [property: JsonPropertyName("tag-values")] string[] Tags);
+
     [Fact]
     public void Emit_RouteLessSemanticOperation_RetainsIdentityButOmitsHttpClientAndMockBindings()
     {
