@@ -153,3 +153,7 @@ remain the caller's contract. Relation draft admission uses it for graph-owned e
 without rounding. It shares bounded coefficient parsing with JSON-number acquisition, while JSON
 alone permits exponent notation. The expression evaluator delegates to this helper. The existing
 `TryGetDecimal` convenience coercion keeps its broader BCL syntax and rounding behavior.
+
+Execution-document normalization and fingerprinting traverse immutable JSON directly; see
+[canonicalization performance](../../docs/performance/execution-canonicalization.md) for ownership,
+exact-byte regression coverage, allocation measurements and remaining costs.

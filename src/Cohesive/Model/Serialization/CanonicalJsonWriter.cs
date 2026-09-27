@@ -298,6 +298,54 @@ public static class CanonicalJsonWriter
         return GetCanonicalBytesCore(node, options, getArrayOrdering: null, numberSemantics);
     }
 
+    // Execution documents already own immutable JSON. Traverse it directly instead of expanding
+    // each property into a mutable JsonNode graph. Scalar spelling is shared with the node writer.
+    internal static void WriteCanonicalSequence(Utf8JsonWriter writer, JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                var count = element.GetPropertyCount();
+                if (count > 0)
+                {
+                    var properties = ArrayPool<KeyValuePair<string, JsonElement>>.Shared.Rent(count);
+                    try
+                    {
+                        var index = 0;
+                        foreach (var property in element.EnumerateObject())
+                            properties[index++] = new(property.Name, property.Value);
+                        properties.AsSpan(0, count).Sort(
+                            static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
+                        for (index = 0; index < count; index++)
+                        {
+                            writer.WritePropertyName(properties[index].Key);
+                            WriteCanonicalSequence(writer, properties[index].Value);
+                        }
+                    }
+                    finally
+                    {
+                        properties.AsSpan(0, count).Clear();
+                        ArrayPool<KeyValuePair<string, JsonElement>>.Shared.Return(properties);
+                    }
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                    WriteCanonicalSequence(writer, item);
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.Number:
+                WriteExactDecimalRational(writer, element.GetRawText());
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
+    }
+
     static byte[] GetCanonicalBytesCore(
         JsonNode node,
         JsonSerializerOptions options,
