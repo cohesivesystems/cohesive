@@ -14,6 +14,17 @@ namespace Cohesive.Tests.CodeGen;
 public sealed class RelationsContractProjectionTests
 {
     [Fact]
+    public void DeclaredJsonFactory_ProducesTheNativeWireContractWithoutAParallelProfile()
+    {
+        var declared = ContractsAssemblyShapeGraphLoader.LoadDeclaredJson(
+            typeof(RelationsContractsDefinition).Assembly.Location, "relations");
+        var emitter = new TypeScriptShapeEmitter();
+        Assert.Equal(
+            Assert.Single(emitter.Emit(new ShapeCodeGenerationRequest(LoadWireContractGraph())).Documents).Text,
+            Assert.Single(emitter.Emit(new ShapeCodeGenerationRequest(declared)).Documents).Text);
+    }
+
+    [Fact]
     public void RelationsContracts_ProjectCanonicalDocumentsAndClosedUnions()
     {
         var graph = LoadWireContractGraph();

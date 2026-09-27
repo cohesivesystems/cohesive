@@ -21,8 +21,8 @@ public static class CodeGenUsage
         writer.WriteLine("    --module myapp");
         writer.WriteLine();
         writer.WriteLine("Optional:");
-        writer.WriteLine("  --shape-projection <clr|canonical-json>");
-        writer.WriteLine("    Project CLR semantics (default) or canonical JSON wire names and values.");
+        writer.WriteLine("  --shape-projection <clr|canonical-json|declared-json>");
+        writer.WriteLine("    Project CLR semantics (default), canonical JSON, or the assembly's declared serializer contract.");
         writer.WriteLine("  --external-shapes <clr-namespace-prefix>=<typescript-import-path>");
         writer.WriteLine("    Treat matching CLR namespace shapes as owned by another generated TypeScript module.");
         writer.WriteLine("  --union-catalog <generated-union-type>=<typescript-export-name>");

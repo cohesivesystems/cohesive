@@ -328,6 +328,12 @@ public static class CodeGenCliParser
             return true;
         }
 
+        if (string.Equals(value, "declared-json", StringComparison.OrdinalIgnoreCase))
+        {
+            projection = ContractShapeProjection.DeclaredJson;
+            return true;
+        }
+
         projection = default;
         return false;
     }

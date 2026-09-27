@@ -110,3 +110,19 @@ its specialized query-parameter converter. A generic web naming converter is not
 the complete nested JSON for the existing string-based native admission API; this is one boundary operation, not a
 row-loop projection. Registering these adapters only on API options keeps persisted aggregate restoration and its
 existing diagnostics unchanged.
+
+
+## Declared serializer authority
+
+An assembly may declare `JsonContractOptionsAttribute` pointing to a public static, parameterless
+options factory. The CLI's `declared-json` interpretation resolves it in the same load context as the
+contract types, snapshots the options, and uses the existing public graph/OpenAPI projections. This is
+an authoring/runtime binding association, not a new portable document schema. Hosts share the same
+configuration function; generation does not guess their naming or enum policy from an application name.
+The relation contracts assembly delegates directly to its existing native serializer options factory.
+
+The factory must be deterministic, must not resolve services or invocation context, and is executed only
+as explicitly selected trusted contract-authoring code. Invalid declarations and attributed factory
+failures stop generation. A declaration does not make arbitrary custom converters structurally known;
+emitter capability restrictions continue to apply. GraphQL rejects this interpretation until it can
+preserve the declared serializer contract.

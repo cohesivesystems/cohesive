@@ -161,3 +161,23 @@ The longer-term model is:
 - emit multiple target languages from the same semantic graph
 
 TypeScript is the first target, not the terminal abstraction.
+
+## Declared JSON authority
+
+For public contracts, `--shape-projection declared-json` reads one explicit assembly declaration:
+
+```csharp
+[assembly: JsonContractOptions(typeof(AppJson), nameof(AppJson.CreateOptions))]
+```
+
+The factory must be public, static and parameterless, returning `JsonSerializerOptions`. It is trusted,
+deterministic authoring code and must not resolve runtime services or request context. Share its
+configuration with the HTTP host; the generator snapshots and freezes the returned options. Missing,
+invalid or failing declarations are reported instead of selecting a naming convention implicitly.
+The relation contracts assembly points directly to its native serializer options factory.
+
+The declared profile applies to shapes and OpenAPI. API and Playwright clients retain references to
+those generated shape types. GraphQL currently rejects this profile before writing artifacts; its
+public serializer projection remains a separate capability. Existing `clr` (default) and
+`canonical-json` modes remain available. Custom converter/schema restrictions of each emitter still
+apply; declaring a factory does not grant an emitter knowledge of arbitrary converter output.

@@ -65,8 +65,10 @@ public sealed class CodeGenCliParserTests
             });
     }
 
-    [Fact]
-    public void TryParse_RecognizesCanonicalJsonShapeProjection()
+    [Theory]
+    [InlineData("canonical-json", ContractShapeProjection.CanonicalJson)]
+    [InlineData("declared-json", ContractShapeProjection.DeclaredJson)]
+    public void TryParse_RecognizesJsonShapeProjection(string profile, ContractShapeProjection expected)
     {
         var parsed = CodeGenCliParser.TryParse(
             [
@@ -74,7 +76,7 @@ public sealed class CodeGenCliParserTests
                 "--out", "/tmp/generated",
                 "--emit", "shapes",
                 "--module", "sample",
-                "--shape-projection", "canonical-json"
+                "--shape-projection", profile
             ],
             out var options,
             out var error,
@@ -83,7 +85,7 @@ public sealed class CodeGenCliParserTests
         Assert.True(parsed);
         Assert.False(showHelp);
         Assert.Null(error);
-        Assert.Equal(ContractShapeProjection.CanonicalJson, options!.ShapeProjection);
+        Assert.Equal(expected, options!.ShapeProjection);
     }
 
     [Fact]

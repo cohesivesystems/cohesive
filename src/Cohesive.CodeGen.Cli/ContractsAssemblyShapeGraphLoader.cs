@@ -42,10 +42,14 @@ public static class ContractsAssemblyShapeGraphLoader
             () => new ClrShapeGraphBuilder().UsePublicJsonContracts(jsonSerializerOptions));
     }
 
+    /// <summary>Projects public contracts using the assembly's declared JSON options factory.</summary>
+    public static ShapeGraph LoadDeclaredJson(string assemblyPath, string moduleName) =>
+        Load(assemblyPath, moduleName, createBuilder: null);
+
     static ShapeGraph Load(
         string assemblyPath,
         string moduleName,
-        Func<ClrShapeGraphBuilder> createBuilder)
+        Func<ClrShapeGraphBuilder>? createBuilder)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(assemblyPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
@@ -57,6 +61,11 @@ public static class ContractsAssemblyShapeGraphLoader
         try
         {
             var assembly = loadContext.LoadFromAssemblyPath(assemblyPath);
+            if (createBuilder is null)
+            {
+                var declaredOptions = JsonContractOptionsAttribute.Resolve(assembly);
+                createBuilder = () => new ClrShapeGraphBuilder().UsePublicJsonContracts(declaredOptions);
+            }
             var roots = DiscoverRootTypes(assembly, createBuilder);
             if (roots.Count == 0)
             {
