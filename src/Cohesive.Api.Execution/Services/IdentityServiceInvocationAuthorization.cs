@@ -38,7 +38,7 @@ public sealed class IdentityServiceInvocationAuthorization : IServiceInvocationA
     }
 
     /// <inheritdoc />
-    public ValueTask<bool> AuthorizeResourceAsync(OperationContext context, ServiceTransitionOperation operation, EntitySnapshot snapshot)
+    public ValueTask<bool> AuthorizeResourceAsync(OperationContext context, ServiceOperation operation, EntitySnapshot snapshot)
     {
         context.ThrowIfCancellationRequested();
         var scope = Resolve(context, operation);

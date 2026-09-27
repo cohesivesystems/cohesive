@@ -12,6 +12,7 @@ namespace Cohesive.Api.Services;
 [JsonDerivedType(typeof(ServiceTransitionOperation), "transition")]
 [JsonDerivedType(typeof(ServiceQueryOperation), "query")]
 [JsonDerivedType(typeof(ServiceProcessOperation), "process")]
+[JsonDerivedType(typeof(ServiceProcessEntityResultOperation), "processEntityResult")]
 [JsonDerivedType(typeof(ServiceProcessControlOperation), "processControl")]
 public abstract record ServiceOperation
 {
@@ -109,6 +110,39 @@ public sealed record ServiceProcessOperation : ServiceOperation
 
     /// <summary>Exact Process authority; the service does not copy its graph, contracts or control lifecycle.</summary>
     public ExecutionDefinitionReference Process { get; }
+}
+
+/// <summary>Reads the exact entity receipt produced at one declared node of a terminal Process attempt.</summary>
+/// <remarks>The Process owns execution. This operation selects retained commit evidence for a response;
+/// it neither reruns the Process nor substitutes current entity state when evidence is unavailable.</remarks>
+public sealed record ServiceProcessEntityResultOperation : ServiceOperation
+{
+    /// <summary>Declares an independently authorized committed-entity result read.</summary>
+    /// <param name="id">Service operation identity.</param>
+    /// <param name="process">Exact Process definition.</param>
+    /// <param name="commitNode">Transition invocation node whose single terminal-attempt receipt supplies the response.</param>
+    /// <param name="entity">Exact entity state shape exposed by the result binding.</param>
+    /// <param name="authorizationRequirements">Requirements for reading this result, independent of start admission.</param>
+    /// <exception cref="ArgumentException">A node or entity identity is empty.</exception>
+    /// <exception cref="ArgumentNullException">The Process reference is null.</exception>
+    [JsonConstructor]
+    public ServiceProcessEntityResultOperation(string id, ExecutionDefinitionReference process,
+        ExecutionNodeId commitNode, QualifiedShapeId entity,
+        ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default) : base(id, authorizationRequirements)
+    {
+        Process = process ?? throw new ArgumentNullException(nameof(process));
+        ArgumentException.ThrowIfNullOrWhiteSpace(commitNode.Value);
+        if (string.IsNullOrWhiteSpace(entity.GraphId.Value) || string.IsNullOrWhiteSpace(entity.ShapeId.Value))
+            throw new ArgumentException("An exact entity state shape is required.", nameof(entity));
+        CommitNode = commitNode;
+        Entity = entity;
+    }
+    /// <summary>Exact Process authority from which evidence must be read.</summary>
+    public ExecutionDefinitionReference Process { get; }
+    /// <summary>Declared Transition invocation node; ambiguous repeated occurrences cannot produce a single entity response.</summary>
+    public ExecutionNodeId CommitNode { get; }
+    /// <summary>Graph-qualified entity state authority.</summary>
+    public QualifiedShapeId Entity { get; }
 }
 
 /// <summary>Exposes one native lifecycle action restricted to an exact Process definition.</summary>

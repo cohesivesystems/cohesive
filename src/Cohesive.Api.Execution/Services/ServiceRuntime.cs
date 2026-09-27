@@ -28,7 +28,7 @@ public interface IServiceInvocationAuthorization
 
     /// <summary>Authorizes the exact runtime-loaded resource; false rejects without evaluating or committing.</summary>
     /// <exception cref="OperationCanceledException">Invocation cancellation was observed.</exception>
-    ValueTask<bool> AuthorizeResourceAsync(OperationContext context, ServiceTransitionOperation operation, EntitySnapshot snapshot);
+    ValueTask<bool> AuthorizeResourceAsync(OperationContext context, ServiceOperation operation, EntitySnapshot snapshot);
 }
 
 /// <summary>Structured declaration/binding diagnostics retained for human and agent inspection.</summary>
@@ -68,17 +68,19 @@ public sealed class ServiceTransitionBinding : ServiceBinding
         Func<OperationContext, IEntityRepository> repository) : base(operationId)
     {
         Plan = plan ?? throw new ArgumentNullException(nameof(plan));
-        Entity = entity ?? throw new ArgumentNullException(nameof(entity));
+        EntityBinding = new(entity, repository);
         if (plan.Definition.Observation != ValueContract.FromShape(entity.Shape))
             throw ServiceBindingValidationException.Error("services.binding.observationMismatch",
                 "The plan observation contract must match the bound entity state contract.", "/binding/entity");
-        Repository = repository ?? throw new ArgumentNullException(nameof(repository));
+
     }
     /// <summary>Reusable, immutable, exact compiled behavior.</summary>
     public CompiledTransitionPlan Plan { get; }
     /// <summary>Entity declaration against which plan and repository bindings are checked.</summary>
-    public EntityDefinition Entity { get; }
-    internal Func<OperationContext, IEntityRepository> Repository { get; }
+    public EntityDefinition Entity => EntityBinding.Entity;
+    /// <summary>Shared entity/repository association.</summary>
+    public ServiceEntityBinding EntityBinding { get; }
+    internal Func<OperationContext, IEntityRepository> Repository => EntityBinding.Repository;
     internal override void Validate(ServiceOperation operation)
     {
         if (operation is not ServiceTransitionOperation transition)

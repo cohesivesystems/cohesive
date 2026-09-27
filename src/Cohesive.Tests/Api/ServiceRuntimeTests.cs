@@ -394,7 +394,7 @@ public sealed class ServiceRuntimeTests
             Assert.Equal("notes.revise", Assert.Single(operation.AuthorizationRequirements).Id);
             return ValueTask.FromResult<ScopeRef?>(AllowAdmission ? new("tenant-a", "tenant") : null);
         }
-        public ValueTask<bool> AuthorizeResourceAsync(OperationContext context, ServiceTransitionOperation operation, EntitySnapshot snapshot)
+        public ValueTask<bool> AuthorizeResourceAsync(OperationContext context, ServiceOperation operation, EntitySnapshot snapshot)
         {
             ResourceChecks++;
             return ValueTask.FromResult(AllowResource && snapshot.Entity.Observation.GetField("Tenant").GetString() == "tenant-a");

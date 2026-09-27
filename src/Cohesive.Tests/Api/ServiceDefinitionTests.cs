@@ -37,6 +37,21 @@ public sealed class ServiceDefinitionTests
     }
 
     [Fact]
+    public void ProcessEntityResultRoundTripsExactCommitSourceAndIndependentRequirements()
+    {
+        var operation = new ServiceProcessEntityResultOperation("result", Reference("notes/publish"),
+            new("commit"), new(new("notes"), new("note")), [new("notes.result.read")]);
+        var document = ServiceDefinitionDocuments.Create(new("notes"), new("v1"), new([operation]),
+            new(new("tests"), new("tests/services"), DocumentOrigin.Generated));
+        Assert.True(ExecutionDefinitionJsonSerializer.TryDeserialize(
+            ExecutionDefinitionJsonSerializer.Serialize(document), out var restored).IsValid);
+        Assert.True(ServiceDefinitionDocuments.ValidateAndProject(restored!, out var definition).IsValid);
+        Assert.Equal(operation, Assert.Single(definition!.Operations));
+        Assert.NotEqual(operation, new ServiceProcessEntityResultOperation("result", operation.Process,
+            new("other-commit"), operation.Entity, operation.AuthorizationRequirements));
+    }
+
+    [Fact]
     public void OperationIdentityIsUniqueAcrossSemanticFamilies()
     {
         Assert.Throws<ArgumentException>(() => new ServiceDefinition([

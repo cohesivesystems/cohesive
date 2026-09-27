@@ -503,3 +503,32 @@ Twenty repository tests pass (`/tmp/cohesive-protected-terminal-values.log`), in
 value projection, foreign authority rejection, in-progress versus missing-terminal-artifact states,
 and malformed definition/instance affinity. Service declaration/binding of the commit result source,
 resource authorization and HTTP response projection remain outstanding.
+
+## Declared committed-entity result reads
+
+`ServiceProcessEntityResultOperation` declares an independently authorized read of the entity
+receipt from one exact Process node. Its declaration owns the Process reference, commit-node
+identity, entity state shape and read requirements. The binding verifies the selected node is the
+exact supplied Transition and that its observation contract matches the entity authority.
+`ServiceEntityBinding` now captures the entity/repository association used by both direct Transition
+bindings and Process result reads; repository resolution remains invocation-scoped.
+
+`ReadCommittedEntityAsync` admits access before reading native Process values, selects only the
+terminal attempt and declared node, and requires one receipt-bearing completion. It verifies locator
+occurrence/authority, exact Transition, entity identity, full snapshot and trusted partition before
+resource authorization against the retained snapshot. `IServiceInvocationAuthorization` now accepts
+the common `ServiceOperation` for resource checks; policy semantics remain logical ownership plus
+explicit operation grants. Host implementations of that interface must adopt the generalized signature.
+
+A running execution returns Accepted; unavailable, ambiguous or missing evidence returns explicit
+non-success without reading current entity state. Noncompleted Processes and rejected Transition
+decisions do not produce a successful entity result. This read does not start, retry or wait for
+execution. Medium adapters still own DTO projection and request/response conventions.
+
+Example: a note commit writes `committed-private`, then a later write stores `later`. The declared
+result returns the first snapshot and token. A grant for the result operation is required independently
+of start permissions, and a receipt whose logical owner differs from the admitted tenant is denied.
+Fifty-one focused service tests pass, including declaration roundtrip, wrong-node binding, exact
+older snapshot, denied admission before reads, ownership, missing/ambiguous receipts and earlier
+attempt exclusion. Full core qualification is running in `/tmp/cohesive-service-receipt-full.log`.
+HTTP projection and Ari adoption remain outstanding; this is in-memory qualification.
