@@ -89,3 +89,9 @@ See [typed portable JSON values](../../docs/decisions/typed-portable-json-values
 
 `JsonContractOptionsAttribute` identifies the native relation serializer factory in the contracts
 assembly, so generation no longer needs a separately reconstructed serializer profile.
+
+`ShapeGraphDocument` is also an explicit generation root. Its complete native model closure is
+exported alongside relations because source and target shapes are part of the relation contract.
+Applications can reference that shared canonical document without copying shape definitions into
+their frontend contracts. The native model remains authority; application envelopes must use its
+canonical JSON conventions when externalizing these types.

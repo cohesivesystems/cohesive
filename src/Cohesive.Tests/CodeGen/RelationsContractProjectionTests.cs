@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Cohesive.Adapters.TypeScript;
 using Cohesive.CodeGen;
 using Cohesive.CodeGen.Cli;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Contracts;
 using Cohesive.Relations.Drafts;
 using Cohesive.Relations.Explain;
@@ -22,6 +24,20 @@ public sealed class RelationsContractProjectionTests
         Assert.Equal(
             Assert.Single(emitter.Emit(new ShapeCodeGenerationRequest(LoadWireContractGraph())).Documents).Text,
             Assert.Single(emitter.Emit(new ShapeCodeGenerationRequest(declared)).Documents).Text);
+    }
+
+    [Fact]
+    public void ShapeGraphRoot_PreservesTheExistingWebDocumentWireShape()
+    {
+        var document = ShapeGraphDocument.FromGraph(new ShapeGraph(
+            id: new("graph.contract-test"),
+            shapes: [new(id: new("shape.order"), fields:
+                [new(name: new("orderNumber"), type: new ScalarTypeRef(ScalarTypeKind.String),
+                    presence: FieldPresence.Optional, nullability: FieldNullability.Nullable)])],
+            annotations: AnnotationMap.Create("graph.kind", "order")));
+        Assert.Equal(
+            JsonSerializer.Serialize(document, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            JsonSerializer.Serialize(document, RelationsContractsDefinition.CreateJsonOptions()));
     }
 
     [Fact]
@@ -82,6 +98,9 @@ public sealed class RelationsContractProjectionTests
         }).Emit(new ShapeCodeGenerationRequest(graph));
         var text = Assert.Single(emission.Documents).Text;
 
+        Assert.Contains("export interface ShapeGraphDocument", text, StringComparison.Ordinal);
+        Assert.Contains("graph: ShapeGraph;", text, StringComparison.Ordinal);
+        Assert.Contains("export interface ShapeGraph", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationQueryDocument", text, StringComparison.Ordinal);
         Assert.Contains("export type RelationQueryDefinition =", text, StringComparison.Ordinal);
         Assert.Contains("readonly $definition: 'relation';", text, StringComparison.Ordinal);

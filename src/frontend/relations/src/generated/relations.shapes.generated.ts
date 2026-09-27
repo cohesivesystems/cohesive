@@ -4,6 +4,25 @@ export type GraphId = string;
 
 export type ShapeId = string;
 
+export interface ShapeGraphDocumentMetadata {
+  origin: DocumentOrigin;
+  name?: string | null;
+  description?: string | null;
+  sourceUri?: string | null;
+  createdAtUtc?: string | null;
+  updatedAtUtc?: string | null;
+  annotations: Record<string, AnnotationValue>;
+}
+
+export interface ShapeGraph {
+  id: GraphId;
+  shapes: Shape[];
+  namedTypes: TypeDefinition[];
+  annotations: Record<string, AnnotationValue>;
+  diagnostics: GraphDiagnostic[];
+  hasErrors: boolean;
+}
+
 export type TypeRef = {
   readonly $type: 'named';
 } & NamedTypeRef | {
@@ -525,6 +544,82 @@ export interface RelationshipCatalogDocumentMetadata {
   createdAtUtc?: string | null;
   updatedAtUtc?: string | null;
   annotations: Record<string, AnnotationValue>;
+}
+
+export type DocumentOrigin = 'Unknown' | 'User' | 'System' | 'Imported' | 'Generated' | 'Compiled' | 'Extracted';
+
+export const documentOrigins = {
+  unknown: 'Unknown',
+  user: 'User',
+  system: 'System',
+  imported: 'Imported',
+  generated: 'Generated',
+  compiled: 'Compiled',
+  extracted: 'Extracted',
+} as const satisfies Record<string, DocumentOrigin>;
+
+export const documentOriginLabels: Record<DocumentOrigin, string> = {
+  Unknown: 'Unknown',
+  User: 'User',
+  System: 'System',
+  Imported: 'Imported',
+  Generated: 'Generated',
+  Compiled: 'Compiled',
+  Extracted: 'Extracted',
+};
+
+export type AnnotationKey = string;
+
+export type AnnotationValue = unknown;
+
+export interface Shape {
+  id: ShapeId;
+  fields: FieldDefinition[];
+  constraints: ShapeConstraint[];
+  annotations: Record<string, AnnotationValue>;
+  role?: string | null;
+  entityType?: EntityTypeName | null;
+}
+
+export type TypeDefinition = {
+  readonly $typeDef: 'structural';
+} & Structural | {
+  readonly $typeDef: 'enum';
+} & Enum | {
+  readonly $typeDef: 'union';
+} & Union;
+
+export interface Structural {
+  id: TypeId;
+  name: string;
+  fields: StructuralField[];
+  constraints: ShapeConstraint[];
+  annotations: Record<string, AnnotationValue>;
+}
+
+export interface Enum {
+  id: TypeId;
+  name: string;
+  underlying: PrimitiveType;
+  values: EnumValue[];
+  annotations: Record<string, AnnotationValue>;
+}
+
+export interface Union {
+  id: TypeId;
+  name: string;
+  discriminator: UnionDiscriminator;
+  cases: UnionCase[];
+  annotations: Record<string, AnnotationValue>;
+}
+
+export interface GraphDiagnostic {
+  id: DiagnosticId;
+  severity: DiagnosticSeverity;
+  message: string;
+  shapeId?: ShapeId | null;
+  fieldIdentity?: string | null;
+  typeId?: TypeId | null;
 }
 
 export type TypeId = string;
@@ -1330,32 +1425,6 @@ export interface InvariantDefinition {
   message?: string | null;
 }
 
-export type DocumentOrigin = 'Unknown' | 'User' | 'System' | 'Imported' | 'Generated' | 'Compiled' | 'Extracted';
-
-export const documentOrigins = {
-  unknown: 'Unknown',
-  user: 'User',
-  system: 'System',
-  imported: 'Imported',
-  generated: 'Generated',
-  compiled: 'Compiled',
-  extracted: 'Extracted',
-} as const satisfies Record<string, DocumentOrigin>;
-
-export const documentOriginLabels: Record<DocumentOrigin, string> = {
-  Unknown: 'Unknown',
-  User: 'User',
-  System: 'System',
-  Imported: 'Imported',
-  Generated: 'Generated',
-  Compiled: 'Compiled',
-  Extracted: 'Extracted',
-};
-
-export type AnnotationKey = string;
-
-export type AnnotationValue = unknown;
-
 export interface RelationDraftProducerArtifactReference {
   kind: string;
   value: string;
@@ -1405,6 +1474,137 @@ export interface RelationshipDefinition {
   targetKey: RelationshipTargetKey;
   sourceReferenceUniqueness: SourceReferenceUniqueness;
 }
+
+export interface FieldDefinition {
+  name: FieldName;
+  type: TypeRef;
+  cardinality: FieldCardinality;
+  presence: FieldPresence;
+  role: FieldRole;
+  nullability: FieldNullability;
+  mutability: FieldMutability;
+  compute?: ComputeDefinition | null;
+  constraints: ShapeConstraint[];
+  annotations: Record<string, AnnotationValue>;
+}
+
+export type ShapeConstraint = {
+  readonly $constraint: 'required';
+} & RequiredConstraint | {
+  readonly $constraint: 'minLength';
+} & MinLengthConstraint | {
+  readonly $constraint: 'maxLength';
+} & MaxLengthConstraint | {
+  readonly $constraint: 'range';
+} & RangeConstraint | {
+  readonly $constraint: 'regex';
+} & RegexConstraint | {
+  readonly $constraint: 'allowedValues';
+} & AllowedValuesConstraint | {
+  readonly $constraint: 'occurrence';
+} & OccurrenceConstraint;
+
+export interface RequiredConstraint {
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
+export interface MinLengthConstraint {
+  value: number;
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
+export interface MaxLengthConstraint {
+  value: number;
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
+export interface RangeConstraint {
+  minimum?: number | null;
+  maximum?: number | null;
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
+export interface RegexConstraint {
+  pattern: string;
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
+export interface AllowedValuesConstraint {
+  values: string[];
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
+export interface OccurrenceConstraint {
+  minimum?: number | null;
+  maximum?: number | null;
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
+export interface StructuralField {
+  name: FieldName;
+  type: TypeRef;
+  cardinality: FieldCardinality;
+  presence: FieldPresence;
+  nullability: FieldNullability;
+  role: FieldRole;
+  constraints: ShapeConstraint[];
+  annotations: Record<string, AnnotationValue>;
+}
+
+export type PrimitiveType = 'Bool' | 'Int32' | 'Int64' | 'Decimal' | 'String' | 'Guid' | 'Date' | 'DateTime' | 'Instant' | 'Bytes';
+
+export const primitiveTypes = {
+  bool: 'Bool',
+  int32: 'Int32',
+  int64: 'Int64',
+  decimal: 'Decimal',
+  string: 'String',
+  guid: 'Guid',
+  date: 'Date',
+  dateTime: 'DateTime',
+  instant: 'Instant',
+  bytes: 'Bytes',
+} as const satisfies Record<string, PrimitiveType>;
+
+export const primitiveTypeLabels: Record<PrimitiveType, string> = {
+  Bool: 'Bool',
+  Int32: 'Int32',
+  Int64: 'Int64',
+  Decimal: 'Decimal',
+  String: 'String',
+  Guid: 'Guid',
+  Date: 'Date',
+  DateTime: 'DateTime',
+  Instant: 'Instant',
+  Bytes: 'Bytes',
+};
+
+export interface EnumValue {
+  name: string;
+  value?: string | null;
+  label?: string | null;
+  description?: string | null;
+}
+
+export interface UnionDiscriminator {
+  fieldName: string;
+  type: PrimitiveType;
+}
+
+export interface UnionCase {
+  name: string;
+  type: TypeRef;
+  discriminatorValue: string;
+}
+
+export type DiagnosticId = string;
 
 export interface RelationQueryLogicalPlan {
   nodes: RelationQueryLogicalPlanNode[];
@@ -2141,6 +2341,44 @@ export const sourceReferenceUniquenessLabels: Record<SourceReferenceUniqueness, 
   GloballyUnique: 'GloballyUnique',
 };
 
+export type FieldName = string;
+
+export type FieldRole = 'Data' | 'Identity' | 'Reference' | 'Computed' | 'Metadata';
+
+export const fieldRoles = {
+  data: 'Data',
+  identity: 'Identity',
+  reference: 'Reference',
+  computed: 'Computed',
+  metadata: 'Metadata',
+} as const satisfies Record<string, FieldRole>;
+
+export const fieldRoleLabels: Record<FieldRole, string> = {
+  Data: 'Data',
+  Identity: 'Identity',
+  Reference: 'Reference',
+  Computed: 'Computed',
+  Metadata: 'Metadata',
+};
+
+export type FieldMutability = 'Mutable' | 'WriteOnce' | 'Computed';
+
+export const fieldMutabilities = {
+  mutable: 'Mutable',
+  writeOnce: 'WriteOnce',
+  computed: 'Computed',
+} as const satisfies Record<string, FieldMutability>;
+
+export const fieldMutabilityLabels: Record<FieldMutability, string> = {
+  Mutable: 'Mutable',
+  WriteOnce: 'WriteOnce',
+  Computed: 'Computed',
+};
+
+export interface ComputeDefinition {
+  expression: Expr;
+}
+
 export interface RelationQueryLogicalPlanNode {
   node: QueryNodeId;
   inputs: RelationQueryLogicalPlanInput[];
@@ -2717,6 +2955,12 @@ export const temporalNullBoundBehaviorLabels: Record<TemporalNullBoundBehavior, 
 export interface QualifiedShapeId {
   graphId: GraphId;
   shapeId: ShapeId;
+}
+
+export interface ShapeGraphDocument {
+  schemaVersion: string;
+  metadata: ShapeGraphDocumentMetadata;
+  graph: ShapeGraph;
 }
 
 export interface ValueContract {
