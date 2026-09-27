@@ -11,7 +11,7 @@ namespace Cohesive.Storage.Processes;
 /// Storage-owned durable driver that composes canonical Process, control, and operation authorities.
 /// </summary>
 /// <remarks>
-/// Each finite activation is interpreted synchronously in memory and committed once at an invariant-preserving
+/// Each finite activation uses the canonical in-memory reducer and is committed once at an invariant-preserving
 /// safe point. The runtime never persists an incomplete activation descriptor. Callers recovering uncommitted
 /// work must therefore resupply the exact stable <see cref="ProcessActivation"/> request.
 /// When an <see cref="IProcessTransitionOperationAdapter"/> is supplied, an unmaterialized Transition suspends the
@@ -25,7 +25,8 @@ namespace Cohesive.Storage.Processes;
 public sealed partial class ProcessDurableRuntime
 {
     readonly IProcessDurableStore store;
-    readonly IProcessReferenceHost host;
+    readonly IProcessReferenceHost? host;
+    readonly IAsyncProcessReferenceHost? asyncHost;
     readonly IDurableRequestBindingResolver bindingResolver;
     readonly IProcessLocalMutationPlanner localMutationPlanner;
     readonly IProcessStoreMutationExceptionClassifier storeMutationExceptionClassifier;
@@ -66,9 +67,60 @@ public sealed partial class ProcessDurableRuntime
         IDurableOperationAdapterResolver? operationAdapterResolver = null,
         IDurableOperationExceptionClassifier? operationExceptionClassifier = null,
         IProcessTransitionOperationAdapter? transitionOperationAdapter = null)
+        : this(store, host ?? throw new ArgumentNullException(nameof(host)), null, options,
+            bindingResolver, localMutationPlanner, storeMutationExceptionClassifier,
+            operationAdapterResolver, operationExceptionClassifier, transitionOperationAdapter)
+    {
+    }
+
+    /// <summary>Creates a durable driver with naturally asynchronous canonical host operations.</summary>
+    /// <remarks>
+    /// Uses the native asynchronous reference interpreter and the same receipt/checkpoint reducer as the
+    /// synchronous profile. Host operations must honor their occurrence identity on retries before a checkpoint
+    /// commits. Compose entity Transition adapters into the host; no blocking asynchronous-to-synchronous bridge
+    /// or separate workflow interpreter is introduced.
+    /// </remarks>
+    /// <param name="store">Atomic Process aggregate durability provider.</param>
+    /// <param name="host">Asynchronous evidence host, safe for calls from different Process instances.</param>
+    /// <param name="options">Worker identity, lease, and bounded exact-retry policy.</param>
+    /// <param name="bindingResolver">Optional exact durable Request binding resolver.</param>
+    /// <param name="localMutationPlanner">Optional deterministic local mutation planner.</param>
+    /// <param name="storeMutationExceptionClassifier">Optional ambiguous store-mutation classifier.</param>
+    /// <param name="operationAdapterResolver">Optional exact durable Request adapter resolver.</param>
+    /// <param name="operationExceptionClassifier">Optional adapter exception classifier.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="store"/>, <paramref name="host"/>, or <paramref name="options"/> is null.
+    /// </exception>
+    public ProcessDurableRuntime(
+        IProcessDurableStore store,
+        IAsyncProcessReferenceHost host,
+        ProcessDurableRuntimeOptions options,
+        IDurableRequestBindingResolver? bindingResolver = null,
+        IProcessLocalMutationPlanner? localMutationPlanner = null,
+        IProcessStoreMutationExceptionClassifier? storeMutationExceptionClassifier = null,
+        IDurableOperationAdapterResolver? operationAdapterResolver = null,
+        IDurableOperationExceptionClassifier? operationExceptionClassifier = null)
+        : this(store, null, host ?? throw new ArgumentNullException(nameof(host)), options,
+            bindingResolver, localMutationPlanner, storeMutationExceptionClassifier,
+            operationAdapterResolver, operationExceptionClassifier, null)
+    {
+    }
+
+    ProcessDurableRuntime(
+        IProcessDurableStore store,
+        IProcessReferenceHost? host,
+        IAsyncProcessReferenceHost? asyncHost,
+        ProcessDurableRuntimeOptions options,
+        IDurableRequestBindingResolver? bindingResolver,
+        IProcessLocalMutationPlanner? localMutationPlanner,
+        IProcessStoreMutationExceptionClassifier? storeMutationExceptionClassifier,
+        IDurableOperationAdapterResolver? operationAdapterResolver,
+        IDurableOperationExceptionClassifier? operationExceptionClassifier,
+        IProcessTransitionOperationAdapter? transitionOperationAdapter)
     {
         this.store = store ?? throw new ArgumentNullException(nameof(store));
-        this.host = host ?? throw new ArgumentNullException(nameof(host));
+        this.host = host;
+        this.asyncHost = asyncHost;
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.bindingResolver = bindingResolver ?? EmptyDurableRequestBindingResolver.Instance;
         this.localMutationPlanner = localMutationPlanner ?? EmptyProcessLocalMutationPlanner.Instance;
@@ -308,26 +360,8 @@ public sealed partial class ProcessDurableRuntime
                     diagnostics: begun.Diagnostics);
             }
 
-            var transitionHost = transitionOperationAdapter is null
-                ? null
-                : new ProcessTransitionOperationSuspensionHost(host);
-            var replayHost = new ProcessOperationReplayHost(
-                transitionHost ?? host,
-                checkpoint.Operations);
-            var decision = transitionHost is null
-                ? Activate(
-                    plan,
-                    checkpoint.Continuation,
-                    activation,
-                    replayHost)
-                : await ActivateWithTransitionOperationsAsync(
-                        context,
-                        plan,
-                        checkpoint.Continuation,
-                        activation,
-                        replayHost,
-                        transitionHost)
-                    .ConfigureAwait(false);
+            var (decision, observations) = await InterpretAsync(
+                context, plan, checkpoint, activation).ConfigureAwait(false);
             if (decision.Disposition == ProcessActivationDisposition.Rejected)
             {
                 return new(
@@ -372,7 +406,7 @@ public sealed partial class ProcessDurableRuntime
                     activation,
                     decision,
                     committedControl,
-                    replayHost.Observations,
+                    observations,
                     bindingResolver,
                     committedAtUtc,
                     out var replacement,
@@ -846,11 +880,8 @@ public sealed partial class ProcessDurableRuntime
                 }
                 activeControl = begun.State;
             }
-            var activationDecision = Activate(
-                plan,
-                checkpoint.Continuation,
-                activation,
-                host);
+            var (activationDecision, observations) = await InterpretAsync(
+                context, plan, checkpoint, activation).ConfigureAwait(false);
             if (activationDecision.Disposition is ProcessActivationDisposition.Rejected
                 || cancellationPolicy == ProcessCancellationCompletionPolicy.Immediate
                     && activationDecision.Disposition != ProcessActivationDisposition.Cancelled)
@@ -900,7 +931,7 @@ public sealed partial class ProcessDurableRuntime
                     activation,
                     activationDecision,
                     committedControl,
-                    [],
+                    observations,
                     bindingResolver,
                     committedAtUtc,
                     out var replacement,
@@ -1281,32 +1312,7 @@ public sealed partial class ProcessDurableRuntime
         try
         {
             var decision = ProcessReferenceInterpreter.Activate(plan, state, activation, host);
-            var outcome = decision.Disposition switch
-            {
-                ProcessActivationDisposition.Quiescent or ProcessActivationDisposition.DurableCut
-                    or ProcessActivationDisposition.Completed => ExecutionTelemetryOutcome.Succeeded,
-                ProcessActivationDisposition.Failed => ExecutionTelemetryOutcome.Failed,
-                ProcessActivationDisposition.Cancelled => ExecutionTelemetryOutcome.Cancelled,
-                ProcessActivationDisposition.Rejected => ExecutionTelemetryOutcome.Rejected,
-                _ => throw new ArgumentOutOfRangeException(
-                    nameof(decision),
-                    decision.Disposition,
-                    "Unsupported Process activation disposition.")
-            };
-            if (activity?.IsAllDataRequested == true)
-            {
-                try
-                {
-                    var trace = ProcessExecutionTraceProjector.Project(decision);
-                    ExecutionTelemetry.CorrelateActivity(activity, trace: trace.Trace);
-                }
-                catch (Exception exception) when (exception is not (
-                    OutOfMemoryException or StackOverflowException or AccessViolationException))
-                {
-                    // Supplemental trace projection cannot alter the finite activation decision.
-                }
-            }
-            ExecutionTelemetry.CompleteActivity(activity, outcome);
+            CompleteActivationActivity(activity, decision);
             return decision;
         }
         catch (ProcessTransitionOperationPendingException)
@@ -1324,6 +1330,79 @@ public sealed partial class ProcessDurableRuntime
             ExecutionTelemetry.CompleteActivity(activity, ExecutionTelemetryOutcome.Failed, exception);
             throw;
         }
+    }
+
+    async Task<(ProcessActivationDecision Decision, ImmutableArray<ProcessOperationReplayObservation> Observations)>
+        InterpretAsync(
+            OperationContext context,
+            CompiledProcessPlan plan,
+            ProcessDurableCheckpoint checkpoint,
+            ProcessActivation activation)
+    {
+        if (asyncHost is not null)
+        {
+            var replay = new ProcessOperationReplayHost(asyncHost, checkpoint.Operations);
+            var activity = ExecutionTelemetry.StartActivity(ExecutionTelemetryActivityKind.Activation);
+            try
+            {
+                var decision = await ProcessReferenceInterpreter.ActivateAsync(
+                    context, plan, checkpoint.Continuation, activation, replay).ConfigureAwait(false);
+                CompleteActivationActivity(activity, decision);
+                return (decision, replay.Observations);
+            }
+            catch (OperationCanceledException exception)
+            {
+                ExecutionTelemetry.CompleteActivity(activity, ExecutionTelemetryOutcome.Cancelled, exception);
+                throw;
+            }
+            catch (Exception exception)
+            {
+                ExecutionTelemetry.CompleteActivity(activity, ExecutionTelemetryOutcome.Failed, exception);
+                throw;
+            }
+        }
+
+        var transitionHost = transitionOperationAdapter is null
+            ? null
+            : new ProcessTransitionOperationSuspensionHost(host!);
+        var replayHost = new ProcessOperationReplayHost(transitionHost ?? host!, checkpoint.Operations);
+        var result = transitionHost is null
+            ? Activate(plan, checkpoint.Continuation, activation, replayHost)
+            : await ActivateWithTransitionOperationsAsync(
+                context, plan, checkpoint.Continuation, activation, replayHost, transitionHost).ConfigureAwait(false);
+        return (result, replayHost.Observations);
+    }
+
+    static void CompleteActivationActivity(
+        System.Diagnostics.Activity? activity,
+        ProcessActivationDecision decision)
+    {
+        var outcome = decision.Disposition switch
+        {
+            ProcessActivationDisposition.Quiescent or ProcessActivationDisposition.DurableCut
+                or ProcessActivationDisposition.Completed => ExecutionTelemetryOutcome.Succeeded,
+            ProcessActivationDisposition.Failed => ExecutionTelemetryOutcome.Failed,
+            ProcessActivationDisposition.Cancelled => ExecutionTelemetryOutcome.Cancelled,
+            ProcessActivationDisposition.Rejected => ExecutionTelemetryOutcome.Rejected,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(decision),
+                decision.Disposition,
+                "Unsupported Process activation disposition.")
+        };
+        if (activity?.IsAllDataRequested == true)
+        {
+            try
+            {
+                var trace = ProcessExecutionTraceProjector.Project(decision);
+                ExecutionTelemetry.CorrelateActivity(activity, trace: trace.Trace);
+            }
+            catch (Exception exception) when (exception is not (
+                OutOfMemoryException or StackOverflowException or AccessViolationException))
+            {
+                // Supplemental trace projection cannot alter the finite activation decision.
+            }
+        }
+        ExecutionTelemetry.CompleteActivity(activity, outcome);
     }
 
     async Task<ProcessActivationDecision> ActivateWithTransitionOperationsAsync(

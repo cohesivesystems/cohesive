@@ -165,7 +165,7 @@ The native public `ProcessStartResult` is retained without exposing receipt payl
 `ServiceOperationResult<TOutcome>` carries native query/Process evidence, structured admission
 failures and a service trace. Runtime failures and cancellation remain observable exceptions.
 These tests qualify admission composition only. Durable multi-entity recovery, Process controls,
-transport projection for new operation families and native deterministic computation remain open.
+transport projection for new operation families remain open; native computation qualification follows below.
 
 
 ### Native computation qualification
@@ -182,3 +182,19 @@ The tested example declares acquisition followed by normalization. The native as
 computation without emitting an alternative successful result. This is the boundary intended for native relation
 acceptance after the Process has acquired exact graph documents and a draft revision. Ari's acceptance-specific
 inputs, retained evidence and commit fence still require adoption qualification.
+
+
+### Async durable hosting qualification
+
+Extend Storage's existing `ProcessDurableRuntime` to accept `IAsyncProcessReferenceHost`; retain its direct
+synchronous path. Both profiles share exact occurrence receipts, checkpoint reduction and telemetry. Cancellation
+finalization and child-start prevention use the selected profile too. This closes a reusable integration gap between
+typed query/computation catalogs and the durable driver without adding a service-local workflow coordinator.
+
+The tested example awaits a query, loses the acknowledgment of the Process aggregate commit, and recreates the
+runtime. The retry uses committed evidence with zero additional query calls. Cancellation after a host await leaves
+no partial Process checkpoint. The existing entity handoff conformance scenario now runs through both profiles:
+a crash after the entity commit replays its atomic entity receipt, and later Process commit/publication failures
+converge without duplicate logical publication. These are in-memory provider conformance tests, not a remote
+backend durability claim. A combined service with acquisition, computation, an explicit durable cut and mutations
+across multiple entities remains the next qualification gate.

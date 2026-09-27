@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
+using Cohesive.Prelude;
 using Cohesive.Processes.Execution;
 
 namespace Cohesive.Storage.Processes;
@@ -23,9 +24,10 @@ internal sealed record ProcessOperationReplayObservation(
 /// materializes <see cref="Observations"/> as <see cref="ProcessOperationReceipt"/> values at the atomic commit
 /// boundary. Repeated calls for a first-time key within the same activation reuse the captured result.
 /// </remarks>
-internal sealed class ProcessOperationReplayHost : IProcessReferenceHost
+internal sealed class ProcessOperationReplayHost : IProcessReferenceHost, IAsyncProcessReferenceHost
 {
-    readonly IProcessReferenceHost inner;
+    readonly IProcessReferenceHost? inner;
+    readonly IAsyncProcessReferenceHost? asyncInner;
     readonly Dictionary<ProcessOperationOccurrence, ProcessOperationReceipt> receipts;
     readonly Dictionary<ProcessOperationOccurrence, ProcessOperationReplayObservation> observedByKey = [];
     readonly List<ProcessOperationReplayObservation> observations = [];
@@ -40,8 +42,21 @@ internal sealed class ProcessOperationReplayHost : IProcessReferenceHost
     internal ProcessOperationReplayHost(
         IProcessReferenceHost inner,
         ImmutableArray<ProcessOperationReceipt> receipts = default)
+        : this(receipts)
     {
         this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
+    }
+
+    internal ProcessOperationReplayHost(
+        IAsyncProcessReferenceHost inner,
+        ImmutableArray<ProcessOperationReceipt> receipts = default)
+        : this(receipts)
+    {
+        asyncInner = inner ?? throw new ArgumentNullException(nameof(inner));
+    }
+
+    ProcessOperationReplayHost(ImmutableArray<ProcessOperationReceipt> receipts)
+    {
         var normalized = receipts.IsDefault ? [] : receipts;
         this.receipts = new(normalized.Length);
         foreach (var receipt in normalized)
@@ -77,7 +92,7 @@ internal sealed class ProcessOperationReplayHost : IProcessReferenceHost
         return Resolve(
             key,
             invocation.Definition,
-            () => inner.InvokeTransition(invocation));
+            () => SyncHost.InvokeTransition(invocation));
     }
 
     /// <inheritdoc />
@@ -93,17 +108,81 @@ internal sealed class ProcessOperationReplayHost : IProcessReferenceHost
         return Resolve(
             key,
             evaluation.Definition,
-            () => inner.EvaluateRelation(evaluation));
+            () => SyncHost.EvaluateRelation(evaluation));
     }
 
     /// <inheritdoc />
     public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) =>
-        inner.ResolveSignalTarget(resolution ?? throw new ArgumentNullException(nameof(resolution)));
+        SyncHost.ResolveSignalTarget(resolution ?? throw new ArgumentNullException(nameof(resolution)));
+
+    IProcessReferenceHost SyncHost => inner
+        ?? throw new InvalidOperationException("This replay host requires asynchronous invocation.");
+
+    IAsyncProcessReferenceHost AsyncHost => asyncInner
+        ?? throw new InvalidOperationException("This replay host requires synchronous invocation.");
+
+    /// <inheritdoc />
+    public ValueTask<ProcessOperationResult> InvokeTransitionAsync(
+        OperationContext context,
+        ProcessTransitionInvocation invocation)
+    {
+        ArgumentNullException.ThrowIfNull(invocation);
+        return ResolveAsync(context,
+            Key(invocation.Continuation, invocation.Activation, invocation.Token, invocation.Node, invocation.Occurrence),
+            invocation.Definition,
+            () => AsyncHost.InvokeTransitionAsync(context, invocation));
+    }
+
+    /// <inheritdoc />
+    public ValueTask<ProcessOperationResult> EvaluateRelationAsync(
+        OperationContext context,
+        ProcessRelationEvaluation evaluation)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        return ResolveAsync(context,
+            Key(evaluation.Continuation, evaluation.Activation, evaluation.Token, evaluation.Node, evaluation.Occurrence),
+            evaluation.Definition,
+            () => AsyncHost.EvaluateRelationAsync(context, evaluation));
+    }
+
+    /// <inheritdoc />
+    public ValueTask<ProcessSignalTargetResult> ResolveSignalTargetAsync(
+        OperationContext context,
+        ProcessSignalTargetResolution resolution)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(resolution);
+        context.ThrowIfCancellationRequested();
+        return AsyncHost.ResolveSignalTargetAsync(context, resolution);
+    }
 
     ProcessOperationResult Resolve(
         ProcessOperationOccurrence key,
         ExecutionDefinitionReference definition,
-        Func<ProcessOperationResult> invoke)
+        Func<ProcessOperationResult> invoke) =>
+        Replay(key, definition) ?? Capture(key, definition, invoke());
+
+    async ValueTask<ProcessOperationResult> ResolveAsync(
+        OperationContext context,
+        ProcessOperationOccurrence key,
+        ExecutionDefinitionReference definition,
+        Func<ValueTask<ProcessOperationResult>> invoke)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        context.ThrowIfCancellationRequested();
+        var retained = Replay(key, definition);
+        if (retained is not null)
+        {
+            return retained;
+        }
+        var result = await invoke().ConfigureAwait(false);
+        context.ThrowIfCancellationRequested();
+        return Capture(key, definition, result);
+    }
+
+    ProcessOperationResult? Replay(
+        ProcessOperationOccurrence key,
+        ExecutionDefinitionReference definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
         if (receipts.TryGetValue(key, out var receipt))
@@ -111,14 +190,20 @@ internal sealed class ProcessOperationReplayHost : IProcessReferenceHost
             RequireDefinition(key, definition, receipt.OperationDefinition, "committed receipt");
             return receipt.Result;
         }
-
         if (observedByKey.TryGetValue(key, out var observed))
         {
             RequireDefinition(key, definition, observed.OperationDefinition, "captured observation");
             return observed.Result;
         }
+        return null;
+    }
 
-        var result = invoke()
+    ProcessOperationResult Capture(
+        ProcessOperationOccurrence key,
+        ExecutionDefinitionReference definition,
+        ProcessOperationResult? value)
+    {
+        var result = value
             ?? throw new InvalidOperationException(
                 $"The Process host returned null for operation occurrence '{Describe(key)}'.");
         if (!result.IsValidOutcome())
