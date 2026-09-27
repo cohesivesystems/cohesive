@@ -1,4 +1,12 @@
 using System.Collections.Immutable;
+using System.Text.Json;
+using Cohesive.Adapters.AspNet.Services;
+using Cohesive.Adapters.OpenApi;
+using Cohesive.Api.CodeGen;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Api;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Api.Services;
@@ -21,6 +29,68 @@ namespace Cohesive.Tests.Api;
 
 public sealed class ServiceProcessEntityResultTests
 {
+    [Theory]
+    [InlineData(true, 200)]
+    [InlineData(false, 403)]
+    public async Task HttpProjectionUsesAuthorizedExactReceiptAndOpaqueToken(bool admitted, int status)
+    {
+        var fixture = await Create();
+        await fixture.Repository.Upsert(fixture.Context, new(fixture.Repository.EntityDefinition
+            .CreateState("note/1", new Note("note/1", "tenant-a", "later"), 2).Snapshot, fixture.Committed.ConcurrencyToken));
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(admitted ? fixture.Context : OperationContext.Create());
+        await using var app = builder.Build();
+        var projections = 0;
+        app.MapServiceProcessEntityResult(fixture.Runtime, "result", "/notes/results/{instanceId}", snapshot =>
+        {
+            projections++;
+            return new Response(snapshot.Entity.Observation.GetField("Text").GetRequiredString());
+        }, authorizationPolicyResolver: (_, requirement) => requirement.Id);
+        Assert.Equal(0, fixture.Values.Reads);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().Single();
+        Assert.Same(fixture.Runtime.Declaration, endpoint.Metadata.GetMetadata<ExecutionDefinitionDocument>());
+        var http = new DefaultHttpContext { RequestServices = app.Services };
+        http.Request.Method = "GET";
+        http.Request.RouteValues["instanceId"] = fixture.Instance.Value;
+        http.Response.Body = new MemoryStream();
+        await endpoint.RequestDelegate!(http);
+        Assert.Equal(status, http.Response.StatusCode);
+        Assert.Equal(admitted ? 1 : 0, projections);
+        Assert.Equal(admitted ? 1 : 0, fixture.Values.Reads);
+        if (admitted)
+        {
+            Assert.Equal(fixture.Committed.ConcurrencyToken.Value, http.Response.Headers["X-Concurrency-Token"].ToString());
+            http.Response.Body.Position = 0;
+            using var json = await JsonDocument.ParseAsync(http.Response.Body);
+            Assert.Equal("committed-private", json.RootElement.GetProperty("text").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task ResultProjectionEmitsTypedReadContractWithoutStorageAccess()
+    {
+        var fixture = await Create();
+        var endpoint = fixture.Runtime.ProjectCommittedEntityResult<Response>("result",
+            new("GET", "/notes/results/{instanceId}",
+                [new("instanceId", HttpParameterSource.Route, typeof(string))], body: null));
+        Assert.Equal(typeof(Response), endpoint.Operation.ResponseType);
+        Assert.Equal(new[] { "notes.result.read" },
+            endpoint.Operation.AuthorizationRequirements.Select(requirement => requirement.Id));
+        var emission = new OpenApiEmitter().Emit(new ApiCodeGenerationRequest(new ApiDefinition([endpoint.Operation])));
+        using var document = JsonDocument.Parse(Assert.Single(emission.Documents).Text);
+        var read = document.RootElement.GetProperty("paths").GetProperty("/notes/results/{instanceId}").GetProperty("get");
+        Assert.False(read.TryGetProperty("requestBody", out _));
+        var parameter = Assert.Single(read.GetProperty("parameters").EnumerateArray());
+        Assert.Equal("instanceId", parameter.GetProperty("name").GetString());
+        Assert.Equal("path", parameter.GetProperty("in").GetString());
+        Assert.True(parameter.GetProperty("required").GetBoolean());
+        foreach (var status in new[] { "200", "202", "400", "403", "404", "500" })
+            Assert.True(read.GetProperty("responses").TryGetProperty(status, out _), status);
+        Assert.Equal(0, fixture.Values.Reads);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+    }
+
     [Fact]
     public async Task ResultReturnsOriginalCommitAfterLaterWrite()
     {
@@ -144,6 +214,7 @@ public sealed class ServiceProcessEntityResultTests
         return new(runtime, repository, values, context, continuation.ProcessInstanceId, (await repository.TryGet(context, "note/1"))!);
     }
 
+    sealed record Response(string Text);
     sealed record Note(string Id, string Tenant, string Text);
     sealed record Update(string Text);
     sealed record Fixture(ServiceRuntime Runtime, InMemoryEntityOutboxRepository Repository, Values Values,

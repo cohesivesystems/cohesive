@@ -530,5 +530,17 @@ result returns the first snapshot and token. A grant for the result operation is
 of start permissions, and a receipt whose logical owner differs from the admitted tenant is denied.
 Fifty-one focused service tests pass, including declaration roundtrip, wrong-node binding, exact
 older snapshot, denied admission before reads, ownership, missing/ambiguous receipts and earlier
-attempt exclusion. Full core qualification is running in `/tmp/cohesive-service-receipt-full.log`.
-HTTP projection and Ari adoption remain outstanding; this is in-memory qualification.
+attempt exclusion. Full core qualification passed 3,994 tests with 33 skipped in
+`/tmp/cohesive-service-receipt-full.log` before the HTTP projection additions.
+
+`ProjectCommittedEntityResult<TResponse>` projects the declaration into native API metadata.
+`MapServiceProcessEntityResult` attaches GET routing and a synchronous snapshot-to-response mapping;
+authorization and receipt resolution remain in the shared runtime. Successful responses retain the
+original opaque token in the configured header (default `X-Concurrency-Token`). Registration and
+contract generation perform no storage reads. The response mapper runs only after authorization.
+The host owns the public response view and its serialization conventions.
+
+Eleven result-read tests pass, including authorized/denied HTTP invocation and OpenAPI required-path,
+body-free request and outcome projection. Broader focused service coverage passed 53 tests before
+the added OpenAPI case. Generated-client and Ari adoption qualification remain outstanding; this is
+in-memory qualification, not a live-provider claim.

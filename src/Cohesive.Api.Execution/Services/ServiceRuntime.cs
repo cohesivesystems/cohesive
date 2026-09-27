@@ -122,6 +122,9 @@ public sealed partial class ServiceRuntime
     readonly IServiceInvocationAuthorization authorization;
     readonly ExecutionDefinitionReference definitionReference;
 
+    string ServiceOperationIdentity(string operationId) =>
+        $"service/{Uri.EscapeDataString(definitionReference.DefinitionId.Value)}/operation/{Uri.EscapeDataString(operationId)}";
+
     /// <summary>Admits a canonical declaration and its exact physical bindings without resolving repositories.</summary>
     /// <exception cref="ArgumentException">The declaration or binding set is invalid or requires unsupported guarantees.</exception>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
@@ -182,7 +185,7 @@ public sealed partial class ServiceRuntime
         if (http?.Body is { } body && body.BodyType != typeof(TInput))
             throw new ArgumentException("The HTTP body must project the declared input type.", nameof(http));
         var operation = new ApiOperation(operationId, ApiOperationKind.Command, typeof(TInput), typeof(TOutcome),
-            id: new($"service/{Uri.EscapeDataString(definitionReference.DefinitionId.Value)}/operation/{Uri.EscapeDataString(operationId)}"), entity: linked.Binding.Entity.Name,
+            id: new(ServiceOperationIdentity(operationId)), entity: linked.Binding.Entity.Name,
             transitionReference: linked.Operation.Transition,
             authorizationRequirements: linked.Operation.AuthorizationRequirements,
             results: [new(ApiResultKind.Success, typeof(TOutcome), isPrimary: true),

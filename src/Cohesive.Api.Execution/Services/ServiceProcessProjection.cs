@@ -38,7 +38,7 @@ public sealed partial class ServiceRuntime
         if (native.RequestType != typeof(TRequest) || http?.Body is { } body && body.BodyType != native.RequestType)
             throw new ArgumentException("The request and HTTP body must exactly project the native Process command contract.");
         var operation = new ApiOperation(operationId, native.Kind, native.RequestType, native.ResponseType,
-            id: new($"service/{Uri.EscapeDataString(definitionReference.DefinitionId.Value)}/operation/{Uri.EscapeDataString(operationId)}"),
+            id: new(ServiceOperationIdentity(operationId)),
             summary: native.Summary, description: native.Description, tags: native.Tags,
             results: native.Results.Any(result => result.Kind == ApiResultKind.ValidationFailed && result.BodyType == typeof(ExecutionApiProblem))
                 ? native.Results

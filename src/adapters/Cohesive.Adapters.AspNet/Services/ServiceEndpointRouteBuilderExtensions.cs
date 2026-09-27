@@ -74,6 +74,51 @@ public static class ServiceEndpointRouteBuilderExtensions
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(runtime.Declaration);
     }
 
+    /// <summary>Maps a declared committed-entity result read through shared authorization and receipt resolution.</summary>
+    /// <typeparam name="TResponse">Public response contract attached at the HTTP boundary.</typeparam>
+    /// <param name="endpoints">Native endpoint builder.</param>
+    /// <param name="runtime">Prepared service runtime.</param>
+    /// <param name="operationId">Declared result-read operation.</param>
+    /// <param name="route">GET route containing the logical Process instance parameter.</param>
+    /// <param name="project">Pure synchronous response projection of the authorized exact snapshot; no reads or writes.</param>
+    /// <param name="authorizationPolicyResolver">Optional native policy associations.</param>
+    /// <param name="instanceParameter">Route parameter naming the logical Process instance.</param>
+    /// <param name="tokenHeader">Response header retaining the original opaque concurrency token verbatim.</param>
+    /// <returns>The native route builder with API and service metadata attached.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    /// <exception cref="ArgumentException">A declaration or medium binding is invalid.</exception>
+    public static RouteHandlerBuilder MapServiceProcessEntityResult<TResponse>(this IEndpointRouteBuilder endpoints,
+        ServiceRuntime runtime, string operationId, string route, Func<EntitySnapshot, TResponse> project,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
+        string instanceParameter = "instanceId", string tokenHeader = "X-Concurrency-Token")
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentNullException.ThrowIfNull(runtime);
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentException.ThrowIfNullOrWhiteSpace(instanceParameter);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tokenHeader);
+        var projection = runtime.ProjectCommittedEntityResult<TResponse>(operationId, new("GET", route,
+            [new(instanceParameter, HttpParameterSource.Route, typeof(string))], body: null));
+        return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
+        {
+            var instance = http.Request.RouteValues[instanceParameter]?.ToString();
+            if (string.IsNullOrWhiteSpace(instance))
+                return Results.BadRequest(new ApiValidationProblem("services.result.instanceRequired", "A Process instance is required.",
+                    [new(instanceParameter, "services.result.instanceRequired", "Supply the logical Process instance identity.")]));
+            var result = await runtime.ReadCommittedEntityAsync(context, operationId, new(instance)).ConfigureAwait(false);
+            var status = projection.Operation.Results.Single(item => item.Kind == result.Kind).Http!.StatusCode;
+            if (result.Kind == ApiResultKind.Success)
+            {
+                var snapshot = result.Outcome ?? throw new InvalidOperationException("Successful receipt resolution returned no snapshot.");
+                http.Response.Headers[tokenHeader] = snapshot.ConcurrencyToken.Value;
+                return Results.Json(project(snapshot), statusCode: status);
+            }
+            var diagnostic = result.Diagnostics.FirstOrDefault();
+            return Results.Json(new ApiProblem(diagnostic?.Code ?? "services.result.unavailable",
+                diagnostic?.Message ?? "The committed result is unavailable.", diagnostic?.Location), statusCode: status);
+        }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(runtime.Declaration);
+    }
+
     /// <summary>Maps a declared Process entry using its native start request and admission result.</summary>
     /// <remarks>Authority, exact definition and portable input admission remain in the shared service runtime.</remarks>
     /// <exception cref="ArgumentException">The operation or route is invalid.</exception>

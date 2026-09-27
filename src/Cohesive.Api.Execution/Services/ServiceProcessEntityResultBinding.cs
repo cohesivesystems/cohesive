@@ -70,6 +70,33 @@ public sealed class ServiceProcessEntityResultBinding : ServiceBinding
 
 public sealed partial class ServiceRuntime
 {
+    /// <summary>Projects a declared result read into the existing API model with an explicit medium-owned response view.</summary>
+    /// <typeparam name="TResponse">Public response type produced from the authorized retained snapshot.</typeparam>
+    /// <param name="operationId">Declared result-read identity.</param>
+    /// <param name="http">Optional HTTP projection; result reads cannot require a request body.</param>
+    /// <returns>A typed API endpoint with declaration-derived identity, requirements and standard outcomes.</returns>
+    /// <exception cref="ArgumentException">The operation is not a result read or the projection requires a body.</exception>
+    public ApiEndpoint ProjectCommittedEntityResult<TResponse>(string operationId, HttpBinding? http = null)
+    {
+        if (!operations.TryGetValue(operationId, out var linked)
+            || linked.Operation is not ServiceProcessEntityResultOperation operation
+            || linked.Binding is not ServiceProcessEntityResultBinding binding)
+            throw new ArgumentException("The operation is not a declared committed-entity result read.", nameof(operationId));
+        if (http?.Body is not null)
+            throw new ArgumentException("A committed-entity result read has no request body.", nameof(http));
+        var projected = new ApiOperation(operationId, ApiOperationKind.Query, typeof(string), typeof(TResponse),
+            id: new(ServiceOperationIdentity(operationId)), entity: binding.Entity.Entity.Name,
+            transitionReference: binding.Transition.DefinitionReference,
+            authorizationRequirements: operation.AuthorizationRequirements,
+            results: [new(ApiResultKind.Success, typeof(TResponse), isPrimary: true),
+                new(ApiResultKind.Accepted, typeof(ApiProblem)), new(ApiResultKind.ValidationFailed, typeof(ApiValidationProblem)),
+                new(ApiResultKind.Forbidden, typeof(ApiProblem)),
+                new(ApiResultKind.NotFound, typeof(ApiProblem)), new(ApiResultKind.DomainError, typeof(ApiProblem)),
+                new(ApiResultKind.InfrastructureError, typeof(ApiProblem))]);
+        if (http is not null) projected = projected.WithHttp(http);
+        return new ApiDefinition([projected]).Endpoints[0];
+    }
+
     /// <summary>Reads the original committed entity for a declared terminal Process result source.</summary>
     /// <remarks>Admission precedes reads; logical resource authorization uses the exact retained snapshot.
     /// Missing, ambiguous or incompatible receipt evidence never falls back to the current entity. This method
