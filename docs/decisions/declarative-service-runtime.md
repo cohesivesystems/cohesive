@@ -341,3 +341,18 @@ existing captured-token Transition binding rejects a subsequent commit if that s
 Source-reader tests qualify payload shadowing, metadata identity, malformed-token admission, and
 emitted Cosmos fallback SQL with a fake feed. Live Cosmos evaluation, physical read/page counts,
 and the complete Ari acquisition-to-commit flow remain qualification gates.
+
+## Present payloads in Process branches
+
+Transition and Process pure expression profiles now admit the existing `requireValue` function.
+Its semantic authority remains `ExprSemanticsCatalog`; reference execution reuses the shared
+concrete-value admission rather than introducing a Process-specific unwrap operation. For example,
+a Process that branches on a typed `Result` can require the success payload before invoking the
+next declared step. Null or absent payloads fail evaluation; missing, unknown, and failed evidence
+retain their existing infrastructure diagnostics and cannot become a successful outcome.
+
+This is a coherent extension of the existing expression profile and evaluator. The concrete path
+returns the same observation value without traversal, serialization, or new retained state.
+Closure and execution tests cover a present string, absent/null members, and unavailable input
+states. Process composition must still supply portable expression result types derived from its
+step contracts; declaring a function does not make an opaque runtime type portable.

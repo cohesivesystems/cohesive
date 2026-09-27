@@ -11,6 +11,7 @@ public static class TransitionExpressionLanguage
     internal static ImmutableHashSet<string> SupportedFunctionNames { get; } =
         ImmutableHashSet.Create(
             StringComparer.Ordinal,
+            ExprFunctionNames.RequireValue,
             ExprFunctionNames.Contains,
             ExprFunctionNames.Count,
             ExprFunctionNames.EndsWith,
