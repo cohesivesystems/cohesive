@@ -4120,6 +4120,17 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             timeout.Token);
         Assert.Equal(OrchestrationRuntimeStatus.Failed, topLevel.RuntimeStatus);
         Assert.Contains(nameof(DurableTaskProcessFailedException), topLevel.FailureDetails?.ErrorType);
+        var repository = new DurableTaskProcessExecutionRepository(client);
+        var retainedFailure = await repository.GetValuesAsync(OperationContext.Create(),
+            topLevelStart.ActivationContext.AuthorityScope, topLevelStart.Receipt.Request.Context.ProcessInstanceId);
+        Assert.Equal(Cohesive.Processes.Runtime.ProcessExecutionValueReadState.Available, retainedFailure.State);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Failed, retainedFailure.Values!.TerminalOutcome!.Kind);
+        Assert.Equal(topLevelStart.Receipt.Request.Definition, retainedFailure.Values.Definition);
+        Assert.Equal(topLevelStart.Receipt.Request.InitialContinuation, retainedFailure.Values.TerminalContinuation);
+        Assert.False(retainedFailure.Values.Evidence.IsDefaultOrEmpty);
+        var retainedTraces = await repository.GetTracesAsync(OperationContext.Create(), topLevelSchedule.InstanceId);
+        Assert.Equal(Cohesive.Processes.Runtime.ProcessExecutionTraceReadState.Available, retainedTraces.State);
+
 
         await worker.StopAsync(timeout.Token);
     }

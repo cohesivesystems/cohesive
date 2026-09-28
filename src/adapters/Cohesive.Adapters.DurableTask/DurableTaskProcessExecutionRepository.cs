@@ -270,22 +270,9 @@ public sealed class DurableTaskProcessExecutionRepository :
             }
             return ProcessExecutionTraceReadResult.InProgress();
         }
-        if (string.IsNullOrWhiteSpace(metadata.SerializedOutput))
-        {
+        var result = await ReadTerminalResultAsync(context, metadata, execution).ConfigureAwait(false);
+        if (result is null)
             return ProcessExecutionTraceReadResult.TerminalArtifactUnavailable();
-        }
-
-        if (metadata.RuntimeStatus != ModernOrchestrationStatus.Completed)
-        {
-            throw InvalidCurrentEvidence(
-                metadata,
-                "contains a canonical result artifact even though the task-hub execution did not complete normally");
-        }
-
-        var result = ReadCurrentResult(metadata);
-        var runtimeStatus = execution.RuntimeStatus
-            ?? throw InvalidCurrentEvidence(metadata, "has a canonical result but no canonical terminal custom status");
-        ValidateResultAffinity(metadata, result, runtimeStatus);
         var missingTracePrefixCount = result.Evidence.Length - result.Traces.Length;
         return ProcessExecutionTraceReadResult.Available(new(
             ProcessExecutionTraceArtifact.CurrentSchemaVersion,
@@ -326,21 +313,9 @@ public sealed class DurableTaskProcessExecutionRepository :
             }
             return ProcessExecutionValueReadResult.InProgress(values);
         }
-        if (string.IsNullOrWhiteSpace(metadata.SerializedOutput))
-        {
+        var result = await ReadTerminalResultAsync(context, metadata, execution).ConfigureAwait(false);
+        if (result is null)
             return ProcessExecutionValueReadResult.TerminalArtifactUnavailable(values);
-        }
-        if (metadata.RuntimeStatus != ModernOrchestrationStatus.Completed)
-        {
-            throw InvalidCurrentEvidence(
-                metadata,
-                "contains a canonical result artifact even though the task-hub execution did not complete normally");
-        }
-
-        var result = ReadCurrentResult(metadata);
-        var runtimeStatus = execution.RuntimeStatus
-            ?? throw InvalidCurrentEvidence(metadata, "has a canonical result but no canonical terminal custom status");
-        ValidateResultAffinity(metadata, result, runtimeStatus);
         return ProcessExecutionValueReadResult.Available(new(
             values.Definition,
             values.ProcessInstanceId,
@@ -349,6 +324,41 @@ public sealed class DurableTaskProcessExecutionRepository :
             result.State.Continuation,
             result.Evidence,
             ProcessOperationFailure.Project(result.State, result.Evidence)));
+    }
+
+    async ValueTask<DurableTaskSequentialProcessResult?> ReadTerminalResultAsync(
+        OperationContext context, ModernOrchestrationMetadata metadata, ProcessExecutionRecord execution)
+    {
+        DurableTaskSequentialProcessResult? result;
+        if (!string.IsNullOrWhiteSpace(metadata.SerializedOutput))
+        {
+            if (metadata.RuntimeStatus != ModernOrchestrationStatus.Completed)
+                throw InvalidCurrentEvidence(metadata,
+                    "contains a canonical result artifact even though the task-hub execution did not complete normally");
+            result = ReadCurrentResult(metadata);
+        }
+        else
+        {
+            // Root canonical failures retain their full result before throwing to preserve the
+            // provider's failed status. Read that existing authority, never reconstruct from text.
+            if (metadata.RuntimeStatus != ModernOrchestrationStatus.Failed
+                || execution.RuntimeStatus?.TerminalOutcome.Kind != ExecutionTerminalOutcomeKind.Failed)
+                return null;
+            var start = ReadCurrentStart(metadata);
+            var identity = DurableTaskProcessControlProtocol.Terminal(start.ActivationContext.AuthorityScope,
+                start.Receipt.Request.InitialContinuation.ProcessInstanceId);
+            var retained = await currentClient!.Entities.GetEntityAsync<DurableTaskTerminalProcessControlState>(
+                identity, includeState: true, context.CancellationToken).ConfigureAwait(false);
+            if (retained is null) return null;
+            if (retained.Id != identity)
+                throw InvalidCurrentEvidence(metadata, "terminal handoff returned another entity identity");
+            result = retained.State?.Terminal;
+            if (result is null) return null;
+        }
+        var runtimeStatus = execution.RuntimeStatus
+            ?? throw InvalidCurrentEvidence(metadata, "has a canonical result but no canonical terminal custom status");
+        ValidateResultAffinity(metadata, result, runtimeStatus);
+        return result;
     }
 
     ValueTask<ProcessExecutionQueryResult> QueryCurrentAsync(
