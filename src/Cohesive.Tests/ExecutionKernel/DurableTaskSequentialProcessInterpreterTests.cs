@@ -3359,6 +3359,21 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
+    public void PlanCatalog_ProjectsExactDefinitionsInStableOrderWithoutReenumeratingInput()
+    {
+        var first = Physical(Compile(Definition("return", [new ReturnProcessNode(new("return"), Expr.Const("first"))]),
+            definitionId: "process/a"));
+        var second = Physical(Compile(Definition("return", [new ReturnProcessNode(new("return"), Expr.Const("second"))]),
+            definitionId: "process/b"));
+        List<DurableTaskProcessRealizationPlan> input = [second, first];
+        var catalog = new DurableTaskSequentialProcessPlanCatalog(input);
+        input.Clear();
+        Assert.Equal(new[] { first.Definition, second.Definition }, catalog.Definitions.ToArray());
+        Assert.Equal(catalog.Count, catalog.Definitions.Length);
+        Assert.All(catalog.Definitions, definition => Assert.Equal(definition, catalog.GetExact(definition).Definition));
+    }
+
+    [Fact]
     public async Task PortableSdkConverter_RoundTripsStartContinuationAndEvidence()
     {
         var plan = Compile(Definition(
