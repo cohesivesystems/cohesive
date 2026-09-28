@@ -680,3 +680,9 @@ service's declared authorization requirements. Tests assert policy identity in t
 endpoint and native endpoint metadata; all 26 committed-result tests pass. Host scope enforcement
 still belongs to the existing scope adapter; metadata preservation alone is not an end-to-end
 multi-tenant authorization qualification.
+
+The Services.Infra adapter adds exact service-to-workload association over existing consumer binding
+identities. Ownership stays separate: it depends on API declarations and Infra, not execution runtime;
+Infra core gains no API dependency. Four focused tests cover exact references, immutable selections,
+coverage and consumer ownership. Capability closure, requirement completeness, persisted association
+admission and Ari adoption remain unfinished; this initial association is not a readiness proof.
