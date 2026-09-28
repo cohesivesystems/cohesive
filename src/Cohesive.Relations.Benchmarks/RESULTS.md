@@ -1347,3 +1347,30 @@ WarmupCount=3
 
 
 Sampled warm invocation allocation fell from 289.71 KB to 81.86 KB (about 72%); unsampled allocation stayed 16.88 KB. Observed sampled warm means changed from 433.061 us to 22.945 us. The baseline timing was noisy, so this is not a precise speedup guarantee. The change isolates repeated serializer metadata preparation; canonical JSON materialization and hashing still occur per sampled invocation. Cache lifetime is process-wide with two fixed profiles, initialized independently on first use; no trace, identity, tenant or invocation result is retained by this cache. Existing benchmark exclusions still apply. Differential tests compare canonical bytes, semantic hashes and indented output against fresh strict options; a deterministic test protects frozen profile reuse and caller isolation.
+
+### Invocation metric completion
+
+At 909443f plus the invocation-metrics working changes, the same Short command uses artifacts `/tmp/cohesive-service-metrics-final`. Enabled now includes invocation count/duration metric listeners as well as sampled traces; callbacks do no processing or export. All six cases completed with real changed-token writes.
+
+```
+
+BenchmarkDotNet v0.15.8, macOS 27.0 (26A428) [Darwin 27.0.0]
+Apple M5 Max, 1 CPU, 18 logical and 18 physical cores
+.NET SDK 10.0.201
+  [Host]   : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+  ShortRun : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+
+Job=ShortRun  IterationCount=3  LaunchCount=1
+WarmupCount=3
+
+```
+| Method                   | Instrumented | Mean      | Error       | StdDev     | Gen0    | Gen1   | Allocated |
+|------------------------- |------------- |----------:|------------:|-----------:|--------:|-------:|----------:|
+| **ConstructPreparedRuntime** | **False**        | **13.130 μs** |  **43.4657 μs** |  **2.3825 μs** |  **5.9204** | **0.1221** |  **48.55 KB** |
+| ConstructAndInvoke       | False        | 41.765 μs | 315.5398 μs | 17.2958 μs |  7.9346 | 0.1221 |  65.69 KB |
+| WarmInvoke               | False        |  2.629 μs |   0.1823 μs |  0.0100 μs |  2.0676 | 0.0381 |  16.89 KB |
+| **ConstructPreparedRuntime** | **True**         | **13.293 μs** |  **46.2434 μs** |  **2.5348 μs** |  **5.9204** | **0.1221** |  **48.55 KB** |
+| ConstructAndInvoke       | True         | 75.845 μs | 472.3704 μs | 25.8922 μs | 15.8691 | 0.9766 |  130.8 KB |
+| WarmInvoke               | True         | 22.840 μs |   0.6118 μs |  0.0335 μs | 10.0098 | 0.8545 |  81.87 KB |
+
+The final warm observations are 2.629 us / 16.89 KB disabled and 22.840 us / 81.87 KB enabled, compared with frozen-profile trace-only 2.620 us / 16.88 KB and 22.945 us / 81.86 KB. Short-job confidence intervals do not establish timing equivalence. The additional timestamp field adds a small retained per-invocation cost; metric recording without listeners has a separate zero-allocation regression. Existing startup/provider/export exclusions apply.

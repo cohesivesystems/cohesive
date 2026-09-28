@@ -12,6 +12,7 @@ internal sealed class ServiceInvocationEvidence : IDisposable
     readonly string operation;
     readonly ActivationId activation;
     readonly Activity? activity;
+    readonly long started = Stopwatch.GetTimestamp();
     readonly List<NormalizedExecutionTraceEvent> events = [];
     ExecutionTelemetryOutcome outcome = ExecutionTelemetryOutcome.Failed;
     Exception? failure;
@@ -59,5 +60,9 @@ internal sealed class ServiceInvocationEvidence : IDisposable
         Record(exception is OperationCanceledException ? "invocationCancelled" : "invocationFailed");
     }
 
-    public void Dispose() => ExecutionTelemetry.CompleteActivity(activity, outcome, failure);
+    public void Dispose()
+    {
+        ExecutionTelemetry.RecordInvocation(ExecutionTelemetryActivityKind.Activation, outcome, Stopwatch.GetElapsedTime(started));
+        ExecutionTelemetry.CompleteActivity(activity, outcome, failure);
+    }
 }

@@ -22,6 +22,17 @@ public sealed class ExecutionTelemetryTests
     const string PrivatePayload = "private-execution-payload-ari-210";
 
     [Fact]
+    public void InvocationMetricsRejectUnsupportedDimensionsAndNegativeDuration()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ExecutionTelemetry.RecordInvocation(
+            (ExecutionTelemetryActivityKind)(-1), ExecutionTelemetryOutcome.Succeeded, TimeSpan.Zero));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ExecutionTelemetry.RecordInvocation(
+            ExecutionTelemetryActivityKind.Activation, (ExecutionTelemetryOutcome)(-1), TimeSpan.Zero));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ExecutionTelemetry.RecordInvocation(
+            ExecutionTelemetryActivityKind.Activation, ExecutionTelemetryOutcome.Succeeded, TimeSpan.FromTicks(-1)));
+    }
+
+    [Fact]
     public void Activities_CorrelateExplainAndTraceWithStableHierarchyWithoutPayloads()
     {
         var (explain, trace) = ExplainAndTrace();
@@ -138,6 +149,8 @@ public sealed class ExecutionTelemetryTests
             unexpectedTelemetry |= ExecutionTelemetry.StartActivity(
                 ExecutionTelemetryActivityKind.Activation) is not null;
             StorageExecutionTelemetry.RecordCheckpoint(checkpoint);
+            ExecutionTelemetry.RecordInvocation(ExecutionTelemetryActivityKind.Activation,
+                ExecutionTelemetryOutcome.Succeeded, TimeSpan.Zero);
         }
 
         var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
@@ -147,6 +160,8 @@ public sealed class ExecutionTelemetryTests
             unexpectedTelemetry |= ExecutionTelemetry.StartActivity(
                 ExecutionTelemetryActivityKind.Activation) is not null;
             StorageExecutionTelemetry.RecordCheckpoint(checkpoint);
+            ExecutionTelemetry.RecordInvocation(ExecutionTelemetryActivityKind.Activation,
+                ExecutionTelemetryOutcome.Succeeded, TimeSpan.Zero);
         }
         var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
 
@@ -180,10 +195,8 @@ public sealed class ExecutionTelemetryTests
         meterListener.InstrumentPublished = static (instrument, listener) =>
         {
             if (string.Equals(instrument.Meter.Name, ExecutionTelemetry.MeterName, StringComparison.Ordinal)
-                && string.Equals(
-                    instrument.Name,
-                    ExecutionTelemetry.CheckpointsInstrumentName,
-                    StringComparison.Ordinal))
+                && instrument.Name is ExecutionTelemetry.CheckpointsInstrumentName
+                    or ExecutionTelemetry.InvocationsInstrumentName or ExecutionTelemetry.InvocationDurationInstrumentName)
             {
                 listener.EnableMeasurementEvents(instrument);
             }
@@ -192,6 +205,11 @@ public sealed class ExecutionTelemetryTests
         {
             Interlocked.Increment(ref measured);
             throw new InvalidOperationException("The test metric observer failed.");
+        });
+        meterListener.SetMeasurementEventCallback<double>((_, _, _, _) =>
+        {
+            Interlocked.Increment(ref measured);
+            throw new InvalidOperationException("The test duration observer failed.");
         });
         meterListener.Start();
 
@@ -204,8 +222,10 @@ public sealed class ExecutionTelemetryTests
             backlogCount: 0,
             outcome: ExecutionTelemetryOutcome.Succeeded);
 
+        ExecutionTelemetry.RecordInvocation(ExecutionTelemetryActivityKind.Activation,
+            ExecutionTelemetryOutcome.Failed, TimeSpan.FromSeconds(1));
         Assert.Equal(1, Volatile.Read(ref stopped));
-        Assert.Equal(1, Volatile.Read(ref measured));
+        Assert.Equal(3, Volatile.Read(ref measured));
     }
 
     [Fact]

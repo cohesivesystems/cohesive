@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using Cohesive.Api;
 using Cohesive.Api.Services;
 using Cohesive.Api.Execution.Services;
@@ -19,9 +20,11 @@ namespace Cohesive.Adapters.OpenTelemetry.Tests;
 public sealed class ServiceInvocationExportTests
 {
     [Theory]
-    [InlineData(ExportResult.Success)]
-    [InlineData(ExportResult.Failure)]
-    public async Task ExportOutcomeDoesNotChangeCommitOrCanonicalEvidence(ExportResult exportResult)
+    [InlineData(ExportResult.Success, true)]
+    [InlineData(ExportResult.Success, false)]
+    [InlineData(ExportResult.Failure, true)]
+    [InlineData(ExportResult.Failure, false)]
+    public async Task ExportOutcomeDoesNotChangeCommitOrCanonicalEvidence(ExportResult exportResult, bool sampled)
     {
         var entity = Note.Instance.Definition;
         var compiled = TransitionAuthoring.Create<Note, Note.Input, bool>(entity.Shape,
@@ -42,13 +45,40 @@ public sealed class ServiceInvocationExportTests
         var exporter = new RecordingExporter(exportResult);
         using var provider = Sdk.CreateTracerProviderBuilder()
             .AddCohesiveExecutionInstrumentation()
-            .SetSampler(new AlwaysOnSampler())
+            .SetSampler(sampled ? new AlwaysOnSampler() : new AlwaysOffSampler())
             .AddProcessor(new SimpleActivityExportProcessor(exporter)).Build();
+        long invocationCount = 0;
+        double? invocationSeconds = null;
+        using var metrics = new MeterListener();
+        metrics.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == ExecutionTelemetry.MeterName
+                && (instrument.Name == ExecutionTelemetry.InvocationsInstrumentName
+                    || instrument.Name == ExecutionTelemetry.InvocationDurationInstrumentName))
+                listener.EnableMeasurementEvents(instrument);
+        };
+        var expectedOutcome = "succeeded";
+        void CheckTags(ReadOnlySpan<KeyValuePair<string, object?>> tags)
+        {
+            Assert.Equal(2, tags.Length);
+            Assert.Contains(tags.ToArray(), tag => tag.Key == ExecutionTelemetry.KindTagName);
+            Assert.Contains(tags.ToArray(), tag => tag.Key == ExecutionTelemetry.OutcomeTagName && Equals(tag.Value, expectedOutcome));
+        }
+        metrics.SetMeasurementEventCallback<long>((_, value, tags, _) => { CheckTags(tags); invocationCount += value; });
+        metrics.SetMeasurementEventCallback<double>((instrument, value, tags, _) =>
+        {
+            CheckTags(tags);
+            Assert.Equal("s", instrument.Unit);
+            invocationSeconds = value;
+        });
+        metrics.Start();
         using var parent = new Activity("caller").SetIdFormat(ActivityIdFormat.W3C).Start();
         var result = await runtime.InvokeAsync(OperationContext.Create(), "revise", "private-note",
             initial.ConcurrencyToken, new("export/invocation"),
             PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(new Note.Input("private-value"))));
         Assert.Equal(ApiResultKind.Success, result.Kind);
+        Assert.Equal(1, invocationCount);
+        Assert.True(invocationSeconds >= 0);
         Assert.NotEqual(initial.ConcurrencyToken, result.ConcurrencyToken);
         var retained = await repository.TryGet(OperationContext.Create(), "private-note",
             EntityReadOptions.Full.WithPartitionKey("private-tenant"));
@@ -57,15 +87,31 @@ public sealed class ServiceInvocationExportTests
         Assert.Equal(initial.Entity.Version + 1, retained.Entity.Version);
         Assert.Equal(result.ConcurrencyToken, retained.ConcurrencyToken);
         Assert.True(provider.ForceFlush(10_000));
-        var span = Assert.Single(exporter.Activities);
-        Assert.Equal(parent.TraceId, span.TraceId);
-        Assert.Equal(parent.SpanId, span.ParentSpanId);
-        Assert.Equal(ExecutionTraceFingerprinter.ComputeSemantic(result.Trace).Value,
-            span.GetTagItem(ExecutionTelemetry.TraceFingerprintTagName));
-        var tags = string.Join(";", span.TagObjects.Select(pair => pair.Value));
-        Assert.DoesNotContain("private-tenant", tags);
-        Assert.DoesNotContain("private-note", tags);
-        Assert.DoesNotContain("private-value", tags);
+        if (sampled)
+        {
+            var span = Assert.Single(exporter.Activities);
+            Assert.Equal(parent.TraceId, span.TraceId);
+            Assert.Equal(parent.SpanId, span.ParentSpanId);
+            Assert.Equal(ExecutionTraceFingerprinter.ComputeSemantic(result.Trace).Value,
+                span.GetTagItem(ExecutionTelemetry.TraceFingerprintTagName));
+            var tags = string.Join(";", span.TagObjects.Select(pair => pair.Value));
+            Assert.DoesNotContain("private-tenant", tags);
+            Assert.DoesNotContain("private-note", tags);
+            Assert.DoesNotContain("private-value", tags);
+        }
+        else Assert.Empty(exporter.Activities);
+        expectedOutcome = "rejected";
+        invocationSeconds = null;
+        var rejected = await runtime.InvokeAsync(OperationContext.Create(), "revise", "private-note",
+            initial.ConcurrencyToken, new("export/stale"),
+            PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(new Note.Input("private-value"))));
+        Assert.Equal(ApiResultKind.Conflict, rejected.Kind);
+        Assert.Equal(2, invocationCount);
+        Assert.True(invocationSeconds >= 0);
+        var unchanged = await repository.TryGet(OperationContext.Create(), "private-note",
+            EntityReadOptions.Full.WithPartitionKey("private-tenant"));
+        Assert.Equal(retained.ConcurrencyToken, unchanged!.ConcurrencyToken);
+
     }
 
     sealed class RecordingExporter(ExportResult result) : BaseExporter<Activity>

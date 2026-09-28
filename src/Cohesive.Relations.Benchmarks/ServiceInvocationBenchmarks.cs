@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using BenchmarkDotNet.Attributes;
 using Cohesive.Api;
 using Cohesive.Api.Services;
@@ -26,6 +27,7 @@ public class ServiceInvocationBenchmarks
     EntityConcurrencyToken token;
     readonly Authority authority = new();
     ActivityListener? listener;
+    MeterListener? metrics;
 
     [Params(false, true)]
     public bool Instrumented { get; set; }
@@ -61,6 +63,17 @@ public class ServiceInvocationBenchmarks
                 Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
             };
             ActivitySource.AddActivityListener(listener);
+            metrics = new MeterListener();
+            metrics.InstrumentPublished = (instrument, observer) =>
+            {
+                if (instrument.Meter.Name == ExecutionTelemetry.MeterName
+                    && (instrument.Name == ExecutionTelemetry.InvocationsInstrumentName
+                        || instrument.Name == ExecutionTelemetry.InvocationDurationInstrumentName))
+                    observer.EnableMeasurementEvents(instrument);
+            };
+            metrics.SetMeasurementEventCallback<long>(static (_, _, _, _) => { });
+            metrics.SetMeasurementEventCallback<double>(static (_, _, _, _) => { });
+            metrics.Start();
         }
         await Invoke(runtime);
     }
@@ -88,7 +101,11 @@ public class ServiceInvocationBenchmarks
     }
 
     [GlobalCleanup]
-    public void Cleanup() => listener?.Dispose();
+    public void Cleanup()
+    {
+        metrics?.Dispose();
+        listener?.Dispose();
+    }
 
     sealed class Authority : IServiceInvocationAuthorization
     {

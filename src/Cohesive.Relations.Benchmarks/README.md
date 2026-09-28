@@ -156,7 +156,7 @@ control.
 and warm invocation with execution activity sampling disabled/enabled. Immutable transition/service
 compilation and the initial entity write occur in setup; every measured invocation validates success
 and advances the opaque concurrency token. One in-memory entity is reused; no database, HTTP server,
-exporter, or host startup is measured. The enabled mode records activity data without exporting it.
+exporter, or host startup is measured. The enabled mode records activity data and enables the invocation count/duration meters with no-op callbacks, without exporting either.
 Construction-plus-invocation is a fresh runtime over warmed dependencies, not process cold start.
 
 Run `dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --filter '*ServiceInvocationBenchmarks*'`.
