@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -127,6 +128,41 @@ public sealed class ServiceRuntimeTests
             OperationContext.Create(cancellationToken: cancellation.Token), "revise", "note-1",
             fixture.Initial.ConcurrencyToken, new("cancelled"), fixture.Input));
         Assert.Equal(0, fixture.Resolutions);
+    }
+
+    [Theory]
+    [InlineData(true, "cancelled")]
+    [InlineData(false, "failed")]
+    public async Task ExceptionalInvocationRecordsOneBoundedOutcomeWithoutWriting(bool cancel, string expectedOutcome)
+    {
+        var fixture = await Fixture.Create();
+        var measurements = new List<(long Count, string? Outcome)>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, observer) =>
+        {
+            if (instrument.Meter.Name == ExecutionTelemetry.MeterName
+                && instrument.Name == ExecutionTelemetry.InvocationsInstrumentName)
+                observer.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((_, count, tags, _) => measurements.Add((count,
+            tags.ToArray().Single(tag => tag.Key == ExecutionTelemetry.OutcomeTagName).Value?.ToString())));
+        listener.Start();
+        if (cancel)
+        {
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.Runtime.InvokeAsync(
+                OperationContext.Create(cancellationToken: cancellation.Token), "revise", "note-1",
+                fixture.Initial.ConcurrencyToken, new("cancelled-metric"), fixture.Input));
+            Assert.Equal(0, fixture.Resolutions);
+        }
+        else
+        {
+            fixture.Repository.ReturnPartial = true;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Invoke());
+        }
+        Assert.Equal((1L, expectedOutcome), Assert.Single(measurements));
+        Assert.Equal(0, fixture.Repository.Writes);
     }
 
     [Fact]
