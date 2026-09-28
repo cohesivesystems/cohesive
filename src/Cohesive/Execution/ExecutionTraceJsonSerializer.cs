@@ -62,7 +62,7 @@ public static class ExecutionTraceFingerprinter
         root.Remove("durableCommitSequence");
         var canonical = CanonicalJsonWriter.GetCanonicalBytes(
             root,
-            ExecutionTraceJsonSerializer.CreateOptions(),
+            ExecutionTraceJsonSerializer.GetReadOnlyOptions(),
             static _ => CanonicalJsonArrayOrdering.Sequence,
             numberSemantics: CanonicalJsonNumberSemantics.ExactDecimalRational);
         return new(
@@ -75,9 +75,29 @@ public static class ExecutionTraceFingerprinter
 /// <summary>Strict deterministic JSON boundary for normalized execution traces.</summary>
 public static class ExecutionTraceJsonSerializer
 {
+    // Prepare each closed profile on first use; retain metadata, never invocation evidence.
+    static readonly Lazy<JsonSerializerOptions> CompactOptions = new(() => CreateReadOnlyOptions(PortableDocumentJsonFormatting.Compact));
+    static readonly Lazy<JsonSerializerOptions> IndentedOptions = new(() => CreateReadOnlyOptions(PortableDocumentJsonFormatting.Indented));
+
+    internal static JsonSerializerOptions GetReadOnlyOptions(
+        PortableDocumentJsonFormatting formatting = PortableDocumentJsonFormatting.Compact) => formatting switch
+        {
+            PortableDocumentJsonFormatting.Compact => CompactOptions.Value,
+            PortableDocumentJsonFormatting.Indented => IndentedOptions.Value,
+            _ => throw new ArgumentOutOfRangeException(nameof(formatting), formatting, "Unsupported JSON formatting mode.")
+        };
+
+    static JsonSerializerOptions CreateReadOnlyOptions(PortableDocumentJsonFormatting formatting)
+    {
+        var options = CreateOptions(formatting);
+        options.MakeReadOnly(populateMissingResolver: true);
+        return options;
+    }
+
     /// <summary>Creates strict serializer options for the normalized execution-trace wire contract.</summary>
     /// <param name="formatting">Desired output formatting.</param>
-    /// <returns>Strict, case-sensitive serializer options.</returns>
+    /// <returns>New independently mutable strict, case-sensitive serializer options.</returns>
+    /// <remarks>Internal operations reuse lazily prepared frozen profiles; this factory remains caller-owned.</remarks>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="formatting"/> is unsupported.</exception>
     public static JsonSerializerOptions CreateOptions(
         PortableDocumentJsonFormatting formatting = PortableDocumentJsonFormatting.Compact) =>
@@ -99,7 +119,7 @@ public static class ExecutionTraceJsonSerializer
         ArgumentNullException.ThrowIfNull(trace);
         return formatting == PortableDocumentJsonFormatting.Compact
             ? Encoding.UTF8.GetString(GetCanonicalBytes(trace))
-            : JsonSerializer.Serialize(trace, CreateOptions(formatting));
+            : JsonSerializer.Serialize(trace, GetReadOnlyOptions(formatting));
     }
 
     /// <summary>Gets canonical UTF-8 JSON for one complete normalized execution trace.</summary>
@@ -114,7 +134,7 @@ public static class ExecutionTraceJsonSerializer
         ArgumentNullException.ThrowIfNull(trace);
         return CanonicalJsonWriter.GetCanonicalBytes(
             ToJsonObject(trace),
-            CreateOptions(),
+            GetReadOnlyOptions(),
             static _ => CanonicalJsonArrayOrdering.Sequence,
             numberSemantics: CanonicalJsonNumberSemantics.ExactDecimalRational);
     }
@@ -127,7 +147,7 @@ public static class ExecutionTraceJsonSerializer
     public static NormalizedExecutionTrace Deserialize(string json)
     {
         ArgumentNullException.ThrowIfNull(json);
-        var trace = JsonSerializer.Deserialize<NormalizedExecutionTrace>(json, CreateOptions())
+        var trace = JsonSerializer.Deserialize<NormalizedExecutionTrace>(json, GetReadOnlyOptions())
             ?? throw new JsonException("Normalized execution-trace JSON produced no document.");
         if (trace.SchemaVersion != NormalizedExecutionTrace.CurrentSchemaVersion)
         {
@@ -144,6 +164,6 @@ public static class ExecutionTraceJsonSerializer
     }
 
     internal static JsonObject ToJsonObject(NormalizedExecutionTrace trace) =>
-        JsonSerializer.SerializeToNode(trace, CreateOptions()) as JsonObject
+        JsonSerializer.SerializeToNode(trace, GetReadOnlyOptions()) as JsonObject
         ?? throw new InvalidOperationException("Failed to materialize normalized execution-trace JSON.");
 }
