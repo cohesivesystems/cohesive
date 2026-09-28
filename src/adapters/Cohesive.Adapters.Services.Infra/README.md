@@ -21,3 +21,10 @@ and requires the entire deployment's native capability closure. It preserves nat
 diagnostics, rejects unrelated reports even if closed, and does not reinterpret capability evidence.
 This is static target qualification, not observed runtime readiness or proof that the caller selected
 every dependency needed by an operation. The full Infra suite passes 120 tests with this boundary.
+
+`CreateWithSharedPrerequisites` applies an explicit service-wide binding set to all canonical
+operations. This removes application-owned operation enumeration when the deployment profile requires
+identical prerequisites throughout the service. It copies selections, rejects duplicates and preserves
+the same workload/binding validation as per-operation `Create`. Adding a result-read operation therefore
+inherits the selected prerequisites without a second operation catalog. This is explicit placement
+policy, not automatic dependency discovery; use `Create` for genuinely different per-operation needs.

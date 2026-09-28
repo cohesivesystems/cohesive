@@ -31,6 +31,39 @@ public sealed class ServiceInfrastructureAssociationTests
     }
 
     [Fact]
+    public void SharedPrerequisitesDeriveCoverageAndMatchExplicitPlacement()
+    {
+        var first = Service();
+        Assert.True(ServiceDefinitionDocuments.ValidateAndProject(first, out var definition).IsValid);
+        var start = Assert.IsType<ServiceProcessOperation>(Assert.Single(definition!.Operations));
+        var service = ServiceDefinitionDocuments.Create(new("notes"), new("2"),
+            new([start, new ServiceProcessResultOperation("result", start.Process)]), first.Metadata.Provenance);
+        var prerequisites = new List<InfrastructureBindingId> { new("api-scheduler") };
+        var association = ServiceInfrastructureAssociation.CreateWithSharedPrerequisites(service, Topology(), new("api"), prerequisites);
+        prerequisites.Clear();
+        var explicitPlacement = ServiceInfrastructureAssociation.Create(service, Topology(), new("api"),
+            new Dictionary<string, ImmutableArray<InfrastructureBindingId>>
+            { ["publish"] = [new("api-scheduler")], ["result"] = [new("api-scheduler")] });
+        Assert.Equal(explicitPlacement.Service, association.Service);
+        Assert.Equal(explicitPlacement.Infrastructure, association.Infrastructure);
+        Assert.Equal(2, association.Operations.Count);
+        foreach (var operation in explicitPlacement.Operations)
+            Assert.Equal(operation.Value.ToArray(), association.Operations[operation.Key].ToArray());
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("worker-scheduler")]
+    [InlineData("duplicate")]
+    public void SharedPrerequisitesPreserveBindingAdmission(string scenario)
+    {
+        InfrastructureBindingId[] selected = scenario == "duplicate"
+            ? [new("api-scheduler"), new("api-scheduler")] : [new(scenario)];
+        Assert.Throws<ArgumentException>(() => ServiceInfrastructureAssociation.CreateWithSharedPrerequisites(
+            Service(), Topology(), new("api"), selected));
+    }
+
+    [Fact]
     public void RejectsUnclosedCapabilitiesAndEvidenceFromAnotherDefinition()
     {
         var topology = Topology();

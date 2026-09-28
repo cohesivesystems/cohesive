@@ -45,6 +45,30 @@ public sealed class ServiceInfrastructureAssociation
             "The associated deployment has unresolved capability requirements; inspect the native closure diagnostics.", "/capabilities")]);
     }
 
+    /// <summary>Applies explicit service-wide prerequisites to every operation in the canonical declaration.</summary>
+    /// <remarks>The caller owns placement policy; this method derives operation coverage, not dependencies.
+    /// Adding an operation automatically includes the same prerequisites. Use per-operation Create when
+    /// requirements differ. An explicit empty set is allowed and does not prove dependency completeness.</remarks>
+    /// <param name="service">Canonical service document without unsupported semantic extensions.</param>
+    /// <param name="infrastructure">Exact canonical infrastructure topology.</param>
+    /// <param name="workload">Workload consuming every prerequisite.</param>
+    /// <param name="prerequisites">Explicit unique existing consumer bindings, copied before projection.</param>
+    /// <returns>Immutable association with coverage derived from the service declaration.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">A declaration, workload or prerequisite is invalid.</exception>
+    public static ServiceInfrastructureAssociation CreateWithSharedPrerequisites(ExecutionDefinitionDocument service,
+        InfrastructureDefinition infrastructure, InfrastructureNodeId workload,
+        IReadOnlyCollection<InfrastructureBindingId> prerequisites)
+    {
+        ArgumentNullException.ThrowIfNull(prerequisites);
+        var definition = RequireDefinition(service);
+        ImmutableArray<InfrastructureBindingId> selected = [.. prerequisites];
+        if (selected.Distinct().Count() != selected.Length)
+            throw new ArgumentException("Shared prerequisites must be unique.", nameof(prerequisites));
+        return CreateValidated(service, definition, infrastructure, workload,
+            definition.Operations.ToDictionary(operation => operation.Id, _ => selected, StringComparer.Ordinal));
+    }
+
     /// <summary>Checks complete operation placement without constructing resources or execution runtimes.</summary>
     /// <param name="service">Canonical service document; semantic extensions are unsupported by this profile.</param>
     /// <param name="infrastructure">Canonical infrastructure definition; its existing identities remain authoritative.</param>
@@ -57,12 +81,24 @@ public sealed class ServiceInfrastructureAssociation
         InfrastructureDefinition infrastructure, InfrastructureNodeId workload,
         IReadOnlyDictionary<string, ImmutableArray<InfrastructureBindingId>> operations)
     {
+        return CreateValidated(service, RequireDefinition(service), infrastructure, workload, operations);
+    }
+
+    static ServiceDefinition RequireDefinition(ExecutionDefinitionDocument service)
+    {
         ArgumentNullException.ThrowIfNull(service);
-        ArgumentNullException.ThrowIfNull(infrastructure);
-        ArgumentNullException.ThrowIfNull(operations);
         var validation = ServiceDefinitionDocuments.ValidateAndProject(service, out var definition);
         if (!validation.IsValid || !service.Extensions.IsEmpty)
             throw new ArgumentException("A valid service declaration without semantic extensions is required.", nameof(service));
+        return definition!;
+    }
+
+    static ServiceInfrastructureAssociation CreateValidated(ExecutionDefinitionDocument service, ServiceDefinition definition,
+        InfrastructureDefinition infrastructure, InfrastructureNodeId workload,
+        IReadOnlyDictionary<string, ImmutableArray<InfrastructureBindingId>> operations)
+    {
+        ArgumentNullException.ThrowIfNull(infrastructure);
+        ArgumentNullException.ThrowIfNull(operations);
         if (!infrastructure.Workloads.Any(candidate => candidate.Id == workload))
             throw new ArgumentException($"Workload '{workload.Value}' is not declared.", nameof(workload));
         var names = definition!.Operations.Select(operation => operation.Id).ToHashSet(StringComparer.Ordinal);
