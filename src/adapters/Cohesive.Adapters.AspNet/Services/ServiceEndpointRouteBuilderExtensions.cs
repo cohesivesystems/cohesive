@@ -127,10 +127,46 @@ public static class ServiceEndpointRouteBuilderExtensions
             authorizationPolicyResolver, instanceParameter, tokenHeader);
     }
 
+    /// <summary>Maps an independently authorized terminal Process value through a declaration-derived HTTP endpoint.</summary>
+    /// <remarks>The runtime is resolved only on invocation and must realize the exact declaration.
+    /// The projection receives an authorized, contract-validated value and must perform no reads or writes.
+    /// Scope policies select the host scope; they do not grant access. No entity concurrency token is emitted.</remarks>
+    /// <exception cref="ArgumentException">The declaration, operation or route binding is invalid.</exception>
+    /// <exception cref="InvalidOperationException">The resolver returns a different service declaration.</exception>
+    public static RouteHandlerBuilder MapServiceProcessResult<TResponse>(this IEndpointRouteBuilder endpoints,
+        ExecutionDefinitionDocument declaration, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
+        string operationId, string route, Func<PortableValue, TResponse> project,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
+        string instanceParameter = "instanceId", IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentNullException.ThrowIfNull(resolveRuntime);
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentException.ThrowIfNullOrWhiteSpace(instanceParameter);
+        var projection = ServiceApiProjection.ProjectProcessResult<TResponse>(declaration, operationId,
+            new("GET", route, [new(instanceParameter, HttpParameterSource.Route, typeof(string))], body: null), scopePolicies);
+        return MapResultCore(endpoints, declaration, projection, resolveRuntime,
+            (runtime, context, instance) => runtime.ReadProcessResultAsync(context, operationId, instance),
+            (_, value) => project(value), authorizationPolicyResolver, instanceParameter);
+    }
+
     static RouteHandlerBuilder MapResult<TResponse>(IEndpointRouteBuilder endpoints,
         ExecutionDefinitionDocument declaration, ApiEndpoint projection, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
         string operationId, Func<EntitySnapshot, TResponse> project, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver,
         string instanceParameter, string tokenHeader)
+        => MapResultCore(endpoints, declaration, projection, resolveRuntime,
+            (runtime, context, instance) => runtime.ReadCommittedEntityAsync(context, operationId, instance),
+            (http, snapshot) =>
+            {
+                http.Response.Headers[tokenHeader] = snapshot.ConcurrencyToken.Value;
+                return project(snapshot);
+            }, authorizationPolicyResolver, instanceParameter);
+
+    static RouteHandlerBuilder MapResultCore<TValue, TResponse>(IEndpointRouteBuilder endpoints,
+        ExecutionDefinitionDocument declaration, ApiEndpoint projection, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
+        Func<ServiceRuntime, OperationContext, ProcessInstanceId, ValueTask<ServiceOperationResult<TValue>>> read,
+        Func<HttpContext, TValue, TResponse> project, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver,
+        string instanceParameter) where TValue : class
     {
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
         {
@@ -144,13 +180,12 @@ public static class ServiceEndpointRouteBuilderExtensions
                 || runtime.Declaration.Metadata.RevisionId != declaration.Metadata.RevisionId
                 || runtime.Declaration.Metadata.Fingerprint != declaration.Metadata.Fingerprint)
                 throw new InvalidOperationException("The resolved runtime does not realize the registered service declaration.");
-            var result = await runtime.ReadCommittedEntityAsync(context, operationId, new(instance)).ConfigureAwait(false);
+            var result = await read(runtime, context, new(instance)).ConfigureAwait(false);
             var status = projection.Operation.Results.Single(item => item.Kind == result.Kind).Http!.StatusCode;
             if (result.Kind == ApiResultKind.Success)
             {
-                var snapshot = result.Outcome ?? throw new InvalidOperationException("Successful receipt resolution returned no snapshot.");
-                http.Response.Headers[tokenHeader] = snapshot.ConcurrencyToken.Value;
-                return Results.Json(project(snapshot), statusCode: status);
+                var value = result.Outcome ?? throw new InvalidOperationException("Successful result resolution returned no value.");
+                return Results.Json(project(http, value), statusCode: status);
             }
             return ProjectServiceProblem(projection, result.Kind, result.Diagnostics);
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(declaration);

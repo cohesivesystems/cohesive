@@ -34,6 +34,52 @@ namespace Cohesive.Tests.Api;
 [Collection(Cohesive.Tests.Observability.OperationTelemetryEmitterTestCollection.Name)]
 public sealed class ServiceProcessEntityResultTests
 {
+    [Theory]
+    [InlineData(true, false, 200)]
+    [InlineData(false, false, 403)]
+    [InlineData(true, true, 202)]
+    public async Task TerminalHttpProjectionIsLazyAuthorizedAndDoesNotEmitEntityToken(bool admitted, bool pending, int status)
+    {
+        var fixture = await Create();
+        var expected = fixture.Values.Result.Values!.TerminalOutcome!.Detail!.Value;
+        if (pending)
+            fixture.Values.Result = ProcessExecutionValueReadResult.InProgress(new(fixture.Values.Result.Values!.Definition, fixture.Instance));
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(admitted ? fixture.Context : OperationContext.Create());
+        await using var app = builder.Build();
+        var resolutions = 0;
+        var projections = 0;
+        var scope = new ApiScopePolicy("tenant", ApiScopeCardinality.Single, ApiScopeBinding.Header,
+            ApiScopeAccess.RequireSelected, singleScopeParameterName: "X-Tenant-Id");
+        app.MapServiceProcessResult(fixture.Runtime.Declaration, _ => { resolutions++; return fixture.Runtime; },
+            "terminal", "/results/{instanceId}", value =>
+            {
+                Assert.Equal(expected, value);
+                projections++;
+                return new Response("retained-output");
+            }, authorizationPolicyResolver: (_, requirement) => requirement.Id, scopePolicies: [scope]);
+        Assert.Equal(0, resolutions);
+        Assert.Equal(0, fixture.Values.Reads);
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().Single();
+        Assert.Same(scope, endpoint.Metadata.GetMetadata<ApiScopePolicy>());
+        var http = new DefaultHttpContext { RequestServices = app.Services };
+        http.Request.RouteValues["instanceId"] = fixture.Instance.Value;
+        http.Response.Body = new MemoryStream();
+        await endpoint.RequestDelegate!(http);
+        Assert.Equal(status, http.Response.StatusCode);
+        Assert.Equal(1, resolutions);
+        Assert.Equal(admitted ? 1 : 0, fixture.Values.Reads);
+        Assert.Equal(status == 200 ? 1 : 0, projections);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+        Assert.False(http.Response.Headers.ContainsKey("X-Concurrency-Token"));
+        if (status == 200)
+        {
+            http.Response.Body.Position = 0;
+            using var json = await JsonDocument.ParseAsync(http.Response.Body);
+            Assert.Equal("retained-output", json.RootElement.GetProperty("text").GetString());
+        }
+    }
+
     [Fact]
     public async Task TerminalResultProjectionDerivesRequirementsWithoutProtectedReads()
     {
@@ -126,8 +172,10 @@ public sealed class ServiceProcessEntityResultTests
         Assert.Equal(0, fixture.Values.RepositoryResolutions);
     }
 
-    [Fact]
-    public async Task LazyResultBindingRejectsDifferentServiceBeforeProtectedReads()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LazyResultBindingRejectsDifferentServiceBeforeProtectedReads(bool terminal)
     {
         var fixture = await Create();
         Assert.True(ServiceDefinitionDocuments.ValidateAndProject(fixture.Runtime.Declaration, out var definition).IsValid);
@@ -136,8 +184,12 @@ public sealed class ServiceProcessEntityResultTests
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(fixture.Context);
         await using var app = builder.Build();
-        app.MapServiceProcessEntityResult(registered, _ => fixture.Runtime, "result", "/results/{instanceId}",
-            _ => "unreachable", authorizationPolicyResolver: (_, requirement) => requirement.Id);
+        if (terminal)
+            app.MapServiceProcessResult(registered, _ => fixture.Runtime, "terminal", "/results/{instanceId}",
+                _ => "unreachable", authorizationPolicyResolver: (_, requirement) => requirement.Id);
+        else
+            app.MapServiceProcessEntityResult(registered, _ => fixture.Runtime, "result", "/results/{instanceId}",
+                _ => "unreachable", authorizationPolicyResolver: (_, requirement) => requirement.Id);
         var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().Single();
         var http = new DefaultHttpContext { RequestServices = app.Services };
         http.Request.RouteValues["instanceId"] = fixture.Instance.Value;

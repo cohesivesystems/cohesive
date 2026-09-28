@@ -230,3 +230,17 @@ app.MapServiceProcessControl<PauseProcessCommand>(runtime, "pause", "/notes/paus
 Native API result definitions determine statuses and response bodies. Service admission failures use the existing
 `ExecutionApiProblem`; native Process decisions retain their own result. Start/control authority and exact-target
 admission run in the shared service runtime, while ASP.NET policy metadata remains an additional host integration.
+
+Declared terminal results use `MapServiceProcessResult<TResponse>` with the portable service document,
+a lazy runtime resolver, operation identity, GET route and a pure `PortableValue` response projection.
+The exact Process remains the output-contract authority. Declaration-derived metadata preserves result
+alternatives, capability requirements and supplied scope policies without constructing repositories.
+Invocation checks that the resolved service has the registered identity, revision and fingerprint, then
+uses the runtime's protected terminal reader. Success emits the selected response view; pending and
+rejected reads use the shared declared problem/status projection. No entity concurrency token is emitted.
+
+For example, a compiler may return diagnostics without creating an entity. Its result endpoint can
+return that retained output directly rather than selecting a nonexistent entity receipt. Tests exercise
+successful serialization, forbidden reads without protected storage access, pending HTTP 202, lazy
+construction and rejection of a mismatched runtime. These are mapped endpoint tests, not deployed
+middleware or remote-provider qualification.
