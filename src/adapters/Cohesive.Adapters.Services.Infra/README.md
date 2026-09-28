@@ -29,11 +29,11 @@ the same workload/binding validation as per-operation `Create`. Adding a result-
 inherits the selected prerequisites without a second operation catalog. This is explicit placement
 policy, not automatic dependency discovery; use `Create` for genuinely different per-operation needs.
 
-`AssessReadiness` accepts an independently selected physical realization and adapter-normalized
-observations. It rejects a realization for a different exact topology, then returns the existing
-`InfrastructureReadinessAssessment` without a service-specific readiness model. Native readiness
-obligations, missing-evidence diagnostics and assessment fingerprints remain authoritative. The result
-covers the whole realization; selected consumer bindings are not implicitly converted into readiness
-edges. Scope, freshness and evidence acquisition must still be enforced by the provider adapter.
-For example, an API observed ready while its declared state dependency has no observation remains
-unknown/not ready. A capability-closed topology alone cannot manufacture that missing evidence.
+`ValidateReadiness` consumes the native assessment already produced by a trusted provider pipeline
+and an independently selected exact realization reference. It rejects topology or physical realization
+mismatch, requires an explicit ready decision for the associated workload, preserves native diagnostics
+and requires the whole assessment to be ready. It does not recollect or reevaluate the same observations
+for each service. No service-specific readiness model is created. Selected bindings are not implicitly
+converted into readiness edges. Scope, freshness and persisted-artifact integrity remain provider concerns;
+this method does not admit arbitrary untrusted assessment documents. For example, an API observed ready
+while its declared state dependency has no evidence remains unknown/not ready.

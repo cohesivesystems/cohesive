@@ -79,14 +79,23 @@ public sealed class ServiceInfrastructureAssociationTests
             observations.Add(new(new("physical/state"), ExecutionHealthStatus.Healthy,
                 ready ? ExecutionReadinessStatus.Ready : ExecutionReadinessStatus.NotReady,
                 DateTimeOffset.UnixEpoch, [SourceReference.Create("test", "state-observation")]));
-        var assessment = association.AssessReadiness(realization, observations.ToImmutable());
+        var assessment = InfrastructureReadinessEvaluator.Assess(realization, observations.ToImmutable());
+        var validation = association.ValidateReadiness(realization.ToReference(), assessment);
         Assert.Equal(ready, assessment.IsReady);
-        Assert.Equal(InfrastructureReadinessEvaluator.Assess(realization, observations.ToImmutable()).Fingerprint, assessment.Fingerprint);
+        Assert.Equal(ready, validation.IsValid);
+        Assert.All(assessment.Diagnostics, diagnostic => Assert.Contains(diagnostic, validation.Diagnostics));
         Assert.Equal(realization.ToReference(), assessment.Realization);
         if (scenario == "missing")
             Assert.Contains(assessment.Diagnostics, item => item.Code == InfrastructureReadinessEvaluator.DiagnosticCodes.ObservationMissing);
         var other = ServiceInfrastructureAssociation.CreateWithSharedPrerequisites(Service(), Topology(), new("api"), []);
-        Assert.Throws<ArgumentException>(() => other.AssessReadiness(realization, observations.ToImmutable()));
+        Assert.Equal("services.infra.realizationMismatch", Assert.Single(other.ValidateReadiness(realization.ToReference(), assessment).Diagnostics).Code);
+        var reference = realization.ToReference();
+        var differentPlacement = new InfrastructureRealizationReference(reference.Definition, reference.Profile,
+            reference.Target, reference.Variant, new(reference.Fingerprint.Algorithm, reference.Fingerprint.Canonicalization, new string('b', 64)));
+        Assert.Equal("services.infra.realizationMismatch", Assert.Single(association.ValidateReadiness(differentPlacement, assessment).Diagnostics).Code);
+        var missingWorkload = new InfrastructureReadinessAssessment(InfrastructureReadinessAssessment.CurrentSchemaVersion,
+            reference, [], [], []);
+        Assert.Equal("services.infra.notReady", Assert.Single(association.ValidateReadiness(reference, missingWorkload).Diagnostics).Code);
     }
 
     [Theory]

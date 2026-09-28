@@ -45,24 +45,29 @@ public sealed class ServiceInfrastructureAssociation
             "The associated deployment has unresolved capability requirements; inspect the native closure diagnostics.", "/capabilities")]);
     }
 
-    /// <summary>Assesses observations through native Infra readiness for this association's exact topology.</summary>
-    /// <remarks>The caller independently selects the physical realization and supplies adapter-normalized evidence.
-    /// Native readiness obligations remain authoritative; selected consumer bindings are not invented readiness edges.
-    /// The returned assessment covers the whole realization, not only this service. Missing evidence fails closed
-    /// through native diagnostics. Provider scope, freshness, collection and authorization remain adapter concerns.
-    /// No resource collection, runtime construction or new readiness model is introduced.</remarks>
-    /// <param name="realization">Independently selected physical realization of the exact associated topology.</param>
-    /// <param name="observations">Attributable, normalized observations; omitted evidence remains unknown.</param>
-    /// <returns>The native fingerprinted readiness assessment with its exact realization and diagnostics.</returns>
-    /// <exception cref="ArgumentNullException">The realization is null.</exception>
-    /// <exception cref="ArgumentException">The topology differs or observations are malformed or duplicated.</exception>
-    public InfrastructureReadinessAssessment AssessReadiness(InfrastructureRealization realization,
-        ImmutableArray<InfrastructureResourceObservation> observations = default)
+    /// <summary>Validates a native readiness assessment against independently selected realization authority.</summary>
+    /// <remarks>Consume the assessment produced by the trusted native evaluator/provider pipeline once; this
+    /// method does not recollect evidence or reevaluate observations. It is not a validator for untrusted persisted
+    /// assessments. Provider scope, freshness and artifact integrity must be established at their owning boundary.
+    /// Readiness covers the whole supplied realization and requires an explicit decision for this workload.
+    /// Selected consumer bindings do not invent readiness obligations or prove dependency completeness.</remarks>
+    /// <param name="expectedRealization">Independently selected exact physical realization, not inferred from the assessment.</param>
+    /// <param name="assessment">Native assessment from the admitted observation pipeline.</param>
+    /// <returns>Native diagnostics with exact-authority or non-readiness diagnostics when admission fails.</returns>
+    /// <exception cref="ArgumentNullException">A reference argument is null.</exception>
+    public DocumentValidationResult ValidateReadiness(InfrastructureRealizationReference expectedRealization,
+        InfrastructureReadinessAssessment assessment)
     {
-        ArgumentNullException.ThrowIfNull(realization);
-        if (realization.CapabilityClosure.Definition.ToReference() != Infrastructure)
-            throw new ArgumentException("Readiness requires a realization of the exact associated infrastructure definition.", nameof(realization));
-        return InfrastructureReadinessEvaluator.Assess(realization, observations);
+        ArgumentNullException.ThrowIfNull(expectedRealization);
+        ArgumentNullException.ThrowIfNull(assessment);
+        if (expectedRealization.Definition != Infrastructure || assessment.Realization != expectedRealization)
+            return new([new("services.infra.realizationMismatch", DiagnosticSeverity.Error,
+                "Readiness evidence must belong to the independently selected realization of the associated topology.", "/realization")]);
+        var workload = assessment.FindDecision(Workload);
+        if (assessment.IsReady && workload is { Kind: InfrastructureNodeKind.Workload, IsReady: true })
+            return new(assessment.Diagnostics);
+        return new([.. assessment.Diagnostics, new("services.infra.notReady", DiagnosticSeverity.Error,
+            "The associated workload or deployment is not observed ready; inspect the native assessment diagnostics.", "/readiness")]);
     }
 
     /// <summary>Applies explicit service-wide prerequisites to every operation in the canonical declaration.</summary>
