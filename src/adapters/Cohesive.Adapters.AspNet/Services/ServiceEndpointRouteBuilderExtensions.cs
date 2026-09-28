@@ -105,14 +105,16 @@ public static class ServiceEndpointRouteBuilderExtensions
 
     /// <summary>Registers a declaration-derived result endpoint, resolving its exact runtime only on invocation.</summary>
     /// <remarks>The resolver must return the runtime for the same service identity, revision and fingerprint.
-    /// Repository and dispatcher construction are deferred; declaration validation remains registration-time work.</remarks>
+    /// Repository and dispatcher construction are deferred; declaration validation remains registration-time work.
+    /// Supplied scope policies are preserved in API and endpoint metadata for host scope binding.</remarks>
     /// <exception cref="ArgumentException">The declaration, result operation or route parameters are invalid.</exception>
     /// <exception cref="InvalidOperationException">Invocation resolves a runtime for a different service declaration.</exception>
     public static RouteHandlerBuilder MapServiceProcessEntityResult<TResponse>(this IEndpointRouteBuilder endpoints,
         ExecutionDefinitionDocument declaration, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
         string operationId, string route, Func<EntitySnapshot, TResponse> project,
         AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
-        string instanceParameter = "instanceId", string tokenHeader = "X-Concurrency-Token")
+        string instanceParameter = "instanceId", string tokenHeader = "X-Concurrency-Token",
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(resolveRuntime);
@@ -120,7 +122,7 @@ public static class ServiceEndpointRouteBuilderExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(instanceParameter);
         ArgumentException.ThrowIfNullOrWhiteSpace(tokenHeader);
         var projection = ServiceApiProjection.ProjectCommittedEntityResult<TResponse>(declaration, operationId,
-            new("GET", route, [new(instanceParameter, HttpParameterSource.Route, typeof(string))], body: null));
+            new("GET", route, [new(instanceParameter, HttpParameterSource.Route, typeof(string))], body: null), scopePolicies);
         return MapResult(endpoints, declaration, projection, resolveRuntime, operationId, project,
             authorizationPolicyResolver, instanceParameter, tokenHeader);
     }

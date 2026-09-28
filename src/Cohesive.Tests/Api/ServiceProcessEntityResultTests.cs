@@ -60,7 +60,10 @@ public sealed class ServiceProcessEntityResultTests
         var fixture = await Create();
         var declaration = fixture.Runtime.Declaration;
         var http = new HttpBinding("GET", "/results/{instanceId}", [], null);
-        var declared = ServiceApiProjection.ProjectCommittedEntityResult<string>(declaration, "result", http);
+        var scope = new ApiScopePolicy("tenant", ApiScopeCardinality.Single, ApiScopeBinding.Header,
+            ApiScopeAccess.RequireSelected, singleScopeParameterName: "X-Tenant-Id");
+        var declared = ServiceApiProjection.ProjectCommittedEntityResult<string>(declaration, "result", http, [scope]);
+        Assert.Same(scope, Assert.Single(declared.Operation.ScopePolicies));
         var bound = fixture.Runtime.ProjectCommittedEntityResult<string>("result", http);
         Assert.Equal(bound.Id, declared.Id);
         Assert.Equal(bound.Operation.AuthorizationRequirements, declared.Operation.AuthorizationRequirements);
@@ -129,9 +132,11 @@ public sealed class ServiceProcessEntityResultTests
             projections++;
             return new Response(snapshot.Entity.Observation.GetField("Text").GetRequiredString());
         }
+        var scope = new ApiScopePolicy("tenant", ApiScopeCardinality.Single, ApiScopeBinding.Header,
+            ApiScopeAccess.RequireSelected, singleScopeParameterName: "X-Tenant-Id");
         if (lazy)
             app.MapServiceProcessEntityResult(fixture.Runtime.Declaration, _ => { resolutions++; return fixture.Runtime; },
-                "result", "/notes/results/{instanceId}", Project, authorizationPolicyResolver: (_, requirement) => requirement.Id);
+                "result", "/notes/results/{instanceId}", Project, authorizationPolicyResolver: (_, requirement) => requirement.Id, scopePolicies: [scope]);
         else
             app.MapServiceProcessEntityResult(fixture.Runtime, "result", "/notes/results/{instanceId}", Project,
                 authorizationPolicyResolver: (_, requirement) => requirement.Id);
@@ -140,6 +145,7 @@ public sealed class ServiceProcessEntityResultTests
         Assert.Equal(0, fixture.Values.RepositoryResolutions);
         var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().Single();
         Assert.Same(fixture.Runtime.Declaration, endpoint.Metadata.GetMetadata<ExecutionDefinitionDocument>());
+        if (lazy) Assert.Same(scope, endpoint.Metadata.GetMetadata<ApiScopePolicy>());
         var http = new DefaultHttpContext { RequestServices = app.Services };
         http.Request.Method = "GET";
         http.Request.RouteValues["instanceId"] = fixture.Instance.Value;

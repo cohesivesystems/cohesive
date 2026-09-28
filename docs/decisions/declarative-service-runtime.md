@@ -672,3 +672,11 @@ runtime must match the registered service identity, revision and fingerprint bef
 result read. Both eager and lazy overloads share request parsing, result authorization, retained token
 projection and problem formatting. A mismatch is a host binding error, not a fallback to another
 service. Hosts still own resolver lifetime and must avoid rebuilding runtimes on every request.
+
+Declaration-only committed-result projection and its lazy ASP.NET mapper accept existing
+`ApiScopePolicy` values at the medium boundary. This preserves host scope selection metadata
+(e.g. Ari's tenant header) without inventing a service-local tenant model or weakening the
+service's declared authorization requirements. Tests assert policy identity in the portable
+endpoint and native endpoint metadata; all 26 committed-result tests pass. Host scope enforcement
+still belongs to the existing scope adapter; metadata preservation alone is not an end-to-end
+multi-tenant authorization qualification.
