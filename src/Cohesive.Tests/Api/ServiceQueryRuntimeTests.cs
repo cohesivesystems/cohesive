@@ -23,6 +23,90 @@ namespace Cohesive.Tests.Api;
 
 public sealed class ServiceQueryRuntimeTests
 {
+    [Fact]
+    public void QueryReferenceProjectionRequiresNoEvaluatorAndRetainsExactRevision()
+    {
+        var fixture = Create();
+        var reference = ServiceQueryBinding.GetReference(new("v1"), fixture.Binding.Compilation);
+        Assert.Equal(fixture.Binding.Reference, reference);
+        Assert.NotEqual(reference, ServiceQueryBinding.GetReference(new("v2"), fixture.Binding.Compilation));
+        Assert.Equal(0, fixture.Resolutions);
+        Assert.Equal(0, fixture.Reader.Reads);
+        Assert.Throws<ArgumentException>(() => ServiceQueryBinding.GetReference(default, fixture.Binding.Compilation));
+    }
+
+    [Fact]
+    public async Task DeferredQueryDoesNotPrepareUnusedOperationAndStillIsolatesInvocations()
+    {
+        var fixture = Create();
+        var document = ServiceDefinitionDocuments.Create(new("deferred-notes"), new("v1"), new([
+            new ServiceQueryOperation("search", fixture.Binding.Reference, new("tenant"), [new("notes.read")]),
+            new ServiceQueryOperation("unused", fixture.Binding.Reference, new("tenant"), [new("notes.read")])]),
+            fixture.Runtime.Declaration.Metadata.Provenance);
+        var prepared = 0;
+        var unused = 0;
+        var factories = new Dictionary<string, Func<ServiceBinding>>
+        {
+            ["search"] = () => { prepared++; return fixture.Binding; },
+            ["unused"] = () => { unused++; throw new InvalidOperationException("unused construction failed"); }
+        };
+        var runtime = ServiceRuntime.CreateDeferred(document, factories, new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
+        factories.Clear();
+        Assert.Equal(0, prepared);
+        Assert.Equal(0, unused);
+        foreach (var tenant in new[] { "tenant-a", "tenant-b" })
+        {
+            var result = await runtime.EvaluateAsync(Context(tenant), "search", new(tenant), new Dictionary<QueryParameterId, ObservationValue>());
+            Assert.Equal(ApiResultKind.Success, result.Kind);
+            Assert.Equal(tenant, Assert.Single(Assert.Single(result.Outcome!.Result!.QueryResults).Rows).Value.GetProperty("Tenant").String);
+        }
+        Assert.Equal(1, prepared);
+        Assert.Equal(0, unused);
+        Assert.Equal(2, fixture.Reader.Reads);
+        var denied = await runtime.EvaluateAsync(OperationContext.Create(), "search", new("denied"), new Dictionary<QueryParameterId, ObservationValue>());
+        Assert.Equal(ApiResultKind.Forbidden, denied.Kind);
+        Assert.Equal(2, fixture.Reader.Reads);
+        Assert.Throws<InvalidOperationException>(() => runtime.ValidateBindings());
+        Assert.Throws<InvalidOperationException>(() => runtime.ValidateBindings());
+        Assert.Equal(1, unused);
+    }
+
+    [Fact]
+    public async Task DeferredBindingPreparationIsOnceUnderConcurrency()
+    {
+        var fixture = Create();
+        var prepared = 0;
+        var runtime = ServiceRuntime.CreateDeferred(fixture.Runtime.Declaration,
+            new Dictionary<string, Func<ServiceBinding>> { ["search"] = () =>
+                { Interlocked.Increment(ref prepared); return fixture.Binding; } },
+            new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
+        await Task.WhenAll(Enumerable.Range(0, 16).Select(_ => Task.Run(runtime.ValidateBindings)));
+        Assert.Equal(1, prepared);
+        Assert.Equal(0, fixture.Reader.Reads);
+    }
+
+    [Fact]
+    public void DeferredBindingCoverageIsImmediateButExactBindingValidationIsRetainedOnFirstUse()
+    {
+        var fixture = Create();
+        var authorization = new IdentityServiceInvocationAuthorization("tenant", new("Tenant"));
+        Assert.Throws<ServiceBindingValidationException>(() => ServiceRuntime.CreateDeferred(fixture.Runtime.Declaration,
+            new Dictionary<string, Func<ServiceBinding>>(), authorization));
+        var prepared = 0;
+        var runtime = ServiceRuntime.CreateDeferred(fixture.Runtime.Declaration,
+            new Dictionary<string, Func<ServiceBinding>> { ["search"] = () =>
+            {
+                prepared++;
+                return new ServiceQueryBinding("wrong-operation", new("v1"), fixture.Binding.Compilation,
+                    (_, _) => throw new InvalidOperationException());
+            } }, authorization);
+        Assert.Equal(0, prepared);
+        Assert.Throws<ServiceBindingValidationException>(() => runtime.ValidateBindings());
+        Assert.Throws<ServiceBindingValidationException>(() => runtime.ValidateBindings());
+        Assert.Equal(1, prepared);
+        Assert.Equal(0, fixture.Reader.Reads);
+    }
+
     [Theory]
     [InlineData(true, false, 200)]
     [InlineData(false, false, 403)]

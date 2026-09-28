@@ -806,3 +806,30 @@ The HTTP mapper is qualified with native start admission/replay and a retained r
 cover completed output and opaque token, bounded pending response and escaped Location under PathBase,
 start denial without dispatch, independent read denial after dispatch, and classified terminal rejection.
 These are adapter tests, not a new end-to-end worker durability claim.
+
+
+### Independently deferred operation bindings
+
+Ari's compilation service combines read-only query acquisition and write Process execution. The eager
+runtime would prepare the write execution closure when a preview resolves the service. Splitting that
+logical service solely to avoid preparation would make deployment and operation declarations follow an
+incidental construction cost. An Ari-local lazy coordinator would duplicate runtime admission.
+
+Extend the existing runtime instead: `CreateDeferred` admits the declaration and exact factory coverage
+immediately; each operation has one runtime-owned `Lazy<ServiceBinding>` that retains successful
+preparation or its failure. Binding validation remains the existing operation-specific admission.
+The ordinary constructor keeps eager admission. This adds no portable factory semantics or global cache:
+native factories belong to host binding, and retention is bounded by declared operation count and runtime
+lifetime. Factories must not do backend I/O or capture caller scope. They may execute before authorization;
+the invocation-scoped evaluator/repository continues to resolve after the appropriate admission boundary.
+
+Explicit `ValidateBindings` preflights every operation for hosts requiring full binding admission before
+readiness. It does not dispatch or establish provider availability. A failed unused binding therefore
+can coexist with a usable read operation only in the explicitly deferred profile; preflight surfaces the
+failure. Tests prove copied factory coverage, exact identity validation, retained failures, one preparation
+under concurrent preflight, per-invocation tenant filtering and unchanged physical read counts.
+`ServiceQueryBinding.GetReference` centralizes query document validation and exact reference projection
+for declarations that must exist independently of runtime realization.
+
+Validation: 120 service tests passed, no skips. Ari adoption and startup/first-use latency qualification
+remain separate work; the tests establish work counts, not measured latency improvement.

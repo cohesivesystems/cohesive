@@ -149,3 +149,26 @@ a path-base-aware Location with the escaped instance identity and Retry-After: 1
 must be local with exactly one `{instanceId}` parameter. Admission denial performs no start; result
 denial after admission discloses no receipt or repository snapshot. Cancellation and unexpected failures
 propagate without adapter retries. Ari adoption remains follow-up work in the same change.
+
+
+### Binding preparation lifetime
+
+The ordinary `ServiceRuntime` constructor validates all supplied bindings immediately.
+`ServiceRuntime.CreateDeferred` is an explicit alternative for services combining independently used
+capabilities. It validates the declaration and complete operation/factory coverage immediately, then
+prepares and validates each exact binding once, thread-safely, on first use. Factory and validation
+failures are retained for that runtime's lifetime. Factories perform immutable preparation only; they
+must not capture invocation scope or perform backend I/O. Repository/evaluator resolution, authorization
+and results retain their invocation lifetime. Binding preparation can precede caller authorization.
+
+For example, reading a compilation source can prepare only its query binding while leaving an unused
+write Process uncompiled. This does not establish readiness for the write operation. A host that needs
+all bindings admitted before readiness calls `ValidateBindings`; this reuses preparation and reports
+retained failures without dispatching operations or proving backend availability. Declaration-only API
+projection stays independent of runtime preparation; typed runtime projections may resolve their binding.
+`ServiceQueryBinding.GetReference` projects the exact canonical query identity/revision/fingerprint for
+service declarations without constructing a dummy evaluator or copying fingerprint conversion logic.
+
+Tests in `ServiceQueryRuntimeTests` cover concurrent one-time preparation, retained factory/admission
+failures, immediate coverage checks, tenant isolation, and physical reads. These are deterministic
+work-count guarantees, not startup or end-to-end latency measurements.

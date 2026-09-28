@@ -28,17 +28,30 @@ public sealed class ServiceQueryBinding : ServiceBinding
         RelationQueryCompilationRequest compilation, Func<OperationContext, ScopeRef, IRelationQueryEvaluator> evaluator)
         : base(operationId)
     {
-        if (string.IsNullOrWhiteSpace(revision.Value))
-            throw new ArgumentException("An exact query revision is required.", nameof(revision));
         Compilation = compilation ?? throw new ArgumentNullException(nameof(compilation));
         Evaluator = evaluator ?? throw new ArgumentNullException(nameof(evaluator));
+        Reference = GetReference(revision, compilation);
+    }
+
+    /// <summary>Projects an exact service reference from the canonical query without constructing a runtime binding.</summary>
+    /// <param name="revision">Application-assigned revision naming this immutable query document.</param>
+    /// <param name="compilation">Native query authority, including its validated document fingerprint.</param>
+    /// <returns>The query identity, supplied revision and canonical fingerprint used by binding admission.</returns>
+    /// <exception cref="ArgumentNullException">The compilation is null.</exception>
+    /// <exception cref="ArgumentException">The revision, document integrity or query semantics are invalid.</exception>
+    public static ExecutionDefinitionReference GetReference(ExecutionRevisionId revision,
+        RelationQueryCompilationRequest compilation)
+    {
+        ArgumentNullException.ThrowIfNull(compilation);
+        if (string.IsNullOrWhiteSpace(revision.Value))
+            throw new ArgumentException("An exact query revision is required.", nameof(revision));
         var validation = RelationQueryDocumentSemanticValidator.Validate(compilation.DefinitionDocument);
         if (!validation.IsValid) throw new ServiceBindingValidationException(validation);
         if (compilation.DefinitionDocument.Definition is not QueryDefinition query)
             throw ServiceBindingValidationException.Error("services.binding.queryRequired",
                 "A query operation requires a canonical Query definition.", "/bindings/query");
         var fingerprint = compilation.DefinitionDocument.DefinitionFingerprint;
-        Reference = new(new(query.Id.Value), revision,
+        return new(new(query.Id.Value), revision,
             new(fingerprint.Algorithm, fingerprint.Canonicalization, fingerprint.Value));
     }
 

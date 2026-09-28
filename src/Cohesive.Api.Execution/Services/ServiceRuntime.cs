@@ -118,7 +118,11 @@ public sealed record ServiceInvocationResult(ApiResultKind Kind, PortableValue? 
 /// </remarks>
 public sealed partial class ServiceRuntime
 {
-    readonly FrozenDictionary<string, (ServiceOperation Operation, ServiceBinding Binding)> operations;
+    readonly FrozenDictionary<string, BoundOperation> operations;
+    sealed record BoundOperation(ServiceOperation Operation, Lazy<ServiceBinding> Resolution)
+    {
+        internal ServiceBinding Binding => Resolution.Value;
+    }
     readonly IServiceInvocationAuthorization authorization;
     readonly ExecutionDefinitionReference definitionReference;
 
@@ -130,6 +134,45 @@ public sealed partial class ServiceRuntime
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public ServiceRuntime(ExecutionDefinitionDocument service, IEnumerable<ServiceBinding> bindings,
         IServiceInvocationAuthorization authorization)
+        : this(service, BindingFactories(bindings), authorization, eager: true) { }
+
+    /// <summary>Admits declaration and complete factory coverage without preparing unused operation bindings.</summary>
+    /// <remarks>Each factory is invoked once, thread-safely, when its operation first needs a binding.
+    /// Exact binding validation occurs before execution; construction/validation failures are retained for this
+    /// runtime's lifetime. Factories must prepare immutable bindings only, without invocation identity, cancellation,
+    /// tenant data, or backend I/O. Authorization, repository resolution and results remain invocation-scoped.
+    /// Hosts requiring eager capability admission must call ValidateBindings before declaring readiness.</remarks>
+    /// <param name="service">Canonical service declaration.</param>
+    /// <param name="bindings">Exactly one immutable binding factory per declared operation; copied on admission.</param>
+    /// <param name="authorization">Invocation-scoped authority policy.</param>
+    /// <returns>A runtime with independently deferred exact operation bindings.</returns>
+    /// <exception cref="ArgumentException">The declaration or factory coverage is invalid.</exception>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    public static ServiceRuntime CreateDeferred(ExecutionDefinitionDocument service,
+        IReadOnlyDictionary<string, Func<ServiceBinding>> bindings, IServiceInvocationAuthorization authorization) =>
+        new(service, bindings, authorization, eager: false);
+
+    /// <summary>Prepares and validates every operation binding for explicit host preflight.</summary>
+    /// <remarks>Does not authorize a caller or qualify backend availability. Reuses successful preparation;
+    /// a retained factory or validation failure is rethrown. No operation is dispatched.</remarks>
+    /// <exception cref="ServiceBindingValidationException">A prepared binding does not satisfy its declaration.</exception>
+    public void ValidateBindings()
+    {
+        foreach (var linked in operations.Values) _ = linked.Binding;
+    }
+
+    static IReadOnlyDictionary<string, Func<ServiceBinding>> BindingFactories(IEnumerable<ServiceBinding> bindings)
+    {
+        ArgumentNullException.ThrowIfNull(bindings);
+        var factories = new Dictionary<string, Func<ServiceBinding>>(StringComparer.Ordinal);
+        foreach (var binding in bindings)
+            if (binding is null || !factories.TryAdd(binding.OperationId, () => binding))
+                throw ServiceBindingValidationException.Error("services.binding.duplicate", "Bindings must be non-null and uniquely identified.", "/bindings");
+        return factories;
+    }
+
+    ServiceRuntime(ExecutionDefinitionDocument service, IReadOnlyDictionary<string, Func<ServiceBinding>> bindings,
+        IServiceInvocationAuthorization authorization, bool eager)
     {
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(bindings);
@@ -142,20 +185,29 @@ public sealed partial class ServiceRuntime
                 "This service profile does not support semantic extensions.", "/extensions");
         Declaration = service;
         definitionReference = new(service.Metadata.DefinitionId, service.Metadata.RevisionId, service.Metadata.Fingerprint);
-        var bound = new Dictionary<string, ServiceBinding>(StringComparer.Ordinal);
+        var bound = new Dictionary<string, Func<ServiceBinding>>(StringComparer.Ordinal);
         foreach (var binding in bindings)
-            if (binding is null || !bound.TryAdd(binding.OperationId, binding))
-                throw ServiceBindingValidationException.Error("services.binding.duplicate", "Bindings must be non-null and uniquely identified.", "/bindings");
+            if (binding.Value is null || !bound.TryAdd(binding.Key, binding.Value))
+                throw ServiceBindingValidationException.Error("services.binding.duplicate", "Binding factories must be non-null and uniquely identified.", "/bindings");
         if (bound.Count != definition!.Operations.Length)
             throw ServiceBindingValidationException.Error("services.binding.incomplete", "Each declared operation requires exactly one binding.", "/bindings");
-        var linked = new Dictionary<string, (ServiceOperation, ServiceBinding)>(StringComparer.Ordinal);
+        var linked = new Dictionary<string, BoundOperation>(StringComparer.Ordinal);
         foreach (var operation in definition.Operations)
         {
-            if (!bound.TryGetValue(operation.Id, out var binding))
+            if (!bound.TryGetValue(operation.Id, out var factory))
                 throw ServiceBindingValidationException.Error("services.binding.inexact",
                     "Every binding must identify a declared operation.", "/bindings");
-            binding.Validate(operation);
-            linked.Add(operation.Id, (operation, binding));
+            var resolution = new Lazy<ServiceBinding>(() =>
+            {
+                var binding = factory();
+                if (binding is null || binding.OperationId != operation.Id)
+                    throw ServiceBindingValidationException.Error("services.binding.inexact",
+                        "A binding factory must return its declared operation.", "/bindings");
+                binding.Validate(operation);
+                return binding;
+            });
+            if (eager) _ = resolution.Value;
+            linked.Add(operation.Id, new(operation, resolution));
         }
         operations = linked.ToFrozenDictionary(StringComparer.Ordinal);
     }
