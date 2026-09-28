@@ -35,6 +35,98 @@ namespace Cohesive.Tests.Api;
 public sealed class ServiceProcessEntityResultTests
 {
     [Fact]
+    public async Task TerminalResultProjectionDerivesRequirementsWithoutProtectedReads()
+    {
+        var fixture = await Create();
+        var endpoint = ServiceApiProjection.ProjectProcessResult<bool>(fixture.Runtime.Declaration, "terminal",
+            new("GET", "/results/{instanceId}", [], null));
+        Assert.Equal("notes.result.read", Assert.Single(endpoint.Operation.AuthorizationRequirements).Id);
+        Assert.Equal(typeof(bool), endpoint.Operation.ResponseType);
+        Assert.Contains(endpoint.Operation.Results, result => result.Kind == ApiResultKind.Accepted);
+        Assert.Equal(0, fixture.Values.Reads);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+        Assert.Throws<ArgumentException>(() => ServiceApiProjection.ProjectProcessResult<bool>(fixture.Runtime.Declaration, "result"));
+    }
+
+    [Fact]
+    public async Task TerminalResultReturnsCanonicalValueWithoutResolvingEntityRepository()
+    {
+        var fixture = await Create();
+        var expected = Assert.IsType<PortableValue>(fixture.Values.Result.Values!.TerminalOutcome!.Detail!.Value);
+        var result = await fixture.Runtime.ReadProcessResultAsync(fixture.Context, "terminal", fixture.Instance);
+        Assert.Equal(ApiResultKind.Success, result.Kind);
+        Assert.Equal(expected, result.Outcome);
+        Assert.Equal(1, fixture.Values.Reads);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+        Assert.Contains(result.Trace.Events, entry => entry.Kind == "terminalResultValidated");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TerminalResultRejectsMissingOrMismatchedOutputContract(bool wrongContract)
+    {
+        var fixture = await Create();
+        var original = fixture.Values.Result.Values!;
+        var otherContract = new ValueContract(new DefaultClrTypeRefMapper().Map(typeof(string), nullability: null));
+        var terminal = new ExecutionTerminalOutcome(ExecutionTerminalOutcomeKind.Completed, fixture.Context.UtcNow,
+            wrongContract ? ExecutionStatusValue.Disclose(PortableValue.Concrete(otherContract, ObservationValue.FromObject("other"))) : null);
+        fixture.Values.Result = ProcessExecutionValueReadResult.Available(new(original.Definition, original.ProcessInstanceId,
+            original.Input, terminal, original.TerminalContinuation, original.Evidence));
+        var result = await fixture.Runtime.ReadProcessResultAsync(fixture.Context, "terminal", fixture.Instance);
+        Assert.Equal(ApiResultKind.InfrastructureError, result.Kind);
+        Assert.Null(result.Outcome);
+        Assert.Equal("services.process.resultUnavailable", Assert.Single(result.Diagnostics).Code);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+    }
+
+    [Fact]
+    public async Task TerminalResultRejectsWrongInstanceBeforeDisclosingOutput()
+    {
+        var fixture = await Create();
+        var result = await fixture.Runtime.ReadProcessResultAsync(fixture.Context, "terminal", new("different-instance"));
+        Assert.Equal(ApiResultKind.NotFound, result.Kind);
+        Assert.Null(result.Outcome);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+    }
+
+    [Fact]
+    public async Task TerminalResultDenialPrecedesProtectedReads()
+    {
+        var fixture = await Create();
+        var result = await fixture.Runtime.ReadProcessResultAsync(OperationContext.Create(), "terminal", fixture.Instance);
+        Assert.Equal(ApiResultKind.Forbidden, result.Kind);
+        Assert.Null(result.Outcome);
+        Assert.Equal(0, fixture.Values.Reads);
+    }
+
+    [Fact]
+    public async Task TerminalResultWaitReauthorizesBeforeReturningPayload()
+    {
+        var authorization = new RevocableAuthorization();
+        var fixture = await Create(authorization: authorization);
+        var completed = fixture.Values.Result;
+        fixture.Values.Result = ProcessExecutionValueReadResult.InProgress(new(completed.Values!.Definition, fixture.Instance));
+        fixture.Values.OnWait = () => { authorization.Revoked = true; fixture.Values.Result = completed; return true; };
+        var result = await fixture.Runtime.ReadProcessResultAsync(fixture.Context, "terminal", fixture.Instance, TimeSpan.FromSeconds(2));
+        Assert.Equal(ApiResultKind.Forbidden, result.Kind);
+        Assert.Null(result.Outcome);
+        Assert.Equal(1, fixture.Values.Reads);
+        Assert.Equal(1, fixture.Values.Waits);
+    }
+
+    [Fact]
+    public async Task TerminalResultPendingRetainsPendingEvidenceWithoutPayload()
+    {
+        var fixture = await Create();
+        fixture.Values.Result = ProcessExecutionValueReadResult.InProgress(new(fixture.Values.Result.Values!.Definition, fixture.Instance));
+        var result = await fixture.Runtime.ReadProcessResultAsync(fixture.Context, "terminal", fixture.Instance);
+        Assert.Equal(ApiResultKind.Accepted, result.Kind);
+        Assert.Null(result.Outcome);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+    }
+
+    [Fact]
     public async Task LazyResultBindingRejectsDifferentServiceBeforeProtectedReads()
     {
         var fixture = await Create();
@@ -398,10 +490,11 @@ public sealed class ServiceProcessEntityResultTests
             });
         var service = ServiceDefinitionDocuments.Create(new("notes"), new("1"), new([
             new ServiceProcessEntityResultOperation("result", plan.DefinitionReference, new(resultNode), entity.StateShape.QualifiedId,
-                [new("notes.result.read")], resultClassifier: classifier?.Reference)]), provenance);
+                [new("notes.result.read")], resultClassifier: classifier?.Reference),
+            new ServiceProcessResultOperation("terminal", plan.DefinitionReference, [new("notes.result.read")])]), provenance);
         var binding = new ServiceProcessEntityResultBinding("result", plan, transition,
             new(entity, _ => { values.RepositoryResolutions++; return repository; }), "notes", values, classifierBinding);
-        var runtime = new ServiceRuntime(service, [binding], authorization ?? new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
+        var runtime = new ServiceRuntime(service, [binding, new ServiceProcessResultBinding("terminal", plan, "notes", values)], authorization ?? new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
         return new(runtime, repository, values, context, continuation.ProcessInstanceId, (await repository.TryGet(context, "note/1"))!);
     }
 

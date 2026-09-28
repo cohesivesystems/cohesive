@@ -55,6 +55,19 @@ public sealed class ServiceDefinitionTests
     }
 
     [Fact]
+    public void TerminalResultRoundTripsExactProcessAndIndependentRequirements()
+    {
+        var operation = new ServiceProcessResultOperation("result", Reference("compile/spec"), [new("spec.result.read")]);
+        var document = ServiceDefinitionDocuments.Create(new("compiler"), new("1"), new([operation]),
+            new(new("tests"), new("tests/services"), DocumentOrigin.Generated));
+        Assert.True(ExecutionDefinitionJsonSerializer.TryDeserialize(
+            ExecutionDefinitionJsonSerializer.Serialize(document), out var restored).IsValid);
+        Assert.True(ServiceDefinitionDocuments.ValidateAndProject(restored!, out var definition).IsValid);
+        Assert.Equal(operation, Assert.Single(definition!.Operations));
+        Assert.NotEqual(operation, new ServiceProcessResultOperation("result", Reference("other/process"), operation.AuthorizationRequirements));
+    }
+
+    [Fact]
     public void OperationIdentityIsUniqueAcrossSemanticFamilies()
     {
         Assert.Throws<ArgumentException>(() => new ServiceDefinition([

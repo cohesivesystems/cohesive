@@ -119,47 +119,16 @@ public sealed partial class ServiceRuntime
             || linked.Operation is not ServiceProcessEntityResultOperation operation
             || linked.Binding is not ServiceProcessEntityResultBinding binding)
             throw new ArgumentException("The operation is not a declared committed-entity result read.", nameof(operationId));
-        using var evidence = new ServiceInvocationEvidence(definitionReference, operationId, operation.Process,
-            new(instance.Value));
-        try
+        return await ReadProcessResultCoreAsync(context, operation, operation.Process, binding.Authority,
+            binding.Values, instance, maximumWait, Project).ConfigureAwait(false);
+
+        async ValueTask<ServiceOperationResult<EntitySnapshot>> Project(AdmittedProcessResult admitted,
+            ServiceInvocationEvidence evidence)
         {
-            context.ThrowIfCancellationRequested();
-            var scope = await authorization.AdmitAsync(context, operation).ConfigureAwait(false);
-            if (scope is null) return Reject(ApiResultKind.Forbidden, "services.authorization.denied", "Result access is not authorized.");
-            evidence.Record("authorityAdmitted");
-            var trusted = context.WithSingleEffectiveScope(scope.Kind, scope.Id, partitionKey: scope.ResolvePartitionKey());
-            var authority = new InteractionAuthorityScope(binding.Authority, scope.Id);
-            var read = await binding.Values.GetValuesAsync(trusted, authority, instance).ConfigureAwait(false);
-            if (read.State == ProcessExecutionValueReadState.InProgress && maximumWait is { } wait)
-            {
-                if (read.Values!.Definition != operation.Process || read.Values.ProcessInstanceId != instance)
-                    return Reject(ApiResultKind.NotFound, "services.process.notFound", "No execution is visible at the declared exact definition.");
-                if (binding.Values is not IProcessExecutionCompletionWaiter waiter)
-                    throw new NotSupportedException("The bound Process value provider does not support bounded completion waiting.");
-                evidence.Record("completionWaitStarted");
-                var completed = await waiter.WaitForCompletionAsync(trusted, authority, instance, wait).ConfigureAwait(false);
-                evidence.Record(completed ? "completionWaitFinished" : "completionWaitExpired");
-                var refreshedScope = await authorization.AdmitAsync(context, operation).ConfigureAwait(false);
-                if (refreshedScope is null || refreshedScope != scope)
-                    return Reject(ApiResultKind.Forbidden, "services.authorization.denied", "Result access is no longer authorized.");
-                if (completed)
-                    read = await binding.Values.GetValuesAsync(trusted, authority, instance).ConfigureAwait(false);
-            }
-            if (read.State == ProcessExecutionValueReadState.NotFound)
-                return Reject(ApiResultKind.NotFound, "services.process.notFound", "No execution is visible at this target.");
-            var values = read.Values!;
-            if (values.Definition != operation.Process || values.ProcessInstanceId != instance)
-                return Reject(ApiResultKind.NotFound, "services.process.notFound", "No execution is visible at the declared exact definition.");
-            if (read.State == ProcessExecutionValueReadState.InProgress)
-                return Reject(ApiResultKind.Accepted, "services.process.inProgress", "The execution has not completed.");
-            if (read.State != ProcessExecutionValueReadState.Available || values.TerminalContinuation is null || values.Evidence.IsDefault)
-                return Reject(ApiResultKind.InfrastructureError, "services.process.evidenceUnavailable", "Exact terminal execution evidence is unavailable.");
-            evidence.Record("terminalValuesRead");
-            if (values.TerminalOutcome!.Kind != ExecutionTerminalOutcomeKind.Completed)
-                return Reject(ApiResultKind.DomainError, "services.process.notCompleted", "The Process did not complete successfully.");
+            var (trusted, scope, authority, values) = admitted;
             if (binding.ResultClassifier is { } classifier)
             {
-                if (values.TerminalOutcome.Detail?.Value is not PortableValue terminal)
+                if (values.TerminalOutcome!.Detail?.Value is not PortableValue terminal)
                     return Reject(ApiResultKind.InfrastructureError, "services.process.resultUnavailable", "The canonical terminal result is unavailable.");
                 var classified = classifier.Evaluate(terminal, trusted.CancellationToken);
                 if (classified.Type == ResultType.Failure)
@@ -205,13 +174,9 @@ public sealed partial class ServiceRuntime
             if (receipt.Commit.DecisionKind is not (TransitionDecisionKind.Applied or TransitionDecisionKind.NoChange))
                 return Reject(ApiResultKind.DomainError, "services.process.commitRejected", "The selected Transition did not accept the entity change.");
             return new(ApiResultKind.Success, receipt.Entity, [], evidence.Complete(ApiResultKind.Success));
-        }
-        catch (Exception exception) { evidence.Fail(exception); throw; }
 
-        ServiceOperationResult<EntitySnapshot> Reject(ApiResultKind kind, string code, string message)
-        {
-            evidence.Record("resultUnavailable", code);
-            return new(kind, null, [new(code, kind == ApiResultKind.Accepted ? DiagnosticSeverity.Info : DiagnosticSeverity.Error, message, "/result")], evidence.Complete(kind));
+            ServiceOperationResult<EntitySnapshot> Reject(ApiResultKind kind, string code, string message) =>
+                RejectProcessResult<EntitySnapshot>(evidence, kind, code, message);
         }
     }
 }

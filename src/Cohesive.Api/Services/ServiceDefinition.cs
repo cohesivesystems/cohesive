@@ -13,6 +13,7 @@ namespace Cohesive.Api.Services;
 [JsonDerivedType(typeof(ServiceQueryOperation), "query")]
 [JsonDerivedType(typeof(ServiceProcessOperation), "process")]
 [JsonDerivedType(typeof(ServiceProcessEntityResultOperation), "processEntityResult")]
+[JsonDerivedType(typeof(ServiceProcessResultOperation), "processResult")]
 [JsonDerivedType(typeof(ServiceProcessControlOperation), "processControl")]
 public abstract record ServiceOperation
 {
@@ -109,6 +110,22 @@ public sealed record ServiceProcessOperation : ServiceOperation
         : base(id, authorizationRequirements) => Process = process ?? throw new ArgumentNullException(nameof(process));
 
     /// <summary>Exact Process authority; the service does not copy its graph, contracts or control lifecycle.</summary>
+    public ExecutionDefinitionReference Process { get; }
+}
+
+/// <summary>Reads the canonical terminal value of one exact Process, independently of entity receipts.</summary>
+/// <remarks>Requirements authorize disclosure of the Process output within the admitted logical scope.
+/// Processes exposing resource-sensitive output must declare a suitably restricted result-read capability.</remarks>
+public sealed record ServiceProcessResultOperation : ServiceOperation
+{
+    /// <summary>Declares an independently authorized terminal-value read; the Process owns its output contract.</summary>
+    /// <exception cref="ArgumentNullException">The exact Process reference is null.</exception>
+    [JsonConstructor]
+    public ServiceProcessResultOperation(string id, ExecutionDefinitionReference process,
+        ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default)
+        : base(id, authorizationRequirements) => Process = process ?? throw new ArgumentNullException(nameof(process));
+
+    /// <summary>Exact Process authority supplying the result contract and retained terminal value.</summary>
     public ExecutionDefinitionReference Process { get; }
 }
 

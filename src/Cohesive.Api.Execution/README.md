@@ -125,3 +125,13 @@ recovery. Query source qualification currently covers native in-memory acquisiti
 filtering and query HTTP projection remain in progress. `ProjectProcess<TRequest>` derives Process entry/control
 API contracts from the native catalog. ASP.NET `MapServiceProcessStart` and `MapServiceProcessControl<TCommand>`
 use those projections and the shared runtime, retaining native results and existing admission problems.
+
+
+`ServiceProcessResultOperation` exposes the exact Process terminal value when the result is not an
+entity receipt (for example compilation diagnostics and provenance). Bind it with
+`ServiceProcessResultBinding` and use `ReadProcessResultAsync`; the existing native `PortableValue`
+retains the Process-owned contract and value states. Result requirements authorize the complete output
+within the admitted logical scope. Terminal and entity result readers share admission, bounded waiting,
+reauthorization and payload-free evidence; entity reads additionally check their retained receipt and
+resource. `ServiceApiProjection.ProjectProcessResult<TResponse>` derives medium metadata without
+resolving the provider. See the design note for failure behavior and qualification boundaries.

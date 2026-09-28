@@ -686,3 +686,47 @@ identities. Ownership stays separate: it depends on API declarations and Infra, 
 Infra core gains no API dependency. Four focused tests cover exact references, immutable selections,
 coverage and consumer ownership. Capability closure, requirement completeness, persisted association
 admission and Ari adoption remain unfinished; this initial association is not a readiness proof.
+
+
+### Canonical terminal results for non-entity workflows
+
+Ari protocol compilation exposed a semantic gap in committed-entity result reads: its canonical output
+contains compilation status, diagnostics and provenance, and graph creation/revision are alternative
+commit nodes. Selecting an arbitrary entity receipt would lose the workflow result or require
+application-owned branching. Extend the existing service runtime with `ServiceProcessResultOperation`
+and `ServiceProcessResultBinding`; do not reconstruct compilation results from current entity state.
+The exact Process remains output-contract and terminal-value authority. The operation declares only
+its exact Process reference and independent read requirements, and round-trips in the service document.
+
+`ReadProcessResultAsync` returns the native `PortableValue` after checking the exact Process result
+contract against its compiled validation context. `Success` means the Process completed and its
+canonical value is available, not that a domain-specific result inside it reports success. Pending
+execution is `Accepted`; non-completed terminal outcomes are `DomainError`; missing or incompatible
+terminal evidence is an infrastructure error. No current entity read, workflow restart, or fabricated
+result is a fallback. The service does not introduce another result envelope or output schema.
+
+Terminal and committed-entity readers share a single admission/read/wait lifecycle: capability and
+logical-scope admission precede provider access; exact definition/instance matching precedes result
+use; bounded provider-native waits are followed by reauthorization; payload-free events describe
+progress and failure. Providers retain responsibility for scoped storage access and exact execution
+evidence. Terminal reads authorize the whole Process output within the admitted scope. Applications
+must declare sufficiently restricted read capabilities for sensitive output; this operation does not
+pretend that an entity resource-authorization callback applies to arbitrary workflow values.
+Committed-entity reads additionally retain their receipt validation and resource authorization.
+
+For example, a compiler returns `{ status: InvalidSpec, diagnostics: [...] }` without creating a graph.
+The terminal-result operation can preserve that typed output without finding a graph receipt. A
+successful compiler may instead return graph identity and compiler provenance. The API projection
+`ProjectProcessResult<TResponse>` derives identity, requirements and standard alternatives from the
+same declaration, attaching medium-owned response and scope-selection metadata without resolving a
+runtime. ASP.NET terminal mapping and Ari's public compilation-service adoption remain separate work.
+
+Regression coverage includes portable declaration round-trip, canonical value identity, no entity
+repository resolution, denial before protected reads, revocation during waiting, pending results,
+missing or wrong output contracts, wrong instance and declaration-only projection. The existing
+committed-entity tests protect the shared lifecycle during extraction. No provider persistence,
+retention, polling, or local-runtime lifetime guarantee changes in this extension.
+
+Qualification: all 91 service tests pass, followed by the complete core suite at this change:
+4,031 passed and 33 integration skips (`/tmp/cohesive-terminal-result-full.log`). This is local runtime
+qualification; it does not establish deployed exporter, Scheduler or Cosmos behavior.

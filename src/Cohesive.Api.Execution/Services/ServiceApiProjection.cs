@@ -14,6 +14,19 @@ public static class ServiceApiProjection
     /// <exception cref="ArgumentException">The document, operation family or HTTP body is invalid.</exception>
     public static ApiEndpoint ProjectCommittedEntityResult<TResponse>(ExecutionDefinitionDocument declaration,
         string operationId, HttpBinding? http = null, IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
+        => ProjectDeclaredResult<TResponse, ServiceProcessEntityResultOperation>(declaration, operationId, http, scopePolicies);
+
+    /// <summary>Projects independently authorized terminal-value reads without resolving execution infrastructure.</summary>
+    /// <remarks>The medium supplies its response view. Runtime reads still validate the retained value against
+    /// the exact Process result contract. Scope-selection metadata does not grant access.</remarks>
+    /// <exception cref="ArgumentException">The declaration, selected operation, or HTTP body is invalid.</exception>
+    public static ApiEndpoint ProjectProcessResult<TResponse>(ExecutionDefinitionDocument declaration,
+        string operationId, HttpBinding? http = null, IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
+        => ProjectDeclaredResult<TResponse, ServiceProcessResultOperation>(declaration, operationId, http, scopePolicies);
+
+    static ApiEndpoint ProjectDeclaredResult<TResponse, TOperation>(ExecutionDefinitionDocument declaration,
+        string operationId, HttpBinding? http, IReadOnlyList<ApiScopePolicy>? scopePolicies)
+        where TOperation : ServiceOperation
     {
         ArgumentNullException.ThrowIfNull(declaration);
         var validation = ServiceDefinitionDocuments.ValidateAndProject(declaration, out var definition);
@@ -22,9 +35,9 @@ public static class ServiceApiProjection
             throw ServiceBindingValidationException.Error("services.binding.extensionsUnsupported",
                 "This service profile does not support semantic extensions.", "/extensions");
         if (definition!.Operations.SingleOrDefault(operation => operation.Id == operationId)
-            is not ServiceProcessEntityResultOperation result)
-            throw new ArgumentException("The operation is not a declared committed-entity result read.", nameof(operationId));
-        return CreateCommittedEntityResult<TResponse>(new(declaration.Metadata.DefinitionId,
+            is not TOperation result)
+            throw new ArgumentException("The operation is not a declared Process result read.", nameof(operationId));
+        return CreateResult<TResponse>(new(declaration.Metadata.DefinitionId,
             declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint), result, http, scopePolicies: scopePolicies);
     }
 
@@ -34,10 +47,16 @@ public static class ServiceApiProjection
     internal static ApiEndpoint CreateCommittedEntityResult<TResponse>(ExecutionDefinitionReference reference,
         ServiceProcessEntityResultOperation operation, HttpBinding? http,
         EntityTypeName? entity = null, ExecutionDefinitionReference? transition = null,
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null) =>
+        CreateResult<TResponse>(reference, operation, http, entity, transition, scopePolicies);
+
+    static ApiEndpoint CreateResult<TResponse>(ExecutionDefinitionReference reference,
+        ServiceOperation operation, HttpBinding? http,
+        EntityTypeName? entity = null, ExecutionDefinitionReference? transition = null,
         IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
     {
         if (http?.Body is not null)
-            throw new ArgumentException("A committed-entity result read has no request body.", nameof(http));
+            throw new ArgumentException("A Process result read has no request body.", nameof(http));
         var projected = new ApiOperation(operation.Id, ApiOperationKind.Query, typeof(string), typeof(TResponse),
             id: new(OperationIdentity(reference, operation.Id)), entity: entity,
             transitionReference: transition,
