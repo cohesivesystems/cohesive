@@ -396,6 +396,13 @@ must match both the canonical evaluation semantics and exact implementation iden
 immutable pinned configuration and cancellation, with no infrastructure or ambient execution context. Its code
 must satisfy the declared purity contract; the runtime does not sandbox CLR code. Expected domain outcomes
 belong in the declared result contract, while thrown exceptions remain physical failures.
+`CreateDeterministicOutcome` uses the same binding when a computation explicitly reports an inability
+to produce its declared value. It returns the existing `Result<TResult, DocumentValidationDiagnostic>`;
+the failure must be an error diagnostic and becomes native Process operation failure evidence. It gets
+no Process context and must derive even its diagnostic from declared input/configuration. Cancellation
+is checked after both success and failure, and exceptions are never automatically classified. The
+shared `DeterministicHostedQueryBinding.CreateOutcome` owns this admission outside the Process adapter;
+ordinary `Create` wraps a successful result through the same path. No second failure model or cache is added.
 
 Acquisition and native computation remain separate `EvaluateRelationProcessNode` steps authored through the
 existing `process.Query` surface. `HostedQueryProcessAuthoringTests.DeclaredProcessAcquiresThenComputesThroughExactNativeBindings`

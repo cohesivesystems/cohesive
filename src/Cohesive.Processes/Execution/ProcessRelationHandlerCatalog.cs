@@ -310,6 +310,23 @@ public abstract class ProcessRelationHandlerRegistration
         return new DeterministicRegistration(binding);
     }
 
+    /// <summary>Binds a deterministic computation with explicit runtime failure evidence.</summary>
+    /// <typeparam name="TInput">Canonical input projection.</typeparam>
+    /// <typeparam name="TResult">Canonical result projection.</typeparam>
+    /// <param name="query">Exact deterministic hosted Query.</param>
+    /// <param name="implementation">Exact implementation contract deployed by the host.</param>
+    /// <param name="computation">Pure input/configuration computation returning a value or an error diagnostic.</param>
+    /// <returns>A registration using shared deterministic admission and native Process failure projection.</returns>
+    /// <remarks>Expected inability to produce the value is evaluation evidence. Business alternatives belong in
+    /// the declared result. Cancellation and physical exceptions propagate. No Process context is passed to the computation.</remarks>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">The declaration or implementation identity is invalid.</exception>
+    public static ProcessRelationHandlerRegistration CreateDeterministicOutcome<TInput, TResult>(
+        HostedQuery<TInput, TResult> query, HostedQueryImplementationReference implementation,
+        Func<TInput, PortableValue, CancellationToken, Result<TResult, DocumentValidationDiagnostic>> computation)
+        where TInput : notnull where TResult : notnull =>
+        new DeterministicRegistration(DeterministicHostedQueryBinding.CreateOutcome(query, implementation, computation));
+
     sealed class DeterministicRegistration(DeterministicHostedQueryBinding binding)
         : ProcessRelationHandlerRegistration(binding.Reference, binding.InputContract, binding.ResultContract,
             HostedQueryEvaluationSemantics.DeterministicComputation)

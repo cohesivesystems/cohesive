@@ -833,3 +833,21 @@ for declarations that must exist independently of runtime realization.
 
 Validation: 120 service tests passed, no skips. Ari adoption and startup/first-use latency qualification
 remain separate work; the tests establish work counts, not measured latency improvement.
+
+
+### Deterministic computation failure evidence
+
+Ari compiler observation handlers already distinguish a declared invalid-spec business result from an
+expected inability to produce the compiler value. Relabeling those handlers as deterministic would fail
+native registration; replacing them with an exception-throwing pure delegate would lose their classified
+failure evidence. Extend the existing deterministic binding with `CreateOutcome`, using native
+`Result<TResult, DocumentValidationDiagnostic>`. This is runtime evaluation evidence, not a second
+business outcome schema. Error severity is required; cancellation and unexpected exceptions propagate.
+The Process adapter's `CreateDeterministicOutcome` delegates to that binding and reuses its existing
+native operation-failure projection. No Process context reaches the computation; even diagnostics must
+be deterministic. An adapter may attach occurrence evidence at its owning boundary.
+
+Tests prove exact diagnostic preservation without a value, no implicit caching, cancellation after a
+failed computation, physical exception propagation and rejection of warning-only failure evidence.
+The existing success, affinity and service suites pass through the same admission path: 147 tests passed,
+no skips. Ari adoption remains dependency-ordered follow-up.
