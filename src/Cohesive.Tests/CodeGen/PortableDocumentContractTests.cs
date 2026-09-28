@@ -140,6 +140,41 @@ public sealed class PortableDocumentContractTests
         }).Emit(api));
     }
 
+    [Fact]
+    public void PublicOpenApi_IsolatesNestedConverterProfilesForTheSameRecursiveType()
+    {
+        var options = new JsonSerializerOptions();
+        var value = new MixedProfiles(new("outer", null), new("inner", new("child", null)));
+        var wire = JsonSerializer.SerializeToElement(value, options);
+        Assert.True(wire.GetProperty("Plain").TryGetProperty("Name", out _));
+        Assert.True(wire.GetProperty("Web").TryGetProperty("name", out _));
+        var api = Cohesive.Api.Api.Define("Profiles")
+            .Query("Get").Route("GET", "/profiles").Returns<MixedProfiles>().Done().Build();
+        var emitter = new OpenApiEmitter(new() { JsonSerializerOptions = options });
+        var text = Assert.Single(emitter.Emit(api).Documents).Text;
+        using var document = JsonDocument.Parse(text);
+        var root = document.RootElement;
+        ValidateReferences(root, root);
+        var schemas = root.GetProperty("components").GetProperty("schemas");
+        var properties = schemas.GetProperty(nameof(MixedProfiles)).GetProperty("properties");
+        var plainRef = properties.GetProperty("Plain").GetProperty("$ref").GetString()!;
+        var webRef = properties.GetProperty("Web").GetProperty("$ref").GetString()!;
+        Assert.NotEqual(plainRef, webRef);
+        var plain = schemas.GetProperty(plainRef.Split('/')[^1]).GetProperty("properties");
+        var web = schemas.GetProperty(webRef.Split('/')[^1]).GetProperty("properties");
+        Assert.True(plain.TryGetProperty("Name", out _));
+        Assert.False(plain.TryGetProperty("name", out _));
+        Assert.True(web.TryGetProperty("name", out _));
+        Assert.False(web.TryGetProperty("Name", out _));
+        Assert.Contains(web.GetProperty("child").GetProperty("anyOf").EnumerateArray(),
+            item => item.TryGetProperty("$ref", out var reference) && reference.GetString() == webRef);
+        Assert.Equal(text, Assert.Single(emitter.Emit(api).Documents).Text);
+    }
+
+    sealed record ProfileNode(string Name, ProfileNode? Child);
+    sealed record MixedProfiles(ProfileNode Plain,
+        [property: JsonConverter(typeof(WebJsonPropertyConverter<ProfileNode>))] ProfileNode Web);
+
     static void ValidateReferences(JsonElement node, JsonElement root)
     {
         if (node.ValueKind == JsonValueKind.Object)

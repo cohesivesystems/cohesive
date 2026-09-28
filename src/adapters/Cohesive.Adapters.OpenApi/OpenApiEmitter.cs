@@ -553,6 +553,7 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
         readonly Dictionary<Type, string> componentNameByType = new();
         readonly Dictionary<string, Type> typeByComponentName = new(StringComparer.Ordinal);
         readonly JsonObject components = [];
+        readonly Dictionary<JsonSerializerOptions, SchemaRegistry> profiles = new(ReferenceEqualityComparer.Instance);
         readonly JsonSerializerOptions? serializerOptions;
         readonly SystemTextJsonClrShapeMetadataProvider? jsonMetadata;
 
@@ -563,6 +564,26 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
             serializerOptions = new(options);
             serializerOptions.MakeReadOnly(populateMissingResolver: true);
             jsonMetadata = new(serializerOptions);
+        }
+
+        SchemaRegistry(JsonSerializerOptions options, SchemaRegistry owner) : this(options)
+        {
+            components = owner.components;
+            typeByComponentName = owner.typeByComponentName;
+            profiles = owner.profiles;
+        }
+
+        JsonObject ProfileSchema(Type type, IJsonValueSerializerProfile profile)
+        {
+            var options = profile.ValueSerializerOptions;
+            if (!options.IsReadOnly)
+                throw new NotSupportedException("Nested JSON serializer profiles must expose frozen options.");
+            if (!profiles.TryGetValue(options, out var registry))
+            {
+                registry = new SchemaRegistry(options, this);
+                profiles.Add(options, registry);
+            }
+            return registry.SchemaFor(type);
         }
 
         public JsonObject SchemaFor(Type type)
@@ -721,9 +742,12 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
                     hasExtensionData = true;
                     continue;
                 }
-                if (property.CustomConverter is not null || property.NumberHandling is not null)
+                if (property.NumberHandling is not null
+                    || property.CustomConverter is not null and not IJsonValueSerializerProfile)
                     throw new NotSupportedException($"JSON property '{info.Type.FullName}.{property.Name}' requires a converter or number-handling schema projection.");
-                var propertySchema = SchemaFor(property.PropertyType);
+                var propertySchema = property.CustomConverter is IJsonValueSerializerProfile profile
+                    ? ProfileSchema(property.PropertyType, profile)
+                    : SchemaFor(property.PropertyType);
                 if (!property.PropertyType.IsValueType && (property.IsGetNullable || property.IsSetNullable))
                     propertySchema = NullableSchema(propertySchema);
                 properties[property.Name] = propertySchema;
@@ -792,7 +816,7 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
             var baseName = CreateComponentName(type);
             var name = baseName;
             var suffix = 2;
-            while (typeByComponentName.TryGetValue(name, out var existing) && existing != type)
+            while (typeByComponentName.ContainsKey(name))
             {
                 name = $"{baseName}{suffix}";
                 suffix++;

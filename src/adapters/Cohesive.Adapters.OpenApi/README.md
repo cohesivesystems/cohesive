@@ -50,3 +50,14 @@ without explicit discriminators. Unknown converter output stays opaque; CLR impl
 are not substituted for a converter schema. Native document semantic validation remains authoritative.
 See [typed portable JSON contracts](../../../docs/decisions/typed-portable-json-values.md) for the
 projection boundary and qualification.
+
+### Nested serializer profiles
+
+A property converter implementing `IJsonValueSerializerProfile` declares the frozen options it uses
+for the complete nested value. OpenAPI follows that profile instead of applying the envelope's
+naming and converter rules. `WebJsonPropertyConverter<T>` exposes its existing shared web profile.
+Each profile receives a separate type-to-schema cache within an emission; component names remain
+unique across profiles. Recursive references therefore preserve the selected profile even when the
+same CLR type is also serialized by the outer envelope. Mutable profiles and unrecognized custom
+property converters remain unsupported with explicit diagnostics. This support does not imply
+profile-aware TypeScript or GraphQL projection.
