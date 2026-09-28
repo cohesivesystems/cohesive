@@ -100,3 +100,16 @@ Commit preflight is `executor.Validate(intent)`: it includes adapter-encoded pay
 I/O. `Capabilities.ValidateStructure(intent)` only checks placement and dependencies; full capability
 validation requires serialized byte evidence when a payload budget is declared. Query guard writes
 must carry a non-null token captured before the query; initialize a missing guard separately.
+
+
+### Durable Process JSON depth
+
+Checkpoint, commit, and durable-store serialization and content fingerprints share the bounded
+profile exposed by `ProcessDurableCheckpointJsonSerializer.CreateOptions` (maximum JSON depth 256).
+Tagged portable values use additional containers per domain object or array; the storage budget
+includes those tags and surrounding checkpoint/store envelopes. It does not relax semantic value
+validation. Canonical recovery uses the same configured depth for parsing and typed projection.
+Values beyond the budget fail serialization or produce a structured invalid-JSON recovery diagnostic.
+Existing supported values retain their canonical bytes and fingerprints; the change expands the
+accepted nesting range without changing the wire representation. `ProcessStorageDepthTests` covers
+nested value round trips, fingerprint stability, shallow-byte compatibility, and bounded rejection.

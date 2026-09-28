@@ -395,7 +395,7 @@ public interface IProcessDurableStore
 
 static class ProcessDurableCommitFingerprinter
 {
-    static readonly System.Text.Json.JsonSerializerOptions Options = StrictDocumentJson.CreateOptions();
+    static readonly System.Text.Json.JsonSerializerOptions Options = ProcessDurableCheckpointJsonSerializer.CreateOptions();
 
     internal static ProcessCommitFingerprint Compute(ProcessDurableCommit commit)
     {
