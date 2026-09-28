@@ -76,3 +76,11 @@ capability closure and must fail before execution when it cannot preserve the re
 - [`Cohesive.Storage`](../Cohesive.Storage/README.md) provides the provider-neutral durable aggregate and runtime.
 - [`Cohesive.Adapters.DurableTask`](../adapters/Cohesive.Adapters.DurableTask/README.md) provides the current bounded
   Azure Durable Task interpretation.
+
+
+Async Process source authoring supports `await process.DurableCut(id: new("prepared"));` when a
+workflow must retain acquired/computed bindings before mutations. The generator projects the existing
+DurableCutProcessNode and resume edge; it introduces no timer, interaction, new checkpoint format or
+execution model. A following operation/terminal is required. Runtime hosts persist the cut through
+the existing native checkpoint boundary. Generated/native builder definition and fingerprint
+equivalence is covered by ProcessComputationAuthoringTests.

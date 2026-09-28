@@ -752,3 +752,14 @@ replays admission without repeating acquisition, computation or writes. All 92 s
 Full core validation after local assembly extraction passes 4,032 tests with 33 integration skips
 (`/tmp/cohesive-local-bindings-full.log`). Local packages for dependency-ordered Ari adoption are
 `0.1.0-service-review.local-bindings`; this is not a published release.
+
+
+### Checkpoint authoring exposed by compilation adoption
+
+Ari's compilation workflow reads a source token then updates that source after writing a graph. A
+crash after the source update but before terminal checkpoint persistence must replay retained
+preparation, not re-read the now-changed source token. The native DurableCut construct already models
+this boundary, but async Process source authoring lacked its syntax projection. Extend ProcessContext
+and its generator with DurableCut; the generated definition/fingerprint matches the native builder.
+This is an authoring extension of existing semantics, not a service-owned journal or recovery loop.
+All 98 Process authoring/generator tests pass; Ari's compilation root uses the cut before any mutation.
