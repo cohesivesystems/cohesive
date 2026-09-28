@@ -241,6 +241,48 @@ public sealed class ServiceRuntimeTests
             completed[0].GetTagItem(ExecutionTelemetry.TraceFingerprintTagName));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StaleInvocationRetainsEvidenceWithSamplingDisabledOrEnabled(bool sampled)
+    {
+        var fixture = await Fixture.Create();
+        Assert.Equal(ApiResultKind.Success, (await fixture.Invoke()).Kind);
+        var completed = new List<Activity>();
+        using ActivityListener listener = new()
+        {
+            ShouldListenTo = source => source.Name == ExecutionTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => sampled
+                ? ActivitySamplingResult.AllDataAndRecorded : ActivitySamplingResult.None,
+            ActivityStopped = activity => completed.Add(activity)
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var parent = new Activity("service-caller").SetIdFormat(ActivityIdFormat.W3C).Start();
+        var result = await fixture.Invoke();
+        Assert.Equal(ApiResultKind.Conflict, result.Kind);
+        Assert.Equal(1, fixture.Repository.Writes);
+        Assert.Contains(result.Trace.Events, item => item.Kind == "authorityAdmitted");
+        Assert.DoesNotContain(result.Trace.Events, item => item.Kind == "commitCompleted");
+        Assert.Equal("services.concurrency.stale", result.Trace.Events[^1].Detail);
+        if (!sampled)
+        {
+            Assert.Empty(completed);
+            return;
+        }
+        var span = Assert.Single(completed);
+        Assert.Equal(parent.SpanId, span.ParentSpanId);
+        Assert.Equal(parent.TraceId, span.TraceId);
+        Assert.Equal("rejected", span.GetTagItem(ExecutionTelemetry.OutcomeTagName));
+        Assert.Equal(ExecutionTraceFingerprinter.ComputeSemantic(result.Trace).Value,
+            span.GetTagItem(ExecutionTelemetry.TraceFingerprintTagName));
+        Assert.Equal(result.Trace.Events.Select(item => item.Kind), span.Events.Select(item => item.Name));
+        var exported = string.Join("|", span.TagObjects.Select(tag => $"{tag.Key}={tag.Value}")
+            .Concat(span.Events.SelectMany(item => item.Tags.Select(tag => $"{tag.Key}={tag.Value}"))));
+        Assert.DoesNotContain("tenant-a", exported, StringComparison.Ordinal);
+        Assert.DoesNotContain("note-1", exported, StringComparison.Ordinal);
+        Assert.DoesNotContain("after", exported, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task OperationAndRequirementOrderingDoesNotChangeCanonicalIdentity()
     {
