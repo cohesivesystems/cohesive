@@ -28,3 +28,12 @@ identical prerequisites throughout the service. It copies selections, rejects du
 the same workload/binding validation as per-operation `Create`. Adding a result-read operation therefore
 inherits the selected prerequisites without a second operation catalog. This is explicit placement
 policy, not automatic dependency discovery; use `Create` for genuinely different per-operation needs.
+
+`AssessReadiness` accepts an independently selected physical realization and adapter-normalized
+observations. It rejects a realization for a different exact topology, then returns the existing
+`InfrastructureReadinessAssessment` without a service-specific readiness model. Native readiness
+obligations, missing-evidence diagnostics and assessment fingerprints remain authoritative. The result
+covers the whole realization; selected consumer bindings are not implicitly converted into readiness
+edges. Scope, freshness and evidence acquisition must still be enforced by the provider adapter.
+For example, an API observed ready while its declared state dependency has no observation remains
+unknown/not ready. A capability-closed topology alone cannot manufacture that missing evidence.

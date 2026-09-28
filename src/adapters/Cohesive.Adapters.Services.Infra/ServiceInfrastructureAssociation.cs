@@ -45,6 +45,26 @@ public sealed class ServiceInfrastructureAssociation
             "The associated deployment has unresolved capability requirements; inspect the native closure diagnostics.", "/capabilities")]);
     }
 
+    /// <summary>Assesses observations through native Infra readiness for this association's exact topology.</summary>
+    /// <remarks>The caller independently selects the physical realization and supplies adapter-normalized evidence.
+    /// Native readiness obligations remain authoritative; selected consumer bindings are not invented readiness edges.
+    /// The returned assessment covers the whole realization, not only this service. Missing evidence fails closed
+    /// through native diagnostics. Provider scope, freshness, collection and authorization remain adapter concerns.
+    /// No resource collection, runtime construction or new readiness model is introduced.</remarks>
+    /// <param name="realization">Independently selected physical realization of the exact associated topology.</param>
+    /// <param name="observations">Attributable, normalized observations; omitted evidence remains unknown.</param>
+    /// <returns>The native fingerprinted readiness assessment with its exact realization and diagnostics.</returns>
+    /// <exception cref="ArgumentNullException">The realization is null.</exception>
+    /// <exception cref="ArgumentException">The topology differs or observations are malformed or duplicated.</exception>
+    public InfrastructureReadinessAssessment AssessReadiness(InfrastructureRealization realization,
+        ImmutableArray<InfrastructureResourceObservation> observations = default)
+    {
+        ArgumentNullException.ThrowIfNull(realization);
+        if (realization.CapabilityClosure.Definition.ToReference() != Infrastructure)
+            throw new ArgumentException("Readiness requires a realization of the exact associated infrastructure definition.", nameof(realization));
+        return InfrastructureReadinessEvaluator.Assess(realization, observations);
+    }
+
     /// <summary>Applies explicit service-wide prerequisites to every operation in the canonical declaration.</summary>
     /// <remarks>The caller owns placement policy; this method derives operation coverage, not dependencies.
     /// Adding an operation automatically includes the same prerequisites. Use per-operation Create when

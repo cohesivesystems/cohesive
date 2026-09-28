@@ -4,6 +4,7 @@ using Cohesive.Api.Services;
 using Cohesive.Execution;
 using Cohesive.Infra.Realization;
 using Cohesive.Model.Serialization;
+using Cohesive.Model;
 
 namespace Cohesive.Infra.Tests;
 
@@ -49,6 +50,43 @@ public sealed class ServiceInfrastructureAssociationTests
         Assert.Equal(2, association.Operations.Count);
         foreach (var operation in explicitPlacement.Operations)
             Assert.Equal(operation.Value.ToArray(), association.Operations[operation.Key].ToArray());
+    }
+
+    [Theory]
+    [InlineData("ready", true)]
+    [InlineData("missing", false)]
+    [InlineData("notReady", false)]
+    public void ReadinessUsesExactNativeRealizationAndPreservesUnknownEvidence(string scenario, bool ready)
+    {
+        var definition = Infrastructure.Define(new("readiness"), new("1"), builder =>
+        {
+            var state = builder.Resource(new("state")).Persistent();
+            builder.Workload(new("api")).RequiresReady(state);
+        });
+        InfrastructureCapabilityVariantId variant = new("local");
+        var profile = new InfrastructureCapabilityProfile(InfrastructureCapabilityProfile.CurrentSchemaVersion,
+            new("local"), new("local"), [InfrastructureDefinitionDocument.CurrentSchemaVersion], [new(variant)]);
+        var closure = InfrastructureCapabilityCompiler.Compile(definition, profile, variant);
+        var lifecycle = new InfrastructureLifecyclePlan(definition,
+            [new(new("state"), new("physical/state"), new("local"), new("local/test"), InfrastructureLifecycleDisposition.Managed)]);
+        var realization = InfrastructureRealizationCompiler.Compile(closure, lifecycle,
+            [new(new("api"), new("physical/api"), new("local"), [SourceReference.Create("test", "placement")])]);
+        var association = ServiceInfrastructureAssociation.CreateWithSharedPrerequisites(Service(), definition.Definition, new("api"), []);
+        var observations = ImmutableArray.CreateBuilder<InfrastructureResourceObservation>();
+        observations.Add(new(new("physical/api"), ExecutionHealthStatus.Healthy, ExecutionReadinessStatus.Ready,
+            DateTimeOffset.UnixEpoch, [SourceReference.Create("test", "api-observation")]));
+        if (scenario != "missing")
+            observations.Add(new(new("physical/state"), ExecutionHealthStatus.Healthy,
+                ready ? ExecutionReadinessStatus.Ready : ExecutionReadinessStatus.NotReady,
+                DateTimeOffset.UnixEpoch, [SourceReference.Create("test", "state-observation")]));
+        var assessment = association.AssessReadiness(realization, observations.ToImmutable());
+        Assert.Equal(ready, assessment.IsReady);
+        Assert.Equal(InfrastructureReadinessEvaluator.Assess(realization, observations.ToImmutable()).Fingerprint, assessment.Fingerprint);
+        Assert.Equal(realization.ToReference(), assessment.Realization);
+        if (scenario == "missing")
+            Assert.Contains(assessment.Diagnostics, item => item.Code == InfrastructureReadinessEvaluator.DiagnosticCodes.ObservationMissing);
+        var other = ServiceInfrastructureAssociation.CreateWithSharedPrerequisites(Service(), Topology(), new("api"), []);
+        Assert.Throws<ArgumentException>(() => other.AssessReadiness(realization, observations.ToImmutable()));
     }
 
     [Theory]
