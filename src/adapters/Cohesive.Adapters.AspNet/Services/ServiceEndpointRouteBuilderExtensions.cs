@@ -113,14 +113,39 @@ public static class ServiceEndpointRouteBuilderExtensions
                 http.Response.Headers[tokenHeader] = snapshot.ConcurrencyToken.Value;
                 return Results.Json(project(snapshot), statusCode: status);
             }
-            var diagnostic = result.Diagnostics.FirstOrDefault();
-            if (result.Kind == ApiResultKind.ValidationFailed)
-                return Results.Json(new ApiValidationProblem(diagnostic?.Code ?? "services.result.invalid",
-                    diagnostic?.Message ?? "The result was rejected.", result.Diagnostics.Select(item =>
-                        new ApiValidationIssue(item.Location, item.Code, item.Message)).ToArray()), statusCode: status);
-            return Results.Json(new ApiProblem(diagnostic?.Code ?? "services.result.unavailable",
-                diagnostic?.Message ?? "The committed result is unavailable.", diagnostic?.Location), statusCode: status);
+            return ProjectServiceProblem(projection, result.Kind, result.Diagnostics);
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(runtime.Declaration);
+    }
+
+    /// <summary>Projects a rejected or pending service outcome using its declared HTTP status and problem contract.</summary>
+    /// <param name="endpoint">Canonical endpoint containing the result alternative.</param>
+    /// <param name="kind">Rejected or pending service outcome.</param>
+    /// <param name="diagnostics">Safe diagnostics produced by service admission or declared result classification.</param>
+    /// <returns>A JSON problem with the declared status; validation retains all issue locations and codes.</returns>
+    /// <exception cref="InvalidOperationException">The result is undeclared or does not use a standard API problem contract.</exception>
+    public static IResult ProjectServiceProblem(ApiEndpoint endpoint, ApiResultKind kind,
+        IEnumerable<DocumentValidationDiagnostic> diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        var result = endpoint.Operation.Results.Single(candidate => candidate.Kind == kind);
+        var status = result.Http?.StatusCode
+            ?? throw new InvalidOperationException("A service problem requires a declared HTTP status.");
+        var issues = diagnostics.ToArray();
+        var first = issues.FirstOrDefault();
+        var code = first?.Code ?? "services.result.unavailable";
+        var message = first?.Message ?? "The operation result is unavailable.";
+        object problem;
+        if (result.BodyType == typeof(ApiValidationProblem))
+            problem = new ApiValidationProblem(code, message,
+                issues.Select(item => new ApiValidationIssue(item.Location, item.Code, item.Message)).ToArray());
+        else if (result.BodyType == typeof(ApiConflictProblem))
+            problem = new ApiConflictProblem(code, message);
+        else if (result.BodyType == typeof(ApiProblem))
+            problem = new ApiProblem(code, message, first?.Location);
+        else
+            throw new InvalidOperationException("The declared result is not a standard API problem contract.");
+        return Results.Json(problem, statusCode: status);
     }
 
     /// <summary>Maps a declared Process entry using its native start request and admission result.</summary>

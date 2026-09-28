@@ -32,6 +32,19 @@ namespace Cohesive.Tests.Api;
 
 public sealed class ServiceProcessEntityResultTests
 {
+    [Fact]
+    public void ProblemProjectionUsesDeclaredStatusAndBodyContract()
+    {
+        var endpoint = Cohesive.Api.Api.Define("Problems").Query("Read").Route("GET", "/result")
+            .Returns<string>().Result<ApiConflictProblem>(ApiResultKind.Conflict, httpStatusCode: 412).Build();
+        var response = ServiceEndpointRouteBuilderExtensions.ProjectServiceProblem(endpoint,
+            ApiResultKind.Conflict, [new("review.stale", DiagnosticSeverity.Error, "Refresh the review.", "/token")]);
+        Assert.Equal(412, Assert.IsAssignableFrom<IStatusCodeHttpResult>(response).StatusCode);
+        Assert.IsType<ApiConflictProblem>(Assert.IsAssignableFrom<IValueHttpResult>(response).Value);
+        Assert.Throws<InvalidOperationException>(() => ServiceEndpointRouteBuilderExtensions.ProjectServiceProblem(
+            endpoint, ApiResultKind.Success, []));
+    }
+
     [Theory]
     [InlineData(true, 200)]
     [InlineData(false, 403)]

@@ -646,3 +646,11 @@ primary-only return type incorrectly allowed callers to treat an admission as a 
 The generator now emits both alternatives in its signature/cast and imports their types. Error
 responses remain the HTTP client's rejection responsibility. This is a body union, not a substitute
 for a status-discriminated transport response where callers need headers or status distinctions.
+
+### Medium-owned standard problem projection
+
+`ServiceEndpointRouteBuilderExtensions.ProjectServiceProblem` resolves the HTTP status and standard
+problem body from the declared endpoint alternative. It preserves validation issues and rejects
+undeclared/non-problem result contracts. The committed-entity result endpoint uses the same projector;
+application HTTP seams can reuse it with lazy runtime resolution instead of maintaining a second
+result-kind/status switch. Execution, admission and classification remain service/runtime concerns.
