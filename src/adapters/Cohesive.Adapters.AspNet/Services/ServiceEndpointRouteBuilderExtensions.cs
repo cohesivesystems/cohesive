@@ -174,12 +174,7 @@ public static class ServiceEndpointRouteBuilderExtensions
             if (string.IsNullOrWhiteSpace(instance))
                 return Results.BadRequest(new ApiValidationProblem("services.result.instanceRequired", "A Process instance is required.",
                     [new(instanceParameter, "services.result.instanceRequired", "Supply the logical Process instance identity.")]));
-            var runtime = resolveRuntime(http.RequestServices)
-                ?? throw new InvalidOperationException("The result runtime resolver returned null.");
-            if (runtime.Declaration.Metadata.DefinitionId != declaration.Metadata.DefinitionId
-                || runtime.Declaration.Metadata.RevisionId != declaration.Metadata.RevisionId
-                || runtime.Declaration.Metadata.Fingerprint != declaration.Metadata.Fingerprint)
-                throw new InvalidOperationException("The resolved runtime does not realize the registered service declaration.");
+            var runtime = ResolveRuntime(declaration, resolveRuntime, http.RequestServices);
             var result = await read(runtime, context, new(instance)).ConfigureAwait(false);
             var status = projection.Operation.Results.Single(item => item.Kind == result.Kind).Http!.StatusCode;
             if (result.Kind == ApiResultKind.Success)
@@ -242,6 +237,25 @@ public static class ServiceEndpointRouteBuilderExtensions
         MapProcess<TCommand, ExecutionControlResult>(endpoints, runtime, operationId, route,
             (context, request) => runtime.ControlAsync(context, operationId, request), authorizationPolicyResolver);
 
+    /// <summary>Maps a declared native start without resolving its runtime during endpoint registration.</summary>
+    /// <remarks>The resolver must return the exact registered service. Native request validation and service
+    /// authority admission run on invocation; supplied scope policies only select the host scope.</remarks>
+    public static RouteHandlerBuilder MapServiceProcessStart(this IEndpointRouteBuilder endpoints,
+        ExecutionDefinitionDocument declaration, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
+        string operationId, string route, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null) =>
+        MapProcess<ProcessStartRequest, ProcessStartResult>(endpoints, declaration, resolveRuntime, operationId, route,
+            (runtime, context, request) => runtime.StartAsync(context, operationId, request), authorizationPolicyResolver, scopePolicies);
+
+    /// <summary>Maps a declared native lifecycle control with lazy, exact runtime resolution.</summary>
+    /// <remarks>Native command contracts and authorization requirements derive from the service declaration.</remarks>
+    public static RouteHandlerBuilder MapServiceProcessControl<TCommand>(this IEndpointRouteBuilder endpoints,
+        ExecutionDefinitionDocument declaration, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
+        string operationId, string route, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null) where TCommand : ProcessControlCommand =>
+        MapProcess<TCommand, ExecutionControlResult>(endpoints, declaration, resolveRuntime, operationId, route,
+            (runtime, context, request) => runtime.ControlAsync(context, operationId, request), authorizationPolicyResolver, scopePolicies);
+
     static RouteHandlerBuilder MapProcess<TRequest, TOutcome>(IEndpointRouteBuilder endpoints,
         ServiceRuntime runtime, string operationId, string route,
         Func<OperationContext, TRequest, ValueTask<ServiceOperationResult<TOutcome>>> invoke,
@@ -251,13 +265,29 @@ public static class ServiceEndpointRouteBuilderExtensions
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentException.ThrowIfNullOrWhiteSpace(route);
-        var projection = runtime.ProjectProcess<TRequest>(operationId, new("POST", route, [], new(typeof(TRequest))));
+        return MapProcess<TRequest, TOutcome>(endpoints, runtime.Declaration, _ => runtime, operationId, route,
+            (_, context, request) => invoke(context, request), authorizationPolicyResolver);
+    }
+
+    static RouteHandlerBuilder MapProcess<TRequest, TOutcome>(IEndpointRouteBuilder endpoints,
+        ExecutionDefinitionDocument declaration, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
+        string operationId, string route,
+        Func<ServiceRuntime, OperationContext, TRequest, ValueTask<ServiceOperationResult<TOutcome>>> invoke,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver, IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
+        where TRequest : class where TOutcome : class
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentNullException.ThrowIfNull(resolveRuntime);
+        ArgumentException.ThrowIfNullOrWhiteSpace(route);
+        var projection = ServiceApiProjection.ProjectProcess<TRequest>(declaration, operationId,
+            new("POST", route, [], new(typeof(TRequest))), scopePolicies);
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
         {
             var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, projection.Operation,
                 context.CancellationToken).ConfigureAwait(false)
                 ?? throw new BadHttpRequestException("A native Process request body is required.");
-            var result = await invoke(context, request).ConfigureAwait(false);
+            var runtime = ResolveRuntime(declaration, resolveRuntime, http.RequestServices);
+            var result = await invoke(runtime, context, request).ConfigureAwait(false);
             object response = result.Outcome is { } outcome
                 ? outcome
                 : new ExecutionApiProblem(result.Diagnostics.FirstOrDefault()?.Code ?? "services.invocation.failed");
@@ -266,7 +296,19 @@ public static class ServiceEndpointRouteBuilderExtensions
             return Results.Json(response, options: null,
                 contentType: projectedResult.Http!.ContentType ?? "application/json",
                 statusCode: projectedResult.Http.StatusCode);
-        }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(runtime.Declaration);
+        }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(declaration);
+    }
+
+    static ServiceRuntime ResolveRuntime(ExecutionDefinitionDocument declaration,
+        Func<IServiceProvider, ServiceRuntime> resolveRuntime, IServiceProvider services)
+    {
+        var runtime = resolveRuntime(services)
+            ?? throw new InvalidOperationException("The service runtime resolver returned null.");
+        if (runtime.Declaration.Metadata.DefinitionId != declaration.Metadata.DefinitionId
+            || runtime.Declaration.Metadata.RevisionId != declaration.Metadata.RevisionId
+            || runtime.Declaration.Metadata.Fingerprint != declaration.Metadata.Fingerprint)
+            throw new InvalidOperationException("The resolved runtime does not realize the registered service declaration.");
+        return runtime;
     }
 
     static JsonSerializerOptions CreateJsonOptions()

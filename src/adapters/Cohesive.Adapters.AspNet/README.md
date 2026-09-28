@@ -244,3 +244,11 @@ return that retained output directly rather than selecting a nonexistent entity 
 successful serialization, forbidden reads without protected storage access, pending HTTP 202, lazy
 construction and rejection of a mismatched runtime. These are mapped endpoint tests, not deployed
 middleware or remote-provider qualification.
+
+Process start and lifecycle-control endpoints also accept a portable service declaration plus a lazy
+runtime resolver. `ServiceApiProjection.ProjectProcess<TRequest>` derives their native command types,
+result alternatives and service authorization requirements without creating execution bindings.
+Both eager and lazy overloads use the same request reader and invocation path. The lazy resolver must
+return the registered service identity, revision and fingerprint; mismatch fails before dispatch.
+Host scope policies can be attached explicitly. Inspection and Signal ingress are rejected by the same
+lifecycle admission rule at projection and runtime binding, rather than generating unusable endpoints.

@@ -38,16 +38,22 @@ public sealed class ServiceProcessControlBinding : ServiceBinding
         if (operation is not ServiceProcessControlOperation control || control.Process != Plan.DefinitionReference)
             throw ServiceBindingValidationException.Error("services.binding.inexact",
                 "The binding must control the exact declared Process.", "/bindings/processControl");
-        var native = ServiceRuntime.NativeProcessOperation(control.Action);
-        if (!typeof(ProcessControlCommand).IsAssignableFrom(native.RequestType)
-            || native.RequestType == typeof(InspectProcessCommand) || native.RequestType == typeof(SignalProcessCommand))
-            throw ServiceBindingValidationException.Error("services.binding.controlUnsupported",
-                "This binding requires a native lifecycle mutation; inspection and Signal ingress require other bindings.", "/bindings/processControl/action");
+        ServiceRuntime.NativeLifecycleOperation(control.Action);
     }
 }
 
 public sealed partial class ServiceRuntime
 {
+    internal static ApiOperation NativeLifecycleOperation(string action)
+    {
+        var native = NativeProcessOperation(action);
+        if (!typeof(ProcessControlCommand).IsAssignableFrom(native.RequestType)
+            || native.RequestType == typeof(InspectProcessCommand) || native.RequestType == typeof(SignalProcessCommand))
+            throw ServiceBindingValidationException.Error("services.binding.controlUnsupported",
+                "This binding requires a native lifecycle mutation; inspection and Signal ingress require other bindings.", "/bindings/processControl/action");
+        return native;
+    }
+
     /// <summary>Admits and dispatches the declared native control action against its exact Process definition.</summary>
     /// <remarks>
     /// The native catalog owns command types and result semantics. Trusted authority, provenance and definition

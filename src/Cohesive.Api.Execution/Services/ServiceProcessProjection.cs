@@ -25,28 +25,5 @@ public sealed partial class ServiceRuntime
     /// <exception cref="ArgumentException">The operation family, request type or HTTP body type is incorrect.</exception>
     public ApiEndpoint ProjectProcess<TRequest>(string operationId, HttpBinding? http = null)
         where TRequest : class
-    {
-        if (!operations.TryGetValue(operationId, out var linked))
-            throw new ArgumentException("The operation is not declared.", nameof(operationId));
-        var action = linked.Operation switch
-        {
-            ServiceProcessOperation => ProcessStartWireNames.Start,
-            ServiceProcessControlOperation control => control.Action,
-            _ => throw new ArgumentException("The operation is not a Process entry or lifecycle control.", nameof(operationId))
-        };
-        var native = NativeProcessOperation(action);
-        if (native.RequestType != typeof(TRequest) || http?.Body is { } body && body.BodyType != native.RequestType)
-            throw new ArgumentException("The request and HTTP body must exactly project the native Process command contract.");
-        var operation = new ApiOperation(operationId, native.Kind, native.RequestType, native.ResponseType,
-            id: new(ServiceOperationIdentity(operationId)),
-            summary: native.Summary, description: native.Description, tags: native.Tags,
-            results: native.Results.Any(result => result.Kind == ApiResultKind.ValidationFailed && result.BodyType == typeof(ExecutionApiProblem))
-                ? native.Results
-                : [.. native.Results, new(ApiResultKind.ValidationFailed, typeof(ExecutionApiProblem), id: "admissionValidationFailed")],
-            scopePolicies: native.ScopePolicies,
-            authorizationRequirements: linked.Operation.AuthorizationRequirements,
-            semanticReferences: native.SemanticReferences);
-        if (http is not null) operation = operation.WithHttp(http);
-        return new ApiDefinition([operation]).Endpoints[0];
-    }
+        => ServiceApiProjection.ProjectProcess<TRequest>(Declaration, operationId, http);
 }

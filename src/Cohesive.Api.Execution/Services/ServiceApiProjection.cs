@@ -24,9 +24,38 @@ public static class ServiceApiProjection
         string operationId, HttpBinding? http = null, IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
         => ProjectDeclaredResult<TResponse, ServiceProcessResultOperation>(declaration, operationId, http, scopePolicies);
 
-    static ApiEndpoint ProjectDeclaredResult<TResponse, TOperation>(ExecutionDefinitionDocument declaration,
-        string operationId, HttpBinding? http, IReadOnlyList<ApiScopePolicy>? scopePolicies)
-        where TOperation : ServiceOperation
+    /// <summary>Projects native Process entry/control contracts directly from a portable service declaration.</summary>
+    /// <remarks>Runtime construction is deferred. The exact native request and result contracts remain authoritative;
+    /// supplied scope policies attach host scope selection without granting authorization.</remarks>
+    /// <exception cref="ArgumentException">The operation family or native request/body contract is invalid.</exception>
+    public static ApiEndpoint ProjectProcess<TRequest>(ExecutionDefinitionDocument declaration, string operationId,
+        HttpBinding? http = null, IReadOnlyList<ApiScopePolicy>? scopePolicies = null) where TRequest : class
+    {
+        var declared = GetOperation(declaration, operationId);
+        var native = declared switch
+        {
+            ServiceProcessOperation => ServiceRuntime.NativeProcessOperation(ProcessStartWireNames.Start),
+            ServiceProcessControlOperation control => ServiceRuntime.NativeLifecycleOperation(control.Action),
+            _ => throw new ArgumentException("The operation is not a Process entry or lifecycle control.", nameof(operationId))
+        };
+        if (native.RequestType != typeof(TRequest) || http?.Body is { } body && body.BodyType != native.RequestType)
+            throw new ArgumentException("The request and HTTP body must exactly project the native Process command contract.");
+        var reference = new ExecutionDefinitionReference(declaration.Metadata.DefinitionId,
+            declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint);
+        var operation = new ApiOperation(operationId, native.Kind, native.RequestType, native.ResponseType,
+            id: new(OperationIdentity(reference, operationId)),
+            summary: native.Summary, description: native.Description, tags: native.Tags,
+            results: native.Results.Any(result => result.Kind == ApiResultKind.ValidationFailed && result.BodyType == typeof(ExecutionApiProblem))
+                ? native.Results
+                : [.. native.Results, new(ApiResultKind.ValidationFailed, typeof(ExecutionApiProblem), id: "admissionValidationFailed")],
+            scopePolicies: scopePolicies ?? native.ScopePolicies,
+            authorizationRequirements: declared.AuthorizationRequirements,
+            semanticReferences: native.SemanticReferences);
+        if (http is not null) operation = operation.WithHttp(http);
+        return new ApiDefinition([operation]).Endpoints[0];
+    }
+
+    static ServiceOperation GetOperation(ExecutionDefinitionDocument declaration, string operationId)
     {
         ArgumentNullException.ThrowIfNull(declaration);
         var validation = ServiceDefinitionDocuments.ValidateAndProject(declaration, out var definition);
@@ -34,8 +63,15 @@ public static class ServiceApiProjection
         if (!declaration.Extensions.IsEmpty)
             throw ServiceBindingValidationException.Error("services.binding.extensionsUnsupported",
                 "This service profile does not support semantic extensions.", "/extensions");
-        if (definition!.Operations.SingleOrDefault(operation => operation.Id == operationId)
-            is not TOperation result)
+        return definition!.Operations.SingleOrDefault(operation => operation.Id == operationId)
+            ?? throw new ArgumentException("The operation is not declared.", nameof(operationId));
+    }
+
+    static ApiEndpoint ProjectDeclaredResult<TResponse, TOperation>(ExecutionDefinitionDocument declaration,
+        string operationId, HttpBinding? http, IReadOnlyList<ApiScopePolicy>? scopePolicies)
+        where TOperation : ServiceOperation
+    {
+        if (GetOperation(declaration, operationId) is not TOperation result)
             throw new ArgumentException("The operation is not a declared Process result read.", nameof(operationId));
         return CreateResult<TResponse>(new(declaration.Metadata.DefinitionId,
             declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint), result, http, scopePolicies: scopePolicies);

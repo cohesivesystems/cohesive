@@ -142,14 +142,19 @@ public sealed class ServiceProcessRuntimeTests
         var failure = Assert.Throws<ServiceBindingValidationException>(() => new ServiceRuntime(declaration, [binding],
             new IdentityServiceInvocationAuthorization("tenant", new("Tenant"))));
         Assert.Equal("services.binding.controlUnsupported", Assert.Single(failure.Validation.Diagnostics).Code);
+        var projectionFailure = Assert.Throws<ServiceBindingValidationException>(() =>
+            ServiceApiProjection.ProjectProcess<ProcessControlCommand>(declaration, "control"));
+        Assert.Equal("services.binding.controlUnsupported", Assert.Single(projectionFailure.Validation.Diagnostics).Code);
     }
 
-    [Fact]
-    public async Task HttpStartAndPauseShareNativeAdmissionAndReplay()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HttpStartAndPauseShareNativeAdmissionAndReplay(bool lazy)
     {
         var fixture = Create();
         var start = fixture.Request();
-        var started = await InvokeHttp(fixture.Runtime, "publish", start, Context());
+        var started = await InvokeHttp(fixture.Runtime, "publish", start, Context(), lazy);
         Assert.Equal(StatusCodes.Status200OK, started.StatusCode);
         var admitted = JsonSerializer.Deserialize<ProcessStartResult>(started.Body, HttpJson)!;
         Assert.Equal(ProcessStartDisposition.Accepted, admitted.Disposition);
@@ -158,8 +163,8 @@ public sealed class ServiceProcessRuntimeTests
             new(new("http/pause"), new("http/pause"), start.Context.ProcessInstanceId, start.Context.Authorization,
                 start.Context.IssuedAtUtc, start.Context.Provenance),
             new(admitted.Admission!.Continuation, admitted.Admission.ControlRevision));
-        var paused = await InvokeHttp(fixture.Runtime, "pause", pause, Context());
-        var replayed = await InvokeHttp(fixture.Runtime, "pause", pause, Context());
+        var paused = await InvokeHttp(fixture.Runtime, "pause", pause, Context(), lazy);
+        var replayed = await InvokeHttp(fixture.Runtime, "pause", pause, Context(), lazy);
         Assert.Equal(StatusCodes.Status200OK, paused.StatusCode);
         Assert.Equal(StatusCodes.Status200OK, replayed.StatusCode);
         var result = JsonSerializer.Deserialize<ExecutionControlResult>(paused.Body, HttpJson)!;
@@ -171,17 +176,19 @@ public sealed class ServiceProcessRuntimeTests
         Assert.Equal("alice", fixture.ControlInvocation!.Authorization.Actor);
     }
 
-    [Fact]
-    public async Task HttpAdmissionReturnsDeclaredErrorsWithoutDispatchingInvalidRequests()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HttpAdmissionReturnsDeclaredErrorsWithoutDispatchingInvalidRequests(bool lazy)
     {
         var fixture = Create();
         var request = fixture.Request();
-        var denied = await InvokeHttp(fixture.Runtime, "publish", request, OperationContext.Create());
+        var denied = await InvokeHttp(fixture.Runtime, "publish", request, OperationContext.Create(), lazy);
         Assert.Equal(StatusCodes.Status403Forbidden, denied.StatusCode);
         Assert.Equal("services.authorization.denied", JsonSerializer.Deserialize<ExecutionApiProblem>(denied.Body, HttpJson)!.Code);
         var invalid = new ProcessStartRequest(request.SchemaVersion, request.Definition, request.Context,
             request.InitialContinuation, PortableValue.Concrete(new(new ScalarTypeRef(ScalarTypeKind.Bool)), ObservationValue.FromBool(true)));
-        var rejected = await InvokeHttp(fixture.Runtime, "publish", invalid, Context());
+        var rejected = await InvokeHttp(fixture.Runtime, "publish", invalid, Context(), lazy);
         Assert.Equal(StatusCodes.Status400BadRequest, rejected.StatusCode);
         Assert.Contains("services.process.inputInvalid", rejected.Body);
         Assert.Equal(0, fixture.Dispatches);
@@ -220,19 +227,47 @@ public sealed class ServiceProcessRuntimeTests
         Assert.Equal(0, fixture.ControlDispatches);
     }
 
+    [Fact]
+    public async Task LazyStartRejectsMismatchedDeclarationBeforeDispatch()
+    {
+        var fixture = Create();
+        Assert.True(ServiceDefinitionDocuments.ValidateAndProject(fixture.Document, out var definition).IsValid);
+        var other = ServiceDefinitionDocuments.Create(new("other-service"), new("1"), definition!, fixture.Document.Metadata.Provenance);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => InvokeHttp(fixture.Runtime, "publish", fixture.Request(),
+            Context(), lazy: true, declaration: other));
+        Assert.Equal(0, fixture.Dispatches);
+        Assert.Equal(0, fixture.ControlDispatches);
+    }
+
     static readonly JsonSerializerOptions HttpJson = new(JsonSerializerDefaults.Web);
 
     static async Task<(int StatusCode, string Body)> InvokeHttp<TRequest>(ServiceRuntime runtime,
-        string operationId, TRequest request, OperationContext context)
+        string operationId, TRequest request, OperationContext context, bool lazy = false, ExecutionDefinitionDocument? declaration = null)
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(context);
         await using var app = builder.Build();
-        app.MapServiceProcessStart(runtime, "publish", "/notes/publish", (_, requirement) => requirement.Id);
-        app.MapServiceProcessControl<PauseProcessCommand>(runtime, "pause", "/notes/pause", (_, requirement) => requirement.Id);
+        var resolutions = 0;
+        var scope = new ApiScopePolicy("tenant", ApiScopeCardinality.Single, ApiScopeBinding.Header,
+            ApiScopeAccess.RequireSelected, singleScopeParameterName: "X-Tenant-Id");
+        if (lazy)
+        {
+            ServiceRuntime Resolve(IServiceProvider _) { resolutions++; return runtime; }
+            app.MapServiceProcessStart(declaration ?? runtime.Declaration, Resolve, "publish", "/notes/publish",
+                (_, requirement) => requirement.Id, [scope]);
+            app.MapServiceProcessControl<PauseProcessCommand>(declaration ?? runtime.Declaration, Resolve, "pause", "/notes/pause",
+                (_, requirement) => requirement.Id, [scope]);
+        }
+        else
+        {
+            app.MapServiceProcessStart(runtime, "publish", "/notes/publish", (_, requirement) => requirement.Id);
+            app.MapServiceProcessControl<PauseProcessCommand>(runtime, "pause", "/notes/pause", (_, requirement) => requirement.Id);
+        }
+        Assert.Equal(0, resolutions);
         var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints)
             .OfType<RouteEndpoint>().Single(candidate => candidate.RoutePattern.RawText == "/notes/" + operationId);
-        Assert.Same(runtime.Declaration, endpoint.Metadata.GetMetadata<ExecutionDefinitionDocument>());
+        Assert.Same(declaration ?? runtime.Declaration, endpoint.Metadata.GetMetadata<ExecutionDefinitionDocument>());
+        if (lazy) Assert.Same(scope, endpoint.Metadata.GetMetadata<ApiScopePolicy>());
         var bytes = JsonSerializer.SerializeToUtf8Bytes(request, HttpJson);
         var http = new DefaultHttpContext { RequestServices = app.Services };
         http.Request.Method = "POST";
@@ -241,6 +276,7 @@ public sealed class ServiceProcessRuntimeTests
         http.Request.Body = new MemoryStream(bytes);
         http.Response.Body = new MemoryStream();
         await endpoint.RequestDelegate!(http);
+        Assert.Equal(lazy ? 1 : 0, resolutions);
         return (http.Response.StatusCode, Encoding.UTF8.GetString(((MemoryStream)http.Response.Body).ToArray()));
     }
 

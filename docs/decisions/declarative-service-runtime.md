@@ -763,3 +763,18 @@ this boundary, but async Process source authoring lacked its syntax projection. 
 and its generator with DurableCut; the generated definition/fingerprint matches the native builder.
 This is an authoring extension of existing semantics, not a service-owned journal or recovery loop.
 All 98 Process authoring/generator tests pass; Ari's compilation root uses the cut before any mutation.
+
+### Declaration-only native Process HTTP mapping
+
+Start/control projection now consumes the service document directly and resolves its runtime only
+when invoked. Native command and outcome contracts remain owned by the execution API catalog;
+service operation identity and grants remain owned by the service declaration. Existing runtime-based
+projection delegates to this same path. HTTP start/control and result routes share exact runtime
+identity/revision/fingerprint validation. Lifecycle action eligibility is also shared with binding
+validation, so a declaration cannot project inspection or Signal as a lifecycle mutation.
+
+Example: registering a Process endpoint can attach a tenant header policy while its dispatcher is
+unavailable or expensive to construct. Registration validates its semantic contract without constructing
+the dispatcher. A later request resolves the exact runtime, enforces native input and authorization
+admission, and preserves the normal start/control replay decisions. This native-envelope profile does
+not yet remove Ari's domain-specific start request shaping or imply a typed domain-input start mapper.
