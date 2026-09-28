@@ -625,3 +625,14 @@ The registry remains in memory, and the runtime's store determines checkpoint du
 background scheduler: a quiescent or bounded-cut Process needs later driving. This local profile is
 not a claim of remote durability across host loss. Nine composition tests pass, including local
 admission, changed-content conflicts, completed replay and post-commit interruption/recovery.
+
+### Start intent at application boundaries
+
+`ServiceRuntime.StartAsync` accepts native command/idempotency identities, the initial continuation,
+and a materialized `ObservationValue`. The declared Process supplies its exact definition and input
+contract; admission supplies authority, issuance time and provenance. An HTTP application therefore
+need not construct a nominally trusted `ProcessStartRequest` with placeholder authority just to have
+it replaced. The canonical-request overload remains available for already materialized requests,
+including its exact-definition check. Both overloads share authorization, input validation, evidence
+and dispatch. Tests cover cross-overload replay, authorization rejection, invalid input and recovery
+following an interrupted local commit.

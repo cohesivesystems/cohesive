@@ -22,12 +22,17 @@ namespace Cohesive.Tests.Api;
 
 public sealed class ServiceProcessRuntimeTests
 {
-    [Fact]
-    public async Task StartUsesNativeAdmissionAndReplayWithServerOwnedAuthority()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StartUsesNativeAdmissionAndReplayWithServerOwnedAuthority(bool fromIntent)
     {
         var fixture = Create();
         var request = fixture.Request();
-        var accepted = await fixture.Runtime.StartAsync(Context(), "publish", request);
+        var accepted = fromIntent
+            ? await fixture.Runtime.StartAsync(Context(), "publish", request.Context.CommandId,
+                request.Context.IdempotencyKey, request.InitialContinuation, ObservationValue.FromString("private-input"))
+            : await fixture.Runtime.StartAsync(Context(), "publish", request);
         var replayed = await fixture.Runtime.StartAsync(Context(), "publish", request);
         Assert.Equal(ApiResultKind.Success, accepted.Kind);
         Assert.Equal(ProcessStartDisposition.Accepted, accepted.Outcome!.Disposition);
@@ -65,6 +70,15 @@ public sealed class ServiceProcessRuntimeTests
         var badInput = await fixture.Runtime.StartAsync(Context(), "publish", invalid);
         Assert.Equal(ApiResultKind.ValidationFailed, badInput.Kind);
         Assert.Equal("services.process.inputInvalid", Assert.Single(badInput.Diagnostics).Code);
+        var deniedIntent = await fixture.Runtime.StartAsync(OperationContext.Create(), "publish",
+            request.Context.CommandId, request.Context.IdempotencyKey, request.InitialContinuation,
+            ObservationValue.FromBool(true));
+        Assert.Equal(ApiResultKind.Forbidden, deniedIntent.Kind);
+        var invalidIntent = await fixture.Runtime.StartAsync(Context(), "publish",
+            request.Context.CommandId, request.Context.IdempotencyKey, request.InitialContinuation,
+            ObservationValue.FromBool(true));
+        Assert.Equal(ApiResultKind.ValidationFailed, invalidIntent.Kind);
+        Assert.Equal("services.process.inputInvalid", Assert.Single(invalidIntent.Diagnostics).Code);
         Assert.Equal(0, fixture.Dispatches);
     }
 

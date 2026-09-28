@@ -55,16 +55,41 @@ public sealed partial class ServiceRuntime
     /// <exception cref="ArgumentException">The operation, exact definition or Process input is invalid.</exception>
     /// <exception cref="InvalidOperationException">The native dispatcher returns incoherent admission evidence.</exception>
     /// <exception cref="OperationCanceledException">Cancellation is observed, including ambiguous in-flight admission.</exception>
-    public async ValueTask<ServiceOperationResult<ProcessStartResult>> StartAsync(OperationContext context, string operationId,
+    public ValueTask<ServiceOperationResult<ProcessStartResult>> StartAsync(OperationContext context, string operationId,
         ProcessStartRequest request)
     {
-        ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(request);
+        return StartCoreAsync(context, operationId, request.Context.CommandId, request.Context.IdempotencyKey,
+            request.InitialContinuation, request.Input, null, request.Definition);
+    }
+
+    /// <summary>Starts a declared Process from caller intent, deriving its contract and trusted context.</summary>
+    /// <param name="context">Normalized caller identity, time and cancellation.</param>
+    /// <param name="operationId">Declared Process entry.</param>
+    /// <param name="commandId">Stable command identity, retained on retries after ambiguous admission.</param>
+    /// <param name="idempotencyKey">Stable logical start identity.</param>
+    /// <param name="initialContinuation">Requested instance and initial attempt.</param>
+    /// <param name="input">Materialized domain input; the declaration supplies its exact contract.</param>
+    /// <remarks>Uses the same authorization, validation and dispatcher as canonical request admission.</remarks>
+    public ValueTask<ServiceOperationResult<ProcessStartResult>> StartAsync(OperationContext context, string operationId,
+        ProcessControlCommandId commandId, ProcessControlIdempotencyKey idempotencyKey,
+        ProcessContinuationIdentity initialContinuation, ObservationValue input)
+    {
+        ArgumentNullException.ThrowIfNull(initialContinuation);
+        return StartCoreAsync(context, operationId, commandId, idempotencyKey, initialContinuation, null, input, null);
+    }
+
+    private async ValueTask<ServiceOperationResult<ProcessStartResult>> StartCoreAsync(OperationContext context, string operationId,
+        ProcessControlCommandId commandId, ProcessControlIdempotencyKey idempotencyKey,
+        ProcessContinuationIdentity initialContinuation, PortableValue? suppliedInput, ObservationValue? domainInput,
+        ExecutionDefinitionReference? suppliedDefinition)
+    {
+        ArgumentNullException.ThrowIfNull(context);
         if (!operations.TryGetValue(operationId, out var linked)
             || linked.Operation is not ServiceProcessOperation operation || linked.Binding is not ServiceProcessBinding binding)
             throw new ArgumentException("The operation is not a declared Process entry.", nameof(operationId));
         using var evidence = new ServiceInvocationEvidence(definitionReference, operationId, operation.Process,
-            new(request.Context.CommandId.Value));
+            new(commandId.Value));
         try
         {
             var invocation = await AdmitProcessAsync(context, operation, binding.Authority, ProcessStartWireNames.Start,
@@ -77,19 +102,21 @@ public sealed partial class ServiceRuntime
                     evidence.Complete(ApiResultKind.Forbidden));
             }
             evidence.Record("authorityAdmitted");
-            if (request.Definition != operation.Process)
+            if (suppliedDefinition is not null && suppliedDefinition != operation.Process)
                 return RejectInput("services.process.definitionMismatch", "A service entry only admits its exact declared Process.");
-            if (request.Input is not { State: PortableValueState.Concrete } input
+            var materialized = domainInput is { } value
+                ? PortableValue.Concrete(binding.Plan.Definition.Input, value) : suppliedInput;
+            if (materialized is not { State: PortableValueState.Concrete } input
                 || input.Contract != binding.Plan.Definition.Input
                 || !PortableExecutionValidator.Validate(input, binding.Plan.ValidationContext.ShapeGraph).IsValid)
                 return RejectInput("services.process.inputInvalid", "The input must satisfy the exact Process contract.");
-            var canonical = new ProcessStartRequest(request.SchemaVersion, operation.Process,
-                new(request.Context.CommandId, request.Context.IdempotencyKey, request.Context.ProcessInstanceId,
-                    invocation.Authorization, invocation.IssuedAtUtc, invocation.Provenance), request.InitialContinuation, input);
+            var canonical = new ProcessStartRequest(ProcessStartRequest.CurrentSchemaVersion, operation.Process,
+                new(commandId, idempotencyKey, initialContinuation.ProcessInstanceId,
+                    invocation.Authorization, invocation.IssuedAtUtc, invocation.Provenance), initialContinuation, input);
             context.ThrowIfCancellationRequested();
             var result = await binding.Start(context, canonical, invocation).ConfigureAwait(false);
             if (result is null || (result.Admission is { } admission
-                && (admission.Definition != operation.Process || admission.Continuation != request.InitialContinuation)))
+                && (admission.Definition != operation.Process || admission.Continuation != initialContinuation)))
                 throw new InvalidOperationException("The Process dispatcher returned admission for a different definition or continuation.");
             evidence.Record("processStartDispatched");
             var kind = result.IsConflict ? ApiResultKind.Conflict : ApiResultKind.Success;

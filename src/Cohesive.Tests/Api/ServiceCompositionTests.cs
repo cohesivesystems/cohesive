@@ -49,7 +49,9 @@ public sealed class ServiceCompositionTests
             await Assert.ThrowsAsync<HandoffCrash>(() => service.StartAsync(Context(), "publish", fixture.StartRequest()).AsTask());
             shouldInterrupt = false;
         }
-        var first = await service.StartAsync(Context(), "publish", fixture.StartRequest());
+        var intent = fixture.StartRequest();
+        var first = await service.StartAsync(Context(), "publish", intent.Context.CommandId,
+            intent.Context.IdempotencyKey, intent.InitialContinuation, ObservationValue.FromString("batch"));
         Assert.Equal(ApiResultKind.Success, first.Kind);
         Assert.Equal(interrupt ? ProcessStartDisposition.Replayed : ProcessStartDisposition.Accepted, first.Outcome!.Disposition);
         var replay = await service.StartAsync(Context(), "publish", fixture.StartRequest());
