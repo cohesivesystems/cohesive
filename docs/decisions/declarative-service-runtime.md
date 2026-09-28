@@ -730,3 +730,25 @@ retention, polling, or local-runtime lifetime guarantee changes in this extensio
 Qualification: all 91 service tests pass, followed by the complete core suite at this change:
 4,031 passed and 33 integration skips (`/tmp/cohesive-terminal-result-full.log`). This is local runtime
 qualification; it does not establish deployed exporter, Scheduler or Cosmos behavior.
+
+
+### Reusable local execution assembly
+
+`InMemoryExecutionControlApiAdapter.CreateInMemoryProcessBindings` composes its existing admission
+registry, exact prepared plans, native operation host and per-authority in-memory checkpoint runtimes
+with the native protected value reader. It returns native start/value bindings rather than a second
+service runtime or workflow coordinator. This closes repeated assembly observed when Ari adopted
+review and compilation. Plans are indexed once; successful scope initialization is shared across
+concurrent invocations. Unknown-scope result reads use one empty read-only store and do not create
+scope entries. Product policy, operation handlers and repository associations remain host-owned.
+
+Retain this pair for the host lifetime. The profile has no restart durability, background scheduling,
+or automatic eviction; retention limits remain an explicit operational follow-up. Do not expose the
+registry's unrelated lifecycle endpoints as controls over these checkpoint runtimes. The existing
+advanced factory accepting an external runtime resolver remains available for qualified durable stores.
+The composition regression executes a multi-entity Process, reads its canonical terminal value, and
+replays admission without repeating acquisition, computation or writes. All 92 service tests pass.
+
+Full core validation after local assembly extraction passes 4,032 tests with 33 integration skips
+(`/tmp/cohesive-local-bindings-full.log`). Local packages for dependency-ordered Ari adoption are
+`0.1.0-service-review.local-bindings`; this is not a published release.

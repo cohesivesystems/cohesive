@@ -27,6 +27,37 @@ namespace Cohesive.Tests.Api;
 /// <summary>A non-review domain qualifying all service operation families against native execution boundaries.</summary>
 public sealed class ServiceCompositionTests
 {
+    [Fact]
+    public async Task ComposedLocalBindingsRetainCanonicalResultsAndReplayWithoutRepeatingWrites()
+    {
+        var fixture = await Fixture.Create();
+        var registry = new InMemoryExecutionControlApiAdapter(fixture.Contracts);
+        var adapter = new EntityTransitionProcessOperationAdapter(_ => new(fixture.Transition, fixture.Repository, fixture.Contracts));
+        var local = registry.CreateInMemoryProcessBindings([fixture.Plan],
+            new RegisteredAsyncProcessReferenceHost(fixture.Handlers, adapter.ExecuteAsync),
+            new("local-test", TimeSpan.FromMinutes(5)),
+            receipt => fixture.Activation("binding", ProcessActivationCause.Start).Context);
+        var declaration = ServiceDefinitionDocuments.Create(new("local-documents"), new("1"), new([
+            new ServiceProcessOperation("publish", fixture.Plan.DefinitionReference, [new("documents.publish")]),
+            new ServiceProcessResultOperation("result", fixture.Plan.DefinitionReference, [new("documents.read")])]), Provenance);
+        var service = new ServiceRuntime(declaration,
+            [new ServiceProcessBinding("publish", fixture.Plan, "documents", local.Start),
+             new ServiceProcessResultBinding("result", fixture.Plan, "documents", local.Values)],
+            new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
+        var request = fixture.StartRequest();
+        var before = await service.ReadProcessResultAsync(Context(), "result", request.Context.ProcessInstanceId);
+        Assert.Equal(ApiResultKind.NotFound, before.Kind);
+        var start = await service.StartAsync(Context(), "publish", request);
+        Assert.Equal(ApiResultKind.Success, start.Kind);
+        var result = await service.ReadProcessResultAsync(Context(), "result", request.Context.ProcessInstanceId);
+        Assert.Equal(ApiResultKind.Success, result.Kind);
+        Assert.NotNull(result.Outcome);
+        var replay = await service.StartAsync(Context(), "publish", request);
+        Assert.Equal(ProcessStartDisposition.Replayed, replay.Outcome!.Disposition);
+        Assert.Equal(1, fixture.Reader.Reads);
+        Assert.Equal(1, fixture.Computations);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
