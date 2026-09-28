@@ -21,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Cohesive.Api.Execution\Cohesive.Api.Execution.csproj" />
     <ProjectReference Include="..\adapters\Cohesive.Adapters.OpenTelemetry\Cohesive.Adapters.OpenTelemetry.csproj" />
   </ItemGroup>
 

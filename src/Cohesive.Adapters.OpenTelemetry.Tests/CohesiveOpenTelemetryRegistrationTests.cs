@@ -9,6 +9,8 @@ using OpenTelemetry.Trace;
 
 namespace Cohesive.Adapters.OpenTelemetry.Tests;
 
+// Native diagnostic listeners are process-wide; serialize tests that select their scopes.
+[Collection("OpenTelemetry listeners")]
 public sealed class CohesiveOpenTelemetryRegistrationTests
 {
     [Fact]

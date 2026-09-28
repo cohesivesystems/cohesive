@@ -107,3 +107,7 @@ Current adapter scopes are:
 
 `Cohesive.ServiceLevels` can later bind stable semantic operation identities to objectives and indicators. This package
 only makes runtime evidence collectible; it does not define objectives or evaluate compliance.
+
+## Service export conformance
+
+The adapter tests invoke a real declared transition-backed service through a native OpenTelemetry provider and processor. Both successful and failed exporter responses preserve the successful commit and canonical trace fingerprint. Exported service evidence retains caller parentage and excludes fixture tenant, subject and business values from tags. These tests establish local SDK collection/export behavior; they do not establish remote collector delivery, retention or authorized inspection. Listener-owning tests share one collection because native diagnostic listeners are process-wide.
