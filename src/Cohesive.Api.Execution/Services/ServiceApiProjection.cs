@@ -40,9 +40,32 @@ public static class ServiceApiProjection
         };
         if (native.RequestType != typeof(TRequest) || http?.Body is { } body && body.BodyType != native.RequestType)
             throw new ArgumentException("The request and HTTP body must exactly project the native Process command contract.");
+        return CreateProcess(declaration, declared, native, typeof(TRequest), http, scopePolicies);
+    }
+
+    /// <summary>Attaches a typed medium request to a declared Process start while retaining native admission outcomes.</summary>
+    /// <remarks>The medium projects caller-owned retry identities and domain input. The runtime validates that input
+    /// against the exact Process contract and derives trusted authority; this request type is not a new Process contract.</remarks>
+    /// <exception cref="ArgumentException">The operation is not a start or the HTTP body differs from the request type.</exception>
+    public static ApiEndpoint ProjectProcessInput<TRequest>(ExecutionDefinitionDocument declaration, string operationId,
+        HttpBinding? http = null, IReadOnlyList<ApiScopePolicy>? scopePolicies = null) where TRequest : class
+    {
+        var declared = GetOperation(declaration, operationId);
+        if (declared is not ServiceProcessOperation)
+            throw new ArgumentException("Domain input projection requires a declared Process start.", nameof(operationId));
+        if (http?.Body is { } body && body.BodyType != typeof(TRequest))
+            throw new ArgumentException("The HTTP body must match the medium request type.", nameof(http));
+        return CreateProcess(declaration, declared, ServiceRuntime.NativeProcessOperation(ProcessStartWireNames.Start),
+            typeof(TRequest), http, scopePolicies);
+    }
+
+    static ApiEndpoint CreateProcess(ExecutionDefinitionDocument declaration, ServiceOperation declared, ApiOperation native,
+        Type requestType, HttpBinding? http, IReadOnlyList<ApiScopePolicy>? scopePolicies)
+    {
+        var operationId = declared.Id;
         var reference = new ExecutionDefinitionReference(declaration.Metadata.DefinitionId,
             declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint);
-        var operation = new ApiOperation(operationId, native.Kind, native.RequestType, native.ResponseType,
+        var operation = new ApiOperation(operationId, native.Kind, requestType, native.ResponseType,
             id: new(OperationIdentity(reference, operationId)),
             summary: native.Summary, description: native.Description, tags: native.Tags,
             results: native.Results.Any(result => result.Kind == ApiResultKind.ValidationFailed && result.BodyType == typeof(ExecutionApiProblem))

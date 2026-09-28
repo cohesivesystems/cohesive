@@ -239,6 +239,57 @@ public sealed class ServiceProcessRuntimeTests
         Assert.Equal(0, fixture.ControlDispatches);
     }
 
+    [Theory]
+    [InlineData(true, false, 200)]
+    [InlineData(false, false, 403)]
+    [InlineData(true, true, 400)]
+    public async Task DomainInputHttpUsesDeclaredAdmissionAndRetainedRetryIdentity(bool authorized, bool invalid, int status)
+    {
+        var fixture = Create();
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(authorized ? Context() : OperationContext.Create());
+        await using var app = builder.Build();
+        var resolutions = 0;
+        var start = fixture.Request();
+        var binding = new HttpBinding("POST", "/notes/input", [], new(typeof(InputEnvelope)));
+        app.MapServiceProcessInput<InputEnvelope>(fixture.Document, _ => { resolutions++; return fixture.Runtime; },
+            "publish", binding, (_, body) => (start.Context.CommandId, start.Context.IdempotencyKey,
+                start.InitialContinuation, body.Invalid ? ObservationValue.FromBool(true) : ObservationValue.FromObject(body.Text)),
+            (_, requirement) => requirement.Id);
+        Assert.Equal(0, resolutions);
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().Single();
+        async Task<string> Invoke()
+        {
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(new InputEnvelope("private-input", invalid), HttpJson);
+            var http = new DefaultHttpContext { RequestServices = app.Services };
+            http.Request.Method = "POST";
+            http.Request.ContentType = "application/json";
+            http.Request.ContentLength = bytes.Length;
+            http.Request.Body = new MemoryStream(bytes);
+            http.Response.Body = new MemoryStream();
+            await endpoint.RequestDelegate!(http);
+            Assert.Equal(status, http.Response.StatusCode);
+            return Encoding.UTF8.GetString(((MemoryStream)http.Response.Body).ToArray());
+        }
+        var result = await Invoke();
+        Assert.DoesNotContain("private-input", result);
+        Assert.Equal(1, resolutions);
+        if (status == 200)
+        {
+            var first = JsonSerializer.Deserialize<ProcessStartResult>(result, HttpJson)!;
+            var replay = JsonSerializer.Deserialize<ProcessStartResult>(await Invoke(), HttpJson)!;
+            Assert.Equal(ProcessStartDisposition.Accepted, first.Disposition);
+            Assert.Equal(ProcessStartDisposition.Replayed, replay.Disposition);
+            Assert.Equal(first.Admission!.Continuation, replay.Admission!.Continuation);
+            Assert.Equal("alice", fixture.Received!.Context.Authorization.Actor);
+        }
+        else
+            Assert.Equal(0, fixture.Dispatches);
+        Assert.Throws<ArgumentException>(() => ServiceApiProjection.ProjectProcessInput<InputEnvelope>(fixture.Document, "pause", binding));
+    }
+
+    sealed record InputEnvelope(string Text, bool Invalid);
+
     static readonly JsonSerializerOptions HttpJson = new(JsonSerializerDefaults.Web);
 
     static async Task<(int StatusCode, string Body)> InvokeHttp<TRequest>(ServiceRuntime runtime,

@@ -256,6 +256,31 @@ public static class ServiceEndpointRouteBuilderExtensions
         MapProcess<TCommand, ExecutionControlResult>(endpoints, declaration, resolveRuntime, operationId, route,
             (runtime, context, request) => runtime.ControlAsync(context, operationId, request), authorizationPolicyResolver, scopePolicies);
 
+    /// <summary>Maps typed domain input and caller-owned retry identities to a declared Process start.</summary>
+    /// <remarks>The synchronous projection must only bind request data, without reads or writes. It must preserve
+    /// retry identities and input across retries. Throw BadHttpRequestException for malformed transport fields.
+    /// The runtime owns authority, exact Process selection, portable input validation and native admission.</remarks>
+    public static RouteHandlerBuilder MapServiceProcessInput<TRequest>(this IEndpointRouteBuilder endpoints,
+        ExecutionDefinitionDocument declaration, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
+        string operationId, HttpBinding http,
+        Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,
+            ProcessContinuationIdentity Continuation, ObservationValue Input)> bind,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null) where TRequest : class
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentNullException.ThrowIfNull(resolveRuntime);
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(bind);
+        var projection = ServiceApiProjection.ProjectProcessInput<TRequest>(declaration, operationId, http, scopePolicies);
+        return MapProcessCore<TRequest, ProcessStartResult>(endpoints, declaration, projection, resolveRuntime,
+            (runtime, context, request, requestHttp) =>
+            {
+                var input = bind(requestHttp, request);
+                return runtime.StartAsync(context, operationId, input.Command, input.Idempotency, input.Continuation, input.Input);
+            }, authorizationPolicyResolver);
+    }
+
     static RouteHandlerBuilder MapProcess<TRequest, TOutcome>(IEndpointRouteBuilder endpoints,
         ServiceRuntime runtime, string operationId, string route,
         Func<OperationContext, TRequest, ValueTask<ServiceOperationResult<TOutcome>>> invoke,
@@ -281,13 +306,22 @@ public static class ServiceEndpointRouteBuilderExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(route);
         var projection = ServiceApiProjection.ProjectProcess<TRequest>(declaration, operationId,
             new("POST", route, [], new(typeof(TRequest))), scopePolicies);
+        return MapProcessCore<TRequest, TOutcome>(endpoints, declaration, projection, resolveRuntime,
+            (runtime, context, request, _) => invoke(runtime, context, request), authorizationPolicyResolver);
+    }
+
+    static RouteHandlerBuilder MapProcessCore<TRequest, TOutcome>(IEndpointRouteBuilder endpoints,
+        ExecutionDefinitionDocument declaration, ApiEndpoint projection, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
+        Func<ServiceRuntime, OperationContext, TRequest, HttpContext, ValueTask<ServiceOperationResult<TOutcome>>> invoke,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver) where TRequest : class where TOutcome : class
+    {
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
         {
             var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, projection.Operation,
                 context.CancellationToken).ConfigureAwait(false)
                 ?? throw new BadHttpRequestException("A native Process request body is required.");
             var runtime = ResolveRuntime(declaration, resolveRuntime, http.RequestServices);
-            var result = await invoke(runtime, context, request).ConfigureAwait(false);
+            var result = await invoke(runtime, context, request, http).ConfigureAwait(false);
             object response = result.Outcome is { } outcome
                 ? outcome
                 : new ExecutionApiProblem(result.Diagnostics.FirstOrDefault()?.Code ?? "services.invocation.failed");

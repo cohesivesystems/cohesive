@@ -252,3 +252,12 @@ Both eager and lazy overloads use the same request reader and invocation path. T
 return the registered service identity, revision and fingerprint; mismatch fails before dispatch.
 Host scope policies can be attached explicitly. Inspection and Signal ingress are rejected by the same
 lifecycle admission rule at projection and runtime binding, rather than generating unusable endpoints.
+
+For a domain-specific request body, use `ServiceApiProjection.ProjectProcessInput<TRequest>` and
+`MapServiceProcessInput<TRequest>`. A synchronous medium binder returns native command/idempotency/
+continuation identities and an `ObservationValue` input; it must perform no reads or writes and must
+preserve all retry values. The service runtime chooses the exact Process and trusted authority,
+validates input against its Process-owned portable contract, and dispatches native admission. The
+response retains native admission/conflict outcomes; it does not imply workflow completion. The
+medium request is a projection, not a competing semantic input contract. This profile does not add
+bounded completion waiting or custom result-read orchestration to starts.
