@@ -34,6 +34,12 @@ public static class RelationsContractsDefinition
             .Build(),
         CohesiveApi
             .Define("RelationsContracts")
+            .Action("GraphDelta")
+            .Route("GET", "/relations/contracts/graph-delta")
+            .Returns<GraphDelta>()
+            .Build(),
+        CohesiveApi
+            .Define("RelationsContracts")
             .Action("ShapeGraphDocument")
             .Route("GET", "/relations/contracts/shape-graph-document")
             .Returns<ShapeGraphDocument>()

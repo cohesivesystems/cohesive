@@ -95,3 +95,7 @@ exported alongside relations because source and target shapes are part of the re
 Applications can reference that shared canonical document without copying shape definitions into
 their frontend contracts. The native model remains authority; application envelopes must use its
 canonical JSON conventions when externalizing these types.
+
+`GraphDelta` is also a shared generation root. Its native `$operation` union and reachable shape
+model types are derived from serializer metadata, with no parallel operation catalog. These exports
+use the declared native JSON profile; consumers must preserve that profile when externalizing types.

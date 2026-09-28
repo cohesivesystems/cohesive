@@ -36,6 +36,24 @@ public sealed class RelationsContractProjectionTests
     }
 
     [Fact]
+    public void GraphDeltaRoot_ProjectsNativeDiscriminatorsAndSerializedMembers()
+    {
+        var delta = new GraphDelta("delta.example",
+            [new SetGraphAnnotationOperation(new("example"), AnnotationValue.FromString("changed"))],
+            GraphDeltaKind.Version);
+        var wire = JsonSerializer.SerializeToElement(delta, RelationsContractsDefinition.CreateJsonOptions());
+        Assert.Equal("Version", wire.GetProperty("kind").GetString());
+        Assert.Equal("setGraphAnnotation", wire.GetProperty("operations")[0].GetProperty("$operation").GetString());
+        var graph = LoadWireContractGraph();
+        AssertUnion(graph, nameof(GraphDeltaOperation), "$operation");
+        var text = Assert.Single(new TypeScriptShapeEmitter()
+            .Emit(new ShapeCodeGenerationRequest(graph)).Documents).Text;
+        Assert.Contains("export interface GraphDelta", text, StringComparison.Ordinal);
+        Assert.Contains("operations: GraphDeltaOperation[];", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $operation: 'setGraphAnnotation';", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ShapeGraphRoot_PreservesTheExistingWebDocumentWireShape()
     {
         var document = ShapeGraphDocument.FromGraph(new ShapeGraph(
