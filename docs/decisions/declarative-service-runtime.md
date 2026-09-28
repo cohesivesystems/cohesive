@@ -851,3 +851,20 @@ Tests prove exact diagnostic preservation without a value, no implicit caching, 
 failed computation, physical exception propagation and rejection of warning-only failure evidence.
 The existing success, affinity and service suites pass through the same admission path: 147 tests passed,
 no skips. Ari adoption remains dependency-ordered follow-up.
+
+
+### Native graph deltas in portable preview results
+
+Preview composition exposed that GraphDelta already has a typed polymorphic JSON wire model but
+was structurally inferred as opaque operations and an annotation-key dictionary. It now declares the
+existing object JSON contract through PortableJsonValue, as ShapeGraphDocument does. No copy of the
+delta or operation case list is introduced. GraphDeltaKind uses the existing strict string-enum
+converter so default observation encoding agrees with strict hosted-query decoding. This makes the
+standalone default enum wire representation explicit: canonical names replace numeric enum output,
+and numeric/case-insensitive/unknown inputs reject. Hosts previously using string-enum document
+profiles retain their canonical spellings; raw default-serializer numeric consumers need migration.
+
+Qualification: native query-value round trips preserve operation subtypes, shape fields, annotations,
+graph identities and canonical encoded equality; unknown operation discriminators and noncanonical
+kind encodings reject. All 36 delta/native-handler tests passed. This is portable runtime value
+admission, not a new delta semantic validator or a fully derived public-client schema claim.

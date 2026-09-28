@@ -6,6 +6,7 @@ namespace Cohesive.Model;
 /// <summary>
 /// Semantic purpose of a graph delta.
 /// </summary>
+[JsonConverter(typeof(Serialization.StrictStringEnumJsonConverterFactory))]
 public enum GraphDeltaKind
 {
     /// <summary>
@@ -27,6 +28,7 @@ public enum GraphDeltaKind
 /// <summary>
 /// Explicit difference between two shape graphs.
 /// </summary>
+[PortableJsonValue(JsonTypeKind.Object)]
 public sealed record GraphDelta
 {
     /// <summary>
