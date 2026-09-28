@@ -12,6 +12,26 @@ namespace Cohesive.Tests.CodeGen;
 public sealed class TypeScriptApiClientEmitterTests
 {
     [Fact]
+    public void Emit_AlternatingSuccessfulBodies_UsesDeclaredHttpResponseUnion()
+    {
+        var definition = Cohesive.Api.Api.Define("Review")
+            .Action("Start").Route("POST", "/reviews")
+            .Returns<CompletedReview>()
+            .Result<PendingReview>(ApiResultKind.Accepted)
+            .Result<CompletedReview>(ApiResultKind.Created)
+            .Result<ApiProblem>(ApiResultKind.Conflict)
+            .Done().Build();
+        var text = Assert.Single(new TypeScriptApiClientEmitter().Emit(definition).Documents).Text;
+        Assert.Contains("Promise<CompletedReview | PendingReview>", text);
+        Assert.Contains("as Promise<CompletedReview | PendingReview>", text);
+        Assert.Contains("import type { CompletedReview, PendingReview }", text);
+        Assert.DoesNotContain("Promise<CompletedReview | PendingReview |", text);
+    }
+
+    sealed record CompletedReview(string Token);
+    sealed record PendingReview(string ResultUrl);
+
+    [Fact]
     public void Emit_PublicJsonQueryMembers_AlignClientAndMockWithSerializedContract()
     {
         var definition = Cohesive.Api.Api.Define("Search")

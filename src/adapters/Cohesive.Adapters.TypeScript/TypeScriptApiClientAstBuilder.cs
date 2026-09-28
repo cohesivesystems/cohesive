@@ -77,7 +77,8 @@ public sealed class TypeScriptApiClientAstBuilder
             if (operation.Http is not { } http)
                 continue;
 
-            AppendTypeImports(names, operation.ResponseType);
+            foreach (var type in SuccessfulResponseTypes(operation))
+                AppendTypeImports(names, type);
 
             if (http.Body is not null)
                 AppendTypeImports(names, http.Body.BodyType);
@@ -442,7 +443,7 @@ public sealed class TypeScriptApiClientAstBuilder
         return new TsFunctionDeclaration(
             name: BuildFunctionName(operation),
             parameters: parameters.ToImmutable(),
-            returnType: new TsRawType($"Promise<{GetTypeScriptTypeText(operation.ResponseType)}>"),
+            returnType: new TsRawType($"Promise<{GetSuccessfulResponseTypeText(operation)}>"),
             bodyLines: bodyLines);
     }
 
@@ -567,6 +568,19 @@ public sealed class TypeScriptApiClientAstBuilder
         lines.Add($"headers['{parameter.Name}'] = String({parameterName});");
     }
 
+    static IEnumerable<Type> SuccessfulResponseTypes(ApiOperation operation)
+    {
+        var types = operation.WithHttp(operation.Http!).Results.Where(result =>
+        {
+            var status = result.Http!.StatusCode;
+            return status is >= 200 and < 300;
+        }).Select(result => result.BodyType).Distinct().ToArray();
+        return types.Length == 0 ? [operation.ResponseType] : types;
+    }
+
+    string GetSuccessfulResponseTypeText(ApiOperation operation) =>
+        string.Join(" | ", SuccessfulResponseTypes(operation).Select(GetTypeScriptTypeText).Distinct());
+
     string BuildReturnLine(
         ApiOperation operation,
         HttpBinding http,
@@ -585,7 +599,7 @@ public sealed class TypeScriptApiClientAstBuilder
         if (boundBodyParameterName is not null)
             init.Add($"body: JSON.stringify({boundBodyParameterName})");
 
-        var responseType = GetTypeScriptTypeText(operation.ResponseType);
+        var responseType = GetSuccessfulResponseTypeText(operation);
         return $"return http(path, {{ {string.Join(", ", init)} }}) as Promise<{responseType}>;";
     }
 

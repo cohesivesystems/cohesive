@@ -636,3 +636,13 @@ it replaced. The canonical-request overload remains available for already materi
 including its exact-definition check. Both overloads share authorization, input validation, evidence
 and dispatch. Tests cover cross-overload replay, authorization rejection, invalid input and recovery
 following an interrupted local commit.
+
+### Successful HTTP response alternatives
+
+TypeScript client return types include every distinct body type whose resolved HTTP status is 2xx.
+The native API HTTP projection supplies default statuses; explicit status bindings retain authority.
+For example, review may return a committed resource with 200 or a Process admission with 202. A
+primary-only return type incorrectly allowed callers to treat an admission as a committed resource.
+The generator now emits both alternatives in its signature/cast and imports their types. Error
+responses remain the HTTP client's rejection responsibility. This is a body union, not a substitute
+for a status-discriminated transport response where callers need headers or status distinctions.
