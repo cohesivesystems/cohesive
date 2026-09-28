@@ -99,12 +99,49 @@ public static class ServiceEndpointRouteBuilderExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(tokenHeader);
         var projection = runtime.ProjectCommittedEntityResult<TResponse>(operationId, new("GET", route,
             [new(instanceParameter, HttpParameterSource.Route, typeof(string))], body: null));
+        return MapResult(endpoints, runtime.Declaration, projection, _ => runtime, operationId, project,
+            authorizationPolicyResolver, instanceParameter, tokenHeader);
+    }
+
+    /// <summary>Registers a declaration-derived result endpoint, resolving its exact runtime only on invocation.</summary>
+    /// <remarks>The resolver must return the runtime for the same service identity, revision and fingerprint.
+    /// Repository and dispatcher construction are deferred; declaration validation remains registration-time work.</remarks>
+    /// <exception cref="ArgumentException">The declaration, result operation or route parameters are invalid.</exception>
+    /// <exception cref="InvalidOperationException">Invocation resolves a runtime for a different service declaration.</exception>
+    public static RouteHandlerBuilder MapServiceProcessEntityResult<TResponse>(this IEndpointRouteBuilder endpoints,
+        ExecutionDefinitionDocument declaration, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
+        string operationId, string route, Func<EntitySnapshot, TResponse> project,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
+        string instanceParameter = "instanceId", string tokenHeader = "X-Concurrency-Token")
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentNullException.ThrowIfNull(resolveRuntime);
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentException.ThrowIfNullOrWhiteSpace(instanceParameter);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tokenHeader);
+        var projection = ServiceApiProjection.ProjectCommittedEntityResult<TResponse>(declaration, operationId,
+            new("GET", route, [new(instanceParameter, HttpParameterSource.Route, typeof(string))], body: null));
+        return MapResult(endpoints, declaration, projection, resolveRuntime, operationId, project,
+            authorizationPolicyResolver, instanceParameter, tokenHeader);
+    }
+
+    static RouteHandlerBuilder MapResult<TResponse>(IEndpointRouteBuilder endpoints,
+        ExecutionDefinitionDocument declaration, ApiEndpoint projection, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
+        string operationId, Func<EntitySnapshot, TResponse> project, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver,
+        string instanceParameter, string tokenHeader)
+    {
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
         {
             var instance = http.Request.RouteValues[instanceParameter]?.ToString();
             if (string.IsNullOrWhiteSpace(instance))
                 return Results.BadRequest(new ApiValidationProblem("services.result.instanceRequired", "A Process instance is required.",
                     [new(instanceParameter, "services.result.instanceRequired", "Supply the logical Process instance identity.")]));
+            var runtime = resolveRuntime(http.RequestServices)
+                ?? throw new InvalidOperationException("The result runtime resolver returned null.");
+            if (runtime.Declaration.Metadata.DefinitionId != declaration.Metadata.DefinitionId
+                || runtime.Declaration.Metadata.RevisionId != declaration.Metadata.RevisionId
+                || runtime.Declaration.Metadata.Fingerprint != declaration.Metadata.Fingerprint)
+                throw new InvalidOperationException("The resolved runtime does not realize the registered service declaration.");
             var result = await runtime.ReadCommittedEntityAsync(context, operationId, new(instance)).ConfigureAwait(false);
             var status = projection.Operation.Results.Single(item => item.Kind == result.Kind).Http!.StatusCode;
             if (result.Kind == ApiResultKind.Success)
@@ -114,7 +151,7 @@ public static class ServiceEndpointRouteBuilderExtensions
                 return Results.Json(project(snapshot), statusCode: status);
             }
             return ProjectServiceProblem(projection, result.Kind, result.Diagnostics);
-        }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(runtime.Declaration);
+        }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(declaration);
     }
 
     /// <summary>Projects a rejected or pending service outcome using its declared HTTP status and problem contract.</summary>

@@ -35,6 +35,26 @@ namespace Cohesive.Tests.Api;
 public sealed class ServiceProcessEntityResultTests
 {
     [Fact]
+    public async Task LazyResultBindingRejectsDifferentServiceBeforeProtectedReads()
+    {
+        var fixture = await Create();
+        Assert.True(ServiceDefinitionDocuments.ValidateAndProject(fixture.Runtime.Declaration, out var definition).IsValid);
+        var registered = ServiceDefinitionDocuments.Create(new("different-service"), new("1"), definition!,
+            fixture.Runtime.Declaration.Metadata.Provenance);
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(fixture.Context);
+        await using var app = builder.Build();
+        app.MapServiceProcessEntityResult(registered, _ => fixture.Runtime, "result", "/results/{instanceId}",
+            _ => "unreachable", authorizationPolicyResolver: (_, requirement) => requirement.Id);
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().Single();
+        var http = new DefaultHttpContext { RequestServices = app.Services };
+        http.Request.RouteValues["instanceId"] = fixture.Instance.Value;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => endpoint.RequestDelegate!(http));
+        Assert.Equal(0, fixture.Values.Reads);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+    }
+
+    [Fact]
     public async Task DeclarationProjectionPreservesRuntimeEndpointContractsWithoutResolvingRepositories()
     {
         var fixture = await Create();
@@ -92,7 +112,9 @@ public sealed class ServiceProcessEntityResultTests
     [InlineData(true, 200)]
     [InlineData(false, 403)]
     [InlineData(true, 400, ApiResultKind.ValidationFailed)]
-    public async Task HttpProjectionUsesAuthorizedExactReceiptAndOpaqueToken(bool admitted, int status, ApiResultKind? classification = null)
+    [InlineData(true, 200, null, true)]
+    [InlineData(false, 403, null, true)]
+    public async Task HttpProjectionUsesAuthorizedExactReceiptAndOpaqueToken(bool admitted, int status, ApiResultKind? classification = null, bool lazy = false)
     {
         var fixture = await Create(classification: classification);
         await fixture.Repository.Upsert(fixture.Context, new(fixture.Repository.EntityDefinition
@@ -101,11 +123,19 @@ public sealed class ServiceProcessEntityResultTests
         builder.Services.AddSingleton(admitted ? fixture.Context : OperationContext.Create());
         await using var app = builder.Build();
         var projections = 0;
-        app.MapServiceProcessEntityResult(fixture.Runtime, "result", "/notes/results/{instanceId}", snapshot =>
+        var resolutions = 0;
+        Response Project(EntitySnapshot snapshot)
         {
             projections++;
             return new Response(snapshot.Entity.Observation.GetField("Text").GetRequiredString());
-        }, authorizationPolicyResolver: (_, requirement) => requirement.Id);
+        }
+        if (lazy)
+            app.MapServiceProcessEntityResult(fixture.Runtime.Declaration, _ => { resolutions++; return fixture.Runtime; },
+                "result", "/notes/results/{instanceId}", Project, authorizationPolicyResolver: (_, requirement) => requirement.Id);
+        else
+            app.MapServiceProcessEntityResult(fixture.Runtime, "result", "/notes/results/{instanceId}", Project,
+                authorizationPolicyResolver: (_, requirement) => requirement.Id);
+        Assert.Equal(0, resolutions);
         Assert.Equal(0, fixture.Values.Reads);
         Assert.Equal(0, fixture.Values.RepositoryResolutions);
         var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().Single();
@@ -116,6 +146,7 @@ public sealed class ServiceProcessEntityResultTests
         http.Response.Body = new MemoryStream();
         await endpoint.RequestDelegate!(http);
         Assert.Equal(status, http.Response.StatusCode);
+        Assert.Equal(lazy ? 1 : 0, resolutions);
         Assert.Equal(status == 200 ? 1 : 0, projections);
         Assert.Equal(admitted ? 1 : 0, fixture.Values.Reads);
         if (status == 200)

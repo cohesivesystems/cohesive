@@ -665,3 +665,10 @@ Runtime construction still checks the exact Process, commit node, Transition and
 HTTP invocation must resolve and use the qualified runtime. This separates metadata preparation from
 repository/dispatcher resolution without another operation catalog. Invalid documents, unsupported
 extensions, wrong operation families and request bodies on result reads are rejected.
+
+ASP.NET result mapping also accepts the canonical service document plus a runtime resolver. Endpoint
+registration validates/projects metadata without invoking that resolver. At request time the resolved
+runtime must match the registered service identity, revision and fingerprint before any protected
+result read. Both eager and lazy overloads share request parsing, result authorization, retained token
+projection and problem formatting. A mismatch is a host binding error, not a fallback to another
+service. Hosts still own resolver lifetime and must avoid rebuilding runtimes on every request.
