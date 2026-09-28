@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Collections.Immutable;
 using System.Text.Json;
 using Cohesive.Adapters.AspNet.Services;
@@ -30,8 +31,31 @@ using Cohesive.Transitions.Model;
 
 namespace Cohesive.Tests.Api;
 
+[Collection(Cohesive.Tests.Observability.OperationTelemetryEmitterTestCollection.Name)]
 public sealed class ServiceProcessEntityResultTests
 {
+    [Fact]
+    public async Task PendingResultReadIsNotReportedAsRejectedTelemetry()
+    {
+        var fixture = await Create();
+        fixture.Values.Result = ProcessExecutionValueReadResult.InProgress(new(
+            fixture.Values.Result.Values!.Definition, fixture.Instance));
+        var completed = new List<Activity>();
+        using ActivityListener listener = new()
+        {
+            ShouldListenTo = source => source.Name == ExecutionTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity => completed.Add(activity)
+        };
+        ActivitySource.AddActivityListener(listener);
+        var result = await fixture.Read();
+        Assert.Equal(ApiResultKind.Accepted, result.Kind);
+        var span = Assert.Single(completed);
+        Assert.Equal("pending", span.GetTagItem(ExecutionTelemetry.OutcomeTagName));
+        Assert.NotEqual(ActivityStatusCode.Error, span.Status);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+    }
+
     [Fact]
     public void ProblemProjectionUsesDeclaredStatusAndBodyContract()
     {

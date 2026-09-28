@@ -42,6 +42,7 @@ internal sealed class ServiceInvocationEvidence : IDisposable
         outcome = kind switch
         {
             ApiResultKind.Success => ExecutionTelemetryOutcome.Succeeded,
+            ApiResultKind.Accepted => ExecutionTelemetryOutcome.Pending,
             ApiResultKind.InfrastructureError => ExecutionTelemetryOutcome.Failed,
             _ => ExecutionTelemetryOutcome.Rejected
         };
