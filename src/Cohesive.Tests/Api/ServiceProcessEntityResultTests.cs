@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Api;
 using Cohesive.Api.Execution.Services;
+using Cohesive.Api.Execution;
 using Cohesive.Api.Services;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.IR;
@@ -256,6 +257,81 @@ public sealed class ServiceProcessEntityResultTests
         }
         Assert.Equal(0, fixture.Values.Reads);
         Assert.Equal(0, fixture.Values.RepositoryResolutions);
+    }
+
+    [Theory]
+    [InlineData("complete", 200)]
+    [InlineData("pending", 202)]
+    [InlineData("startDenied", 403)]
+    [InlineData("resultDenied", 403)]
+    [InlineData("rejected", 400)]
+    public async Task CommandHttpComposesAdmissionAndIndependentResultRead(string scenario, int status)
+    {
+        var fixture = await Create(authorization: scenario == "resultDenied" ? new DeniedResultAuthorization() : null,
+            classification: scenario == "rejected" ? ApiResultKind.ValidationFailed : null, includeStart: true);
+        if (scenario == "pending")
+        {
+            fixture.Values.Result = ProcessExecutionValueReadResult.InProgress(new(fixture.Values.Result.Values!.Definition, fixture.Instance));
+            fixture.Values.OnWait = () => false;
+        }
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(scenario == "startDenied" ? OperationContext.Create() : fixture.Context);
+        await using var app = builder.Build();
+        var resolutions = 0;
+        app.MapServiceProcessEntityCommand<Update, Response, Pending>(fixture.Runtime.Declaration,
+            _ => { resolutions++; return fixture.Runtime; }, "start", "result",
+            new("POST", "/notes", [], new(typeof(Update))), "/results/{instanceId}",
+            (_, request) => (new("command"), new("idempotency"), new(fixture.Instance, new("attempt/1")), ObservationValue.FromObject(request)),
+            snapshot => new(snapshot.Entity.Observation.GetField("Text").GetRequiredString()),
+            (start, location) => new(start.Disposition.ToString(), location), TimeSpan.FromSeconds(2),
+            authorizationPolicyResolver: (_, requirement) => requirement.Id);
+        Assert.Equal(0, resolutions);
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().Single();
+        var http = new DefaultHttpContext { RequestServices = app.Services };
+        http.Request.Method = "POST";
+        http.Request.PathBase = "/api";
+        http.Request.ContentType = "application/json";
+        var body = JsonSerializer.SerializeToUtf8Bytes(new Update("committed-private"));
+        http.Request.ContentLength = body.Length;
+        http.Request.Body = new MemoryStream(body);
+        http.Response.Body = new MemoryStream();
+        await endpoint.RequestDelegate!(http);
+        Assert.Equal(status, http.Response.StatusCode);
+        Assert.Equal(1, resolutions);
+        Assert.Equal(scenario == "startDenied" ? 0 : 1, fixture.Values.Starts);
+        Assert.Equal(scenario.EndsWith("Denied", StringComparison.Ordinal) ? 0 : 1, fixture.Values.Reads);
+        Assert.Equal(scenario == "pending" ? 1 : 0, fixture.Values.Waits);
+        Assert.Equal(scenario == "complete" ? 1 : 0, fixture.Values.RepositoryResolutions);
+        Assert.Equal(scenario == "complete", http.Response.Headers.ContainsKey("X-Concurrency-Token"));
+        if (scenario == "pending")
+        {
+            Assert.Equal("/api/results/instance%2Fnote", http.Response.Headers.Location.ToString());
+            Assert.Equal("1", http.Response.Headers.RetryAfter.ToString());
+            http.Response.Body.Position = 0;
+            using var json = await JsonDocument.ParseAsync(http.Response.Body);
+            Assert.Equal(http.Response.Headers.Location.ToString(), json.RootElement.GetProperty("location").GetString());
+            http.Request.Body.Position = 0;
+            http.Response.Body = new MemoryStream();
+            await endpoint.RequestDelegate!(http);
+            Assert.Equal(202, http.Response.StatusCode);
+            http.Response.Body.Position = 0;
+            using var replay = await JsonDocument.ParseAsync(http.Response.Body);
+            Assert.Equal("Replayed", replay.RootElement.GetProperty("disposition").GetString());
+            Assert.Equal(2, fixture.Values.Starts);
+            Assert.Equal(2, fixture.Values.Reads);
+            Assert.Equal(0, fixture.Values.RepositoryResolutions);
+        }
+        else Assert.False(http.Response.Headers.ContainsKey("Location"));
+    }
+
+    sealed record Pending(string Disposition, string Location);
+    sealed class DeniedResultAuthorization : IServiceInvocationAuthorization
+    {
+        readonly IdentityServiceInvocationAuthorization inner = new("tenant", new("Tenant"));
+        public ValueTask<ScopeRef?> AdmitAsync(OperationContext context, ServiceOperation operation) =>
+            operation.Id == "result" ? ValueTask.FromResult<ScopeRef?>(null) : inner.AdmitAsync(context, operation);
+        public ValueTask<bool> AuthorizeResourceAsync(OperationContext context, ServiceOperation operation, EntitySnapshot snapshot) =>
+            inner.AuthorizeResourceAsync(context, operation, snapshot);
     }
 
     [Fact]
@@ -531,13 +607,13 @@ public sealed class ServiceProcessEntityResultTests
         Assert.Equal("services.binding.resultSourceMismatch", Assert.Single(error.Validation.Diagnostics).Code);
     }
 
-    static async Task<Fixture> Create(string owner = "tenant-a", string resultNode = "commit", ApiResultKind? classification = null, IServiceInvocationAuthorization? authorization = null)
+    static async Task<Fixture> Create(string owner = "tenant-a", string resultNode = "commit", ApiResultKind? classification = null, IServiceInvocationAuthorization? authorization = null, bool includeStart = false)
     {
         var actor = new PrincipalRef("reviewer", PrincipalKind.User);
         var scope = new ScopeRef("tenant-a", "tenant", PartitionKey: "shared");
         var context = OperationContext.Create().WithIdentityContext(new IdentityContext(actor,
             EffectiveScope: new([scope], ScopeSelectionMode.Single, ScopeSelectionSource.Ambient),
-            Grants: [new(actor, scope, ["notes.result.read"], "tests")]));
+            Grants: [new(actor, scope, ["notes.result.read", "notes.start"], "tests")]));
         var entity = ObjectEntityDefinition.For<Note>(new("note"));
         var repository = new InMemoryEntityOutboxRepository(entity, _ => "shared");
         await repository.Upsert(context, new(entity.CreateState("note/1", new Note("note/1", owner, "initial")).Snapshot));
@@ -579,12 +655,22 @@ public sealed class ServiceProcessEntityResultTests
                         "The note was rejected.", "/note")]);
             });
         var service = ServiceDefinitionDocuments.Create(new("notes"), new("1"), new([
+            .. (includeStart ? new ServiceOperation[] { new ServiceProcessOperation("start", plan.DefinitionReference, [new("notes.start")]) } : []),
             new ServiceProcessEntityResultOperation("result", plan.DefinitionReference, new(resultNode), entity.StateShape.QualifiedId,
                 [new("notes.result.read")], resultClassifier: classifier?.Reference),
             new ServiceProcessResultOperation("terminal", plan.DefinitionReference, [new("notes.result.read")])]), provenance);
         var binding = new ServiceProcessEntityResultBinding("result", plan, transition,
             new(entity, _ => { values.RepositoryResolutions++; return repository; }), "notes", values, classifierBinding);
-        var runtime = new ServiceRuntime(service, [binding, new ServiceProcessResultBinding("terminal", plan, "notes", values)], authorization ?? new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
+        var catalog = ExecutionControlApiCatalog.Create();
+        var startAdapter = new InMemoryExecutionControlApiAdapter(contracts!, catalog);
+        var startBinding = new ServiceProcessBinding("start", plan, "notes", async (invocationContext, request, invocation) =>
+        {
+            values.Starts++;
+            var started = await startAdapter.DispatchAsync(invocationContext, catalog.Start, request, invocation);
+            return Assert.IsType<Cohesive.Execution.ProcessStartResult>(started.Body);
+        });
+        var runtime = new ServiceRuntime(service, [binding, new ServiceProcessResultBinding("terminal", plan, "notes", values),
+            .. (includeStart ? new ServiceBinding[] { startBinding } : [])], authorization ?? new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
         return new(runtime, repository, values, context, continuation.ProcessInstanceId, (await repository.TryGet(context, "note/1"))!);
     }
 
@@ -609,6 +695,7 @@ public sealed class ServiceProcessEntityResultTests
     {
         public ProcessExecutionValueReadResult Result = result;
         public int Reads;
+        public int Starts;
         public int Classifications;
         public int Waits;
         public Func<bool>? OnWait;

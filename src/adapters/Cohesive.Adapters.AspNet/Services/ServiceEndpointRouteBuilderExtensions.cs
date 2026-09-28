@@ -285,6 +285,68 @@ public static class ServiceEndpointRouteBuilderExtensions
             }, authorizationPolicyResolver);
     }
 
+    /// <summary>Maps a Process command with an independently authorized committed-entity response.</summary>
+    /// <remarks>Request and response delegates are pure medium projections. The native runtime owns admission,
+    /// bounded waiting, result authorization and receipt resolution. A successful start does not imply completion.
+    /// Pending responses retain the caller's logical instance identity in Location. Cancellation and unexpected
+    /// failures propagate without retrying admission. Registration resolves no runtime or repository.</remarks>
+    /// <exception cref="ArgumentException">The declarations, body, or result route are incompatible.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The optional wait is not a positive finite timer duration.</exception>
+    public static RouteHandlerBuilder MapServiceProcessEntityCommand<TRequest, TResponse, TPending>(
+        this IEndpointRouteBuilder endpoints, ExecutionDefinitionDocument declaration,
+        Func<IServiceProvider, ServiceRuntime> resolveRuntime, string startOperationId, string resultOperationId,
+        HttpBinding http, string resultRoute,
+        Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,
+            ProcessContinuationIdentity Continuation, ObservationValue Input)> bind,
+        Func<EntitySnapshot, TResponse> project, Func<ProcessStartResult, string, TPending> projectPending,
+        TimeSpan? maximumWait = null, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null) where TRequest : class
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentNullException.ThrowIfNull(resolveRuntime);
+        ArgumentNullException.ThrowIfNull(bind);
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(projectPending);
+        ArgumentException.ThrowIfNullOrWhiteSpace(resultRoute);
+        const string instanceToken = "{instanceId}";
+        var routeWithoutInstance = resultRoute.Replace(instanceToken, "", StringComparison.Ordinal);
+        if (!resultRoute.StartsWith('/') || resultRoute.StartsWith("//", StringComparison.Ordinal)
+            || resultRoute.Length - routeWithoutInstance.Length != instanceToken.Length
+            || routeWithoutInstance.Contains('{') || routeWithoutInstance.Contains('}'))
+            throw new ArgumentException("The local result route must contain exactly one {instanceId} parameter.", nameof(resultRoute));
+        if (maximumWait is { } duration && (duration <= TimeSpan.Zero || duration.TotalMilliseconds > uint.MaxValue - 1))
+            throw new ArgumentOutOfRangeException(nameof(maximumWait), "A positive finite timer duration is required.");
+        var projection = ServiceApiProjection.ProjectProcessEntityCommand<TRequest, TResponse, TPending>(
+            declaration, startOperationId, resultOperationId, http, scopePolicies);
+        return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext requestHttp) =>
+        {
+            var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(requestHttp, projection.Operation,
+                context.CancellationToken).ConfigureAwait(false)
+                ?? throw new BadHttpRequestException("A Process command body is required.");
+            var input = bind(requestHttp, request);
+            var runtime = ResolveRuntime(declaration, resolveRuntime, requestHttp.RequestServices);
+            var start = await runtime.StartAsync(context, startOperationId, input.Command, input.Idempotency,
+                input.Continuation, input.Input).ConfigureAwait(false);
+            if (start.Kind != ApiResultKind.Success)
+                return ProjectServiceProblem(projection, start.Kind, start.Diagnostics);
+            var instance = input.Continuation.ProcessInstanceId;
+            var result = await runtime.ReadCommittedEntityAsync(context, resultOperationId, instance, maximumWait).ConfigureAwait(false);
+            if (result.Kind == ApiResultKind.Success)
+            {
+                var snapshot = result.Outcome ?? throw new InvalidOperationException("Successful result resolution returned no entity.");
+                requestHttp.Response.Headers["X-Concurrency-Token"] = snapshot.ConcurrencyToken.Value;
+                return Results.Json(project(snapshot), statusCode: projection.Operation.Results.Single(item => item.Kind == ApiResultKind.Success).Http!.StatusCode);
+            }
+            if (result.Kind != ApiResultKind.Accepted)
+                return ProjectServiceProblem(projection, result.Kind, result.Diagnostics);
+            var location = requestHttp.Request.PathBase + resultRoute.Replace(instanceToken, Uri.EscapeDataString(instance.Value), StringComparison.Ordinal);
+            requestHttp.Response.Headers.Location = location;
+            requestHttp.Response.Headers.RetryAfter = "1";
+            return Results.Json(projectPending(start.Outcome ?? throw new InvalidOperationException("Successful start returned no admission result."), location),
+                statusCode: projection.Operation.Results.Single(item => item.Kind == ApiResultKind.Accepted).Http!.StatusCode);
+        }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(declaration);
+    }
+
     static RouteHandlerBuilder MapProcess<TRequest, TOutcome>(IEndpointRouteBuilder endpoints,
         ServiceRuntime runtime, string operationId, string route,
         Func<OperationContext, TRequest, ValueTask<ServiceOperationResult<TOutcome>>> invoke,

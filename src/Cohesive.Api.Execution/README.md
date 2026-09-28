@@ -142,5 +142,10 @@ must reference the same exact Process definition, revision and fingerprint. For 
 may return a committed proposal or a pending execution response; it cannot accidentally read a result
 from a different approval revision. Endpoint admission uses the start requirements; result disclosure
 still requires the independently declared read authorization. Projection resolves no runtime and does
-not itself execute the start, bounded wait or result read. The shared HTTP execution adapter for this
-composition and Ari adoption are follow-up work in the same service-runtime change.
+not itself execute the start, bounded wait or result read. `MapServiceProcessEntityCommand` executes this composition using native admission and result reading.
+Its pure medium delegates bind retry identities/input and project committed or pending responses.
+The optional positive bounded wait belongs to the runtime result reader. A pending response includes
+a path-base-aware Location with the escaped instance identity and Retry-After: 1. The result route
+must be local with exactly one `{instanceId}` parameter. Admission denial performs no start; result
+denial after admission discloses no receipt or repository snapshot. Cancellation and unexpected failures
+propagate without adapter retries. Ari adoption remains follow-up work in the same change.

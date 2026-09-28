@@ -798,6 +798,11 @@ Bounded HTTP responses compose an existing Process start and independently autho
 read. This is transport response policy, not another canonical workflow: the Process remains the
 sequencing and recovery authority. The declaration-derived command projection validates exact Process
 association and derives terminal alternatives from the result operation, with a medium-owned pending
-response. A start capability does not grant result disclosure. Runtime binding and Ari adoption remain
-required before retiring the current review HTTP coordinator. Projection tests cover exact revision
+response. A start capability does not grant result disclosure. The shared ASP.NET mapper now executes this composition through native runtime calls; Ari adoption
+remains required before retiring the current review HTTP coordinator. Projection tests cover exact revision
 mismatch, invalid operation family/body, response identity and no infrastructure resolution.
+
+The HTTP mapper is qualified with native start admission/replay and a retained receipt fixture. Tests
+cover completed output and opaque token, bounded pending response and escaped Location under PathBase,
+start denial without dispatch, independent read denial after dispatch, and classified terminal rejection.
+These are adapter tests, not a new end-to-end worker durability claim.
