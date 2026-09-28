@@ -135,3 +135,12 @@ within the admitted logical scope. Terminal and entity result readers share admi
 reauthorization and payload-free evidence; entity reads additionally check their retained receipt and
 resource. `ServiceApiProjection.ProjectProcessResult<TResponse>` derives medium metadata without
 resolving the provider. See the design note for failure behavior and qualification boundaries.
+
+`ServiceApiProjection.ProjectProcessEntityCommand<TRequest, TResponse, TPending>` projects a medium
+command combining a declared Process start with a committed-entity result operation. Both operations
+must reference the same exact Process definition, revision and fingerprint. For example, `approve`
+may return a committed proposal or a pending execution response; it cannot accidentally read a result
+from a different approval revision. Endpoint admission uses the start requirements; result disclosure
+still requires the independently declared read authorization. Projection resolves no runtime and does
+not itself execute the start, bounded wait or result read. The shared HTTP execution adapter for this
+composition and Ari adoption are follow-up work in the same service-runtime change.

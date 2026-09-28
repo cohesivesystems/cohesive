@@ -220,6 +220,44 @@ public sealed class ServiceProcessEntityResultTests
             declaration, "result", new("POST", "/result", [], new(typeof(string)))));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CommandProjectionRequiresExactStartResultAssociation(bool differentRevision)
+    {
+        var fixture = await Create();
+        Assert.True(ServiceDefinitionDocuments.ValidateAndProject(fixture.Runtime.Declaration, out var definition).IsValid);
+        var result = Assert.IsType<ServiceProcessEntityResultOperation>(definition!.Operations.Single(item => item.Id == "result"));
+        var process = differentRevision
+            ? new ExecutionDefinitionReference(result.Process.DefinitionId, new("different-revision"), result.Process.Fingerprint)
+            : result.Process;
+        var declaration = ServiceDefinitionDocuments.Create(new("notes"), new("1"),
+            new([new ServiceProcessOperation("start", process, [new("notes.start")]), result]),
+            fixture.Runtime.Declaration.Metadata.Provenance);
+        var http = new HttpBinding("POST", "/notes", [], new(typeof(Note)));
+        if (differentRevision)
+        {
+            Assert.Throws<ArgumentException>(() => ServiceApiProjection.ProjectProcessEntityCommand<Note, Response, ApiProblem>(
+                declaration, "start", "result", http));
+        }
+        else
+        {
+            var endpoint = ServiceApiProjection.ProjectProcessEntityCommand<Note, Response, ApiProblem>(
+                declaration, "start", "result", http);
+            Assert.Equal("notes.start", Assert.Single(endpoint.Operation.AuthorizationRequirements).Id);
+            Assert.Equal(typeof(Response), endpoint.Operation.ResponseType);
+            Assert.Equal(typeof(ApiProblem), endpoint.Operation.Results.Single(item => item.Kind == ApiResultKind.Accepted).BodyType);
+            Assert.Equal(202, endpoint.Operation.Results.Single(item => item.Kind == ApiResultKind.Accepted).Http!.StatusCode);
+            Assert.Equal(ServiceApiProjection.ProjectProcessInput<Note>(declaration, "start", http).Id, endpoint.Id);
+            Assert.Throws<ArgumentException>(() => ServiceApiProjection.ProjectProcessEntityCommand<Note, Response, ApiProblem>(
+                declaration, "start", "start", http));
+            Assert.Throws<ArgumentException>(() => ServiceApiProjection.ProjectProcessEntityCommand<Note, Response, ApiProblem>(
+                declaration, "start", "result", new("POST", "/notes", [], new(typeof(string)))));
+        }
+        Assert.Equal(0, fixture.Values.Reads);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+    }
+
     [Fact]
     public async Task PendingResultReadIsNotReportedAsRejectedTelemetry()
     {

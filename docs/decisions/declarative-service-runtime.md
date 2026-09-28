@@ -791,3 +791,13 @@ Admission failures and native failed evaluations have separate declared response
 when both use HTTP 400: the former returns a standard problem, while the latter reaches the response
 projection with the full native phase outcome and diagnostics. This avoids either silently discarding
 query evidence or inventing a parallel diagnostic model. Response redaction remains a medium policy.
+
+### Process command response composition
+
+Bounded HTTP responses compose an existing Process start and independently authorized entity-result
+read. This is transport response policy, not another canonical workflow: the Process remains the
+sequencing and recovery authority. The declaration-derived command projection validates exact Process
+association and derives terminal alternatives from the result operation, with a medium-owned pending
+response. A start capability does not grant result disclosure. Runtime binding and Ari adoption remain
+required before retiring the current review HTTP coordinator. Projection tests cover exact revision
+mismatch, invalid operation family/body, response identity and no infrastructure resolution.

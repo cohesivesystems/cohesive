@@ -59,6 +59,34 @@ public static class ServiceApiProjection
             typeof(TRequest), http, scopePolicies);
     }
 
+    /// <summary>Projects an HTTP command that starts a Process and offers a bounded committed-entity response.</summary>
+    /// <remarks>This is a medium composition of two independently authorized operations, not a new workflow.
+    /// The start and result must reference the same exact Process. Start authorization remains endpoint admission;
+    /// the result operation must authorize disclosure separately when invoked. The pending response belongs to
+    /// the medium and must preserve the admitted execution identity for later result retrieval.
+    /// This projection alone performs no start, wait, result read or infrastructure resolution.</remarks>
+    /// <exception cref="ArgumentException">Operation families, exact Process references or request body disagree.</exception>
+    public static ApiEndpoint ProjectProcessEntityCommand<TRequest, TResponse, TPending>(
+        ExecutionDefinitionDocument declaration, string startOperationId, string resultOperationId,
+        HttpBinding? http = null, IReadOnlyList<ApiScopePolicy>? scopePolicies = null) where TRequest : class
+    {
+        var start = ProjectProcessInput<TRequest>(declaration, startOperationId, http, scopePolicies);
+        if (GetOperation(declaration, resultOperationId) is not ServiceProcessEntityResultOperation result)
+            throw new ArgumentException("The response operation must read a committed entity.", nameof(resultOperationId));
+        var entry = (ServiceProcessOperation)GetOperation(declaration, startOperationId);
+        if (entry.Process != result.Process)
+            throw new ArgumentException("Start and result must reference the same exact Process definition, revision and fingerprint.",
+                nameof(resultOperationId));
+        var response = ProjectCommittedEntityResult<TResponse>(declaration, resultOperationId);
+        var operation = new ApiOperation(startOperationId, ApiOperationKind.Command, typeof(TRequest), typeof(TResponse),
+            id: start.Operation.Id, authorizationRequirements: entry.AuthorizationRequirements,
+            scopePolicies: scopePolicies,
+            results: response.Operation.Results.Select(item => item.Kind == ApiResultKind.Accepted
+                ? new ApiResultDefinition(ApiResultKind.Accepted, typeof(TPending)) : item).ToArray());
+        if (http is not null) operation = operation.WithHttp(http);
+        return new ApiDefinition([operation]).Endpoints[0];
+    }
+
     static ApiEndpoint CreateProcess(ExecutionDefinitionDocument declaration, ServiceOperation declared, ApiOperation native,
         Type requestType, HttpBinding? http, IReadOnlyList<ApiScopePolicy>? scopePolicies)
     {
