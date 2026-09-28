@@ -654,3 +654,14 @@ problem body from the declared endpoint alternative. It preserves validation iss
 undeclared/non-problem result contracts. The committed-entity result endpoint uses the same projector;
 application HTTP seams can reuse it with lazy runtime resolution instead of maintaining a second
 result-kind/status switch. Execution, admission and classification remain service/runtime concerns.
+
+### Declaration-only result endpoint projection
+
+`ServiceApiProjection.ProjectCommittedEntityResult` projects result identity, authorization requirements
+and response alternatives from a validated service document without constructing runtime bindings.
+The runtime's existing projection shares that implementation and adds its known entity/Transition
+metadata. Declaration-only projection intentionally does not invent those physical binding details.
+Runtime construction still checks the exact Process, commit node, Transition and entity association;
+HTTP invocation must resolve and use the qualified runtime. This separates metadata preparation from
+repository/dispatcher resolution without another operation catalog. Invalid documents, unsupported
+extensions, wrong operation families and request bodies on result reads are rejected.

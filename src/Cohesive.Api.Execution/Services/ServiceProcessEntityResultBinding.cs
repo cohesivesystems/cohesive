@@ -97,20 +97,8 @@ public sealed partial class ServiceRuntime
             || linked.Operation is not ServiceProcessEntityResultOperation operation
             || linked.Binding is not ServiceProcessEntityResultBinding binding)
             throw new ArgumentException("The operation is not a declared committed-entity result read.", nameof(operationId));
-        if (http?.Body is not null)
-            throw new ArgumentException("A committed-entity result read has no request body.", nameof(http));
-        var projected = new ApiOperation(operationId, ApiOperationKind.Query, typeof(string), typeof(TResponse),
-            id: new(ServiceOperationIdentity(operationId)), entity: binding.Entity.Entity.Name,
-            transitionReference: binding.Transition.DefinitionReference,
-            authorizationRequirements: operation.AuthorizationRequirements,
-            results: [new(ApiResultKind.Success, typeof(TResponse), isPrimary: true),
-                new(ApiResultKind.Accepted, typeof(ApiProblem)), new(ApiResultKind.ValidationFailed, typeof(ApiValidationProblem)),
-                new(ApiResultKind.Forbidden, typeof(ApiProblem)),
-                new(ApiResultKind.Conflict, typeof(ApiProblem)), new(ApiResultKind.PreconditionFailed, typeof(ApiProblem)),
-                new(ApiResultKind.NotFound, typeof(ApiProblem)), new(ApiResultKind.DomainError, typeof(ApiProblem)),
-                new(ApiResultKind.InfrastructureError, typeof(ApiProblem))]);
-        if (http is not null) projected = projected.WithHttp(http);
-        return new ApiDefinition([projected]).Endpoints[0];
+        return ServiceApiProjection.CreateCommittedEntityResult<TResponse>(definitionReference, operation, http,
+            binding.Entity.Entity.Name, binding.Transition.DefinitionReference);
     }
 
     /// <summary>Reads the original committed entity for a declared terminal Process result source.</summary>

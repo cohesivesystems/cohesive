@@ -35,6 +35,25 @@ namespace Cohesive.Tests.Api;
 public sealed class ServiceProcessEntityResultTests
 {
     [Fact]
+    public async Task DeclarationProjectionPreservesRuntimeEndpointContractsWithoutResolvingRepositories()
+    {
+        var fixture = await Create();
+        var declaration = fixture.Runtime.Declaration;
+        var http = new HttpBinding("GET", "/results/{instanceId}", [], null);
+        var declared = ServiceApiProjection.ProjectCommittedEntityResult<string>(declaration, "result", http);
+        var bound = fixture.Runtime.ProjectCommittedEntityResult<string>("result", http);
+        Assert.Equal(bound.Id, declared.Id);
+        Assert.Equal(bound.Operation.AuthorizationRequirements, declared.Operation.AuthorizationRequirements);
+        Assert.Equal(bound.Operation.Results.Select(result => (result.Kind, result.BodyType, result.Http!.StatusCode)),
+            declared.Operation.Results.Select(result => (result.Kind, result.BodyType, result.Http!.StatusCode)));
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+        Assert.Throws<ArgumentException>(() => ServiceApiProjection.ProjectCommittedEntityResult<string>(
+            declaration, "missing", http));
+        Assert.Throws<ArgumentException>(() => ServiceApiProjection.ProjectCommittedEntityResult<string>(
+            declaration, "result", new("POST", "/result", [], new(typeof(string)))));
+    }
+
+    [Fact]
     public async Task PendingResultReadIsNotReportedAsRejectedTelemetry()
     {
         var fixture = await Create();

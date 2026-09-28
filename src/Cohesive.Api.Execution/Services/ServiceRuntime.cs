@@ -123,7 +123,7 @@ public sealed partial class ServiceRuntime
     readonly ExecutionDefinitionReference definitionReference;
 
     string ServiceOperationIdentity(string operationId) =>
-        $"service/{Uri.EscapeDataString(definitionReference.DefinitionId.Value)}/operation/{Uri.EscapeDataString(operationId)}";
+        ServiceApiProjection.OperationIdentity(definitionReference, operationId);
 
     /// <summary>Admits a canonical declaration and its exact physical bindings without resolving repositories.</summary>
     /// <exception cref="ArgumentException">The declaration or binding set is invalid or requires unsupported guarantees.</exception>
