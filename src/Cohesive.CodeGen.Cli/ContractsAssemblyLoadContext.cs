@@ -31,6 +31,17 @@ public sealed class ContractsAssemblyLoadContext : AssemblyLoadContext
                 return assembly;
         }
 
+        // Share generator dependencies even when they have not yet been loaded. Otherwise
+        // a contract can bind a second copy of a type used in a shared API signature.
+        try
+        {
+            return Default.LoadFromAssemblyName(assemblyName);
+        }
+        catch (FileNotFoundException)
+        {
+            // Application-only dependencies belong to the collectible contracts context.
+        }
+
         var path = resolver.ResolveAssemblyToPath(assemblyName);
         if (path is null && assemblyName.Name is not null)
             dependencyPaths.TryGetValue(assemblyName.Name, out path);

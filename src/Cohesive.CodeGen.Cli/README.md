@@ -188,3 +188,9 @@ names. URL query parameter names still follow the HTTP binding convention. For e
 `search_term`. An explicit JSON name overrides the corresponding conventions. Both emitters use
 the same serializer metadata provider as shape generation; punctuation-containing names use
 quoted property access. The default CLR projection remains unchanged.
+
+Contract loading shares dependencies resolvable by the generator's default load context, including
+ones not yet loaded when discovery begins. Application-only dependencies are loaded in the collectible
+contracts context. This preserves type identity across API signatures: a service declaration using a
+relation parameter must not receive a second copy of that parameter's assembly merely because API
+discovery ran before the generator first used relations. Loader tests cover this cold dependency case.
