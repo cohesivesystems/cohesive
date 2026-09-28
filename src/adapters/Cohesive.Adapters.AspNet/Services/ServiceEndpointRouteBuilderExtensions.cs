@@ -1,3 +1,6 @@
+using Cohesive.Adapters.AspNet.Relations;
+using Cohesive.Relations.Execution;
+using Cohesive.Relations.IR;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Api;
@@ -190,14 +193,15 @@ public static class ServiceEndpointRouteBuilderExtensions
     /// <param name="endpoint">Canonical endpoint containing the result alternative.</param>
     /// <param name="kind">Rejected or pending service outcome.</param>
     /// <param name="diagnostics">Safe diagnostics produced by service admission or declared result classification.</param>
+    /// <param name="resultId">Optional declared alternative when multiple results share the same kind.</param>
     /// <returns>A JSON problem with the declared status; validation retains all issue locations and codes.</returns>
     /// <exception cref="InvalidOperationException">The result is undeclared or does not use a standard API problem contract.</exception>
     public static IResult ProjectServiceProblem(ApiEndpoint endpoint, ApiResultKind kind,
-        IEnumerable<DocumentValidationDiagnostic> diagnostics)
+        IEnumerable<DocumentValidationDiagnostic> diagnostics, string? resultId = null)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(diagnostics);
-        var result = endpoint.Operation.Results.Single(candidate => candidate.Kind == kind);
+        var result = endpoint.Operation.Results.Single(candidate => candidate.Kind == kind && (resultId is null || candidate.Id == resultId));
         var status = result.Http?.StatusCode
             ?? throw new InvalidOperationException("A service problem requires a declared HTTP status.");
         var issues = diagnostics.ToArray();
@@ -330,6 +334,43 @@ public static class ServiceEndpointRouteBuilderExtensions
             return Results.Json(response, options: null,
                 contentType: projectedResult.Http!.ContentType ?? "application/json",
                 statusCode: projectedResult.Http.StatusCode);
+        }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(declaration);
+    }
+
+    /// <summary>Maps an authorized declared query without resolving its evaluator during registration.</summary>
+    /// <remarks>Both projections are synchronous and must perform no reads or writes. The input binder supplies
+    /// caller parameters only; the runtime injects the declared trusted scope. The response projection receives
+    /// the complete native outcome for success and evaluation failure, preserving diagnostics at the medium seam.
+    /// Evaluation identity follows the existing relation-query HTTP convention. Provider exceptions and cancellation propagate.</remarks>
+    public static RouteHandlerBuilder MapServiceQuery<TRequest, TResponse>(this IEndpointRouteBuilder endpoints,
+        ExecutionDefinitionDocument declaration, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
+        string operationId, HttpBinding http, Func<TRequest, IReadOnlyDictionary<QueryParameterId, ObservationValue>> bind,
+        Func<RelationQueryEvaluationOutcome, TResponse> project,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null) where TRequest : class
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentNullException.ThrowIfNull(resolveRuntime);
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(bind);
+        ArgumentNullException.ThrowIfNull(project);
+        var projection = ServiceApiProjection.ProjectQuery<TRequest, TResponse>(declaration, operationId, http, scopePolicies);
+        return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext requestHttp) =>
+        {
+            var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(requestHttp, projection.Operation,
+                context.CancellationToken).ConfigureAwait(false)
+                ?? throw new BadHttpRequestException("A query request is required.");
+            var runtime = ResolveRuntime(declaration, resolveRuntime, requestHttp.RequestServices);
+            var result = await runtime.EvaluateAsync(context, operationId,
+                RelationQueryApiEndpointOptions.CreateConventionalEvaluationId(requestHttp, projection.Operation), bind(request)).ConfigureAwait(false);
+            if (result.Outcome is { } outcome)
+            {
+                var alternative = projection.Operation.Results.Single(item => outcome.IsSuccessful
+                    ? item.IsPrimary : item.Id == "queryEvaluationFailed");
+                return Results.Json(project(outcome), statusCode: alternative.Http!.StatusCode);
+            }
+            return ProjectServiceProblem(projection, result.Kind, result.Diagnostics,
+                result.Kind == ApiResultKind.ValidationFailed ? "admissionValidationFailed" : null);
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(declaration);
     }
 

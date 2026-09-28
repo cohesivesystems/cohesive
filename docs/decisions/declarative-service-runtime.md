@@ -778,3 +778,16 @@ unavailable or expensive to construct. Registration validates its semantic contr
 the dispatcher. A later request resolves the exact runtime, enforces native input and authorization
 admission, and preserves the normal start/control replay decisions. This native-envelope profile does
 not yet remove Ari's domain-specific start request shaping or imply a typed domain-input start mapper.
+
+### Declared query HTTP boundary
+
+The service query HTTP adapter reuses ServiceRuntime.EvaluateAsync and the native relation-query
+HTTP evaluation-identity convention. It does not construct a second evaluator or copy parameter/scope
+admission. Host-owned typed request/response projections are synchronous and contain no reads or
+writes. The service document remains operation/grant authority; the referenced query remains parameter,
+output-demand and execution authority. A caller-supplied tenant parameter is rejected before any read.
+
+Admission failures and native failed evaluations have separate declared response alternatives even
+when both use HTTP 400: the former returns a standard problem, while the latter reaches the response
+projection with the full native phase outcome and diagnostics. This avoids either silently discarding
+query evidence or inventing a parallel diagnostic model. Response redaction remains a medium policy.

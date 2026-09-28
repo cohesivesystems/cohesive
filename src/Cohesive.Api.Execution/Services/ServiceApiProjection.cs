@@ -78,6 +78,29 @@ public static class ServiceApiProjection
         return new ApiDefinition([operation]).Endpoints[0];
     }
 
+    /// <summary>Projects a declared query with typed medium input/output and independent admission failures.</summary>
+    /// <remarks>The native query owns parameters, output demand and evaluation diagnostics. The response projection
+    /// receives the complete outcome, including failed evaluations. Scope selection does not grant access.</remarks>
+    public static ApiEndpoint ProjectQuery<TRequest, TResponse>(ExecutionDefinitionDocument declaration, string operationId,
+        HttpBinding? http = null, IReadOnlyList<ApiScopePolicy>? scopePolicies = null) where TRequest : class
+    {
+        if (GetOperation(declaration, operationId) is not ServiceQueryOperation query)
+            throw new ArgumentException("The operation is not a declared query.", nameof(operationId));
+        if (http?.Body is { } body && body.BodyType != typeof(TRequest))
+            throw new ArgumentException("The HTTP body must match the medium request type.", nameof(http));
+        var reference = new ExecutionDefinitionReference(declaration.Metadata.DefinitionId,
+            declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint);
+        var operation = new ApiOperation(operationId, ApiOperationKind.Query, typeof(TRequest), typeof(TResponse),
+            id: new(OperationIdentity(reference, operationId)), scopePolicies: scopePolicies,
+            authorizationRequirements: query.AuthorizationRequirements,
+            results: [new(ApiResultKind.Success, typeof(TResponse), isPrimary: true),
+                new(ApiResultKind.ValidationFailed, typeof(TResponse), id: "queryEvaluationFailed"),
+                new(ApiResultKind.ValidationFailed, typeof(ApiValidationProblem), id: "admissionValidationFailed"),
+                new(ApiResultKind.Forbidden, typeof(ApiProblem))]);
+        if (http is not null) operation = operation.WithHttp(http);
+        return new ApiDefinition([operation]).Endpoints[0];
+    }
+
     static ServiceOperation GetOperation(ExecutionDefinitionDocument declaration, string operationId)
     {
         ArgumentNullException.ThrowIfNull(declaration);

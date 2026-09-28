@@ -261,3 +261,17 @@ validates input against its Process-owned portable contract, and dispatches nati
 response retains native admission/conflict outcomes; it does not imply workflow completion. The
 medium request is a projection, not a competing semantic input contract. This profile does not add
 bounded completion waiting or custom result-read orchestration to starts.
+
+Declared queries use `ServiceApiProjection.ProjectQuery<TRequest,TResponse>` and
+`MapServiceQuery<TRequest,TResponse>`. Registration validates the service/query operation and attaches
+host scope policies without resolving runtime/evaluator dependencies. The pure request projection
+supplies caller parameters; ServiceRuntime injects the trusted scope parameter and rejects attempted
+scope overrides before evaluator resolution. Evaluation identity reuses the existing relation-query
+HTTP convention, and the native runtime retains compilation, output-demand and provider semantics.
+
+The pure response projection receives the complete native outcome, including failed evaluations,
+so it can preserve/redact native phase diagnostics intentionally. A successful outcome uses the primary
+response; failed evaluation uses the typed `queryEvaluationFailed` alternative. Admission failures
+use the separate standard `admissionValidationFailed` problem. Both validation alternatives are
+represented in generated API contracts. Provider exceptions and cancellation propagate normally;
+there is no hidden retry or result cache. The mapper adds no query execution algorithm.

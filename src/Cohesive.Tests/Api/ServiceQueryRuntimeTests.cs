@@ -1,3 +1,9 @@
+using System.Text.Json;
+using Cohesive.Adapters.AspNet.Services;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Api;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Api.Services;
@@ -17,6 +23,59 @@ namespace Cohesive.Tests.Api;
 
 public sealed class ServiceQueryRuntimeTests
 {
+    [Theory]
+    [InlineData(true, false, 200)]
+    [InlineData(false, false, 403)]
+    [InlineData(true, true, 400)]
+    [InlineData(true, false, 400, true)]
+    public async Task QueryHttpUsesDeclaredScopeAndDoesNotReadOnAdmissionFailure(bool authorized, bool spoof, int status, bool failEvaluation = false)
+    {
+        var fixture = Create(failEvaluation);
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(authorized ? Context("tenant-a") : OperationContext.Create());
+        await using var app = builder.Build();
+        var resolutions = 0;
+        var projections = 0;
+        var scope = new ApiScopePolicy("tenant", ApiScopeCardinality.Single, ApiScopeBinding.Header,
+            ApiScopeAccess.RequireSelected, singleScopeParameterName: "X-Tenant-Id");
+        app.MapServiceQuery<QueryRequest, QueryResponse>(fixture.Runtime.Declaration,
+            _ => { resolutions++; return fixture.Runtime; }, "search",
+            new("POST", "/notes/search", [], new(typeof(QueryRequest))), request => request.Spoof
+                ? new Dictionary<QueryParameterId, ObservationValue> { [new("tenant")] = ObservationValue.FromString("tenant-b") }
+                : new Dictionary<QueryParameterId, ObservationValue>(),
+            outcome =>
+            {
+                projections++;
+                return new(outcome.IsSuccessful,
+                    outcome.Result?.QueryResults.SelectMany(result => result.Rows).Select(row => row.Value.GetProperty("Id").String!).ToArray() ?? [], outcome.Diagnostics.Select(diagnostic => diagnostic.Code).ToArray());
+            }, (_, requirement) => requirement.Id, [scope]);
+        Assert.Equal(0, resolutions);
+        Assert.Equal(0, fixture.Resolutions);
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().Single();
+        Assert.Same(scope, endpoint.Metadata.GetMetadata<ApiScopePolicy>());
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new QueryRequest(spoof), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var http = new DefaultHttpContext { RequestServices = app.Services };
+        http.TraceIdentifier = "query-request";
+        http.Request.Method = "POST";
+        http.Request.ContentType = "application/json";
+        http.Request.ContentLength = bytes.Length;
+        http.Request.Body = new MemoryStream(bytes);
+        http.Response.Body = new MemoryStream();
+        await endpoint.RequestDelegate!(http);
+        Assert.Equal(status, http.Response.StatusCode);
+        Assert.Equal(1, resolutions);
+        Assert.Equal(status == 200 || failEvaluation ? 1 : 0, projections);
+        Assert.Equal(status == 200 ? 1 : 0, fixture.Reader.Reads);
+        http.Response.Body.Position = 0;
+        using var json = await JsonDocument.ParseAsync(http.Response.Body);
+        if (status == 200) Assert.Equal("a", Assert.Single(json.RootElement.GetProperty("ids").EnumerateArray()).GetString());
+        if (failEvaluation) Assert.Equal("tests.query.preflight", Assert.Single(json.RootElement.GetProperty("diagnostics").EnumerateArray()).GetString());
+        if (spoof) Assert.Equal("services.query.scopeOverride", json.RootElement.GetProperty("code").GetString());
+    }
+
+    sealed record QueryRequest(bool Spoof);
+    sealed record QueryResponse(bool Successful, string[] Ids, string[] Diagnostics);
+
     [Fact]
     public async Task NativeQueryUsesTrustedScopeAndOnePhysicalReadPerInvocationInSharedPartition()
     {
@@ -93,7 +152,7 @@ public sealed class ServiceQueryRuntimeTests
             Grants: [new(actor, scope, ["notes.read"], "tests")]));
     }
 
-    static Fixture Create()
+    static Fixture Create(bool failEvaluation = false)
     {
         var shape = RelationQuery.Expression().Clr.Shape<Row>();
         var author = RelationQuery.Structural();
@@ -120,7 +179,7 @@ public sealed class ServiceQueryRuntimeTests
         {
             Assert.Equal("shared", scope.ResolvePartitionKey());
             fixture.Resolutions++;
-            return evaluator;
+            return failEvaluation ? new FailedPreflightEvaluator() : evaluator;
         });
         var document = ServiceDefinitionDocuments.Create(new("notes"), new("v1"),
             new([new ServiceQueryOperation("search", binding.Reference, tenant.Id, [new("notes.read")])]),
@@ -128,6 +187,14 @@ public sealed class ServiceQueryRuntimeTests
         fixture.Binding = binding;
         fixture.Runtime = new(document, [binding], new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
         return fixture;
+    }
+
+    sealed class FailedPreflightEvaluator : IRelationQueryEvaluator
+    {
+        public ValueTask<RelationQueryEvaluationOutcome> EvaluateAsync(RelationQueryEvaluation evaluation,
+            CancellationToken cancellationToken = default) => ValueTask.FromResult(new RelationQueryEvaluationOutcome(
+                evaluation, RelationQueryStaticCompiler.Compile(evaluation.Compilation),
+                diagnostics: [new("tests.query.preflight", DiagnosticSeverity.Error, "Synthetic attributable preflight failure.")]));
     }
 
     sealed record Row(string Id, string Tenant, string Text);
