@@ -743,11 +743,13 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
                     continue;
                 }
                 if (property.NumberHandling is not null
-                    || property.CustomConverter is not null and not IJsonValueSerializerProfile)
+                    || property.CustomConverter is not null and not IJsonValueSerializerProfile and not IJsonStringValueConverter)
                     throw new NotSupportedException($"JSON property '{info.Type.FullName}.{property.Name}' requires a converter or number-handling schema projection.");
-                var propertySchema = property.CustomConverter is IJsonValueSerializerProfile profile
-                    ? ProfileSchema(property.PropertyType, profile)
-                    : SchemaFor(property.PropertyType);
+                var propertySchema = property.CustomConverter is IJsonStringValueConverter
+                    ? new JsonObject { ["type"] = "string" }
+                    : property.CustomConverter is IJsonValueSerializerProfile profile
+                        ? ProfileSchema(property.PropertyType, profile)
+                        : SchemaFor(property.PropertyType);
                 if (!property.PropertyType.IsValueType && (property.IsGetNullable || property.IsSetNullable))
                     propertySchema = NullableSchema(propertySchema);
                 properties[property.Name] = propertySchema;

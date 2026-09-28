@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Cohesive.Model.Serialization;
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
@@ -9,7 +10,7 @@ namespace Cohesive.Domain;
 /// <summary>
 /// Serializes enum values using their <see cref="CodeAttribute.Code"/> value when one is present.
 /// </summary>
-public sealed class CodeEnumJsonConverter<TEnum> : JsonConverter<TEnum>
+public sealed class CodeEnumJsonConverter<TEnum> : JsonConverter<TEnum>, IJsonStringValueConverter
     where TEnum : struct, Enum
 {
     static readonly CodeEnumJsonConverterCache<TEnum> Cache = CodeEnumJsonConverterCache<TEnum>.Create();

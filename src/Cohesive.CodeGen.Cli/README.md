@@ -194,3 +194,17 @@ ones not yet loaded when discovery begins. Application-only dependencies are loa
 contracts context. This preserves type identity across API signatures: a service declaration using a
 relation parameter must not receive a second copy of that parameter's assembly merely because API
 discovery ran before the generator first used relations. Loader tests cover this cold dependency case.
+
+Declared JSON projection follows property converters that expose `IJsonValueSerializerProfile`.
+The CLR shape builder contributes separate nested-profile type identities through its existing metadata
+hooks, preserving recursive value references, dictionaries and collection cardinality. Preparation is
+cached per property for the metadata provider's lifetime; the builder/provider are mutable authoring
+objects and are not intended for concurrent use. Recursive converter re-entry is rejected explicitly.
+TypeScript allocates deterministic unique declaration names when profile identities share a readable
+suffix. CLR authoring identity maps describe the envelope profile; contributed nested definitions live
+in the resulting graph rather than overwriting those maps.
+
+`IJsonStringValueConverter` declares open string output (including code-enum and lossless Int64
+converters). It does not enumerate every compatibility form accepted by a reader. These declarations
+describe emitted representation, not an exhaustive external-input validator. OpenAPI rejects unsupported property converters. This does not establish complete TypeScript
+coverage for arbitrary converter implementations. GraphQL remains a separate CLR projection.

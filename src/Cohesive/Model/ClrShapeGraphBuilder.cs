@@ -36,9 +36,14 @@ public sealed class ClrShapeGraphBuilder
     public ClrShapeGraphBuilder UsePublicJsonContracts(JsonSerializerOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        return UsePublicJsonContracts(new SystemTextJsonClrShapeMetadataProvider(options));
+    }
+
+    internal ClrShapeGraphBuilder UsePublicJsonContracts(SystemTextJsonClrShapeMetadataProvider provider)
+    {
         if (roots.Count != 0 || publicJsonContracts is not null)
             throw new InvalidOperationException("Configure public JSON contracts once, before registering roots.");
-        publicJsonContracts = new(options);
+        publicJsonContracts = provider;
         return AddMetadataProvider(publicJsonContracts);
     }
 

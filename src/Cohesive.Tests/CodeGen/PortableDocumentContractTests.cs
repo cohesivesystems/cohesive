@@ -141,6 +141,36 @@ public sealed class PortableDocumentContractTests
     }
 
     [Fact]
+    public void PublicTypeScript_IsolatesNestedConverterProfilesForTheSameRecursiveType()
+    {
+        var builder = new ClrShapeGraphBuilder()
+            .UsePublicJsonContracts(new JsonSerializerOptions())
+            .AddShape<MixedProfiles>();
+        var graph = builder.Build();
+        var root = Assert.Single(graph.Shapes);
+        var plain = Assert.IsType<NamedTypeRef>(Assert.Single(root.Fields, field => field.Name.Value == "Plain").Type);
+        var web = Assert.IsType<NamedTypeRef>(Assert.Single(root.Fields, field => field.Name.Value == "Web").Type);
+        Assert.NotEqual(plain.TypeId, web.TypeId);
+        var plainDefinition = Assert.IsType<TypeDefinition.Structural>(Assert.Single(graph.NamedTypes, type => type.Id == plain.TypeId));
+        var webDefinition = Assert.IsType<TypeDefinition.Structural>(Assert.Single(graph.NamedTypes, type => type.Id == web.TypeId));
+        Assert.Contains(plainDefinition.Fields, field => field.Name.Value == "Name");
+        Assert.Contains(webDefinition.Fields, field => field.Name.Value == "name");
+        Assert.DoesNotContain(webDefinition.Fields, field => field.Name.Value == "Name");
+        var text = Assert.Single(new TypeScriptShapeEmitter()
+            .Emit(new ShapeCodeGenerationRequest(graph)).Documents).Text;
+        Assert.Contains("name: string;", text, StringComparison.Ordinal);
+        var declarations = System.Text.RegularExpressions.Regex.Matches(text, @"export (?:interface|type) (\w+)")
+            .Select(match => match.Groups[1].Value).ToArray();
+        Assert.Equal(declarations.Length, declarations.Distinct(StringComparer.Ordinal).Count());
+        var child = Assert.Single(webDefinition.Fields, field => field.Name.Value == "child");
+        Assert.Equal(web, child.Type);
+        var rebuilt = builder.Build();
+        Assert.Same(webDefinition, Assert.Single(rebuilt.NamedTypes, type => type.Id == web.TypeId));
+        Assert.Equal(text, Assert.Single(new TypeScriptShapeEmitter()
+            .Emit(new ShapeCodeGenerationRequest(rebuilt)).Documents).Text);
+    }
+
+    [Fact]
     public void PublicOpenApi_IsolatesNestedConverterProfilesForTheSameRecursiveType()
     {
         var options = new JsonSerializerOptions();
@@ -171,9 +201,51 @@ public sealed class PortableDocumentContractTests
         Assert.Equal(text, Assert.Single(emitter.Emit(api).Documents).Text);
     }
 
+    [Fact]
+    public void PublicTypeScript_ProjectsScalarAndCollectionPropertyProfiles()
+    {
+        var graph = new ClrShapeGraphBuilder()
+            .UsePublicJsonContracts(new JsonSerializerOptions())
+            .AddShape<ProfileCollections>().Build();
+        var text = Assert.Single(new TypeScriptShapeEmitter()
+            .Emit(new ShapeCodeGenerationRequest(graph)).Documents).Text;
+        Assert.Contains("Text: string;", text, StringComparison.Ordinal);
+        Assert.Contains("name: string;", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("export interface ProfileValue", text, StringComparison.Ordinal);
+        var root = Assert.Single(graph.Shapes);
+        Assert.Equal(FieldCardinality.Many, Assert.Single(root.Fields, field => field.Name.Value == "Items").Cardinality);
+    }
+
+    sealed record ProfileCollections(
+        [property: JsonConverter(typeof(WebJsonPropertyConverter<string>))] string Text,
+        [property: JsonConverter(typeof(WebJsonPropertyConverter<ProfileNode[]>))] ProfileNode[] Items);
+
+    [Fact]
+    public void PropertyCodeConverter_ProjectsOpenStringOutputIncludingUndefinedValues()
+    {
+        var options = new JsonSerializerOptions();
+        Assert.Equal("M", JsonSerializer.SerializeToElement(new CodeEnvelope(Requirement.Required), options)
+            .GetProperty("Value").GetString());
+        Assert.Equal("99", JsonSerializer.SerializeToElement(new CodeEnvelope((Requirement)99), options)
+            .GetProperty("Value").GetString());
+        var graph = new ClrShapeGraphBuilder().UsePublicJsonContracts(options).AddShape<CodeEnvelope>().Build();
+        var text = Assert.Single(new TypeScriptShapeEmitter().Emit(new ShapeCodeGenerationRequest(graph)).Documents).Text;
+        Assert.Contains("Value: string;", text, StringComparison.Ordinal);
+        var api = Cohesive.Api.Api.Define("Codes").Query("Get").Route("GET", "/codes").Returns<CodeEnvelope>().Done().Build();
+        using var document = JsonDocument.Parse(Assert.Single(new OpenApiEmitter(new() { JsonSerializerOptions = options }).Emit(api).Documents).Text);
+        var value = document.RootElement.GetProperty("components").GetProperty("schemas")
+            .GetProperty(nameof(CodeEnvelope)).GetProperty("properties").GetProperty("Value");
+        Assert.Equal("string", value.GetProperty("type").GetString());
+        Assert.False(value.TryGetProperty("enum", out _));
+    }
+
+    public enum Requirement { [Cohesive.Domain.Code("M")] Required }
+    sealed record CodeEnvelope([property: JsonConverter(typeof(Cohesive.Domain.CodeEnumJsonConverter<Requirement>))] Requirement Value);
+
     sealed record ProfileNode(string Name, ProfileNode? Child);
     sealed record MixedProfiles(ProfileNode Plain,
-        [property: JsonConverter(typeof(WebJsonPropertyConverter<ProfileNode>))] ProfileNode Web);
+        [property: JsonConverter(typeof(WebJsonPropertyConverter<ProfileNode>))] ProfileNode Web,
+        [property: JsonConverter(typeof(WebJsonPropertyConverter<ProfileNode>))] ProfileNode? Other = null);
 
     static void ValidateReferences(JsonElement node, JsonElement root)
     {

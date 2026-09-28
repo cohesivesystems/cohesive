@@ -46,12 +46,20 @@ public static class SystemTextJsonShapeAnnotations
 public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataProvider
 {
     readonly JsonSerializerOptions options;
+    readonly Dictionary<PropertyInfo, ClrShapeMetadata> nestedProfiles = [];
+    readonly HashSet<(Type, JsonSerializerOptions)> activeProfiles;
 
     /// <summary>Creates a metadata provider for the supplied serializer contract.</summary>
     /// <param name="options">Serializer options that define the JSON wire representation.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
-    public SystemTextJsonClrShapeMetadataProvider(JsonSerializerOptions options)
+    public SystemTextJsonClrShapeMetadataProvider(JsonSerializerOptions options) : this(options, [])
     {
+    }
+
+    SystemTextJsonClrShapeMetadataProvider(JsonSerializerOptions options,
+        HashSet<(Type, JsonSerializerOptions)> activeProfiles)
+    {
+        this.activeProfiles = activeProfiles;
         ArgumentNullException.ThrowIfNull(options);
         this.options = new(options);
         this.options.MakeReadOnly(populateMissingResolver: true);
@@ -104,7 +112,7 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
             ? AnnotationMap.Create(SystemTextJsonShapeAnnotations.Dictionary, true)
             : ImmutableDictionary<AnnotationKey, AnnotationValue>.Empty;
         var converterType = property.GetCustomAttribute<JsonConverterAttribute>(inherit: true)?.ConverterType;
-        if (converterType == typeof(StringEncodedInt64JsonConverter))
+        if (converterType is not null && typeof(IJsonStringValueConverter).IsAssignableFrom(converterType))
         {
             annotations = annotations.Add(
                 new(SystemTextJsonShapeAnnotations.Representation),
@@ -118,11 +126,68 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
                 AnnotationValue.FromBool(true));
         }
 
-        return new()
+        var nested = GetNestedProfile(property);
+        return nested with
         {
             FieldName = new(ResolveJsonPropertyName(property)),
             Annotations = annotations
         };
+    }
+
+    ClrShapeMetadata GetNestedProfile(PropertyInfo property)
+    {
+        if (nestedProfiles.TryGetValue(property, out var cached))
+            return cached;
+        var info = options.GetTypeInfo(property.DeclaringType!);
+        var jsonProperty = info.Properties.FirstOrDefault(candidate =>
+            candidate.AttributeProvider is PropertyInfo member
+            && ShapeTypeInspector.IsSameProperty(member, property));
+        if (jsonProperty?.CustomConverter is not IJsonValueSerializerProfile profile)
+        {
+            nestedProfiles.Add(property, ClrShapeMetadata.Empty);
+            return ClrShapeMetadata.Empty;
+        }
+        var nestedOptions = profile.ValueSerializerOptions;
+        if (!nestedOptions.IsReadOnly)
+            throw new NotSupportedException("Nested JSON serializer profiles must expose frozen options.");
+        var type = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+        var active = activeProfiles;
+        if (!active.Add((type, nestedOptions)))
+            throw new NotSupportedException($"Recursive property converter profile for '{type}' requires a shared profile identity.");
+        try
+        {
+            var prefix = $"json-property:{property.DeclaringType!.FullName}:{property.Name}:";
+            // A private acquisition envelope lets the ordinary builder handle scalar, sequence,
+            // dictionary and object values uniformly. Only its field contract survives projection.
+            var envelope = typeof(ProfileValue<>).MakeGenericType(type);
+            var result = new ClrShapeGraphBuilder()
+                .UsePublicJsonContracts(new SystemTextJsonClrShapeMetadataProvider(nestedOptions, activeProfiles))
+                .AddMetadataProvider(new ProfileIdentity(prefix))
+                .AddShape(envelope)
+                .BuildResult(new GraphId(prefix));
+            var envelopeId = result.TypeIds[envelope];
+            var metadata = new ClrShapeMetadata
+            {
+                TypeRef = result.Graph.Shapes.Single().Fields.Single().Type,
+                NamedTypes = [.. result.Graph.NamedTypes.Where(definition => definition.Id != envelopeId)]
+            };
+            nestedProfiles.Add(property, metadata);
+            return metadata;
+        }
+        finally
+        {
+            active.Remove((type, nestedOptions));
+        }
+    }
+
+    sealed record ProfileValue<T>(T Value);
+
+    sealed class ProfileIdentity(string prefix) : IClrShapeMetadataProvider
+    {
+        public ClrShapeMetadata GetMetadata(ClrShapeMetadataContext context) =>
+            context.Target == ClrShapeMetadataTarget.Type
+                ? new() { TypeId = new(prefix + context.ClrType.FullName) }
+                : ClrShapeMetadata.Empty;
     }
 
     ClrShapeMetadata GetTypeMetadata(Type clrType)
