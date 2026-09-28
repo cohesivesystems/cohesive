@@ -149,3 +149,16 @@ copy the relevant Markdown table into RESULTS.md:
 
 Do not commit generated `BenchmarkDotNet.Artifacts`. Only curated baseline summaries belong in source
 control.
+
+### Service invocation instrumentation
+
+`ServiceInvocationBenchmarks` compares prepared-runtime construction, construction plus an invocation,
+and warm invocation with execution activity sampling disabled/enabled. Immutable transition/service
+compilation and the initial entity write occur in setup; every measured invocation validates success
+and advances the opaque concurrency token. One in-memory entity is reused; no database, HTTP server,
+exporter, or host startup is measured. The enabled mode records activity data without exporting it.
+Construction-plus-invocation is a fresh runtime over warmed dependencies, not process cold start.
+
+Run `dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --filter '*ServiceInvocationBenchmarks*'`.
+Use `--job Dry` only to verify harness execution; its single samples are not performance conclusions.
+Retain BenchmarkDotNet environment and allocation reports with any reported comparison.

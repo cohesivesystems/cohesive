@@ -1289,3 +1289,33 @@ and result construction.
 This ShortRun establishes a descriptive baseline, not a regression threshold. Optimization should
 remain deferred unless representative end-to-end profiles show that DTO materialization is a material
 part of total query execution time.
+
+## Service invocation instrumentation — 2026-09-28
+
+Measured at dabeffa with the new ServiceInvocationBenchmarks harness and its project reference uncommitted. All six cases completed. The harness alternates two prepared values and requires an advanced concurrency token on every successful invocation, excluding no-change writes. An earlier same-value run was discarded.
+
+Command: `dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --filter '*ServiceInvocationBenchmarks*' --job Short --artifacts /tmp/cohesive-service-write-benchmark`. No explicit runtime configuration overrides were supplied; power mode was not recorded.
+
+```
+
+BenchmarkDotNet v0.15.8, macOS 27.0 (26A428) [Darwin 27.0.0]
+Apple M5 Max, 1 CPU, 18 logical and 18 physical cores
+.NET SDK 10.0.201
+  [Host]   : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+  ShortRun : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+
+Job=ShortRun  IterationCount=3  LaunchCount=1  
+WarmupCount=3  
+
+```
+| Method                   | Instrumented | Mean       | Error         | StdDev     | Gen0    | Gen1   | Allocated |
+|------------------------- |------------- |-----------:|--------------:|-----------:|--------:|-------:|----------:|
+| **ConstructPreparedRuntime** | **False**        |  **13.090 μs** |    **29.6167 μs** |  **1.6234 μs** |  **5.9204** | **0.1221** |  **48.55 KB** |
+| ConstructAndInvoke       | False        |  42.020 μs |   306.2098 μs | 16.7844 μs |  7.9346 | 0.1221 |  65.68 KB |
+| WarmInvoke               | False        |   2.563 μs |     0.1339 μs |  0.0073 μs |  2.0638 | 0.0420 |  16.88 KB |
+| **ConstructPreparedRuntime** | **True**         |  **11.158 μs** |     **9.6743 μs** |  **0.5303 μs** |  **5.9204** | **0.1221** |  **48.55 KB** |
+| ConstructAndInvoke       | True         | 525.674 μs |   292.6336 μs | 16.0402 μs | 41.0156 | 7.8125 | 339.06 KB |
+| WarmInvoke               | True         | 433.061 μs | 1,435.0311 μs | 78.6589 μs | 35.1563 | 6.8359 | 289.71 KB |
+
+
+These are exploratory observations, not performance thresholds. Three measured iterations produce wide timing confidence intervals, particularly for sampled warm invocation. Allocation indicates substantial additional sampled-trace work and warrants investigation. Construction uses precompiled definitions; invocation uses a single in-memory entity and a permissive authorization stub. This does not measure host startup, real identity policy evaluation, HTTP, database I/O, exporter delivery, or retained-history growth. Sampling enabled means AllDataAndRecorded without an exporter. No claim of deployed latency follows from these measurements.
