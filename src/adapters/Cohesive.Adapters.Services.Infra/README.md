@@ -15,3 +15,9 @@ No runtime, repository or provider SDK is constructed during association.
 For example, `publish` hosted by `api` may select `api-scheduler`; selecting a worker's
 `worker-scheduler` is rejected even when both bindings target the same resource. The conformance
 tests reside in `Cohesive.Infra.Tests/ServiceInfrastructureAssociationTests.cs`.
+
+`ValidateCapabilityClosure` admits a report only for the exact associated infrastructure reference
+and requires the entire deployment's native capability closure. It preserves native compiler
+diagnostics, rejects unrelated reports even if closed, and does not reinterpret capability evidence.
+This is static target qualification, not observed runtime readiness or proof that the caller selected
+every dependency needed by an operation. The full Infra suite passes 120 tests with this boundary.

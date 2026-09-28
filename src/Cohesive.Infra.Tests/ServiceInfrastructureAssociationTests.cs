@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Cohesive.Adapters.Services.Infra;
 using Cohesive.Api.Services;
 using Cohesive.Execution;
+using Cohesive.Infra.Realization;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Infra.Tests;
@@ -27,6 +28,25 @@ public sealed class ServiceInfrastructureAssociationTests
         Assert.Equal(service.Metadata.Fingerprint, association.Service.Fingerprint);
         Assert.Equal(InfrastructureDefinitionDocument.FromDefinition(infrastructure).ToReference(), association.Infrastructure);
         Assert.Equal(new InfrastructureBindingId("api-scheduler"), Assert.Single(association.Operations["publish"]));
+    }
+
+    [Fact]
+    public void RejectsUnclosedCapabilitiesAndEvidenceFromAnotherDefinition()
+    {
+        var topology = Topology();
+        var association = ServiceInfrastructureAssociation.Create(Service(), topology, new("api"),
+            new Dictionary<string, ImmutableArray<InfrastructureBindingId>> { ["publish"] = [new("api-scheduler")] });
+        var profile = new InfrastructureCapabilityProfile(InfrastructureCapabilityProfile.CurrentSchemaVersion,
+            new("test"), new("test"), [InfrastructureDefinitionDocument.CurrentSchemaVersion],
+            [new InfrastructureCapabilityVariant(new("local"))]);
+        var closure = InfrastructureCapabilityCompiler.Compile(InfrastructureDefinitionDocument.FromDefinition(topology), profile, new("local"));
+        var validation = association.ValidateCapabilityClosure(closure);
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Diagnostics, diagnostic => diagnostic.Code == InfrastructureBindingElaborationDiagnosticCodes.ContractUnavailable);
+        var other = new InfrastructureDefinition(new("other"), new("1"), workloads: [new(new("api"))]);
+        var otherClosure = InfrastructureCapabilityCompiler.Compile(InfrastructureDefinitionDocument.FromDefinition(other), profile, new("local"));
+        Assert.True(otherClosure.IsClosed);
+        Assert.Equal("services.infra.definitionMismatch", Assert.Single(association.ValidateCapabilityClosure(otherClosure).Diagnostics).Code);
     }
 
     [Theory]

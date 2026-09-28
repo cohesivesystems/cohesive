@@ -2,6 +2,9 @@ using System.Collections.Immutable;
 using Cohesive.Api.Services;
 using Cohesive.Execution;
 using Cohesive.Infra;
+using Cohesive.Infra.Realization;
+using Cohesive.Model;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Adapters.Services.Infra;
 
@@ -24,6 +27,23 @@ public sealed class ServiceInfrastructureAssociation
     public InfrastructureNodeId Workload { get; }
     /// <summary>Complete operation coverage with normalized, existing consumer binding identities.</summary>
     public ImmutableDictionary<string, ImmutableArray<InfrastructureBindingId>> Operations { get; }
+
+    /// <summary>Validates target capability closure against this association's exact infrastructure authority.</summary>
+    /// <param name="closure">Report produced by the existing infrastructure capability compiler.</param>
+    /// <returns>Native closure diagnostics, or an exact-authority mismatch diagnostic.</returns>
+    /// <remarks>This requires closure of the whole supplied deployment definition, not only this service's subset.
+    /// It does not establish observed readiness, runtime registration, or dependency completeness.</remarks>
+    /// <exception cref="ArgumentNullException">The report is null.</exception>
+    public DocumentValidationResult ValidateCapabilityClosure(InfrastructureCapabilityClosureReport closure)
+    {
+        ArgumentNullException.ThrowIfNull(closure);
+        if (closure.Definition.ToReference() != Infrastructure)
+            return new([new("services.infra.definitionMismatch", DiagnosticSeverity.Error,
+                "Capability evidence belongs to a different exact infrastructure definition.", "/infrastructure")]);
+        if (closure.IsClosed) return new(closure.Diagnostics);
+        return new([.. closure.Diagnostics, new("services.infra.capabilitiesUnclosed", DiagnosticSeverity.Error,
+            "The associated deployment has unresolved capability requirements; inspect the native closure diagnostics.", "/capabilities")]);
+    }
 
     /// <summary>Checks complete operation placement without constructing resources or execution runtimes.</summary>
     /// <param name="service">Canonical service document; semantic extensions are unsupported by this profile.</param>
