@@ -1,4 +1,5 @@
 using Cohesive.Api;
+using Cohesive.Api.Execution;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Api.Services;
 using Cohesive.Execution;
@@ -26,6 +27,45 @@ namespace Cohesive.Tests.Api;
 /// <summary>A non-review domain qualifying all service operation families against native execution boundaries.</summary>
 public sealed class ServiceCompositionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LocalAdmissionPreservesReplayAndRecoversInterruptedExecution(bool interrupt)
+    {
+        var fixture = await Fixture.Create();
+        var registry = new InMemoryExecutionControlApiAdapter(fixture.Contracts);
+        var shouldInterrupt = interrupt;
+        var dispatcher = registry.CreateLocalProcessStartDispatcher(
+            reference => reference == fixture.Plan.DefinitionReference ? fixture.Plan : null,
+            (_, _) => fixture.Runtime(crashAfterFirstCommit: shouldInterrupt),
+            _ => fixture.Activation("binding", ProcessActivationCause.Start).Context);
+        var declaration = ServiceDefinitionDocuments.Create(new("local-documents"), new("1"), new([
+            new ServiceProcessOperation("publish", fixture.Plan.DefinitionReference, [new("documents.publish")])]), Provenance);
+        var service = new ServiceRuntime(declaration,
+            [new ServiceProcessBinding("publish", fixture.Plan, "documents", dispatcher)],
+            new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
+        if (interrupt)
+        {
+            await Assert.ThrowsAsync<HandoffCrash>(() => service.StartAsync(Context(), "publish", fixture.StartRequest()).AsTask());
+            shouldInterrupt = false;
+        }
+        var first = await service.StartAsync(Context(), "publish", fixture.StartRequest());
+        Assert.Equal(ApiResultKind.Success, first.Kind);
+        Assert.Equal(interrupt ? ProcessStartDisposition.Replayed : ProcessStartDisposition.Accepted, first.Outcome!.Disposition);
+        var replay = await service.StartAsync(Context(), "publish", fixture.StartRequest());
+        Assert.Equal(ProcessStartDisposition.Replayed, replay.Outcome!.Disposition);
+        Assert.Equal(1, fixture.Reader.Reads);
+        Assert.Equal(1, fixture.Computations);
+        foreach (var id in new[] { "a", "b" })
+            Assert.Equal(1, (await fixture.Repository.TryGet(Context(), id, EntityReadOptions.Full))!.Entity.Version);
+        var original = fixture.StartRequest();
+        var conflicting = new ProcessStartRequest(original.SchemaVersion, original.Definition, original.Context,
+            original.InitialContinuation, PortableValue.Concrete(fixture.Plan.Definition.Input, ObservationValue.FromString("different")));
+        var conflict = await service.StartAsync(Context(), "publish", conflicting);
+        Assert.Equal(ApiResultKind.Conflict, conflict.Kind);
+        Assert.Equal(1, fixture.Computations);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

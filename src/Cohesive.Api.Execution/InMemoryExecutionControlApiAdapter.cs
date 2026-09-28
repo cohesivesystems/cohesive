@@ -244,7 +244,7 @@ public sealed class ExecutionApiInvocationContext
 /// that operation bypasses its local registry entirely; the adapter only authorizes and projects the authoritative
 /// decision. External dispatchers remain responsible for trusted-context rebinding and durable occurrence replay.
 /// </remarks>
-public sealed class InMemoryExecutionControlApiAdapter : IExecutionControlApiDispatcher
+public sealed partial class InMemoryExecutionControlApiAdapter : IExecutionControlApiDispatcher
 {
     readonly object processRegistryGate = new();
     readonly object controlRegistryGate = new();

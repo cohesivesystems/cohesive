@@ -611,3 +611,17 @@ own guarded load and validation. This is a bounded extra read per attempted acti
 Seven composition tests pass. The local driver stops after one cut, reconstructs after a post-commit
 crash, preserves one acquisition/computation and one version increment per entity, and adds no
 activation after terminal completion. Ari local hosting/HTTP integration remains outstanding.
+
+## Local start admission binding
+
+`InMemoryExecutionControlApiAdapter.CreateLocalProcessStartDispatcher` connects the existing
+command/idempotency/instance registry to exact prepared plans and native local runtime bindings.
+Admission uses the same evaluator and retained trusted start receipt. Interrupted execution can be
+retried through that receipt; successful replay does not repeat entity effects. Unknown plans fail
+before admission. The adapter's independent lifecycle endpoints must not be exposed as controls over
+the supplied durable runtime.
+
+The registry remains in memory, and the runtime's store determines checkpoint durability. There is no
+background scheduler: a quiescent or bounded-cut Process needs later driving. This local profile is
+not a claim of remote durability across host loss. Nine composition tests pass, including local
+admission, changed-content conflicts, completed replay and post-commit interruption/recovery.
