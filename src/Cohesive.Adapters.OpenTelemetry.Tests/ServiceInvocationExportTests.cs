@@ -50,8 +50,14 @@ public sealed class ServiceInvocationExportTests
             PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(new Note.Input("private-value"))));
         Assert.Equal(ApiResultKind.Success, result.Kind);
         Assert.NotEqual(initial.ConcurrencyToken, result.ConcurrencyToken);
-        provider.ForceFlush(10_000);
-        var span = Assert.Single(exporter.Activities.Where(activity => activity.GetTagItem(ExecutionTelemetry.TraceFingerprintTagName) is not null));
+        var retained = await repository.TryGet(OperationContext.Create(), "private-note",
+            EntityReadOptions.Full.WithPartitionKey("private-tenant"));
+        Assert.NotNull(retained);
+        Assert.Equal("private-value", retained.Entity.Observation.GetField("Text").GetString());
+        Assert.Equal(initial.Entity.Version + 1, retained.Entity.Version);
+        Assert.Equal(result.ConcurrencyToken, retained.ConcurrencyToken);
+        Assert.True(provider.ForceFlush(10_000));
+        var span = Assert.Single(exporter.Activities);
         Assert.Equal(parent.TraceId, span.TraceId);
         Assert.Equal(parent.SpanId, span.ParentSpanId);
         Assert.Equal(ExecutionTraceFingerprinter.ComputeSemantic(result.Trace).Value,
