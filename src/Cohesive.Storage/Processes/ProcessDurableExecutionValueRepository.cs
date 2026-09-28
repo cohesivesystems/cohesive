@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Processes.Compilation;
+using Cohesive.Processes.Execution;
 using Cohesive.Processes.Runtime;
 
 namespace Cohesive.Storage.Processes;
@@ -43,8 +44,9 @@ public sealed class ProcessDurableExecutionValueRepository(
         if (checkpoint.Continuation.Terminal.Kind == ExecutionTerminalOutcomeKind.None)
             return ProcessExecutionValueReadResult.InProgress(new(checkpoint.Definition, processInstanceId,
                 checkpoint.Start.Request.Input));
+        var evidence = checkpoint.Activations.Select(item => item.Evidence).ToImmutableArray();
         return ProcessExecutionValueReadResult.Available(new(checkpoint.Definition, processInstanceId,
             checkpoint.Start.Request.Input, checkpoint.Continuation.Terminal, checkpoint.ContinuationIdentity,
-            checkpoint.Activations.Select(item => item.Evidence).ToImmutableArray()));
+            evidence, ProcessOperationFailure.Project(checkpoint.Continuation, evidence)));
     }
 }

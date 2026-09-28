@@ -66,6 +66,7 @@ public sealed record ProcessExecutionValues
     /// <param name="terminalContinuation">Exact terminal attempt when retained; null denotes unavailable attempt evidence.</param>
     /// <param name="evidence">Protected canonical activation evidence. Default denotes unavailable evidence;
     /// a materialized empty array denotes no retained activations. This is not normalized telemetry.</param>
+    /// <param name="operationFailures">Optional exact failed-operation evidence from terminal state.</param>
     /// <exception cref="ArgumentNullException"><paramref name="definition"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="processInstanceId"/> is default or <paramref name="terminalOutcome"/> is nonterminal.
@@ -77,7 +78,8 @@ public sealed record ProcessExecutionValues
         PortableValue? input = null,
         ExecutionTerminalOutcome? terminalOutcome = null,
         ProcessContinuationIdentity? terminalContinuation = null,
-        ImmutableArray<ProcessExecutionEvidence> evidence = default)
+        ImmutableArray<ProcessExecutionEvidence> evidence = default,
+        ImmutableArray<ProcessOperationFailure> operationFailures = default)
     {
         Definition = definition ?? throw new ArgumentNullException(nameof(definition));
         if (string.IsNullOrWhiteSpace(processInstanceId.Value))
@@ -107,12 +109,32 @@ public sealed record ProcessExecutionValues
                         || item.Continuation.ProcessInstanceId != processInstanceId))
                     throw new ArgumentException("Retained activation evidence contradicts the exact Process definition or instance.", nameof(evidence));
         }
+        if (!operationFailures.IsDefaultOrEmpty)
+        {
+            if (terminalOutcome?.Kind != ExecutionTerminalOutcomeKind.Failed || evidence.IsDefaultOrEmpty
+                || operationFailures.Any(failure => failure is null
+                    || failure.Operation.Continuation != terminalContinuation
+                    || evidence.SelectMany(item => item.Trace).Count(trace =>
+                        trace.Definition == failure.Operation.Definition && trace.Continuation == failure.Operation.Continuation
+                        && trace.Activation == failure.Operation.Activation && trace.Token == failure.Operation.Token
+                        && trace.Node == failure.Operation.Node && trace.OperationOccurrence == failure.Operation.OperationOccurrence
+                        && trace.Sequence == failure.Operation.Sequence && trace.Kind == failure.Operation.Kind
+                        && trace.Detail == failure.Operation.Detail && trace.ReceiptReference is null) != 1)
+                || operationFailures.Select(failure => (failure.Operation.Continuation, failure.Operation.Activation,
+                    failure.Operation.Token, failure.Operation.Node, failure.Operation.OperationOccurrence)).Distinct().Count() != operationFailures.Length)
+                throw new ArgumentException("Operation failures require unique exact terminal-attempt trace evidence.", nameof(operationFailures));
+        }
+        OperationFailures = operationFailures;
         ProcessInstanceId = processInstanceId;
         Input = input;
         TerminalOutcome = terminalOutcome;
         TerminalContinuation = terminalContinuation;
         Evidence = evidence;
     }
+
+    /// <summary>Protected exact-operation failures projected from terminal token state; default means unavailable.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public ImmutableArray<ProcessOperationFailure> OperationFailures { get; }
 
     /// <summary>Exact pinned Process definition.</summary>
     public ExecutionDefinitionReference Definition { get; }

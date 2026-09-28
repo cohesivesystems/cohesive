@@ -4,6 +4,8 @@ using Cohesive.Identity;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Runtime;
+using Cohesive.Processes.Execution;
+using Cohesive.Storage.Processes;
 
 namespace Cohesive.Api.Execution.Services;
 
@@ -56,7 +58,26 @@ public sealed partial class ServiceRuntime
                 return Reject(ApiResultKind.InfrastructureError, "services.process.evidenceUnavailable", "Exact terminal execution evidence is unavailable.");
             evidence.Record("terminalValuesRead");
             if (values.TerminalOutcome!.Kind != ExecutionTerminalOutcomeKind.Completed)
+            {
+                // Only the native captured-token failure at the declared commit can establish this conflict.
+                // A matching diagnostic elsewhere, or an earlier attempt, is not commit evidence.
+                if (operation is ServiceProcessEntityResultOperation entityResult
+                    && values.TerminalOutcome.Kind == ExecutionTerminalOutcomeKind.Failed
+                    && !values.OperationFailures.IsDefault && values.OperationFailures.Length == 1
+                    && values.OperationFailures[0] is var failure
+                    && failure.Operation.Node == entityResult.CommitNode
+                    && values.Evidence.SelectMany(item => item.Trace).LastOrDefault(trace =>
+                        trace.Continuation == values.TerminalContinuation && trace.Kind == ProcessTraceEventKind.TerminalReached) is { } terminal
+                    && terminal.Detail == "failed" && terminal.Activation == failure.Operation.Activation
+                    && terminal.Token == failure.Operation.Token && terminal.Node == failure.Operation.Node
+                    && terminal.Sequence > failure.Operation.Sequence
+                    && failure.Diagnostic.Code == ProcessTransitionOperationAdapterDiagnosticCodes.SubjectChanged)
+                {
+                    evidence.Record("commitConflict", failure.Diagnostic.Code);
+                    return new(ApiResultKind.Conflict, null, [failure.Diagnostic], evidence.Complete(ApiResultKind.Conflict));
+                }
                 return Reject(ApiResultKind.DomainError, "services.process.notCompleted", "The Process did not complete successfully.");
+            }
             return await project(new(trusted, scope, authority, values), evidence).ConfigureAwait(false);
         }
         catch (Exception exception) { evidence.Fail(exception); throw; }

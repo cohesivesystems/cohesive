@@ -36,6 +36,70 @@ namespace Cohesive.Tests.Api;
 public sealed class ServiceProcessEntityResultTests
 {
     [Theory]
+    [InlineData(ProcessTransitionOperationAdapterDiagnosticCodes.SubjectChanged, ApiResultKind.Conflict)]
+    [InlineData("unclassified.failure", ApiResultKind.DomainError)]
+    public async Task FailedCommitRetainsAttributedDiagnosticWithoutResolvingRepository(string code, ApiResultKind expected)
+    {
+        var fixture = await Create(failureCode: code);
+        var retained = fixture.Values.Result.Values!;
+        var failure = Assert.Single(retained.OperationFailures);
+        Assert.Equal(code, failure.Diagnostic.Code);
+        Assert.Equal(new("commit"), failure.Operation.Node);
+        var options = ProcessDurableCheckpointJsonSerializer.CreateOptions();
+        var roundTrip = JsonSerializer.Deserialize<ProcessExecutionValues>(JsonSerializer.Serialize(retained, options), options)!;
+        fixture.Values.Result = ProcessExecutionValueReadResult.Available(roundTrip);
+        var result = await fixture.Read();
+        Assert.Equal(expected, result.Kind);
+        if (expected == ApiResultKind.Conflict)
+            Assert.Equal(failure.Diagnostic, Assert.Single(result.Diagnostics));
+        Assert.Null(result.Outcome);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+        var terminal = await fixture.Runtime.ReadProcessResultAsync(fixture.Context, "terminal", fixture.Instance);
+        Assert.Equal(ApiResultKind.DomainError, terminal.Kind);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeConflictAtAnotherNodeDoesNotClassifyAsDeclaredCommitConflict(bool onlyTerminal)
+    {
+        var fixture = await Create(failureCode: ProcessTransitionOperationAdapterDiagnosticCodes.SubjectChanged);
+        var retained = fixture.Values.Result.Values!;
+        var evidence = retained.Evidence.Select(item => item with
+        {
+            Trace = item.Trace.Select(trace => !onlyTerminal || trace.Kind == ProcessTraceEventKind.TerminalReached
+                ? trace with { Node = new("other-operation") } : trace).ToImmutableArray()
+        }).ToImmutableArray();
+        var failure = Assert.Single(retained.OperationFailures);
+        var other = onlyTerminal ? failure : new ProcessOperationFailure(failure.Operation with { Node = new("other-operation") }, failure.Diagnostic);
+        fixture.Values.Result = ProcessExecutionValueReadResult.Available(new(retained.Definition, retained.ProcessInstanceId,
+            retained.Input, retained.TerminalOutcome, retained.TerminalContinuation, evidence, [other]));
+        var result = await fixture.Read();
+        Assert.Equal(ApiResultKind.DomainError, result.Kind);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+    }
+
+    [Fact]
+    public async Task FailedCommitEvidenceCannotComeFromAnotherAttemptOrBeDuplicated()
+    {
+        var fixture = await Create(failureCode: ProcessTransitionOperationAdapterDiagnosticCodes.SubjectChanged);
+        var retained = fixture.Values.Result.Values!;
+        var failure = Assert.Single(retained.OperationFailures);
+        Assert.Throws<ArgumentException>(() => new ProcessExecutionValues(retained.Definition, retained.ProcessInstanceId,
+            retained.Input, retained.TerminalOutcome, retained.TerminalContinuation, retained.Evidence,
+            [failure, failure]));
+        Assert.Throws<ArgumentException>(() => new ProcessExecutionValues(retained.Definition, retained.ProcessInstanceId,
+            retained.Input, retained.TerminalOutcome, retained.TerminalContinuation, [.. retained.Evidence, .. retained.Evidence], [failure]));
+        var earlier = new ProcessOperationFailure(failure.Operation with
+            { Continuation = new(fixture.Instance, new("earlier")) }, failure.Diagnostic);
+        Assert.Throws<ArgumentException>(() => new ProcessExecutionValues(retained.Definition, retained.ProcessInstanceId,
+            retained.Input, retained.TerminalOutcome, retained.TerminalContinuation, retained.Evidence, [earlier]));
+        var denied = await fixture.Runtime.ReadCommittedEntityAsync(OperationContext.Create(), "result", fixture.Instance);
+        Assert.Equal(ApiResultKind.Forbidden, denied.Kind);
+        Assert.Equal(0, fixture.Values.Reads);
+    }
+
+    [Theory]
     [InlineData(true, false, 200)]
     [InlineData(false, false, 403)]
     [InlineData(true, true, 202)]
@@ -607,7 +671,7 @@ public sealed class ServiceProcessEntityResultTests
         Assert.Equal("services.binding.resultSourceMismatch", Assert.Single(error.Validation.Diagnostics).Code);
     }
 
-    static async Task<Fixture> Create(string owner = "tenant-a", string resultNode = "commit", ApiResultKind? classification = null, IServiceInvocationAuthorization? authorization = null, bool includeStart = false)
+    static async Task<Fixture> Create(string owner = "tenant-a", string resultNode = "commit", ApiResultKind? classification = null, IServiceInvocationAuthorization? authorization = null, bool includeStart = false, string? failureCode = null)
     {
         var actor = new PrincipalRef("reviewer", PrincipalKind.User);
         var scope = new ScopeRef("tenant-a", "tenant", PartitionKey: "shared");
@@ -639,10 +703,11 @@ public sealed class ServiceProcessEntityResultTests
             new(new("activation/1"), ProcessActivationCause.Start, context.UtcNow,
                 new(new("notes", "tenant-a"), new("correlation"),
                     new(InteractionDurabilityDemand.Durable, InteractionVisibilityDemand.AfterOriginCommit), provenance)),
-            new AdapterHost(adapter, context));
-        Assert.Equal(ProcessActivationDisposition.Completed, decision.Disposition);
+            new AdapterHost(adapter, context, failureCode));
+        Assert.Equal(failureCode is null ? ProcessActivationDisposition.Completed : ProcessActivationDisposition.Failed, decision.Disposition);
         var values = new Values(ProcessExecutionValueReadResult.Available(new(plan.DefinitionReference, continuation.ProcessInstanceId,
-            terminalOutcome: decision.State.Terminal, terminalContinuation: continuation, evidence: [decision.Evidence])));
+            terminalOutcome: decision.State.Terminal, terminalContinuation: continuation, evidence: [decision.Evidence],
+            operationFailures: ProcessOperationFailure.Project(decision.State, [decision.Evidence]))));
         var classifier = classification is null ? null : HostedQuery<bool, ServiceResultClassification>.Create(
             new("notes/classify"), new("1"), new("notes/classify", "1"), "test-policy", provenance,
             evaluationSemantics: HostedQueryEvaluationSemantics.DeterministicComputation);
@@ -718,9 +783,11 @@ public sealed class ServiceProcessEntityResultTests
             return ValueTask.FromResult(Result);
         }
     }
-    sealed class AdapterHost(EntityTransitionProcessOperationAdapter adapter, OperationContext context) : IProcessReferenceHost
+    sealed class AdapterHost(EntityTransitionProcessOperationAdapter adapter, OperationContext context, string? failureCode = null) : IProcessReferenceHost
     {
-        public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation) => adapter.ExecuteAsync(context, invocation).GetAwaiter().GetResult();
+        public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation) => failureCode is null
+            ? adapter.ExecuteAsync(context, invocation).GetAwaiter().GetResult()
+            : ProcessOperationResult.Failed(new(failureCode, DiagnosticSeverity.Error, "Retained failure.", "/invocation/input"));
         public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) => throw new InvalidOperationException();
         public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) => throw new InvalidOperationException();
     }

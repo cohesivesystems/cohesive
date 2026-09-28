@@ -1,3 +1,4 @@
+using Cohesive.Processes.Execution;
 using System.Diagnostics;
 using Cohesive.Execution;
 using DurableTask.Core;
@@ -346,7 +347,8 @@ public sealed class DurableTaskProcessExecutionRepository :
             values.Input,
             result.State.Terminal,
             result.State.Continuation,
-            result.Evidence));
+            result.Evidence,
+            ProcessOperationFailure.Project(result.State, result.Evidence)));
     }
 
     ValueTask<ProcessExecutionQueryResult> QueryCurrentAsync(

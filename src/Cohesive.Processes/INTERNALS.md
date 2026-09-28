@@ -508,3 +508,20 @@ or one opaque activity for an entire Process. See the accepted
 - `Cohesive.Storage` for durable checkpoints, control, and the Process-store contract
 - `Cohesive.Processes.Distribution` for optional portable worker pools, durable claims, capacity, leases, fencing, and recovery
 - `Cohesive.Adapters.DurableTask` for current authority-neutral task-hub status projections and the accepted future parallel interpreter target
+
+
+### Attributed operation failures in protected result reads
+
+`ProcessExecutionValues.OperationFailures` projects native failed terminal tokens together with their
+exact `OperationCompleted` trace occurrences. `ProcessOperationFailure` adds an attribution boundary,
+not another diagnostic catalog: it retains the existing trace and `DocumentValidationDiagnostic`.
+Unlike aggregate `ProcessChildFailure`, it proves the attempt, activation, token, node, and occurrence.
+The local checkpoint and DurableTask readers use the same projection. Default means unavailable;
+empty means no attributable failed host operation. Non-operation failures are not fabricated.
+
+The service entity-result reader maps native `SubjectChanged` to `Conflict` only when one retained
+failure belongs to its declared commit node and matches the final failed terminal event in the exact
+attempt. It returns the original diagnostic without resolving a current entity or invoking a domain
+result classifier. Missing, unrelated, ambiguous, or prior-attempt evidence cannot establish that
+classification. Protected-read authorization still precedes evidence access. Successful result and
+receipt contracts are unchanged. No package-specific error table is added in applications.
