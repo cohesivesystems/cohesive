@@ -234,5 +234,12 @@ possible prior effects, not private receipt locators, host values or backend exc
 propagates; a cooperative execution deadline returns an infrastructure problem after the host stops. It never
 returns an asynchronous admission receipt or schedules background work. Internal callers retain the full
 `EphemeralProcessResult` evidence for authorized reconciliation. The HTTP tests cover typed success, deferred
-resolution, one execution and redaction; durable admission status conventions and deployed qualification still
-need the refinement's remaining work.
+resolution, one execution and redaction; deployed qualification still needs the refinement's remaining work.
+
+Explicit `ReturnAfterDurableAdmission()` operations now return `ApiResultKind.Accepted`, projected as HTTP
+202 with the native `ProcessStartResult` receipt. Replaying the same admission returns 202 with its retained
+receipt as well; this is not a terminal-success claim. Native lifecycle commands retain their own outcomes.
+A legacy omitted execution policy preserves the earlier start result contract until consumers adopt explicit
+policies. An explicit admission-only operation cannot be attached to the legacy bounded entity-completion
+adapter; that would contradict its declared response promise. Tests exercise direct admission and actual
+HTTP replay against the in-memory native admission adapter. This is not real-provider durability evidence.

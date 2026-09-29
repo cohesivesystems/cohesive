@@ -340,7 +340,23 @@ public sealed class ServiceProcessRuntimeTests
             Grants: [new(actor, scope, ["notes.publish", "notes.pause"], "tests")]));
     }
 
-    static Fixture Create()
+    [Fact]
+    public async Task ExplicitDurableAdmissionReturnsAcceptedInRuntimeAndHttp()
+    {
+        var fixture = Create(explicitAdmission: true);
+        var request = fixture.Request();
+        var result = await fixture.Runtime.StartAsync(Context(), "publish", request);
+        Assert.Equal(ApiResultKind.Accepted, result.Kind);
+        Assert.Equal(ProcessStartDisposition.Accepted, result.Outcome!.Disposition);
+        var http = await InvokeHttp(fixture.Runtime, "publish", request, Context(), lazy: true);
+        Assert.Equal(StatusCodes.Status202Accepted, http.StatusCode);
+        var replay = JsonSerializer.Deserialize<ProcessStartResult>(http.Body, HttpJson)!;
+        Assert.Equal(ProcessStartDisposition.Replayed, replay.Disposition);
+        Assert.Equal(result.Outcome.Admission, replay.Admission);
+        Assert.DoesNotContain("private-input", http.Body);
+    }
+
+    static Fixture Create(bool explicitAdmission = false)
     {
         var provenance = new ExecutionProvenance(new("tests"), new("tests/services"), DocumentOrigin.Generated);
         var contract = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));
@@ -353,7 +369,8 @@ public sealed class ServiceProcessRuntimeTests
         var catalog = ExecutionControlApiCatalog.Create();
         var adapter = new InMemoryExecutionControlApiAdapter(ProcessControlTestFixture.Create().Catalog, catalog);
         var service = ServiceDefinitionDocuments.Create(new("notes"), new("v1"),
-            new([new ServiceProcessOperation("publish", plan.DefinitionReference, [new("notes.publish")]),
+            new([new ServiceProcessOperation("publish", plan.DefinitionReference, [new("notes.publish")],
+                    explicitAdmission ? new(ServiceProcessLifetime.Durable, ServiceProcessCompletion.Admission) : null),
                 new ServiceProcessControlOperation("pause", plan.DefinitionReference, ExecutionControlWireNames.Pause, [new("notes.pause")])]), provenance);
         var fixture = new Fixture { Plan = plan, Document = service };
         var binding = new ServiceProcessBinding("publish", plan, "notes-authority", async (context, request, invocation) =>

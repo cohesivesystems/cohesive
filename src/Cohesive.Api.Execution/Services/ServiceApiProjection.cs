@@ -76,6 +76,8 @@ public static class ServiceApiProjection
         if (GetOperation(declaration, resultOperationId) is not ServiceProcessEntityResultOperation result)
             throw new ArgumentException("The response operation must read a committed entity.", nameof(resultOperationId));
         var entry = (ServiceProcessOperation)GetOperation(declaration, startOperationId);
+        if (entry.Execution is not null)
+            throw new ArgumentException("An explicit admission-only operation cannot be projected as terminal entity completion.", nameof(startOperationId));
         if (entry.Process != result.Process)
             throw new ArgumentException("Start and result must reference the same exact Process definition, revision and fingerprint.",
                 nameof(resultOperationId));
@@ -95,12 +97,18 @@ public static class ServiceApiProjection
         var operationId = declared.Id;
         var reference = new ExecutionDefinitionReference(declaration.Metadata.DefinitionId,
             declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint);
+        var nativeResults = declared is ServiceProcessOperation { Execution.Completion: ServiceProcessCompletion.Admission }
+            ? native.Results.Select(result => result.Kind == ApiResultKind.Success
+                ? new ApiResultDefinition(ApiResultKind.Accepted, result.BodyType, result.IsPrimary,
+                    description: "The Process was durably admitted; terminal completion is not promised.")
+                : result).ToArray()
+            : native.Results;
         var operation = new ApiOperation(operationId, native.Kind, requestType, native.ResponseType,
             id: new(OperationIdentity(reference, operationId)),
             summary: native.Summary, description: native.Description, tags: native.Tags,
-            results: native.Results.Any(result => result.Kind == ApiResultKind.ValidationFailed && result.BodyType == typeof(ExecutionApiProblem))
-                ? native.Results
-                : [.. native.Results, new(ApiResultKind.ValidationFailed, typeof(ExecutionApiProblem), id: "admissionValidationFailed")],
+            results: nativeResults.Any(result => result.Kind == ApiResultKind.ValidationFailed && result.BodyType == typeof(ExecutionApiProblem))
+                ? nativeResults
+                : [.. nativeResults, new(ApiResultKind.ValidationFailed, typeof(ExecutionApiProblem), id: "admissionValidationFailed")],
             scopePolicies: scopePolicies ?? native.ScopePolicies,
             authorizationRequirements: declared.AuthorizationRequirements,
             semanticReferences: native.SemanticReferences);
