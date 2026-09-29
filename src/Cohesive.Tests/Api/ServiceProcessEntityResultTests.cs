@@ -671,6 +671,23 @@ public sealed class ServiceProcessEntityResultTests
         Assert.Equal("services.binding.resultSourceMismatch", Assert.Single(error.Validation.Diagnostics).Code);
     }
 
+    [Theory]
+    [InlineData(ApiResultKind.Success)]
+    [InlineData(ApiResultKind.Conflict)]
+    [InlineData(ApiResultKind.ValidationFailed)]
+    public async Task PublicProcessResultUsesDeclaredClassifierWithoutResolvingEntity(ApiResultKind kind)
+    {
+        var fixture = await Create(classification: kind);
+        var result = await fixture.Runtime.ReadProcessResultAsync(fixture.Context, "terminal", fixture.Instance);
+        Assert.Equal(kind, result.Kind);
+        Assert.Equal(kind == ApiResultKind.Success, result.Outcome is not null);
+        Assert.Equal(1, fixture.Values.Classifications);
+        Assert.Equal(0, fixture.Values.RepositoryResolutions);
+        var denied = await fixture.Runtime.ReadProcessResultAsync(OperationContext.Create(), "terminal", fixture.Instance);
+        Assert.Equal(ApiResultKind.Forbidden, denied.Kind);
+        Assert.Equal(1, fixture.Values.Classifications); // No classifier invocation before independent read admission.
+    }
+
     static async Task<Fixture> Create(string owner = "tenant-a", string resultNode = "commit", ApiResultKind? classification = null, IServiceInvocationAuthorization? authorization = null, bool includeStart = false, string? failureCode = null)
     {
         var actor = new PrincipalRef("reviewer", PrincipalKind.User);
@@ -723,7 +740,7 @@ public sealed class ServiceProcessEntityResultTests
             .. (includeStart ? new ServiceOperation[] { new ServiceProcessOperation("start", plan.DefinitionReference, [new("notes.start")]) } : []),
             new ServiceProcessEntityResultOperation("result", plan.DefinitionReference, new(resultNode), entity.StateShape.QualifiedId,
                 [new("notes.result.read")], resultClassifier: classifier?.Reference),
-            new ServiceProcessResultOperation("terminal", plan.DefinitionReference, [new("notes.result.read")])]), provenance);
+            new ServiceProcessResultOperation("terminal", plan.DefinitionReference, [new("notes.result.read")], classifier?.Reference)]), provenance);
         var binding = new ServiceProcessEntityResultBinding("result", plan, transition,
             new(entity, _ => { values.RepositoryResolutions++; return repository; }), "notes", values, classifierBinding);
         var catalog = ExecutionControlApiCatalog.Create();
@@ -734,7 +751,7 @@ public sealed class ServiceProcessEntityResultTests
             var started = await startAdapter.DispatchAsync(invocationContext, catalog.Start, request, invocation);
             return Assert.IsType<Cohesive.Execution.ProcessStartResult>(started.Body);
         });
-        var runtime = new ServiceRuntime(service, [binding, new ServiceProcessResultBinding("terminal", plan, "notes", values),
+        var runtime = new ServiceRuntime(service, [binding, new ServiceProcessResultBinding("terminal", plan, "notes", values, classifierBinding),
             .. (includeStart ? new ServiceBinding[] { startBinding } : [])], authorization ?? new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
         return new(runtime, repository, values, context, continuation.ProcessInstanceId, (await repository.TryGet(context, "note/1"))!);
     }

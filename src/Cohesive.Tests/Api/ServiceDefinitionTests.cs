@@ -54,10 +54,13 @@ public sealed class ServiceDefinitionTests
             new("other-commit"), operation.Entity, operation.AuthorizationRequirements));
     }
 
-    [Fact]
-    public void TerminalResultRoundTripsExactProcessAndIndependentRequirements()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TerminalResultRoundTripsExactProcessAndIndependentRequirements(bool classified)
     {
-        var operation = new ServiceProcessResultOperation("result", Reference("compile/spec"), [new("spec.result.read")]);
+        var operation = new ServiceProcessResultOperation("result", Reference("compile/spec"), [new("spec.result.read")],
+            classified ? Reference("compile/classify") : null);
         var document = ServiceDefinitionDocuments.Create(new("compiler"), new("1"), new([operation]),
             new(new("tests"), new("tests/services"), DocumentOrigin.Generated));
         Assert.True(ExecutionDefinitionJsonSerializer.TryDeserialize(

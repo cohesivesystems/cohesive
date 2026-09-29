@@ -250,3 +250,17 @@ and idempotency identities identify this call; they do not create a durable rece
 `WithInvocationStartContext` checks instance/authority affinity before attaching that attribution. The retained
 start helper remains for durable replay. This lets existing query handlers enforce scope and attribute generated
 artifacts without accepting caller-supplied actor/time fields or introducing an Ari-specific identity model.
+
+### Classifying public Process results
+
+`ReadResultOf(process, classifier)` declares an optional exact deterministic hosted query from the
+Process output to `ServiceResultClassification`. The runtime validates the reference and both contracts
+when binding, then evaluates the classifier only after independent result-read authorization and
+terminal-value validation. A rejection exposes its selected diagnostics without the raw output; success
+returns the unchanged canonical value. No entity repository or internal commit-node selector is required.
+The existing committed-entity result path shares the same classification implementation.
+
+For example, a review Process can return `Result<CommittedProposal, ReviewRejection>`. Its classifier
+selects success or conflict from that value; HTTP then projects the successful proposal into its resource
+view. This preserves a Process-owned output while keeping transport status and domain rejection distinct.
+A classifier grants no authorization and provides no execution, persistence or commit guarantee.

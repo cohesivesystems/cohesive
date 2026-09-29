@@ -7,7 +7,7 @@ using Cohesive.Model.Serialization;
 namespace Cohesive.Api.Services;
 
 /// <summary>Business disposition produced by a declared terminal-result classifier Query.</summary>
-/// <remarks>Success permits receipt resolution; it does not establish a committed entity result.
+/// <remarks>Success permits the declared result projection; it does not itself establish a committed entity result.
 /// Rejections expose only diagnostics explicitly selected by the application-owned classifier.</remarks>
 public sealed record ServiceResultClassification
 {
@@ -26,7 +26,7 @@ public sealed record ServiceResultClassification
         Kind = kind;
         Diagnostics = diagnostics;
     }
-    /// <summary>Standard business disposition; success still requires the declared commit receipt.</summary>
+    /// <summary>Standard business disposition; the declared result source remains authoritative.</summary>
     public ApiResultKind Kind { get; }
     /// <summary>Application-selected diagnostics safe for the authorized result reader.</summary>
     public ImmutableArray<DocumentValidationDiagnostic> Diagnostics { get; }

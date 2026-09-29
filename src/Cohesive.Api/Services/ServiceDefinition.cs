@@ -131,8 +131,17 @@ public sealed record ServiceProcessResultOperation : ServiceOperation
     /// <exception cref="ArgumentNullException">The exact Process reference is null.</exception>
     [JsonConstructor]
     public ServiceProcessResultOperation(string id, ExecutionDefinitionReference process,
-        ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default)
-        : base(id, authorizationRequirements) => Process = process ?? throw new ArgumentNullException(nameof(process));
+        ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default,
+        ExecutionDefinitionReference? resultClassifier = null)
+        : base(id, authorizationRequirements)
+    {
+        Process = process ?? throw new ArgumentNullException(nameof(process));
+        ResultClassifier = resultClassifier;
+    }
+
+    /// <summary>Optional exact deterministic Query classifying the public terminal value before disclosure.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExecutionDefinitionReference? ResultClassifier { get; }
 
     /// <summary>Exact Process authority supplying the result contract and retained terminal value.</summary>
     public ExecutionDefinitionReference Process { get; }

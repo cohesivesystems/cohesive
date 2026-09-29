@@ -1,4 +1,6 @@
 using System.Text;
+using Cohesive.Relations.Authoring;
+using Cohesive.Relations.IR;
 using Cohesive.Adapters.AspNet.Services;
 using Cohesive.Processes.Authoring;
 using Microsoft.AspNetCore.Builder;
@@ -38,17 +40,22 @@ public sealed class ServiceEphemeralProcessTests
         Assert.Equal(TimeSpan.FromSeconds(2), Assert.IsType<ServiceProcessOperation>(Assert.Single(definition!.Operations)).Execution!.Timeout);
     }
 
-    [Fact]
-    public void FluentResultReadDerivesProcessIdentityWithoutInheritingWritePermission()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FluentResultReadDerivesProcessIdentityWithoutInheritingWritePermission(bool classified)
     {
         var process = ProcessAuthoring.Project<string, string>(Plan().Document);
+        var classifier = classified ? HostedQuery<string, ServiceResultClassification>.Create(new("classify"), new("1"),
+            new("tests.classify", "1"), "v1", Provenance,
+            evaluationSemantics: HostedQueryEvaluationSemantics.DeterministicComputation) : null;
         var document = Service.Define(new("notes"), new("1"), Provenance)
             .Operation("write").Require(new("notes.write")).Run(process).ReturnAfterDurableAdmission()
-            .Operation("result").Require(new("notes.read")).ReadResultOf(process).Build();
+            .Operation("result").Require(new("notes.read")).ReadResultOf(process, classifier).Build();
         var direct = ServiceDefinitionDocuments.Create(new("notes"), new("1"), new([
             new ServiceProcessOperation("write", process.Reference, [new("notes.write")],
                 new(ProcessExecutionLifetime.Durable, ServiceProcessCompletion.Admission)),
-            new ServiceProcessResultOperation("result", process.Reference, [new("notes.read")])]), Provenance);
+            new ServiceProcessResultOperation("result", process.Reference, [new("notes.read")], classifier?.Reference)]), Provenance);
         Assert.Equal(ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(direct),
             ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document));
         Assert.Equal(direct.Metadata.Fingerprint, document.Metadata.Fingerprint);

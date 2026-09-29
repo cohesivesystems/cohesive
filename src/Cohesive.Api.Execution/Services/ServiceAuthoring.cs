@@ -4,6 +4,7 @@ using Cohesive.Execution;
 using Cohesive.Processes.Authoring;
 using Cohesive.Processes.Compilation;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Authoring;
 using Cohesive.Relations.IR;
 
 namespace Cohesive.Api.Execution.Services;
@@ -94,12 +95,16 @@ public sealed class ServiceOperationBuilder
     }
 
     /// <summary>Exposes the retained public output of an exact typed Process with independent authorization.</summary>
-    public ServiceBuilder ReadResultOf<TInput, TResult>(Process<TInput, TResult> definition)
+    public ServiceBuilder ReadResultOf<TInput, TResult>(Process<TInput, TResult> definition,
+        HostedQuery<TResult, ServiceResultClassification>? classifier = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         RequireUnselected();
         if (!definition.IsValid) throw new ServiceBindingValidationException(definition.Validation);
-        return service.Add(new ServiceProcessResultOperation(id, definition.Reference, requirements));
+        if (classifier is not null && (!classifier.IsValid || classifier.InputContract != definition.Definition.Result
+            || classifier.EvaluationSemantics != HostedQueryEvaluationSemantics.DeterministicComputation))
+            throw new ArgumentException("The result classifier must be a valid deterministic Query over the exact Process output.", nameof(classifier));
+        return service.Add(new ServiceProcessResultOperation(id, definition.Reference, requirements, classifier?.Reference));
     }
 
     void RequireUnselected()

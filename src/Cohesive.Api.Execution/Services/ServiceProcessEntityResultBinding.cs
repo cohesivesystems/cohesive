@@ -62,10 +62,6 @@ public sealed class ServiceProcessEntityResultBinding : ServiceBinding
     internal IProcessExecutionValueRepository Values { get; }
     /// <summary>Exact deterministic classifier, invoked only after result-read admission.</summary>
     public DeterministicHostedQueryBinding? ResultClassifier { get; }
-    internal static readonly Lazy<ValueContract> ClassificationContract = new(() =>
-        new(new DefaultClrTypeRefMapper().Map(typeof(ServiceResultClassification), nullability: null)));
-
-
     internal override void Validate(ServiceOperation operation)
     {
         if (operation is not ServiceProcessEntityResultOperation result || result.Process != Process.DefinitionReference
@@ -75,11 +71,7 @@ public sealed class ServiceProcessEntityResultBinding : ServiceBinding
             || Transition.Definition.Observation != ValueContract.FromShape(Entity.Entity.Shape))
             throw ServiceBindingValidationException.Error("services.binding.resultSourceMismatch",
                 "The result source must identify an exact Transition invocation and its entity authority.", "/bindings/processEntityResult");
-        if (result.ResultClassifier != ResultClassifier?.Reference
-            || (ResultClassifier is not null && (ResultClassifier.InputContract != Process.Definition.Result
-                || ResultClassifier.ResultContract != ClassificationContract.Value)))
-            throw ServiceBindingValidationException.Error("services.binding.resultClassifierMismatch",
-                "The classifier must match the exact declared Query, Process output and standard classification contract.", "/bindings/resultClassifier");
+        ServiceProcessResultBinding.ValidateClassifier(result.ResultClassifier, ResultClassifier, Process.Definition.Result);
     }
 }
 
@@ -130,17 +122,8 @@ public sealed partial class ServiceRuntime
             {
                 if (values.TerminalOutcome!.Detail?.Value is not PortableValue terminal)
                     return Reject(ApiResultKind.InfrastructureError, "services.process.resultUnavailable", "The canonical terminal result is unavailable.");
-                var classified = classifier.Evaluate(terminal, trusted.CancellationToken);
-                if (classified.Type == ResultType.Failure)
-                    return Reject(ApiResultKind.InfrastructureError, "services.process.classificationFailed", "The terminal result could not be classified against its declared contract.");
-                var decoded = HostedQueryValueAdapter.Decode<ServiceResultClassification>(classified.Success!,
-                    ServiceProcessEntityResultBinding.ClassificationContract.Value);
-                if (decoded.Type == ResultType.Failure)
-                    return Reject(ApiResultKind.InfrastructureError, "services.process.classificationFailed", "The terminal classification is invalid.");
-                var classification = decoded.Success!;
-                evidence.Record("terminalResultClassified", classification.Kind.ToString());
-                if (classification.Kind != ApiResultKind.Success)
-                    return new(classification.Kind, null, classification.Diagnostics, evidence.Complete(classification.Kind));
+                var rejection = ClassifyProcessResult<EntitySnapshot>(classifier, terminal, trusted, evidence);
+                if (rejection is not null) return rejection;
             }
             var candidates = values.Evidence.SelectMany(item => item.Trace).Where(item =>
                 item.Continuation == values.TerminalContinuation && item.Node == operation.CommitNode
