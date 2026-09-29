@@ -132,3 +132,10 @@ This operation supports Process result enrichment and is also reused by service 
 reads. For example, after commit A is followed by mutation B, resolving A still returns A's fields and
 concurrency token; a wrong tenant, attempt, Transition or partition returns no snapshot. In-memory tests
 cover those boundaries and denied resource disclosure. Optional Cosmos integration remains a separate gate.
+
+`ProcessEnrichmentUsesAuthorizedOriginalReceiptAfterLaterWrite` exercises this boundary with the native
+Process interpreter, Transition storage adapter and a registered hosted query. A customer is committed
+with status `pending`, another writer changes it to `later`, and enrichment still returns `pending`
+with the original token. Denied disclosure fails the Process while preserving the committed entity and
+its interaction; it does not roll back or repeat the Transition. This is in-memory integration evidence,
+not Cosmos conformance or deployed recovery qualification.

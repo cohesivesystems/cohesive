@@ -1,9 +1,12 @@
 using Cohesive.Adapters.Cosmos;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
+using Cohesive.Processes.Authoring;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
+using Cohesive.Relations.Authoring;
+using Cohesive.Relations.IR;
 using Cohesive.Storage;
 using Cohesive.Storage.Processes;
 using Cohesive.Transitions.Authoring;
@@ -28,6 +31,89 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
         Assert.Equal(EntityTransitionReceiptReferences.ValueContract, link.ReceiptContract);
         Assert.Throws<InvalidOperationException>(() => new ProcessTransitionOperationBinding(fixture.Plan,
             new NonAtomicRepository(fixture.Repository), fixture.InteractionCatalog).CreateProcessDefinitionLink());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ProcessEnrichmentUsesAuthorizedOriginalReceiptAfterLaterWrite(bool allowDisclosure)
+    {
+        var fixture = await Fixture.CreateAsync();
+        var query = HostedQuery<EntityTransitionOperationReference, string>.Create(
+            new("query/committed-customer"), new("1"), new("tests.committed-customer", "1"), "v1",
+            Fixture.Provenance(), evaluationSemantics: HostedQueryEvaluationSemantics.Observation);
+        var receipt = new ProcessOutputBinding(new("receipt"), EntityTransitionReceiptReferences.ValueContract);
+        var output = new ProcessOutputBinding(new("response"), query.ResultContract);
+        var document = ProcessDefinitionDocuments.Create(new("process/enriched-customer"), new("1"),
+            new(fixture.StateContract, query.ResultContract, new("commit"), [
+                new InvokeTransitionProcessNode(new("commit"), fixture.Plan.DefinitionReference,
+                    Expr.Field(ProcessBindingIds.Input, nameof(CustomerEntity.Id)), Expr.BoundValue(ProcessBindingIds.Input),
+                    new(new(new("commit/enrich"), new("enrich"))), receipt),
+                new EvaluateRelationProcessNode(new("enrich"), query.Reference, Expr.BoundValue(receipt.Binding),
+                    new(new(new("enrich/return"), new("return")), output)),
+                new ReturnProcessNode(new("return"), Expr.BoundValue(output.Binding))
+            ], ProcessRecoveryPolicy.ContinueAttempt), Fixture.Provenance());
+        var binding = new ProcessTransitionOperationBinding(fixture.Plan, fixture.Repository, fixture.InteractionCatalog);
+        var compilation = ProcessStaticCompiler.Compile(document, new(definitions:
+            [binding.CreateProcessDefinitionLink(), query.CreateProcessDefinitionLink()], interactionContracts: fixture.InteractionCatalog));
+        Assert.True(compilation.IsSuccessful, string.Join("; ", compilation.Validation.Diagnostics));
+        var plan = compilation.Plan!;
+        EntitySnapshot? committed = null;
+        var authorizations = 0;
+        var handlers = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.CreateOutcome(query, async (context, evaluation, reference) =>
+            {
+                var resolved = await EntityTransitionReceiptReferences.ResolveSnapshotAsync(fixture.Repository,
+                    context, reference, fixture.Plan.DefinitionReference, evaluation.Context.AuthorityScope,
+                    evaluation.Continuation, "tenant/acme", (_, snapshot) =>
+                    {
+                        authorizations++;
+                        Assert.Equal(committed, snapshot);
+                        return ValueTask.FromResult(allowDisclosure);
+                    });
+                return resolved.Type == Cohesive.Prelude.ResultType.Failure
+                    ? ProcessRelationHandlerOutcome<string>.Failed(resolved.Failure!)
+                    : ProcessRelationHandlerOutcome<string>.Completed(
+                        resolved.Success!.Entity.Observation.GetField(nameof(CustomerEntity.Status)).GetRequiredString()
+                        + ":" + resolved.Success.ConcurrencyToken.Value);
+            })]);
+        var writes = 0;
+        var host = new RegisteredAsyncProcessReferenceHost(handlers, async (context, invocation) =>
+        {
+            writes++;
+            var result = await fixture.Adapter.ExecuteAsync(context, invocation);
+            Assert.True(result.IsSuccessful);
+            var retained = await fixture.Repository.ResolveTransitionOperation(context,
+                EntityTransitionReceiptReferences.Read(result.ReceiptReference!));
+            committed = retained.Receipt!.Entity;
+            // Another writer wins before enrichment. A current-state read would return the wrong response.
+            var later = CustomerEntity.Instance.CreateState(fixture.SubjectId,
+                new CustomerState(fixture.SubjectId, "tenant/acme", "later"), committed.Entity.Version + 1);
+            await fixture.Repository.Upsert(context, new(later.Snapshot, committed.ConcurrencyToken));
+            return result;
+        });
+        var state = ProcessReferenceInterpreter.Create(plan, fixture.Invocation.Continuation, fixture.Invocation.Input);
+        var activation = new ProcessActivation(new("activation/enriched-customer"), ProcessActivationCause.Start,
+            fixture.Invocation.ObservedAtUtc, fixture.Invocation.Context);
+        var decision = await ProcessReferenceInterpreter.ActivateAsync(fixture.Context, plan, state, activation, host);
+        Assert.Equal(1, writes);
+        Assert.Equal(1, authorizations);
+        Assert.Single(decision.Emissions); // The committed interaction is retained even when disclosure is denied.
+        var current = await fixture.Repository.TryGet(fixture.Context, fixture.SubjectId, EntityReadOptions.Full);
+        Assert.Equal("later", current!.Entity.Observation.GetField(nameof(CustomerEntity.Status)).GetRequiredString());
+        Assert.NotEqual(committed!.ConcurrencyToken, current.ConcurrencyToken);
+        if (allowDisclosure)
+        {
+            Assert.Equal(ProcessActivationDisposition.Completed, decision.Disposition);
+            Assert.Equal("pending:" + committed.ConcurrencyToken.Value,
+                decision.State.Terminal.Detail!.Value!.Value!.Value.GetString());
+        }
+        else
+        {
+            Assert.Equal(ProcessActivationDisposition.Failed, decision.Disposition);
+            Assert.Contains(decision.Diagnostics, diagnostic =>
+                diagnostic.Code == EntityTransitionOperationDiagnosticCodes.ReceiptResourceDenied);
+        }
     }
 
     sealed class NonAtomicRepository(IEntityRepository inner) : IEntityRepository
