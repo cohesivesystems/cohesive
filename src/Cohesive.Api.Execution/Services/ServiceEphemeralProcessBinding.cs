@@ -4,6 +4,7 @@ using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
+using Cohesive.Relations.Execution;
 
 namespace Cohesive.Api.Execution.Services;
 
@@ -13,14 +14,20 @@ namespace Cohesive.Api.Execution.Services;
 public sealed class ServiceEphemeralProcessBinding : ServiceBinding
 {
     /// <summary>Prepares the canonical interpreter and validates supported constructs once.</summary>
+    /// <param name="operationId">Declared operation identity.</param>
+    /// <param name="plan">Exact compiled Process with its input and public result contracts.</param>
+    /// <param name="authority">Execution authority combined with the admitted tenant scope.</param>
+    /// <param name="host">Invocation-scoped factory called after authorization and input validation.</param>
+    /// <param name="resultClassifier">Optional deterministic binding for the exact declared public-output classifier.</param>
     /// <exception cref="ArgumentException">Identity, authority or Process requirements are unsupported.</exception>
     /// <exception cref="ArgumentNullException">Plan or host factory is null.</exception>
     public ServiceEphemeralProcessBinding(string operationId, CompiledProcessPlan plan, string authority,
-        Func<OperationContext, ExecutionApiInvocationContext, IAsyncProcessReferenceHost> host) : base(operationId)
+        Func<OperationContext, ExecutionApiInvocationContext, IAsyncProcessReferenceHost> host, DeterministicHostedQueryBinding? resultClassifier = null) : base(operationId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(authority);
         Executor = new(plan);
         Authority = authority;
+        ResultClassifier = resultClassifier;
         Host = host ?? throw new ArgumentNullException(nameof(host));
     }
 
@@ -28,6 +35,8 @@ public sealed class ServiceEphemeralProcessBinding : ServiceBinding
     public EphemeralProcessExecutor Executor { get; }
     /// <summary>Host-associated authority; logical tenant is supplied by invocation admission.</summary>
     public string Authority { get; }
+    /// <summary>Optional exact deterministic classifier of the successful public output.</summary>
+    public DeterministicHostedQueryBinding? ResultClassifier { get; }
     internal Func<OperationContext, ExecutionApiInvocationContext, IAsyncProcessReferenceHost> Host { get; }
 
     internal override void Validate(ServiceOperation operation)
@@ -38,6 +47,7 @@ public sealed class ServiceEphemeralProcessBinding : ServiceBinding
         if (process.Execution is not { Lifetime: ProcessExecutionLifetime.Ephemeral, Completion: ServiceProcessCompletion.Terminal })
             throw ServiceBindingValidationException.Error("services.binding.executionUnsupported",
                 "This binding requires explicit ephemeral terminal completion.", "/bindings/process/execution");
+        ServiceProcessResultBinding.ValidateClassifier(process.ResultClassifier, ResultClassifier, Executor.Plan.Definition.Result);
     }
 }
 
@@ -90,6 +100,13 @@ public sealed partial class ServiceRuntime
                 ProcessActivationDisposition.Rejected => ApiResultKind.ValidationFailed,
                 _ => ApiResultKind.DomainError
             };
+            if (kind == ApiResultKind.Success && binding.ResultClassifier is not null)
+            {
+                var terminal = decision.State.Terminal.Detail?.Value
+                    ?? throw new InvalidOperationException("Completed Process returned no public value.");
+                var rejection = ClassifyProcessResult<EphemeralProcessResult>(binding.ResultClassifier, terminal, context, evidence);
+                if (rejection is not null) return rejection;
+            }
             return new(kind, execution, decision.Diagnostics, evidence.Complete(kind));
         }
         catch (Exception exception)

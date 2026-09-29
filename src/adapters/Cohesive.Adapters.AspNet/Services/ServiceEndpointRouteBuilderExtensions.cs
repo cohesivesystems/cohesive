@@ -271,26 +271,62 @@ public static class ServiceEndpointRouteBuilderExtensions
         AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
         IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
     {
+        return endpoints.MapServiceEphemeralProcess<TInput, TOutput, TInput, TOutput>(declaration, resolveRuntime,
+            operationId, process, http, static (_, input) => input, static output => output,
+            authorizationPolicyResolver, scopePolicies);
+    }
+
+    /// <summary>Maps an ephemeral Process through pure medium request and public response projections.</summary>
+    /// <remarks>Registration resolves no runtime. Projections must perform no reads, writes or orchestration.
+    /// The runtime validates the projected canonical input and owns authorization and bounded execution.
+    /// Only successful public terminal output reaches the response projection; private execution evidence does not.
+    /// Cancellation, deadline, and uncertain-effect behavior match the inferred-contract overload.</remarks>
+    /// <param name="endpoints">Endpoint route builder.</param>
+    /// <param name="declaration">Canonical service declaration.</param>
+    /// <param name="resolveRuntime">Deferred request-time runtime resolver.</param>
+    /// <param name="operationId">Declared ephemeral terminal operation.</param>
+    /// <param name="process">Exact Process input and output authority.</param>
+    /// <param name="http">Medium route and request body binding.</param>
+    /// <param name="bind">Pure mapping of route and body fields into Process input.</param>
+    /// <param name="project">Pure mapping of public Process output into the response body.</param>
+    /// <param name="authorizationPolicyResolver">Optional native authorization policy resolver.</param>
+    /// <param name="scopePolicies">Optional medium scope policies.</param>
+    /// <returns>The mapped endpoint with its canonical declaration metadata.</returns>
+    /// <exception cref="ArgumentException">The declaration, Process, or HTTP body is incompatible.</exception>
+    /// <exception cref="BadHttpRequestException">Request parsing or input projection rejects transport fields.</exception>
+    public static RouteHandlerBuilder MapServiceEphemeralProcess<TRequest, TResponse, TInput, TOutput>(
+        this IEndpointRouteBuilder endpoints, ExecutionDefinitionDocument declaration,
+        Func<IServiceProvider, ServiceRuntime> resolveRuntime, string operationId,
+        Cohesive.Processes.Authoring.Process<TInput, TOutput> process, HttpBinding http,
+        Func<HttpContext, TRequest, TInput> bind, Func<TOutput, TResponse> project,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
+    {
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(resolveRuntime);
         ArgumentNullException.ThrowIfNull(http);
-        var projection = ServiceApiProjection.ProjectEphemeralProcess(declaration, operationId, process, http, scopePolicies);
+        ArgumentNullException.ThrowIfNull(bind);
+        ArgumentNullException.ThrowIfNull(project);
+        var projection = ServiceApiProjection.ProjectEphemeralProcess<TRequest, TResponse, TInput, TOutput>(
+            declaration, operationId, process, http, scopePolicies);
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext request) =>
         {
             var body = await HttpRequestBindingSupport.ReadOperationBodyAsync(request, projection.Operation, context.CancellationToken).ConfigureAwait(false);
+            var input = bind(request, (TRequest)body!);
             var runtime = ResolveRuntime(declaration, resolveRuntime, request.RequestServices);
             try
             {
                 var result = await runtime.ExecuteProcessAsync(context, operationId,
-                    new(new($"http/{request.TraceIdentifier}"), new("attempt/1")), ObservationValue.FromObject(body)).ConfigureAwait(false);
+                    new(new($"http/{request.TraceIdentifier}"), new("attempt/1")), ObservationValue.FromObject(input)).ConfigureAwait(false);
                 if (result.Kind == ApiResultKind.Success)
                 {
                     var value = result.Outcome?.Decision.State.Terminal.Detail?.Value?.Value
                         ?? throw new InvalidOperationException("Completed Process returned no public value.");
-                    return Results.Json(value.Deserialize<TOutput>(OutcomeJson, ObservationBytesJsonEncoding.Base64String),
+                    return Results.Json(project(value.Deserialize<TOutput>(OutcomeJson, ObservationBytesJsonEncoding.Base64String)!),
                         statusCode: projection.Operation.Results.Single(item => item.Kind == ApiResultKind.Success).Http!.StatusCode);
                 }
-                if (result.Kind == ApiResultKind.DomainError)
+                // Failed execution carries internal evidence; classifier rejections contain only selected public diagnostics.
+                if (result.Kind == ApiResultKind.DomainError && result.Outcome is not null)
                     return Uncertain(ApiResultKind.DomainError);
                 return ProjectServiceProblem(projection, result.Kind, result.Diagnostics);
             }

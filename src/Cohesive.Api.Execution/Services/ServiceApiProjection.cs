@@ -145,19 +145,41 @@ public static class ServiceApiProjection
         string operationId, Cohesive.Processes.Authoring.Process<TInput, TOutput> process, HttpBinding? http = null,
         IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
     {
+        return ProjectEphemeralProcess<TInput, TOutput, TInput, TOutput>(declaration, operationId, process, http, scopePolicies);
+    }
+
+    /// <summary>Projects an ephemeral Process with independent medium request and response contracts.</summary>
+    /// <remarks>The Process remains the execution authority. The adapter must supply pure mappings between
+    /// the medium contracts and the exact Process input and public output; these mappings cannot orchestrate work.</remarks>
+    /// <param name="declaration">Canonical service declaration.</param>
+    /// <param name="operationId">Declared ephemeral terminal operation.</param>
+    /// <param name="process">Exact typed Process referenced by the operation.</param>
+    /// <param name="http">Optional HTTP binding whose body must match the medium request.</param>
+    /// <param name="scopePolicies">Optional medium scope policies.</param>
+    /// <returns>The endpoint derived from the declared operation and medium contracts.</returns>
+    /// <exception cref="ArgumentException">The operation, Process, or HTTP body is incompatible.</exception>
+    /// <exception cref="ServiceBindingValidationException">The declaration or Process is invalid.</exception>
+    public static ApiEndpoint ProjectEphemeralProcess<TRequest, TResponse, TInput, TOutput>(
+        ExecutionDefinitionDocument declaration, string operationId,
+        Cohesive.Processes.Authoring.Process<TInput, TOutput> process, HttpBinding? http = null,
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
+    {
         ArgumentNullException.ThrowIfNull(process);
         if (!process.IsValid) throw new ServiceBindingValidationException(process.Validation);
         if (GetOperation(declaration, operationId) is not ServiceProcessOperation operation
             || operation.Process != process.Reference
             || operation.Execution is not { Lifetime: ProcessExecutionLifetime.Ephemeral, Completion: ServiceProcessCompletion.Terminal })
             throw new ArgumentException("Terminal projection requires the exact ephemeral Process declaration.", nameof(operationId));
-        if (http?.Body is { } body && body.BodyType != typeof(TInput))
-            throw new ArgumentException("HTTP input must match the Process input contract.", nameof(http));
-        var projected = new ApiOperation(operation.Id, ApiOperationKind.Command, typeof(TInput), typeof(TOutput),
+        if (http?.Body is { } body && body.BodyType != typeof(TRequest))
+            throw new ArgumentException("HTTP input must match the medium request contract.", nameof(http));
+        var projected = new ApiOperation(operation.Id, ApiOperationKind.Command, typeof(TRequest), typeof(TResponse),
             id: new(OperationIdentity(new(declaration.Metadata.DefinitionId, declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint), operationId)),
             authorizationRequirements: operation.AuthorizationRequirements, scopePolicies: scopePolicies,
-            results: [new(ApiResultKind.Success, typeof(TOutput), isPrimary: true),
+            results: [new(ApiResultKind.Success, typeof(TResponse), isPrimary: true),
                 new(ApiResultKind.Forbidden, typeof(ApiProblem)),
+                new(ApiResultKind.NotFound, typeof(ApiProblem)),
+                new(ApiResultKind.Conflict, typeof(ApiProblem)),
+                new(ApiResultKind.PreconditionFailed, typeof(ApiProblem)),
                 new(ApiResultKind.ValidationFailed, typeof(ApiValidationProblem)),
                 new(ApiResultKind.DomainError, typeof(ApiProblem)),
                 new(ApiResultKind.InfrastructureError, typeof(ApiProblem))]);

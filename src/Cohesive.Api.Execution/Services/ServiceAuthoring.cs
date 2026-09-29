@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Cohesive.Api.Services;
 using Cohesive.Execution;
+using Cohesive.Model;
 using Cohesive.Processes.Authoring;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.IR;
@@ -64,15 +65,17 @@ public sealed class ServiceOperationBuilder
     readonly ServiceBuilder service;
     readonly string id;
     readonly ExecutionDefinitionReference? process;
+    readonly ValueContract? processResult;
     readonly ImmutableArray<ApiAuthorizationRequirement> requirements;
 
     internal ServiceOperationBuilder(ServiceBuilder service, string id, ExecutionDefinitionReference? process,
-        ImmutableArray<ApiAuthorizationRequirement> requirements)
+        ImmutableArray<ApiAuthorizationRequirement> requirements, ValueContract? processResult = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         this.service = service;
         this.id = id;
         this.process = process;
+        this.processResult = processResult;
         this.requirements = requirements;
     }
 
@@ -80,7 +83,7 @@ public sealed class ServiceOperationBuilder
     public ServiceOperationBuilder Require(ApiAuthorizationRequirement requirement)
     {
         ArgumentNullException.ThrowIfNull(requirement);
-        return new(service, id, process, requirements.Contains(requirement) ? requirements : requirements.Add(requirement));
+        return new(service, id, process, requirements.Contains(requirement) ? requirements : requirements.Add(requirement), processResult);
     }
 
     /// <summary>Exposes a scoped canonical query without creating an evaluator or acquiring data.</summary>
@@ -143,29 +146,46 @@ public sealed class ServiceOperationBuilder
     {
         ArgumentNullException.ThrowIfNull(definition);
         if (!definition.IsValid) throw new ServiceBindingValidationException(definition.Validation);
-        return new(service, id, definition.Reference, requirements);
+        return new(service, id, definition.Reference, requirements, definition.Definition.Result);
     }
 
     /// <summary>References a canonical data-authored Process without introducing a CLR input authority.</summary>
     /// <remarks>Performs document validation only; linked compilation and infrastructure resolution stay at runtime binding.</remarks>
     public ServiceOperationBuilder Run(ExecutionDefinitionDocument document) =>
-        new(service, id, RequireDocument(document), requirements);
+        new(service, id, RequireDocument(document), requirements, document.GetDefinition<ProcessDefinition>().Result);
 
     /// <summary>References already compiled behavior without revalidating its dependency closure.</summary>
     public ServiceOperationBuilder Run(CompiledProcessPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        return new(service, id, plan.DefinitionReference, requirements);
+        return new(service, id, plan.DefinitionReference, requirements, plan.Definition.Result);
     }
 
     /// <summary>Completes the operation with invocation-local execution and an explicit cooperative deadline.</summary>
     public ServiceBuilder ExecuteEphemerally(TimeSpan timeout) => Complete(
         new(ProcessExecutionLifetime.Ephemeral, ServiceProcessCompletion.Terminal, timeout));
 
+    /// <summary>Completes ephemeral execution with a declared classifier over its public terminal output.</summary>
+    /// <param name="timeout">Positive cooperative execution budget.</param>
+    /// <param name="classifier">Exact deterministic Query over the selected Process result contract.</param>
+    /// <returns>The service containing the classified ephemeral operation.</returns>
+    /// <exception cref="ArgumentException">The classifier is invalid, nondeterministic, or has a different input contract.</exception>
+    /// <exception cref="InvalidOperationException">No Process has been selected.</exception>
+    public ServiceBuilder ExecuteEphemerally<TResult>(TimeSpan timeout,
+        HostedQuery<TResult, ServiceResultClassification> classifier) where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(classifier);
+        if (process is null) throw new InvalidOperationException("Select the Process with Run before choosing its execution policy.");
+        if (!classifier.IsValid || classifier.InputContract != processResult
+            || classifier.EvaluationSemantics != HostedQueryEvaluationSemantics.DeterministicComputation)
+            throw new ArgumentException("The result classifier must be a valid deterministic Query over the exact Process output.", nameof(classifier));
+        return Complete(new(ProcessExecutionLifetime.Ephemeral, ServiceProcessCompletion.Terminal, timeout), classifier.Reference);
+    }
+
     /// <summary>Completes the operation with durable admission; the response does not promise Process completion.</summary>
     public ServiceBuilder ReturnAfterDurableAdmission() => Complete(
         new(ProcessExecutionLifetime.Durable, ServiceProcessCompletion.Admission));
 
-    ServiceBuilder Complete(ServiceProcessExecution execution) => service.Add(new ServiceProcessOperation(id,
-        process ?? throw new InvalidOperationException("Select the Process with Run before choosing its execution policy."), requirements, execution));
+    ServiceBuilder Complete(ServiceProcessExecution execution, ExecutionDefinitionReference? classifier = null) => service.Add(new ServiceProcessOperation(id,
+        process ?? throw new InvalidOperationException("Select the Process with Run before choosing its execution policy."), requirements, execution, classifier));
 }
