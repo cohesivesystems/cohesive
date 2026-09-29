@@ -1695,7 +1695,7 @@ public static partial class ProcessReferenceInterpreter
                 token.Step,
                 activation.ObservedAtUtc,
                 activation.Context));
-            CompleteOperation(token, node.Id, node.Continuation, link.Result, result);
+            CompleteOperation(token, node.Id, node.Continuation, link.Result, result, node.Receipt);
         }
 
         void ExecuteRelation(ProcessTokenState token, EvaluateRelationProcessNode node)
@@ -1727,7 +1727,8 @@ public static partial class ProcessReferenceInterpreter
             ExecutionNodeId node,
             ProcessContinuation continuation,
             ValueContract resultContract,
-            ProcessOperationResult result)
+            ProcessOperationResult result,
+            ProcessOutputBinding? receipt = null)
         {
             ArgumentNullException.ThrowIfNull(result);
             if (!result.IsSuccessful)
@@ -1797,6 +1798,17 @@ public static partial class ProcessReferenceInterpreter
                 detail: "completed",
                 operationOccurrence: token.Step,
                 receiptReference: result.ReceiptReference);
+            if (receipt is not null)
+            {
+                if (result.ReceiptReference is not { } reference || reference.Contract != receipt.Contract
+                    || !PortableExecutionValidator.Validate(reference, plan.ValidationContext.ShapeGraph).IsValid)
+                {
+                    FailToken(token, Diagnostic(ProcessExecutionDiagnosticCodes.ResultContractViolated,
+                        "The successful Transition host did not return its attested receipt contract; effects may have committed.", node));
+                    return;
+                }
+                token = Bind(token, receipt, reference);
+            }
             Advance(token, continuation, value);
         }
 

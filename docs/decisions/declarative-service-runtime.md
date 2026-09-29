@@ -911,3 +911,18 @@ query reference projection and explicit trusted scope parameter. Neither path re
 repository or execution plan. This extends the existing service frontend; it introduces no parallel
 operation model. Tests compare canonical semantic bytes and fingerprints with direct IR, preserve
 branching authoring state, and verify that no source acquisition occurs during declaration.
+
+### Exact committed-result enrichment boundary
+
+Ari review currently reconciles an immutable storage receipt selected by a service-owned commit-node
+name. Replacing it with a current-state query would change its concurrency-token and snapshot contract.
+The reusable extension therefore belongs in Process receipt binding and storage receipt resolution, not
+an Ari-local response wrapper or a change to the domain Transition outcome. A Transition invocation
+can now explicitly bind its host-attested portable receipt separately from its domain value. Both retain
+their own authorities; a later query can resolve and authorize the receipt before forming the public output.
+The Process document remains the authority for which evidence is consumed and which result is returned.
+
+This choice extends existing native host receipt evidence and canonical continuation bindings. It avoids
+a second receipt catalog, implicit last-write selection and a provider-specific Process node. An exact
+host attestation is required at linking; the existing atomic state/receipt capability must be qualified at
+the storage binding before Ari adopts this path. Core conformance does not establish storage behavior.

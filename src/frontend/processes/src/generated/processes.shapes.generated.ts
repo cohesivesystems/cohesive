@@ -278,6 +278,7 @@ export interface InvokeTransitionProcessNode {
   subject: Expr;
   input: Expr;
   continuation: ProcessContinuation;
+  receipt?: ProcessOutputBinding | null;
   id: ExecutionNodeId;
 }
 
@@ -697,6 +698,11 @@ export interface ProcessContinuation {
   output?: ProcessOutputBinding | null;
 }
 
+export interface ProcessOutputBinding {
+  binding: ValueBindingId;
+  contract: ValueContract;
+}
+
 export interface RequestContractReference {
   definition: ExecutionDefinitionReference;
 }
@@ -928,11 +934,6 @@ export const processChildCancellationPolicyLabels: Record<ProcessChildCancellati
   Propagate: 'Propagate',
   Detach: 'Detach',
 };
-
-export interface ProcessOutputBinding {
-  binding: ValueBindingId;
-  contract: ValueContract;
-}
 
 export type ProcessPartitionFailurePolicy = 'Unspecified' | 'FailFast' | 'AwaitAll';
 

@@ -2615,6 +2615,7 @@ public static class ProcessContinuationValidator
                 {
                     case InvokeTransitionProcessNode transition:
                         Add(contracts, transition.Continuation.Output);
+                        Add(contracts, transition.Receipt);
                         break;
                     case EvaluateRelationProcessNode relation:
                         Add(contracts, relation.Continuation.Output);

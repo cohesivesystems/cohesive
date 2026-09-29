@@ -237,6 +237,8 @@ internal sealed class ProcessAuthoringContext
             case InvokeTransitionProcessNode invocation:
                 AddConstruct(entries, invocation.Subject, path.Add("subject"), nodeSource);
                 AddConstruct(entries, invocation.Input, path.Add("input"), nodeSource);
+                if (invocation.Receipt is { } receipt)
+                    AddOutput(entries, receipt, path.Add("receipt"), nodeSource);
                 AddContinuation(entries, invocation.Continuation, path.Add("continuation"), nodeSource);
                 break;
             case EvaluateRelationProcessNode relation:

@@ -44,6 +44,37 @@ public sealed partial class ProcessBuilder<TInput, TResult>
         return Add(new InvokeTransitionProcessNode(id, transition, subject.Expression, input.Expression, continuation), source);
     }
 
+    /// <summary>Invokes a Transition and binds its host-attested receipt separately from its domain outcome.</summary>
+    /// <typeparam name="TSubject">Authoritative subject type.</typeparam>
+    /// <typeparam name="TTransitionInput">Domain input type.</typeparam>
+    /// <typeparam name="TReceipt">Host-owned portable commit locator type.</typeparam>
+    /// <param name="id">Stable node identity.</param>
+    /// <param name="transition">Exact Transition reference.</param>
+    /// <param name="subject">Authoritative aggregate subject.</param>
+    /// <param name="input">Typed domain input.</param>
+    /// <param name="continuation">Next edge and optional domain outcome binding.</param>
+    /// <param name="receipt">Separate output binding available along the same continuation.</param>
+    /// <param name="sourceFile">Caller source file.</param>
+    /// <param name="sourceLine">Caller source line.</param>
+    /// <param name="sourceMember">Caller member.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>Linking requires a matching host receipt-contract attestation. A locator is not an access grant.</remarks>
+    public ProcessBuilder<TInput, TResult> InvokeTransitionWithReceipt<TSubject, TTransitionInput, TReceipt>(
+        ExecutionNodeId id, ExecutionDefinitionReference transition, ProcessValue<TSubject> subject,
+        ProcessValue<TTransitionInput> input, ProcessContinuation continuation, ProcessBinding<TReceipt> receipt,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(transition);
+        ArgumentNullException.ThrowIfNull(continuation);
+        context.RequireValue(subject);
+        context.RequireValue(input);
+        context.RequireBinding(receipt);
+        return Add(new InvokeTransitionProcessNode(id, transition, subject.Expression, input.Expression,
+            continuation, receipt.RequireOutput()),
+            context.Source(sourceFile, sourceLine, sourceMember, $"Transition invocation '{id.Value}'"));
+    }
+
     /// <summary>Adds evaluation of one exact canonical Relation or Query.</summary>
     /// <typeparam name="TQueryInput">CLR type of the query input expression.</typeparam>
     /// <param name="id">Stable Process-node identity.</param>

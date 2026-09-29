@@ -80,19 +80,22 @@ public sealed record InvokeTransitionProcessNode : ProcessNode
     /// <param name="subject">Portable expression identifying the authoritative aggregate subject.</param>
     /// <param name="input">Portable typed Transition input expression.</param>
     /// <param name="continuation">Typed continuation receiving the Transition outcome when requested.</param>
+    /// <param name="receipt">Optional separate binding for the host-attested immutable commit locator.</param>
     [JsonConstructor]
     public InvokeTransitionProcessNode(
         ExecutionNodeId id,
         ExecutionDefinitionReference transition,
         Expr subject,
         Expr input,
-        ProcessContinuation continuation)
+        ProcessContinuation continuation,
+        ProcessOutputBinding? receipt = null)
         : base(id)
     {
         Transition = transition;
         Subject = subject;
         Input = input;
         Continuation = continuation;
+        Receipt = receipt;
     }
 
     /// <summary>Exact Transition definition revision and fingerprint.</summary>
@@ -106,6 +109,12 @@ public sealed record InvokeTransitionProcessNode : ProcessNode
 
     /// <summary>Typed continuation receiving the Transition outcome when requested.</summary>
     public ProcessContinuation Continuation { get; }
+
+    /// <summary>Optional host-attested commit locator, distinct from the Transition domain outcome.</summary>
+    /// <remarks>The locator is not an authorization grant. Receipt resolution must enforce authority and resource
+    /// access. Omission preserves older canonical documents; selecting it requires matching linking evidence.</remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProcessOutputBinding? Receipt { get; }
 }
 
 /// <summary>Evaluates one exact canonical Relation or Query definition.</summary>

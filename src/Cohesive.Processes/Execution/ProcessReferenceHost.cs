@@ -130,7 +130,8 @@ public sealed record ProcessOperationResult
 
     /// <summary>Optional typed locator for retained authoritative commit evidence, distinct from the domain result.</summary>
     /// <remarks>The host owns its contract and resolution. A locator is not an authorization grant or current-state
-    /// snapshot. Runtimes retain it for exact response reconciliation; domain continuations still bind only Value.
+    /// snapshot. Runtimes retain it for exact response reconciliation. A Transition node may explicitly bind it
+    /// through its separately attested Receipt output; the domain outcome remains Value.
     /// Omission preserves the canonical encoding of older results and their receipt fingerprints.</remarks>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public PortableValue? ReceiptReference { get; }

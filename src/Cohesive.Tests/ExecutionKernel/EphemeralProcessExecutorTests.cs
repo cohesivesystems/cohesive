@@ -1,6 +1,7 @@
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
+using Cohesive.Processes.Authoring;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
 
@@ -30,6 +31,60 @@ public sealed class EphemeralProcessExecutorTests
         // Reusing a prepared executor does not share results or imply durable deduplication.
         await Execute(executor, host);
         Assert.Equal(2, host.Writes);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReceiptBindingIsDistinctFromDomainOutcomeAndMissingReceiptRetainsCommitEvidence(bool suppliesReceipt)
+    {
+        var receipt = Value("receipt/immutable-commit");
+        var output = new ProcessOutputBinding(new("commit-receipt"), Text);
+        var document = ProcessDefinitionDocuments.Create(new("receipt-example"), new("1"),
+            new(Text, Text, new("write"), [
+                new InvokeTransitionProcessNode(new("write"), Transition, Expr.Const("proposal/1"),
+                    Expr.BoundValue(ProcessBindingIds.Input), new(new(new("next"), new("return")), new(new("domain-outcome"), Text)), output),
+                new ReturnProcessNode(new("return"), Expr.BoundValue(output.Binding))
+            ], ProcessRecoveryPolicy.ContinueAttempt), Provenance);
+        var authored = ProcessAuthoring.Create<string, string>(
+            new(new("receipt-example"), new("1"), new("write"), ProcessRecoveryPolicy.ContinueAttempt, Provenance), builder =>
+            {
+                var domain = builder.Output<string>(new("domain-outcome"));
+                var committed = builder.Output<string>(output.Binding);
+                builder.InvokeTransitionWithReceipt(new("write"), Transition, builder.Constant("proposal/1"),
+                    builder.Input.Value, builder.Continuation(builder.Edge(new("next"), new("return")), domain), committed);
+                builder.Return(new("return"), committed.Value);
+            });
+        Assert.True(authored.IsValid, string.Join("; ", authored.Validation.Diagnostics));
+        Assert.Equal(document.Metadata.Fingerprint, authored.Document.Metadata.Fingerprint);
+        Assert.NotEqual(new ProcessDefinitionLink(Transition, ProcessDefinitionLinkKind.Transition, Text, Text),
+            new ProcessDefinitionLink(Transition, ProcessDefinitionLinkKind.Transition, Text, Text, receiptContract: Text));
+        Assert.True(ProcessDefinitionDocuments.TryDeserialize(ExecutionDefinitionJsonSerializer.Serialize(document),
+            out var restored, out _).IsValid);
+        Assert.Equal(document.Metadata.Fingerprint, restored!.Metadata.Fingerprint);
+        var unattested = ProcessStaticCompiler.Compile(document,
+            new(definitions: [new(Transition, ProcessDefinitionLinkKind.Transition, Text, Text)]));
+        Assert.False(unattested.IsSuccessful);
+        Assert.Contains(unattested.Validation.Diagnostics, d => d.Code == ProcessDefinitionDiagnosticCodes.OutputContractMismatch);
+        var compilation = ProcessStaticCompiler.Compile(document,
+            new(definitions: [new(Transition, ProcessDefinitionLinkKind.Transition, Text, Text, receiptContract: Text)]));
+        Assert.True(compilation.IsSuccessful, string.Join("; ", compilation.Validation.Diagnostics));
+        var host = new Host { Receipt = suppliesReceipt ? receipt : null };
+        var result = await Execute(new(compilation.Plan!), host);
+        Assert.Equal(1, host.Writes);
+        Assert.Equal(Value("approved"), Assert.Single(result.Evidence.CompletedOperations).Value.Value);
+        if (suppliesReceipt)
+        {
+            Assert.Equal(ProcessActivationDisposition.Completed, result.Decision.Disposition);
+            Assert.Equal(receipt, result.Decision.State.Terminal.Detail?.Value);
+            Assert.True(ProcessContinuationValidator.Validate(compilation.Plan!, result.Decision.State).IsValid);
+            Assert.True(ProcessExecutionTraceProjector.Project(result.Decision).IsSuccessful);
+        }
+        else
+        {
+            Assert.Equal(ProcessActivationDisposition.Failed, result.Decision.Disposition);
+            Assert.Contains(result.Decision.Diagnostics, d => d.Code == ProcessExecutionDiagnosticCodes.ResultContractViolated);
+        }
     }
 
     [Fact]
@@ -109,6 +164,7 @@ public sealed class EphemeralProcessExecutorTests
     {
         public int Writes { get; private set; }
         public Action? AfterWrite { get; init; }
+        public PortableValue? Receipt { get; init; }
         public bool WaitForCancellation { get; init; }
         public bool Exited { get; private set; }
         public async ValueTask<ProcessOperationResult> InvokeTransitionAsync(OperationContext context, ProcessTransitionInvocation invocation)
@@ -119,7 +175,8 @@ public sealed class EphemeralProcessExecutorTests
                     await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken);
                 Writes++;
                 AfterWrite?.Invoke();
-                return ProcessOperationResult.Completed(Value("approved"));
+                var result = ProcessOperationResult.Completed(Value("approved"));
+                return Receipt is null ? result : result.WithReceiptReference(Receipt);
             }
             finally { Exited = true; }
         }

@@ -517,11 +517,19 @@ public static class ProcessDefinitionValidator
                 Child(location, "transition"));
             AddExpression(invocation.Id, invocation.Subject, Child(location, "subject"));
             AddExpression(invocation.Id, invocation.Input, Child(location, "input"), link?.Input);
-            RegisterContinuation(
+            var edge = RegisterContinuation(
                 invocation.Continuation,
                 Child(location, "continuation"),
                 invocation.Id,
                 link?.Result);
+            if (invocation.Receipt is { } receipt)
+            {
+                if (context is not null && (link?.ReceiptContract is null || receipt.Contract != link.ReceiptContract))
+                    Error(ProcessDefinitionDiagnosticCodes.OutputContractMismatch,
+                        "The requested receipt requires an exact Transition host receipt-contract attestation.",
+                        Child(location, "receipt"), subject: receipt.Binding.Value);
+                RegisterBinding(receipt, Child(location, "receipt"), invocation.Id, edge);
+            }
         }
 
         void ValidateEvaluation(EvaluateRelationProcessNode evaluation, string location)

@@ -129,3 +129,25 @@ no automatic retry, trusted hosts without interaction emissions, and protected i
 boundaries do not establish cross-host recovery, outbox delivery, durable audit retention or ACID. The host's
 no-emission contract is checked on returned evidence before another operation executes. Profile preparation
 is lazy and shared; the exact-plan realization report is prepared with the executor, not per invocation.
+
+## Transition receipt outputs
+
+A Transition's domain result and its physical commit evidence are different contracts. An
+`InvokeTransitionProcessNode` may declare an optional `Receipt` output binding alongside the ordinary
+continuation output. Typed authoring uses `InvokeTransitionWithReceipt`. The binding becomes visible
+on that continuation and persists through native checkpoints like any other portable bound value.
+Omission leaves older Process encodings and fingerprints unchanged.
+
+Selecting a receipt requires matching `ProcessDefinitionLink.ReceiptContract` evidence from the host
+binding; a link derived only from the domain Transition document makes no such promise. Compilation
+rejects a missing or different attestation before invocation. This evidence is an assertion by the
+qualified host, not proof that an arbitrary provider implements atomic persistence. A host that returns
+a successful operation without its promised receipt causes terminal contract failure before subsequent
+steps; returned operation evidence is retained because effects may already have committed.
+
+A receipt locator is not an authorization grant or an entity snapshot. A subsequent relation query can
+resolve it through the authoritative receipt provider, check tenant/subject/occurrence affinity and
+resource authorization, and project the exact committed entity and token into the public Process result.
+This avoids recovering a response by guessing an internal node name or reading a newer entity state.
+Storage-backed enrichment and Ari adoption are separate qualification gates; the core tests prove typed
+authoring equivalence, link admission, evidence preservation, wire round-trip and serialized-cut resumption.
