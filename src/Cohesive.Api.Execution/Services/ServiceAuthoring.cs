@@ -3,6 +3,7 @@ using Cohesive.Api.Services;
 using Cohesive.Execution;
 using Cohesive.Processes.Authoring;
 using Cohesive.Processes.Compilation;
+using Cohesive.Processes.IR;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.IR;
@@ -107,6 +108,29 @@ public sealed class ServiceOperationBuilder
         return service.Add(new ServiceProcessResultOperation(id, definition.Reference, requirements, classifier?.Reference));
     }
 
+    /// <summary>Exposes a data-authored Process output with an exact typed deterministic classifier.</summary>
+    /// <remarks>Validates the document locally without compiling or resolving its dependency closure.</remarks>
+    public ServiceBuilder ReadResultOf<TResult>(ExecutionDefinitionDocument document,
+        HostedQuery<TResult, ServiceResultClassification> classifier) where TResult : notnull
+    {
+        RequireUnselected();
+        ArgumentNullException.ThrowIfNull(classifier);
+        var reference = RequireDocument(document);
+        var definition = document.GetDefinition<Cohesive.Processes.IR.ProcessDefinition>();
+        if (!classifier.IsValid || classifier.InputContract != definition.Result
+            || classifier.EvaluationSemantics != HostedQueryEvaluationSemantics.DeterministicComputation)
+            throw new ArgumentException("The result classifier must be a valid deterministic Query over the exact Process output.", nameof(classifier));
+        return service.Add(new ServiceProcessResultOperation(id, reference, requirements, classifier.Reference));
+    }
+
+    static ExecutionDefinitionReference RequireDocument(ExecutionDefinitionDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var validation = ProcessDefinitionDocuments.Validate(document);
+        if (!validation.IsValid) throw new ServiceBindingValidationException(validation);
+        return new(document.Metadata.DefinitionId, document.Metadata.RevisionId, document.Metadata.Fingerprint);
+    }
+
     void RequireUnselected()
     {
         if (process is not null)
@@ -121,6 +145,11 @@ public sealed class ServiceOperationBuilder
         if (!definition.IsValid) throw new ServiceBindingValidationException(definition.Validation);
         return new(service, id, definition.Reference, requirements);
     }
+
+    /// <summary>References a canonical data-authored Process without introducing a CLR input authority.</summary>
+    /// <remarks>Performs document validation only; linked compilation and infrastructure resolution stay at runtime binding.</remarks>
+    public ServiceOperationBuilder Run(ExecutionDefinitionDocument document) =>
+        new(service, id, RequireDocument(document), requirements);
 
     /// <summary>References already compiled behavior without revalidating its dependency closure.</summary>
     public ServiceOperationBuilder Run(CompiledProcessPlan plan)

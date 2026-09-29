@@ -326,12 +326,17 @@ public static class ServiceEndpointRouteBuilderExtensions
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(bind);
         var projection = ServiceApiProjection.ProjectProcessInput<TRequest>(declaration, operationId, http, scopePolicies);
-        return MapProcessCore<TRequest, ProcessStartResult>(endpoints, declaration, projection, resolveRuntime,
-            (runtime, context, request, requestHttp) =>
-            {
-                var input = bind(requestHttp, request);
-                return runtime.StartAsync(context, operationId, input.Command, input.Idempotency, input.Continuation, input.Input);
-            }, authorizationPolicyResolver);
+        return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext requestHttp) =>
+        {
+            var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(requestHttp, projection.Operation,
+                context.CancellationToken).ConfigureAwait(false)
+                ?? throw new BadHttpRequestException("A Process command body is required.");
+            var input = bind(requestHttp, request);
+            var runtime = ResolveRuntime(declaration, resolveRuntime, requestHttp.RequestServices);
+            var result = await runtime.StartAsync(context, operationId, input.Command, input.Idempotency,
+                input.Continuation, input.Input).ConfigureAwait(false);
+            return ProjectProcessOutcome(projection, result);
+        }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(declaration);
     }
 
     /// <summary>Maps a Process command with an independently authorized committed-entity response.</summary>
@@ -437,15 +442,21 @@ public static class ServiceEndpointRouteBuilderExtensions
                 ?? throw new BadHttpRequestException("A native Process request body is required.");
             var runtime = ResolveRuntime(declaration, resolveRuntime, http.RequestServices);
             var result = await invoke(runtime, context, request, http).ConfigureAwait(false);
-            object response = result.Outcome is { } outcome
-                ? outcome
-                : new ExecutionApiProblem(result.Diagnostics.FirstOrDefault()?.Code ?? "services.invocation.failed");
-            var projectedResult = ProcessExecutionCommandApiEndpointRouteBuilderExtensions.GetProjectedResult(
-                projection.Operation, result.Kind, response.GetType());
-            return Results.Json(response, options: null,
-                contentType: projectedResult.Http!.ContentType ?? "application/json",
-                statusCode: projectedResult.Http.StatusCode);
+            return ProjectProcessOutcome(projection, result);
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(declaration);
+    }
+
+    static IResult ProjectProcessOutcome<TOutcome>(ApiEndpoint projection, ServiceOperationResult<TOutcome> result)
+        where TOutcome : class
+    {
+        object response = result.Outcome is { } outcome
+            ? outcome
+            : new ExecutionApiProblem(result.Diagnostics.FirstOrDefault()?.Code ?? "services.invocation.failed");
+        var projectedResult = ProcessExecutionCommandApiEndpointRouteBuilderExtensions.GetProjectedResult(
+            projection.Operation, result.Kind, response.GetType());
+        return Results.Json(response, options: null,
+            contentType: projectedResult.Http!.ContentType ?? "application/json",
+            statusCode: projectedResult.Http.StatusCode);
     }
 
     /// <summary>Maps an authorized declared query without resolving its evaluator during registration.</summary>

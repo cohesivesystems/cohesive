@@ -264,3 +264,13 @@ For example, a review Process can return `Result<CommittedProposal, ReviewReject
 selects success or conflict from that value; HTTP then projects the successful proposal into its resource
 view. This preserves a Process-owned output while keeping transport status and domain rejection distinct.
 A classifier grants no authorization and provides no execution, persistence or commit guarantee.
+
+Data-authored workflows can use `Run(document)` and `ReadResultOf(document, classifier)` directly.
+These overloads validate the original canonical Process document without inventing CLR input records
+or compiling its dependency closure. The typed classifier must exactly match the public output.
+Document validation is local to declaration construction; callers should retain the resulting service
+declaration at host lifetime, as with other immutable authoring results.
+
+The ASP.NET domain-input projection parses and binds the medium request before resolving the service
+runtime. Missing retry headers or other binder-rejected fields therefore cannot initialize a Process
+host or dispatch work. Authorized semantic input validation remains owned by the runtime.

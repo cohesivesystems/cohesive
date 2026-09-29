@@ -240,10 +240,11 @@ public sealed class ServiceProcessRuntimeTests
     }
 
     [Theory]
-    [InlineData(true, false, 200)]
-    [InlineData(false, false, 403)]
-    [InlineData(true, true, 400)]
-    public async Task DomainInputHttpUsesDeclaredAdmissionAndRetainedRetryIdentity(bool authorized, bool invalid, int status)
+    [InlineData(true, false, 200, false)]
+    [InlineData(false, false, 403, false)]
+    [InlineData(true, true, 400, false)]
+    [InlineData(true, false, 400, true)]
+    public async Task DomainInputHttpUsesDeclaredAdmissionAndRetainedRetryIdentity(bool authorized, bool invalid, int status, bool malformedTransport)
     {
         var fixture = Create();
         var builder = WebApplication.CreateSlimBuilder();
@@ -253,7 +254,7 @@ public sealed class ServiceProcessRuntimeTests
         var start = fixture.Request();
         var binding = new HttpBinding("POST", "/notes/input", [], new(typeof(InputEnvelope)));
         app.MapServiceProcessInput<InputEnvelope>(fixture.Document, _ => { resolutions++; return fixture.Runtime; },
-            "publish", binding, (_, body) => (start.Context.CommandId, start.Context.IdempotencyKey,
+            "publish", binding, (_, body) => malformedTransport ? throw new BadHttpRequestException("Missing retry identity.") : (start.Context.CommandId, start.Context.IdempotencyKey,
                 start.InitialContinuation, body.Invalid ? ObservationValue.FromBool(true) : ObservationValue.FromObject(body.Text)),
             (_, requirement) => requirement.Id);
         Assert.Equal(0, resolutions);
@@ -270,6 +271,13 @@ public sealed class ServiceProcessRuntimeTests
             await endpoint.RequestDelegate!(http);
             Assert.Equal(status, http.Response.StatusCode);
             return Encoding.UTF8.GetString(((MemoryStream)http.Response.Body).ToArray());
+        }
+        if (malformedTransport)
+        {
+            await Assert.ThrowsAsync<BadHttpRequestException>(() => Invoke());
+            Assert.Equal(0, resolutions);
+            Assert.Equal(0, fixture.Dispatches);
+            return;
         }
         var result = await Invoke();
         Assert.DoesNotContain("private-input", result);

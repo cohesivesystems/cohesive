@@ -59,6 +59,13 @@ public sealed class ServiceEphemeralProcessTests
         Assert.Equal(ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(direct),
             ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document));
         Assert.Equal(direct.Metadata.Fingerprint, document.Metadata.Fingerprint);
+        if (classifier is not null)
+        {
+            var fromDocument = Service.Define(new("notes"), new("1"), Provenance)
+                .Operation("write").Require(new("notes.write")).Run(process.Document).ReturnAfterDurableAdmission()
+                .Operation("result").Require(new("notes.read")).ReadResultOf(process.Document, classifier).Build();
+            Assert.Equal(document.Metadata.Fingerprint, fromDocument.Metadata.Fingerprint);
+        }
         Assert.Throws<InvalidOperationException>(() => Service.Define(new("notes"), new("1"), Provenance)
             .Operation("ambiguous").Run(process).ReadResultOf(process));
     }
