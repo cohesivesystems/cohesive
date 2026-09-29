@@ -24,11 +24,12 @@ public sealed class ServiceMutationTests
             .Return(new("result"), TransitionOutcomeDisposition.Applied, "approved"));
 
     [Theory]
-    [InlineData(false, false, ProcessActivationDisposition.Completed, 1)]
-    [InlineData(true, false, ProcessActivationDisposition.Failed, 0)]
-    [InlineData(false, true, ProcessActivationDisposition.Failed, 1)]
+    [InlineData(false, false, ProcessActivationDisposition.Completed, 1, false)]
+    [InlineData(true, false, ProcessActivationDisposition.Failed, 0, false)]
+    [InlineData(false, true, ProcessActivationDisposition.Failed, 1, false)]
+    [InlineData(false, false, ProcessActivationDisposition.Failed, 1, true)]
     public async Task HydrateApplyEnrichUsesCanonicalSequencingAndDoesNotUndoWrites(bool failHydration, bool failEnrichment,
-        ProcessActivationDisposition expected, int expectedWrites)
+        ProcessActivationDisposition expected, int expectedWrites, bool throwEnrichment)
     {
         var transition = Approval;
         var process = ServiceMutation.HydrateWith(Hydration)
@@ -42,13 +43,26 @@ public sealed class ServiceMutationTests
             new(transition.Reference, ProcessDefinitionLinkKind.Transition, transition.Definition.Input, transition.Definition.Outcome),
             Enrichment.CreateProcessDefinitionLink()]));
         Assert.True(compiled.IsSuccessful, string.Join("; ", compiled.Validation.Diagnostics));
-        var host = new Host(failHydration, failEnrichment);
-        var decision = await new EphemeralProcessExecutor(compiled.Plan!).ExecuteAsync(OperationContext.Create(),
+        var host = new Host(failHydration, failEnrichment, throwEnrichment);
+        var pending = new EphemeralProcessExecutor(compiled.Plan!).ExecuteAsync(OperationContext.Create(),
             new(new("review/1"), new("attempt/1")), PortableValue.Concrete(process.Definition.Input, ObservationValue.FromString("proposal/1")),
             new(new("tests", "tenant-a"), new("review/1"),
                 new(InteractionDurabilityDemand.ActivationLocal, InteractionVisibilityDemand.ActivationLocal), Provenance),
-            host, TimeSpan.FromSeconds(5));
+            host, TimeSpan.FromSeconds(5)).AsTask();
+        if (throwEnrichment)
+        {
+            var failure = await Assert.ThrowsAsync<EphemeralProcessExecutionException>(() => pending);
+            Assert.IsType<IOException>(failure.InnerException);
+            Assert.Equal(new ExecutionNodeId("step/2"), failure.Evidence.InterruptedOperation);
+            Assert.Single(failure.Evidence.CompletedOperations.Values, result => result.ReceiptReference is not null);
+            Assert.Equal(1, host.Writes);
+            Assert.Equal(new[] { "hydrate", "apply", "enrich" }, host.Calls);
+            return;
+        }
+        var execution = await pending;
+        var decision = execution.Decision;
         Assert.Equal(expected, decision.Disposition);
+        Assert.Equal(expectedWrites, execution.Evidence.CompletedOperations.Values.Count(result => result.ReceiptReference is not null));
         Assert.Equal(expectedWrites, host.Writes);
         if (!failHydration && !failEnrichment)
             Assert.Equal(ObservationValue.FromString("details:approved"), decision.State.Terminal.Detail!.Value!.Value);
@@ -88,7 +102,7 @@ public sealed class ServiceMutationTests
         public Field<string> Status { get; }
     }
 
-    sealed class Host(bool failHydration, bool failEnrichment) : IAsyncProcessReferenceHost
+    sealed class Host(bool failHydration, bool failEnrichment, bool throwEnrichment) : IAsyncProcessReferenceHost
     {
         public List<string> Calls { get; } = [];
         public int Writes { get; private set; }
@@ -96,6 +110,7 @@ public sealed class ServiceMutationTests
         {
             var hydrate = evaluation.Definition == Hydration.Reference;
             Calls.Add(hydrate ? "hydrate" : "enrich");
+            if (!hydrate && throwEnrichment) throw new IOException("private backend error");
             if (hydrate ? failHydration : failEnrichment)
                 return ValueTask.FromResult(ProcessOperationResult.Failed(new("test.query.failed", DiagnosticSeverity.Error, "Query failed.")));
             if (hydrate)
@@ -110,7 +125,8 @@ public sealed class ServiceMutationTests
             Calls.Add("apply");
             Assert.Equal(ObservationValue.FromString("proposal/1"), invocation.Subject.Value);
             Writes++;
-            return ValueTask.FromResult(ProcessOperationResult.Completed(PortableValue.Concrete(Enrichment.InputContract, ObservationValue.FromString("approved"))));
+            return ValueTask.FromResult(ProcessOperationResult.Completed(PortableValue.Concrete(Enrichment.InputContract, ObservationValue.FromString("approved")))
+                .WithReceiptReference(PortableValue.Concrete(Enrichment.InputContract, ObservationValue.FromString("receipt/1"))));
         }
         public ValueTask<ProcessSignalTargetResult> ResolveSignalTargetAsync(OperationContext context, ProcessSignalTargetResolution resolution) => throw new InvalidOperationException();
     }

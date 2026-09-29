@@ -50,7 +50,7 @@ public sealed partial class ServiceRuntime
     /// <exception cref="ArgumentException">The operation family, invocation identity or input is invalid.</exception>
     /// <exception cref="OperationCanceledException">Cancellation or deadline is observed; effects may have committed.</exception>
     /// <exception cref="InvalidOperationException">The host supplies invalid execution evidence.</exception>
-    public async ValueTask<ServiceOperationResult<ProcessActivationDecision>> ExecuteProcessAsync(OperationContext context,
+    public async ValueTask<ServiceOperationResult<EphemeralProcessResult>> ExecuteProcessAsync(OperationContext context,
         string operationId, ProcessContinuationIdentity invocationIdentity, ObservationValue input)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -74,10 +74,11 @@ public sealed partial class ServiceRuntime
             context.ThrowIfCancellationRequested();
             var host = binding.Host(context, invocation)
                 ?? throw new InvalidOperationException("The Process host factory returned null.");
-            var decision = await binding.Executor.ExecuteAsync(context, invocationIdentity, materialized,
+            var execution = await binding.Executor.ExecuteAsync(context, invocationIdentity, materialized,
                 new(invocation.Authorization.AuthorityScope, new(invocationIdentity.ProcessInstanceId.Value),
                     new(InteractionDurabilityDemand.ActivationLocal, InteractionVisibilityDemand.ActivationLocal), invocation.Provenance),
                 host, operation.Execution!.Timeout!.Value).ConfigureAwait(false);
+            var decision = execution.Decision;
             evidence.Record("processExecutionCompleted");
             var kind = decision.Disposition switch
             {
@@ -85,7 +86,7 @@ public sealed partial class ServiceRuntime
                 ProcessActivationDisposition.Rejected => ApiResultKind.ValidationFailed,
                 _ => ApiResultKind.DomainError
             };
-            return new(kind, decision, decision.Diagnostics, evidence.Complete(kind));
+            return new(kind, execution, decision.Diagnostics, evidence.Complete(kind));
         }
         catch (Exception exception)
         {
@@ -93,7 +94,7 @@ public sealed partial class ServiceRuntime
             throw;
         }
 
-        ServiceOperationResult<ProcessActivationDecision> Reject(ApiResultKind kind, string code, string message)
+        ServiceOperationResult<EphemeralProcessResult> Reject(ApiResultKind kind, string code, string message)
         {
             evidence.Record("invocationRejected", code);
             return new(kind, null, [new(code, DiagnosticSeverity.Error, message)], evidence.Complete(kind));

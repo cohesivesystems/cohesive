@@ -199,7 +199,7 @@ separate canonical policy fields; neither confers ACID. Existing omitted policie
 behavior. Bindings reject unsupported combinations. Native start HTTP projection rejects ephemeral policies
 rather than exposing an admission contract for an operation promising completion.
 
-This authoring slice does not yet provide terminal HTTP projection, durable terminal waiting, or Ari migration. Those remain in the declarative service refinement.
+This authoring slice does not yet provide durable terminal waiting or Ari migration. Those remain in the declarative service refinement.
 Do not present the existing start adapter as a terminal-completion adapter.
 
 
@@ -225,3 +225,14 @@ The executable synthetic example in `ServiceMutationTests` proves exact canonica
 mutation, inferred contracts, ordered hydration/mutation/enrichment, pre-write failure, post-write enrichment
 failure and rejection of a second mutation. Its host records writes in memory; it is not deployed storage or
 cross-entity transaction qualification. Exact definition links and shape evidence remain required at compilation.
+
+
+`MapServiceEphemeralProcess` exposes a typed Process-backed operation without resolving the runtime during
+route registration. It derives request/result types from the exact typed Process and returns its public
+terminal value on success. Domain failure and execution interruption expose a standard problem explaining
+possible prior effects, not private receipt locators, host values or backend exception messages. Request abort
+propagates; a cooperative execution deadline returns an infrastructure problem after the host stops. It never
+returns an asynchronous admission receipt or schedules background work. Internal callers retain the full
+`EphemeralProcessResult` evidence for authorized reconciliation. The HTTP tests cover typed success, deferred
+resolution, one execution and redaction; durable admission status conventions and deployed qualification still
+need the refinement's remaining work.

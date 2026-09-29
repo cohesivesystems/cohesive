@@ -107,6 +107,14 @@ Hosts remain responsible for resource authorization, concurrency and per-operati
 They must not emit interactions; unexpected emissions fail execution before another host operation runs.
 
 This is the execution foundation for fluent service composition. Service-level lifetime/completion
-policy projection, general interruption evidence for non-cancellation failures, capability-profile
-integration and fluent hydration/transition/enrichment lowering remain work in progress. It is not yet
+policy projection, capability-profile integration and consumer migration remain work in progress. Shared service authoring now lowers
+hydration/transition/enrichment into the canonical graph and exposes a terminal HTTP adapter. It is not yet
 a claim that the service API offers this execution policy.
+
+`ExecuteAsync` returns `EphemeralProcessResult`: the native decision plus `EphemeralProcessEvidence`.
+The same evidence accompanies cancellation (`EphemeralProcessInterruptedException`) and physical failure
+(`EphemeralProcessExecutionException`). Returned host outcomes and receipt locators survive a later query
+failure; an in-flight node without returned evidence remains uncertain. This shares the canonical
+`ProcessOperationResult` values rather than inventing another receipt format. Evidence is invocation-local
+and not durable audit storage. Success, semantic failure, cancellation and physical failure never authorize
+an automatic mutation retry.

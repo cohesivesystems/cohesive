@@ -70,8 +70,8 @@ public sealed class EphemeralProcessExecutor
     /// <exception cref="ArgumentException">Input, invocation identity, or delivery policy is invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Timeout is not positive and representable by a timer.</exception>
     /// <exception cref="OperationCanceledException">Caller cancellation or deadline is observed; writes may have committed.</exception>
-    /// <exception cref="InvalidOperationException">A host emits interactions or execution does not terminate.</exception>
-    public async ValueTask<ProcessActivationDecision> ExecuteAsync(OperationContext context,
+    /// <exception cref="EphemeralProcessExecutionException">Host execution or canonical evidence validation fails; earlier outcomes are retained.</exception>
+    public async ValueTask<EphemeralProcessResult> ExecuteAsync(OperationContext context,
         ProcessContinuationIdentity continuation, PortableValue input, ProcessActivationContext activationContext,
         IAsyncProcessReferenceHost host, TimeSpan timeout)
     {
@@ -90,22 +90,27 @@ public sealed class EphemeralProcessExecutor
         var activation = new ProcessActivation(new("ephemeral/0"), ProcessActivationCause.Start,
             context.UtcNow, activationContext);
         var observedHost = new ObservedHost(host);
-        ProcessActivationDecision decision;
         try
         {
-            decision = await ProcessReferenceInterpreter.ActivateAsync(scoped, Plan, state, activation, observedHost).ConfigureAwait(false);
+            var decision = await ProcessReferenceInterpreter.ActivateAsync(scoped, Plan, state, activation, observedHost).ConfigureAwait(false);
+            if (!decision.Emissions.IsEmpty)
+                throw new InvalidOperationException("The ephemeral host produced interactions without a qualified delivery boundary; writes may already have committed.");
+            if (decision.Disposition is not (ProcessActivationDisposition.Completed or ProcessActivationDisposition.Failed
+                or ProcessActivationDisposition.Cancelled or ProcessActivationDisposition.Rejected))
+                throw new InvalidOperationException("Ephemeral execution did not terminate; no background continuation was admitted.");
+            return new(decision, Snapshot());
         }
         catch (OperationCanceledException exception)
         {
-            throw new EphemeralProcessInterruptedException(Plan.DefinitionReference, continuation,
-                observedHost.Results.ToImmutableDictionary(), observedHost.InFlight, exception);
+            throw new EphemeralProcessInterruptedException(Snapshot(), exception);
         }
-        if (!decision.Emissions.IsEmpty)
-            throw new InvalidOperationException("The ephemeral host produced interactions without a qualified delivery boundary; writes may already have committed.");
-        if (decision.Disposition is not (ProcessActivationDisposition.Completed or ProcessActivationDisposition.Failed
-            or ProcessActivationDisposition.Cancelled or ProcessActivationDisposition.Rejected))
-            throw new InvalidOperationException("Ephemeral execution did not terminate; no background continuation was admitted.");
-        return decision;
+        catch (Exception exception)
+        {
+            throw new EphemeralProcessExecutionException(Snapshot(), exception);
+        }
+
+        EphemeralProcessEvidence Snapshot() => new(Plan.DefinitionReference, continuation,
+            observedHost.Results.ToImmutableDictionary(), observedHost.InFlight);
     }
 
     sealed class ObservedHost(IAsyncProcessReferenceHost inner) : IAsyncProcessReferenceHost
@@ -143,29 +148,38 @@ public sealed class EphemeralProcessExecutor
 }
 
 
-/// <summary>Cancellation evidence for an interrupted ephemeral attempt, without a rollback or replay claim.</summary>
-/// <remarks>Returned operation values and receipt references can contain private data. They are invocation-scoped
-/// evidence for authorized reconciliation, not safe telemetry labels or public exception payloads. An operation
-/// without returned evidence may have committed. This exception cannot establish a negative commit claim.</remarks>
+/// <summary>Invocation-local host evidence shared by terminal results and physical interruptions.</summary>
+/// <param name="Definition">Exact Process authority.</param>
+/// <param name="Continuation">Invocation identity; not a durable checkpoint.</param>
+/// <param name="CompletedOperations">Returned canonical outcomes, including authoritative receipt locators.</param>
+/// <param name="InterruptedOperation">Host call entered without returned evidence; effects may be uncertain.</param>
+/// <remarks>This evidence may contain private data. It requires resource authorization and must not be exported
+/// as telemetry labels or a public exception payload. Missing evidence never proves absence of a commit.</remarks>
+public sealed record EphemeralProcessEvidence(ExecutionDefinitionReference Definition,
+    ProcessContinuationIdentity Continuation, ImmutableDictionary<ExecutionNodeId, ProcessOperationResult> CompletedOperations,
+    ExecutionNodeId? InterruptedOperation);
+
+/// <summary>A canonical terminal decision with the host evidence needed to reconcile earlier effects.</summary>
+/// <param name="Decision">Native Process decision, including its public output and trace.</param>
+/// <param name="Evidence">Returned host outcomes, including receipts even when a later step failed.</param>
+public sealed record EphemeralProcessResult(ProcessActivationDecision Decision, EphemeralProcessEvidence Evidence);
+
+/// <summary>Cancellation of an ephemeral attempt; does not imply rollback or safe replay.</summary>
 public sealed class EphemeralProcessInterruptedException : OperationCanceledException
 {
-    internal EphemeralProcessInterruptedException(ExecutionDefinitionReference definition,
-        ProcessContinuationIdentity continuation, ImmutableDictionary<ExecutionNodeId, ProcessOperationResult> completedOperations,
-        ExecutionNodeId? interruptedOperation, OperationCanceledException cause)
-        : base("Ephemeral execution was interrupted; inspect operation evidence before deciding whether any mutation can be retried.", cause, cause.CancellationToken)
-    {
-        Definition = definition;
-        Continuation = continuation;
-        CompletedOperations = completedOperations;
-        InterruptedOperation = interruptedOperation;
-    }
+    internal EphemeralProcessInterruptedException(EphemeralProcessEvidence evidence, OperationCanceledException cause)
+        : base("Ephemeral execution was interrupted; inspect operation evidence before deciding whether any mutation can be retried.", cause, cause.CancellationToken) => Evidence = evidence;
 
-    /// <summary>Exact Process authority for the observed attempt.</summary>
-    public ExecutionDefinitionReference Definition { get; }
-    /// <summary>Invocation identity; does not imply a durable checkpoint exists.</summary>
-    public ProcessContinuationIdentity Continuation { get; }
-    /// <summary>Canonical host outcomes returned before interruption, including any authoritative receipt locators.</summary>
-    public ImmutableDictionary<ExecutionNodeId, ProcessOperationResult> CompletedOperations { get; }
-    /// <summary>Host operation entered without returning evidence; its effects may be uncertain.</summary>
-    public ExecutionNodeId? InterruptedOperation { get; }
+    /// <summary>Protected invocation evidence; missing outcomes may represent uncertain effects.</summary>
+    public EphemeralProcessEvidence Evidence { get; }
+}
+
+/// <summary>A physical execution failure retaining earlier host outcomes without claiming rollback.</summary>
+public sealed class EphemeralProcessExecutionException : Exception
+{
+    internal EphemeralProcessExecutionException(EphemeralProcessEvidence evidence, Exception cause)
+        : base("Ephemeral execution failed; inspect operation evidence before deciding whether any mutation can be retried.", cause) => Evidence = evidence;
+
+    /// <summary>Protected invocation evidence, including any returned authoritative commit locators.</summary>
+    public EphemeralProcessEvidence Evidence { get; }
 }

@@ -1,3 +1,10 @@
+using System.Text;
+using Cohesive.Adapters.AspNet.Services;
+using Cohesive.Processes.Authoring;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Api;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Api.Services;
@@ -53,7 +60,7 @@ public sealed class ServiceEphemeralProcessTests
         var success = await runtime.ExecuteProcessAsync(Context(), "echo", identity, ObservationValue.FromString("private"));
         Assert.Equal(ApiResultKind.Success, success.Kind);
         Assert.Equal(1, resolutions);
-        Assert.Equal(PortableValue.Concrete(Text, ObservationValue.FromString("private")), success.Outcome!.State.Terminal.Detail?.Value);
+        Assert.Equal(PortableValue.Concrete(Text, ObservationValue.FromString("private")), success.Outcome!.Decision.State.Terminal.Detail?.Value);
         Assert.DoesNotContain("private", ExecutionTraceJsonSerializer.Serialize(success.Trace));
     }
 
@@ -79,6 +86,65 @@ public sealed class ServiceEphemeralProcessTests
         Assert.Throws<ArgumentException>(() => new ServiceProcessExecution(ServiceProcessLifetime.Ephemeral, ServiceProcessCompletion.Terminal));
         Assert.Throws<ArgumentOutOfRangeException>(() => new ServiceProcessExecution(ServiceProcessLifetime.Ephemeral, ServiceProcessCompletion.Terminal, TimeSpan.Zero));
         Assert.Throws<InvalidOperationException>(() => Service.Define(new("notes"), new("1"), Provenance).Operation("echo").ExecuteEphemerally(TimeSpan.FromSeconds(1)));
+    }
+
+    [Theory]
+    [InlineData(false, 200)]
+    [InlineData(true, 500)]
+    public async Task HttpTerminalProjectionIsDeferredAndNeverExposesInternalFailure(bool failHost, int expectedStatus)
+    {
+        var query = new ExecutionDefinitionReference(new("query"), new("1"),
+            new(ExecutionDefinitionFingerprinter.Algorithm, ExecutionDefinitionFingerprinter.Canonicalization, new string('a', 64)));
+        var process = ProcessAuthoring.Create<string, string>(
+            new(new("http-echo"), new("1"), new("query"), ProcessRecoveryPolicy.ContinueAttempt, Provenance), builder =>
+            {
+                var output = builder.Output<string>(new("output"), Text);
+                builder.EvaluateRelation(new("query"), query, builder.Input.Value,
+                    builder.Continuation(builder.Edge(new("next"), new("return")), output));
+                builder.Return(new("return"), output.Value);
+            });
+        var plan = process.Compile(new(definitions: [new(query, ProcessDefinitionLinkKind.RelationQuery, Text, Text)])).Plan!;
+        var document = Declare(plan);
+        var resolutions = 0;
+        var host = new EchoHost(failHost);
+        var runtime = new ServiceRuntime(document,
+            [new ServiceEphemeralProcessBinding("echo", plan, "notes", (_, _) => host)],
+            new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(Context());
+        await using var app = builder.Build();
+        app.MapServiceEphemeralProcess(document, _ => { resolutions++; return runtime; }, "echo", process,
+            new("POST", "/echo", [], new(typeof(string))), (_, requirement) => requirement.Id);
+        Assert.Equal(0, resolutions);
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().Single();
+        var http = new DefaultHttpContext { RequestServices = app.Services, TraceIdentifier = "invocation/1" };
+        var bytes = Encoding.UTF8.GetBytes("\"hello\"");
+        http.Request.Method = "POST";
+        http.Request.ContentType = "application/json";
+        http.Request.ContentLength = bytes.Length;
+        http.Request.Body = new MemoryStream(bytes);
+        http.Response.Body = new MemoryStream();
+        await endpoint.RequestDelegate!(http);
+        Assert.Equal(expectedStatus, http.Response.StatusCode);
+        Assert.Equal(1, resolutions);
+        Assert.Equal(1, host.Calls);
+        var body = Encoding.UTF8.GetString(((MemoryStream)http.Response.Body).ToArray());
+        Assert.DoesNotContain("private-backend", body);
+        if (failHost) Assert.Contains("services.process.incomplete", body);
+        else Assert.Equal("\"hello\"", body);
+    }
+
+    sealed class EchoHost(bool fail) : IAsyncProcessReferenceHost
+    {
+        public int Calls { get; private set; }
+        public ValueTask<ProcessOperationResult> EvaluateRelationAsync(OperationContext context, ProcessRelationEvaluation evaluation)
+        {
+            Calls++;
+            if (fail) throw new IOException("private-backend");
+            return ValueTask.FromResult(ProcessOperationResult.Completed(evaluation.Input));
+        }
+        public ValueTask<ProcessOperationResult> InvokeTransitionAsync(OperationContext context, ProcessTransitionInvocation invocation) => throw new InvalidOperationException();
+        public ValueTask<ProcessSignalTargetResult> ResolveSignalTargetAsync(OperationContext context, ProcessSignalTargetResolution resolution) => throw new InvalidOperationException();
     }
 
     static ExecutionDefinitionDocument Declare(CompiledProcessPlan plan) => Service.Define(new("notes"), new("1"), Provenance)

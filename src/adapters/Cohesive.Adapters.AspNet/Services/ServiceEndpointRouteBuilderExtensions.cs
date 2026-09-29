@@ -260,6 +260,55 @@ public static class ServiceEndpointRouteBuilderExtensions
         MapProcess<TCommand, ExecutionControlResult>(endpoints, declaration, resolveRuntime, operationId, route,
             (runtime, context, request) => runtime.ControlAsync(context, operationId, request), authorizationPolicyResolver, scopePolicies);
 
+    /// <summary>Maps a terminal ephemeral Process operation using its inferred typed input and output.</summary>
+    /// <remarks>Registration resolves no host. Successful completion returns the public Process output, never
+    /// internal host evidence. Failures report possible prior effects without exposing receipts or private values.
+    /// No background admission or mutation retry occurs. Request abort propagates; execution deadlines return an
+    /// infrastructure problem after the host stops. The budget covers execution, not request parsing/admission.</remarks>
+    public static RouteHandlerBuilder MapServiceEphemeralProcess<TInput, TOutput>(this IEndpointRouteBuilder endpoints,
+        ExecutionDefinitionDocument declaration, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
+        string operationId, Cohesive.Processes.Authoring.Process<TInput, TOutput> process, HttpBinding http,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentNullException.ThrowIfNull(resolveRuntime);
+        ArgumentNullException.ThrowIfNull(http);
+        var projection = ServiceApiProjection.ProjectEphemeralProcess(declaration, operationId, process, http, scopePolicies);
+        return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext request) =>
+        {
+            var body = await HttpRequestBindingSupport.ReadOperationBodyAsync(request, projection.Operation, context.CancellationToken).ConfigureAwait(false);
+            var runtime = ResolveRuntime(declaration, resolveRuntime, request.RequestServices);
+            try
+            {
+                var result = await runtime.ExecuteProcessAsync(context, operationId,
+                    new(new($"http/{request.TraceIdentifier}"), new("attempt/1")), ObservationValue.FromObject(body)).ConfigureAwait(false);
+                if (result.Kind == ApiResultKind.Success)
+                {
+                    var value = result.Outcome?.Decision.State.Terminal.Detail?.Value?.Value
+                        ?? throw new InvalidOperationException("Completed Process returned no public value.");
+                    return Results.Json(value.Deserialize<TOutput>(OutcomeJson, ObservationBytesJsonEncoding.Base64String),
+                        statusCode: projection.Operation.Results.Single(item => item.Kind == ApiResultKind.Success).Http!.StatusCode);
+                }
+                if (result.Kind == ApiResultKind.DomainError)
+                    return Uncertain(ApiResultKind.DomainError);
+                return ProjectServiceProblem(projection, result.Kind, result.Diagnostics);
+            }
+            catch (Cohesive.Processes.Execution.EphemeralProcessInterruptedException) when (!context.CancellationToken.IsCancellationRequested)
+            {
+                return Uncertain(ApiResultKind.InfrastructureError);
+            }
+            catch (Cohesive.Processes.Execution.EphemeralProcessExecutionException)
+            {
+                return Uncertain(ApiResultKind.InfrastructureError);
+            }
+
+            IResult Uncertain(ApiResultKind kind) => ProjectServiceProblem(projection, kind,
+                [new("services.process.incomplete", DiagnosticSeverity.Error,
+                    "The operation did not complete successfully. Earlier changes may have committed; do not automatically retry.")]);
+        }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(declaration);
+    }
+
     /// <summary>Maps typed domain input and caller-owned retry identities to a declared Process start.</summary>
     /// <remarks>The synchronous projection must only bind request data, without reads or writes. It must preserve
     /// retry identities and input across retries. Throw BadHttpRequestException for malformed transport fields.

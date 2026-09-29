@@ -131,6 +131,32 @@ public static class ServiceApiProjection
         return new ApiDefinition([operation]).Endpoints[0];
     }
 
+    /// <summary>Projects terminal ephemeral invocation from the exact typed Process contracts without resolving a runtime.</summary>
+    /// <exception cref="ArgumentException">The definition, policy or body contract does not match.</exception>
+    public static ApiEndpoint ProjectEphemeralProcess<TInput, TOutput>(ExecutionDefinitionDocument declaration,
+        string operationId, Cohesive.Processes.Authoring.Process<TInput, TOutput> process, HttpBinding? http = null,
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+        if (!process.IsValid) throw new ServiceBindingValidationException(process.Validation);
+        if (GetOperation(declaration, operationId) is not ServiceProcessOperation operation
+            || operation.Process != process.Reference
+            || operation.Execution is not { Lifetime: ServiceProcessLifetime.Ephemeral, Completion: ServiceProcessCompletion.Terminal })
+            throw new ArgumentException("Terminal projection requires the exact ephemeral Process declaration.", nameof(operationId));
+        if (http?.Body is { } body && body.BodyType != typeof(TInput))
+            throw new ArgumentException("HTTP input must match the Process input contract.", nameof(http));
+        var projected = new ApiOperation(operation.Id, ApiOperationKind.Command, typeof(TInput), typeof(TOutput),
+            id: new(OperationIdentity(new(declaration.Metadata.DefinitionId, declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint), operationId)),
+            authorizationRequirements: operation.AuthorizationRequirements, scopePolicies: scopePolicies,
+            results: [new(ApiResultKind.Success, typeof(TOutput), isPrimary: true),
+                new(ApiResultKind.Forbidden, typeof(ApiProblem)),
+                new(ApiResultKind.ValidationFailed, typeof(ApiValidationProblem)),
+                new(ApiResultKind.DomainError, typeof(ApiProblem)),
+                new(ApiResultKind.InfrastructureError, typeof(ApiProblem))]);
+        if (http is not null) projected = projected.WithHttp(http);
+        return new ApiDefinition([projected]).Endpoints[0];
+    }
+
     static ServiceOperation GetOperation(ExecutionDefinitionDocument declaration, string operationId)
     {
         ArgumentNullException.ThrowIfNull(declaration);

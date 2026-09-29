@@ -19,11 +19,11 @@ public sealed class EphemeralProcessExecutorTests
         var executor = new EphemeralProcessExecutor(Plan(mutation: true));
         var host = new Host();
         var result = await Execute(executor, host);
-        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Decision.Disposition);
         Assert.Equal(1, host.Writes);
-        Assert.Equal(Value("done"), result.State.Terminal.Detail?.Value);
-        Assert.Empty(result.Emissions);
-        Assert.True(ProcessExecutionTraceProjector.Project(result).IsSuccessful);
+        Assert.Equal(Value("done"), result.Decision.State.Terminal.Detail?.Value);
+        Assert.Empty(result.Decision.Emissions);
+        Assert.True(ProcessExecutionTraceProjector.Project(result.Decision).IsSuccessful);
         // Reusing a prepared executor does not share results or imply durable deduplication.
         await Execute(executor, host);
         Assert.Equal(2, host.Writes);
@@ -59,8 +59,8 @@ public sealed class EphemeralProcessExecutorTests
         var interrupted = await Assert.ThrowsAsync<EphemeralProcessInterruptedException>(() => Execute(new(Plan(mutation: true)), host,
             OperationContext.Create(cancellationToken: cancellation.Token)));
         Assert.Equal(1, host.Writes);
-        Assert.Null(interrupted.InterruptedOperation);
-        Assert.Equal(Value("approved"), Assert.Single(interrupted.CompletedOperations).Value.Value);
+        Assert.Null(interrupted.Evidence.InterruptedOperation);
+        Assert.Equal(Value("approved"), Assert.Single(interrupted.Evidence.CompletedOperations).Value.Value);
     }
 
     [Fact]
@@ -69,13 +69,13 @@ public sealed class EphemeralProcessExecutorTests
         var host = new Host { WaitForCancellation = true };
         var interrupted = await Assert.ThrowsAsync<EphemeralProcessInterruptedException>(() => Execute(new(Plan(mutation: true)), host,
             timeout: TimeSpan.FromMilliseconds(20)));
-        Assert.Equal(new ExecutionNodeId("write"), interrupted.InterruptedOperation);
-        Assert.Empty(interrupted.CompletedOperations);
+        Assert.Equal(new ExecutionNodeId("write"), interrupted.Evidence.InterruptedOperation);
+        Assert.Empty(interrupted.Evidence.CompletedOperations);
         Assert.True(host.Exited);
         Assert.Equal(0, host.Writes);
     }
 
-    static async Task<ProcessActivationDecision> Execute(EphemeralProcessExecutor executor, Host host,
+    static async Task<EphemeralProcessResult> Execute(EphemeralProcessExecutor executor, Host host,
         OperationContext? context = null, TimeSpan? timeout = null) => await executor.ExecuteAsync(
             context ?? OperationContext.Create(), new(new("instance/1"), new("attempt/1")), Value("input"),
             new(new("tests", "tenant"), new("correlation/1"),
