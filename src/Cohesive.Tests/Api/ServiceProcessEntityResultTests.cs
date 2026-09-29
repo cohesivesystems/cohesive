@@ -55,27 +55,31 @@ public sealed class ServiceProcessEntityResultTests
         Assert.Null(result.Outcome);
         Assert.Equal(0, fixture.Values.RepositoryResolutions);
         var terminal = await fixture.Runtime.ReadProcessResultAsync(fixture.Context, "terminal", fixture.Instance);
-        Assert.Equal(ApiResultKind.DomainError, terminal.Kind);
+        Assert.Equal(expected, terminal.Kind);
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task NativeConflictAtAnotherNodeDoesNotClassifyAsDeclaredCommitConflict(bool onlyTerminal)
+    [InlineData(false, "other-operation")]
+    [InlineData(true, "other-operation")]
+    [InlineData(false, "return")]
+    [InlineData(true, "return")]
+    public async Task NativeConflictAtAnotherNodeDoesNotClassifyAsDeclaredCommitConflict(bool onlyTerminal, string otherNode)
     {
         var fixture = await Create(failureCode: ProcessTransitionOperationAdapterDiagnosticCodes.SubjectChanged);
         var retained = fixture.Values.Result.Values!;
         var evidence = retained.Evidence.Select(item => item with
         {
             Trace = item.Trace.Select(trace => !onlyTerminal || trace.Kind == ProcessTraceEventKind.TerminalReached
-                ? trace with { Node = new("other-operation") } : trace).ToImmutableArray()
+                ? trace with { Node = new(otherNode) } : trace).ToImmutableArray()
         }).ToImmutableArray();
         var failure = Assert.Single(retained.OperationFailures);
-        var other = onlyTerminal ? failure : new ProcessOperationFailure(failure.Operation with { Node = new("other-operation") }, failure.Diagnostic);
+        var other = onlyTerminal ? failure : new ProcessOperationFailure(failure.Operation with { Node = new(otherNode) }, failure.Diagnostic);
         fixture.Values.Result = ProcessExecutionValueReadResult.Available(new(retained.Definition, retained.ProcessInstanceId,
             retained.Input, retained.TerminalOutcome, retained.TerminalContinuation, evidence, [other]));
         var result = await fixture.Read();
         Assert.Equal(ApiResultKind.DomainError, result.Kind);
+        var terminal = await fixture.Runtime.ReadProcessResultAsync(fixture.Context, "terminal", fixture.Instance);
+        Assert.Equal(ApiResultKind.DomainError, terminal.Kind);
         Assert.Equal(0, fixture.Values.RepositoryResolutions);
     }
 

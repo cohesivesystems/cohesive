@@ -111,7 +111,7 @@ public sealed partial class ServiceRuntime
             || linked.Operation is not ServiceProcessEntityResultOperation operation
             || linked.Binding is not ServiceProcessEntityResultBinding binding)
             throw new ArgumentException("The operation is not a declared committed-entity result read.", nameof(operationId));
-        return await ReadProcessResultCoreAsync(context, operation, operation.Process, binding.Authority,
+        return await ReadProcessResultCoreAsync(context, operation, binding.Process, binding.Authority,
             binding.Values, instance, maximumWait, Project).ConfigureAwait(false);
 
         async ValueTask<ServiceOperationResult<EntitySnapshot>> Project(AdmittedProcessResult admitted,

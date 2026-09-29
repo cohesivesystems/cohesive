@@ -274,3 +274,8 @@ declaration at host lifetime, as with other immutable authoring results.
 The ASP.NET domain-input projection parses and binds the medium request before resolving the service
 runtime. Missing retry headers or other binder-rejected fields therefore cannot initialize a Process
 host or dispatch work. Authorized semantic input validation remains owned by the runtime.
+
+A failed public result retains native concurrency-conflict semantics only when the exact Process
+identifies the failed node as a Transition and the terminal attempt, activation, token and operation
+sequence agree with its retained failure evidence. A matching diagnostic on another node is not enough.
+This classification does not assert rollback of earlier mutations or authorize automatic retry.

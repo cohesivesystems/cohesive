@@ -6,6 +6,8 @@ using Cohesive.Model.Serialization;
 using Cohesive.Processes.Runtime;
 using Cohesive.Processes.Execution;
 using Cohesive.Storage.Processes;
+using Cohesive.Processes.Compilation;
+using Cohesive.Processes.IR;
 
 namespace Cohesive.Api.Execution.Services;
 
@@ -17,11 +19,12 @@ public sealed partial class ServiceRuntime
         InteractionAuthorityScope Authority, ProcessExecutionValues Values);
 
     async ValueTask<ServiceOperationResult<T>> ReadProcessResultCoreAsync<T>(OperationContext context,
-        ServiceOperation operation, ExecutionDefinitionReference process, string authorityName,
+        ServiceOperation operation, CompiledProcessPlan plan, string authorityName,
         IProcessExecutionValueRepository provider, ProcessInstanceId instance, TimeSpan? maximumWait,
         Func<AdmittedProcessResult, ServiceInvocationEvidence, ValueTask<ServiceOperationResult<T>>> project)
         where T : class
     {
+        var process = plan.DefinitionReference;
         using var evidence = new ServiceInvocationEvidence(definitionReference, operation.Id, process, new(instance.Value));
         try
         {
@@ -59,13 +62,13 @@ public sealed partial class ServiceRuntime
             evidence.Record("terminalValuesRead");
             if (values.TerminalOutcome!.Kind != ExecutionTerminalOutcomeKind.Completed)
             {
-                // Only the native captured-token failure at the declared commit can establish this conflict.
-                // A matching diagnostic elsewhere, or an earlier attempt, is not commit evidence.
-                if (operation is ServiceProcessEntityResultOperation entityResult
-                    && values.TerminalOutcome.Kind == ExecutionTerminalOutcomeKind.Failed
+                // Derive mutation attribution from the exact Process, not a service-owned node selector.
+                // Conflict at one Transition does not imply earlier steps rolled back or authorize a retry.
+                if (values.TerminalOutcome.Kind == ExecutionTerminalOutcomeKind.Failed
                     && !values.OperationFailures.IsDefault && values.OperationFailures.Length == 1
                     && values.OperationFailures[0] is var failure
-                    && failure.Operation.Node == entityResult.CommitNode
+                    && plan.Definition.Nodes.Any(node => node.Id == failure.Operation.Node && node is InvokeTransitionProcessNode)
+                    && (operation is not ServiceProcessEntityResultOperation entityResult || failure.Operation.Node == entityResult.CommitNode)
                     && values.Evidence.SelectMany(item => item.Trace).LastOrDefault(trace =>
                         trace.Continuation == values.TerminalContinuation && trace.Kind == ProcessTraceEventKind.TerminalReached) is { } terminal
                     && terminal.Detail == "failed" && terminal.Activation == failure.Operation.Activation

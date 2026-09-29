@@ -73,7 +73,7 @@ public sealed partial class ServiceRuntime
             || linked.Operation is not ServiceProcessResultOperation operation
             || linked.Binding is not ServiceProcessResultBinding binding)
             throw new ArgumentException("The operation is not a declared Process result read.", nameof(operationId));
-        return ReadProcessResultCoreAsync<PortableValue>(context, operation, operation.Process, binding.Authority,
+        return ReadProcessResultCoreAsync<PortableValue>(context, operation, binding.Process, binding.Authority,
             binding.Values, instance, maximumWait, (admitted, evidence) =>
             {
                 if (admitted.Values.TerminalOutcome!.Detail?.Value is not PortableValue result
