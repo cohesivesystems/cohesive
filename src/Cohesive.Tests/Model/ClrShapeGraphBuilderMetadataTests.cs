@@ -8,6 +8,73 @@ namespace Cohesive.Tests.Model;
 
 public sealed class ClrShapeGraphBuilderMetadataTests
 {
+    [Theory]
+    [InlineData(nameof(ConcurrentProfileEnvelope.Plain))]
+    [InlineData(nameof(ConcurrentProfileEnvelope.Nested))]
+    [InlineData(nameof(ConcurrentProfileEnvelope.Items))]
+    public async Task SharedJsonMetadataProviderPreparesColdPropertiesOnceAcrossConcurrentCallers(string propertyName)
+    {
+        var context = ClrShapeMetadataContext.ForField(typeof(ConcurrentProfileEnvelope).GetProperty(propertyName)!);
+        for (var round = 0; round < 4; round++)
+        {
+            var provider = new SystemTextJsonClrShapeMetadataProvider(new JsonSerializerOptions());
+            using var start = new Barrier(16);
+            var reads = Enumerable.Range(0, 16).Select(_ => Task.Factory.StartNew(() =>
+            {
+                Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(10)));
+                return provider.GetMetadata(context);
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+            var results = await Task.WhenAll(reads);
+            var retained = provider.GetMetadata(context);
+            Assert.All(results, metadata =>
+            {
+                Assert.Equal(retained.FieldName, metadata.FieldName);
+                Assert.Equal(retained.TypeRef, metadata.TypeRef);
+                Assert.Equal(retained.NamedTypes.Length, metadata.NamedTypes.Length);
+                for (var index = 0; index < retained.NamedTypes.Length; index++)
+                    Assert.Same(retained.NamedTypes[index], metadata.NamedTypes[index]);
+            });
+        }
+    }
+
+    [Theory]
+    [InlineData(nameof(ConcurrentProfileEnvelope.Plain), 200)]
+    [InlineData(nameof(ConcurrentProfileEnvelope.Nested), 2300)]
+    [InlineData(nameof(ConcurrentProfileEnvelope.Items), 2400)]
+    public void WarmJsonMetadataLookupHasBoundedAllocationWithoutRebuildingProfiles(string propertyName, int maximumBytesPerCall)
+    {
+        var context = ClrShapeMetadataContext.ForField(typeof(ConcurrentProfileEnvelope).GetProperty(propertyName)!);
+        var provider = new SystemTextJsonClrShapeMetadataProvider(new JsonSerializerOptions());
+        for (var index = 0; index < 10_000; index++) provider.GetMetadata(context);
+        // Attribute reflection allocates converter type names, so these longer-named test fixtures
+        // have a different baseline than the short-name standalone allocation probe.
+        const int count = 1000;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < count; index++) provider.GetMetadata(context);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.InRange(allocated, 0, count * maximumBytesPerCall);
+    }
+
+    [Fact]
+    public void SharedJsonMetadataProviderRetainsCycleDetectionAndClearsFailedPreparation()
+    {
+        var provider = new SystemTextJsonClrShapeMetadataProvider(new JsonSerializerOptions());
+        var recursive = ClrShapeMetadataContext.ForField(typeof(RecursiveProfile).GetProperty(nameof(RecursiveProfile.Child))!);
+        for (var attempt = 0; attempt < 2; attempt++)
+            Assert.Contains("Recursive property converter profile", Assert.Throws<NotSupportedException>(
+                () => provider.GetMetadata(recursive)).Message);
+        var safe = ClrShapeMetadataContext.ForField(typeof(ConcurrentProfileEnvelope).GetProperty(nameof(ConcurrentProfileEnvelope.Nested))!);
+        Assert.NotEmpty(provider.GetMetadata(safe).NamedTypes);
+    }
+
+    sealed record RecursiveProfile(string Name,
+        [property: JsonConverter(typeof(WebJsonPropertyConverter<RecursiveProfile>))] RecursiveProfile? Child);
+
+    sealed record ConcurrentProfileNode(string Name, ConcurrentProfileNode? Child);
+    sealed record ConcurrentProfileEnvelope(string Plain,
+        [property: JsonConverter(typeof(WebJsonPropertyConverter<ConcurrentProfileNode>))] ConcurrentProfileNode Nested,
+        [property: JsonConverter(typeof(WebJsonPropertyConverter<ConcurrentProfileNode[]>))] ConcurrentProfileNode[] Items);
+
     [Fact]
     public void Build_AppliesShapeAttributesAndMetadataProviderContributions()
     {

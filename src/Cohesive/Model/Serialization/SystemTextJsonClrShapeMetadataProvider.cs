@@ -43,22 +43,27 @@ public static class SystemTextJsonShapeAnnotations
 /// Projects System.Text.Json naming and converter metadata into a CLR-derived shape graph without
 /// changing the default CLR semantic projection.
 /// </summary>
+/// <remarks>Safe for concurrent metadata reads. Serializer options are frozen on construction; nested
+/// profiles are prepared once per property and retained for this provider's lifetime. Preparation and
+/// recursion tracking share a reentrant gate across nested profiles; failures are not cached.</remarks>
 public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataProvider
 {
     readonly JsonSerializerOptions options;
+    readonly object profileGate;
     readonly Dictionary<PropertyInfo, ClrShapeMetadata> nestedProfiles = [];
     readonly HashSet<(Type, JsonSerializerOptions)> activeProfiles;
 
     /// <summary>Creates a metadata provider for the supplied serializer contract.</summary>
     /// <param name="options">Serializer options that define the JSON wire representation.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
-    public SystemTextJsonClrShapeMetadataProvider(JsonSerializerOptions options) : this(options, [])
+    public SystemTextJsonClrShapeMetadataProvider(JsonSerializerOptions options) : this(options, [], new object())
     {
     }
 
     SystemTextJsonClrShapeMetadataProvider(JsonSerializerOptions options,
-        HashSet<(Type, JsonSerializerOptions)> activeProfiles)
+        HashSet<(Type, JsonSerializerOptions)> activeProfiles, object profileGate)
     {
+        this.profileGate = profileGate;
         this.activeProfiles = activeProfiles;
         ArgumentNullException.ThrowIfNull(options);
         this.options = new(options);
@@ -136,6 +141,14 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
 
     ClrShapeMetadata GetNestedProfile(PropertyInfo property)
     {
+        // Cache publication and recursion detection are one synchronous preparation operation.
+        // Descendants share the reentrant gate so another caller cannot look like a recursive profile.
+        lock (profileGate)
+            return GetNestedProfileCore(property);
+    }
+
+    ClrShapeMetadata GetNestedProfileCore(PropertyInfo property)
+    {
         if (nestedProfiles.TryGetValue(property, out var cached))
             return cached;
         var info = options.GetTypeInfo(property.DeclaringType!);
@@ -161,7 +174,7 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
             // dictionary and object values uniformly. Only its field contract survives projection.
             var envelope = typeof(ProfileValue<>).MakeGenericType(type);
             var result = new ClrShapeGraphBuilder()
-                .UsePublicJsonContracts(new SystemTextJsonClrShapeMetadataProvider(nestedOptions, activeProfiles))
+                .UsePublicJsonContracts(new SystemTextJsonClrShapeMetadataProvider(nestedOptions, activeProfiles, profileGate))
                 .AddMetadataProvider(new ProfileIdentity(prefix))
                 .AddShape(envelope)
                 .BuildResult(new GraphId(prefix));

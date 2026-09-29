@@ -157,3 +157,26 @@ alone permits exponent notation. The expression evaluator delegates to this help
 Execution-document normalization and fingerprinting traverse immutable JSON directly; see
 [canonicalization performance](../../docs/performance/execution-canonicalization.md) for ownership,
 exact-byte regression coverage, allocation measurements and remaining costs.
+
+
+### Concurrent JSON profile metadata preparation
+
+`SystemTextJsonClrShapeMetadataProvider` may be shared by independent CLR graph builders, as in the
+relation authoring defaults. It freezes serializer options and retains nested field-profile metadata by
+property for the provider lifetime. One reentrant gate protects cache lookup/publication and the active
+profile set across nested preparation. A concurrent first use must not be mistaken for a recursive
+converter profile. Real recursive profiles remain rejected, and failed preparation clears recursion
+state without caching failure. The gate covers synchronous metadata preparation, not query execution,
+source reads or observation materialization. Retained named types are reused after successful preparation.
+
+Ari's parallel qualification exposed duplicate-key insertion and false recursive-profile failures.
+`ClrShapeGraphBuilderMetadataTests` reproduces cold concurrent access for plain, nested and collection
+properties, verifies shared retained type identity, and preserves real-cycle rejection and failure cleanup.
+Warm allocation guards separate cache preparation from 1,000 repeated reads after 10,000 warm-up calls.
+A local .NET 10 allocation probe over 100,000 warm reads measured approximately 152/1,496/1,584 bytes per
+plain/nested/collection lookup both before and after synchronization. These existing costs include field
+metadata/reflection projection; longer converter type names in the regression fixtures measure
+2,032/2,120 bytes for nested/collection fields and use separate bounds. The change makes no throughput
+or end-to-end latency claim. Cold preparation
+is measured separately and includes serializer/CLR metadata initialization, so its total is not retained
+cache size. No additional per-row cache or alternative semantic model was introduced.
