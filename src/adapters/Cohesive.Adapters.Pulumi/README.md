@@ -1,0 +1,81 @@
+# Native Pulumi graph projection
+
+`PulumiGraphProjection` consumes a complete `InfrastructureTargetDeploymentPlan` and drives native
+factories from its selected declarations. It owns coverage, construction ordering and association
+accounting. Pulumi owns resources, arguments, options, outputs, state and provider execution.
+
+```csharp
+var projection = new PulumiGraphProjection(plan);
+projection.Map(databaseNode, context =>
+{
+    var database = new NativeDatabase("existing-logical-name", new NativeDatabaseArgs
+    {
+        // Ordinary provider arguments and native options remain here.
+    });
+    context.Associate(databaseNode, database);
+    return database;
+});
+projection.Map(workerNode, context =>
+{
+    var database = context.Get<NativeDatabase>(databaseNode);
+    var worker = new NativeWorker("existing-worker-name", new NativeWorkerArgs
+    {
+        DatabaseId = database.Id
+    });
+    context.Associate(workerNode, worker);
+    return worker;
+});
+var native = projection.Execute();
+```
+
+The provider types above are illustrative; the executable tests use native `CustomResource`
+construction, provider mocks and secret outputs. The database relationship must exist in the
+compiled graph, or be an explicit `After(node, reason)` native construction refinement.
+
+## Contract
+
+- Every selected workload and resource must have exactly one factory. Unknown, duplicate and
+  excluded registrations fail. Missing coverage and cycles fail before any factory is invoked.
+- Binding targets and readiness dependencies are constructed before their subjects. This is an
+  ordering interpretation, **not** a live readiness check, automatic IAM grant or automatic native
+  `DependsOn`. Native output references and options retain Pulumi's execution dependencies.
+- An indivisible native facility can handle several related declarations in one invocation. Each
+  declaration still requires an explicit association; returning a successful object is insufficient.
+- Factories return their existing native resource or adapter result. Typed retrieval rejects wrong
+  result types and undeclared dependency access; it never awaits outputs or strips secret metadata.
+- External lifecycle declarations can record an explicit metadata-only reference. Persistent
+  resources cannot be excused as external. Non-participation comes from the compiled manifest,
+  not an interpreter-side skip list.
+- Native ordering refinements carry a reason and participate in the same preflight cycle check.
+  Semantic relationship cycles that cannot be constructed as one native facility are unsupported;
+  they fail rather than silently losing ordering. A general late-binding interpreter is not provided.
+- A projection is invocation-scoped, sequential and single-use. Callback exceptions propagate;
+  partial native registrations are possible and there is no automatic retry or rollback.
+
+## Ownership and limits
+
+This is a provider-independent Pulumi adapter, not portable IR and not a provider-options wrapper.
+Existing Azure attachment adapters continue to validate physical names, scopes, classified outputs
+and authorization policy. Grouping does not authorize creation of undeclared logical resources.
+Provider-generated children remain native facility implementation detail.
+
+The result records primary logical/native associations and explicit references. It does not intercept
+arbitrary Pulumi constructors elsewhere in the program, prove provider output identity by itself,
+or establish runtime readiness. Consumers should test their actual stack registrations and retain
+explicit ownership for bootstrap resources outside the application definition.
+
+The existing Azure construction/binding helpers and Aspire handoff were evaluated: they validate
+individual associations and exact plans but do not drive whole-plan construction. This component
+adds that responsibility while reusing their plan and native result types. Canonical IR contains no
+factory delegates, native objects or second dependency catalog.
+
+Preflight indexes selected nodes and dependencies once. Stable topological traversal is bounded by
+the graph and factory count; each factory runs once regardless of consumer fan-out. There is no
+global cache or backend call in the traversal itself.
+
+## Validation
+
+`Cohesive.Adapters.Pulumi.Tests` covers native construction and secret preservation, missing/duplicate
+coverage, excluded nodes, cycles, external-reference policy, missing associations, dependency access
+and no-retry behavior. Consumer tests must additionally exercise real provider-specific attachments
+and the full stack against the authoritative manifest.
