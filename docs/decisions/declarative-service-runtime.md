@@ -926,3 +926,9 @@ This choice extends existing native host receipt evidence and canonical continua
 a second receipt catalog, implicit last-write selection and a provider-specific Process node. An exact
 host attestation is required at linking; the existing atomic state/receipt capability must be qualified at
 the storage binding before Ari adopts this path. Core conformance does not establish storage behavior.
+
+The native storage binding now qualifies receipt linking against its existing atomic state/receipt capability
+and entity shape. Checked receipt resolution is shared by the existing service result reader and the future
+Process enrichment handler. It retains the original fields/token after later writes and requires caller-supplied
+resource policy in addition to exact invocation/placement affinity. No new receipt or identifier model was
+introduced. Host-declared capability is not a substitute for provider conformance tests.

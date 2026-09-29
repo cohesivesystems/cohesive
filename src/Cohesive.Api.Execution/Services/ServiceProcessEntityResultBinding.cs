@@ -158,22 +158,30 @@ public sealed partial class ServiceRuntime
             if (repository.EntityDefinition.StateShape.QualifiedId != operation.Entity
                 || reference.Subject.EntityType.Value != repository.EntityType)
                 throw new InvalidOperationException("The repository or receipt subject contradicts the declared entity authority.");
-            var resolved = await repository.ResolveTransitionOperation(trusted, reference).ConfigureAwait(false);
-            if (resolved.Receipt is not { } receipt)
+            var resolved = await EntityTransitionReceiptReferences.ResolveSnapshotAsync(repository, trusted, reference,
+                binding.Transition.DefinitionReference, authority, values.TerminalContinuation, scope.ResolvePartitionKey(),
+                (context, snapshot) => authorization.AuthorizeResourceAsync(context, operation, snapshot)).ConfigureAwait(false);
+            if (resolved.Type == ResultType.Failure)
+            {
+                var diagnostic = resolved.Failure!;
+                if (diagnostic.Code == EntityTransitionOperationDiagnosticCodes.ReceiptMismatch)
+                    throw new InvalidOperationException("The resolved receipt contradicts the declared Transition or trusted placement.");
+                if (diagnostic.Code == EntityTransitionOperationDiagnosticCodes.ReceiptResourceDenied)
+                {
+                    evidence.Record("commitReceiptResolved");
+                    return Reject(ApiResultKind.Forbidden, "services.authorization.resourceDenied", "Result access is not authorized for this resource.");
+                }
+                if (diagnostic.Code == EntityTransitionOperationDiagnosticCodes.SubjectStateConflict)
+                {
+                    evidence.Record("commitReceiptResolved");
+                    evidence.Record("resourceAuthorized");
+                    return Reject(ApiResultKind.DomainError, "services.process.commitRejected", "The selected Transition did not accept the entity change.");
+                }
                 return Reject(ApiResultKind.InfrastructureError, "services.process.receiptUnavailable", "The exact committed receipt could not be resolved.");
-            if (receipt.Request.Reference != reference || receipt.Request.Transition != binding.Transition.DefinitionReference
-                || receipt.Entity.PartitionKey != scope.ResolvePartitionKey()
-                || receipt.Entity.Entity.EntityId.Value != reference.Subject.EntityId.Value
-                || (receipt.Entity.LoadedFields is not null && binding.Entity.Entity.Shape.Fields.Any(
-                    field => !receipt.Entity.LoadedFields.Contains(field.Name.Value))))
-                throw new InvalidOperationException("The resolved receipt contradicts the declared Transition or trusted placement.");
+            }
             evidence.Record("commitReceiptResolved");
-            if (!await authorization.AuthorizeResourceAsync(trusted, operation, receipt.Entity).ConfigureAwait(false))
-                return Reject(ApiResultKind.Forbidden, "services.authorization.resourceDenied", "Result access is not authorized for this resource.");
             evidence.Record("resourceAuthorized");
-            if (receipt.Commit.DecisionKind is not (TransitionDecisionKind.Applied or TransitionDecisionKind.NoChange))
-                return Reject(ApiResultKind.DomainError, "services.process.commitRejected", "The selected Transition did not accept the entity change.");
-            return new(ApiResultKind.Success, receipt.Entity, [], evidence.Complete(ApiResultKind.Success));
+            return new(ApiResultKind.Success, resolved.Success, [], evidence.Complete(ApiResultKind.Success));
 
             ServiceOperationResult<EntitySnapshot> Reject(ApiResultKind kind, string code, string message) =>
                 RejectProcessResult<EntitySnapshot>(evidence, kind, code, message);

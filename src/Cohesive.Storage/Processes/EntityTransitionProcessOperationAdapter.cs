@@ -1,5 +1,6 @@
 using Cohesive.Execution;
 using Cohesive.Processes.Execution;
+using Cohesive.Processes.IR;
 using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Execution;
 using Cohesive.Transitions.IR;
@@ -122,6 +123,21 @@ public sealed class ProcessTransitionOperationBinding
     /// <summary>Optional input field retaining the opaque token captured before preparation. The token
     /// participates in exact operation identity through the retained Transition input.</summary>
     public string? ExpectedConcurrencyTokenField { get; }
+
+    /// <summary>Attests the native receipt contract after checking this repository's declared capability.</summary>
+    /// <returns>Exact domain input/output linking evidence plus the separate host receipt contract.</returns>
+    /// <exception cref="InvalidOperationException">The repository cannot atomically commit state and receipt,
+    /// or its entity shape does not match the Transition observation.</exception>
+    /// <remarks>No repository read or write occurs. This checks provider-declared capability; provider
+    /// conformance must independently qualify that claim.</remarks>
+    public ProcessDefinitionLink CreateProcessDefinitionLink()
+    {
+        if (!Repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt
+            || Plan.Definition.Observation != ValueContract.FromShape(Repository.EntityDefinition.Shape))
+            throw new InvalidOperationException("Receipt binding requires matching entity authority and atomic state/receipt support.");
+        return new(Plan.DefinitionReference, ProcessDefinitionLinkKind.Transition, Plan.Definition.Input,
+            Plan.Definition.Outcome, receiptContract: EntityTransitionReceiptReferences.ValueContract);
+    }
 
     internal EntityConcurrencyToken? ResolveExpectedConcurrencyToken(ProcessTransitionInvocation invocation)
     {

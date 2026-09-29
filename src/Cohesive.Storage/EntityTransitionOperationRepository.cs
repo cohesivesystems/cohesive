@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
+using Cohesive.Prelude;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Execution;
 using Cohesive.Storage.Processes;
@@ -14,6 +15,15 @@ public static class EntityTransitionOperationDiagnosticCodes
 {
     /// <summary>The entity repository cannot atomically commit entity state and a Transition operation receipt.</summary>
     public const string CapabilityInsufficient = "storage.entityTransition.operation.capability.insufficient";
+
+    /// <summary>No immutable receipt is available for the exact locator.</summary>
+    public const string ReceiptUnavailable = "storage.entityTransition.receipt.unavailable";
+
+    /// <summary>Receipt identity or placement contradicts the trusted resolution boundary.</summary>
+    public const string ReceiptMismatch = "storage.entityTransition.receipt.mismatch";
+
+    /// <summary>Resource authorization denied disclosure of the committed snapshot.</summary>
+    public const string ReceiptResourceDenied = "storage.entityTransition.receipt.resourceDenied";
 
     /// <summary>An operation occurrence identity was reused for different canonical content.</summary>
     public const string IdentityConflict = "storage.entityTransition.operation.identity.conflict";
@@ -108,6 +118,67 @@ public static class EntityTransitionReceiptReferences
         options.MakeReadOnly(populateMissingResolver: true);
         return options;
     });
+
+    /// <summary>Exact portable locator contract emitted by the native entity Transition adapter.</summary>
+    public static ValueContract ValueContract => Contract.Value;
+
+    /// <summary>Resolves and authorizes an immutable committed snapshot without reading current entity state.</summary>
+    /// <param name="repository">Authoritative atomic state/receipt repository.</param>
+    /// <param name="context">Trusted invocation context and cancellation.</param>
+    /// <param name="reference">Input-free receipt locator; never an authorization grant.</param>
+    /// <param name="transition">Exact expected domain Transition.</param>
+    /// <param name="authority">Authority from trusted invocation admission, not the locator.</param>
+    /// <param name="continuation">Current admitted Process instance and attempt.</param>
+    /// <param name="partitionKey">Physical placement resolved by trusted scope admission.</param>
+    /// <param name="authorizeResource">Mandatory resource policy, evaluated before snapshot disclosure.</param>
+    /// <returns>The original committed snapshot/token, or a structured rejection without a snapshot.</returns>
+    /// <remarks>Capability and locator affinity checks precede repository access. Provider errors/cancellation
+    /// propagate. No fallback to current state, retry, write or cross-receipt search is performed.</remarks>
+    public static async ValueTask<Result<EntitySnapshot, DocumentValidationDiagnostic>> ResolveSnapshotAsync(
+        IEntityRepository repository, OperationContext context, EntityTransitionOperationReference reference,
+        ExecutionDefinitionReference transition, InteractionAuthorityScope authority,
+        ProcessContinuationIdentity continuation, string partitionKey,
+        Func<OperationContext, EntitySnapshot, ValueTask<bool>> authorizeResource)
+    {
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(reference);
+        ArgumentNullException.ThrowIfNull(transition);
+        ArgumentNullException.ThrowIfNull(authority);
+        ArgumentNullException.ThrowIfNull(continuation);
+        ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
+        ArgumentNullException.ThrowIfNull(authorizeResource);
+        context.ThrowIfCancellationRequested();
+        if (!repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt)
+            return Reject(EntityTransitionOperationDiagnosticCodes.CapabilityInsufficient,
+                "The repository does not support atomic entity state and receipt resolution.");
+        if (reference.AuthorityScope != authority || reference.Operation.Continuation != continuation
+            || reference.Subject.EntityType.Value != repository.EntityType)
+            return Reject(EntityTransitionOperationDiagnosticCodes.ReceiptMismatch,
+                "The receipt locator contradicts the admitted Process or entity authority.");
+        var resolved = await repository.ResolveTransitionOperation(context, reference).ConfigureAwait(false);
+        if (resolved.Receipt is not { } receipt)
+            return Reject(EntityTransitionOperationDiagnosticCodes.ReceiptUnavailable,
+                "The exact committed receipt is unavailable.");
+        if (receipt.Request.Reference != reference || receipt.Request.Transition != transition
+            || receipt.Entity.PartitionKey != partitionKey
+            || receipt.Entity.Entity.EntityId.Value != reference.Subject.EntityId.Value
+            || (receipt.Entity.LoadedFields is not null && repository.EntityDefinition.Shape.Fields.Any(
+                field => !receipt.Entity.LoadedFields.Contains(field.Name.Value))))
+            return Reject(EntityTransitionOperationDiagnosticCodes.ReceiptMismatch,
+                "The resolved receipt contradicts the expected Transition, subject or trusted placement.");
+        context.ThrowIfCancellationRequested();
+        if (!await authorizeResource(context, receipt.Entity).ConfigureAwait(false))
+            return Reject(EntityTransitionOperationDiagnosticCodes.ReceiptResourceDenied,
+                "Disclosure of this committed resource is not authorized.");
+        if (receipt.Commit.DecisionKind is not (TransitionDecisionKind.Applied or TransitionDecisionKind.NoChange))
+            return Reject(EntityTransitionOperationDiagnosticCodes.SubjectStateConflict,
+                "The selected Transition did not accept the entity change.");
+        return Result<EntitySnapshot, DocumentValidationDiagnostic>.FromSuccess(receipt.Entity);
+
+        static Result<EntitySnapshot, DocumentValidationDiagnostic> Reject(string code, string message) =>
+            Result<EntitySnapshot, DocumentValidationDiagnostic>.FromFailure(new(code, DiagnosticSeverity.Error, message));
+    }
 
     /// <summary>Reads a locator only when its exact portable contract and concrete value are valid.</summary>
     /// <param name="value">Receipt reference retained in operation evidence.</param>

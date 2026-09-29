@@ -113,3 +113,22 @@ Values beyond the budget fail serialization or produce a structured invalid-JSON
 Existing supported values retain their canonical bytes and fingerprints; the change expands the
 accepted nesting range without changing the wire representation. `ProcessStorageDepthTests` covers
 nested value round trips, fingerprint stability, shallow-byte compatibility, and bounded rejection.
+
+## Checked immutable receipt projection
+
+`ProcessTransitionOperationBinding.CreateProcessDefinitionLink()` supplies the native receipt-contract
+attestation only when the repository declares atomic state/receipt support and its entity shape matches
+the Transition observation. It performs no reads or writes; provider conformance still qualifies the claim.
+`EntityTransitionReceiptReferences.ValueContract` is the single portable locator contract already used
+by the native adapter, not a second receipt schema.
+
+`EntityTransitionReceiptReferences.ResolveSnapshotAsync` resolves an immutable commit snapshot using
+the expected Transition, admitted authority/continuation and trusted physical partition. It rejects
+unqualified providers and mismatched locators before repository access, validates the resolved evidence,
+and requires an explicit resource-authorization callback before returning the original snapshot/token.
+Provider errors and cancellation propagate. Missing evidence never falls back to a current entity read.
+
+This operation supports Process result enrichment and is also reused by service committed-entity result
+reads. For example, after commit A is followed by mutation B, resolving A still returns A's fields and
+concurrency token; a wrong tenant, attempt, Transition or partition returns no snapshot. In-memory tests
+cover those boundaries and denied resource disclosure. Optional Cosmos integration remains a separate gate.

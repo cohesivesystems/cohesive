@@ -244,6 +244,48 @@ public sealed class EntityTransitionOperationRepositoryTests
     }
 
     [Theory]
+    [InlineData("allowed")]
+    [InlineData("denied")]
+    [InlineData("authority")]
+    [InlineData("attempt")]
+    [InlineData("partition")]
+    [InlineData("transition")]
+    [InlineData("unsupported")]
+    public async Task CheckedReceiptResolutionPreservesSnapshotAndRequiresTrustedAffinityAndAuthorization(string scenario)
+    {
+        var fixture = await Fixture.CreateAsync();
+        var committed = (await fixture.Repository.CommitTransitionOperation(fixture.Context, fixture.Commit)).Receipt!;
+        var later = CustomerEntity.Instance.CreateState(fixture.Subject.EntityId.Value,
+            new CustomerState(fixture.Subject.EntityId.Value, "tenant/acme", "later"), committed.Entity.Entity.Version + 1);
+        await fixture.Repository.Upsert(fixture.Context, new(later.Snapshot, committed.Entity.ConcurrencyToken));
+        var authorizations = 0;
+        var result = await EntityTransitionReceiptReferences.ResolveSnapshotAsync(
+            scenario == "unsupported" ? new NonAtomicRepository(fixture.Repository) : fixture.Repository,
+            fixture.Context, fixture.Request.Reference,
+            scenario == "transition" ? ProcessDurabilityTestFixture.DefinitionReference("wrong", '7') : fixture.Transition,
+            scenario == "authority" ? new("foreign", "tenant/acme") : fixture.Request.AuthorityScope,
+            scenario == "attempt" ? new(fixture.Request.Operation.Continuation.ProcessInstanceId, new("other")) : fixture.Request.Operation.Continuation,
+            scenario == "partition" ? "foreign" : "tenant/acme",
+            (_, snapshot) => { authorizations++; Assert.Equal(committed.Entity, snapshot); return ValueTask.FromResult(scenario != "denied"); });
+        if (scenario == "allowed")
+        {
+            Assert.Equal(Cohesive.Prelude.ResultType.Success, result.Type);
+            Assert.Equal(committed.Entity, result.Success);
+            Assert.Equal(committed.Entity.ConcurrencyToken, result.Success!.ConcurrencyToken);
+            Assert.Equal(1, authorizations);
+        }
+        else
+        {
+            Assert.Equal(Cohesive.Prelude.ResultType.Failure, result.Type);
+            Assert.Null(result.Success);
+            Assert.Equal(scenario == "denied" ? EntityTransitionOperationDiagnosticCodes.ReceiptResourceDenied
+                : scenario == "unsupported" ? EntityTransitionOperationDiagnosticCodes.CapabilityInsufficient
+                : EntityTransitionOperationDiagnosticCodes.ReceiptMismatch, result.Failure!.Code);
+            Assert.Equal(scenario == "denied" ? 1 : 0, authorizations);
+        }
+    }
+
+    [Theory]
     [InlineData("authority")]
     [InlineData("subject")]
     [InlineData("fingerprint")]

@@ -16,6 +16,29 @@ namespace Cohesive.Tests.ExecutionKernel;
 
 public sealed class EntityTransitionProcessOperationAdapterCreationTests
 {
+    [Fact]
+    public async Task NativeBindingAttestsReceiptOnlyForMatchingAtomicRepository()
+    {
+        var fixture = await Fixture.CreateAsync();
+        var binding = new ProcessTransitionOperationBinding(fixture.Plan, fixture.Repository, fixture.InteractionCatalog);
+        var link = binding.CreateProcessDefinitionLink();
+        Assert.Equal(fixture.Plan.DefinitionReference, link.Definition);
+        Assert.Equal(fixture.Plan.Definition.Input, link.Input);
+        Assert.Equal(fixture.Plan.Definition.Outcome, link.Result);
+        Assert.Equal(EntityTransitionReceiptReferences.ValueContract, link.ReceiptContract);
+        Assert.Throws<InvalidOperationException>(() => new ProcessTransitionOperationBinding(fixture.Plan,
+            new NonAtomicRepository(fixture.Repository), fixture.InteractionCatalog).CreateProcessDefinitionLink());
+    }
+
+    sealed class NonAtomicRepository(IEntityRepository inner) : IEntityRepository
+    {
+        public Cohesive.Transitions.Model.EntityDefinition EntityDefinition => inner.EntityDefinition;
+        public Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null) =>
+            throw new InvalidOperationException("Attestation must not read.");
+        public Task<EntitySnapshot> Upsert(OperationContext context, EntityWriteRequest write) =>
+            throw new InvalidOperationException("Attestation must not write.");
+    }
+
     [CosmosEntityTransitionCreationFact]
     public async Task CosmosRepository_CreationIndexReplaysOriginalReceiptForReplacementAttempt()
     {
