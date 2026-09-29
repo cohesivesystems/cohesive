@@ -236,6 +236,18 @@ returns an asynchronous admission receipt or schedules background work. Internal
 `EphemeralProcessResult` evidence for authorized reconciliation. The HTTP tests cover typed success, deferred
 resolution, one execution and redaction; deployed qualification still needs the refinement's remaining work.
 
+The four-type `MapServiceEphemeralProcess<TRequest, TResponse, TInput, TOutput>` overload keeps an
+existing HTTP contract while the declared Process owns execution. For example, a request body containing
+`{ "text": "hello" }` and a route prefix `route/` can map to the canonical input `"route/hello"`; a
+successful string output maps to `{ "text": "route/hello" }`. `bind` may combine route and body data;
+`project` sees only the public successful terminal output. Both delegates must be pure medium projections,
+with no repository access, additional steps, retries, or background scheduling. The canonical Process still
+owns input validation, sequencing and the execution budget. API metadata describes the medium types while
+retaining the same declared operation identity, authorization and scope policies. The original two-type
+overload uses identity projections through this same implementation. `ServiceEphemeralProcessTests`
+exercises both forms against the same host, including private failure redaction and no response projection
+on failure. This extension does not yet classify business rejection values or change their HTTP contract.
+
 Explicit `ReturnAfterDurableAdmission()` operations now return `ApiResultKind.Accepted`, projected as HTTP
 202 with the native `ProcessStartResult` receipt. Replaying the same admission returns 202 with its retained
 receipt as well; this is not a terminal-success claim. Native lifecycle commands retain their own outcomes.

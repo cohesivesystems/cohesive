@@ -121,9 +121,13 @@ public sealed class ServiceEphemeralProcessTests
     }
 
     [Theory]
-    [InlineData(false, 200)]
-    [InlineData(true, 500)]
-    public async Task HttpTerminalProjectionIsDeferredAndNeverExposesInternalFailure(bool failHost, int expectedStatus)
+    [InlineData(false, 200, false, true)]
+    [InlineData(true, 500, false, true)]
+    [InlineData(false, 200, true, true)]
+    [InlineData(true, 500, true, true)]
+    [InlineData(false, 403, false, false)]
+    [InlineData(false, 403, true, false)]
+    public async Task HttpTerminalProjectionIsDeferredAndNeverExposesInternalFailure(bool failHost, int expectedStatus, bool mapped, bool authorized)
     {
         var query = new ExecutionDefinitionReference(new("query"), new("1"),
             new(ExecutionDefinitionFingerprinter.Algorithm, ExecutionDefinitionFingerprinter.Canonicalization, new string('a', 64)));
@@ -144,14 +148,23 @@ public sealed class ServiceEphemeralProcessTests
             [new ServiceEphemeralProcessBinding("echo", plan, "notes", (_, _) => host)],
             new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
         var builder = WebApplication.CreateSlimBuilder();
-        builder.Services.AddSingleton(Context());
+        builder.Services.AddSingleton(authorized ? Context() : OperationContext.Create());
         await using var app = builder.Build();
-        app.MapServiceEphemeralProcess(document, _ => { resolutions++; return runtime; }, "echo", process,
-            new("POST", "/echo", [], new(typeof(string))), (_, requirement) => requirement.Id);
+        var projections = 0;
+        if (mapped)
+            app.MapServiceEphemeralProcess<EchoRequest, EchoResponse, string, string>(document,
+                _ => { resolutions++; return runtime; }, "echo", process,
+                new("POST", "/echo/{prefix}", [], new(typeof(EchoRequest))),
+                (http, body) => $"{http.Request.RouteValues["prefix"]}{body.Text}",
+                output => { projections++; return new(output); }, (_, requirement) => requirement.Id);
+        else
+            app.MapServiceEphemeralProcess(document, _ => { resolutions++; return runtime; }, "echo", process,
+                new("POST", "/echo", [], new(typeof(string))), (_, requirement) => requirement.Id);
         Assert.Equal(0, resolutions);
         var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().Single();
         var http = new DefaultHttpContext { RequestServices = app.Services, TraceIdentifier = "invocation/1" };
-        var bytes = Encoding.UTF8.GetBytes("\"hello\"");
+        var bytes = Encoding.UTF8.GetBytes(mapped ? "{\"text\":\"hello\"}" : "\"hello\"");
+        http.Request.RouteValues["prefix"] = "route/";
         http.Request.Method = "POST";
         http.Request.ContentType = "application/json";
         http.Request.ContentLength = bytes.Length;
@@ -160,11 +173,35 @@ public sealed class ServiceEphemeralProcessTests
         await endpoint.RequestDelegate!(http);
         Assert.Equal(expectedStatus, http.Response.StatusCode);
         Assert.Equal(1, resolutions);
-        Assert.Equal(1, host.Calls);
+        Assert.Equal(authorized ? 1 : 0, host.Calls);
         var body = Encoding.UTF8.GetString(((MemoryStream)http.Response.Body).ToArray());
         Assert.DoesNotContain("private-backend", body);
-        if (failHost) Assert.Contains("services.process.incomplete", body);
-        else Assert.Equal("\"hello\"", body);
+        if (!authorized) Assert.Contains("services.authorization.denied", body);
+        else if (failHost) Assert.Contains("services.process.incomplete", body);
+        else Assert.Equal(mapped ? "{\"text\":\"route/hello\"}" : "\"hello\"", body);
+        Assert.Equal(mapped && authorized && !failHost ? 1 : 0, projections);
+    }
+
+    public sealed record EchoRequest(string Text);
+    public sealed record EchoResponse(string Text);
+
+    [Fact]
+    public void MediumProjectionRetainsDeclaredIdentityAndRejectsMismatchedBodyOrProcess()
+    {
+        var process = ProcessAuthoring.Project<string, string>(Plan().Document);
+        var declaration = Declare(Plan());
+        var direct = ServiceApiProjection.ProjectEphemeralProcess(declaration, "echo", process);
+        var mapped = ServiceApiProjection.ProjectEphemeralProcess<EchoRequest, EchoResponse, string, string>(
+            declaration, "echo", process, new("POST", "/echo", [], new(typeof(EchoRequest))));
+        Assert.Equal(direct.Operation.Id, mapped.Operation.Id);
+        Assert.Equal(typeof(EchoResponse), mapped.Operation.Results.Single(result => result.IsPrimary).BodyType);
+        Assert.Throws<ArgumentException>(() =>
+            ServiceApiProjection.ProjectEphemeralProcess<EchoRequest, EchoResponse, string, string>(
+                declaration, "echo", process, new("POST", "/echo", [], new(typeof(string)))));
+        var durable = Service.Define(new("notes"), new("1"), Provenance)
+            .Operation("echo").Run(process).ReturnAfterDurableAdmission().Build();
+        Assert.Throws<ArgumentException>(() =>
+            ServiceApiProjection.ProjectEphemeralProcess<EchoRequest, EchoResponse, string, string>(durable, "echo", process));
     }
 
     sealed class EchoHost(bool fail) : IAsyncProcessReferenceHost
