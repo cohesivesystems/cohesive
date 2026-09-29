@@ -868,3 +868,21 @@ Qualification: native query-value round trips preserve operation subtypes, shape
 graph identities and canonical encoded equality; unknown operation discriminators and noncanonical
 kind encodings reject. All 36 delta/native-handler tests passed. This is portable runtime value
 admission, not a new delta semantic validator or a fully derived public-client schema claim.
+
+### Typed projection of existing Process documents
+
+`ProcessAuthoring.Project<TInput, TResult>(document)` provides the existing typed Process handle for
+canonical documents authored by importers or other frontends. It preserves the original document,
+identity, provenance and fingerprint, performs context-free integrity and Process validation, and
+requires exact default CLR input/result contracts. Invalid documents retain structured diagnostics;
+mismatched CLR projections throw before a service can bind them. The shared CLR contract mapper is
+the same one used by Process authoring. This is an extension of the existing Process frontend, not a
+second definition model or runtime.
+
+For example, an imported preview Process can be projected as
+`ProcessAuthoring.Project<PreviewInput, PreviewResult>(document)` and passed to the service's
+`Run` declaration and HTTP projection. This does not compile the dependency closure or resolve a
+backend during endpoint registration. Exact linked-definition admission remains deferred to runtime
+binding preparation. Generic CLR types cannot represent nullable-reference annotations; this overload
+requires the default required/non-null contract for reference types and does not erase a document's
+nullable or optional occurrence contract to make it fit.

@@ -64,6 +64,37 @@ public sealed class CanonicalProcessAuthoringTests
     }
 
     [Fact]
+    public void TypedProjection_PreservesDocumentAndRejectsMismatchedContracts()
+    {
+        var authored = CreateDecisionProcess();
+        var projected = ProcessAuthoring.Project<DecisionInput, string>(authored.Document);
+
+        Assert.True(projected.IsValid, Format(projected.Validation));
+        Assert.Same(authored.Document, projected.Document);
+        Assert.Equal(authored.Reference, projected.Reference);
+        Assert.Equal(authored.Definition, projected.Definition);
+        Assert.Throws<ArgumentException>(() => ProcessAuthoring.Project<string, string>(authored.Document));
+        Assert.Throws<ArgumentException>(() => ProcessAuthoring.Project<DecisionInput, int>(authored.Document));
+    }
+
+    [Fact]
+    public void TypedProjection_RetainsInvalidDocumentDiagnostics()
+    {
+        var authored = CreateDecisionProcess();
+        var definition = authored.Definition;
+        var invalid = ProcessDefinitionDocuments.Create(
+            Identities.Definition, Identities.Revision,
+            new CanonicalProcessDefinition(definition.Input, definition.Result, new("missing-entry"),
+                definition.Nodes, definition.RecoveryPolicy), Provenance());
+
+        var projected = ProcessAuthoring.Project<DecisionInput, string>(invalid);
+
+        Assert.False(projected.IsValid);
+        Assert.Same(invalid, projected.Document);
+        Assert.Equivalent(ProcessDefinitionDocuments.Validate(invalid), projected.Validation, strict: true);
+    }
+
+    [Fact]
     public void NonSemanticSourceAttribution_DoesNotChangeCompilationOrReferenceMeaning()
     {
         var first = CreateDecisionProcess("tests/ari-205/producer-a");

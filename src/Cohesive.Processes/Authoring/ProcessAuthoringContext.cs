@@ -159,13 +159,15 @@ internal sealed class ProcessAuthoringContext
         if (contracts.TryGetValue(type, out var contract))
             return contract;
 
-        var nullable = Nullable.GetUnderlyingType(type) is not null;
-        contract = new(
-            typeRefMapper.Map(type, nullability: null),
-            nullability: nullable ? FieldNullability.Nullable : FieldNullability.NonNullable);
+        contract = MapContract(typeRefMapper, type);
         contracts.Add(type, contract);
         return contract;
     }
+
+    internal static ValueContract MapContract(IClrTypeRefMapper mapper, Type type) => new(
+        mapper.Map(type, nullability: null),
+        nullability: Nullable.GetUnderlyingType(type) is not null
+            ? FieldNullability.Nullable : FieldNullability.NonNullable);
 
     static ValueContract ResolvePathContract(ValueContract root, FieldPath path)
     {
