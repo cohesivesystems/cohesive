@@ -84,3 +84,29 @@ DurableCutProcessNode and resume edge; it introduces no timer, interaction, new 
 execution model. A following operation/terminal is required. Runtime hosts persist the cut through
 the existing native checkpoint boundary. Generated/native builder definition and fingerprint
 equivalence is covered by ProcessComputationAuthoringTests.
+
+### Ephemeral execution foundation
+
+`EphemeralProcessExecutor` prepares a finite canonical plan for invocation-local execution through
+`ProcessReferenceInterpreter.ActivateAsync`. It supports sequential Transition/Query calls and finite
+branch selection. It needs no checkpoint store or scheduler; it does not provide restart, deduplication,
+background continuation, or whole-definition atomicity. Call `Validate(plan)` to inspect unsupported
+construct/atomic-scope diagnostics before constructing the executor. Preparation is shared; continuation,
+host observations, timers and cancellation are invocation-scoped. The Process validator excludes free
+activation cycles, and this realization excludes durable boundaries, so each observed node occurs at
+most once per invocation.
+
+The positive timeout requests cancellation using `OperationContext.TimeProvider`. The executor awaits
+host quiescence rather than abandoning a writer, so the budget is cooperative, not forced preemption.
+An `EphemeralProcessInterruptedException` preserves canonical returned operation outcomes and receipt
+locators, plus the identity of a host operation interrupted without returning evidence. Returned evidence
+can confirm a write; missing evidence cannot prove that no write occurred. These values may contain
+private data and require the same authorization as the underlying operation. Do not export them as
+exception payloads or telemetry attributes. Cancellation never implies rollback or a safe automatic retry.
+Hosts remain responsible for resource authorization, concurrency and per-operation commit guarantees.
+They must not emit interactions; unexpected emissions fail execution before another host operation runs.
+
+This is the execution foundation for fluent service composition. Service-level lifetime/completion
+policy projection, general interruption evidence for non-cancellation failures, capability-profile
+integration and fluent hydration/transition/enrichment lowering remain work in progress. It is not yet
+a claim that the service API offers this execution policy.
