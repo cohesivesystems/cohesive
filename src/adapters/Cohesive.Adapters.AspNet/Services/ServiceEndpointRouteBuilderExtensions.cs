@@ -325,7 +325,8 @@ public static class ServiceEndpointRouteBuilderExtensions
                     return Results.Json(project(value.Deserialize<TOutput>(OutcomeJson, ObservationBytesJsonEncoding.Base64String)!),
                         statusCode: projection.Operation.Results.Single(item => item.Kind == ApiResultKind.Success).Http!.StatusCode);
                 }
-                if (result.Kind == ApiResultKind.DomainError)
+                // Failed execution carries internal evidence; classifier rejections contain only selected public diagnostics.
+                if (result.Kind == ApiResultKind.DomainError && result.Outcome is not null)
                     return Uncertain(ApiResultKind.DomainError);
                 return ProjectServiceProblem(projection, result.Kind, result.Diagnostics);
             }

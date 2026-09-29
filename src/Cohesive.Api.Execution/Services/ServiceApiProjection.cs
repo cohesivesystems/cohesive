@@ -177,6 +177,9 @@ public static class ServiceApiProjection
             authorizationRequirements: operation.AuthorizationRequirements, scopePolicies: scopePolicies,
             results: [new(ApiResultKind.Success, typeof(TResponse), isPrimary: true),
                 new(ApiResultKind.Forbidden, typeof(ApiProblem)),
+                new(ApiResultKind.NotFound, typeof(ApiProblem)),
+                new(ApiResultKind.Conflict, typeof(ApiProblem)),
+                new(ApiResultKind.PreconditionFailed, typeof(ApiProblem)),
                 new(ApiResultKind.ValidationFailed, typeof(ApiValidationProblem)),
                 new(ApiResultKind.DomainError, typeof(ApiProblem)),
                 new(ApiResultKind.InfrastructureError, typeof(ApiProblem))]);

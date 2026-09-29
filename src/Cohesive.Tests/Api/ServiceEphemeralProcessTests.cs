@@ -1,6 +1,7 @@
 using System.Text;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Execution;
 using Cohesive.Adapters.AspNet.Services;
 using Cohesive.Processes.Authoring;
 using Microsoft.AspNetCore.Builder;
@@ -96,6 +97,78 @@ public sealed class ServiceEphemeralProcessTests
         Assert.DoesNotContain("private", ExecutionTraceJsonSerializer.Serialize(success.Trace));
     }
 
+    [Theory]
+    [InlineData(ApiResultKind.Success)]
+    [InlineData(ApiResultKind.ValidationFailed)]
+    [InlineData(ApiResultKind.NotFound)]
+    [InlineData(ApiResultKind.PreconditionFailed)]
+    [InlineData(ApiResultKind.Conflict)]
+    [InlineData(ApiResultKind.DomainError)]
+    public async Task DeclaredClassifierUsesOnlyAuthorizedSuccessfulPublicOutput(ApiResultKind kind)
+    {
+        var plan = Plan();
+        var classifier = HostedQuery<string, ServiceResultClassification>.Create(new("classify"), new("1"),
+            new("tests.classify", "1"), "v1", Provenance,
+            evaluationSemantics: HostedQueryEvaluationSemantics.DeterministicComputation);
+        var document = Service.Define(new("notes"), new("1"), Provenance)
+            .Operation("echo").Run(plan).Require(new("notes.read"))
+            .ExecuteEphemerally(TimeSpan.FromSeconds(2), classifier).Build();
+        var direct = ServiceDefinitionDocuments.Create(new("notes"), new("1"), new([
+            new ServiceProcessOperation("echo", plan.DefinitionReference, [new("notes.read")],
+                new(ProcessExecutionLifetime.Ephemeral, ServiceProcessCompletion.Terminal, TimeSpan.FromSeconds(2)),
+                classifier.Reference)]), Provenance);
+        Assert.Equal(ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(direct),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document));
+        Assert.True(ExecutionDefinitionJsonSerializer.TryDeserialize(ExecutionDefinitionJsonSerializer.Serialize(document), out var restored).IsValid);
+        Assert.True(ServiceDefinitionDocuments.ValidateAndProject(restored!, out var definition).IsValid);
+        Assert.Equal(classifier.Reference, Assert.IsType<ServiceProcessOperation>(Assert.Single(definition!.Operations)).ResultClassifier);
+        var typed = ProcessAuthoring.Project<string, string>(plan.Document);
+        var fromTyped = Service.Define(new("notes"), new("1"), Provenance)
+            .Operation("echo").Run(typed).Require(new("notes.read"))
+            .ExecuteEphemerally(TimeSpan.FromSeconds(2), classifier).Build();
+        var fromDocument = Service.Define(new("notes"), new("1"), Provenance)
+            .Operation("echo").Run(plan.Document).Require(new("notes.read"))
+            .ExecuteEphemerally(TimeSpan.FromSeconds(2), classifier).Build();
+        Assert.Equal(document.Metadata.Fingerprint, fromTyped.Metadata.Fingerprint);
+        Assert.Equal(document.Metadata.Fingerprint, fromDocument.Metadata.Fingerprint);
+        var calls = 0;
+        var binding = DeterministicHostedQueryBinding.Create(classifier, classifier.Implementation, (value, _, _) =>
+        {
+            calls++;
+            Assert.Equal("public-output", value);
+            return new ServiceResultClassification(kind, kind == ApiResultKind.Success ? []
+                : [new("notes.rejected", DiagnosticSeverity.Error, "Selected public rejection.")]);
+        });
+        var runtime = new ServiceRuntime(document,
+            [new ServiceEphemeralProcessBinding("echo", plan, "notes", (_, _) => new NoOperationsHost(), binding)],
+            new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
+        var identity = new ProcessContinuationIdentity(new("instance/classify"), new("attempt/1"));
+        Assert.Equal(ApiResultKind.Forbidden, (await runtime.ExecuteProcessAsync(OperationContext.Create(), "echo", identity,
+            ObservationValue.FromString("public-output"))).Kind);
+        Assert.Equal(ApiResultKind.ValidationFailed, (await runtime.ExecuteProcessAsync(Context(), "echo", identity,
+            ObservationValue.FromBool(true))).Kind);
+        Assert.Equal(0, calls);
+        var result = await runtime.ExecuteProcessAsync(Context(), "echo", identity, ObservationValue.FromString("public-output"));
+        Assert.Equal(kind, result.Kind);
+        Assert.Equal(1, calls);
+        if (kind == ApiResultKind.Success) Assert.NotNull(result.Outcome);
+        else
+        {
+            Assert.Null(result.Outcome);
+            Assert.Equal("notes.rejected", Assert.Single(result.Diagnostics).Code);
+        }
+        Assert.Throws<ServiceBindingValidationException>(() => new ServiceRuntime(document,
+            [new ServiceEphemeralProcessBinding("echo", plan, "notes", (_, _) => new NoOperationsHost())],
+            new IdentityServiceInvocationAuthorization("tenant", new("Tenant"))));
+        Assert.Throws<ArgumentException>(() => new ServiceProcessOperation("echo", plan.DefinitionReference,
+            execution: new(ProcessExecutionLifetime.Durable, ServiceProcessCompletion.Admission), resultClassifier: classifier.Reference));
+        var otherInput = HostedQuery<bool, ServiceResultClassification>.Create(new("classify-other"), new("1"),
+            new("tests.classify-other", "1"), "v1", Provenance,
+            evaluationSemantics: HostedQueryEvaluationSemantics.DeterministicComputation);
+        Assert.Throws<ArgumentException>(() => Service.Define(new("notes"), new("1"), Provenance)
+            .Operation("echo").Run(plan).ExecuteEphemerally(TimeSpan.FromSeconds(2), otherInput));
+    }
+
     [Fact]
     public void BindingsAndNativeStartProjectionRejectIncompatibleCompletion()
     {
@@ -127,7 +200,13 @@ public sealed class ServiceEphemeralProcessTests
     [InlineData(true, 500, true, true)]
     [InlineData(false, 403, false, false)]
     [InlineData(false, 403, true, false)]
-    public async Task HttpTerminalProjectionIsDeferredAndNeverExposesInternalFailure(bool failHost, int expectedStatus, bool mapped, bool authorized)
+    [InlineData(false, 404, true, true, ApiResultKind.NotFound)]
+    [InlineData(false, 412, true, true, ApiResultKind.PreconditionFailed)]
+    [InlineData(false, 422, true, true, ApiResultKind.DomainError)]
+    [InlineData(true, 500, true, true, ApiResultKind.NotFound)]
+    [InlineData(false, 403, true, false, ApiResultKind.NotFound)]
+    public async Task HttpTerminalProjectionIsDeferredAndNeverExposesInternalFailure(bool failHost, int expectedStatus,
+        bool mapped, bool authorized, ApiResultKind? classification = null)
     {
         var query = new ExecutionDefinitionReference(new("query"), new("1"),
             new(ExecutionDefinitionFingerprinter.Algorithm, ExecutionDefinitionFingerprinter.Canonicalization, new string('a', 64)));
@@ -141,11 +220,24 @@ public sealed class ServiceEphemeralProcessTests
                 builder.Return(new("return"), output.Value);
             });
         var plan = process.Compile(new(definitions: [new(query, ProcessDefinitionLinkKind.RelationQuery, Text, Text)])).Plan!;
-        var document = Declare(plan);
+        var classifier = classification is null ? null : HostedQuery<string, ServiceResultClassification>.Create(
+            new("http/classify"), new("1"), new("tests.http-classify", "1"), "v1", Provenance,
+            evaluationSemantics: HostedQueryEvaluationSemantics.DeterministicComputation);
+        var classifications = 0;
+        var classifierBinding = classifier is null ? null : DeterministicHostedQueryBinding.Create(classifier,
+            classifier.Implementation, (_, _, _) =>
+            {
+                classifications++;
+                return new ServiceResultClassification(classification!.Value,
+                    [new("notes.public-rejection", DiagnosticSeverity.Error, "Public business rejection.")]);
+            });
+        var document = classifier is null ? Declare(plan) : Service.Define(new("notes"), new("1"), Provenance)
+            .Require(new("notes.read")).Operation("echo").Run(plan)
+            .ExecuteEphemerally(TimeSpan.FromSeconds(2), classifier).Build();
         var resolutions = 0;
         var host = new EchoHost(failHost);
         var runtime = new ServiceRuntime(document,
-            [new ServiceEphemeralProcessBinding("echo", plan, "notes", (_, _) => host)],
+            [new ServiceEphemeralProcessBinding("echo", plan, "notes", (_, _) => host, classifierBinding)],
             new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(authorized ? Context() : OperationContext.Create());
@@ -178,8 +270,10 @@ public sealed class ServiceEphemeralProcessTests
         Assert.DoesNotContain("private-backend", body);
         if (!authorized) Assert.Contains("services.authorization.denied", body);
         else if (failHost) Assert.Contains("services.process.incomplete", body);
+        else if (classification is not null) Assert.Contains("notes.public-rejection", body);
         else Assert.Equal(mapped ? "{\"text\":\"route/hello\"}" : "\"hello\"", body);
-        Assert.Equal(mapped && authorized && !failHost ? 1 : 0, projections);
+        Assert.Equal(classification is not null && authorized && !failHost ? 1 : 0, classifications);
+        Assert.Equal(mapped && authorized && !failHost && classification is null ? 1 : 0, projections);
     }
 
     public sealed record EchoRequest(string Text);

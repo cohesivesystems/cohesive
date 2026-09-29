@@ -102,17 +102,31 @@ public sealed record ServiceQueryOperation : ServiceOperation
 public sealed record ServiceProcessOperation : ServiceOperation
 {
     /// <summary>Declares a Process entry operation and its requirements.</summary>
+    /// <param name="id">Stable operation identity within the service.</param>
+    /// <param name="process">Exact canonical Process reference.</param>
+    /// <param name="authorizationRequirements">Capabilities required before execution.</param>
+    /// <param name="execution">Explicit lifetime and completion; omission retains durable admission.</param>
+    /// <param name="resultClassifier">Optional exact deterministic public-output classifier; requires ephemeral terminal completion.</param>
     /// <exception cref="ArgumentException">Identity or authorization requirements are invalid.</exception>
     /// <exception cref="ArgumentNullException">The exact Process reference is null.</exception>
     [JsonConstructor]
     public ServiceProcessOperation(string id, ExecutionDefinitionReference process,
         ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default,
-        ServiceProcessExecution? execution = null)
+        ServiceProcessExecution? execution = null, ExecutionDefinitionReference? resultClassifier = null)
         : base(id, authorizationRequirements)
     {
         Process = process ?? throw new ArgumentNullException(nameof(process));
+        if (resultClassifier is not null && execution is not
+            { Lifetime: ProcessExecutionLifetime.Ephemeral, Completion: ServiceProcessCompletion.Terminal })
+            throw new ArgumentException("An entry-operation classifier requires ephemeral terminal completion.", nameof(resultClassifier));
         Execution = execution;
+        ResultClassifier = resultClassifier;
     }
+
+    /// <summary>Optional exact deterministic Query classifying successful public terminal output.</summary>
+    /// <remarks>It does not classify host exceptions, failed execution evidence, or admission outcomes.</remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExecutionDefinitionReference? ResultClassifier { get; }
 
     /// <summary>Explicit lifetime and completion policy. Omission preserves native durable start admission.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

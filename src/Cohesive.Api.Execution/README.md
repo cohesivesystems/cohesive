@@ -246,7 +246,7 @@ owns input validation, sequencing and the execution budget. API metadata describ
 retaining the same declared operation identity, authorization and scope policies. The original two-type
 overload uses identity projections through this same implementation. `ServiceEphemeralProcessTests`
 exercises both forms against the same host, including private failure redaction and no response projection
-on failure. This extension does not yet classify business rejection values or change their HTTP contract.
+on failure. Business result classification is declared separately as described below.
 
 Explicit `ReturnAfterDurableAdmission()` operations now return `ApiResultKind.Accepted`, projected as HTTP
 202 with the native `ProcessStartResult` receipt. Replaying the same admission returns 202 with its retained
@@ -271,6 +271,21 @@ when binding, then evaluates the classifier only after independent result-read a
 terminal-value validation. A rejection exposes its selected diagnostics without the raw output; success
 returns the unchanged canonical value. No entity repository or internal commit-node selector is required.
 The existing committed-entity result path shares the same classification implementation.
+
+`.Run(process).ExecuteEphemerally(timeout, classifier)` uses that same classifier for successful ephemeral
+terminal output. The canonical declaration retains its exact Query reference; binding rejects a missing,
+different, or contract-incompatible classifier. Durable admission cannot select this classifier because no
+terminal value exists at admission. Failed host execution, cancellation and denied/invalid input never invoke
+the classifier. Classification adds no reads, writes, retries or background work and does not extend the
+Process execution budget. Classifiers must remain bounded deterministic computations and honor cancellation.
+
+For example, a preview Process may successfully return a public `SourceMissing` result; its classifier
+selects `NotFound`, and HTTP emits 404 with selected diagnostics instead of an execution-failure message.
+A failed physical read remains an execution failure with private evidence redacted. Business `DomainError`
+classifications similarly expose only their explicitly selected public diagnostics, while unclassified
+failed executions retain the possible-prior-effects warning. Rejection suppresses the original output and
+its response mapper. `ServiceEphemeralProcessTests` covers declaration round-trips, fluent/direct IR
+equivalence, exact binding, authorization and input gating, and the mapped HTTP rejection boundary.
 
 For example, a review Process can return `Result<CommittedProposal, ReviewRejection>`. Its classifier
 selects success or conflict from that value; HTTP then projects the successful proposal into its resource
