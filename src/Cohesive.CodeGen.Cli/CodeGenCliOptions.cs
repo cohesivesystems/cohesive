@@ -10,7 +10,10 @@ public enum ContractShapeProjection
     Clr = 0,
 
     /// <summary>Project canonical JSON names, scalar wrappers, and string enum values.</summary>
-    CanonicalJson = 1
+    CanonicalJson = 1,
+
+    /// <summary>Use the serializer options factory explicitly declared by the contracts assembly.</summary>
+    DeclaredJson = 2
 }
 
 /// <summary>

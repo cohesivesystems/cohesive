@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Cohesive.Model.Serialization;
 using Cohesive.Api;
 using Cohesive.Model;
 using Cohesive.Relations.Explain;
@@ -6,6 +8,9 @@ using Cohesive.Relations.Physical;
 using Cohesive.Relations.Serialization;
 using CohesiveApi = Cohesive.Api.Api;
 
+[assembly: JsonContractOptions(typeof(Cohesive.Relations.Contracts.RelationsContractsDefinition),
+    nameof(Cohesive.Relations.Contracts.RelationsContractsDefinition.CreateJsonOptions))]
+
 namespace Cohesive.Relations.Contracts;
 
 /// <summary>
@@ -13,6 +18,9 @@ namespace Cohesive.Relations.Contracts;
 /// </summary>
 public static class RelationsContractsDefinition
 {
+    /// <summary>Creates the native serializer contract used by generated public relation documents.</summary>
+    public static JsonSerializerOptions CreateJsonOptions() => RelationQueryJsonSerializer.CreateOptions();
+
     /// <summary>
     /// API definition used only to expose relation semantic model roots to contract code-generation.
     /// </summary>
@@ -23,6 +31,18 @@ public static class RelationsContractsDefinition
             .Action("RelationQueryDocument")
             .Route("GET", "/relations/contracts/relation-query-document")
             .Returns<RelationQueryDocument>()
+            .Build(),
+        CohesiveApi
+            .Define("RelationsContracts")
+            .Action("GraphDelta")
+            .Route("GET", "/relations/contracts/graph-delta")
+            .Returns<GraphDelta>()
+            .Build(),
+        CohesiveApi
+            .Define("RelationsContracts")
+            .Action("ShapeGraphDocument")
+            .Route("GET", "/relations/contracts/shape-graph-document")
+            .Returns<ShapeGraphDocument>()
             .Build(),
         CohesiveApi
             .Define("RelationsContracts")

@@ -184,8 +184,36 @@ public static class ExecutionTelemetry
         "{generation}",
         "Materialization generations observed in status.");
 
+    /// <summary>Completed invocation count, independent of trace sampling.</summary>
+    public const string InvocationsInstrumentName = "cohesive.execution.invocations";
+    /// <summary>Completed invocation duration in seconds, independent of trace sampling.</summary>
+    public const string InvocationDurationInstrumentName = "cohesive.execution.invocation.duration";
+    static readonly Counter<long>? Invocations = CreateCounter(InvocationsInstrumentName, "{invocation}", "Completed runtime invocations.");
+    static readonly Histogram<double>? InvocationDuration = CreateDoubleHistogram(InvocationDurationInstrumentName, "s", "Runtime invocation duration.");
+
+    /// <summary>Records one completed invocation with closed activity-family and outcome dimensions.</summary>
+    /// <param name="kind">Bounded activity family; no definition or invocation identity is recorded.</param>
+    /// <param name="outcome">Semantic completion outcome, independent of exporter delivery.</param>
+    /// <param name="duration">Nonnegative elapsed duration, including awaited work.</param>
+    /// <exception cref="ArgumentOutOfRangeException">An enum or duration is invalid.</exception>
+    public static void RecordInvocation(ExecutionTelemetryActivityKind kind, ExecutionTelemetryOutcome outcome, TimeSpan duration)
+    {
+        if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
+        if (!Enum.IsDefined(outcome)) throw new ArgumentOutOfRangeException(nameof(outcome));
+        var family = GetActivityName(kind);
+        var result = GetOutcomeValue(outcome);
+        if (duration < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(duration));
+        TagList tags = default;
+        tags.Add(KindTagName, family);
+        tags.Add(OutcomeTagName, result);
+        if (Invocations?.Enabled == true) Add(Invocations, 1, tags);
+        if (InvocationDuration?.Enabled == true) Record(InvocationDuration, duration.TotalSeconds, tags);
+    }
+
     /// <summary>Whether any execution activity or metric listener is currently enabled.</summary>
     public static bool IsEnabled => (Activities?.HasListeners() ?? false)
+        || Invocations?.Enabled == true
+        || InvocationDuration?.Enabled == true
         || StatusObservations?.Enabled == true
         || Activations?.Enabled == true
         || Waits?.Enabled == true

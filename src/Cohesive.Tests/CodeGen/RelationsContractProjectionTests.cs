@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Cohesive.Adapters.TypeScript;
 using Cohesive.CodeGen;
 using Cohesive.CodeGen.Cli;
+using Cohesive.Model.Serialization;
 using Cohesive.Relations.Contracts;
 using Cohesive.Relations.Drafts;
 using Cohesive.Relations.Explain;
@@ -13,6 +15,58 @@ namespace Cohesive.Tests.CodeGen;
 
 public sealed class RelationsContractProjectionTests
 {
+    [Theory]
+    [InlineData(typeof(RelationDraftDocument))]
+    [InlineData(typeof(RelationQueryDocument))]
+    public void NativeDocument_DeclaresPortableObjectExecutionContract(Type documentType)
+    {
+        var contract = new Cohesive.Model.Authoring.DefaultClrTypeRefMapper().Map(documentType, null);
+        Assert.Equal(new JsonTypeRef(JsonTypeKind.Object), contract);
+    }
+
+    [Fact]
+    public void DeclaredJsonFactory_ProducesTheNativeWireContractWithoutAParallelProfile()
+    {
+        var declared = ContractsAssemblyShapeGraphLoader.LoadDeclaredJson(
+            typeof(RelationsContractsDefinition).Assembly.Location, "relations");
+        var emitter = new TypeScriptShapeEmitter();
+        Assert.Equal(
+            Assert.Single(emitter.Emit(new ShapeCodeGenerationRequest(LoadWireContractGraph())).Documents).Text,
+            Assert.Single(emitter.Emit(new ShapeCodeGenerationRequest(declared)).Documents).Text);
+    }
+
+    [Fact]
+    public void GraphDeltaRoot_ProjectsNativeDiscriminatorsAndSerializedMembers()
+    {
+        var delta = new GraphDelta("delta.example",
+            [new SetGraphAnnotationOperation(new("example"), AnnotationValue.FromString("changed"))],
+            GraphDeltaKind.Version);
+        var wire = JsonSerializer.SerializeToElement(delta, RelationsContractsDefinition.CreateJsonOptions());
+        Assert.Equal("Version", wire.GetProperty("kind").GetString());
+        Assert.Equal("setGraphAnnotation", wire.GetProperty("operations")[0].GetProperty("$operation").GetString());
+        var graph = LoadWireContractGraph();
+        AssertUnion(graph, nameof(GraphDeltaOperation), "$operation");
+        var text = Assert.Single(new TypeScriptShapeEmitter()
+            .Emit(new ShapeCodeGenerationRequest(graph)).Documents).Text;
+        Assert.Contains("export interface GraphDelta", text, StringComparison.Ordinal);
+        Assert.Contains("operations: GraphDeltaOperation[];", text, StringComparison.Ordinal);
+        Assert.Contains("readonly $operation: 'setGraphAnnotation';", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ShapeGraphRoot_PreservesTheExistingWebDocumentWireShape()
+    {
+        var document = ShapeGraphDocument.FromGraph(new ShapeGraph(
+            id: new("graph.contract-test"),
+            shapes: [new(id: new("shape.order"), fields:
+                [new(name: new("orderNumber"), type: new ScalarTypeRef(ScalarTypeKind.String),
+                    presence: FieldPresence.Optional, nullability: FieldNullability.Nullable)])],
+            annotations: AnnotationMap.Create("graph.kind", "order")));
+        Assert.Equal(
+            JsonSerializer.Serialize(document, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            JsonSerializer.Serialize(document, RelationsContractsDefinition.CreateJsonOptions()));
+    }
+
     [Fact]
     public void RelationsContracts_ProjectCanonicalDocumentsAndClosedUnions()
     {
@@ -71,6 +125,9 @@ public sealed class RelationsContractProjectionTests
         }).Emit(new ShapeCodeGenerationRequest(graph));
         var text = Assert.Single(emission.Documents).Text;
 
+        Assert.Contains("export interface ShapeGraphDocument", text, StringComparison.Ordinal);
+        Assert.Contains("graph: ShapeGraph;", text, StringComparison.Ordinal);
+        Assert.Contains("export interface ShapeGraph", text, StringComparison.Ordinal);
         Assert.Contains("export interface RelationQueryDocument", text, StringComparison.Ordinal);
         Assert.Contains("export type RelationQueryDefinition =", text, StringComparison.Ordinal);
         Assert.Contains("readonly $definition: 'relation';", text, StringComparison.Ordinal);

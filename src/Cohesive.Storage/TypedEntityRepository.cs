@@ -90,6 +90,11 @@ public sealed class TypedEntityRepository<TEntity>(
         EntityTransitionOperationRequest request) =>
         repository.TryGetTransitionOperation(context, request);
 
+    /// <inheritdoc />
+    public Task<EntityTransitionOperationResult> ResolveTransitionOperation(
+        OperationContext context, EntityTransitionOperationReference reference) =>
+        repository.ResolveTransitionOperation(context, reference);
+
     /// <summary>Looks up one subject-scoped creation Transition receipt.</summary>
     /// <param name="context">Operation context and cancellation.</param>
     /// <param name="request">Candidate creation request whose exact occurrence was not retained.</param>
@@ -187,6 +192,11 @@ public sealed class TypedEntityOutboxRepository<TEntity>(
         OperationContext context,
         EntityTransitionOperationRequest request) =>
         outboxRepository.TryGetTransitionOperation(context, request);
+
+    /// <inheritdoc />
+    public Task<EntityTransitionOperationResult> ResolveTransitionOperation(
+        OperationContext context, EntityTransitionOperationReference reference) =>
+        outboxRepository.ResolveTransitionOperation(context, reference);
 
     /// <summary>Looks up one subject-scoped creation Transition receipt.</summary>
     /// <param name="context">Operation context and cancellation.</param>

@@ -80,6 +80,9 @@ public sealed class EntityTransitionOperationRepositoryTests
                 container,
                 partitionKeyPolicy: partitionKeyPolicy);
             var replayed = await restarted.TryGetTransitionOperation(fixture.Context, fixture.Request);
+            var resolved = await restarted.ResolveTransitionOperation(fixture.Context, fixture.Request.Reference);
+            Assert.Equal(EntityTransitionOperationDisposition.Replayed, resolved.Disposition);
+            Assert.Equal(replayed.Receipt!.Entity, resolved.Receipt!.Entity);
             var current = await restarted.TryGet(
                 fixture.Context,
                 fixture.Subject.EntityId.Value,
@@ -207,6 +210,107 @@ public sealed class EntityTransitionOperationRepositoryTests
         Assert.Equal(
             "approved",
             receipt.Entity.Entity.Observation.GetField(nameof(CustomerEntity.Status)).GetString());
+    }
+
+    [Fact]
+    public async Task ExactReceipt_AfterLaterEntityWrite_RetainsOriginalSnapshotAndToken()
+    {
+        var fixture = await Fixture.CreateAsync();
+        var committed = await fixture.Repository.CommitTransitionOperation(fixture.Context, fixture.Commit);
+        var original = Assert.IsType<EntityTransitionOperationReceipt>(committed.Receipt);
+        var laterState = CustomerEntity.Instance.CreateState(
+            fixture.Subject.EntityId.Value,
+            new CustomerState(fixture.Subject.EntityId.Value, "tenant/acme", "suspended"),
+            checked(original.Entity.Entity.Version + 1));
+        var later = await fixture.Repository.Upsert(fixture.Context,
+            new(laterState.Snapshot, original.Entity.ConcurrencyToken));
+
+        var options = ProcessDurableCheckpointJsonSerializer.CreateOptions();
+        var wire = JsonSerializer.Serialize(fixture.Request.Reference, options);
+        Assert.DoesNotContain("\"input\"", wire, StringComparison.OrdinalIgnoreCase);
+        var reference = JsonSerializer.Deserialize<EntityTransitionOperationReference>(wire, options)!;
+        Assert.Equal(fixture.Request.Reference, reference);
+        var replay = await fixture.Repository.ResolveTransitionOperation(fixture.Context, reference);
+        var retained = Assert.IsType<EntityTransitionOperationReceipt>(replay.Receipt);
+        Assert.Equal(EntityTransitionOperationDisposition.Replayed, replay.Disposition);
+        Assert.Equal(original.Entity, retained.Entity);
+        Assert.Equal(original.Entity.ConcurrencyToken, retained.Entity.ConcurrencyToken);
+        Assert.NotEqual(later.ConcurrencyToken, retained.Entity.ConcurrencyToken);
+        Assert.Equal("approved", retained.Entity.Entity.Observation.GetField(nameof(CustomerEntity.Status)).GetString());
+        var current = await fixture.Repository.TryGet(fixture.Context, fixture.Subject.EntityId.Value,
+            EntityReadOptions.Full);
+        Assert.Equal(later, current);
+        Assert.Equal("suspended", current!.Entity.Observation.GetField(nameof(CustomerEntity.Status)).GetString());
+    }
+
+    [Theory]
+    [InlineData("allowed")]
+    [InlineData("denied")]
+    [InlineData("authority")]
+    [InlineData("attempt")]
+    [InlineData("partition")]
+    [InlineData("transition")]
+    [InlineData("unsupported")]
+    public async Task CheckedReceiptResolutionPreservesSnapshotAndRequiresTrustedAffinityAndAuthorization(string scenario)
+    {
+        var fixture = await Fixture.CreateAsync();
+        var committed = (await fixture.Repository.CommitTransitionOperation(fixture.Context, fixture.Commit)).Receipt!;
+        var later = CustomerEntity.Instance.CreateState(fixture.Subject.EntityId.Value,
+            new CustomerState(fixture.Subject.EntityId.Value, "tenant/acme", "later"), committed.Entity.Entity.Version + 1);
+        await fixture.Repository.Upsert(fixture.Context, new(later.Snapshot, committed.Entity.ConcurrencyToken));
+        var authorizations = 0;
+        var result = await EntityTransitionReceiptReferences.ResolveSnapshotAsync(
+            scenario == "unsupported" ? new NonAtomicRepository(fixture.Repository) : fixture.Repository,
+            fixture.Context, fixture.Request.Reference,
+            scenario == "transition" ? ProcessDurabilityTestFixture.DefinitionReference("wrong", '7') : fixture.Transition,
+            scenario == "authority" ? new("foreign", "tenant/acme") : fixture.Request.AuthorityScope,
+            scenario == "attempt" ? new(fixture.Request.Operation.Continuation.ProcessInstanceId, new("other")) : fixture.Request.Operation.Continuation,
+            scenario == "partition" ? "foreign" : "tenant/acme",
+            (_, snapshot) => { authorizations++; Assert.Equal(committed.Entity, snapshot); return ValueTask.FromResult(scenario != "denied"); });
+        if (scenario == "allowed")
+        {
+            Assert.Equal(Cohesive.Prelude.ResultType.Success, result.Type);
+            Assert.Equal(committed.Entity, result.Success);
+            Assert.Equal(committed.Entity.ConcurrencyToken, result.Success!.ConcurrencyToken);
+            Assert.Equal(1, authorizations);
+        }
+        else
+        {
+            Assert.Equal(Cohesive.Prelude.ResultType.Failure, result.Type);
+            Assert.Null(result.Success);
+            Assert.Equal(scenario == "denied" ? EntityTransitionOperationDiagnosticCodes.ReceiptResourceDenied
+                : scenario == "unsupported" ? EntityTransitionOperationDiagnosticCodes.CapabilityInsufficient
+                : EntityTransitionOperationDiagnosticCodes.ReceiptMismatch, result.Failure!.Code);
+            Assert.Equal(scenario == "denied" ? 1 : 0, authorizations);
+        }
+    }
+
+    [Theory]
+    [InlineData("authority")]
+    [InlineData("subject")]
+    [InlineData("fingerprint")]
+    public async Task ReceiptReference_RejectsChangedIdentityWithoutReturningPayload(string changed)
+    {
+        var fixture = await Fixture.CreateAsync();
+        await fixture.Repository.CommitTransitionOperation(fixture.Context, fixture.Commit);
+        var original = fixture.Request.Reference;
+        var reference = new EntityTransitionOperationReference(original.Operation,
+            changed == "authority" ? new("authority/foreign", "tenant/foreign") : original.AuthorityScope,
+            changed == "subject" ? new(original.Subject.EntityType, new("customer/other")) : original.Subject,
+            changed == "fingerprint" ? new(new string('a', 64)) : original.Fingerprint);
+        var result = await fixture.Repository.ResolveTransitionOperation(fixture.Context, reference);
+        Assert.Equal(EntityTransitionOperationDisposition.IdentityConflict, result.Disposition);
+        Assert.Null(result.Receipt);
+    }
+
+    [Fact]
+    public async Task ReceiptReference_MissingDoesNotInventCurrentStateEvidence()
+    {
+        var fixture = await Fixture.CreateAsync();
+        var result = await fixture.Repository.ResolveTransitionOperation(fixture.Context, fixture.Request.Reference);
+        Assert.Equal(EntityTransitionOperationDisposition.NotFound, result.Disposition);
+        Assert.Null(result.Receipt);
+        Assert.NotNull(await fixture.Repository.TryGet(fixture.Context, fixture.Subject.EntityId.Value));
     }
 
     [Fact]

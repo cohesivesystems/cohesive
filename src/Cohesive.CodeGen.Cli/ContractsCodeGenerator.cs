@@ -23,6 +23,10 @@ public static class ContractsCodeGenerator
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(log);
 
+        if (options.ShapeProjection == ContractShapeProjection.DeclaredJson
+            && options.EmitKinds.Contains(CodeGenEmitKind.GraphQL))
+            throw new NotSupportedException("GraphQL does not yet support declared JSON contract projection.");
+
         var writes = 0;
 
         for (var i = 0; i < options.EmitKinds.Length; i++)
@@ -55,9 +59,12 @@ public static class ContractsCodeGenerator
 
                 case CodeGenEmitKind.Apis:
                 {
-                    var definition = ContractsAssemblyApiDefinitionLoader.Load(options.ContractsAssemblyPath);
+                    var definition = ContractsAssemblyApiDefinitionLoader.Load(options.ContractsAssemblyPath,
+                        options.ShapeProjection == ContractShapeProjection.DeclaredJson, out var declaredJsonOptions);
                     var emission = new TypeScriptApiClientEmitter(new TypeScriptApiClientEmitterOptions
                     {
+                        JsonSerializerOptions = declaredJsonOptions ?? (options.ShapeProjection == ContractShapeProjection.CanonicalJson
+                            ? CreateCanonicalJsonOptions() : null),
                         FileName = $"{SanitizeFileNameSegment(options.ModuleName)}.api.generated.ts",
                         ModuleName = options.ModuleName,
                         ShapesImportPath = $"./{SanitizeFileNameSegment(options.ModuleName)}.shapes.generated",
@@ -78,13 +85,17 @@ public static class ContractsCodeGenerator
 
                 case CodeGenEmitKind.OpenApi:
                 {
-                    var definition = ContractsAssemblyApiDefinitionLoader.Load(options.ContractsAssemblyPath);
+                    var definition = ContractsAssemblyApiDefinitionLoader.Load(options.ContractsAssemblyPath,
+                        options.ShapeProjection == ContractShapeProjection.DeclaredJson, out var declaredJsonOptions);
                     var emission = new OpenApiEmitter(new OpenApiEmitterOptions
                     {
                         FileName = $"{SanitizeFileNameSegment(options.ModuleName)}.openapi.generated.json",
                         Title = options.ModuleName,
                         Version = "1.0.0",
-                        WriteIndented = true
+                        WriteIndented = true,
+                        JsonSerializerOptions = declaredJsonOptions ?? (options.ShapeProjection == ContractShapeProjection.CanonicalJson
+                            ? CreateCanonicalJsonOptions()
+                            : null)
                     }).Emit(new ApiCodeGenerationRequest(definition));
 
                     var document = emission.Documents[0];
@@ -100,9 +111,12 @@ public static class ContractsCodeGenerator
 
                 case CodeGenEmitKind.ApiPlaywright:
                 {
-                    var definition = ContractsAssemblyApiDefinitionLoader.Load(options.ContractsAssemblyPath);
+                    var definition = ContractsAssemblyApiDefinitionLoader.Load(options.ContractsAssemblyPath,
+                        options.ShapeProjection == ContractShapeProjection.DeclaredJson, out var declaredJsonOptions);
                     var emission = new TypeScriptPlaywrightApiMockEmitter(new TypeScriptPlaywrightApiMockEmitterOptions
                     {
+                        JsonSerializerOptions = declaredJsonOptions ?? (options.ShapeProjection == ContractShapeProjection.CanonicalJson
+                            ? CreateCanonicalJsonOptions() : null),
                         FileName = $"{SanitizeFileNameSegment(options.ModuleName)}.api.playwright.generated.ts",
                         ShapesImportPath = $"./{SanitizeFileNameSegment(options.ModuleName)}.shapes.generated",
                         ModuleName = options.ModuleName,
@@ -213,15 +227,23 @@ public static class ContractsCodeGenerator
         if (options.ShapeProjection == ContractShapeProjection.Clr)
             return ContractsAssemblyShapeGraphLoader.Load(options.ContractsAssemblyPath, options.ModuleName);
 
+        if (options.ShapeProjection == ContractShapeProjection.DeclaredJson)
+            return ContractsAssemblyShapeGraphLoader.LoadDeclaredJson(options.ContractsAssemblyPath, options.ModuleName);
+
         if (options.ShapeProjection != ContractShapeProjection.CanonicalJson)
             throw new InvalidOperationException($"Unsupported shape projection '{options.ShapeProjection}'.");
 
-        JsonSerializerOptions serializerOptions = new(JsonSerializerDefaults.Web);
-        serializerOptions.Converters.Add(SingleValueWrapperJsonConverter.ScalarOnly);
-        serializerOptions.Converters.Add(new JsonStringEnumConverter());
         return ContractsAssemblyShapeGraphLoader.Load(
             options.ContractsAssemblyPath,
             options.ModuleName,
-            serializerOptions);
+            CreateCanonicalJsonOptions());
+    }
+
+    static JsonSerializerOptions CreateCanonicalJsonOptions()
+    {
+        JsonSerializerOptions serializerOptions = new(JsonSerializerDefaults.Web);
+        serializerOptions.Converters.Add(SingleValueWrapperJsonConverter.ScalarOnly);
+        serializerOptions.Converters.Add(new JsonStringEnumConverter());
+        return serializerOptions;
     }
 }

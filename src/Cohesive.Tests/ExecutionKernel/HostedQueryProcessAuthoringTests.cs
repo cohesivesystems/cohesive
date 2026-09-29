@@ -1,6 +1,7 @@
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Authoring;
+using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.IR;
@@ -10,6 +11,52 @@ namespace Cohesive.Tests.ExecutionKernel;
 
 public sealed class HostedQueryProcessAuthoringTests
 {
+    [Fact]
+    public async Task DeclaredProcessAcquiresThenComputesThroughExactNativeBindings()
+    {
+        var observation = GeneratedHostedQueryCatalog.ById;
+        var computation = GeneratedHostedQueryCatalog.Normalize;
+        var process = GeneratedComputedHostedQueryProcess.Define(Metadata());
+        var compiled = process.Compile(new ProcessDefinitionValidationContext([
+            observation.CreateProcessDefinitionLink(), computation.CreateProcessDefinitionLink()]));
+        Assert.True(compiled.IsSuccessful, Format(compiled.Validation));
+        var plan = compiled.Plan!;
+        var reads = 0;
+        var computations = 0;
+        var handlers = new ProcessRelationHandlerCatalog([
+            ProcessRelationHandlerRegistration.Create(observation, async (_, _, input) =>
+            {
+                await Task.Yield();
+                reads++;
+                return new HostedQueryProcessResult { Id = input.Id, Value = "acquired" };
+            }),
+            ProcessRelationHandlerRegistration.CreateDeterministic(computation, computation.Implementation, (input, configuration, cancellation) =>
+            {
+                cancellation.ThrowIfCancellationRequested();
+                computations++;
+                return new HostedQueryProcessResult { Id = input.Id,
+                    Value = configuration.Value!.Value.GetProperty("ReadPolicy").GetString() + ":" + input.Value.ToUpperInvariant() };
+            })]);
+        var host = new RegisteredAsyncProcessReferenceHost(handlers,
+            static (_, _) => throw new InvalidOperationException("This Process declares no mutation."));
+        var state = ProcessReferenceInterpreter.Create(plan, ProcessRelationHandlerCatalogTests.Continuation(),
+            PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(new HostedQueryProcessInput { Id = "source/42" })));
+        var activation = new ProcessActivation(new("activation/compute"), ProcessActivationCause.Start,
+            new(2026, 9, 27, 12, 0, 0, TimeSpan.Zero),
+            new(new("authority/tests", "tenant/acme"), new("correlation/compute"),
+                new(InteractionDurabilityDemand.Durable, InteractionVisibilityDemand.AfterOriginCommit), plan.Document.Metadata.Provenance));
+        var result = await ProcessReferenceInterpreter.ActivateAsync(OperationContext.Create(), plan, state, activation, host);
+        Assert.True(result.Disposition == ProcessActivationDisposition.Completed,
+            result.Disposition + ": " + string.Join("; ", result.Diagnostics.Select(d => d.Code + ": " + d.Message)));
+        var terminal = Assert.IsType<PortableValue>(result.State.Terminal.Detail?.Value);
+        Assert.Equal(ObservationValue.FromObject(new HostedQueryProcessResult { Id = "source/42", Value = "normalized:ACQUIRED" }),
+            terminal.Value);
+        Assert.Equal(1, reads);
+        Assert.Equal(1, computations);
+        Assert.Equal(new[] { observation.Reference, computation.Reference }, process.Definition.Nodes
+            .OfType<EvaluateRelationProcessNode>().OrderBy(node => node.Id.Value).Select(node => node.Relation));
+    }
+
     [Fact]
     public void TypedHostedQueryEvaluation_IsByteEquivalentToRawExactReferenceAuthoring()
     {
@@ -88,6 +135,13 @@ public sealed record HostedQueryProcessConfiguration(string SourceFamily, string
 
 public static class GeneratedHostedQueryCatalog
 {
+    public static HostedQuery<HostedQueryProcessResult, HostedQueryProcessResult> Normalize { get; } =
+        HostedQuery<HostedQueryProcessResult, HostedQueryProcessResult>.Create(
+            new("query/tests/native-normalization"), new("1"), new("tests.native-normalization", "1"),
+            new HostedQueryProcessConfiguration("materialized-input", "normalized"),
+            ProcessRelationHandlerCatalogTests.Provenance(),
+            evaluationSemantics: HostedQueryEvaluationSemantics.DeterministicComputation);
+
     public static HostedQuery<HostedQueryProcessInput, HostedQueryProcessResult> ById { get; } =
         HostedQuery<HostedQueryProcessInput, HostedQueryProcessResult>.Create(
             new("query/tests/typed-hosted-process"),
@@ -135,5 +189,17 @@ public static partial class GeneratedRawHostedQueryProcess
             input,
             id: new("hosted/read"));
         return read;
+    }
+}
+
+
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedComputedHostedQueryProcess
+{
+    static async ProcessTask<HostedQueryProcessResult> Run(ProcessContext process, HostedQueryProcessInput input)
+    {
+        var observed = await process.Query(GeneratedHostedQueryCatalog.ById, input, id: new("1-acquire"));
+        var computed = await process.Query(GeneratedHostedQueryCatalog.Normalize, observed, id: new("2-compute"));
+        return computed;
     }
 }

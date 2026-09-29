@@ -124,6 +124,7 @@ public sealed class TransitionExpressionLanguageClosureTests
             ExprCapabilities.ForAggregate(AggregateOperator.Any),
             ExprCapabilities.ForAggregate(AggregateOperator.All),
             ExprCapabilities.ForAggregate(AggregateOperator.Average),
+            ExprCapabilities.ForFunction(ExprFunctionNames.RequireValue),
             ExprCapabilities.ForFunction(ExprFunctionNames.Contains),
             ExprCapabilities.ForFunction(ExprFunctionNames.Count),
             ExprCapabilities.ForFunction(ExprFunctionNames.EndsWith),
@@ -169,6 +170,7 @@ public sealed class TransitionExpressionLanguageClosureTests
         var objectContract = Permissive(ObjectContract(new ObjectFieldTypeDef("value", StringContract.Type!)));
         FunctionCase[] cases =
         [
+            Function(ExprFunctionNames.RequireValue, StringContract, ObservationValue.FromString("present"), Expr.Const("present")),
             Function(ExprFunctionNames.Contains, BooleanContract, ObservationValue.FromBool(true), strings, Expr.Const("beta")),
             Function(ExprFunctionNames.Count, Int64Contract, ObservationValue.FromInt64(2), strings),
             Function(ExprFunctionNames.EndsWith, BooleanContract, ObservationValue.FromBool(true), Expr.Const("alpha"), Expr.Const("pha")),
@@ -317,19 +319,25 @@ public sealed class TransitionExpressionLanguageClosureTests
     }
 
     [Theory]
-    [InlineData(PortableValueState.Missing, TransitionExecutionDiagnosticCodes.ObservationUnavailable)]
-    [InlineData(PortableValueState.Unknown, TransitionExecutionDiagnosticCodes.ObservationUnknown)]
-    [InlineData(PortableValueState.Failed, "test.input.failed")]
+    [InlineData(PortableValueState.Missing, TransitionExecutionDiagnosticCodes.ObservationUnavailable, false)]
+    [InlineData(PortableValueState.Missing, TransitionExecutionDiagnosticCodes.ObservationUnavailable, true)]
+    [InlineData(PortableValueState.Unknown, TransitionExecutionDiagnosticCodes.ObservationUnknown, false)]
+    [InlineData(PortableValueState.Unknown, TransitionExecutionDiagnosticCodes.ObservationUnknown, true)]
+    [InlineData(PortableValueState.Failed, "test.input.failed", false)]
+    [InlineData(PortableValueState.Failed, "test.input.failed", true)]
     public void Decide_NonTerminalPortableInput_DoesNotBecomeASuccessfulOutcome(
         PortableValueState state,
-        string expectedDiagnosticCode)
+        string expectedDiagnosticCode,
+        bool requireValue)
     {
         var valueContract = new ValueContract(
             new ScalarTypeRef(ScalarTypeKind.String),
             presence: FieldPresence.Optional,
             nullability: FieldNullability.Nullable);
         var compilation = CompileOutcome(
-            Expr.BoundValue(TransitionBindingIds.Input),
+            requireValue
+                ? new CallExpr(ExprFunctionNames.RequireValue, [Expr.BoundValue(TransitionBindingIds.Input)], valueContract.Type)
+                : Expr.BoundValue(TransitionBindingIds.Input),
             valueContract,
             valueContract);
         Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
@@ -358,6 +366,31 @@ public sealed class TransitionExpressionLanguageClosureTests
         Assert.Empty(decision.MachineMovements);
         Assert.False(decision.GuaranteeDemands.CommitRequired);
         Assert.Equal(expectedDiagnosticCode, Assert.Single(decision.Diagnostics).Code);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RequireValue_AbsentOrNullMember_CannotProduceSuccessfulOutcome(bool explicitNull)
+    {
+        var input = ObjectContract(new ObjectFieldTypeDef("value", StringContract.Type!,
+            presence: FieldPresence.Optional, nullability: FieldNullability.Nullable));
+        var expression = new CallExpr(ExprFunctionNames.RequireValue,
+            [Expr.Field(TransitionBindingIds.Input, "value")], StringContract.Type);
+        var compilation = CompileOutcome(expression, StringContract, input);
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        var value = explicitNull
+            ? ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["value"] = ObservationValue.Null })
+            : ObservationValue.EmptyObject;
+
+        var decision = TransitionReferenceInterpreter.DecideFullState(compilation.Plan!, new("require-value/rejected"),
+            PortableValue.Concrete(input, value),
+            PortableValue.Concrete(EmptyObjectContract, ObservationValue.EmptyObject));
+
+        Assert.Null(decision.Outcome);
+        Assert.NotEmpty(decision.Diagnostics);
+        Assert.Empty(decision.Patch);
+        Assert.False(decision.GuaranteeDemands.CommitRequired);
     }
 
     static TransitionCompilationResult CompileOutcome(

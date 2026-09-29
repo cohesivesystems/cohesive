@@ -14,12 +14,15 @@ namespace Cohesive.Model.Serialization;
 /// <see cref="JsonElement"/> is materialized.
 /// </remarks>
 /// <typeparam name="T">Nested property value type.</typeparam>
-public sealed class WebJsonPropertyConverter<T> : JsonConverter<T>
+public sealed class WebJsonPropertyConverter<T> : JsonConverter<T>, IJsonValueSerializerProfile
 {
     /// <summary>Creates a web-profile property converter.</summary>
     public WebJsonPropertyConverter()
     {
     }
+
+    /// <inheritdoc />
+    public JsonSerializerOptions ValueSerializerOptions => WebJsonPropertySerialization.Options;
 
     /// <inheritdoc />
     public override T? Read(

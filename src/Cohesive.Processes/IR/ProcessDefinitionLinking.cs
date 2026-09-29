@@ -162,6 +162,7 @@ public sealed record ProcessDefinitionLink
     /// Exact recovery policy projected from a Process definition. Required only when <paramref name="kind"/> is
     /// <see cref="ProcessDefinitionLinkKind.Process"/>.
     /// </param>
+    /// <param name="receiptContract">Host-attested Transition commit locator contract, or null when not guaranteed.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="definition"/>, <paramref name="input"/>, or <paramref name="result"/> is
     /// <see langword="null"/>.
@@ -177,7 +178,8 @@ public sealed record ProcessDefinitionLink
         ValueContract input,
         ValueContract result,
         IEnumerable<ExecutionDefinitionReference>? processDependencies = null,
-        ProcessRecoveryPolicy? recoveryPolicy = null)
+        ProcessRecoveryPolicy? recoveryPolicy = null,
+        ValueContract? receiptContract = null)
     {
         if (!Enum.IsDefined(kind) || kind == ProcessDefinitionLinkKind.Unspecified)
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "A Process definition link requires an explicit semantic family.");
@@ -186,6 +188,9 @@ public sealed record ProcessDefinitionLink
         Kind = kind;
         Input = Guard.RequireNotNull(input);
         Result = Guard.RequireNotNull(result);
+        if (receiptContract is not null && kind != ProcessDefinitionLinkKind.Transition)
+            throw new ArgumentException("Only a Transition host binding can attest a commit receipt contract.", nameof(receiptContract));
+        ReceiptContract = receiptContract;
 
         var dependencyBuilder = ImmutableArray.CreateBuilder<ExecutionDefinitionReference>();
         HashSet<ExecutionDefinitionReference> observedDependencies = [];
@@ -257,6 +262,11 @@ public sealed record ProcessDefinitionLink
     /// </remarks>
     public ValueContract Result { get; }
 
+    /// <summary>Optional host attestation of the exact portable receipt contract returned on successful invocation.</summary>
+    /// <remarks>This is host evidence, not part of the Transition domain outcome. A document-derived link alone
+    /// makes no receipt guarantee. The binding must establish support before accepting a Process requiring it.</remarks>
+    public ValueContract? ReceiptContract { get; }
+
     /// <summary>
     /// Known direct child-Process references in deterministic exact-reference order. This set is complete only when
     /// <see cref="HasCompleteProcessDependencyEvidence"/> is <see langword="true"/>.
@@ -281,6 +291,7 @@ public sealed record ProcessDefinitionLink
         && Kind == other.Kind
         && Input == other.Input
         && Result == other.Result
+        && ReceiptContract == other.ReceiptContract
         && RecoveryPolicy == other.RecoveryPolicy
         && HasCompleteProcessDependencyEvidence == other.HasCompleteProcessDependencyEvidence
         && ProcessDependencies.SequenceEqual(other.ProcessDependencies);
@@ -294,6 +305,7 @@ public sealed record ProcessDefinitionLink
         hash.Add(Kind);
         hash.Add(Input);
         hash.Add(Result);
+        hash.Add(ReceiptContract);
         hash.Add(RecoveryPolicy);
         hash.Add(HasCompleteProcessDependencyEvidence);
         foreach (var dependency in ProcessDependencies)

@@ -65,3 +65,13 @@ of `Microsoft.AspNetCore.App`.
 - `Cohesive.Adapters.OpenApi` for OpenAPI emission.
 - `Cohesive.Adapters.GraphQL` for GraphQL schema emission.
 - `Cohesive.Adapters.TypeScript` for TypeScript client generation.
+
+## Service declarations
+
+`Services.ServiceDefinition` groups exact Transition, query, Process-entry and Process-control operations
+into a portable authority using the existing execution-definition document, provenance and fingerprints.
+Referenced definitions own input/output and behavior. Control actions use the native Process-control
+vocabulary; requirements are declared per exposed operation. Native repositories, dispatchers and HTTP
+routes are runtime/projection bindings, never stored callbacks. The optional `Cohesive.Api.Execution`
+package provides shared invocation and normalized authorization.
+See [declarative service runtime](../../docs/decisions/declarative-service-runtime.md).

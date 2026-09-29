@@ -539,18 +539,20 @@ public static class ProcessInterpreterRealizationCompiler
     /// <summary>Acquires requirements, validates target evidence, and produces an exhaustive disposition ledger.</summary>
     /// <param name="plan">Successfully compiled exact canonical Process plan.</param>
     /// <param name="targetProfile">Target capability assertions to validate and match.</param>
+    /// <param name="lifetime">Requested recovery lifetime, retained in the report inventory. Does not relax explicit graph demands.</param>
     /// <returns>A complete realization report, including an unavailable decision for every unmatched requirement.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="plan"/> or <paramref name="targetProfile"/> is <see langword="null"/>.
     /// </exception>
     public static ProcessInterpreterRealizationReport Compile(
         CompiledProcessPlan plan,
-        ProcessInterpreterCapabilityProfile targetProfile)
+        ProcessInterpreterCapabilityProfile targetProfile,
+        ProcessExecutionLifetime lifetime = ProcessExecutionLifetime.Durable)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(targetProfile);
 
-        var inventory = ProcessInterpreterRequirementCollector.Collect(plan);
+        var inventory = ProcessInterpreterRequirementCollector.Collect(plan, lifetime);
         List<ProcessInterpreterRealizationDiagnostic> diagnostics = [];
         HashSet<ProcessInterpreterCapabilityEvidenceId> invalidEvidence = [];
         ValidateProfile(targetProfile, diagnostics, invalidEvidence);

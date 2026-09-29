@@ -48,3 +48,96 @@ The declaration must be reviewed as semantic contract metadata. Serializer behav
 deterministic, and changing its root JSON kind is a contract change. Consumers may inspect or replace the complete
 JSON value in portable expressions, but internal document semantics stay behind the document's own schema and
 validator unless explicitly projected into a separate structural contract.
+
+
+## Public discriminator projection
+
+A portable object may also be a case in a native `JsonPolymorphic` contract. Public TypeScript generation must
+retain that serializer's flat discriminator layout even while the case's internal document schema remains opaque.
+For example, a native `RelationQueryDocument` relation case serializes with `$definition: "relation"` beside the
+relation fields. Its conservative generated type is the discriminator intersected with `Record<string, unknown>`;
+a synthetic `value` property would describe a different wire format. Scalar and other non-object union payloads
+retain their existing envelope convention.
+
+`PortableDocumentContractTests` qualifies this layout against actual serialization and generates native draft and
+query documents through the existing graph builder. Native expression cases retain their declared discriminators.
+This does not yet provide the full public relation schema: separating execution admission from an explicitly
+selected public document contract remains part of the declarative service plan. Expanding every portable value
+through CLR reflection would still violate the authority boundary described above.
+
+## Explicit public record contracts
+
+`ClrShapeGraphBuilder.UsePublicJsonContracts(options)` selects a public representation interpretation of
+serializer-backed records. The normal builder and `DefaultClrTypeRefMapper` retain portable JSON admission.
+The public builder snapshots serializer options, reuses the existing recursive named-type and polymorphic union
+projection, and expands a portable value only when its actual serializer metadata describes an object. An
+incompatible declared root kind fails early. Converter-defined portable values remain opaque; CLR implementation
+properties are not used to guess their serialized representation. Custom object metadata that cannot be described
+by the readable CLR properties is rejected rather than silently approximated.
+
+The canonical-JSON contracts assembly loader uses this interpretation for both discovery validation and final
+projection. This makes a record such as `Review(RelationDraftDocument Draft, RelationQueryDocument? Relation)`
+publicly typed, including the native `RelationDefinition` case, without changing its execution/storage contract or
+adding a parallel review/document model. The regenerated relations artifact is produced by the existing CLI.
+
+OpenAPI accepts the same explicit serializer options. Its existing schema registry consumes native object metadata
+for names, presence, nullable properties, dictionaries and explicit polymorphic discriminators. Recursive references
+remain component references. Scalar/converter schemas use the platform exporter and the existing System.Text.Json
+shape metadata for known wrappers/enums. Constructor default values are deliberately not emitted as wire defaults:
+they may be internal normalization inputs, and native schema export cannot serialize some defaults such as
+`default(ImmutableArray<T>)`. Semantic document validators and strict serializers continue to own acceptance.
+
+This initial OpenAPI public profile rejects property-specific converters/number-handling overrides and
+polymorphic cases without explicit discriminators, rather than claiming an unsupported contract. Converter-defined
+values without a known public scalar representation remain opaque. The default OpenAPI profile is unchanged.
+GraphQL public document expansion is not included in this change.
+
+Qualification includes native draft/query documents, recursive records and expressions, nullable document fields,
+unchanged execution inference, actual JSON discriminator layout, converter opacity, contradictory root kinds,
+unsupported object metadata, deterministic generation, valid OpenAPI references and TypeScript compilation.
+
+## Native documents inside foreign envelopes
+
+`RelationDraftDocumentJsonConverter` and `RelationQueryDocumentJsonConverter` are native document-boundary
+adapters in Cohesive.Relations. Register them on an envelope's serializer options, or on an individual property.
+They retain the native format's own options rather than inheriting outer naming/enum policies. Reads delegate to
+the owning serializer, including version dispatch, duplicate-property detection, semantic validation and
+fingerprint checks. Writes stream using frozen options created by that owner. No replacement document type or
+protocol-specific model is introduced.
+
+Each adapter belongs to its native format because their admission contracts differ; the query serializer also owns
+its specialized query-parameter converter. A generic web naming converter is not sufficient. Read adaptation retains
+the complete nested JSON for the existing string-based native admission API; this is one boundary operation, not a
+row-loop projection. Registering these adapters only on API options keeps persisted aggregate restoration and its
+existing diagnostics unchanged.
+
+
+## Declared serializer authority
+
+An assembly may declare `JsonContractOptionsAttribute` pointing to a public static, parameterless
+options factory. The CLI's `declared-json` interpretation resolves it in the same load context as the
+contract types, snapshots the options, and uses the existing public graph/OpenAPI projections. This is
+an authoring/runtime binding association, not a new portable document schema. Hosts share the same
+configuration function; generation does not guess their naming or enum policy from an application name.
+The relation contracts assembly delegates directly to its existing native serializer options factory.
+
+The factory must be deterministic, must not resolve services or invocation context, and is executed only
+as explicitly selected trusted contract-authoring code. Invalid declarations and attributed factory
+failures stop generation. A declaration does not make arbitrary custom converters structurally known;
+emitter capability restrictions continue to apply. GraphQL rejects this interpretation until it can
+preserve the declared serializer contract.
+
+## Declared value serializer profiles
+
+A portable value whose native serializer requires non-default options can declare its existing
+factory with type-level `JsonContractOptionsAttribute`. `DeclaredJsonValueConverterFactory`
+projects that native value inside a foreign envelope, and ObservationValue plus typed execution
+contract decoding use it. Profiles are lazily cached per CLR type, snapshotted and frozen; weak keys
+avoid introducing another permanent type-retention catalog. Recursive factory registration fails
+explicitly. Outer envelope conventions remain unchanged.
+
+For example, a draft's output mode remains its canonical string and a query retains its specialized
+parameter encoding during Process preparation. This adapter owns representation only: native
+semantic validation, fingerprint admission and authorization remain mandatory at their boundaries.
+The existing native document HTTP converters still perform full admission on reads. Type-level
+profiles do not yet solve arbitrary property-level converter schema projection in code generation.

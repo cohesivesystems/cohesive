@@ -387,6 +387,40 @@ public sealed class Process<TInput, TResult>
 /// </remarks>
 public static partial class ProcessAuthoring
 {
+    /// <summary>Projects a validated portable document into a typed handle without compiling or changing it.</summary>
+    /// <remarks>
+    /// The document remains the semantic authority. Input and result must exactly match the default CLR
+    /// authoring contracts (required, and non-null unless the CLR type is Nullable). Generic CLR types do
+    /// not preserve nullable-reference annotations. Linked-definition admission remains a compilation concern.
+    /// Invalid documents retain their validation diagnostics and cannot be used as valid authored Processes.
+    /// </remarks>
+    /// <typeparam name="TInput">CLR projection of the canonical input contract.</typeparam>
+    /// <typeparam name="TResult">CLR projection of the canonical terminal result contract.</typeparam>
+    /// <param name="document">Existing canonical document, including its original identity and provenance.</param>
+    /// <returns>A handle retaining the original document and context-free validation result.</returns>
+    /// <exception cref="ArgumentNullException">The document is null.</exception>
+    /// <exception cref="ArgumentException">A valid document's contracts do not match the requested CLR types.</exception>
+    public static Process<TInput, TResult> Project<TInput, TResult>(ExecutionDefinitionDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var validation = ProcessDefinitionDocuments.Validate(document);
+        if (!validation.IsValid)
+            return new(document, validation);
+
+        var definition = document.GetDefinition<CanonicalProcessDefinition>();
+        var mapper = new DefaultClrTypeRefMapper();
+        RequireContract(typeof(TInput), definition.Input, "input");
+        RequireContract(typeof(TResult), definition.Result, "result");
+        return new(document, validation);
+
+        void RequireContract(Type type, ValueContract actual, string role)
+        {
+            var expected = ProcessAuthoringContext.MapContract(mapper, type);
+            if (actual != expected)
+                throw new ArgumentException($"The canonical Process {role} contract does not match CLR type '{type}'.", nameof(document));
+        }
+    }
+
     /// <summary>Stable producer identity for the canonical C# Process frontend.</summary>
     public const string Producer = "cohesive.processes.csharp/v1";
 

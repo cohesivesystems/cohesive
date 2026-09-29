@@ -6,6 +6,7 @@ using Cohesive.Api;
 using Cohesive.Api.CodeGen;
 using Cohesive.CodeGen;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Adapters.TypeScript;
 
@@ -15,6 +16,7 @@ namespace Cohesive.Adapters.TypeScript;
 public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
 {
     readonly TypeScriptPlaywrightApiMockEmitterOptions options;
+    readonly SystemTextJsonClrShapeMetadataProvider? jsonMetadata;
 
     /// <summary>
     /// Creates the emitter.
@@ -22,6 +24,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
     public TypeScriptPlaywrightApiMockEmitter(TypeScriptPlaywrightApiMockEmitterOptions? options = null)
     {
         this.options = options ?? new TypeScriptPlaywrightApiMockEmitterOptions();
+        jsonMetadata = this.options.JsonSerializerOptions is { } json ? new(json) : null;
     }
 
     /// <inheritdoc />
@@ -991,8 +994,8 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
             writer.Write(variableName);
             writer.WriteLine(".length > 0) {");
             writer.PushIndent();
-            writer.Write("query.");
-            writer.Write(property.PropertyName);
+            writer.Write(TypeScriptSyntaxEmitter.IsIdentifier(property.PropertyName)
+                ? $"query.{property.PropertyName}" : $"query[{Quote(property.PropertyName)}]");
             writer.Write(" = ");
             writer.Write(variableName);
             writer.Write(".map(");
@@ -1016,8 +1019,8 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         writer.Write(variableName);
         writer.WriteLine(" !== undefined) {");
         writer.PushIndent();
-        writer.Write("query.");
-        writer.Write(property.PropertyName);
+        writer.Write(TypeScriptSyntaxEmitter.IsIdentifier(property.PropertyName)
+            ? $"query.{property.PropertyName}" : $"query[{Quote(property.PropertyName)}]");
         writer.Write(" = ");
         writer.Write(variableName);
         writer.Write(" as ");
@@ -1270,7 +1273,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         writer.WriteLine();
     }
 
-    static ImmutableArray<OperationModel> BuildOperationModels(ApiDefinition definition)
+    ImmutableArray<OperationModel> BuildOperationModels(ApiDefinition definition)
     {
         var usedKeys = new HashSet<string>(StringComparer.Ordinal);
         var models = ImmutableArray.CreateBuilder<OperationModel>(definition.Operations.Count);
@@ -1468,7 +1471,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
             .Where(static parameter => parameter.Source == HttpParameterSource.Route)
             .Select(parameter => new RoutePropertyModel(identifiers[parameter], parameter.Name))];
 
-    static ImmutableArray<QueryPropertyModel> BuildQueryProperties(
+    ImmutableArray<QueryPropertyModel> BuildQueryProperties(
         HttpBinding http,
         TypeScriptHttpParameterIdentifiers identifiers)
     {
@@ -1480,10 +1483,11 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
             for (var i = 0; i < metadata.Length; i++)
             {
                 var property = metadata[i].Property;
+                var name = jsonMetadata?.ResolveJsonPropertyName(property) ?? property.Name;
                 properties.Add(new QueryPropertyModel(
-                    PropertyName: property.Name,
+                    PropertyName: name,
                     QueryName: ResolveQueryParameterName(property),
-                    TypeText: $"{queryTypeText}['{property.Name}']",
+                    TypeText: $"{queryTypeText}[{Quote(name)}]",
                     Decoder: GetQueryDecoderName(property.PropertyType),
                     IsArray: IsSequenceType(property.PropertyType)));
             }

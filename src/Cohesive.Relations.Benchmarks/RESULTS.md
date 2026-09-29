@@ -1289,3 +1289,88 @@ and result construction.
 This ShortRun establishes a descriptive baseline, not a regression threshold. Optimization should
 remain deferred unless representative end-to-end profiles show that DTO materialization is a material
 part of total query execution time.
+
+## Service invocation instrumentation — 2026-09-28
+
+Measured at dabeffa with the new ServiceInvocationBenchmarks harness and its project reference uncommitted. All six cases completed. The harness alternates two prepared values and requires an advanced concurrency token on every successful invocation, excluding no-change writes. An earlier same-value run was discarded.
+
+Command: `dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --filter '*ServiceInvocationBenchmarks*' --job Short --artifacts /tmp/cohesive-service-write-benchmark`. No explicit runtime configuration overrides were supplied; power mode was not recorded.
+
+```
+
+BenchmarkDotNet v0.15.8, macOS 27.0 (26A428) [Darwin 27.0.0]
+Apple M5 Max, 1 CPU, 18 logical and 18 physical cores
+.NET SDK 10.0.201
+  [Host]   : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+  ShortRun : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+
+Job=ShortRun  IterationCount=3  LaunchCount=1
+WarmupCount=3
+
+```
+| Method                   | Instrumented | Mean       | Error         | StdDev     | Gen0    | Gen1   | Allocated |
+|------------------------- |------------- |-----------:|--------------:|-----------:|--------:|-------:|----------:|
+| **ConstructPreparedRuntime** | **False**        |  **13.090 μs** |    **29.6167 μs** |  **1.6234 μs** |  **5.9204** | **0.1221** |  **48.55 KB** |
+| ConstructAndInvoke       | False        |  42.020 μs |   306.2098 μs | 16.7844 μs |  7.9346 | 0.1221 |  65.68 KB |
+| WarmInvoke               | False        |   2.563 μs |     0.1339 μs |  0.0073 μs |  2.0638 | 0.0420 |  16.88 KB |
+| **ConstructPreparedRuntime** | **True**         |  **11.158 μs** |     **9.6743 μs** |  **0.5303 μs** |  **5.9204** | **0.1221** |  **48.55 KB** |
+| ConstructAndInvoke       | True         | 525.674 μs |   292.6336 μs | 16.0402 μs | 41.0156 | 7.8125 | 339.06 KB |
+| WarmInvoke               | True         | 433.061 μs | 1,435.0311 μs | 78.6589 μs | 35.1563 | 6.8359 | 289.71 KB |
+
+
+These are exploratory observations, not performance thresholds. Three measured iterations produce wide timing confidence intervals, particularly for sampled warm invocation. Allocation indicates substantial additional sampled-trace work and warrants investigation. Construction uses precompiled definitions; invocation uses a single in-memory entity and a permissive authorization stub. This does not measure host startup, real identity policy evaluation, HTTP, database I/O, exporter delivery, or retained-history growth. Sampling enabled means AllDataAndRecorded without an exporter. No claim of deployed latency follows from these measurements.
+
+### Frozen trace profiles comparison
+
+Same harness at d90acad with ExecutionTraceJsonSerializer changed to two lazy, frozen profiles; the public options factory remains independently mutable. Same command as above with artifacts `/tmp/cohesive-service-frozen-benchmark`.
+
+```
+
+BenchmarkDotNet v0.15.8, macOS 27.0 (26A428) [Darwin 27.0.0]
+Apple M5 Max, 1 CPU, 18 logical and 18 physical cores
+.NET SDK 10.0.201
+  [Host]   : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+  ShortRun : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+
+Job=ShortRun  IterationCount=3  LaunchCount=1
+WarmupCount=3
+
+```
+| Method                   | Instrumented | Mean      | Error       | StdDev     | Median    | Gen0    | Gen1   | Allocated |
+|------------------------- |------------- |----------:|------------:|-----------:|----------:|--------:|-------:|----------:|
+| **ConstructPreparedRuntime** | **False**        | **11.370 μs** |  **13.3896 μs** |  **0.7339 μs** | **11.206 μs** |  **5.9204** | **0.1221** |  **48.55 KB** |
+| ConstructAndInvoke       | False        | 43.062 μs | 261.3706 μs | 14.3266 μs | 43.379 μs |  7.9346 | 0.1221 |  65.68 KB |
+| WarmInvoke               | False        |  2.620 μs |   0.1029 μs |  0.0056 μs |  2.618 μs |  2.0638 | 0.0420 |  16.88 KB |
+| **ConstructPreparedRuntime** | **True**         | **12.310 μs** |  **40.0173 μs** |  **2.1935 μs** | **11.427 μs** |  **5.9204** | **0.1221** |  **48.55 KB** |
+| ConstructAndInvoke       | True         | 73.577 μs | 714.3868 μs | 39.1580 μs | 57.843 μs | 15.8691 | 0.9766 | 130.67 KB |
+| WarmInvoke               | True         | 22.945 μs |   4.7013 μs |  0.2577 μs | 22.865 μs | 10.0098 | 0.8545 |  81.86 KB |
+
+
+Sampled warm invocation allocation fell from 289.71 KB to 81.86 KB (about 72%); unsampled allocation stayed 16.88 KB. Observed sampled warm means changed from 433.061 us to 22.945 us. The baseline timing was noisy, so this is not a precise speedup guarantee. The change isolates repeated serializer metadata preparation; canonical JSON materialization and hashing still occur per sampled invocation. Cache lifetime is process-wide with two fixed profiles, initialized independently on first use; no trace, identity, tenant or invocation result is retained by this cache. Existing benchmark exclusions still apply. Differential tests compare canonical bytes, semantic hashes and indented output against fresh strict options; a deterministic test protects frozen profile reuse and caller isolation.
+
+### Invocation metric completion
+
+At 909443f plus the invocation-metrics working changes, the same Short command uses artifacts `/tmp/cohesive-service-metrics-final`. Enabled now includes invocation count/duration metric listeners as well as sampled traces; callbacks do no processing or export. All six cases completed with real changed-token writes.
+
+```
+
+BenchmarkDotNet v0.15.8, macOS 27.0 (26A428) [Darwin 27.0.0]
+Apple M5 Max, 1 CPU, 18 logical and 18 physical cores
+.NET SDK 10.0.201
+  [Host]   : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+  ShortRun : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+
+Job=ShortRun  IterationCount=3  LaunchCount=1
+WarmupCount=3
+
+```
+| Method                   | Instrumented | Mean      | Error       | StdDev     | Gen0    | Gen1   | Allocated |
+|------------------------- |------------- |----------:|------------:|-----------:|--------:|-------:|----------:|
+| **ConstructPreparedRuntime** | **False**        | **13.130 μs** |  **43.4657 μs** |  **2.3825 μs** |  **5.9204** | **0.1221** |  **48.55 KB** |
+| ConstructAndInvoke       | False        | 41.765 μs | 315.5398 μs | 17.2958 μs |  7.9346 | 0.1221 |  65.69 KB |
+| WarmInvoke               | False        |  2.629 μs |   0.1823 μs |  0.0100 μs |  2.0676 | 0.0381 |  16.89 KB |
+| **ConstructPreparedRuntime** | **True**         | **13.293 μs** |  **46.2434 μs** |  **2.5348 μs** |  **5.9204** | **0.1221** |  **48.55 KB** |
+| ConstructAndInvoke       | True         | 75.845 μs | 472.3704 μs | 25.8922 μs | 15.8691 | 0.9766 |  130.8 KB |
+| WarmInvoke               | True         | 22.840 μs |   0.6118 μs |  0.0335 μs | 10.0098 | 0.8545 |  81.87 KB |
+
+The final warm observations are 2.629 us / 16.89 KB disabled and 22.840 us / 81.87 KB enabled, compared with frozen-profile trace-only 2.620 us / 16.88 KB and 22.945 us / 81.86 KB. Short-job confidence intervals do not establish timing equivalence. The additional timestamp field adds a small retained per-invocation cost; metric recording without listeners has a separate zero-allocation regression. Existing startup/provider/export exclusions apply.

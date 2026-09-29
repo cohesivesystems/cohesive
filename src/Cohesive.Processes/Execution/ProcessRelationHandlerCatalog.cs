@@ -1,10 +1,11 @@
 using System.Collections.Immutable;
-using System.Text.Json;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Prelude;
 using Cohesive.Relations.Authoring;
+using Cohesive.Relations.IR;
+using Cohesive.Relations.Execution;
 
 namespace Cohesive.Processes.Execution;
 
@@ -18,16 +19,16 @@ public static class ProcessRelationHandlerDiagnosticCodes
     public const string DefinitionFingerprintMismatch = "processes.relationHandler.definition.fingerprintMismatch";
 
     /// <summary>The invocation value does not carry the canonical Relation/Query input contract.</summary>
-    public const string InputContractMismatch = "processes.relationHandler.input.contractMismatch";
+    public const string InputContractMismatch = HostedQueryValueDiagnosticCodes.InputContractMismatch;
 
     /// <summary>The invocation value is not one concrete portable input.</summary>
-    public const string InputValueInvalid = "processes.relationHandler.input.invalid";
+    public const string InputValueInvalid = HostedQueryValueDiagnosticCodes.InputValueInvalid;
 
     /// <summary>A portable value could not be converted to or from its registered CLR projection.</summary>
-    public const string ValueConversionFailed = "processes.relationHandler.value.conversionFailed";
+    public const string ValueConversionFailed = HostedQueryValueDiagnosticCodes.ValueConversionFailed;
 
     /// <summary>The typed handler result does not satisfy the canonical Relation/Query result contract.</summary>
-    public const string ResultValueInvalid = "processes.relationHandler.result.invalid";
+    public const string ResultValueInvalid = HostedQueryValueDiagnosticCodes.ResultValueInvalid;
 }
 
 /// <summary>Executes one typed exact canonical Relation or Query evaluation.</summary>
@@ -122,6 +123,23 @@ public delegate ValueTask<ProcessRelationHandlerOutcome<TResult>> ProcessRelatio
     where TInput : notnull
     where TResult : notnull;
 
+/// <summary>A deterministic native computation over admitted input and immutable canonical configuration.</summary>
+/// <remarks>
+/// Implementations must not perform I/O, mutate shared state or consult ambient identity, time or randomness.
+/// This is an explicit host capability contract, not a sandbox or a proof of arbitrary CLR code purity.
+/// Dependencies needed as data must already be materialized in input or configuration by the owning Process.
+/// Cancellation may stop work but cannot change the successful result. Expected domain failures belong in TResult.
+/// </remarks>
+/// <typeparam name="TInput">Typed projection of the canonical input.</typeparam>
+/// <typeparam name="TResult">Typed projection of the canonical result.</typeparam>
+/// <param name="input">Invocation-owned admitted input.</param>
+/// <param name="configuration">Immutable configuration from the pinned definition, never ambient configuration.</param>
+/// <param name="cancellationToken">Cancellation only; no clock, identity or infrastructure context is supplied.</param>
+/// <returns>The deterministic result of the declared native computation.</returns>
+public delegate TResult DeterministicQueryComputation<TInput, TResult>(
+    TInput input, PortableValue configuration, CancellationToken cancellationToken)
+    where TInput : notnull where TResult : notnull;
+
 /// <summary>Runtime-only binding between one exact canonical Relation or Query and its typed executable handler.</summary>
 /// <remarks>
 /// The document retained by the source typed handle remains the definition authority. This registration projects
@@ -133,12 +151,17 @@ public abstract class ProcessRelationHandlerRegistration
     private protected ProcessRelationHandlerRegistration(
         ExecutionDefinitionReference reference,
         ValueContract inputContract,
-        ValueContract resultContract)
+        ValueContract resultContract,
+        HostedQueryEvaluationSemantics evaluationSemantics = HostedQueryEvaluationSemantics.Observation)
     {
+        EvaluationSemantics = evaluationSemantics;
         Reference = reference ?? throw new ArgumentNullException(nameof(reference));
         InputContract = inputContract ?? throw new ArgumentNullException(nameof(inputContract));
         ResultContract = resultContract ?? throw new ArgumentNullException(nameof(resultContract));
     }
+
+    /// <summary>Execution capability this registration attests for its exact definition.</summary>
+    public HostedQueryEvaluationSemantics EvaluationSemantics { get; }
 
     /// <summary>Exact identity, revision, and semantic fingerprint required for dispatch.</summary>
     public ExecutionDefinitionReference Reference { get; }
@@ -168,6 +191,8 @@ public abstract class ProcessRelationHandlerRegistration
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(handler);
         RequireValid(query.IsValid, nameof(query));
+        if (query.EvaluationSemantics != HostedQueryEvaluationSemantics.Observation)
+            throw new ArgumentException("A deterministic Query requires an explicit deterministic computation registration.", nameof(query));
         return new TypedProcessRelationHandlerRegistration<TInput, TResult>(
             query.Reference,
             query.InputContract,
@@ -223,6 +248,8 @@ public abstract class ProcessRelationHandlerRegistration
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(handler);
         RequireValid(query.IsValid, nameof(query));
+        if (query.EvaluationSemantics != HostedQueryEvaluationSemantics.Observation)
+            throw new ArgumentException("A deterministic Query requires an explicit deterministic computation registration.", nameof(query));
         return new TypedProcessRelationHandlerRegistration<TInput, TResult>(
             query.Reference,
             query.InputContract,
@@ -256,6 +283,64 @@ public abstract class ProcessRelationHandlerRegistration
             handler);
     }
 
+    /// <summary>Binds a deterministic hosted Query to an explicitly attested native computation.</summary>
+    /// <remarks>
+    /// Exact implementation identity/version and declared semantics must agree. No automatic memoization, receipt
+    /// elision or relaxed Process recovery follows from this capability. The existing typed admission and result
+    /// validation path is reused. The host is responsible for qualifying its code against the purity contract.
+    /// </remarks>
+    /// <typeparam name="TInput">Canonical input projection.</typeparam>
+    /// <typeparam name="TResult">Canonical result projection.</typeparam>
+    /// <param name="query">Exact deterministic hosted Query.</param>
+    /// <param name="implementation">Implementation contract actually deployed by the host.</param>
+    /// <param name="computation">Native computation satisfying that exact contract.</param>
+    /// <returns>A registration admitted by the existing Process relation/query dispatcher.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">The document, semantics or implementation identity does not match.</exception>
+    public static ProcessRelationHandlerRegistration CreateDeterministic<TInput, TResult>(
+        HostedQuery<TInput, TResult> query, HostedQueryImplementationReference implementation,
+        DeterministicQueryComputation<TInput, TResult> computation)
+        where TInput : notnull where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(implementation);
+        ArgumentNullException.ThrowIfNull(computation);
+        var binding = DeterministicHostedQueryBinding.Create(query, implementation,
+            (input, configuration, cancellation) => computation(input, configuration, cancellation));
+        return new DeterministicRegistration(binding);
+    }
+
+    /// <summary>Binds a deterministic computation with explicit runtime failure evidence.</summary>
+    /// <typeparam name="TInput">Canonical input projection.</typeparam>
+    /// <typeparam name="TResult">Canonical result projection.</typeparam>
+    /// <param name="query">Exact deterministic hosted Query.</param>
+    /// <param name="implementation">Exact implementation contract deployed by the host.</param>
+    /// <param name="computation">Pure input/configuration computation returning a value or an error diagnostic.</param>
+    /// <returns>A registration using shared deterministic admission and native Process failure projection.</returns>
+    /// <remarks>Expected inability to produce the value is evaluation evidence. Business alternatives belong in
+    /// the declared result. Cancellation and physical exceptions propagate. No Process context is passed to the computation.</remarks>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">The declaration or implementation identity is invalid.</exception>
+    public static ProcessRelationHandlerRegistration CreateDeterministicOutcome<TInput, TResult>(
+        HostedQuery<TInput, TResult> query, HostedQueryImplementationReference implementation,
+        Func<TInput, PortableValue, CancellationToken, Result<TResult, DocumentValidationDiagnostic>> computation)
+        where TInput : notnull where TResult : notnull =>
+        new DeterministicRegistration(DeterministicHostedQueryBinding.CreateOutcome(query, implementation, computation));
+
+    sealed class DeterministicRegistration(DeterministicHostedQueryBinding binding)
+        : ProcessRelationHandlerRegistration(binding.Reference, binding.InputContract, binding.ResultContract,
+            HostedQueryEvaluationSemantics.DeterministicComputation)
+    {
+        internal override ValueTask<ProcessOperationResult> EvaluateAsync(OperationContext context,
+            ProcessRelationEvaluation evaluation)
+        {
+            var result = binding.Evaluate(evaluation.Input, context.CancellationToken);
+            return ValueTask.FromResult(result.Type == ResultType.Success
+                ? ProcessOperationResult.Completed(result.Success!)
+                : ProcessOperationResult.Failed(result.Failure!));
+        }
+    }
+
     static void RequireValid(bool isValid, string parameterName)
     {
         if (!isValid)
@@ -278,58 +363,25 @@ public abstract class ProcessRelationHandlerRegistration
         where TInput : notnull
         where TResult : notnull
     {
-        static readonly JsonSerializerOptions JsonOptions =
-            ExecutionDefinitionJsonSerializer.GetClrContractReadOnlyOptions();
         readonly ProcessRelationOutcomeHandler<TInput, TResult> handler;
 
         internal TypedProcessRelationHandlerRegistration(
             ExecutionDefinitionReference reference,
             ValueContract inputContract,
             ValueContract resultContract,
-            ProcessRelationOutcomeHandler<TInput, TResult> handler)
-            : base(reference, inputContract, resultContract) =>
+            ProcessRelationOutcomeHandler<TInput, TResult> handler,
+            HostedQueryEvaluationSemantics evaluationSemantics = HostedQueryEvaluationSemantics.Observation)
+            : base(reference, inputContract, resultContract, evaluationSemantics) =>
             this.handler = handler;
 
         internal override async ValueTask<ProcessOperationResult> EvaluateAsync(
             OperationContext context,
             ProcessRelationEvaluation evaluation)
         {
-            if (evaluation.Input.Contract != InputContract)
-            {
-                return Failed(
-                    ProcessRelationHandlerDiagnosticCodes.InputContractMismatch,
-                    "The Process evaluation input contract does not match the exact Relation/Query definition.",
-                    "/input/contract");
-            }
-            if (evaluation.Input.State != PortableValueState.Concrete || evaluation.Input.Value is null)
-            {
-                return Failed(
-                    ProcessRelationHandlerDiagnosticCodes.InputValueInvalid,
-                    "A typed Relation/Query handler requires one concrete non-null invocation value.",
-                    "/input/state");
-            }
-
-            var inputValidation = PortableExecutionValidator.Validate(evaluation.Input);
-            var inputError = inputValidation.Diagnostics.FirstOrDefault(
-                static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
-            if (inputError is not null)
-                return ProcessOperationResult.Failed(inputError);
-
-            TInput input;
-            try
-            {
-                var element = JsonSerializer.SerializeToElement(evaluation.Input.Value.Value, JsonOptions);
-                input = element.Deserialize<TInput>(JsonOptions)
-                    ?? throw new JsonException("The concrete invocation decoded as null.");
-            }
-            catch (Exception exception) when (IsConversionFailure(exception))
-            {
-                return Failed(
-                    ProcessRelationHandlerDiagnosticCodes.ValueConversionFailed,
-                    $"The Relation/Query invocation could not be decoded as '{typeof(TInput).FullName}': "
-                    + exception.Message,
-                    "/input/value");
-            }
+            var decoded = HostedQueryValueAdapter.Decode<TInput>(evaluation.Input, InputContract);
+            if (decoded.Type == ResultType.Failure)
+                return ProcessOperationResult.Failed(decoded.Failure!);
+            var input = decoded.Success!;
 
             var outcome = await handler(context, evaluation, input).ConfigureAwait(false);
             if (outcome is null)
@@ -342,38 +394,12 @@ public abstract class ProcessRelationHandlerRegistration
             if (!outcome.IsSuccessful)
                 return ProcessOperationResult.Failed(outcome.Failure!);
 
-            var result = outcome.Value;
-
-            PortableValue portable;
-            try
-            {
-                var observed = ObservationValue.FromObject(result);
-                if (observed.Kind is ObservationValueKind.Undefined or ObservationValueKind.Null)
-                    throw new JsonException("The typed result encoded as an undefined or null root value.");
-                portable = PortableValue.Concrete(ResultContract, observed);
-            }
-            catch (Exception exception) when (IsConversionFailure(exception))
-            {
-                return Failed(
-                    ProcessRelationHandlerDiagnosticCodes.ValueConversionFailed,
-                    $"The Relation/Query result could not be encoded from '{typeof(TResult).FullName}': "
-                    + exception.Message,
-                    "/result");
-            }
-
-            var resultValidation = PortableExecutionValidator.Validate(portable);
-            var resultError = resultValidation.Diagnostics.FirstOrDefault(
-                static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
-            return resultError is null
-                ? ProcessOperationResult.Completed(portable)
-                : Failed(
-                    ProcessRelationHandlerDiagnosticCodes.ResultValueInvalid,
-                    $"The typed Relation/Query result violates its canonical contract: {resultError.Message}",
-                    "/result");
+            var encoded = HostedQueryValueAdapter.Encode(outcome.Value, ResultContract);
+            return encoded.Type == ResultType.Success
+                ? ProcessOperationResult.Completed(encoded.Success!)
+                : ProcessOperationResult.Failed(encoded.Failure!);
         }
 
-        static bool IsConversionFailure(Exception exception) => exception is
-            JsonException or NotSupportedException or InvalidOperationException or ArgumentException;
     }
 
     internal static ProcessOperationResult Failed(string code, string message, string location) =>

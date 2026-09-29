@@ -388,6 +388,28 @@ catalog is constructed. `CreateOutcome` preserves a statically typed success whi
 to produce that value to become structured Process failure evidence. Thrown exceptions remain physical execution
 failures. `RegisteredAsyncProcessReferenceHost` composes this catalog with one exact Transition adapter and optional
 Signal-target policy, avoiding application-owned family routers or registration-order selection.
+
+For an explicitly deterministic hosted Query, use
+`ProcessRelationHandlerRegistration.CreateDeterministic(query, implementation, computation)`. The registration
+must match both the canonical evaluation semantics and exact implementation identity/version. Ordinary
+`Create`/`CreateOutcome` observation handlers cannot satisfy that contract. The computation receives typed input,
+immutable pinned configuration and cancellation, with no infrastructure or ambient execution context. Its code
+must satisfy the declared purity contract; the runtime does not sandbox CLR code. Expected domain outcomes
+belong in the declared result contract, while thrown exceptions remain physical failures.
+`CreateDeterministicOutcome` uses the same binding when a computation explicitly reports an inability
+to produce its declared value. It returns the existing `Result<TResult, DocumentValidationDiagnostic>`;
+the failure must be an error diagnostic and becomes native Process operation failure evidence. It gets
+no Process context and must derive even its diagnostic from declared input/configuration. Cancellation
+is checked after both success and failure, and exceptions are never automatically classified. The
+shared `DeterministicHostedQueryBinding.CreateOutcome` owns this admission outside the Process adapter;
+ordinary `Create` wraps a successful result through the same path. No second failure model or cache is added.
+
+Acquisition and native computation remain separate `EvaluateRelationProcessNode` steps authored through the
+existing `process.Query` surface. `HostedQueryProcessAuthoringTests.DeclaredProcessAcquiresThenComputesThroughExactNativeBindings`
+executes asynchronous acquisition followed by a deterministic normalization through the native interpreter,
+with one call per occurrence. Process effect analysis remains conservative for host operations; purity does not
+silently remove external-effect requirements, bypass receipts, enable caching or claim stronger atomicity.
+
 `SynchronousProcessReferenceHostAdapter` is the explicit bounded compatibility path; it checks cancellation before
 invocation but cannot interrupt a synchronous call already in progress.
 
@@ -493,3 +515,20 @@ or one opaque activity for an entire Process. See the accepted
 - `Cohesive.Storage` for durable checkpoints, control, and the Process-store contract
 - `Cohesive.Processes.Distribution` for optional portable worker pools, durable claims, capacity, leases, fencing, and recovery
 - `Cohesive.Adapters.DurableTask` for current authority-neutral task-hub status projections and the accepted future parallel interpreter target
+
+
+### Attributed operation failures in protected result reads
+
+`ProcessExecutionValues.OperationFailures` projects native failed terminal tokens together with their
+exact `OperationCompleted` trace occurrences. `ProcessOperationFailure` adds an attribution boundary,
+not another diagnostic catalog: it retains the existing trace and `DocumentValidationDiagnostic`.
+Unlike aggregate `ProcessChildFailure`, it proves the attempt, activation, token, node, and occurrence.
+The local checkpoint and DurableTask readers use the same projection. Default means unavailable;
+empty means no attributable failed host operation. Non-operation failures are not fabricated.
+
+The service entity-result reader maps native `SubjectChanged` to `Conflict` only when one retained
+failure belongs to its declared commit node and matches the final failed terminal event in the exact
+attempt. It returns the original diagnostic without resolving a current entity or invoking a domain
+result classifier. Missing, unrelated, ambiguous, or prior-attempt evidence cannot establish that
+classification. Protected-read authorization still precedes evidence access. Successful result and
+receipt contracts are unchanged. No package-specific error table is added in applications.

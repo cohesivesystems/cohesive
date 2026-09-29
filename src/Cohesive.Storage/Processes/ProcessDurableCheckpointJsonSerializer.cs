@@ -33,13 +33,25 @@ public static class ProcessCheckpointJsonDiagnosticCodes
 /// <summary>Strict canonical JSON serialization and recovery admission for durable Process checkpoints.</summary>
 public static class ProcessDurableCheckpointJsonSerializer
 {
-    /// <summary>Creates strict serializer options for the durable Process-checkpoint wire.</summary>
+    /// <summary>Maximum JSON nesting of durable Process state, including tagged values and storage envelopes.</summary>
+    /// <remarks>
+    /// Tagged portable values add two JSON containers per object/array level. The bounded storage profile
+    /// reserves room for those tags and checkpoint/commit/store envelopes beyond ordinary domain JSON.
+    /// This wire limit does not relax semantic value admission or change canonical bytes within the limit.
+    /// </remarks>
+    public const int MaximumJsonDepth = 256;
+
+    /// <summary>Creates strict serializer options for durable Process state and its content fingerprints.</summary>
     /// <param name="formatting">Compact or human-readable JSON formatting.</param>
     /// <returns>Case-sensitive strict portable-document serializer options.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="formatting"/> is unsupported.</exception>
     public static JsonSerializerOptions CreateOptions(
-        PortableDocumentJsonFormatting formatting = PortableDocumentJsonFormatting.Compact) =>
-        StrictDocumentJson.CreateOptions(formatting);
+        PortableDocumentJsonFormatting formatting = PortableDocumentJsonFormatting.Compact)
+    {
+        var options = StrictDocumentJson.CreateOptions(formatting);
+        options.MaxDepth = MaximumJsonDepth;
+        return options;
+    }
 
     /// <summary>Serializes a complete durable Process checkpoint.</summary>
     /// <param name="checkpoint">Complete validated physical checkpoint.</param>

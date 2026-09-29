@@ -430,6 +430,13 @@ public sealed class ProcessContext
         string nextRole = "next") =>
         throw SyntaxOnly();
 
+    /// <summary>Declares a native durable checkpoint before the following operation.</summary>
+    /// <remarks>Retained bindings and continuation state cross the cut; no timer or external interaction is introduced.</remarks>
+    /// <param name="id">Optional explicit canonical checkpoint identity.</param>
+    /// <returns>A syntax-only task representing continuation after checkpoint persistence.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if executed as ordinary CLR code.</exception>
+    public ProcessTask DurableCut(ExecutionNodeId? id = null) => throw SyntaxOnly();
+
     /// <summary>Declares a durable absolute-time wait.</summary>
     /// <param name="dueAt">Pure expression yielding the absolute due instant.</param>
     /// <param name="id">Optional explicit canonical timer identity.</param>

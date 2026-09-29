@@ -971,6 +971,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     flow = partition;
                     return true;
 
+                case "DurableCut":
                 case "Timer":
                 case "EmitEvent":
                 case "SendSignal":
@@ -981,6 +982,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 case "Terminate":
                     var kind = invocation.TargetMethod.Name switch
                     {
+                        "DurableCut" => ActionKind.DurableCut,
                         "Timer" => ActionKind.Timer,
                         "EmitEvent" => ActionKind.EmitEvent,
                         "SendSignal" => ActionKind.SendSignal,
@@ -4074,6 +4076,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         {
             switch (action.Kind)
             {
+                case ActionKind.DurableCut:
+                    if (successor is null)
+                        return StatementFailure(action.Syntax, "DurableCut requires a following operation or terminal");
+                    builderStatements.Add(
+                        $"__builder.DurableCut(id: {action.Identity.Variable}, resume: __builder.Edge(owner: {action.Identity.Variable}, role: \"next\", target: {successor}, {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)});");
+                    return true;
+
                 case ActionKind.Timer:
                     if (successor is null)
                     {
@@ -6570,7 +6579,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         Terminate = 6,
         EmitEvent = 7,
         SendSignal = 8,
-        CancellationFinalizer = 9
+        CancellationFinalizer = 9,
+        DurableCut = 10
     }
 
     enum AwaitClauseKind

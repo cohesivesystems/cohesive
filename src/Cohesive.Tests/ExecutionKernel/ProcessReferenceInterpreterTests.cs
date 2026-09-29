@@ -293,6 +293,35 @@ public sealed class ProcessReferenceInterpreterTests
     }
 
     [Fact]
+    public void TransitionReceiptSurvivesDurableCutSerializationWithoutRepeatingMutation()
+    {
+        var transition = DefinitionReference("receipt-transition", 'a');
+        var receipt = StringValue("retained/commit-1");
+        var binding = new ProcessOutputBinding(new("receipt"), StringContract);
+        var plan = Compile(Definition("write", [
+            new InvokeTransitionProcessNode(new("write"), transition, Expr.Const("entity/1"),
+                Expr.BoundValue(ProcessBindingIds.Input), new(Edge("write/cut", "cut")), binding),
+            new DurableCutProcessNode(new("cut"), Edge("cut/return", "return")),
+            new ReturnProcessNode(new("return"), Expr.BoundValue(binding.Binding))
+        ]), definitions: [new(transition, ProcessDefinitionLinkKind.Transition, StringContract, StringContract,
+            receiptContract: StringContract)]);
+        var host = new RecordingHost { Receipt = receipt };
+        var cut = ProcessReferenceInterpreter.Activate(plan,
+            ProcessReferenceInterpreter.Create(plan, Continuation(), StringValue("domain-input")),
+            Activation("write", ProcessActivationCause.Start), host);
+        Assert.Equal(ProcessActivationDisposition.DurableCut, cut.Disposition);
+        Assert.Single(host.Transitions);
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        var restored = JsonSerializer.Deserialize<ProcessContinuationState>(JsonSerializer.Serialize(cut.State, options), options)!;
+        Assert.True(ProcessContinuationValidator.Validate(plan, restored).IsValid);
+        var completed = ProcessReferenceInterpreter.Activate(plan, restored,
+            Activation("resume", ProcessActivationCause.Continue, StartedAtUtc.AddMinutes(1)), RejectingHost.Instance);
+        Assert.Equal(ProcessActivationDisposition.Completed, completed.Disposition);
+        Assert.Equal(receipt, completed.State.Terminal.Detail?.Value);
+        Assert.Single(host.Transitions);
+    }
+
+    [Fact]
     public void ForkJoinAll_ProducesAStableMultiTokenContinuationAcrossReplay()
     {
         var plan = Compile(Definition(
@@ -1841,6 +1870,8 @@ public sealed class ProcessReferenceInterpreterTests
 
     sealed class RecordingHost : IProcessReferenceHost
     {
+        public PortableValue? Receipt { get; init; }
+
         public List<ProcessTransitionInvocation> Transitions { get; } = [];
 
         public List<ProcessRelationEvaluation> Relations { get; } = [];
@@ -1848,7 +1879,8 @@ public sealed class ProcessReferenceInterpreterTests
         public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation)
         {
             Transitions.Add(invocation);
-            return ProcessOperationResult.Completed(invocation.Input);
+            var result = ProcessOperationResult.Completed(invocation.Input);
+            return Receipt is null ? result : result.WithReceiptReference(Receipt);
         }
 
         public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation)

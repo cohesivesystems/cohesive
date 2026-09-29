@@ -25,6 +25,13 @@ namespace Cohesive.Model;
 [JsonConverter(typeof(ObservationValueJsonConverter))]
 public readonly struct ObservationValue : IEquatable<ObservationValue>
 {
+    static readonly Lazy<JsonSerializerOptions> DeclaredJsonOptions = new(() =>
+    {
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(new DeclaredJsonValueConverterFactory());
+        options.MakeReadOnly(populateMissingResolver: true);
+        return options;
+    });
     readonly ScalarPayload scalar;
     readonly object? reference;
 
@@ -794,7 +801,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
             return false;
         }
 
-        observed = FromJsonNode(JsonSerializer.SerializeToNode(value, type));
+        observed = FromJsonNode(JsonSerializer.SerializeToNode(value, type, DeclaredJsonOptions.Value));
         return true;
     }
 
@@ -837,7 +844,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         var type = value.GetType();
         if (type.GetCustomAttribute<JsonConverterAttribute>(inherit: true) is not null)
         {
-            var node = JsonSerializer.SerializeToNode(value, type);
+            var node = JsonSerializer.SerializeToNode(value, type, DeclaredJsonOptions.Value);
             if (node is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var converted) && !string.IsNullOrWhiteSpace(converted))
             {
                 key = converted;
@@ -906,7 +913,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
             return Null;
 
         if (ShouldProjectWithDeclaredJsonType(property.PropertyType))
-            return FromJsonNode(JsonSerializer.SerializeToNode(value, property.PropertyType));
+            return FromJsonNode(JsonSerializer.SerializeToNode(value, property.PropertyType, DeclaredJsonOptions.Value));
 
         return FromObjectCore(value, ref visited);
     }

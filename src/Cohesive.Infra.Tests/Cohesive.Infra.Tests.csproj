@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Cohesive.Infra\Cohesive.Infra.csproj" />
+    <ProjectReference Include="../adapters/Cohesive.Adapters.Services.Infra/Cohesive.Adapters.Services.Infra.csproj" />
   </ItemGroup>
 
 </Project>

@@ -5,6 +5,7 @@ using Cohesive.Adapters.TypeScript.Ast;
 using Cohesive.Api;
 using Cohesive.Execution;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Adapters.TypeScript;
 
@@ -13,6 +14,7 @@ namespace Cohesive.Adapters.TypeScript;
 /// </summary>
 public sealed class TypeScriptApiClientAstBuilder
 {
+    readonly SystemTextJsonClrShapeMetadataProvider? jsonMetadata;
     readonly ApiDefinition definition;
     readonly TypeScriptApiClientEmitterOptions options;
 
@@ -23,6 +25,7 @@ public sealed class TypeScriptApiClientAstBuilder
     {
         this.definition = definition ?? throw new ArgumentNullException(nameof(definition));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
+        jsonMetadata = options.JsonSerializerOptions is { } json ? new(json) : null;
     }
 
     /// <summary>
@@ -74,7 +77,8 @@ public sealed class TypeScriptApiClientAstBuilder
             if (operation.Http is not { } http)
                 continue;
 
-            AppendTypeImports(names, operation.ResponseType);
+            foreach (var type in SuccessfulResponseTypes(operation))
+                AppendTypeImports(names, type);
 
             if (http.Body is not null)
                 AppendTypeImports(names, http.Body.BodyType);
@@ -439,7 +443,7 @@ public sealed class TypeScriptApiClientAstBuilder
         return new TsFunctionDeclaration(
             name: BuildFunctionName(operation),
             parameters: parameters.ToImmutable(),
-            returnType: new TsRawType($"Promise<{GetTypeScriptTypeText(operation.ResponseType)}>"),
+            returnType: new TsRawType($"Promise<{GetSuccessfulResponseTypeText(operation)}>"),
             bodyLines: bodyLines);
     }
 
@@ -532,17 +536,19 @@ public sealed class TypeScriptApiClientAstBuilder
         for (var i = 0; i < properties.Length; i++)
         {
             var property = properties[i];
-            var propertyName = property.Name;
+            var propertyName = jsonMetadata?.ResolveJsonPropertyName(property) ?? property.Name;
+            var access = TypeScriptSyntaxEmitter.IsIdentifier(propertyName)
+                ? $"{parameterName}.{propertyName}" : $"{parameterName}[{Quote(propertyName)}]";
             var queryParameterName = ResolveQueryParameterName(property);
             if (IsSequenceType(property.PropertyType))
             {
-                lines.Add($"  if ({parameterName}.{propertyName} !== undefined && {parameterName}.{propertyName} !== null) {{");
-                lines.Add($"    for (const value of {parameterName}.{propertyName}) queryParams.append('{queryParameterName}', String(value));");
+                lines.Add($"  if ({access} !== undefined && {access} !== null) {{");
+                lines.Add($"    for (const value of {access}) queryParams.append('{queryParameterName}', String(value));");
                 lines.Add("  }");
                 continue;
             }
 
-            lines.Add($"  if ({parameterName}.{propertyName} !== undefined && {parameterName}.{propertyName} !== null) queryParams.set('{queryParameterName}', String({parameterName}.{propertyName}));");
+            lines.Add($"  if ({access} !== undefined && {access} !== null) queryParams.set('{queryParameterName}', String({access}));");
         }
 
         lines.Add("}");
@@ -562,6 +568,19 @@ public sealed class TypeScriptApiClientAstBuilder
         lines.Add($"headers['{parameter.Name}'] = String({parameterName});");
     }
 
+    static IEnumerable<Type> SuccessfulResponseTypes(ApiOperation operation)
+    {
+        var types = operation.WithHttp(operation.Http!).Results.Where(result =>
+        {
+            var status = result.Http!.StatusCode;
+            return status is >= 200 and < 300;
+        }).Select(result => result.BodyType).Distinct().ToArray();
+        return types.Length == 0 ? [operation.ResponseType] : types;
+    }
+
+    string GetSuccessfulResponseTypeText(ApiOperation operation) =>
+        string.Join(" | ", SuccessfulResponseTypes(operation).Select(GetTypeScriptTypeText).Distinct());
+
     string BuildReturnLine(
         ApiOperation operation,
         HttpBinding http,
@@ -580,7 +599,7 @@ public sealed class TypeScriptApiClientAstBuilder
         if (boundBodyParameterName is not null)
             init.Add($"body: JSON.stringify({boundBodyParameterName})");
 
-        var responseType = GetTypeScriptTypeText(operation.ResponseType);
+        var responseType = GetSuccessfulResponseTypeText(operation);
         return $"return http(path, {{ {string.Join(", ", init)} }}) as Promise<{responseType}>;";
     }
 

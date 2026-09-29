@@ -161,3 +161,50 @@ The longer-term model is:
 - emit multiple target languages from the same semantic graph
 
 TypeScript is the first target, not the terminal abstraction.
+
+## Declared JSON authority
+
+For public contracts, `--shape-projection declared-json` reads one explicit assembly declaration:
+
+```csharp
+[assembly: JsonContractOptions(typeof(AppJson), nameof(AppJson.CreateOptions))]
+```
+
+The factory must be public, static and parameterless, returning `JsonSerializerOptions`. It is trusted,
+deterministic authoring code and must not resolve runtime services or request context. Share its
+configuration with the HTTP host; the generator snapshots and freezes the returned options. Missing,
+invalid or failing declarations are reported instead of selecting a naming convention implicitly.
+The relation contracts assembly points directly to its native serializer options factory.
+
+The declared profile applies to shapes and OpenAPI. API and Playwright clients retain references to
+those generated shape types. GraphQL currently rejects this profile before writing artifacts; its
+public serializer projection remains a separate capability. Existing `clr` (default) and
+`canonical-json` modes remain available. Custom converter/schema restrictions of each emitter still
+apply; declaring a factory does not grant an emitter knowledge of arbitrary converter output.
+
+The public JSON profile also governs TypeScript client and Playwright mock query-object member
+names. URL query parameter names still follow the HTTP binding convention. For example, a CLR
+`SearchTerm` property may project to `searchTerm` in the client object while its URL parameter is
+`search_term`. An explicit JSON name overrides the corresponding conventions. Both emitters use
+the same serializer metadata provider as shape generation; punctuation-containing names use
+quoted property access. The default CLR projection remains unchanged.
+
+Contract loading shares dependencies resolvable by the generator's default load context, including
+ones not yet loaded when discovery begins. Application-only dependencies are loaded in the collectible
+contracts context. This preserves type identity across API signatures: a service declaration using a
+relation parameter must not receive a second copy of that parameter's assembly merely because API
+discovery ran before the generator first used relations. Loader tests cover this cold dependency case.
+
+Declared JSON projection follows property converters that expose `IJsonValueSerializerProfile`.
+The CLR shape builder contributes separate nested-profile type identities through its existing metadata
+hooks, preserving recursive value references, dictionaries and collection cardinality. Preparation is
+cached per property for the metadata provider's lifetime; the builder/provider are mutable authoring
+objects and are not intended for concurrent use. Recursive converter re-entry is rejected explicitly.
+TypeScript allocates deterministic unique declaration names when profile identities share a readable
+suffix. CLR authoring identity maps describe the envelope profile; contributed nested definitions live
+in the resulting graph rather than overwriting those maps.
+
+`IJsonStringValueConverter` declares open string output (including code-enum and lossless Int64
+converters). It does not enumerate every compatibility form accepted by a reader. These declarations
+describe emitted representation, not an exhaustive external-input validator. OpenAPI rejects unsupported property converters. This does not establish complete TypeScript
+coverage for arbitrary converter implementations. GraphQL remains a separate CLR projection.

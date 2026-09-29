@@ -33,6 +33,7 @@ public static class ExecutionProcessControlCommandAdmission
     /// <param name="state">Authoritative retained Process-control state used to find exact replay evidence.</param>
     /// <returns>A canonical command ready for <see cref="ProcessControlReferenceExecutor"/> reduction.</returns>
     /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
+    /// <exception cref="KeyNotFoundException">Retained state does not match the trusted exact-definition restriction.</exception>
     /// <exception cref="InvalidOperationException">
     /// A first-time Signal does not have a trusted interaction-envelope context.
     /// </exception>
@@ -44,6 +45,8 @@ public static class ExecutionProcessControlCommandAdmission
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(invocation);
         ArgumentNullException.ThrowIfNull(state);
+        if (!invocation.MatchesProcessDefinition(state.Definition))
+            throw new KeyNotFoundException("No Process matches the trusted exact-definition restriction.");
         return Rebind(command, invocation, FindPriorCommand(state, command.Context));
     }
 

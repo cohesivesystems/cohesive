@@ -46,15 +46,49 @@ public static class SystemTextJsonShapeAnnotations
 public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataProvider
 {
     readonly JsonSerializerOptions options;
+    readonly Dictionary<PropertyInfo, ClrShapeMetadata> nestedProfiles = [];
+    readonly HashSet<(Type, JsonSerializerOptions)> activeProfiles;
 
     /// <summary>Creates a metadata provider for the supplied serializer contract.</summary>
     /// <param name="options">Serializer options that define the JSON wire representation.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
-    public SystemTextJsonClrShapeMetadataProvider(JsonSerializerOptions options)
+    public SystemTextJsonClrShapeMetadataProvider(JsonSerializerOptions options) : this(options, [])
     {
+    }
+
+    SystemTextJsonClrShapeMetadataProvider(JsonSerializerOptions options,
+        HashSet<(Type, JsonSerializerOptions)> activeProfiles)
+    {
+        this.activeProfiles = activeProfiles;
         ArgumentNullException.ThrowIfNull(options);
         this.options = new(options);
         this.options.MakeReadOnly(populateMissingResolver: true);
+    }
+
+    /// <summary>Determines whether a portable JSON value has a projectable public object contract.</summary>
+    /// <param name="clrType">Declared CLR document type to inspect using this provider's frozen options.</param>
+    /// <returns>True for serializer-backed portable records; false for undeclared or converter-defined values.</returns>
+    /// <exception cref="InvalidOperationException">The serializer object contradicts the declared JSON root kind.</exception>
+    /// <exception cref="NotSupportedException">Custom object metadata cannot be represented by readable CLR properties.</exception>
+    public bool HasPortableObjectContract(Type clrType)
+    {
+        if (!PortableJsonValueAttribute.TryGetKind(clrType, out var kind))
+            return false;
+        var typeInfo = options.GetTypeInfo(clrType);
+        if (typeInfo.Kind != JsonTypeInfoKind.Object)
+            return false;
+        if (kind is not (JsonTypeKind.Object or JsonTypeKind.Any))
+            throw new InvalidOperationException(
+                $"Portable JSON type '{clrType.FullName}' declares '{kind}' but its serializer contract is an object.");
+        var properties = ShapeTypeInspector.GetReadableProperties(clrType);
+        var serialized = typeInfo.Properties.Where(static property => property.Get is not null).ToArray();
+        if (serialized.Length != properties.Length
+            || properties.Any(property => !serialized.Any(jsonProperty =>
+                jsonProperty.AttributeProvider is PropertyInfo candidate
+                && ShapeTypeInspector.IsSameProperty(candidate, property))))
+            throw new NotSupportedException(
+                $"Public JSON type '{clrType.FullName}' uses object metadata that cannot be represented by its readable CLR properties.");
+        return true;
     }
 
     /// <inheritdoc />
@@ -78,7 +112,7 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
             ? AnnotationMap.Create(SystemTextJsonShapeAnnotations.Dictionary, true)
             : ImmutableDictionary<AnnotationKey, AnnotationValue>.Empty;
         var converterType = property.GetCustomAttribute<JsonConverterAttribute>(inherit: true)?.ConverterType;
-        if (converterType == typeof(StringEncodedInt64JsonConverter))
+        if (converterType is not null && typeof(IJsonStringValueConverter).IsAssignableFrom(converterType))
         {
             annotations = annotations.Add(
                 new(SystemTextJsonShapeAnnotations.Representation),
@@ -92,11 +126,68 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
                 AnnotationValue.FromBool(true));
         }
 
-        return new()
+        var nested = GetNestedProfile(property);
+        return nested with
         {
             FieldName = new(ResolveJsonPropertyName(property)),
             Annotations = annotations
         };
+    }
+
+    ClrShapeMetadata GetNestedProfile(PropertyInfo property)
+    {
+        if (nestedProfiles.TryGetValue(property, out var cached))
+            return cached;
+        var info = options.GetTypeInfo(property.DeclaringType!);
+        var jsonProperty = info.Properties.FirstOrDefault(candidate =>
+            candidate.AttributeProvider is PropertyInfo member
+            && ShapeTypeInspector.IsSameProperty(member, property));
+        if (jsonProperty?.CustomConverter is not IJsonValueSerializerProfile profile)
+        {
+            nestedProfiles.Add(property, ClrShapeMetadata.Empty);
+            return ClrShapeMetadata.Empty;
+        }
+        var nestedOptions = profile.ValueSerializerOptions;
+        if (!nestedOptions.IsReadOnly)
+            throw new NotSupportedException("Nested JSON serializer profiles must expose frozen options.");
+        var type = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+        var active = activeProfiles;
+        if (!active.Add((type, nestedOptions)))
+            throw new NotSupportedException($"Recursive property converter profile for '{type}' requires a shared profile identity.");
+        try
+        {
+            var prefix = $"json-property:{property.DeclaringType!.FullName}:{property.Name}:";
+            // A private acquisition envelope lets the ordinary builder handle scalar, sequence,
+            // dictionary and object values uniformly. Only its field contract survives projection.
+            var envelope = typeof(ProfileValue<>).MakeGenericType(type);
+            var result = new ClrShapeGraphBuilder()
+                .UsePublicJsonContracts(new SystemTextJsonClrShapeMetadataProvider(nestedOptions, activeProfiles))
+                .AddMetadataProvider(new ProfileIdentity(prefix))
+                .AddShape(envelope)
+                .BuildResult(new GraphId(prefix));
+            var envelopeId = result.TypeIds[envelope];
+            var metadata = new ClrShapeMetadata
+            {
+                TypeRef = result.Graph.Shapes.Single().Fields.Single().Type,
+                NamedTypes = [.. result.Graph.NamedTypes.Where(definition => definition.Id != envelopeId)]
+            };
+            nestedProfiles.Add(property, metadata);
+            return metadata;
+        }
+        finally
+        {
+            active.Remove((type, nestedOptions));
+        }
+    }
+
+    sealed record ProfileValue<T>(T Value);
+
+    sealed class ProfileIdentity(string prefix) : IClrShapeMetadataProvider
+    {
+        public ClrShapeMetadata GetMetadata(ClrShapeMetadataContext context) =>
+            context.Target == ClrShapeMetadataTarget.Type
+                ? new() { TypeId = new(prefix + context.ClrType.FullName) }
+                : ClrShapeMetadata.Empty;
     }
 
     ClrShapeMetadata GetTypeMetadata(Type clrType)
@@ -123,7 +214,8 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
         };
     }
 
-    string ResolveJsonPropertyName(PropertyInfo property)
+    /// <summary>Resolves a CLR property to the name in this serializer contract, including configured metadata overrides.</summary>
+    public string ResolveJsonPropertyName(PropertyInfo property)
     {
         var typeInfo = options.GetTypeInfo(property.DeclaringType
             ?? throw new InvalidOperationException($"Property '{property.Name}' has no declaring type."));

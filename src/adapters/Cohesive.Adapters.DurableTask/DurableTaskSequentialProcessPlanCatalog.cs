@@ -120,11 +120,18 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
         }
 
         this.plans = builder.ToImmutable();
+        Definitions = [.. this.plans.Keys.OrderBy(reference => reference.DefinitionId.Value, StringComparer.Ordinal)
+            .ThenBy(reference => reference.RevisionId.Value, StringComparer.Ordinal)];
         BindingResolver = bindingCatalog;
     }
 
     /// <summary>Number of exact Process plans deployed to the worker.</summary>
     public int Count => plans.Count;
+
+    /// <summary>Exact admitted definitions in deterministic identity/revision order.</summary>
+    /// <remarks>Prepared once with this immutable catalog. This is declaration/admission evidence, not proof
+    /// of provider health, execution completion, or deployed application identity.</remarks>
+    public ImmutableArray<ExecutionDefinitionReference> Definitions { get; }
 
     internal IDurableRequestBindingResolver BindingResolver { get; }
 

@@ -7,7 +7,7 @@ namespace Cohesive.Storage.Processes;
 
 static class ProcessStorageContentFingerprints
 {
-    static readonly System.Text.Json.JsonSerializerOptions Options = StrictDocumentJson.CreateOptions();
+    static readonly System.Text.Json.JsonSerializerOptions Options = ProcessDurableCheckpointJsonSerializer.CreateOptions();
 
     internal static ProcessCommitFingerprint Input(ProcessActivationInput input) => Compute(input);
 

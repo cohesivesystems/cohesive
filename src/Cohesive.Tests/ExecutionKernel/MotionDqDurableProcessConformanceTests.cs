@@ -22,8 +22,10 @@ public sealed class MotionDqDurableProcessConformanceTests
         InteractionDurabilityDemand.Durable,
         InteractionVisibilityDemand.AfterOriginCommit);
 
-    [Fact]
-    public async Task ProcessTransitionRecovery_CrashesConvergeToOneReceiptOutboxAndLogicalPublication()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProcessTransitionRecovery_CrashesConvergeToOneReceiptOutboxAndLogicalPublication(bool asynchronousHost)
     {
         var fixture = MotionDqProcess.Version1;
         var clock = new ScenarioClock(new(2026, 8, 1, 10, 0, 0, TimeSpan.Zero));
@@ -62,16 +64,22 @@ public sealed class MotionDqDurableProcessConformanceTests
                 Occurrence: 3));
         var store = new InMemoryProcessDurableStore(processCrash.ShouldCrash);
         var requestAdapter = new MotionDqScenarioAdapter(fixture);
-        var runtime = new ProcessDurableRuntime(
-            store,
-            new RejectingReferenceHost(),
-            new(
-                "worker/motion-dq-transition-adapter",
-                TimeSpan.FromMinutes(5),
-                maxAmbiguousStoreMutationAttempts: 1),
-            new ExactBindingResolver(fixture.RequestBindings),
-            operationAdapterResolver: new ExactAdapterResolver(requestAdapter),
-            transitionOperationAdapter: crashingAdapter);
+        var runtimeOptions = new ProcessDurableRuntimeOptions(
+            "worker/motion-dq-transition-adapter", TimeSpan.FromMinutes(5), maxAmbiguousStoreMutationAttempts: 1);
+        var runtime = asynchronousHost
+            ? new ProcessDurableRuntime(
+                store,
+                new RegisteredAsyncProcessReferenceHost(new ProcessRelationHandlerCatalog([]), crashingAdapter.ExecuteAsync),
+                runtimeOptions,
+                new ExactBindingResolver(fixture.RequestBindings),
+                operationAdapterResolver: new ExactAdapterResolver(requestAdapter))
+            : new ProcessDurableRuntime(
+                store,
+                new RejectingReferenceHost(),
+                runtimeOptions,
+                new ExactBindingResolver(fixture.RequestBindings),
+                operationAdapterResolver: new ExactAdapterResolver(requestAdapter),
+                transitionOperationAdapter: crashingAdapter);
         var start = Start(fixture, input, clock.Next(), clock.Next());
         var initialized = await runtime.InitializeAsync(Context(clock.Next()), fixture.Plan, start);
         var before = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot).Checkpoint;
@@ -113,7 +121,9 @@ public sealed class MotionDqDurableProcessConformanceTests
                 subject,
                 crashedInvocation.Input));
         Assert.Equal(EntityTransitionOperationDisposition.Replayed, entityReceipt.Disposition);
-        Assert.Equal(crashedResult, entityReceipt.Receipt!.Result);
+        Assert.Equal(crashedResult, entityReceipt.Receipt!.Result.WithReceiptReference(
+            EntityTransitionReceiptReferences.Project(entityReceipt.Receipt.Request.Reference)));
+        Assert.Null(entityReceipt.Receipt.Result.ReceiptReference);
         Assert.Equal(
             EntityTransitionEmissionPublicationAuthority.ProcessOutbox,
             entityReceipt.Receipt.PublicationAuthority);

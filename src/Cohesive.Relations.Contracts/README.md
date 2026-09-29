@@ -28,7 +28,7 @@ dotnet run --project src/Cohesive.CodeGen.Cli -- \
   --out src/frontend/relations/src/generated \
   --emit shapes \
   --module relations \
-  --shape-projection canonical-json
+  --shape-projection declared-json
 ```
 
 The generated TypeScript declarations describe the portable value shape. Strict duplicate-property,
@@ -81,3 +81,21 @@ treating stage identifiers as an independent source of truth.
 
 - `Cohesive.Relations` for relation authoring and execution.
 - `Cohesive.CodeGen.Cli` for contract discovery and code generation.
+
+The declared JSON profile expands serializer-backed portable records for public contracts, including the
+native `RelationDefinition` case. It does not change portable value admission in execution or storage.
+Converter-defined values remain opaque unless the shared serializer metadata supplies a known representation.
+See [typed portable JSON values](../../docs/decisions/typed-portable-json-values.md) for this authority boundary.
+
+`JsonContractOptionsAttribute` identifies the native relation serializer factory in the contracts
+assembly, so generation no longer needs a separately reconstructed serializer profile.
+
+`ShapeGraphDocument` is also an explicit generation root. Its complete native model closure is
+exported alongside relations because source and target shapes are part of the relation contract.
+Applications can reference that shared canonical document without copying shape definitions into
+their frontend contracts. The native model remains authority; application envelopes must use its
+canonical JSON conventions when externalizing these types.
+
+`GraphDelta` is also a shared generation root. Its native `$operation` union and reachable shape
+model types are derived from serializer metadata, with no parallel operation catalog. These exports
+use the declared native JSON profile; consumers must preserve that profile when externalizing types.

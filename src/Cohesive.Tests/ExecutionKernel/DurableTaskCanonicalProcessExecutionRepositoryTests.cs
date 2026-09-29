@@ -22,6 +22,34 @@ public sealed class DurableTaskProcessExecutionRepositoryTelemetryTestCollection
 [Collection(DurableTaskProcessExecutionRepositoryTelemetryTestCollection.TelemetryCollectionName)]
 public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CompletionWaitSeparatesTimeoutFromCallerCancellationWithoutPayloadReads(bool callerCancels)
+    {
+        var fixture = CreateFixture();
+        using var cancellation = new CancellationTokenSource();
+        var client = new FakeDurableTaskClient([])
+        {
+            WaitHandler = async token =>
+            {
+                if (callerCancels) cancellation.Cancel();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                throw new InvalidOperationException("Wait should end only through cancellation.");
+            }
+        };
+        var repository = new DurableTaskProcessExecutionRepository(client);
+        var pending = repository.WaitForCompletionAsync(OperationContext.Create(cancellationToken: cancellation.Token),
+            fixture.Scope, fixture.LogicalInstanceId, callerCancels ? TimeSpan.FromSeconds(30) : TimeSpan.FromMilliseconds(10));
+        if (callerCancels) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending.AsTask());
+        else Assert.False(await pending);
+        Assert.Equal(fixture.PhysicalInstanceId, client.LastWaitInstanceId);
+        Assert.False(client.LastWaitInputsAndOutputs);
+        Assert.Equal(0, client.GetCount);
+        Assert.Equal(0, client.QueryCount);
+        Assert.Equal(0, client.ScheduleCount);
+    }
+
     [Fact]
     public async Task ScheduleAsync_PublishesOnlyVersionedCanonicalDiscoveryTags()
     {
@@ -265,6 +293,20 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         var values = Assert.IsType<ProcessExecutionValues>(read.Values);
         Assert.Equal(completed.Result.State.Definition, values.Definition);
         Assert.Equal(completed.Fixture.LogicalInstanceId, values.ProcessInstanceId);
+        Assert.Equal(completed.Result.State.Continuation, values.TerminalContinuation);
+        Assert.Equal(completed.Fixture.Converter.Serialize(completed.Result.Evidence),
+            completed.Fixture.Converter.Serialize(values.Evidence));
+        Assert.Throws<ArgumentException>(() => new ProcessExecutionValues(values.Definition,
+            new("foreign-instance"), values.Input, values.TerminalOutcome, values.TerminalContinuation, values.Evidence));
+        var foreignEvidence = values.Evidence.Select(item => item with
+            { Definition = ProcessDurabilityTestFixture.DefinitionReference("process/foreign", 'a') }).ToImmutableArray();
+        Assert.Throws<ArgumentException>(() => new ProcessExecutionValues(values.Definition,
+            values.ProcessInstanceId, values.Input, values.TerminalOutcome, values.TerminalContinuation, foreignEvidence));
+        var missingContinuation = values.Evidence.Select(item => item with
+            { Trace = item.Trace.Select(trace => trace with { Continuation = null! }).ToImmutableArray() }).ToImmutableArray();
+        var malformed = Assert.Throws<ArgumentException>(() => new ProcessExecutionValues(values.Definition,
+            values.ProcessInstanceId, values.Input, values.TerminalOutcome, values.TerminalContinuation, missingContinuation));
+        Assert.Equal("evidence", malformed.ParamName);
         Assert.Equal(PrivateInput, Assert.IsType<PortableValue>(values.Input).Value?.Deserialize<string>());
         var terminal = Assert.IsType<ExecutionTerminalOutcome>(values.TerminalOutcome);
         Assert.Equal(ExecutionTerminalOutcomeKind.Completed, terminal.Kind);
@@ -1225,6 +1267,10 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         string? continuationToken = null,
         Exception? queryFailure = null) : DurableTaskClient("fake")
     {
+        public Func<CancellationToken, Task<OrchestrationMetadata>>? WaitHandler;
+        public string? LastWaitInstanceId;
+        public bool LastWaitInputsAndOutputs;
+
         public OrchestrationQuery? LastQuery { get; private set; }
 
         public string? LastPageContinuationToken { get; private set; }
@@ -1295,7 +1341,12 @@ public sealed class DurableTaskCanonicalProcessExecutionRepositoryTests
         public override Task<OrchestrationMetadata> WaitForInstanceCompletionAsync(
             string instanceId,
             bool getInputsAndOutputs = false,
-            CancellationToken cancellation = default) => throw new NotSupportedException();
+            CancellationToken cancellation = default)
+        {
+            LastWaitInstanceId = instanceId;
+            LastWaitInputsAndOutputs = getInputsAndOutputs;
+            return WaitHandler?.Invoke(cancellation) ?? throw new NotSupportedException();
+        }
 
         public override Task SuspendInstanceAsync(
             string instanceId,

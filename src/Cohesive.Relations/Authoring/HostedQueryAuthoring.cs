@@ -58,6 +58,9 @@ public sealed class HostedQuery<TInput, TResult>
     /// <summary>Exact semantic host implementation contract projected from the canonical definition.</summary>
     public HostedQueryImplementationReference Implementation => Definition.Implementation;
 
+    /// <summary>Execution semantics required of the exact implementation.</summary>
+    public HostedQueryEvaluationSemantics EvaluationSemantics => Definition.EvaluationSemantics;
+
     /// <summary>Concrete portable implementation configuration projected from the canonical definition.</summary>
     public PortableValue Configuration => Definition.Configuration;
 
@@ -77,6 +80,7 @@ public sealed class HostedQuery<TInput, TResult>
     /// <param name="extensions">Optional exact-versioned semantic extensions.</param>
     /// <param name="displayName">Optional human-facing name excluded from fingerprinting.</param>
     /// <param name="description">Optional human-facing description excluded from fingerprinting.</param>
+    /// <param name="evaluationSemantics">Required native observation or deterministic-computation contract.</param>
     /// <returns>
     /// A typed immutable handle containing the canonical document, exact reference, contracts, dependencies, and
     /// retained validation diagnostics.
@@ -102,7 +106,8 @@ public sealed class HostedQuery<TInput, TResult>
         IEnumerable<HostedQueryDependency>? dependencies = null,
         ImmutableArray<ExecutionDefinitionExtension> extensions = default,
         string? displayName = null,
-        string? description = null)
+        string? description = null,
+        HostedQueryEvaluationSemantics evaluationSemantics = HostedQueryEvaluationSemantics.Observation)
         where TConfiguration : notnull
     {
         ArgumentNullException.ThrowIfNull(implementation);
@@ -129,7 +134,8 @@ public sealed class HostedQuery<TInput, TResult>
             new(TypeMapper.Map(typeof(TResult), null)),
             implementation,
             PortableValue.Concrete(configurationContract, configurationObservation),
-            dependencies is null ? [] : [.. dependencies]);
+            dependencies is null ? [] : [.. dependencies],
+            evaluationSemantics);
         var initial = HostedQueryDefinitionDocuments.Create(
             definitionId,
             revisionId,

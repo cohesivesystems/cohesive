@@ -255,7 +255,7 @@ public sealed record ProcessDurableStoreDocument
 /// <summary>Strict portable JSON wire contract for Process durable-store documents.</summary>
 public static class ProcessDurableStoreJsonSerializer
 {
-    static readonly JsonSerializerOptions CompactOptions = StrictDocumentJson.CreateOptions();
+    static readonly JsonSerializerOptions CompactOptions = ProcessDurableCheckpointJsonSerializer.CreateOptions();
 
     /// <summary>Serializes one complete Process durable-store authority document.</summary>
     /// <param name="document">Exact provider-neutral durable-store state.</param>

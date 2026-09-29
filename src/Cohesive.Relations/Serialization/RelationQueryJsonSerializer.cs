@@ -8,6 +8,9 @@ namespace Cohesive.Relations.Serialization;
 /// </summary>
 public static class RelationQueryJsonSerializer
 {
+    /// <summary>Creates the canonical compact value profile for declared portable JSON projection.</summary>
+    public static JsonSerializerOptions CreateOptions() => CreateOptions(indented: false);
+
     /// <summary>Creates strict serializer options for canonical relation/query IR.</summary>
     /// <param name="indented">Whether serialized JSON should be indented.</param>
     /// <returns>Serializer options configured for the canonical wire contract.</returns>

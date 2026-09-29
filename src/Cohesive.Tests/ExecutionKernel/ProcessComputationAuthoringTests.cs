@@ -16,6 +16,21 @@ namespace Cohesive.Tests.ExecutionKernel;
 public sealed class ProcessComputationAuthoringTests
 {
     [Fact]
+    public void GeneratedDurableCutIsEquivalentToNativeCheckpointAuthoring()
+    {
+        var generated = GeneratedCheckpointProcess.Define(Metadata());
+        var native = ProcessAuthoring.Create<string, string>(Metadata().WithEntry(new("cut")), process =>
+        {
+            process.DurableCut(new("cut"), process.Edge(new("cut"), "next", new("complete")));
+            process.Return(new("complete"), process.Input.Value);
+        });
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        Assert.Equal(native.Definition, generated.Definition);
+        Assert.Equal(native.Document.Metadata.Fingerprint, generated.Document.Metadata.Fingerprint);
+        Assert.Single(generated.Definition.Nodes.OfType<DurableCutProcessNode>());
+    }
+
+    [Fact]
     public void GeneratedComputation_IsByteEquivalentToCanonicalBuilderAuthoring()
     {
         var generated = CustomerQueryProcess.Define(Metadata());
@@ -4122,3 +4137,14 @@ public sealed record ApproveCustomerResult(
     string? DeliveryId,
     string? AuditReceiptId,
     string? NotificationReceiptId);
+
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedCheckpointProcess
+{
+    static async ProcessTask<string> Run(ProcessContext process, string input)
+    {
+        await process.DurableCut(id: new("cut"));
+        await process.Succeed(input, id: new("complete"));
+        return process.Unreachable<string>();
+    }
+}

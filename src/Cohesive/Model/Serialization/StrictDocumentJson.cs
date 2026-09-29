@@ -239,7 +239,7 @@ public static class StrictDocumentJson
         JsonDocument parsed;
         try
         {
-            parsed = JsonDocument.Parse(json);
+            parsed = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = options.MaxDepth });
         }
         catch (JsonException exception)
         {
@@ -272,7 +272,7 @@ public static class StrictDocumentJson
 
             try
             {
-                var node = JsonNode.Parse(parsed.RootElement.GetRawText())
+                var node = JsonNode.Parse(parsed.RootElement.GetRawText(), documentOptions: new JsonDocumentOptions { MaxDepth = options.MaxDepth })
                     ?? throw new InvalidOperationException($"Failed to materialize {contractName} JSON.");
                 persistedBytes = GetCanonicalBytes(node, options);
             }

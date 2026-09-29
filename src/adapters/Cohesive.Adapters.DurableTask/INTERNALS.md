@@ -601,7 +601,11 @@ repository/explain slice owns supported retrieval of that evidence. The runtime 
 into semantic cancellation or invent timeout/escalation values.
 
 `Return` completes the orchestration. An authored root `Fail` produces canonical failure evidence and a failed
-physical orchestration; a joined child failure becomes a typed failed Reply for its parent, with the child execution
+physical orchestration. Protected values and traces read the existing terminal-control handoff when a
+canonical failed root has no physical output, validating exact definition, continuation, control revision
+and terminal affinity against its status. Missing handoff remains unavailable; provider exceptions are
+not inferred as domain failures from exception text. This adds one entity read only on that failure path.
+A joined child failure becomes a typed failed Reply for its parent, with the child execution
 record remaining authoritative for its terminal state and full evidence. A canonical Durable Cut closes one finite
 activation and resumes with exact continuation evidence, using Continue-as-new in the SDK realization.
 

@@ -21,6 +21,9 @@ public sealed class EntityRelationQuerySourceRegistration
     /// <summary>Conventional in-memory selector for <see cref="EntityObservationSnapshot.Version"/>.</summary>
     public const string ObservationVersionSourceSelector = "$version";
 
+    /// <summary>In-memory selector for the exact opaque repository snapshot concurrency token.</summary>
+    public const string ConcurrencyTokenSourceSelector = "$concurrencyToken";
+
     /// <summary>Creates one immutable entity-backed canonical source registration.</summary>
     /// <param name="shape">Exact graph-qualified entity shape supplied by the source.</param>
     /// <param name="source">Canonical physical source instance, capability profile, and limits.</param>
@@ -47,6 +50,7 @@ public sealed class EntityRelationQuerySourceRegistration
     /// Exact entity observation retained by the repository, or <see langword="null"/> when it is
     /// <paramref name="shape"/>. Supply this when <paramref name="shape"/> is a derived query source view.
     /// </param>
+    /// <param name="concurrencyTokenSemanticPath">Optional field for the opaque token from the acquired snapshot.</param>
     /// <exception cref="ArgumentException">
     /// <paramref name="shape"/> is incomplete, <paramref name="identitySourceSelector"/> is empty, or the reader
     /// descriptor does not match <paramref name="source"/>.
@@ -63,7 +67,8 @@ public sealed class EntityRelationQuerySourceRegistration
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
         FieldPath? observationVersionSemanticPath = null,
-        QualifiedShapeId? persistedObservationType = null)
+        QualifiedShapeId? persistedObservationType = null,
+        FieldPath? concurrencyTokenSemanticPath = null)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
             throw new ArgumentException("An entity relation/query source requires a graph-qualified shape.", nameof(shape));
@@ -112,6 +117,10 @@ public sealed class EntityRelationQuerySourceRegistration
             ? ObservationIdentitySourceSelector
             : Guard.RequireNotNullOrWhiteSpace(identitySourceSelector);
         IdentitySemanticPath = identitySemanticPath;
+        if (concurrencyTokenSemanticPath is { } tokenPath
+            && (tokenPath.Segments.IsDefaultOrEmpty || tokenPath == identitySemanticPath || tokenPath == observationVersionSemanticPath))
+            throw new ArgumentException("A concurrency-token path must be nonempty and distinct from identity and version metadata.", nameof(concurrencyTokenSemanticPath));
+        ConcurrencyTokenSemanticPath = concurrencyTokenSemanticPath;
         ObservationVersionSemanticPath = observationVersionSemanticPath;
         FieldSourceSelector = fieldSourceSelector ?? SemanticPathSelector;
         RelationshipKeySourceSelector = relationshipKeySourceSelector ?? SemanticPathSelector;
@@ -143,6 +152,9 @@ public sealed class EntityRelationQuerySourceRegistration
     /// </summary>
     public FieldPath? ObservationVersionSemanticPath { get; }
 
+    /// <summary>Optional field projected from the exact opaque repository token, never observation payload.</summary>
+    public FieldPath? ConcurrencyTokenSemanticPath { get; }
+
     /// <summary>Deterministic semantic-to-physical field selector.</summary>
     public RelationQueryPlacementFieldSelector FieldSourceSelector { get; }
 
@@ -172,6 +184,7 @@ public sealed class EntityRelationQuerySourceRegistration
     /// Exact graph-qualified entity observation retained by <paramref name="repository"/>, or
     /// <see langword="null"/> when it is <paramref name="shape"/>.
     /// </param>
+    /// <param name="concurrencyTokenSemanticPath">Optional field for the opaque token from the acquired snapshot.</param>
     /// <returns>A registration whose source, reader, limits, profile, and selector policies agree exactly.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="repository"/> or <paramref name="logicalPartition"/> is <see langword="null"/>.
@@ -192,7 +205,8 @@ public sealed class EntityRelationQuerySourceRegistration
         RelationQueryPlacementFieldSelector? fieldSourceSelector = null,
         RelationQueryPlacementFieldSelector? relationshipKeySourceSelector = null,
         FieldPath? observationVersionSemanticPath = null,
-        QualifiedShapeId? persistedObservationType = null)
+        QualifiedShapeId? persistedObservationType = null,
+        FieldPath? concurrencyTokenSemanticPath = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
         var effectivePersistedObservationType = persistedObservationType ?? shape;
@@ -241,6 +255,8 @@ public sealed class EntityRelationQuerySourceRegistration
                 sourceViewKey,
                 "/metadata/observation-version/",
                 Uri.EscapeDataString(observationVersionSemanticPath.Value.ToString()));
+        if (concurrencyTokenSemanticPath is { } tokenPath)
+            sourceKey += "/metadata/concurrency-token/" + Uri.EscapeDataString(tokenPath.ToString());
         var effectiveSource = source ?? new RelationQuerySourceInstanceId(
             $"source/cohesive.storage.in-memory/{sourceKey}");
         var effectiveDomain = executionDomain ?? new RelationQueryExecutionDomainId(
@@ -260,7 +276,8 @@ public sealed class EntityRelationQuerySourceRegistration
             fieldSourceSelector,
             relationshipKeySourceSelector,
             observationVersionSemanticPath,
-            effectivePersistedObservationType);
+            effectivePersistedObservationType,
+            concurrencyTokenSemanticPath);
         return new(
             shape,
             sourceInstance,
@@ -270,7 +287,8 @@ public sealed class EntityRelationQuerySourceRegistration
             reader.FieldSourceSelector,
             reader.RelationshipKeySourceSelector,
             observationVersionSemanticPath,
-            effectivePersistedObservationType);
+            effectivePersistedObservationType,
+            concurrencyTokenSemanticPath);
     }
 
     internal static string SelectSemanticPath(FieldPath path) => SemanticPathSelector(path);

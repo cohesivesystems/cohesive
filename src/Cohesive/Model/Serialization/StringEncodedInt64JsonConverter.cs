@@ -8,7 +8,7 @@ namespace Cohesive.Model.Serialization;
 /// Serializes signed 64-bit integers as canonical invariant decimal JSON strings so every value
 /// round-trips exactly through JavaScript and other JSON runtimes without an exact integer type.
 /// </summary>
-public sealed class StringEncodedInt64JsonConverter : JsonConverterFactory
+public sealed class StringEncodedInt64JsonConverter : JsonConverterFactory, IJsonStringValueConverter
 {
     /// <inheritdoc />
     public override bool CanConvert(Type typeToConvert) =>
@@ -43,7 +43,7 @@ public sealed class StringEncodedInt64JsonConverter : JsonConverterFactory
         return value;
     }
 
-    sealed class Int64Converter : JsonConverter<long>
+    sealed class Int64Converter : JsonConverter<long>, IJsonStringValueConverter
     {
         public override long Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
             ReadCanonicalString(ref reader);
@@ -52,7 +52,7 @@ public sealed class StringEncodedInt64JsonConverter : JsonConverterFactory
             writer.WriteStringValue(value.ToString(CultureInfo.InvariantCulture));
     }
 
-    sealed class NullableInt64Converter : JsonConverter<long?>
+    sealed class NullableInt64Converter : JsonConverter<long?>, IJsonStringValueConverter
     {
         public override long? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
             reader.TokenType == JsonTokenType.Null ? null : ReadCanonicalString(ref reader);

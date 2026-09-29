@@ -40,6 +40,9 @@ public sealed record ProcessTransitionInvocation(
 /// <param name="Occurrence">Zero-based occurrence of the node in the token history.</param>
 /// <param name="ObservedAtUtc">Explicit UTC observation time of the finite activation.</param>
 /// <param name="Context">Authority, correlation, delivery, ordering, causation, and provenance evidence.</param>
+/// <param name="StartContext">Optional retained, server-admitted start command context. Durable runtimes
+/// project this from their start receipt, independently of the current worker identity. It is attribution
+/// evidence, not a new authorization grant or proof of continuing permission. Direct interpreters leave it null.</param>
 public sealed record ProcessRelationEvaluation(
     ExecutionDefinitionReference Definition,
     PortableValue Input,
@@ -49,7 +52,31 @@ public sealed record ProcessRelationEvaluation(
     ExecutionNodeId Node,
     long Occurrence,
     DateTimeOffset ObservedAtUtc,
-    ProcessActivationContext Context);
+    ProcessActivationContext Context,
+    ProcessControlCommandContext? StartContext = null)
+{
+    /// <summary>Projects retained admission attribution for this instance and authority, replacing any supplied context.</summary>
+    /// <remarks>The caller must obtain this evidence from the authoritative retained start receipt. This projection
+    /// does not create a grant or establish that the original caller still has permission.</remarks>
+    /// <exception cref="ArgumentNullException">The retained context is null.</exception>
+    /// <exception cref="InvalidOperationException">The retained start belongs to another instance or authority scope.</exception>
+    public ProcessRelationEvaluation WithRetainedStartContext(ProcessControlCommandContext retained) => WithInvocationStartContext(retained);
+
+    /// <summary>Attaches start attribution supplied by an authoritative invocation boundary, replacing any existing value.</summary>
+    /// <remarks>The caller must obtain this context from durable admission or normalized ephemeral service admission.
+    /// The context supplies identity, time and provenance; it does not by itself assert durable retention, deduplication
+    /// or a fresh permission grant. Host bindings remain responsible for resource authorization.</remarks>
+    /// <exception cref="ArgumentNullException">The attribution is null.</exception>
+    /// <exception cref="InvalidOperationException">Its instance or authority differs from this evaluation.</exception>
+    public ProcessRelationEvaluation WithInvocationStartContext(ProcessControlCommandContext retained)
+    {
+        ArgumentNullException.ThrowIfNull(retained);
+        if (retained.ProcessInstanceId != Continuation.ProcessInstanceId
+            || retained.Authorization.AuthorityScope != Context.AuthorityScope)
+            throw new InvalidOperationException("Start attribution must match the evaluation instance and authority scope.");
+        return this with { StartContext = retained };
+    }
+}
 
 /// <summary>Complete context for resolving a portable Signal-target expression.</summary>
 /// <param name="Value">Materialized portable target value.</param>
@@ -77,8 +104,14 @@ public sealed record ProcessOperationResult
     ProcessOperationResult(
         PortableValue? value,
         ImmutableArray<InteractionEnvelope> emissions,
-        DocumentValidationDiagnostic? failure)
+        DocumentValidationDiagnostic? failure,
+        PortableValue? receiptReference = null)
     {
+        if (receiptReference is not null && (failure is not null
+            || receiptReference.State != PortableValueState.Concrete
+            || !PortableExecutionValidator.Validate(receiptReference).IsValid))
+            throw new ArgumentException("Receipt references require a successful operation and a valid concrete portable contract.", nameof(receiptReference));
+        ReceiptReference = receiptReference;
         var normalizedEmissions = emissions.IsDefault ? [] : emissions;
         ValidateOutcome(value, normalizedEmissions, failure);
         Value = value;
@@ -94,6 +127,28 @@ public sealed record ProcessOperationResult
 
     /// <summary>Structured failure evidence when the operation did not complete.</summary>
     public DocumentValidationDiagnostic? Failure { get; }
+
+    /// <summary>Optional typed locator for retained authoritative commit evidence, distinct from the domain result.</summary>
+    /// <remarks>The host owns its contract and resolution. A locator is not an authorization grant or current-state
+    /// snapshot. Runtimes retain it for exact response reconciliation. A Transition node may explicitly bind it
+    /// through its separately attested Receipt output; the domain outcome remains Value.
+    /// Omission preserves the canonical encoding of older results and their receipt fingerprints.</remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PortableValue? ReceiptReference { get; }
+
+    /// <summary>Attaches a typed retained-commit locator without changing the declared outcome or emissions.</summary>
+    /// <param name="reference">Concrete, self-contained portable locator produced by the authoritative commit boundary.</param>
+    /// <returns>A result retaining the same domain outcome and canonical interactions.</returns>
+    /// <exception cref="ArgumentNullException">The reference is null.</exception>
+    /// <exception cref="ArgumentException">The result failed or the reference is not concrete and valid.</exception>
+    /// <exception cref="InvalidOperationException">Different receipt evidence is already attached.</exception>
+    public ProcessOperationResult WithReceiptReference(PortableValue reference)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        if (ReceiptReference is not null && ReceiptReference != reference)
+            throw new InvalidOperationException("A retained receipt reference cannot be replaced by different evidence.");
+        return new(Value, Emissions, Failure, reference);
+    }
 
     /// <summary>Whether the operation completed with a typed value.</summary>
     public bool IsSuccessful => Value is not null && Failure is null;

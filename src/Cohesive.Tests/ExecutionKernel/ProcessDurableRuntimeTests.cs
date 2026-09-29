@@ -1470,15 +1470,19 @@ public sealed partial class ProcessDurableRuntimeTests
         Assert.Equal(1, host.RelationCalls);
     }
 
-    [Fact]
-    public async Task CooperativeCancellation_CommitsControlAndTerminalContinuationTogether_AndReplaysInertly()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CooperativeCancellation_CommitsControlAndTerminalContinuationTogether_AndReplaysInertly(bool asynchronousHost)
     {
         var fixture = ProcessDurabilityTestFixture.Create(
             definitionId: "process/durable-runtime/cooperative-cancellation",
             semanticVariant: "cooperative-cancellation");
         var store = new InMemoryProcessDurableStore();
         var host = new RecordingHost(fixture.OperationResult);
-        var runtime = Runtime(store, fixture, host);
+        var runtime = asynchronousHost
+            ? AsyncRuntime(store, fixture, new SynchronousProcessReferenceHostAdapter(host))
+            : Runtime(store, fixture, host);
         var commands = ProcessControlTestFixture.Create();
         var initialized = await runtime.InitializeAsync(
             Context(ProcessDurabilityTestFixture.AcceptedAtUtc),
@@ -1582,20 +1586,29 @@ public sealed partial class ProcessDurableRuntimeTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
     public async Task AuthoredCancellationFinalizer_RemainsCancellingUntilItsOrdinaryRequestAcknowledges(
-        bool finalizerFails)
+        bool finalizerFails, bool asynchronousHost)
     {
         var fixture = CancellationFinalizerDurabilityTestFixture.Create();
         var store = new InMemoryProcessDurableStore();
         var adapter = new CancellationFinalizerAdapter(fixture, finalizerFails);
-        var runtime = new ProcessDurableRuntime(
-            store,
-            RejectingProcessHost.Instance,
-            new("worker/authored-cancellation-tests", WorkerLease),
-            new BindingResolver(fixture.Binding),
-            operationAdapterResolver: new SingleAdapterResolver(adapter));
+        var runtime = asynchronousHost
+            ? new ProcessDurableRuntime(
+                store,
+                new SynchronousProcessReferenceHostAdapter(RejectingProcessHost.Instance),
+                new("worker/authored-cancellation-tests", WorkerLease),
+                new BindingResolver(fixture.Binding),
+                operationAdapterResolver: new SingleAdapterResolver(adapter))
+            : new ProcessDurableRuntime(
+                store,
+                RejectingProcessHost.Instance,
+                new("worker/authored-cancellation-tests", WorkerLease),
+                new BindingResolver(fixture.Binding),
+                operationAdapterResolver: new SingleAdapterResolver(adapter));
         var initialized = await runtime.InitializeAsync(
             Context(fixture.Start.AcceptedAtUtc),
             fixture.Plan,

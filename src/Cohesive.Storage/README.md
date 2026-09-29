@@ -100,3 +100,42 @@ Commit preflight is `executor.Validate(intent)`: it includes adapter-encoded pay
 I/O. `Capabilities.ValidateStructure(intent)` only checks placement and dependencies; full capability
 validation requires serialized byte evidence when a payload budget is declared. Query guard writes
 must carry a non-null token captured before the query; initialize a missing guard separately.
+
+
+### Durable Process JSON depth
+
+Checkpoint, commit, and durable-store serialization and content fingerprints share the bounded
+profile exposed by `ProcessDurableCheckpointJsonSerializer.CreateOptions` (maximum JSON depth 256).
+Tagged portable values use additional containers per domain object or array; the storage budget
+includes those tags and surrounding checkpoint/store envelopes. It does not relax semantic value
+validation. Canonical recovery uses the same configured depth for parsing and typed projection.
+Values beyond the budget fail serialization or produce a structured invalid-JSON recovery diagnostic.
+Existing supported values retain their canonical bytes and fingerprints; the change expands the
+accepted nesting range without changing the wire representation. `ProcessStorageDepthTests` covers
+nested value round trips, fingerprint stability, shallow-byte compatibility, and bounded rejection.
+
+## Checked immutable receipt projection
+
+`ProcessTransitionOperationBinding.CreateProcessDefinitionLink()` supplies the native receipt-contract
+attestation only when the repository declares atomic state/receipt support and its entity shape matches
+the Transition observation. It performs no reads or writes; provider conformance still qualifies the claim.
+`EntityTransitionReceiptReferences.ValueContract` is the single portable locator contract already used
+by the native adapter, not a second receipt schema.
+
+`EntityTransitionReceiptReferences.ResolveSnapshotAsync` resolves an immutable commit snapshot using
+the expected Transition, admitted authority/continuation and trusted physical partition. It rejects
+unqualified providers and mismatched locators before repository access, validates the resolved evidence,
+and requires an explicit resource-authorization callback before returning the original snapshot/token.
+Provider errors and cancellation propagate. Missing evidence never falls back to a current entity read.
+
+This operation supports Process result enrichment and is also reused by service committed-entity result
+reads. For example, after commit A is followed by mutation B, resolving A still returns A's fields and
+concurrency token; a wrong tenant, attempt, Transition or partition returns no snapshot. In-memory tests
+cover those boundaries and denied resource disclosure. Optional Cosmos integration remains a separate gate.
+
+`ProcessEnrichmentUsesAuthorizedOriginalReceiptAfterLaterWrite` exercises this boundary with the native
+Process interpreter, Transition storage adapter and a registered hosted query. A customer is committed
+with status `pending`, another writer changes it to `later`, and enrichment still returns `pending`
+with the original token. Denied disclosure fails the Process while preserving the committed entity and
+its interaction; it does not roll back or repeat the Transition. This is in-memory integration evidence,
+not Cosmos conformance or deployed recovery qualification.

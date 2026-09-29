@@ -202,6 +202,25 @@ public sealed class TypeScriptShapeAstBuilder
                 break;
             }
         }
+        // Profile-specific identities can share a readable suffix. Allocate names after root
+        // alias suppression so references and declarations use one collision-free mapping.
+        var usedNames = graph.Shapes.Select(shape => ResolveShapeName(shape.Id)).ToHashSet(StringComparer.Ordinal);
+        var reservedNames = typeNameById.Values.ToHashSet(StringComparer.Ordinal);
+        foreach (var definition in graph.NamedTypes.OrderBy(type => type.Id.Value, StringComparer.Ordinal))
+        {
+            if (suppressedNamedTypes.Contains(definition.Id))
+                continue;
+            var baseName = typeNameById[definition.Id];
+            var name = baseName;
+            var suffix = 2;
+            while (usedNames.Contains(name))
+            {
+                do { name = $"{baseName}{suffix++}"; }
+                while (reservedNames.Contains(name));
+            }
+            usedNames.Add(name);
+            typeNameById[definition.Id] = name;
+        }
     }
 
     TsStatement TranslateNamedType(TypeDefinition namedType)
@@ -650,11 +669,12 @@ public sealed class TypeScriptShapeAstBuilder
 
         if (CanMergeUnionPayload(unionCase.Type))
         {
-            return new TsIntersectionType(
-                [
-                    discriminator,
-                    TranslateType(unionCase.Type)
-                ]);
+            // Object-valued portable documents retain their native flat discriminator layout.
+            // Their opaque members do not imply a synthetic wire-level "value" envelope.
+            var payload = unionCase.Type is JsonTypeRef { Kind: JsonTypeKind.Object }
+                ? new TsRawType("Record<string, unknown>")
+                : TranslateType(unionCase.Type);
+            return new TsIntersectionType([discriminator, payload]);
         }
 
         return new TsTypeLiteral(
@@ -672,7 +692,7 @@ public sealed class TypeScriptShapeAstBuilder
 
     bool CanMergeUnionPayload(TypeRef type)
     {
-        if (type is ObjectTypeRef)
+        if (type is ObjectTypeRef or JsonTypeRef { Kind: JsonTypeKind.Object })
             return true;
 
         if (type is not NamedTypeRef named)

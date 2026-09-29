@@ -463,11 +463,8 @@ public sealed partial class ProcessDurableRuntime
             preventedAtUtc,
             activationContext,
             cancellation: cancellation);
-        var activationDecision = ProcessDurableRuntime.Activate(
-            plan,
-            checkpoint.Continuation,
-            activation,
-            host);
+        var (activationDecision, observations) = await InterpretAsync(
+            context, plan, checkpoint, activation).ConfigureAwait(false);
         if (activationDecision.Disposition != ProcessActivationDisposition.Cancelled)
         {
             return new(
@@ -480,7 +477,7 @@ public sealed partial class ProcessDurableRuntime
                 activation,
                 activationDecision,
                 controlDecision.State,
-                [],
+                observations,
                 bindingResolver,
                 preventedAtUtc,
                 out var replacement,

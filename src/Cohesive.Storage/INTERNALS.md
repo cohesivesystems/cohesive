@@ -79,6 +79,15 @@ successor. Compatibility failure, a stale expected attempt, pause, or terminal s
 Host-operation ports must therefore be deterministic for an exact occurrence; externally impure or long-running
 work belongs behind a canonical durable Request rather than a synchronous host call.
 
+The asynchronous host overload accepts the native `IAsyncProcessReferenceHost`, including a
+`RegisteredAsyncProcessReferenceHost` combining typed hosted queries, deterministic computations, and entity
+Transition adapters. Both profiles use the same occurrence-receipt cache, checkpoint reducer, and telemetry
+projection; the synchronous profile keeps its direct reducer path. Async interpretation awaits physical host work
+without blocking a thread. Cancellation after an awaited host call aborts without capturing or committing partial
+Process evidence. A host that already committed an entity mutation must replay its own atomic occurrence receipt
+on retry; Process checkpoint durability alone cannot deduplicate effects that happened before that checkpoint.
+Authored cancellation finalization uses the selected host profile and captures its operation evidence too.
+
 An optional asynchronous entity Transition adapter composes that finite interpreter with the entity repository's
 existing atomic state-and-receipt protocol. An unmaterialized Transition suspends interpretation, commits or replays
 the exact entity handoff, and restarts against the same activation-local observation cache. The Process aggregate

@@ -196,3 +196,82 @@ states map to the catalog's opaque not-found, conflict, and precondition-failed 
 - `Cohesive.Api.Execution` for the canonical execution-control catalog and safe result projections.
 - `Cohesive.Identity` for identity context and scope resolution.
 - `Cohesive.Processes`, `Cohesive.Relations`, and `Cohesive.Storage` for the runtime surfaces exposed by endpoints.
+
+## Declared service operations
+
+For an admitted `ServiceRuntime`, `MapServiceTransition<TInput,TOutcome>` projects the operation
+without per-route repository loading or commit callbacks:
+
+```csharp
+using Cohesive.Adapters.AspNet.Services;
+
+app.MapServiceTransition<ReviseNote, bool>(
+    runtime, "revise", "/notes/{id}/revise",
+    authorizationPolicyResolver: (_, requirement) => requirement.Id);
+```
+
+The CLR types must match the referenced Transition contracts. The caller sends the opaque reviewed token
+in `X-Expected-Concurrency-Token` and receives the next token in the same response header. The response
+body is the Transition outcome. Routes retain standard API metadata and native ASP.NET authorization
+policy associations, while direct and HTTP calls both pass the runtime's mandatory authority binding.
+Repository factories are not resolved during mapping. This initial profile supports existing subjects
+without emissions; see [its guarantees and qualification](../../../docs/decisions/declarative-service-runtime.md).
+
+Process entries and lifecycle controls project their native command contracts through the same service runtime:
+
+```csharp
+app.MapServiceProcessStart(runtime, "publish", "/notes/publish",
+    authorizationPolicyResolver: (_, requirement) => requirement.Id);
+app.MapServiceProcessControl<PauseProcessCommand>(runtime, "pause", "/notes/pause",
+    authorizationPolicyResolver: (_, requirement) => requirement.Id);
+```
+
+`PauseProcessCommand` is the native `Cohesive.Execution` contract. A mismatched command CLR type fails mapping.
+Native API result definitions determine statuses and response bodies. Service admission failures use the existing
+`ExecutionApiProblem`; native Process decisions retain their own result. Start/control authority and exact-target
+admission run in the shared service runtime, while ASP.NET policy metadata remains an additional host integration.
+
+Declared terminal results use `MapServiceProcessResult<TResponse>` with the portable service document,
+a lazy runtime resolver, operation identity, GET route and a pure `PortableValue` response projection.
+The exact Process remains the output-contract authority. Declaration-derived metadata preserves result
+alternatives, capability requirements and supplied scope policies without constructing repositories.
+Invocation checks that the resolved service has the registered identity, revision and fingerprint, then
+uses the runtime's protected terminal reader. Success emits the selected response view; pending and
+rejected reads use the shared declared problem/status projection. No entity concurrency token is emitted.
+
+For example, a compiler may return diagnostics without creating an entity. Its result endpoint can
+return that retained output directly rather than selecting a nonexistent entity receipt. Tests exercise
+successful serialization, forbidden reads without protected storage access, pending HTTP 202, lazy
+construction and rejection of a mismatched runtime. These are mapped endpoint tests, not deployed
+middleware or remote-provider qualification.
+
+Process start and lifecycle-control endpoints also accept a portable service declaration plus a lazy
+runtime resolver. `ServiceApiProjection.ProjectProcess<TRequest>` derives their native command types,
+result alternatives and service authorization requirements without creating execution bindings.
+Both eager and lazy overloads use the same request reader and invocation path. The lazy resolver must
+return the registered service identity, revision and fingerprint; mismatch fails before dispatch.
+Host scope policies can be attached explicitly. Inspection and Signal ingress are rejected by the same
+lifecycle admission rule at projection and runtime binding, rather than generating unusable endpoints.
+
+For a domain-specific request body, use `ServiceApiProjection.ProjectProcessInput<TRequest>` and
+`MapServiceProcessInput<TRequest>`. A synchronous medium binder returns native command/idempotency/
+continuation identities and an `ObservationValue` input; it must perform no reads or writes and must
+preserve all retry values. The service runtime chooses the exact Process and trusted authority,
+validates input against its Process-owned portable contract, and dispatches native admission. The
+response retains native admission/conflict outcomes; it does not imply workflow completion. The
+medium request is a projection, not a competing semantic input contract. This profile does not add
+bounded completion waiting or custom result-read orchestration to starts.
+
+Declared queries use `ServiceApiProjection.ProjectQuery<TRequest,TResponse>` and
+`MapServiceQuery<TRequest,TResponse>`. Registration validates the service/query operation and attaches
+host scope policies without resolving runtime/evaluator dependencies. The pure request projection
+supplies caller parameters; ServiceRuntime injects the trusted scope parameter and rejects attempted
+scope overrides before evaluator resolution. Evaluation identity reuses the existing relation-query
+HTTP convention, and the native runtime retains compilation, output-demand and provider semantics.
+
+The pure response projection receives the complete native outcome, including failed evaluations,
+so it can preserve/redact native phase diagnostics intentionally. A successful outcome uses the primary
+response; failed evaluation uses the typed `queryEvaluationFailed` alternative. Admission failures
+use the separate standard `admissionValidationFailed` problem. Both validation alternatives are
+represented in generated API contracts. Provider exceptions and cancellation propagate normally;
+there is no hidden retry or result cache. The mapper adds no query execution algorithm.

@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Text.Json;
+using Cohesive.Model.Serialization;
 using Cohesive.Api;
 
 namespace Cohesive.CodeGen.Cli;
@@ -11,7 +13,9 @@ public static class ContractsAssemblyApiDefinitionLoader
     /// <summary>
     /// Loads and combines all exported API definitions from an assembly.
     /// </summary>
-    public static ApiDefinition Load(string assemblyPath)
+    public static ApiDefinition Load(string assemblyPath) => Load(assemblyPath, false, out _);
+
+    internal static ApiDefinition Load(string assemblyPath, bool useDeclaredJson, out JsonSerializerOptions? jsonOptions)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(assemblyPath);
 
@@ -22,6 +26,7 @@ public static class ContractsAssemblyApiDefinitionLoader
         // contract load context must remain alive for the rest of the CLI process.
         var loadContext = new ContractsAssemblyLoadContext(assemblyPath);
         var assembly = loadContext.LoadFromAssemblyPath(assemblyPath);
+        jsonOptions = useDeclaredJson ? JsonContractOptionsAttribute.Resolve(assembly) : null;
         var definitions = DiscoverDefinitions(assembly);
         if (definitions.Count == 0)
         {

@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using Cohesive.Model.Serialization;
 using Cohesive.Execution;
 using Cohesive.Processes.IR;
 
@@ -47,6 +50,45 @@ public sealed class ExecutionTraceLineageTests
         Assert.Equal(json, ExecutionTraceJsonSerializer.Serialize(ExecutionTraceJsonSerializer.Deserialize(json)));
         Assert.Contains("child/registration/1", json, StringComparison.Ordinal);
         Assert.DoesNotContain("child-private-input", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InternalProfilesAreFrozenAndReusedWhileCallerOptionsRemainIndependent()
+    {
+        var getter = typeof(ExecutionTraceJsonSerializer).GetMethod("GetReadOnlyOptions",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+        foreach (var formatting in Enum.GetValues<PortableDocumentJsonFormatting>())
+        {
+            var prepared = (JsonSerializerOptions)getter.Invoke(null, [formatting])!;
+            Assert.True(prepared.IsReadOnly);
+            Assert.Same(prepared, (JsonSerializerOptions)getter.Invoke(null, [formatting])!);
+            var caller = ExecutionTraceJsonSerializer.CreateOptions(formatting);
+            Assert.False(caller.IsReadOnly);
+            Assert.NotSame(prepared, caller);
+        }
+    }
+
+    [Fact]
+    public void PreparedProfilesPreserveCanonicalBytesAndSemanticFingerprint()
+    {
+        var trace = Trace("child/escaped/\"/é");
+        var referenceOptions = ExecutionTraceJsonSerializer.CreateOptions();
+        var reference = JsonSerializer.SerializeToNode(trace, referenceOptions)!.AsObject();
+        var bytes = CanonicalJsonWriter.GetCanonicalBytes(reference, referenceOptions,
+            static _ => CanonicalJsonArrayOrdering.Sequence,
+            numberSemantics: CanonicalJsonNumberSemantics.ExactDecimalRational);
+        Assert.Equal(bytes, ExecutionTraceJsonSerializer.GetCanonicalBytes(trace));
+        reference.Remove("durableCommitSequence");
+        var semantic = CanonicalJsonWriter.GetCanonicalBytes(reference, referenceOptions,
+            static _ => CanonicalJsonArrayOrdering.Sequence,
+            numberSemantics: CanonicalJsonNumberSemantics.ExactDecimalRational);
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(semantic)),
+            ExecutionTraceFingerprinter.ComputeSemantic(trace).Value);
+        Assert.Equal(JsonSerializer.Serialize(trace, ExecutionTraceJsonSerializer.CreateOptions(PortableDocumentJsonFormatting.Indented)),
+            ExecutionTraceJsonSerializer.Serialize(trace, PortableDocumentJsonFormatting.Indented));
+        var callerOptions = ExecutionTraceJsonSerializer.CreateOptions();
+        callerOptions.PropertyNamingPolicy = null;
+        Assert.Equal(bytes, ExecutionTraceJsonSerializer.GetCanonicalBytes(trace));
     }
 
     static NormalizedExecutionTrace Trace(string registrationId)

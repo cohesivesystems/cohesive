@@ -76,3 +76,78 @@ capability closure and must fail before execution when it cannot preserve the re
 - [`Cohesive.Storage`](../Cohesive.Storage/README.md) provides the provider-neutral durable aggregate and runtime.
 - [`Cohesive.Adapters.DurableTask`](../adapters/Cohesive.Adapters.DurableTask/README.md) provides the current bounded
   Azure Durable Task interpretation.
+
+
+Async Process source authoring supports `await process.DurableCut(id: new("prepared"));` when a
+workflow must retain acquired/computed bindings before mutations. The generator projects the existing
+DurableCutProcessNode and resume edge; it introduces no timer, interaction, new checkpoint format or
+execution model. A following operation/terminal is required. Runtime hosts persist the cut through
+the existing native checkpoint boundary. Generated/native builder definition and fingerprint
+equivalence is covered by ProcessComputationAuthoringTests.
+
+### Ephemeral execution foundation
+
+`EphemeralProcessExecutor` prepares a finite canonical plan for invocation-local execution through
+`ProcessReferenceInterpreter.ActivateAsync`. It supports sequential Transition/Query calls and finite
+branch selection. It needs no checkpoint store or scheduler; it does not provide restart, deduplication,
+background continuation, or whole-definition atomicity. Call `Validate(plan)` to inspect unsupported
+construct/atomic-scope diagnostics before constructing the executor. Preparation is shared; continuation,
+host observations, timers and cancellation are invocation-scoped. The Process validator excludes free
+activation cycles, and this realization excludes durable boundaries, so each observed node occurs at
+most once per invocation.
+
+The positive timeout requests cancellation using `OperationContext.TimeProvider`. The executor awaits
+host quiescence rather than abandoning a writer, so the budget is cooperative, not forced preemption.
+An `EphemeralProcessInterruptedException` preserves canonical returned operation outcomes and receipt
+locators, plus the identity of a host operation interrupted without returning evidence. Returned evidence
+can confirm a write; missing evidence cannot prove that no write occurred. These values may contain
+private data and require the same authorization as the underlying operation. Do not export them as
+exception payloads or telemetry attributes. Cancellation never implies rollback or a safe automatic retry.
+Hosts remain responsible for resource authorization, concurrency and per-operation commit guarantees.
+They must not emit interactions; unexpected emissions fail execution before another host operation runs.
+
+This is the execution foundation for fluent service composition. Service-level lifetime/completion
+policy projection, consumer migration remains work in progress. Shared service authoring now lowers
+hydration/transition/enrichment into the canonical graph and exposes a terminal HTTP adapter. It is not yet
+a claim that the service API offers this execution policy.
+
+`ExecuteAsync` returns `EphemeralProcessResult`: the native decision plus `EphemeralProcessEvidence`.
+The same evidence accompanies cancellation (`EphemeralProcessInterruptedException`) and physical failure
+(`EphemeralProcessExecutionException`). Returned host outcomes and receipt locators survive a later query
+failure; an in-flight node without returned evidence remains uncertain. This shares the canonical
+`ProcessOperationResult` values rather than inventing another receipt format. Evidence is invocation-local
+and not durable audit storage. Success, semantic failure, cancellation and physical failure never authorize
+an automatic mutation retry.
+
+Ephemeral admission uses `ProcessInterpreterRealizationCompiler`, with its report retained on the executor.
+`ProcessExecutionLifetime` is shared by service policy and interpreter inventory; there is no service-local
+copy of the lifetime enum. The default inventory remains durable. An ephemeral inventory omits only persistent
+lifecycle control and worker evolution; deterministic interpretation, exact identity, trace/explain, payload
+handling, explicit durable Requests and atomic-scope demands remain. Unsupported constructs and atomicity
+still fail admission. The profile records constrained, invocation-local materialization without restart,
+no automatic retry, trusted hosts without interaction emissions, and protected in-memory evidence. These
+boundaries do not establish cross-host recovery, outbox delivery, durable audit retention or ACID. The host's
+no-emission contract is checked on returned evidence before another operation executes. Profile preparation
+is lazy and shared; the exact-plan realization report is prepared with the executor, not per invocation.
+
+## Transition receipt outputs
+
+A Transition's domain result and its physical commit evidence are different contracts. An
+`InvokeTransitionProcessNode` may declare an optional `Receipt` output binding alongside the ordinary
+continuation output. Typed authoring uses `InvokeTransitionWithReceipt`. The binding becomes visible
+on that continuation and persists through native checkpoints like any other portable bound value.
+Omission leaves older Process encodings and fingerprints unchanged.
+
+Selecting a receipt requires matching `ProcessDefinitionLink.ReceiptContract` evidence from the host
+binding; a link derived only from the domain Transition document makes no such promise. Compilation
+rejects a missing or different attestation before invocation. This evidence is an assertion by the
+qualified host, not proof that an arbitrary provider implements atomic persistence. A host that returns
+a successful operation without its promised receipt causes terminal contract failure before subsequent
+steps; returned operation evidence is retained because effects may already have committed.
+
+A receipt locator is not an authorization grant or an entity snapshot. A subsequent relation query can
+resolve it through the authoritative receipt provider, check tenant/subject/occurrence affinity and
+resource authorization, and project the exact committed entity and token into the public Process result.
+This avoids recovering a response by guessing an internal node name or reading a newer entity state.
+Storage-backed enrichment and Ari adoption are separate qualification gates; the core tests prove typed
+authoring equivalence, link admission, evidence preservation, wire round-trip and serialized-cut resumption.

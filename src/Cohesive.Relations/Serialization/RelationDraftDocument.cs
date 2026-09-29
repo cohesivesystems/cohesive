@@ -190,6 +190,8 @@ public sealed record RelationDraftFingerprint
 /// <summary>
 /// Portable, versioned document envelope for a non-executable relation draft.
 /// </summary>
+[PortableJsonValue(JsonTypeKind.Object)]
+[JsonContractOptions(typeof(RelationDraftJsonSerializer), nameof(RelationDraftJsonSerializer.CreateOptions))]
 public sealed record RelationDraftDocument
 {
     /// <summary>Current relation draft document schema version.</summary>

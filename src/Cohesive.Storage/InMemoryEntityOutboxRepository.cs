@@ -258,6 +258,18 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         }
     }
 
+    /// <inheritdoc />
+    public Task<EntityTransitionOperationResult> ResolveTransitionOperation(
+        OperationContext context, EntityTransitionOperationReference reference)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(reference);
+        context.ThrowIfCancellationRequested();
+        lock (gate)
+            return Task.FromResult(transitionOperationReceipts.TryGetValue(reference.Operation, out var retained)
+                ? retained.Replay(reference) : EntityTransitionOperationResult.NotFound());
+    }
+
     /// <summary>Looks up the unique atomic creation receipt for a subject and compares its semantic intent.</summary>
     /// <param name="context">Operation context and cancellation.</param>
     /// <param name="request">Candidate creation request whose exact occurrence was not retained.</param>

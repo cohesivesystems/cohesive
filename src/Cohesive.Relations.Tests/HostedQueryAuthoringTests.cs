@@ -11,6 +11,32 @@ namespace Cohesive.Relations.Tests;
 public sealed class HostedQueryAuthoringTests
 {
     [Fact]
+    public void EvaluationSemanticsAreCanonicalAndObservationKeepsTheEstablishedWireShape()
+    {
+        var provenance = Provenance();
+        var configuration = new QueryConfiguration("schema-mapping", "exact", "retain-entity-version");
+        var observed = HostedQuery<QueryInput, QueryResult>.Create(new("query/semantics"), new("1"),
+            new("tests.computation", "1"), configuration, provenance);
+        var deterministic = HostedQuery<QueryInput, QueryResult>.Create(new("query/semantics"), new("1"),
+            new("tests.computation", "1"), configuration, provenance,
+            evaluationSemantics: HostedQueryEvaluationSemantics.DeterministicComputation);
+        Assert.True(deterministic.IsValid, Format(deterministic.Validation));
+        Assert.Equal(HostedQueryEvaluationSemantics.Observation, observed.EvaluationSemantics);
+        Assert.NotEqual(observed.Reference.Fingerprint, deterministic.Reference.Fingerprint);
+        Assert.NotEqual(observed.Definition, deterministic.Definition);
+        var observedJson = ExecutionDefinitionJsonSerializer.Serialize(observed.Document);
+        var deterministicJson = ExecutionDefinitionJsonSerializer.Serialize(deterministic.Document);
+        Assert.DoesNotContain("evaluationSemantics", observedJson);
+        Assert.Contains("evaluationSemantics", deterministicJson);
+        var restored = HostedQueryDefinitionDocuments.TryDeserialize(deterministicJson, out _, out var definition);
+        Assert.True(restored.IsValid, Format(restored));
+        Assert.Equal(deterministic.Definition, definition);
+        Assert.Throws<ArgumentOutOfRangeException>(() => HostedQuery<QueryInput, QueryResult>.Create(new("invalid"), new("1"),
+            new("tests.computation", "1"), configuration, provenance,
+            evaluationSemantics: (HostedQueryEvaluationSemantics)999));
+    }
+
+    [Fact]
     public void Create_AuthorsTypedCanonicalDocumentAndExactRelationDependency()
     {
         var projection = Projection();

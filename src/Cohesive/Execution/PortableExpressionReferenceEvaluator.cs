@@ -394,6 +394,8 @@ internal sealed class PortableExpressionReferenceEvaluator
         }
         return call.Function switch
         {
+            ExprFunctionNames.RequireValue => PortableExpressionValue.Concrete(
+                Evaluate(call.Arguments[0], context).RequireConcrete(call.Function)),
             ExprFunctionNames.Contains => EvaluateContains(call, context),
             ExprFunctionNames.Count => EvaluateCount(call, context),
             ExprFunctionNames.EndsWith => EvaluateTextPredicate(call, context, static (value, part) => value.EndsWith(part, StringComparison.Ordinal)),

@@ -1,3 +1,4 @@
+using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Execution;
 using Cohesive.Storage.Processes;
@@ -6,6 +7,48 @@ namespace Cohesive.Tests.ExecutionKernel;
 
 public sealed class ProcessOperationReplayHostTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RetainedStartContext_ReplacesSuppliedAttributionBeforeFirstObservation(bool asynchronous)
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var retained = fixture.Checkpoint.Start.Request.Context;
+        var supplied = new ProcessControlCommandContext(retained.CommandId, retained.IdempotencyKey,
+            retained.ProcessInstanceId, new("untrusted", retained.Authorization.AuthorityScope, "untrusted"),
+            retained.IssuedAtUtc, retained.Provenance);
+        var inner = new RecordingHost(fixture.OperationResult);
+        var host = asynchronous
+            ? new ProcessOperationReplayHost(new SynchronousProcessReferenceHostAdapter(inner), startContext: retained)
+            : new ProcessOperationReplayHost(inner, startContext: retained);
+        var evaluation = fixture.Operation with { StartContext = supplied };
+        var result = asynchronous
+            ? await host.EvaluateRelationAsync(OperationContext.Create(), evaluation)
+            : host.EvaluateRelation(evaluation);
+        Assert.Equal(fixture.OperationResult, result);
+        Assert.Same(retained, inner.LastEvaluation!.StartContext);
+        Assert.Equal(supplied, evaluation.StartContext);
+        Assert.Single(host.Observations);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RetainedStartContext_RejectsUnrelatedEvidenceBeforeCallingTheHost(bool foreignScope)
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var inner = new RecordingHost(fixture.OperationResult);
+        var host = new ProcessOperationReplayHost(inner, startContext: fixture.Checkpoint.Start.Request.Context);
+        var original = fixture.Operation.Context;
+        var evaluation = foreignScope
+            ? fixture.Operation with { Context = new(new("different-authority", "foreign-tenant"),
+                original.CorrelationId, original.Delivery, original.Provenance) }
+            : fixture.Operation with { Continuation = new(new("different-instance"), new("attempt/1")) };
+        Assert.Throws<InvalidOperationException>(() => host.EvaluateRelation(evaluation));
+        Assert.Equal(0, inner.RelationCalls);
+        Assert.Empty(host.Observations);
+    }
+
     [Fact]
     public void CommittedReceipt_ReplaysWithoutInvokingTheInnerHost()
     {
@@ -168,11 +211,53 @@ public sealed class ProcessOperationReplayHostTests
         Assert.Equal(failed, materialized.Result);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AsyncReceiptReplay_UsesCommittedOrCapturedEvidence(bool committed)
+    {
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: $"process/operation-replay/async/{committed}", semanticVariant: $"async/{committed}");
+        var inner = new RecordingHost(fixture.OperationResult);
+        var host = new ProcessOperationReplayHost(
+            new SynchronousProcessReferenceHostAdapter(inner), committed ? fixture.Checkpoint.Operations : []);
+        var context = OperationContext.Create();
+
+        var first = await host.EvaluateRelationAsync(context, fixture.Operation);
+        var replay = await host.EvaluateRelationAsync(context, fixture.Operation);
+
+        Assert.Same(first, replay);
+        Assert.Equal(committed ? 0 : 1, inner.RelationCalls);
+        Assert.Equal(committed ? 0 : 1, host.Observations.Length);
+    }
+
+    [Fact]
+    public async Task AsyncReceiptReplay_RejectsChangedDefinitionBeforeDispatch()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: "process/operation-replay/async-conflict", semanticVariant: "async-conflict");
+        var retained = Assert.Single(fixture.Checkpoint.Operations);
+        var conflicting = new ProcessOperationReceipt(retained.Key,
+            ProcessDurabilityTestFixture.DefinitionReference("relation/async-conflict", '9'),
+            retained.Result, retained.RecordedAtUtc);
+        var inner = new RecordingHost(fixture.OperationResult);
+        var host = new ProcessOperationReplayHost(new SynchronousProcessReferenceHostAdapter(inner), [conflicting]);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await host.EvaluateRelationAsync(OperationContext.Create(), fixture.Operation));
+
+        Assert.Contains("another definition", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, inner.RelationCalls);
+        Assert.Empty(host.Observations);
+    }
+
     sealed class RecordingHost(ProcessOperationResult result) : IProcessReferenceHost
     {
         internal int TransitionCalls { get; private set; }
 
         internal int RelationCalls { get; private set; }
+
+        internal ProcessRelationEvaluation? LastEvaluation { get; private set; }
 
         public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation)
         {
@@ -183,6 +268,7 @@ public sealed class ProcessOperationReplayHostTests
         public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation)
         {
             RelationCalls++;
+            LastEvaluation = evaluation;
             return result;
         }
 
