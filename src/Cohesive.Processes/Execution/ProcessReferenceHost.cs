@@ -60,12 +60,20 @@ public sealed record ProcessRelationEvaluation(
     /// does not create a grant or establish that the original caller still has permission.</remarks>
     /// <exception cref="ArgumentNullException">The retained context is null.</exception>
     /// <exception cref="InvalidOperationException">The retained start belongs to another instance or authority scope.</exception>
-    public ProcessRelationEvaluation WithRetainedStartContext(ProcessControlCommandContext retained)
+    public ProcessRelationEvaluation WithRetainedStartContext(ProcessControlCommandContext retained) => WithInvocationStartContext(retained);
+
+    /// <summary>Attaches start attribution supplied by an authoritative invocation boundary, replacing any existing value.</summary>
+    /// <remarks>The caller must obtain this context from durable admission or normalized ephemeral service admission.
+    /// The context supplies identity, time and provenance; it does not by itself assert durable retention, deduplication
+    /// or a fresh permission grant. Host bindings remain responsible for resource authorization.</remarks>
+    /// <exception cref="ArgumentNullException">The attribution is null.</exception>
+    /// <exception cref="InvalidOperationException">Its instance or authority differs from this evaluation.</exception>
+    public ProcessRelationEvaluation WithInvocationStartContext(ProcessControlCommandContext retained)
     {
         ArgumentNullException.ThrowIfNull(retained);
         if (retained.ProcessInstanceId != Continuation.ProcessInstanceId
             || retained.Authorization.AuthorityScope != Context.AuthorityScope)
-            throw new InvalidOperationException("Retained start evidence must match the evaluation instance and authority scope.");
+            throw new InvalidOperationException("Start attribution must match the evaluation instance and authority scope.");
         return this with { StartContext = retained };
     }
 }

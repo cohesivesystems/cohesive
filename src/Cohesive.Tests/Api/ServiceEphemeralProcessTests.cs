@@ -140,6 +140,10 @@ public sealed class ServiceEphemeralProcessTests
         public ValueTask<ProcessOperationResult> EvaluateRelationAsync(OperationContext context, ProcessRelationEvaluation evaluation)
         {
             Calls++;
+            Assert.Equal("alice", evaluation.StartContext?.Authorization.Actor);
+            Assert.Equal("tenant-a", evaluation.StartContext?.Authorization.AuthorityScope.Tenant);
+            Assert.Equal(evaluation.Continuation.ProcessInstanceId, evaluation.StartContext!.ProcessInstanceId);
+            Assert.Equal(Provenance, evaluation.StartContext.Provenance);
             if (fail) throw new IOException("private-backend");
             return ValueTask.FromResult(ProcessOperationResult.Completed(evaluation.Input));
         }

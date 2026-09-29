@@ -243,3 +243,10 @@ A legacy omitted execution policy preserves the earlier start result contract un
 policies. An explicit admission-only operation cannot be attached to the legacy bounded entity-completion
 adapter; that would contradict its declared response promise. Tests exercise direct admission and actual
 HTTP replay against the in-memory native admission adapter. This is not real-provider durability evidence.
+
+Ephemeral query calls receive the same native start-attribution contract used by durable handlers, populated
+only after service admission from the normalized actor, scope, time and provenance. Invocation-scoped command
+and idempotency identities identify this call; they do not create a durable receipt or deduplication guarantee.
+`WithInvocationStartContext` checks instance/authority affinity before attaching that attribution. The retained
+start helper remains for durable replay. This lets existing query handlers enforce scope and attribute generated
+artifacts without accepting caller-supplied actor/time fields or introducing an Ari-specific identity model.

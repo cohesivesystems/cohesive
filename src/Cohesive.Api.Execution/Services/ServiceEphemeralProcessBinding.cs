@@ -74,10 +74,13 @@ public sealed partial class ServiceRuntime
             context.ThrowIfCancellationRequested();
             var host = binding.Host(context, invocation)
                 ?? throw new InvalidOperationException("The Process host factory returned null.");
+            var attribution = new ProcessControlCommandContext(new($"ephemeral/{invocationIdentity.ProcessInstanceId.Value}"),
+                new($"ephemeral/{invocationIdentity.ProcessInstanceId.Value}"), invocationIdentity.ProcessInstanceId,
+                invocation.Authorization, invocation.IssuedAtUtc, invocation.Provenance);
             var execution = await binding.Executor.ExecuteAsync(context, invocationIdentity, materialized,
                 new(invocation.Authorization.AuthorityScope, new(invocationIdentity.ProcessInstanceId.Value),
                     new(InteractionDurabilityDemand.ActivationLocal, InteractionVisibilityDemand.ActivationLocal), invocation.Provenance),
-                host, operation.Execution!.Timeout!.Value).ConfigureAwait(false);
+                new StartAttributedHost(host, attribution), operation.Execution!.Timeout!.Value).ConfigureAwait(false);
             var decision = execution.Decision;
             evidence.Record("processExecutionCompleted");
             var kind = decision.Disposition switch
@@ -100,4 +103,15 @@ public sealed partial class ServiceRuntime
             return new(kind, null, [new(code, DiagnosticSeverity.Error, message)], evidence.Complete(kind));
         }
     }
+
+    sealed class StartAttributedHost(IAsyncProcessReferenceHost host, ProcessControlCommandContext attribution) : IAsyncProcessReferenceHost
+    {
+        public ValueTask<ProcessOperationResult> EvaluateRelationAsync(OperationContext context, ProcessRelationEvaluation evaluation) =>
+            host.EvaluateRelationAsync(context, evaluation.WithInvocationStartContext(attribution));
+        public ValueTask<ProcessOperationResult> InvokeTransitionAsync(OperationContext context, ProcessTransitionInvocation invocation) =>
+            host.InvokeTransitionAsync(context, invocation);
+        public ValueTask<ProcessSignalTargetResult> ResolveSignalTargetAsync(OperationContext context, ProcessSignalTargetResolution resolution) =>
+            host.ResolveSignalTargetAsync(context, resolution);
+    }
+
 }
