@@ -199,6 +199,29 @@ separate canonical policy fields; neither confers ACID. Existing omitted policie
 behavior. Bindings reject unsupported combinations. Native start HTTP projection rejects ephemeral policies
 rather than exposing an admission contract for an operation promising completion.
 
-This first authoring slice does not yet provide hydration/transition/enrichment lowering, terminal HTTP
-projection, durable terminal waiting, or Ari migration. Those remain in the declarative service refinement.
+This authoring slice does not yet provide terminal HTTP projection, durable terminal waiting, or Ari migration. Those remain in the declarative service refinement.
 Do not present the existing start adapter as a terminal-completion adapter.
+
+
+A single-entity mutation can now be authored as a typed composition and supplied to `Run`:
+
+```csharp
+var approval = ServiceMutation.HydrateWith(ApprovalFacts)
+    .Apply(Proposal.Approve, facts => facts.Id)
+    .EnrichWith(ReviewDetails)
+    .Build(new(new("proposal/approval"), new("1"),
+        ProcessRecoveryPolicy.ContinueAttempt, provenance));
+```
+
+The subject selector becomes a portable field path. The Transition's exact output becomes the enrichment
+input; the last step supplies the public Process output. Entry, edges and bindings are derived deterministically.
+`ServiceMutation.Apply(...)` omits hydration when caller input already contains the required facts. No runtime
+callback survives lowering. Reference hosts still own resource authorization, fact freshness and actual commits.
+A second mutation is rejected by this shorthand; use an explicitly authored Process for multi-entity work.
+There is no automatic compensation or interpretation of a domain outcome as rejection: domain branching belongs
+in an explicit Process when an outcome requires it. Interpreter/host failure stops subsequent steps.
+
+The executable synthetic example in `ServiceMutationTests` proves exact canonical-byte equivalence for a direct
+mutation, inferred contracts, ordered hydration/mutation/enrichment, pre-write failure, post-write enrichment
+failure and rejection of a second mutation. Its host records writes in memory; it is not deployed storage or
+cross-entity transaction qualification. Exact definition links and shape evidence remain required at compilation.
