@@ -17,6 +17,9 @@ public sealed class EphemeralProcessExecutorTests
     public async Task SequentialMutationExecutesOnceAndReturnsCanonicalEvidence()
     {
         var executor = new EphemeralProcessExecutor(Plan(mutation: true));
+        Assert.True(executor.Realization.IsRealizable);
+        Assert.Equal(ProcessExecutionLifetime.Ephemeral, executor.Realization.Inventory.Lifetime);
+        Assert.DoesNotContain(executor.Realization.Inventory.Requirements, r => r.Key == ProcessInterpreterGuarantees.LifecycleControl);
         var host = new Host();
         var result = await Execute(executor, host);
         Assert.Equal(ProcessActivationDisposition.Completed, result.Decision.Disposition);

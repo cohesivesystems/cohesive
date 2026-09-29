@@ -29,7 +29,7 @@ public sealed class ServiceEphemeralProcessTests
         var document = Declare(plan);
         var direct = ServiceDefinitionDocuments.Create(new("notes"), new("1"),
             new([new ServiceProcessOperation("echo", plan.DefinitionReference, [new("notes.read")],
-                new(ServiceProcessLifetime.Ephemeral, ServiceProcessCompletion.Terminal, TimeSpan.FromSeconds(2)))]), Provenance);
+                new(ProcessExecutionLifetime.Ephemeral, ServiceProcessCompletion.Terminal, TimeSpan.FromSeconds(2)))]), Provenance);
         Assert.Equal(ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(direct),
             ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document));
         Assert.Equal(direct.Metadata.Fingerprint, document.Metadata.Fingerprint);
@@ -82,9 +82,9 @@ public sealed class ServiceEphemeralProcessTests
     [Fact]
     public void InvalidBudgetsAndEphemeralAdmissionCannotBeDeclared()
     {
-        Assert.Throws<ArgumentException>(() => new ServiceProcessExecution(ServiceProcessLifetime.Ephemeral, ServiceProcessCompletion.Admission));
-        Assert.Throws<ArgumentException>(() => new ServiceProcessExecution(ServiceProcessLifetime.Ephemeral, ServiceProcessCompletion.Terminal));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new ServiceProcessExecution(ServiceProcessLifetime.Ephemeral, ServiceProcessCompletion.Terminal, TimeSpan.Zero));
+        Assert.Throws<ArgumentException>(() => new ServiceProcessExecution(ProcessExecutionLifetime.Ephemeral, ServiceProcessCompletion.Admission));
+        Assert.Throws<ArgumentException>(() => new ServiceProcessExecution(ProcessExecutionLifetime.Ephemeral, ServiceProcessCompletion.Terminal));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ServiceProcessExecution(ProcessExecutionLifetime.Ephemeral, ServiceProcessCompletion.Terminal, TimeSpan.Zero));
         Assert.Throws<InvalidOperationException>(() => Service.Define(new("notes"), new("1"), Provenance).Operation("echo").ExecuteEphemerally(TimeSpan.FromSeconds(1)));
     }
 

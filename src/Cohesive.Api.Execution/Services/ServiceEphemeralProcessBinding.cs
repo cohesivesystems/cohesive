@@ -35,7 +35,7 @@ public sealed class ServiceEphemeralProcessBinding : ServiceBinding
         if (operation is not ServiceProcessOperation process || process.Process != Executor.Plan.DefinitionReference)
             throw ServiceBindingValidationException.Error("services.binding.inexact",
                 "The binding must realize the exact declared Process.", "/bindings/process");
-        if (process.Execution is not { Lifetime: ServiceProcessLifetime.Ephemeral, Completion: ServiceProcessCompletion.Terminal })
+        if (process.Execution is not { Lifetime: ProcessExecutionLifetime.Ephemeral, Completion: ServiceProcessCompletion.Terminal })
             throw ServiceBindingValidationException.Error("services.binding.executionUnsupported",
                 "This binding requires explicit ephemeral terminal completion.", "/bindings/process/execution");
     }

@@ -87,11 +87,11 @@ public sealed class ServiceProcessOperationBuilder
 
     /// <summary>Completes the operation with invocation-local execution and an explicit cooperative deadline.</summary>
     public ServiceBuilder ExecuteEphemerally(TimeSpan timeout) => Complete(
-        new(ServiceProcessLifetime.Ephemeral, ServiceProcessCompletion.Terminal, timeout));
+        new(ProcessExecutionLifetime.Ephemeral, ServiceProcessCompletion.Terminal, timeout));
 
     /// <summary>Completes the operation with durable admission; the response does not promise Process completion.</summary>
     public ServiceBuilder ReturnAfterDurableAdmission() => Complete(
-        new(ServiceProcessLifetime.Durable, ServiceProcessCompletion.Admission));
+        new(ProcessExecutionLifetime.Durable, ServiceProcessCompletion.Admission));
 
     ServiceBuilder Complete(ServiceProcessExecution execution) => service.Add(id,
         process ?? throw new InvalidOperationException("Select the Process with Run before choosing its execution policy."), execution);

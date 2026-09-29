@@ -274,14 +274,19 @@ public sealed class ProcessInterpreterRequirementInventory
 {
     internal ProcessInterpreterRequirementInventory(
         ExecutionDefinitionReference definition,
-        ImmutableArray<ProcessInterpreterRequirement> requirements)
+        ImmutableArray<ProcessInterpreterRequirement> requirements,
+        ProcessExecutionLifetime lifetime)
     {
         Definition = definition;
         Requirements = requirements;
+        Lifetime = lifetime;
     }
 
     /// <summary>Exact canonical Process definition from which the inventory was acquired.</summary>
     public ExecutionDefinitionReference Definition { get; }
+
+    /// <summary>Requested execution lifetime used to derive lifecycle requirements; explicit graph demands remain intact.</summary>
+    public ProcessExecutionLifetime Lifetime { get; }
 
     /// <summary>Every demanded construct and guarantee in deterministic key order.</summary>
     public ImmutableArray<ProcessInterpreterRequirement> Requirements { get; }
@@ -292,14 +297,18 @@ public static class ProcessInterpreterRequirementCollector
 {
     /// <summary>Derives every concrete construct and applicable cross-cutting guarantee from an exact plan.</summary>
     /// <param name="plan">Successfully compiled canonical Process plan.</param>
+    /// <param name="lifetime">Requested execution lifetime. Ephemeral execution omits persistent lifecycle and worker
+    /// evolution requirements, but retains deterministic interpretation, exact identity and every explicit graph demand.</param>
     /// <returns>A complete, deterministically ordered requirement inventory.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
     /// <exception cref="InvalidOperationException">
     /// A node is absent from the canonical persisted union catalog.
     /// </exception>
-    public static ProcessInterpreterRequirementInventory Collect(CompiledProcessPlan plan)
+    public static ProcessInterpreterRequirementInventory Collect(CompiledProcessPlan plan,
+        ProcessExecutionLifetime lifetime = ProcessExecutionLifetime.Durable)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        if (!Enum.IsDefined(lifetime)) throw new ArgumentOutOfRangeException(nameof(lifetime));
         Dictionary<ProcessInterpreterRequirementKey, MutableRequirement> requirements = [];
         Dictionary<ExecutionNodeId, ImmutableArray<ExecutionDefinitionReference>> linksByNode = [];
         foreach (var grouping in plan.EffectSummary.Resources.GroupBy(static resource => resource.Node))
@@ -320,8 +329,11 @@ public static class ProcessInterpreterRequirementCollector
         Add(ProcessInterpreterGuarantees.ExactDefinitionPinning, allNodes);
         Add(ProcessInterpreterGuarantees.StableExecutionIdentity, allNodes);
         Add(ProcessInterpreterGuarantees.DeterministicReplay, allNodes);
-        Add(ProcessInterpreterGuarantees.LifecycleControl, allNodes);
-        Add(ProcessInterpreterGuarantees.DefinitionAndWorkerEvolution, allNodes);
+        if (lifetime == ProcessExecutionLifetime.Durable)
+        {
+            Add(ProcessInterpreterGuarantees.LifecycleControl, allNodes);
+            Add(ProcessInterpreterGuarantees.DefinitionAndWorkerEvolution, allNodes);
+        }
         Add(ProcessInterpreterGuarantees.StatusTraceAndExplain, allNodes);
         Add(ProcessInterpreterGuarantees.SensitiveAndOversizedPayloads, allNodes);
 
@@ -372,7 +384,7 @@ public static class ProcessInterpreterRequirementCollector
             .OrderBy(static requirement => requirement.Key.Category)
             .ThenBy(static requirement => requirement.Key.Name, StringComparer.Ordinal)
             .ToImmutableArray();
-        return new(plan.DefinitionReference, normalized);
+        return new(plan.DefinitionReference, normalized, lifetime);
 
         void AddWhen(ProcessInterpreterRequirementKey key, IEnumerable<ProcessNode> nodes)
         {

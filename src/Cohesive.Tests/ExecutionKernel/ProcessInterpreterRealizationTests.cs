@@ -14,6 +14,21 @@ public sealed class ProcessInterpreterRealizationTests
     static readonly ValueContract StringContract = new(new ScalarTypeRef(ScalarTypeKind.String));
 
     [Fact]
+    public void EphemeralInventoryOmitsPersistentLifecycleButRetainsExplicitRecoveryDemands()
+    {
+        var plan = RequestPlan(out _);
+        var durable = ProcessInterpreterRequirementCollector.Collect(plan);
+        var ephemeral = ProcessInterpreterRequirementCollector.Collect(plan, ProcessExecutionLifetime.Ephemeral);
+        Assert.Equal(ProcessExecutionLifetime.Ephemeral, ephemeral.Lifetime);
+        Assert.Equal(ProcessExecutionLifetime.Durable, durable.Lifetime);
+        Assert.Equal(new[] { ProcessInterpreterGuarantees.LifecycleControl, ProcessInterpreterGuarantees.DefinitionAndWorkerEvolution }.OrderBy(k => k.Name),
+            durable.Requirements.Select(r => r.Key).Except(ephemeral.Requirements.Select(r => r.Key)).OrderBy(k => k.Name));
+        Assert.Contains(ephemeral.Requirements, r => r.Key == ProcessInterpreterGuarantees.DurableRequestRecovery);
+        Assert.Contains(ephemeral.Requirements, r => r.Key == ProcessInterpreterGuarantees.DeterministicReplay);
+        Assert.Throws<ArgumentOutOfRangeException>(() => ProcessInterpreterRequirementCollector.Collect(plan, (ProcessExecutionLifetime)0));
+    }
+
+    [Fact]
     public void ConstructCatalog_IsAnExactProjectionOfTheClosedPersistedNodeUnion()
     {
         string[] expected =

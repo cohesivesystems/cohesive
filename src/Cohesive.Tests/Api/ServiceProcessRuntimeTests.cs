@@ -370,7 +370,7 @@ public sealed class ServiceProcessRuntimeTests
         var adapter = new InMemoryExecutionControlApiAdapter(ProcessControlTestFixture.Create().Catalog, catalog);
         var service = ServiceDefinitionDocuments.Create(new("notes"), new("v1"),
             new([new ServiceProcessOperation("publish", plan.DefinitionReference, [new("notes.publish")],
-                    explicitAdmission ? new(ServiceProcessLifetime.Durable, ServiceProcessCompletion.Admission) : null),
+                    explicitAdmission ? new(ProcessExecutionLifetime.Durable, ServiceProcessCompletion.Admission) : null),
                 new ServiceProcessControlOperation("pause", plan.DefinitionReference, ExecutionControlWireNames.Pause, [new("notes.pause")])]), provenance);
         var fixture = new Fixture { Plan = plan, Document = service };
         var binding = new ServiceProcessBinding("publish", plan, "notes-authority", async (context, request, invocation) =>

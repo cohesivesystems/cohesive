@@ -45,7 +45,7 @@ public sealed class ServiceProcessBinding : ServiceBinding
 
     internal static void ValidateExecution(ServiceProcessOperation process)
     {
-        if (process.Execution is { } execution && (execution.Lifetime != ServiceProcessLifetime.Durable
+        if (process.Execution is { } execution && (execution.Lifetime != ProcessExecutionLifetime.Durable
             || execution.Completion != ServiceProcessCompletion.Admission))
             throw ServiceBindingValidationException.Error("services.binding.executionUnsupported",
                 "This dispatcher binding provides durable admission only.", "/bindings/process/execution");

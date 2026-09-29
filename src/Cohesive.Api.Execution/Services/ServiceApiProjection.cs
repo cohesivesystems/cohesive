@@ -149,7 +149,7 @@ public static class ServiceApiProjection
         if (!process.IsValid) throw new ServiceBindingValidationException(process.Validation);
         if (GetOperation(declaration, operationId) is not ServiceProcessOperation operation
             || operation.Process != process.Reference
-            || operation.Execution is not { Lifetime: ServiceProcessLifetime.Ephemeral, Completion: ServiceProcessCompletion.Terminal })
+            || operation.Execution is not { Lifetime: ProcessExecutionLifetime.Ephemeral, Completion: ServiceProcessCompletion.Terminal })
             throw new ArgumentException("Terminal projection requires the exact ephemeral Process declaration.", nameof(operationId));
         if (http?.Body is { } body && body.BodyType != typeof(TInput))
             throw new ArgumentException("HTTP input must match the Process input contract.", nameof(http));

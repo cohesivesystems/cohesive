@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
+using Cohesive.Model;
 using Cohesive.Prelude;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.IR;
@@ -23,7 +24,8 @@ public sealed class EphemeralProcessExecutor
     public EphemeralProcessExecutor(CompiledProcessPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        var validation = Validate(plan);
+        Realization = Realize(plan);
+        var validation = Diagnostics(Realization);
         if (!validation.IsValid)
             throw new ArgumentException(string.Join("; ", validation.Diagnostics.Select(d => $"{d.Code}: {d.Message}")), nameof(plan));
         Plan = plan;
@@ -37,24 +39,42 @@ public sealed class EphemeralProcessExecutor
     /// interactions, child work and parallel admission require another realization. Per-operation persistence
     /// guarantees remain the host's responsibility; successful validation does not establish ACID semantics.</remarks>
     /// <exception cref="ArgumentNullException">The plan is null.</exception>
-    public static DocumentValidationResult Validate(CompiledProcessPlan plan)
+    public static DocumentValidationResult Validate(CompiledProcessPlan plan) => Diagnostics(Realize(plan));
+
+    /// <summary>Compiler-owned capability evidence for this exact plan and its ephemeral operating boundaries.</summary>
+    public ProcessInterpreterRealizationReport Realization { get; }
+
+    static readonly Lazy<ProcessInterpreterCapabilityProfile> Profile = new(() =>
+    {
+        var evidence = new List<ProcessInterpreterCapabilityEvidence>();
+        foreach (var wireName in new[] { ProcessWireNames.InvokeTransitionNode, ProcessWireNames.EvaluateRelationNode,
+            ProcessWireNames.ChoiceNode, ProcessWireNames.MatchNode, ProcessWireNames.ReturnNode, ProcessWireNames.FailNode })
+            evidence.Add(new(new($"ephemeral/construct/{wireName}"), ProcessInterpreterRequirementKey.ForConstruct(wireName), CapabilityRealizationKind.Native));
+        foreach (var key in new[] { ProcessInterpreterGuarantees.ExactDefinitionPinning,
+            ProcessInterpreterGuarantees.StableExecutionIdentity, ProcessInterpreterGuarantees.StatusTraceAndExplain })
+            evidence.Add(new(new($"ephemeral/{key.Name}"), key, CapabilityRealizationKind.Native));
+        evidence.Add(new(new("ephemeral/replay"), ProcessInterpreterGuarantees.DeterministicReplay,
+            CapabilityRealizationKind.Constrained, operatingBoundaries: [new("activation-local-materialization/no-restart")]));
+        evidence.Add(new(new("ephemeral/effects"), ProcessInterpreterGuarantees.ExternalEffectDelivery,
+            CapabilityRealizationKind.Constrained, operatingBoundaries: [new("host/no-interaction-emissions"), new("invocation/no-automatic-retry")]));
+        evidence.Add(new(new("ephemeral/payloads"), ProcessInterpreterGuarantees.SensitiveAndOversizedPayloads,
+            CapabilityRealizationKind.Constrained, operatingBoundaries: [new("invocation/protected-in-memory-evidence")]));
+        return new(new("cohesive.processes/ephemeral/v1"), new("cohesive.processes/ephemeral"), [.. evidence]);
+    });
+
+    static ProcessInterpreterRealizationReport Realize(CompiledProcessPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        var diagnostics = new List<DocumentValidationDiagnostic>();
-        if (plan.Options.AtomicScope != ProcessAtomicScopeDemand.None)
-            diagnostics.Add(new("processes.ephemeral.atomicScopeUnsupported", DiagnosticSeverity.Error,
-                "This executor cannot guarantee whole-definition atomicity.", "/options/atomicScope"));
-        for (var index = 0; index < plan.Definition.Nodes.Length; index++)
-        {
-            var node = plan.Definition.Nodes[index];
-            if (node is not (InvokeTransitionProcessNode or EvaluateRelationProcessNode
-                or ChoiceProcessNode or MatchProcessNode or ReturnProcessNode or FailProcessNode))
-                diagnostics.Add(new("processes.ephemeral.constructUnsupported", DiagnosticSeverity.Error,
-                    $"Node '{node.Id.Value}' requires a realization beyond sequential ephemeral execution.",
-                    $"/definition/nodes/{index}"));
-        }
-        return new([.. diagnostics]);
+        return ProcessInterpreterRealizationCompiler.Compile(plan, Profile.Value, ProcessExecutionLifetime.Ephemeral);
     }
+
+    static DocumentValidationResult Diagnostics(ProcessInterpreterRealizationReport report) => new(
+        [.. report.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d =>
+            new DocumentValidationDiagnostic(
+                d.Requirement == ProcessInterpreterGuarantees.WholeDefinitionAtomicity ? "processes.ephemeral.atomicScopeUnsupported"
+                    : d.Requirement?.Category == ProcessInterpreterRequirementCategory.Construct ? "processes.ephemeral.constructUnsupported"
+                    : "processes.ephemeral.capabilityUnsupported",
+                d.Severity, d.Message, "/realization"))]);
 
     /// <summary>Executes one fresh attempt with a cooperative deadline and no automatic continuation or retry.</summary>
     /// <param name="context">Invocation identity, time provider, and caller cancellation.</param>

@@ -107,7 +107,7 @@ Hosts remain responsible for resource authorization, concurrency and per-operati
 They must not emit interactions; unexpected emissions fail execution before another host operation runs.
 
 This is the execution foundation for fluent service composition. Service-level lifetime/completion
-policy projection, capability-profile integration and consumer migration remain work in progress. Shared service authoring now lowers
+policy projection, consumer migration remains work in progress. Shared service authoring now lowers
 hydration/transition/enrichment into the canonical graph and exposes a terminal HTTP adapter. It is not yet
 a claim that the service API offers this execution policy.
 
@@ -118,3 +118,14 @@ failure; an in-flight node without returned evidence remains uncertain. This sha
 `ProcessOperationResult` values rather than inventing another receipt format. Evidence is invocation-local
 and not durable audit storage. Success, semantic failure, cancellation and physical failure never authorize
 an automatic mutation retry.
+
+Ephemeral admission uses `ProcessInterpreterRealizationCompiler`, with its report retained on the executor.
+`ProcessExecutionLifetime` is shared by service policy and interpreter inventory; there is no service-local
+copy of the lifetime enum. The default inventory remains durable. An ephemeral inventory omits only persistent
+lifecycle control and worker evolution; deterministic interpretation, exact identity, trace/explain, payload
+handling, explicit durable Requests and atomic-scope demands remain. Unsupported constructs and atomicity
+still fail admission. The profile records constrained, invocation-local materialization without restart,
+no automatic retry, trusted hosts without interaction emissions, and protected in-memory evidence. These
+boundaries do not establish cross-host recovery, outbox delivery, durable audit retention or ACID. The host's
+no-emission contract is checked on returned evidence before another operation executes. Profile preparation
+is lazy and shared; the exact-plan realization report is prepared with the executor, not per invocation.
