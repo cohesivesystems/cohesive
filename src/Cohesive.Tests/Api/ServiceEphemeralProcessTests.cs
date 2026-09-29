@@ -96,7 +96,8 @@ public sealed class ServiceEphemeralProcessTests
         var query = new ExecutionDefinitionReference(new("query"), new("1"),
             new(ExecutionDefinitionFingerprinter.Algorithm, ExecutionDefinitionFingerprinter.Canonicalization, new string('a', 64)));
         var process = ProcessAuthoring.Create<string, string>(
-            new(new("http-echo"), new("1"), new("query"), ProcessRecoveryPolicy.ContinueAttempt, Provenance), builder =>
+            new(new("http-echo"), new("1"), new("query"), ProcessRecoveryPolicy.ContinueAttempt,
+                new(new("process-importer"), new("tests/processes/http-echo"), DocumentOrigin.Generated)), builder =>
             {
                 var output = builder.Output<string>(new("output"), Text);
                 builder.EvaluateRelation(new("query"), query, builder.Input.Value,

@@ -79,7 +79,8 @@ public sealed partial class ServiceRuntime
                 invocation.Authorization, invocation.IssuedAtUtc, invocation.Provenance);
             var execution = await binding.Executor.ExecuteAsync(context, invocationIdentity, materialized,
                 new(invocation.Authorization.AuthorityScope, new(invocationIdentity.ProcessInstanceId.Value),
-                    new(InteractionDurabilityDemand.ActivationLocal, InteractionVisibilityDemand.ActivationLocal), invocation.Provenance),
+                    new(InteractionDurabilityDemand.ActivationLocal, InteractionVisibilityDemand.ActivationLocal),
+                    binding.Executor.Plan.Document.Metadata.Provenance),
                 new StartAttributedHost(host, attribution), operation.Execution!.Timeout!.Value).ConfigureAwait(false);
             var decision = execution.Decision;
             evidence.Record("processExecutionCompleted");
