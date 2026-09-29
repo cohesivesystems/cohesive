@@ -106,8 +106,17 @@ public sealed record ServiceProcessOperation : ServiceOperation
     /// <exception cref="ArgumentNullException">The exact Process reference is null.</exception>
     [JsonConstructor]
     public ServiceProcessOperation(string id, ExecutionDefinitionReference process,
-        ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default)
-        : base(id, authorizationRequirements) => Process = process ?? throw new ArgumentNullException(nameof(process));
+        ImmutableArray<ApiAuthorizationRequirement> authorizationRequirements = default,
+        ServiceProcessExecution? execution = null)
+        : base(id, authorizationRequirements)
+    {
+        Process = process ?? throw new ArgumentNullException(nameof(process));
+        Execution = execution;
+    }
+
+    /// <summary>Explicit lifetime and completion policy. Omission preserves native durable start admission.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ServiceProcessExecution? Execution { get; }
 
     /// <summary>Exact Process authority; the service does not copy its graph, contracts or control lifecycle.</summary>
     public ExecutionDefinitionReference Process { get; }

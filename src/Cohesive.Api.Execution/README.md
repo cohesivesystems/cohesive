@@ -172,3 +172,33 @@ service declarations without constructing a dummy evaluator or copying fingerpri
 Tests in `ServiceQueryRuntimeTests` cover concurrent one-time preparation, retained factory/admission
 failures, immediate coverage checks, tenant isolation, and physical reads. These are deterministic
 work-count guarantees, not startup or end-to-end latency measurements.
+
+### Fluent Process-backed operations (implementation in progress)
+
+Service authoring now lowers an existing typed or compiled Process to the same canonical service IR:
+
+```csharp
+var service = Service.Define(new("notes"), new("1"), provenance)
+    .Require(new("notes.read"))
+    .Operation("echo")
+        .Run(echoProcess)
+        .ExecuteEphemerally(TimeSpan.FromSeconds(2))
+    .Build();
+```
+
+`Run` references the exact Process revision/fingerprint; its input and output contracts remain authoritative.
+`ServiceEphemeralProcessBinding` associates a prepared Process and an invocation-scoped host factory. The
+factory runs after service authorization and exact input validation; its Transition/Query bindings remain
+responsible for resource authorization and persistence. Execution uses the canonical interpreter and existing
+service trace/metrics. The current budget covers execution after admission and host construction, not total
+HTTP request latency. Cancellation may follow a committed write and preserves canonical host outcomes for
+reconciliation; it does not imply rollback or retry safety.
+
+For a durable Process start, choose `ReturnAfterDurableAdmission()` instead. Lifetime and completion are
+separate canonical policy fields; neither confers ACID. Existing omitted policies retain native durable-start
+behavior. Bindings reject unsupported combinations. Native start HTTP projection rejects ephemeral policies
+rather than exposing an admission contract for an operation promising completion.
+
+This first authoring slice does not yet provide hydration/transition/enrichment lowering, terminal HTTP
+projection, durable terminal waiting, or Ari migration. Those remain in the declarative service refinement.
+Do not present the existing start adapter as a terminal-completion adapter.

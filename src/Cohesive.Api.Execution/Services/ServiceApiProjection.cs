@@ -32,6 +32,7 @@ public static class ServiceApiProjection
         HttpBinding? http = null, IReadOnlyList<ApiScopePolicy>? scopePolicies = null) where TRequest : class
     {
         var declared = GetOperation(declaration, operationId);
+        if (declared is ServiceProcessOperation process) ServiceProcessBinding.ValidateExecution(process);
         var native = declared switch
         {
             ServiceProcessOperation => ServiceRuntime.NativeProcessOperation(ProcessStartWireNames.Start),
@@ -51,8 +52,9 @@ public static class ServiceApiProjection
         HttpBinding? http = null, IReadOnlyList<ApiScopePolicy>? scopePolicies = null) where TRequest : class
     {
         var declared = GetOperation(declaration, operationId);
-        if (declared is not ServiceProcessOperation)
+        if (declared is not ServiceProcessOperation process)
             throw new ArgumentException("Domain input projection requires a declared Process start.", nameof(operationId));
+        ServiceProcessBinding.ValidateExecution(process);
         if (http?.Body is { } body && body.BodyType != typeof(TRequest))
             throw new ArgumentException("The HTTP body must match the medium request type.", nameof(http));
         return CreateProcess(declaration, declared, ServiceRuntime.NativeProcessOperation(ProcessStartWireNames.Start),

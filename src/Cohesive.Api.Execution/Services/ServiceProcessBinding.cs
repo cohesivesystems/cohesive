@@ -40,6 +40,15 @@ public sealed class ServiceProcessBinding : ServiceBinding
         if (operation is not ServiceProcessOperation process || process.Process != Plan.DefinitionReference)
             throw ServiceBindingValidationException.Error("services.binding.inexact",
                 "The binding must realize the exact declared Process.", "/bindings/process");
+        ValidateExecution(process);
+    }
+
+    internal static void ValidateExecution(ServiceProcessOperation process)
+    {
+        if (process.Execution is { } execution && (execution.Lifetime != ServiceProcessLifetime.Durable
+            || execution.Completion != ServiceProcessCompletion.Admission))
+            throw ServiceBindingValidationException.Error("services.binding.executionUnsupported",
+                "This dispatcher binding provides durable admission only.", "/bindings/process/execution");
     }
 }
 
