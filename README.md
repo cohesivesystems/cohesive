@@ -171,6 +171,19 @@ Version conventions:
 
 The `release-packages` workflow publishes packages from a tag such as `v0.1.0-alpha.2` or from a manual workflow run with the version input `0.1.0-alpha.2`.
 
+For a targeted npm release, use `release_scope=all` and set `npm_package` to one exact
+`@cohesivesystems/*` package. The workflow still builds, tests and packs both families and runs
+package-consumer checks, but publication and availability preflight cover only the selected npm
+artifact. NuGet login and publication are skipped. An empty selector preserves the ordinary
+all-family release; `release_scope=dotnet` remains NuGet-only.
+
+For example, if NuGet and presentation packages publish but npm rejects the processes package,
+repair that package's trusted publisher first. Then dispatch the same version with its exact npm
+selector from source matching the original release. Repeat for other unpublished packages. Check
+registry availability first and retain the original run/artifacts as provenance. Targeted recovery
+still rejects an already-published selected version; it does not overwrite or silently skip it.
+
+
 - NuGet packages publish with NuGet trusted publishing through `NuGet/login`.
 - npm packages are packed with pnpm, then published to npmjs.org with npm trusted publishing.
 - Release runs are serialized and verify every requested NuGet and npm coordinate before publishing. If any coordinate already exists or registry availability cannot be established, the run fails before publishing begins.

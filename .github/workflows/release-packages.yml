@@ -18,7 +18,7 @@ on:
           - 'all'
           - 'dotnet'
       npm_package:
-        description: 'Optional exact @cohesivesystems/* npm package for a targeted publish'
+        description: 'Optional exact @cohesivesystems/* package; publishes only that npm package'
         required: false
         type: string
 
@@ -227,10 +227,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          arguments=(
-            --version "${{ steps.version.outputs.version }}"
-            --nuget-dir artifacts/nuget
-          )
+          arguments=(--version "${{ steps.version.outputs.version }}")
+          if [[ -z "${{ steps.version.outputs.npm_package }}" ]]; then
+            arguments+=(--nuget-dir artifacts/nuget)
+          fi
           if [[ "${{ steps.version.outputs.release_scope }}" == "all" ]]; then
             arguments+=(--npm-dir artifacts/npm)
           fi
@@ -238,12 +238,14 @@ jobs:
           node ./eng/check-package-version-availability.mjs "${arguments[@]}"
 
       - name: NuGet login
+        if: steps.version.outputs.npm_package == ''
         uses: NuGet/login@v1
         id: nuget-login
         with:
           user: ${{ secrets.NUGET_USER }}
 
       - name: Publish NuGet packages
+        if: steps.version.outputs.npm_package == ''
         run: |
           set -euo pipefail
 

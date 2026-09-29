@@ -143,18 +143,23 @@ export async function checkPackageVersionAvailability({
   if (typeof version !== 'string' || version.length === 0) {
     throw new Error('A non-empty release version is required.');
   }
-  if (typeof nuGetDirectory !== 'string' || nuGetDirectory.length === 0) {
-    throw new Error('A NuGet artifact directory is required.');
+  if (nuGetDirectory === undefined && npmDirectory === undefined) {
+    throw new Error('At least one package artifact directory is required.');
   }
 
-  const nuGetArtifacts = await listArtifacts(nuGetDirectory, '.nupkg');
-  if (nuGetArtifacts.length === 0) {
-    throw new Error(`No NuGet packages were found in ${nuGetDirectory}.`);
+  const packages = [];
+  if (nuGetDirectory !== undefined) {
+    if (typeof nuGetDirectory !== 'string' || nuGetDirectory.length === 0) {
+      throw new Error('A non-empty NuGet artifact directory is required.');
+    }
+    const nuGetArtifacts = await listArtifacts(nuGetDirectory, '.nupkg');
+    if (nuGetArtifacts.length === 0) {
+      throw new Error(`No NuGet packages were found in ${nuGetDirectory}.`);
+    }
+    packages.push(...nuGetArtifacts.map((artifactPath) =>
+      nuGetPackageFromArtifact(artifactPath, version, nuGetFlatContainerUrl),
+    ));
   }
-
-  const packages = nuGetArtifacts.map((artifactPath) =>
-    nuGetPackageFromArtifact(artifactPath, version, nuGetFlatContainerUrl),
-  );
 
   if (npmDirectory !== undefined) {
     const npmArtifacts = await listArtifacts(npmDirectory, '.tgz');

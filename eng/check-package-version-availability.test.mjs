@@ -125,3 +125,37 @@ test('reads the authoritative name and version from an npm tarball', async () =>
     version,
   });
 });
+
+
+test('targeted npm release checks only selected npm artifacts', async () => {
+  const artifacts = await createArtifacts();
+  const requests = [];
+  const observations = await checkPackageVersionAvailability({
+    version,
+    npmDirectory: artifacts.npmDirectory,
+    requestStatus: async (url, method) => {
+      requests.push({ url, method });
+      return 404;
+    },
+  });
+  assert.equal(observations.length, 1);
+  assert.equal(observations[0].coordinate, `@cohesivesystems/relations@${version}`);
+  assert.deepEqual(requests, [{
+    url: `https://registry.npmjs.org/@cohesivesystems%2Frelations/${version}`,
+    method: 'GET',
+  }]);
+});
+
+test('targeted npm release still rejects an already published selected version', async () => {
+  const artifacts = await createArtifacts();
+  await assert.rejects(checkPackageVersionAvailability({
+    version,
+    npmDirectory: artifacts.npmDirectory,
+    requestStatus: async () => 200,
+  }), PublishedPackageVersionError);
+});
+
+test('release without a selected artifact family fails closed', async () => {
+  await assert.rejects(checkPackageVersionAvailability({ version }),
+    /At least one package artifact directory is required/);
+});
