@@ -39,6 +39,24 @@ public sealed class ServiceEphemeralProcessTests
     }
 
     [Fact]
+    public void FluentResultReadDerivesProcessIdentityWithoutInheritingWritePermission()
+    {
+        var process = ProcessAuthoring.Project<string, string>(Plan().Document);
+        var document = Service.Define(new("notes"), new("1"), Provenance)
+            .Operation("write").Require(new("notes.write")).Run(process).ReturnAfterDurableAdmission()
+            .Operation("result").Require(new("notes.read")).ReadResultOf(process).Build();
+        var direct = ServiceDefinitionDocuments.Create(new("notes"), new("1"), new([
+            new ServiceProcessOperation("write", process.Reference, [new("notes.write")],
+                new(ProcessExecutionLifetime.Durable, ServiceProcessCompletion.Admission)),
+            new ServiceProcessResultOperation("result", process.Reference, [new("notes.read")])]), Provenance);
+        Assert.Equal(ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(direct),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document));
+        Assert.Equal(direct.Metadata.Fingerprint, document.Metadata.Fingerprint);
+        Assert.Throws<InvalidOperationException>(() => Service.Define(new("notes"), new("1"), Provenance)
+            .Operation("ambiguous").Run(process).ReadResultOf(process));
+    }
+
+    [Fact]
     public async Task AdmissionAndExactInputPrecedeHostResolutionAndOutputIsInferred()
     {
         var plan = Plan();

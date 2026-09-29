@@ -36,6 +36,29 @@ public sealed class ServiceQueryRuntimeTests
     }
 
     [Fact]
+    public void FluentQueryPreservesCanonicalReferenceAndOperationLocalAuthorization()
+    {
+        var fixture = Create();
+        var provenance = fixture.Runtime.Declaration.Metadata.Provenance;
+        var common = Service.Define(new("query-authoring"), new("1"), provenance).Require(new("tenant.access"));
+        var document = common.Operation("search").Require(new("notes.read"))
+            .EvaluateQuery(fixture.Binding.Compilation, new("v1"), new("tenant"))
+            .Operation("audit").Require(new("notes.audit"))
+            .EvaluateQuery(fixture.Binding.Compilation, new("v1"), new("tenant")).Build();
+        var direct = ServiceDefinitionDocuments.Create(new("query-authoring"), new("1"), new([
+            new ServiceQueryOperation("search", fixture.Binding.Reference, new("tenant"), [new("tenant.access"), new("notes.read")]),
+            new ServiceQueryOperation("audit", fixture.Binding.Reference, new("tenant"), [new("tenant.access"), new("notes.audit")])]), provenance);
+        Assert.Equal(ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(direct),
+            ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document));
+        Assert.Equal(direct.Metadata.Fingerprint, document.Metadata.Fingerprint);
+        Assert.Equal(0, fixture.Resolutions);
+        Assert.Equal(0, fixture.Reader.Reads);
+        var sibling = common.Operation("plain").EvaluateQuery(fixture.Binding.Compilation, new("v1"), new("tenant")).Build();
+        Assert.True(ServiceDefinitionDocuments.ValidateAndProject(sibling, out var definition).IsValid);
+        Assert.Equal("tenant.access", Assert.Single(Assert.Single(definition!.Operations).AuthorizationRequirements).Id);
+    }
+
+    [Fact]
     public async Task DeferredQueryDoesNotPrepareUnusedOperationAndStillIsolatesInvocations()
     {
         var fixture = Create();

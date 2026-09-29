@@ -886,3 +886,28 @@ backend during endpoint registration. Exact linked-definition admission remains 
 binding preparation. Generic CLR types cannot represent nullable-reference annotations; this overload
 requires the default required/non-null contract for reference types and does not erase a document's
 nullable or optional occurrence contract to make it fit.
+
+### Mixed fluent service operations and permission scope
+
+`Operation(id).Require(...)` applies only to that operation; `Service.Define(...).Require(...)` remains
+a service default inherited by subsequently declared operations. Both are immutable, and repeated
+requirements are idempotent. This lets a write and its separately authorized result read share one
+declaration without accidentally requiring write access to disclose a result.
+
+```csharp
+Service.Define(id, revision, provenance)
+    .Operation("compile").Require(writeCapability)
+        .Run(compilation).ReturnAfterDurableAdmission()
+    .Operation("result").Require(readCapability).ReadResultOf(compilation)
+    .Operation("preview").Require(readCapability)
+        .Run(preview).ExecuteEphemerally(TimeSpan.FromSeconds(30))
+    .Operation("select").Require(readCapability)
+        .EvaluateQuery(query, queryRevision, tenantParameter)
+    .Build();
+```
+
+Result reads derive the exact Process reference from its typed handle; queries reuse the canonical
+query reference projection and explicit trusted scope parameter. Neither path resolves an evaluator,
+repository or execution plan. This extends the existing service frontend; it introduces no parallel
+operation model. Tests compare canonical semantic bytes and fingerprints with direct IR, preserve
+branching authoring state, and verify that no source acquisition occurs during declaration.
