@@ -25,6 +25,38 @@ public sealed class InfrastructureTargetDeploymentCompilerTests
     static readonly SourceReference PolicySource = SourceReference.Create("test-policy", "disposable");
 
     [Fact]
+    public void Deployment_artifact_roundtrips_without_an_orchestrator_and_fences_independent_attribution()
+    {
+        var semantic = Semantic();
+        var plan = InfrastructureTargetDeploymentCompiler.Compile(semantic, Deployment(semantic, Facilities()));
+        var source = SourceReference.Create("native-stack", "example/dev");
+        var artifact = InfrastructureDeploymentArtifact.Create(plan, "dev", source);
+        var json = System.Text.Encoding.UTF8.GetBytes(artifact.ToJson());
+        var restored = InfrastructureDeploymentArtifact.Parse(json, "dev", source, artifact.Fingerprint);
+        Assert.Equal(artifact, restored);
+        restored.RequireExactPlan(plan);
+        var otherPlan = InfrastructureTargetDeploymentCompiler.Compile(semantic, Deployment(semantic, Facilities(new("other-target/1"))));
+        Assert.Throws<ArgumentException>(() => restored.RequireExactPlan(otherPlan));
+        Assert.Throws<ArgumentException>(() => new InfrastructureDeploymentArtifact(artifact.SchemaVersion, "dev", source,
+            plan.Manifest, otherPlan.Realization!));
+
+        Assert.StartsWith("cohesive-infra-deployment://", artifact.ToSourceReference().Value);
+        Assert.Throws<ArgumentException>(() => InfrastructureDeploymentArtifact.Parse(json, "staging", source, artifact.Fingerprint));
+        Assert.Throws<ArgumentException>(() => InfrastructureDeploymentArtifact.Parse(json, "dev", SourceReference.Create("native-stack", "other"), artifact.Fingerprint));
+        Assert.Throws<ArgumentException>(() => InfrastructureDeploymentArtifact.Parse(json, "dev", source, new string('0', 64)));
+        Assert.Throws<ArgumentException>(() => new InfrastructureDeploymentArtifact(artifact.SchemaVersion, "staging", source,
+            plan.Manifest, plan.Realization!, plan.Diagnostics, artifact.Fingerprint));
+        Assert.Throws<ArgumentException>(() => new InfrastructureDeploymentArtifact("unknown", "dev", source, plan.Manifest, plan.Realization!));
+        Assert.Throws<ArgumentException>(() => new InfrastructureDeploymentArtifact(artifact.SchemaVersion, "dev", source,
+            plan.Manifest, plan.Realization!, [new("test.error", DiagnosticSeverity.Error, "failure")]));
+        Assert.Throws<JsonException>(() => InfrastructureDeploymentArtifact.Parse(
+            System.Text.Encoding.UTF8.GetBytes("{\"unexpected\":1," + artifact.ToJson()[1..]), "dev", source, artifact.Fingerprint));
+        Assert.Throws<JsonException>(() => InfrastructureDeploymentArtifact.Parse(
+            System.Text.Encoding.UTF8.GetBytes("{\"SchemaVersion\":\"duplicate\"," + artifact.ToJson()[1..]), "dev", source, artifact.Fingerprint));
+        Assert.Throws<ArgumentException>(() => InfrastructureDeploymentArtifact.Parse(new byte[4 * 1024 * 1024 + 1], "dev", source, artifact.Fingerprint));
+    }
+
+    [Fact]
     public void Fluent_and_direct_manifests_materialize_the_same_canonical_ir()
     {
         var semantic = Semantic();

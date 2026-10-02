@@ -237,3 +237,22 @@ assessment requires separately attributable observations from an adapter.
   reconciliation to an existing Pulumi program.
 - [`Cohesive.Adapters.Pulumi.Azure`](../adapters/Cohesive.Adapters.Pulumi.Azure/README.md) constructs an exact
   Azure Durable Task facility inside that program and derives canonical worker access-grant inputs.
+
+## Provider-neutral deployment artifacts
+
+`InfrastructureDeploymentArtifact.Create(plan, environment, deploymentSource)` persists exact compiled
+intent without requiring Aspire, Pulumi, or another deployment orchestrator. It carries the full manifest
+and realization, normalized non-error diagnostics and explicit execution-location attribution. The
+versioned canonical SHA-256 fingerprint covers semantic references and attribution. Native adapters use
+`ToSourceReference()` to attach their binding evidence; consumers use bounded strict `Parse` with an
+independently selected environment, source and fingerprint before acquiring credentials.
+
+For example, a Pulumi-only application can export its compiled plan and Azure native bindings directly.
+Previously an application using the Aspire/Pulumi handoff for that purpose inherited an unused deployment
+transport dependency. The new artifact preserves semantic fences without that dependency. The existing
+Aspire/Pulumi handoff remains a separate adapter execution contract and reuses the same semantic checks.
+
+Artifacts are produced once at the deployment boundary; they neither execute nor poll. They prove no apply,
+health or runtime capability, contain no provider options or credential payload by design, and do not
+self-authenticate. Trust source/run provenance independently. Do not relabel historical handoff evidence
+as a new deployment artifact: the source reference domain is deliberately distinct.
