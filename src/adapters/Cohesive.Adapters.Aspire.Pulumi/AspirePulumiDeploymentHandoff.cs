@@ -386,21 +386,7 @@ public sealed record AspirePulumiDeploymentHandoff
     void ValidateExactRealization(string lifecycleAuthorityParamName)
     {
         var realizationReference = Realization.ToReference();
-        if (Manifest.Definition != realizationReference.Definition
-            || Manifest.TargetFacilities.Profile.ToReference() != realizationReference.Profile
-            || Manifest.TargetFacilities.Profile.Target != realizationReference.Target
-            || Manifest.TargetFacilities.Variant != realizationReference.Variant)
-        {
-            throw new ArgumentException(
-                "The Pulumi handoff manifest and realization do not share exact definition, profile, target, and variant fences.",
-                nameof(Realization));
-        }
-        if (!Realization.IsCapabilityWitnessComplete)
-            throw new ArgumentException("The Pulumi handoff realization has incomplete capability witnesses.", nameof(Realization));
-        if (!Realization.IsReadinessObligationComplete)
-            throw new ArgumentException("The Pulumi handoff realization has incomplete readiness obligations.", nameof(Realization));
-        if (Diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
-            throw new ArgumentException("A Pulumi handoff cannot retain error diagnostics.", nameof(Diagnostics));
+        InfrastructureDeploymentArtifact.RequireCompleteRealization(Manifest, Realization, Diagnostics);
 
         var selectedTarget = realizationReference.Target;
         var incompatible = Realization.Lifecycle.Bindings.FirstOrDefault(binding =>
