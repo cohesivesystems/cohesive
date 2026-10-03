@@ -47,3 +47,7 @@ Total case allocations fell from 2,808,940,480 to 2,710,862,608 bytes (3.5%). Ca
 materialization and fingerprinting work dominates. Tests passed with the production validation
 boundaries intact. Full Cohesive project: 4,159 passed, 33 optional integration skips; final mapper
 subset: 11 passed. The allocation regression fails on the original implementation.
+
+Full Ari.Engine.Tests qualification with the fixed local package passed 849 tests, with 18 scheduler
+skips, in 96 seconds. A preceding ordinary-package run took 90 seconds. Single runs with differing
+parallel scheduling and instrumentation do not establish a suite latency improvement.
