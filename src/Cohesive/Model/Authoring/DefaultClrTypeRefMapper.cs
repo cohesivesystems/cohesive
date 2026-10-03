@@ -46,6 +46,9 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     /// object fields use <see cref="JsonPropertyNameAttribute"/> when present and otherwise use the CLR property
     /// name. Fields are ordered ordinally by that semantic name. Unsupported, recursive, polymorphic, or ambiguous
     /// CLR shapes produce an <see cref="OpaqueRuntimeTypeRef"/> carrying a type-inference diagnostic.
+    /// Reflection nullability metadata is prepared once per property within this invocation and
+    /// released with the traversal. Concurrent invocations do not share mutable reflection state;
+    /// inferred contracts are not cached across occurrence nullability or recursion paths.
     /// </remarks>
     /// <param name="clrType">CLR type to project into a portable semantic type reference.</param>
     /// <param name="nullability">Optional reflection nullability metadata for the mapped occurrence.</param>
@@ -54,10 +57,10 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     public TypeRef Map(Type clrType, NullabilityInfo? nullability)
     {
         ArgumentNullException.ThrowIfNull(clrType);
-        return MapInternal(clrType, nullability, []);
+        return MapInternal(clrType, nullability, new MappingContext());
     }
 
-    TypeRef MapInternal(Type clrType, NullabilityInfo? nullability, HashSet<Type> mapPath)
+    TypeRef MapInternal(Type clrType, NullabilityInfo? nullability, MappingContext context)
     {
         var unwrapped = Nullable.GetUnderlyingType(nullableType: clrType) ?? clrType;
         if (typeMappings.TryGetValue(unwrapped, out var declared))
@@ -74,7 +77,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
         if (TryMapJsonType(unwrapped, out var jsonType))
             return jsonType;
 
-        if (TryMapJsonSingleValueWrapperType(unwrapped, nullability, mapPath, out var singleValueWrapperType))
+        if (TryMapJsonSingleValueWrapperType(unwrapped, nullability, context, out var singleValueWrapperType))
             return singleValueWrapperType;
 
         if (TryGetStructuredQuantityRepresentationType(type: unwrapped, representationType: out var representationType))
@@ -109,14 +112,14 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
             return new ObjectTypeRef(
             [
                 new(name: "Key",
-                    type: MapInternal(clrType: keyType, nullability: keyNullability, mapPath: mapPath),
+                    type: MapInternal(clrType: keyType, nullability: keyNullability, context: context),
                     presence: IsOptional(keyType, keyNullability) ? FieldPresence.Optional : FieldPresence.Required,
                     nullability: IsOptional(keyType, keyNullability)
                         ? FieldNullability.Nullable
                         : FieldNullability.NonNullable
                     ),
                 new(name: "Value",
-                    type: MapInternal(clrType: valueType, nullability: valueNullability, mapPath: mapPath),
+                    type: MapInternal(clrType: valueType, nullability: valueNullability, context: context),
                     presence: IsOptional(valueType, valueNullability) ? FieldPresence.Optional : FieldPresence.Required,
                     nullability: IsOptional(valueType, valueNullability)
                         ? FieldNullability.Nullable
@@ -134,7 +137,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
         }
 
         if (TryGetEnumerableElementType(type: unwrapped, nullability: nullability, elementType: out var elementType, elementNullability: out var elementNullability))
-            return new ArrayTypeRef(ElementType: MapInternal(clrType: elementType, nullability: elementNullability, mapPath: mapPath));
+            return new ArrayTypeRef(ElementType: MapInternal(clrType: elementType, nullability: elementNullability, context: context));
 
         if (unwrapped == typeof(object))
             return Opaque(
@@ -158,7 +161,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
                 "Abstract/interface CLR types cannot be represented structurally without a concrete type set.");
         }
 
-        if (!mapPath.Add(unwrapped))
+        if (!context.Path.Add(unwrapped))
         {
             return Opaque(
                 unwrapped,
@@ -195,13 +198,13 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
             return new ObjectTypeRef(
                 [.. properties.Select(x =>
                 {
-                    var propertyNullability = CreateNullabilityOrNull(x.Property);
+                    var propertyNullability = context.PropertyNullability(x.Property);
                     return new ObjectFieldTypeDef(
                         name: x.Name,
                         type: MapInternal(
                             clrType: x.Property.PropertyType,
                             nullability: propertyNullability,
-                            mapPath: mapPath
+                            context: context
                             ),
                         presence: IsOptional(x.Property.PropertyType, propertyNullability)
                             ? FieldPresence.Optional
@@ -214,7 +217,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
         }
         finally
         {
-            mapPath.Remove(unwrapped);
+            context.Path.Remove(unwrapped);
         }
     }
 
@@ -298,7 +301,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     bool TryMapJsonSingleValueWrapperType(
         Type type,
         NullabilityInfo? nullability,
-        HashSet<Type> mapPath,
+        MappingContext context,
         out TypeRef typeRef)
     {
         var converterAttribute = type.GetCustomAttribute<JsonConverterAttribute>(inherit: true);
@@ -324,8 +327,8 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 
         typeRef = MapInternal(
             clrType: valueProperty.PropertyType,
-            nullability: CreateNullabilityOrNull(valueProperty) ?? nullability,
-            mapPath: mapPath);
+            nullability: context.PropertyNullability(valueProperty) ?? nullability,
+            context: context);
         return true;
     }
 
@@ -518,16 +521,31 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
         return false;
     }
 
-    static NullabilityInfo? CreateNullabilityOrNull(PropertyInfo property)
+    // Reflection preparation belongs to one traversal. Inferred contracts still depend on
+    // occurrence nullability, explicit mappings and the current recursion path.
+    sealed class MappingContext
     {
-        ArgumentNullException.ThrowIfNull(property);
-        try
+        NullabilityInfoContext? nullabilityContext;
+        Dictionary<PropertyInfo, NullabilityInfo?>? propertyNullabilities;
+
+        public HashSet<Type> Path { get; } = [];
+
+        public NullabilityInfo? PropertyNullability(PropertyInfo property)
         {
-            return new NullabilityInfoContext().Create(property);
-        }
-        catch (ArgumentException)
-        {
-            return null;
+            propertyNullabilities ??= [];
+            if (propertyNullabilities.TryGetValue(property, out var prepared))
+                return prepared;
+            nullabilityContext ??= new();
+            try
+            {
+                prepared = nullabilityContext.Create(property);
+            }
+            catch (ArgumentException)
+            {
+                prepared = null;
+            }
+            propertyNullabilities.Add(property, prepared);
+            return prepared;
         }
     }
 
