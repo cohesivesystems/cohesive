@@ -635,7 +635,7 @@ public sealed record InfrastructureLocalProjectSource : InfrastructureLocalServi
 {
     /// <summary>Creates a repository-project construction source.</summary>
     /// <param name="id">Stable project identity used by placements, topology, and diagnostics.</param>
-    /// <param name="projectPath">Validated repository-relative project path.</param>
+    /// <param name="projectPath">Repository-relative path; omit to require an explicit native project association.</param>
     /// <param name="launchProfile">Optional project launch-profile name.</param>
     /// <exception cref="ArgumentException">
     /// <paramref name="id"/> is default, <paramref name="projectPath"/> does not name a project file, or
@@ -644,7 +644,7 @@ public sealed record InfrastructureLocalProjectSource : InfrastructureLocalServi
     [JsonConstructor]
     public InfrastructureLocalProjectSource(
         InfrastructureLocalProjectId id,
-        RepositoryPath projectPath,
+        RepositoryPath? projectPath = null,
         string? launchProfile = null)
     {
         if (string.IsNullOrWhiteSpace(id.Value))
@@ -652,8 +652,8 @@ public sealed record InfrastructureLocalProjectSource : InfrastructureLocalServi
             throw new ArgumentException("A local project source requires a stable project identity.", nameof(id));
         }
 
-        if (string.IsNullOrWhiteSpace(projectPath.Value)
-            || !projectPath.Value.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        if (projectPath is { } path && (string.IsNullOrWhiteSpace(path.Value)
+            || !path.Value.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)))
         {
             throw new ArgumentException("A local project source must name a repository-relative .csproj path.", nameof(projectPath));
         }
@@ -670,8 +670,8 @@ public sealed record InfrastructureLocalProjectSource : InfrastructureLocalServi
     /// <summary>Stable project identity shared by every reference to this source.</summary>
     public InfrastructureLocalProjectId Id { get; }
 
-    /// <summary>Normalized repository-relative project path.</summary>
-    public RepositoryPath ProjectPath { get; }
+    /// <summary>Repository-relative path, or null when native project metadata must be associated by identity.</summary>
+    public RepositoryPath? ProjectPath { get; }
 
     /// <summary>Canonical source reference for placements, witnesses, and diagnostics.</summary>
     [JsonIgnore]

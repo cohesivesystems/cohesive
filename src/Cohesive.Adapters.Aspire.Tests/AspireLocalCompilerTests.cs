@@ -338,6 +338,57 @@ public sealed class AspireLocalCompilerTests
     }
 
     [Fact]
+    public void Native_project_metadata_materializes_path_free_source_without_repository_discovery()
+    {
+        var projection = AspireLocalCompiler.Compile(ProjectWorkloadSource(native: true)).Projection!;
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        {
+            Args = [], DisableDashboard = true,
+            AssemblyName = typeof(AspireLocalCompilerTests).Assembly.GetName().Name,
+            ProjectDirectory = Path.GetTempPath()
+        });
+        var applied = builder.AddCohesiveLocalInfrastructure(projection, new AspireLocalApplicationOptions(
+            Path.GetTempPath(), static _ => null,
+            projects: [AspireProjectAssociation.Create<NativeTestProject>(new("cohesive/infra-tests"))]));
+        var resource = Assert.IsType<ProjectResource>(applied.Services[new("local/ari-training-api")].Resource);
+        Assert.IsType<NativeTestProject>(Assert.Single(resource.Annotations.OfType<IProjectMetadata>()));
+        Assert.Single(resource.Annotations.OfType<AspireInfraIdentityAnnotation>());
+        Assert.Null(((InfrastructureLocalProjectSource)projection.Services[0].Service.Source).ProjectPath);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void Native_project_association_must_exactly_cover_path_free_sources(bool native, bool associate)
+    {
+        var projection = AspireLocalCompiler.Compile(ProjectWorkloadSource(native)).Projection!;
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        {
+            Args = [], DisableDashboard = true,
+            AssemblyName = typeof(AspireLocalCompilerTests).Assembly.GetName().Name,
+            ProjectDirectory = Path.GetTempPath()
+        });
+        var count = builder.Resources.Count;
+        Assert.Throws<InvalidOperationException>(() => builder.AddCohesiveLocalInfrastructure(projection,
+            new AspireLocalApplicationOptions(Path.GetTempPath(), static _ => null,
+                projects: associate ? [AspireProjectAssociation.Create<NativeTestProject>(new("cohesive/infra-tests"))] : [])));
+        Assert.Equal(count, builder.Resources.Count);
+    }
+
+    [Fact]
+    public void Duplicate_native_project_associations_are_rejected()
+    {
+        var association = AspireProjectAssociation.Create<NativeTestProject>(new("cohesive/infra-tests"));
+        Assert.Throws<ArgumentException>(() => new AspireLocalApplicationOptions(
+            Path.GetTempPath(), static _ => null, projects: [association, association]));
+    }
+
+    public sealed class NativeTestProject : IProjectMetadata
+    {
+        public string ProjectPath => Path.Combine(FindRepositoryRoot(), "src/Cohesive.Infra.Tests/Cohesive.Infra.Tests.csproj");
+    }
+
+    [Fact]
     public async Task Aspire_projects_foreign_managed_services_without_taking_lifecycle_ownership()
     {
         var source = ReferencedServiceSource(AspireLocalProjectionDocument.CurrentTargetId);
@@ -722,13 +773,13 @@ public sealed class AspireLocalCompilerTests
         observations,
         observation => observation.PhysicalResource == physicalResource);
 
-    static InfrastructureLocalRealizationDocument ProjectWorkloadSource()
+    static InfrastructureLocalRealizationDocument ProjectWorkloadSource(bool native = false)
     {
         InfrastructureNodeId workload = new("workload/ari-training-api");
         InfrastructurePhysicalResourceId physical = new("local/ari-training-api");
         var project = new InfrastructureLocalProjectSource(
             new("cohesive/infra-tests"),
-            new("src/Cohesive.Infra.Tests/Cohesive.Infra.Tests.csproj"));
+            native ? null : new RepositoryPath("src/Cohesive.Infra.Tests/Cohesive.Infra.Tests.csproj"));
         var definition = InfrastructureDefinitionDocument.FromDefinition(new(
             id: new("ari-training-project-application-test"),
             revision: new("v1"),
@@ -792,7 +843,7 @@ public sealed class AspireLocalCompilerTests
         InfrastructureLocalEndpointId gateway = new("gateway");
         var project = new InfrastructureLocalProjectSource(
             new("cohesive/infra-tests"),
-            new("src/Cohesive.Infra.Tests/Cohesive.Infra.Tests.csproj"));
+            new RepositoryPath("src/Cohesive.Infra.Tests/Cohesive.Infra.Tests.csproj"));
         var definition = InfrastructureDefinitionDocument.FromDefinition(new(
             id: new("referenced-service-aspire-tests"),
             revision: new("v1"),

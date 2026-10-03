@@ -24,3 +24,25 @@ Persistent local profiles use deterministic named container volumes, so ordinary
 The harness AppHost keeps its resource service and dashboard on HTTPS while disabling automatic export of the host developer-certificate private key. DCP instead uses its supported ephemeral self-signed TLS identity, which avoids headless macOS Keychain export stalls without permitting unsecured transport.
 
 No Aspire type is referenced by `Cohesive.Infra`.
+
+## Native project associations
+
+A local project may declare only its stable `InfrastructureLocalProjectId` and launch profile.
+At application construction, supply `AspireProjectAssociation.Create<Projects.MyApi>(project.Id)`
+in `AspireLocalApplicationOptions.projects`. The adapter invokes native `AddProject<TProject>`;
+Aspire's generated metadata owns the project path and launch metadata. No generated type, absolute
+checkout path, or executable callback enters the canonical document or its fingerprint.
+
+Associations must exactly cover path-free sources before any Aspire resource is added. Missing,
+unused, duplicate, and path-overriding associations fail. Existing explicit repository-path sources
+remain supported and use the operation working directory; a project with a declared path cannot
+also receive a native association. Host-operation working directories remain explicit and independent.
+Docker Compose continues to reject project services rather than inventing an execution model.
+
+For example, renaming a solution or omitting cloud YAML from a local checkout no longer affects a
+metadata-associated workload. Its project location follows the AppHost's `ProjectReference` instead
+of a second repository-path declaration. Tests construct the native project from a temporary working
+directory and verify metadata/Infra identity preservation and rejection before resource mutation.
+
+`ProjectPath` is now nullable: source consumers must handle the native-association case. Existing
+path-bearing JSON remains readable; path-free documents require a consumer supporting this contract.

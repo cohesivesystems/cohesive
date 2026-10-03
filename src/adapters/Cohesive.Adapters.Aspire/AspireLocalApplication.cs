@@ -19,19 +19,22 @@ public sealed record AspireLocalApplicationOptions
     /// <summary>Creates runtime application policy.</summary>
     /// <param name="operationWorkingDirectory">Absolute repository directory used to resolve project sources and host operations.</param>
     /// <param name="resolveSecret">Runtime resolver for external secret identities.</param>
+    /// <param name="projects">Native project associations for path-free project declarations; duplicate identities are rejected.</param>
     /// <param name="operationEnvironment">Additional environment variables supplied only to host operations.</param>
-    /// <exception cref="ArgumentException"><paramref name="operationWorkingDirectory"/> is not absolute, or an operation environment name or value is invalid.</exception>
+    /// <exception cref="ArgumentException"><paramref name="operationWorkingDirectory"/> is not absolute, an operation environment name or value is invalid, or project identities are duplicated.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="resolveSecret"/> is <see langword="null"/>.</exception>
     public AspireLocalApplicationOptions(
         string operationWorkingDirectory,
         Func<string, string?> resolveSecret,
-        IReadOnlyDictionary<string, string>? operationEnvironment = null)
+        IReadOnlyDictionary<string, string>? operationEnvironment = null,
+        IEnumerable<AspireProjectAssociation>? projects = null)
     {
         operationWorkingDirectory = Guard.RequireNotNullOrWhiteSpace(operationWorkingDirectory);
         if (!Path.IsPathFullyQualified(operationWorkingDirectory))
             throw new ArgumentException("The Aspire operation working directory must be absolute.", nameof(operationWorkingDirectory));
         if (operationEnvironment?.Any(static variable => string.IsNullOrWhiteSpace(variable.Key) || variable.Value is null) == true)
             throw new ArgumentException("Aspire operation environment names and values cannot be null, empty, or white-space.", nameof(operationEnvironment));
+        Projects = (projects ?? []).ToDictionary(static project => project.Id).ToImmutableDictionary();
         OperationWorkingDirectory = Path.GetFullPath(operationWorkingDirectory);
         ResolveSecret = Guard.RequireNotNull(resolveSecret);
         OperationEnvironment = operationEnvironment is null
@@ -41,6 +44,9 @@ public sealed record AspireLocalApplicationOptions
 
     /// <summary>Absolute repository directory used to resolve project sources and host operations.</summary>
     public string OperationWorkingDirectory { get; }
+
+    /// <summary>Explicit native project associations keyed by canonical project identity.</summary>
+    public ImmutableDictionary<InfrastructureLocalProjectId, AspireProjectAssociation> Projects { get; }
 
     /// <summary>Runtime resolver for external secret identities.</summary>
     public Func<string, string?> ResolveSecret { get; }
@@ -151,7 +157,7 @@ public static class AspireLocalApplicationBuilderExtensions
     /// <param name="options">Runtime-only operation and secret policy.</param>
     /// <returns>Applied resources fenced to the exact projection.</returns>
     /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
-    /// <exception cref="InvalidOperationException">A required external secret is unavailable.</exception>
+    /// <exception cref="InvalidOperationException">Native associations do not exactly cover path-free sources, a required secret is unavailable, or native Aspire construction fails.</exception>
     public static AspireLocalApplication AddCohesiveLocalInfrastructure(
         this IDistributedApplicationBuilder builder,
         AspireLocalProjectionDocument projection,
@@ -160,6 +166,12 @@ public static class AspireLocalApplicationBuilderExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(projection);
         ArgumentNullException.ThrowIfNull(options);
+
+        var requiredProjects = projection.Services.Select(static item => item.Service.Source)
+            .OfType<InfrastructureLocalProjectSource>().Where(static project => project.ProjectPath is null)
+            .Select(static project => project.Id).ToHashSet();
+        if (!requiredProjects.SetEquals(options.Projects.Keys))
+            throw new InvalidOperationException("Native project associations must exactly cover path-free project sources; missing, unused, or path-overriding associations are not allowed.");
 
         builder.Configuration["ASPIRE_DCP_USE_DEVELOPER_CERTIFICATE"] =
             projection.DcpTlsCertificateMode == AspireDcpTlsCertificateMode.HostDeveloperCertificate
@@ -187,10 +199,9 @@ public static class AspireLocalApplicationBuilderExtensions
                     services.Add(item.Service.PhysicalResource, containerResource);
                     break;
                 case InfrastructureLocalProjectSource project:
-                    var projectResource = builder.AddProject(
-                            name: item.ResourceName,
-                            projectPath: Path.GetFullPath(project.ProjectPath.Value, options.OperationWorkingDirectory),
-                            launchProfileName: project.LaunchProfile)
+                    var projectResource = (project.ProjectPath is { } path
+                            ? builder.AddProject(item.ResourceName, Path.GetFullPath(path.Value, options.OperationWorkingDirectory), project.LaunchProfile)
+                            : options.Projects[project.Id].Add(builder, item.ResourceName, project.LaunchProfile))
                         .WithAnnotation(annotation);
                     projects.Add(item.Service.PhysicalResource, projectResource);
                     services.Add(item.Service.PhysicalResource, projectResource);

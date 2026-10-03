@@ -229,12 +229,14 @@ public sealed class InfrastructureLocalRealizationTests
                     retries: 30))));
     }
 
-    [Fact]
-    public void Repository_project_workload_uses_exact_placement_and_round_trips()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Repository_project_workload_uses_exact_placement_and_round_trips(bool native)
     {
         var projectSource = new InfrastructureLocalProjectSource(
             new("ari/training-api"),
-            new("src/Ari.Training.Api/Ari.Training.Api.csproj"),
+            native ? null : new RepositoryPath("src/Ari.Training.Api/Ari.Training.Api.csproj"),
             "https");
         var realization = WorkloadRealization(projectSource.Reference);
         var directProjectTopology = new InfrastructureLocalTopology(
@@ -309,7 +311,7 @@ public sealed class InfrastructureLocalRealizationTests
             .ReadyDependencies.SequenceEqual([new InfrastructurePhysicalResourceId("physical/scheduler")]));
         var project = Assert.IsType<InfrastructureLocalProjectSource>(document.Topology.Services.Single(service => service.Node == new InfrastructureNodeId("workload/api")).Source);
         Assert.Equal("ari/training-api", project.Id.Value);
-        Assert.Equal("src/Ari.Training.Api/Ari.Training.Api.csproj", project.ProjectPath.Value);
+        Assert.Equal(native ? null : "src/Ari.Training.Api/Ari.Training.Api.csproj", project.ProjectPath?.Value);
         Assert.Equal("project://ari/training-api", project.Reference.Value);
         Assert.Equal("https", project.LaunchProfile);
         Assert.Equal(document.Fingerprint, roundTrip?.Fingerprint);
