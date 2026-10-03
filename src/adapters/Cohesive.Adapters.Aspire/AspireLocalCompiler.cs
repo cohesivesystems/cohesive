@@ -271,7 +271,7 @@ public static class AspireLocalCompiler
             decisions.Add(Decision(
                 concern: "local/service-construction/repository-project",
                 kind: CapabilityRealizationKind.Native,
-                rationale: "Repository-relative .NET project sources become Aspire project resources, resolve from the explicit runtime repository directory, and retain exact Infra workload and physical-placement identity.",
+                rationale: "Canonical .NET project sources become Aspire project resources using either explicit repository paths or required native project metadata associations, retaining exact Infra workload and physical-placement identity.",
                 boundaries: [],
                 sourceReferences: [sourceReference, AspireSourceReferences.Target]));
         }
