@@ -105,6 +105,75 @@ public sealed class DefaultClrTypeRefMapperTests
         Assert.Equal(TypeInferenceDiagnosticReasons.UnsupportedEnumConverter, type.InferenceDiagnostic?.Reason);
     }
 
+    [Fact]
+    public void Map_RepeatedPropertiesPreserveOccurrenceNullabilityAndRecursivePaths()
+    {
+        var root = Assert.IsType<ObjectTypeRef>(mapper.Map(typeof(RepeatedEnvelope), null));
+        Assert.Equal(2, root.Fields.Count());
+        foreach (var field in root.Fields)
+        {
+            var child = Assert.IsType<ObjectTypeRef>(field.Type);
+            var optional = Assert.Single(child.Fields, x => x.Name == nameof(RepeatedChild.Optional));
+            Assert.Equal(FieldNullability.Nullable, optional.Nullability);
+            var required = Assert.Single(child.Fields, x => x.Name == nameof(RepeatedChild.Required));
+            Assert.Equal(FieldNullability.NonNullable, required.Nullability);
+            var recursive = Assert.Single(child.Fields, x => x.Name == nameof(RepeatedChild.Parent));
+            Assert.Equal(TypeInferenceDiagnosticReasons.RecursiveType,
+                Assert.IsType<OpaqueRuntimeTypeRef>(recursive.Type).InferenceDiagnostic?.Reason);
+        }
+        // A different root must discover its own recursion boundary after the first traversal ends.
+        var childRoot = Assert.IsType<ObjectTypeRef>(mapper.Map(typeof(RepeatedChild), null));
+        var parent = Assert.IsType<ObjectTypeRef>(Assert.Single(childRoot.Fields,
+            x => x.Name == nameof(RepeatedChild.Parent)).Type);
+        Assert.All(parent.Fields, field => Assert.IsType<OpaqueRuntimeTypeRef>(field.Type));
+    }
+
+    [Fact]
+    public void Map_ConcurrentInvocationsKeepExplicitMappingsIsolated()
+    {
+        var explicitMapper = new DefaultClrTypeRefMapper(new Dictionary<Type, TypeRef>
+        {
+            [typeof(RepeatedChild)] = new ScalarTypeRef(ScalarTypeKind.String)
+        });
+        Parallel.For(0, 32, _ =>
+        {
+            var inferred = Assert.IsType<ObjectTypeRef>(mapper.Map(typeof(RepeatedEnvelope), null));
+            Assert.All(inferred.Fields, field => Assert.IsType<ObjectTypeRef>(field.Type));
+            var declared = Assert.IsType<ObjectTypeRef>(explicitMapper.Map(typeof(RepeatedEnvelope), null));
+            Assert.All(declared.Fields, field => Assert.IsType<ScalarTypeRef>(field.Type));
+        });
+    }
+
+    [Fact]
+    public void Map_CollectionElementsRetainNestedGenericNullability()
+    {
+        var root = Assert.IsType<ObjectTypeRef>(mapper.Map(typeof(Pairs), null));
+        var array = Assert.IsType<ArrayTypeRef>(Assert.Single(root.Fields).Type);
+        var pair = Assert.IsType<ObjectTypeRef>(array.ElementType);
+        Assert.Equal(FieldNullability.NonNullable, Assert.Single(pair.Fields, x => x.Name == "Key").Nullability);
+        Assert.Equal(FieldNullability.Nullable, Assert.Single(pair.Fields, x => x.Name == "Value").Nullability);
+    }
+
+    [Fact]
+    public void Map_RepeatedShapeBoundsTemporaryAllocations()
+    {
+        // Warm shared property discovery; include the retained IR and all traversal-owned preparation.
+        mapper.Map(typeof(LargeEnvelope), null);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var result = mapper.Map(typeof(LargeEnvelope), null);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        GC.KeepAlive(result);
+        Assert.InRange(allocated, 1, 160_000);
+    }
+
+    sealed record Pairs(IReadOnlyList<KeyValuePair<string, string?>> Items);
+    sealed record Leaf(string Name, string? Description, long Sequence, DateTimeOffset Time);
+    sealed record Branch(Leaf First, Leaf Second, Leaf Third, Leaf Fourth);
+    sealed record LargeEnvelope(Branch A, Branch B, Branch C, Branch D, Branch E, Branch F, Branch G, Branch H);
+
+    sealed record RepeatedEnvelope(RepeatedChild First, RepeatedChild? Second);
+    sealed record RepeatedChild(string Required, string? Optional, RepeatedEnvelope? Parent);
+
     sealed record SerializedEnvelope(
         [property: JsonPropertyName("zeta")] long Sequence,
         [property: JsonPropertyName("alpha")] DateTimeOffset ObservedAt);

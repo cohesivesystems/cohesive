@@ -11,6 +11,9 @@ exercise the same semantic definitions, runtime evidence, and CLR DTO contracts.
 
 ## Benchmark groups
 
+- `ClrTypeRefMappingBenchmarks` measures traversal-scoped CLR reflection preparation across flat,
+  nested, collection, and bounded large type graphs; see [evidence and lifetime contract](../../docs/performance/clr-type-mapping/README.md).
+
 - **Representative selection:** full reference execution over ten candidates per key at 100, 1,000 and 10,000 rows,
   with plans and evidence prepared in setup; see `RepresentativeSelectionBenchmarks` and [results](RESULTS.md).
 
