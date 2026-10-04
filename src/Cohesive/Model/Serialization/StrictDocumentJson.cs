@@ -183,9 +183,18 @@ public static class StrictDocumentJson
     {
         ArgumentNullException.ThrowIfNull(value);
         ArgumentNullException.ThrowIfNull(options);
-        var node = JsonSerializer.SerializeToNode(value, typeof(T), options)
-            ?? throw new InvalidOperationException($"Failed to materialize {typeof(T).Name} JSON.");
-        return GetCanonicalBytes(node, options);
+        // Non-strict options retain JsonNode's case-insensitive property collision behavior.
+        if (options.PropertyNameCaseInsensitive)
+        {
+            var node = JsonSerializer.SerializeToNode(value, typeof(T), options)
+                ?? throw new InvalidOperationException($"Failed to materialize {typeof(T).Name} JSON.");
+            return GetCanonicalBytes(node, options);
+        }
+
+        using var document = JsonSerializer.SerializeToDocument(value, typeof(T), options);
+        if (document.RootElement.ValueKind == JsonValueKind.Null)
+            throw new InvalidOperationException($"Failed to materialize {typeof(T).Name} JSON.");
+        return CanonicalJsonWriter.GetCanonicalSequenceBytes(document.RootElement);
     }
 
     /// <summary>
