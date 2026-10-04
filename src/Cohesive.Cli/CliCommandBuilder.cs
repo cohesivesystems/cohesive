@@ -18,6 +18,15 @@ public sealed class CliCommandBuilder<TConfiguration>(
     Action<CliCommandNode>? applyRegisteredPipelines = null
     ) : CliCommandNode
 {
+    internal bool IsRoot { get; init; }
+    internal IReadOnlyList<ConfigurationParameterDescriptor>? ExplicitDescriptors { get; init; }
+    internal Func<IConfiguration, TConfiguration>? ExplicitParser { get; init; }
+    internal Func<IConfigurationRoot, IConfigurationRoot>? ApplyDefaults { get; init; }
+    internal Action<IConfigurationBuilder>? ConfigureEnvironmentMappings { get; init; }
+
+    IReadOnlyList<ConfigurationParameterDescriptor> DescribeParameters() =>
+        ExplicitDescriptors ?? ConfigurationParameterParser.Describe(parameterOptions);
+
     readonly ConfigurationParameterOptions<TConfiguration> parameterOptions = new();
     readonly List<CliCommandArgument> arguments = [];
     readonly List<CliCommandNode> subcommands = [];
@@ -62,8 +71,10 @@ public sealed class CliCommandBuilder<TConfiguration>(
     /// </summary>
     /// <param name="configure">Callback that mutates the command's configuration parameter options.</param>
     /// <returns>The current builder.</returns>
+    /// <exception cref="InvalidOperationException">The command uses explicit declarations.</exception>
     public CliCommandBuilder<TConfiguration> ConfigureParameters(Action<ConfigurationParameterOptions<TConfiguration>> configure)
     {
+        RequirePropertyAuthoring();
         Guard.RequireNotNull(configure)(parameterOptions);
         return this;
     }
@@ -85,8 +96,58 @@ public sealed class CliCommandBuilder<TConfiguration>(
     /// <param name="member">Property selector rooted at <typeparamref name="TConfiguration"/>.</param>
     /// <typeparam name="TParameter">Selected property type.</typeparam>
     /// <returns>A fluent parameter override builder.</returns>
-    public ConfigurationParameterOptionBuilder Map<TParameter>(Expression<Func<TConfiguration, TParameter>> member) =>
-        parameterOptions.Map(member);
+    /// <exception cref="InvalidOperationException">The command uses explicit declarations.</exception>
+    public ConfigurationParameterOptionBuilder Map<TParameter>(Expression<Func<TConfiguration, TParameter>> member)
+    {
+        RequirePropertyAuthoring();
+        return parameterOptions.Map(member);
+    }
+
+    void RequirePropertyAuthoring()
+    {
+        if (ExplicitDescriptors is not null)
+            throw new InvalidOperationException("Explicit commands use CliOption declarations rather than property mappings.");
+    }
+
+    /// <summary>Gets resolved parameter metadata for either authoring surface.</summary>
+    public IReadOnlyList<ConfigurationParameterDescriptor> Parameters => [.. DescribeParameters()];
+
+    /// <summary>Projects a declared parameter into a positional argument.</summary>
+    /// <param name="name">Configuration key of the declared parameter.</param>
+    /// <returns>A builder for the positional argument's help metadata.</returns>
+    /// <exception cref="ArgumentException">The key does not identify a declared parameter.</exception>
+    public CliArgumentBuilder Argument(string name)
+    {
+        var descriptor = DescribeParameters().FirstOrDefault(parameter =>
+            string.Equals(parameter.ConfigurationKey, name, StringComparison.OrdinalIgnoreCase))
+            ?? throw new ArgumentException($"Parameter '{name}' was not declared.", nameof(name));
+        var index = arguments.FindIndex(argument => argument.Path == descriptor.Path);
+        if (index < 0)
+        {
+            index = arguments.Count;
+            arguments.Add(new(descriptor.PropertyName, descriptor.Path));
+        }
+        var capturedIndex = index;
+        return new(update => arguments[capturedIndex] = update(arguments[capturedIndex]));
+    }
+
+    /// <summary>Registers a subcommand authored through explicit declarations.</summary>
+    /// <param name="name">Subcommand name.</param>
+    /// <param name="options">Options keyed by unprefixed name; declarations are snapshotted.</param>
+    /// <param name="description">Optional help text.</param>
+    /// <returns>A builder for the explicit subcommand.</returns>
+    /// <exception cref="ArgumentNullException">Options or a declaration is null.</exception>
+    /// <exception cref="ArgumentException">A name, key, or alias is invalid or duplicated.</exception>
+    /// <exception cref="InvalidOperationException">A subcommand with this name already exists.</exception>
+    public CliCommandBuilder<CliValues> SubCommand(
+        string name, IReadOnlyDictionary<string, CliOption> options, string? description = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        EnsureUniqueChildName(subcommands, name);
+        var command = CliOption.CreateCommand(name, description, options, applyRegisteredPipelines ?? (_ => { }));
+        subcommands.Add(command);
+        return command;
+    }
 
     /// <summary>
     /// Maps a configuration property to a positional command argument instead of a generated option.
@@ -94,8 +155,10 @@ public sealed class CliCommandBuilder<TConfiguration>(
     /// <param name="member">Leaf property selector rooted at <typeparamref name="TConfiguration"/>.</param>
     /// <typeparam name="TParameter">Selected property type.</typeparam>
     /// <returns>A fluent argument builder.</returns>
+    /// <exception cref="InvalidOperationException">The command uses explicit declarations.</exception>
     public CliArgumentBuilder Argument<TParameter>(Expression<Func<TConfiguration, TParameter>> member)
     {
+        RequirePropertyAuthoring();
         ArgumentNullException.ThrowIfNull(member);
 
         var propertyChain = CliExpressionPath.CapturePropertyChain(member);
@@ -171,8 +234,10 @@ public sealed class CliCommandBuilder<TConfiguration>(
     {
         ArgumentNullException.ThrowIfNull(application);
 
-        var command = string.IsNullOrWhiteSpace(Description) ? new Command(Name) : new Command(Name, Description);
-        var descriptors = ConfigurationParameterParser.Describe(parameterOptions);
+        Command command = IsRoot
+            ? new RootCommand(Description ?? application.Description ?? string.Empty)
+            : new Command(Name, Description ?? string.Empty);
+        var descriptors = DescribeParameters();
         var descriptorsByPath = descriptors.ToDictionary(descriptor => descriptor.Path, descriptor => descriptor);
         var positionalPaths = arguments.Select(argument => argument.Path).ToHashSet();
         List<CliSymbolBinding> bindings = [];
@@ -226,7 +291,9 @@ public sealed class CliCommandBuilder<TConfiguration>(
         try
         {
             var configuration = BuildConfiguration(application, bindings, parseResult);
-            var parameters = ConfigurationParameterParser.Parse(configuration, parameterOptions);
+            var parameters = ExplicitParser is null
+                ? ConfigurationParameterParser.Parse(configuration, parameterOptions)
+                : ExplicitParser(configuration);
             var context = new CliCommandContext<TConfiguration>(
                 parameters,
                 configuration,
@@ -287,8 +354,11 @@ public sealed class CliCommandBuilder<TConfiguration>(
             builder.AddEnvironmentVariables(prefix: application.EnvironmentVariablePrefix);
         }
 
+        if (application.UseEnvironmentVariables)
+            ConfigureEnvironmentMappings?.Invoke(builder);
         builder.AddInMemoryCollection(values);
-        return builder.Build();
+        var configuration = builder.Build();
+        return ApplyDefaults?.Invoke(configuration) ?? configuration;
     }
 
     static void AddCollectionValues(IDictionary<string, string?> values, string configurationKey, IReadOnlyList<string>? entries)
@@ -630,7 +700,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
             throw new ArgumentException("At least two configuration parameter selectors are required.", nameof(parameters));
         }
 
-        var descriptors = ConfigurationParameterParser.Describe(parameterOptions)
+        var descriptors = DescribeParameters()
             .Select(static descriptor => descriptor.Path)
             .ToHashSet();
         HashSet<FieldPath> selectedPaths = [];
@@ -662,7 +732,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
 
     string FormatOptionNames(IReadOnlyList<(FieldPath Path, Func<TConfiguration, string?> Read)> bindings)
     {
-        var namesByPath = ConfigurationParameterParser.Describe(parameterOptions)
+        var namesByPath = DescribeParameters()
             .ToDictionary(static descriptor => descriptor.Path, static descriptor => descriptor.CliName);
         string[] names = new string[bindings.Count];
         for (var index = 0; index < bindings.Count; index++)
