@@ -32,6 +32,13 @@ public static class ExecutionDefinitionFingerprinter
     /// <summary>Computes the semantic content fingerprint declared by a document.</summary>
     /// <param name="document">Portable execution-definition document to fingerprint.</param>
     /// <returns>The versioned SHA-256 fingerprint of normalized semantic content.</returns>
+    /// <remarks>
+    /// Successful computation is shared for this immutable document's lifetime. Authored documents retain
+    /// their independently computed construction digest; imported documents compute from their own payload
+    /// on first use with concurrent callers coordinated. Exceptions leave first-use computation retryable.
+    /// Declared metadata is never accepted as computation evidence. Only the digest is retained, not bytes
+    /// or contextual validation. Component-based computation remains an uncached independent operation.
+    /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="document"/> is <see langword="null"/>.</exception>
     /// <exception cref="InvalidOperationException">Semantic content has no canonical JSON encoding.</exception>
     /// <exception cref="JsonException">Semantic content cannot be encoded using the strict JSON contract.</exception>
@@ -39,11 +46,7 @@ public static class ExecutionDefinitionFingerprinter
     public static ExecutionDefinitionFingerprint Compute(ExecutionDefinitionDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        return ComputeNormalized(
-            document.Metadata.SchemaVersion,
-            document.Kind,
-            document.Definition,
-            document.Extensions);
+        return document.GetSemanticFingerprint();
     }
 
     /// <summary>Computes a semantic content fingerprint from normalized definition components.</summary>
