@@ -1,9 +1,11 @@
 using AspireFirst.Orders;
+using Cohesive.Adapters.AspNet;
 using Cohesive.Prelude;
 using Cohesive.Storage;
 using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddRequestOperationContext();
 var connectionString = builder.Configuration.GetConnectionString(OrderStorage.DatabaseName)
     ?? throw new InvalidOperationException("The native Aspire orders database reference is required.");
 await using var database = NpgsqlDataSource.Create(connectionString);
@@ -16,14 +18,15 @@ await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync
     await initialize.ExecuteNonQueryAsync();
 
 var app = builder.Build();
-app.MapPost("/orders/{id:guid}", async (Guid id, CancellationToken cancellation) =>
+app.UseRequestOperationContext();
+app.MapPost("/orders/{id:guid}", async (Guid id, OperationContext context) =>
 {
-    var snapshot = await orders.Upsert(OperationContext.Create(cancellationToken: cancellation), OrderStorage.Register(id));
+    var snapshot = await orders.Upsert(context, OrderStorage.Register(id));
     return Results.Created($"/orders/{id:D}", new { id = snapshot.Entity.EntityId.Value });
 });
-app.MapGet("/orders/{id:guid}", async (Guid id, CancellationToken cancellation) =>
+app.MapGet("/orders/{id:guid}", async (Guid id, OperationContext context) =>
 {
-    var snapshot = await orders.TryGet(OperationContext.Create(cancellationToken: cancellation), id.ToString("D"),
+    var snapshot = await orders.TryGet(context, id.ToString("D"),
         new EntityReadOptions(partitionKey: OrderStorage.LocalPartition));
     return snapshot is null ? Results.NotFound() : Results.Ok(new { id = snapshot.Entity.EntityId.Value });
 });

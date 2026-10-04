@@ -24,7 +24,12 @@ waits and volume configuration in native Aspire. It adds no second deployment in
    implemented by the existing `Cohesive.Adapters.Postgres` repository.
    `JsonPropertyName` preserves the canonical `id`/`partition` names; writes use the
    record directly through `CreateState`. PostgreSQL mappings add physical details only.
-6. Schema lifecycle stays explicit: startup executes the embedded `schema.sql` once.
+6. `AddRequestOperationContext` registers the shared factory and request-scoped context.
+   `UseRequestOperationContext` initializes it from the HTTP principal, activity and
+   request-aborted token; minimal API handlers receive it through DI and pass it to
+   storage. If authentication is added, place context middleware after authentication
+   so it captures the established principal.
+7. Schema lifecycle stays explicit: startup executes the embedded `schema.sql` once.
    Npgsql is used only for the native data source and schema bootstrap; the shared
    repository owns canonical validation and data reads/writes. The runtime binding is
    caller-attested affinity, not independent proof of database identity.
