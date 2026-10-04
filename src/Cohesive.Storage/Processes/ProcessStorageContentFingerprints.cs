@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Runtime.CompilerServices;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Execution;
@@ -14,8 +15,32 @@ static class ProcessStorageContentFingerprints
     internal static InteractionEnvelopeContentFingerprint Envelope(InteractionEnvelope envelope) =>
         InteractionEnvelopeJsonSerializer.ComputeContentFingerprint(envelope);
 
-    internal static ProcessContinuationFingerprint Continuation(ProcessContinuationState continuation) =>
-        new(ComputeValue(continuation));
+    // Snapshot identity, not logical Process identity, owns this derived evidence. Weak keys
+    // release the digest with the immutable snapshot, without retaining payloads or canonical bytes.
+    static readonly ConditionalWeakTable<ProcessContinuationState, Lazy<ProcessContinuationFingerprint>>
+        ContinuationFingerprints = new();
+
+    /// <summary>Returns exact sha256-v1 evidence for an immutable continuation snapshot.</summary>
+    /// <remarks>
+    /// Successful preparation is shared by object identity and concurrent calls. Weak ownership bounds
+    /// retention to live snapshots; new snapshots and persisted projections prepare independent evidence.
+    /// This operation does not replace checkpoint integrity or compatibility validation.
+    /// </remarks>
+    internal static ProcessContinuationFingerprint Continuation(ProcessContinuationState continuation)
+    {
+        var prepared = ContinuationFingerprints.GetValue(continuation, static snapshot => new(
+            () => new(ComputeValue(snapshot)), LazyThreadSafetyMode.ExecutionAndPublication));
+        try
+        {
+            return prepared.Value;
+        }
+        catch
+        {
+            // Reuse successful evidence only; a failed preparation must remain retryable.
+            ContinuationFingerprints.Remove(continuation);
+            throw;
+        }
+    }
 
     internal static ProcessCommitFingerprint Control(ProcessControlState control) => Compute(control);
 
