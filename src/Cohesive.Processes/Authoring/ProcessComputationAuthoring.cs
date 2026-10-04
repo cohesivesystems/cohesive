@@ -45,6 +45,22 @@ public sealed class ProcessContext
     {
     }
 
+    /// <summary>Requires a present, non-null reference through the canonical require-value expression.</summary>
+    /// <typeparam name="TValue">Required reference value type.</typeparam>
+    /// <param name="value">Possibly absent or null portable value.</param>
+    /// <returns>A syntax-only non-null projection; missing runtime values fail canonical evaluation.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if this syntax-only member is executed.</exception>
+    public TValue RequireValue<TValue>(TValue? value) where TValue : class => throw SyntaxOnly();
+
+    /// <summary>Captures declaration-time data as an immutable portable constant.</summary>
+    /// <typeparam name="TValue">Portable value type.</typeparam>
+    /// <param name="value">Exact authoring value; it cannot depend on invocation inputs or outputs.</param>
+    /// <returns>A syntax-only value materialized by the generated builder during declaration.</returns>
+    /// <remarks>Use as a complete Process value expression, such as a returned policy outcome.
+    /// Constructors run during declaration, preserving their validation. No delegate survives into IR.</remarks>
+    /// <exception cref="InvalidOperationException">Always thrown if the syntax-only method is executed.</exception>
+    public TValue Constant<TValue>(TValue value) => throw SyntaxOnly();
+
     /// <summary>Declares evaluation of an exact Relation or Query and binds its result.</summary>
     /// <typeparam name="TResult">CLR type projected into the query result binding.</typeparam>
     /// <param name="relation">Exact Relation or Query definition revision and fingerprint.</param>
@@ -190,6 +206,25 @@ public sealed class ProcessContext
         ExecutionNodeId? id = null,
         string nextRole = "next",
         string outputRole = "result") =>
+        throw SyntaxOnly();
+
+    /// <summary>Invokes an exact Transition, retaining its domain outcome and separate host-issued receipt.</summary>
+    /// <typeparam name="TOutcome">Domain outcome contract.</typeparam>
+    /// <typeparam name="TReceipt">Host-attested portable receipt contract; never an authorization grant.</typeparam>
+    /// <param name="transition">Exact Transition reference.</param>
+    /// <param name="subject">Authoritative entity subject expression.</param>
+    /// <param name="input">Portable domain input expression.</param>
+    /// <param name="id">Optional stable node identity.</param>
+    /// <param name="nextRole">Continuation edge role.</param>
+    /// <param name="outputRole">Domain outcome binding role.</param>
+    /// <param name="receiptRole">Separate receipt binding role; must differ from the outcome role.</param>
+    /// <returns>A syntax-only pair whose members reference separate canonical output bindings.</returns>
+    /// <remarks>Compilation requires the existing exact receipt-contract attestation. This adds no execution
+    /// guarantee and does not convert a rejected domain outcome into a successful commit.</remarks>
+    /// <exception cref="InvalidOperationException">Always thrown if executed instead of source-generated.</exception>
+    public ProcessAwaitable<ProcessTransitionResult<TOutcome, TReceipt>> TransitionWithReceipt<TOutcome, TReceipt>(
+        ExecutionDefinitionReference transition, object subject, object? input,
+        ExecutionNodeId? id = null, string nextRole = "next", string outputRole = "result", string receiptRole = "receipt") =>
         throw SyntaxOnly();
 
     /// <summary>Declares invocation of a typed exact aggregate Transition and binds its typed outcome.</summary>
@@ -1614,4 +1649,18 @@ public struct ProcessTaskMethodBuilder
 
     static InvalidOperationException SyntaxOnly() => new(
         "Process computation branches are syntax-only and must be lowered by Cohesive.Analyzers.");
+}
+
+/// <summary>Syntax-only projection of a Transition's separate domain outcome and host-issued receipt.</summary>
+/// <remarks>Generated consumers select members directly from the existing canonical bindings. This pair
+/// is not a persisted Process value; select its members when constructing a public result.</remarks>
+/// <typeparam name="TOutcome">Domain outcome.</typeparam>
+/// <typeparam name="TReceipt">Host-attested receipt, whose possession does not grant access.</typeparam>
+public sealed class ProcessTransitionResult<TOutcome, TReceipt>
+{
+    private ProcessTransitionResult() { }
+    /// <summary>The Transition's domain outcome.</summary>
+    public TOutcome Outcome => throw new InvalidOperationException("Process authoring is syntax-only.");
+    /// <summary>The separate host-issued receipt.</summary>
+    public TReceipt Receipt => throw new InvalidOperationException("Process authoring is syntax-only.");
 }
