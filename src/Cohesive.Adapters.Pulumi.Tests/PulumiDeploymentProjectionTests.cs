@@ -112,6 +112,68 @@ public sealed class PulumiDeploymentProjectionTests
             .Resource(new("resources/late"), Implementation, new("test/late"), new("pulumi/test"), [Source])));
     }
 
+    [Fact]
+    public async Task Fluent_placement_preserves_manifest_and_existing_native_identity()
+    {
+        var implementation = InfrastructureTargetImplementation.ResourceImplementation(new("test/store"), Implementation.Evidence.ToArray());
+        var fluent = PulumiDeploymentProjection<Resource>.Define(Manifest, p => p.Resource(Store)
+            .Using(implementation).At(new("test/store/physical")).OwnedBy(new("pulumi/test"))
+            .SourcedFrom(Source).UseExisting(native => native));
+        var direct = Manifest(d => d.ResourceUsing(Store, Implementation, new("test/store/physical"), new("pulumi/test"), [Source]));
+        Assert.Equal(direct.Fingerprint, fluent.Manifest.Fingerprint);
+        await Deployment.TestAsync(new Mocks(), new TestOptions { IsPreview = false }, () =>
+        {
+            var native = new TestResource("fluent-existing");
+            var result = fluent.Execute(InfrastructureTargetDeploymentCompiler.Compile(Definition(), fluent.Manifest), native);
+            Assert.Same(native, result.NativeResources[Store]);
+            return Task.CompletedTask;
+        });
+    }
+
+    [Fact]
+    public void Fluent_placement_rejects_missing_fields_wrong_kind_and_late_mutation()
+    {
+        Assert.Throws<InvalidOperationException>(() => PulumiDeploymentProjection<object>.Define(Manifest,
+            p => p.Resource(Store).Using(Implementation).Create((_, _) => new object())));
+        Assert.Throws<InvalidOperationException>(() => PulumiDeploymentProjection<object>.Define(Manifest,
+            p => p.Resource(Store).Using(Implementation).At(new("test/store"))));
+        Assert.Throws<ArgumentException>(() => PulumiDeploymentProjection<object>.Define(Manifest,
+            p => p.Workload(Store).Using(Implementation)));
+        PulumiDeploymentPlacement<object>? saved = null;
+        _ = PulumiDeploymentProjection<object>.Define(Manifest, p =>
+        {
+            saved = p.Resource(Store).Using(Implementation).At(new("test/store/physical"))
+                .OwnedBy(new("pulumi/test")).SourcedFrom(Source);
+            saved.Create((_, _) => new object());
+        });
+        Assert.Throws<InvalidOperationException>(() => saved!.At(new("test/late")));
+        Assert.Throws<InvalidOperationException>(() => saved!.Create((_, _) => new object()));
+        Assert.Throws<ArgumentException>(() => InfrastructureTargetImplementation.ResourceImplementation(new("test/empty")));
+    }
+
+    [Fact]
+    public void Fluent_workload_preserves_manifest_and_does_not_construct_during_authoring()
+    {
+        var node = new InfrastructureNodeId("workloads/worker");
+        var definition = Infrastructure.Define(new("test/worker"), new("1"), new("test/bindings"),
+            d => d.Workload(node).Requires(Capability));
+        var implementation = InfrastructureTargetImplementation.WorkloadImplementation(new("test/worker"), Implementation.Evidence.ToArray());
+        InfrastructureTargetDeploymentManifest Define(Action<InfrastructureTargetDeploymentManifestBuilder> configure) =>
+            InfrastructureTargetDeployments.Define(new("test/deployment"), definition.Definition,
+                new("test/facilities"), new("test/profile"), new("test/pulumi"), new("test/variant"),
+                [InfrastructureDefinitionDocument.CurrentSchemaVersion], configure);
+        var calls = 0;
+        var fluent = PulumiDeploymentProjection<object>.Define(Define, p => p.Workload(node)
+            .Using(implementation).At(new("test/worker/physical")).SourcedFrom(Source)
+            .Create((_, _) => { calls++; return new object(); }));
+        var direct = Define(d => d.WorkloadUsing(node, implementation, new("test/worker/physical"), [Source]));
+        Assert.Equal(direct.Fingerprint, fluent.Manifest.Fingerprint);
+        Assert.True(InfrastructureTargetDeploymentCompiler.Compile(definition, fluent.Manifest).IsComplete);
+        Assert.Equal(0, calls);
+        Assert.Throws<InvalidOperationException>(() => PulumiDeploymentProjection<object>.Define(Define,
+            p => p.Workload(node).OwnedBy(new("test/owner"))));
+    }
+
     sealed class TestResource(string name) : CustomResource("test:index:Resource", name, new Args(), null, null);
     sealed class Args : ResourceArgs;
     sealed class Mocks : IMocks
