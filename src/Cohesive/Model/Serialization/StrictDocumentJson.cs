@@ -163,6 +163,11 @@ public static class StrictDocumentJson
     /// <summary>
     /// Gets the canonical UTF-8 JSON representation of one typed portable-document object.
     /// </summary>
+    /// <remarks>
+    /// Serialization is invocation-scoped: caller-owned values and returned bytes are not cached.
+    /// Temporary immutable JSON storage is disposed before return. Strict, case-sensitive contracts
+    /// reuse the exact-number canonical sequence writer without expanding a mutable JSON tree.
+    /// </remarks>
     /// <typeparam name="T">Closed object contract used for serialization.</typeparam>
     /// <param name="value">Typed object to encode.</param>
     /// <param name="options">
@@ -178,6 +183,7 @@ public static class StrictDocumentJson
     /// <typeparamref name="T"/> or one of its values has no serializer under <paramref name="options"/>.
     /// </exception>
     /// <exception cref="InvalidOperationException">The typed value has no canonical JSON representation.</exception>
+    /// <exception cref="ArgumentException">A converter writes colliding object property names.</exception>
     public static byte[] GetCanonicalBytes<T>(T value, JsonSerializerOptions options)
         where T : class
     {
