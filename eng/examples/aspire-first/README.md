@@ -17,8 +17,14 @@ waits and volume configuration in native Aspire. It adds no second deployment in
 4. The existing target-deployment compiler matches requirements against evidence and
    checks canonical coverage. The AppHost refuses to start if the plan is incomplete.
 5. Once the user starts the AppHost, ordinary Aspire runs the database and application.
-   `OrderWorker` uses Npgsql to create a tiny table, accept an order ID and read it back.
-   The application intentionally needs no Cohesive runtime dependency for this adoption.
+   `OrderWorker/OrderStorage.cs` defines canonical order state with `EntityBuilder`, adds
+   an explicit PostgreSQL field mapping, and binds the Aspire-supplied data source through
+   `PostgresNpgsqlRuntimeBinding`. The endpoints use `IEntityRepository.Upsert/TryGet`,
+   implemented by the existing `Cohesive.Adapters.Postgres` repository.
+6. Schema lifecycle stays explicit: startup executes the embedded `schema.sql` once.
+   Npgsql is used only for the native data source and schema bootstrap; the shared
+   repository owns canonical validation and data reads/writes. The runtime binding is
+   caller-attested affinity, not independent proof of database identity.
 
 The order endpoint is deliberately a persistence demonstration, not a CQRS/ES implementation.
 It does not claim sequential execution, event history, audit logging or orchestration.
@@ -48,10 +54,16 @@ curl "$WORKER_URL/orders/00000000-0000-0000-0000-000000000001"
 ```
 
 POST returns the ID; GET returns it after persistence, or 404 for an unknown ID.
-Repeated POSTs of the same ID do not create duplicate rows. There is no authentication;
+Repeated POSTs of the same ID upsert the same partition/identity row. They can change
+the PostgreSQL concurrency token; this is not an exactly-once execution guarantee and
+the endpoint supplies no optimistic-concurrency precondition. There is no authentication;
 this sample is for a local developer environment. Stop with Ctrl+C. `WithDataVolume`
 retains PostgreSQL data across runs; deleting that volume is a separate deliberate action.
 No cloud provider, deployment credentials or Ari environment is involved.
+
+The explicit bootstrap creates `public.cohesive_orders`. Any `public.orders` table from
+the earlier direct-Npgsql example remains untouched; its rows are not migrated or read.
+The sample does not provide a general schema migration system.
 
 ## Validation and limits
 
@@ -59,7 +71,9 @@ The executable AppHost is referenced by the adapter test project, so tests exerc
 actual generated project metadata and native PostgreSQL resource model. Tests verify
 object identity, unchanged native annotations/resource counts, native-only coexistence,
 canonical fingerprint equivalence, missing associations, incompatible evidence, wrong
-node kind, foreign-model objects, duplicate associations and frozen authoring.
+node kind, foreign-model objects, duplicate associations and frozen authoring. Storage
+unit tests verify the real PostgreSQL adapter binding, canonical state validation and
+cancellation before opening a connection. They do not substitute a fake repository.
 
 The compiler validates **declared evidence**, not PostgreSQL configuration or a running
 service. A PostgreSQL resource type does not automatically assert a transaction, audit,

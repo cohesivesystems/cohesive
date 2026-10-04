@@ -6,5 +6,8 @@
     <IsPackable>false</IsPackable>
     <EnableCohesiveGlobalUsings>false</EnableCohesiveGlobalUsings>
   </PropertyGroup>
-  <ItemGroup><PackageReference Include="Npgsql" Version="10.0.3" /></ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Postgres/Cohesive.Adapters.Postgres.csproj" />
+    <EmbeddedResource Include="schema.sql" LogicalName="Orders.schema.sql" />
+  </ItemGroup>
 </Project>
