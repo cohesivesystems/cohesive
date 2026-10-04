@@ -209,3 +209,5 @@ Apache-2.0
 ### Explicit runtime qualification
 
 [`Cohesive.Adapters.Azure.Qualification`](src/adapters/Cohesive.Adapters.Azure.Qualification/README.md) supplies optional bounded Cosmos/Blob write checks and a dedicated scheduler challenge. It requires reviewed targets and explicit invocation; it does not establish full infrastructure readiness.
+
+For incremental infrastructure adoption, the [Aspire-first order example](eng/examples/aspire-first/README.md) attaches Cohesive requirements to resources in an existing native AppHost.

@@ -1,5 +1,30 @@
 # Cohesive.Adapters.Aspire
 
+Two starting points are supported:
+
+- **Cohesive-first:** compile a canonical local realization and create its native model with `AddCohesiveLocalInfrastructure`.
+- **Aspire-first:** keep an existing AppHost and use `AspireInfrastructureAssociation.Attach` to associate selected native objects with canonical requirements.
+
+See the [runnable Aspire-first order example](../../../eng/examples/aspire-first/README.md).
+`Attach` neither creates resources nor alters native options, references or waits. Its result
+contains the original objects and the ordinary `InfrastructureTargetDeploymentPlan`; inspect
+`Deployment.IsComplete` and `Deployment.Diagnostics` before starting the application.
+Requirements and explicit implementation evidence use existing Cohesive.Infra authoring.
+Evidence is not inferred from native CLR types. This association API is not a runtime
+readiness check and does not use the local materializer's observation collector.
+
+Native membership is captured once before authoring and checked by object identity, including a check after the synchronous
+callback. Each canonical node may be associated once. Unmodeled native resources remain
+allowed; missing modeled nodes remain compiler diagnostics. Builders freeze on success or
+failure. The result is an invocation-local association snapshot, not a cache. Aspire retains
+ownership of the referenced objects and can continue configuring them through its own API.
+
+Physical IDs deterministically use `aspire/resource/{native.Name}`, scoped by the selected
+deployment manifest. The manifest identity derives its facility/profile identities with
+`/facilities` and `/profile`; the target is `aspire/native-association/v1`, and callers select
+the environment variant explicitly. These are authoring conventions, not a second catalog.
+Source maps retain caller attribution. Only the canonical manifest carries portable data.
+
 This adapter projects an exact `InfrastructureLocalRealizationDocument` into an inspectable Aspire resource graph. `Cohesive.Infra.Local` remains the semantic authority: the projection retains the exact physical-realization reference, local-realization fingerprint, environment policy, effective configuration attribution, canonical services, endpoints, health, readiness, operations, and target-specific decisions. Those decisions use the shared `InfrastructureLocalTargetDecision` evidence contract and target-neutral concern identities so differential conformance can compare Aspire with other lifecycle interpreters without inventing another capability catalog.
 
 `AspireLocalCompiler.Compile` is pure and deterministic. It performs no Aspire, Docker, filesystem, network, or secret I/O. `AddCohesiveLocalInfrastructure` is the separate runtime application boundary that turns a successful projection into AppHost resources.

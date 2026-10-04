@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Sdk Name="Aspire.AppHost.Sdk" Version="13.5.2" />
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <AspireUseCliBundle>false</AspireUseCliBundle>
+    <UserSecretsId>cohesive-aspire-first-example</UserSecretsId>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.AppHost" Version="13.5.2" />
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" Version="13.5.2" />
+    <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Aspire/Cohesive.Adapters.Aspire.csproj" IsAspireProjectResource="false" />
+    <ProjectReference Include="../OrderWorker/OrderWorker.csproj" />
+  </ItemGroup>
+</Project>

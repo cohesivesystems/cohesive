@@ -16,6 +16,7 @@
     <Using Include="Xunit" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="../../eng/examples/aspire-first/AppHost/AppHost.csproj" />
     <ProjectReference Include="../adapters/Cohesive.Adapters.Aspire/Cohesive.Adapters.Aspire.csproj" />
     <ProjectReference Include="../adapters/Cohesive.Adapters.DockerCompose/Cohesive.Adapters.DockerCompose.csproj" />
     <ProjectReference Include="../../eng/materialization-harness/model/Cohesive.MaterializationHarness.Model.csproj" />
