@@ -28,7 +28,7 @@ public static class ProcessCompilationDiagnosticCodes
 /// structurally preflights explicit demands, and indexes the validated closed node table without introducing another
 /// persisted model. Successful target-independent compilation does not prove physical target capability.
 /// </remarks>
-public static class ProcessStaticCompiler
+public static partial class ProcessStaticCompiler
 {
     /// <summary>Compiles one exact Process definition with explicit external semantic linking evidence.</summary>
     /// <param name="document">Canonical shared execution-definition document.</param>
@@ -73,7 +73,15 @@ public static class ProcessStaticCompiler
     public static ProcessCompilationResult Compile(
         ExecutionDefinitionDocument document,
         ProcessDefinitionValidationContext context,
-        ProcessCompilationOptions options)
+        ProcessCompilationOptions options) => CompileCore(document, context, options, preparedDefinition: null);
+
+    // A closure-discovered projection belongs to this immutable document. Full admission validation
+    // still runs below; reuse only avoids projecting the same payload again after that validation.
+    static ProcessCompilationResult CompileCore(
+        ExecutionDefinitionDocument document,
+        ProcessDefinitionValidationContext context,
+        ProcessCompilationOptions options,
+        CanonicalProcessDefinition? preparedDefinition)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(context);
@@ -95,12 +103,12 @@ public static class ProcessStaticCompiler
                 .OrderBy(static diagnostic => diagnostic, DocumentValidationDiagnosticComparer.Ordinal);
             return new(
                 document,
-                definition: document.GetDefinition<CanonicalProcessDefinition>(),
+                definition: preparedDefinition ?? document.GetDefinition<CanonicalProcessDefinition>(),
                 plan: null,
                 DocumentValidationResult.FromDiagnostics(diagnostics));
         }
 
-        var definition = document.GetDefinition<CanonicalProcessDefinition>();
+        var definition = preparedDefinition ?? document.GetDefinition<CanonicalProcessDefinition>();
         var effectSummary = ProcessEffectAnalyzer.Analyze(definition);
         var scopeValidation = ProcessScopeAnalyzer.Validate(document, definition, effectSummary, options);
         if (!scopeValidation.IsValid)

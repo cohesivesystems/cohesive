@@ -151,3 +151,31 @@ resource authorization, and project the exact committed entity and token into th
 This avoids recovering a response by guessing an internal node name or reading a newer entity state.
 Storage-backed enrichment and Ari adoption are separate qualification gates; the core tests prove typed
 authoring equivalence, link admission, evidence preservation, wire round-trip and serialized-cut resumption.
+
+## Compile an authored dependency closure
+
+`ProcessDefinition.GetProcessDependencies()` derives unique, canonically ordered exact child references
+from the node table, including ordinary invocations, partitioned work, and cancellation finalizers.
+It does not add serialized data or change definition fingerprints. The same projection supplies
+validated `ProcessDefinitionLink` dependency evidence.
+
+Call `ProcessStaticCompiler.CompileClosure(roots, documents, externalContext)` to prepare selected roots
+without encoding their child order in application code. `documents` is the existing integrity-checked
+`ExecutionDefinitionDocumentCatalog`; it resolves exact identity, revision, and fingerprint. The caller
+selects deployment roots and provides non-Process links, interaction contracts, and optional shapes.
+Process links in external evidence are rejected: the canonical documents own that graph.
+
+Compilation traverses the authored closure iteratively, validates every reachable document through the
+ordinary compiler, and shares successful child plans within the call. A parent's evidence contains only
+its transitive children, not previously compiled siblings. Unselected documents are not compiled.
+Missing references, incompatible fingerprints, cycles, invalid definitions, unsupported extensions, and
+scope demands fail admission. `FailedDefinition` identifies the failed reference and `Validation`
+retains structured diagnostics. `Plans` is empty on failure and ordered bottom-up on success.
+No I/O, target qualification, global cache, or persisted dependency model is introduced. Callers own
+cross-call preparation lifetime and must still qualify plans for their physical target.
+
+For example, when two roots invoke the same child, callers previously supplied validated child links
+and arranged compilation manually. Closure compilation derives both edges and prepares the child once.
+`ProcessClosureCompilationTests` qualifies this diamond, root selection, duplicate calls, canonical
+plan equivalence, external-authority conflicts, and resolution/validation failures. The reusable graph
+operation belongs in Cohesive; product root policy and runtime adapter admission remain in Ari.
