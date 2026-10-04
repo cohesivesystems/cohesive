@@ -27,6 +27,32 @@ public sealed class InfrastructureTargetImplementation
         Evidence = [.. evidence.OrderBy(item => item.Id.Value, StringComparer.Ordinal)];
     }
 
+    /// <summary>Declares a resource implementation with explicit leaf evidence.</summary>
+    /// <param name="id">Stable implementation identity.</param>
+    /// <param name="evidence">Native or constrained capability evidence.</param>
+    /// <returns>An immutable resource implementation.</returns>
+    /// <exception cref="ArgumentException">Evidence or identity is invalid.</exception>
+    /// <exception cref="ArgumentNullException">Evidence is null.</exception>
+    public static InfrastructureTargetImplementation ResourceImplementation(InfrastructureTargetFacilityId id,
+        params InfrastructureCapabilityEvidence[] evidence)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        return new(id, InfrastructureNodeKind.Resource, [.. evidence]);
+    }
+
+    /// <summary>Declares a workload implementation with explicit leaf evidence.</summary>
+    /// <param name="id">Stable implementation identity.</param>
+    /// <param name="evidence">Native or constrained capability evidence.</param>
+    /// <returns>An immutable workload implementation.</returns>
+    /// <exception cref="ArgumentException">Evidence or identity is invalid.</exception>
+    /// <exception cref="ArgumentNullException">Evidence is null.</exception>
+    public static InfrastructureTargetImplementation WorkloadImplementation(InfrastructureTargetFacilityId id,
+        params InfrastructureCapabilityEvidence[] evidence)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        return new(id, InfrastructureNodeKind.Workload, [.. evidence]);
+    }
+
     /// <summary>Canonical facility supplied when this implementation is selected.</summary>
     public InfrastructureTargetFacility Facility { get; }
     /// <summary>Immutable leaf evidence contributed to the target profile.</summary>

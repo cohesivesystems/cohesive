@@ -57,14 +57,16 @@ public sealed class PulumiDeploymentProjection<TContext>
         ArgumentNullException.ThrowIfNull(define);
         ArgumentNullException.ThrowIfNull(configure);
         PulumiDeploymentProjectionBuilder<TContext>? builder = null;
+        ImmutableArray<PulumiDeploymentFactory<TContext>> factories = [];
         var manifest = define(deployment =>
         {
             if (builder is not null) throw new InvalidOperationException("The manifest producer must configure exactly once.");
             builder = new(deployment);
             configure(builder);
+            factories = builder.Complete();
         });
         if (builder is null) throw new InvalidOperationException("The manifest producer did not configure its projection.");
-        return new(manifest, builder.Complete());
+        return new(manifest, factories);
     }
 
     /// <summary>Validates the exact compiled manifest and delegates construction to the existing graph interpreter.</summary>
@@ -109,6 +111,28 @@ public sealed class PulumiDeploymentProjectionBuilder<TContext>
         return group;
     }
 
+    /// <summary>Begins a single resource placement; native construction remains deferred.</summary>
+    /// <param name="node">Canonical declaration identity.</param>
+    /// <param name="sourceFile">Authoring source file.</param>
+    /// <param name="sourceLine">Authoring source line.</param>
+    /// <param name="sourceMember">Authoring member.</param>
+    /// <returns>A placement builder with named configuration operations.</returns>
+    /// <exception cref="InvalidOperationException">Authoring has completed.</exception>
+    public PulumiDeploymentPlacement<TContext> Resource(InfrastructureNodeId node,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0, [CallerMemberName] string sourceMember = "") =>
+        new(Group(), node, InfrastructureNodeKind.Resource, sourceFile, sourceLine, sourceMember);
+
+    /// <summary>Begins a single workload placement; native construction remains deferred.</summary>
+    /// <param name="node">Canonical declaration identity.</param>
+    /// <param name="sourceFile">Authoring source file.</param>
+    /// <param name="sourceLine">Authoring source line.</param>
+    /// <param name="sourceMember">Authoring member.</param>
+    /// <returns>A placement builder with named configuration operations.</returns>
+    /// <exception cref="InvalidOperationException">Authoring has completed.</exception>
+    public PulumiDeploymentPlacement<TContext> Workload(InfrastructureNodeId node,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0, [CallerMemberName] string sourceMember = "") =>
+        new(Group(), node, InfrastructureNodeKind.Workload, sourceFile, sourceLine, sourceMember);
+
     /// <summary>Adds an attributable cross-implementation capability composition rule.</summary>
     /// <param name="rule">Canonical composition rule.</param>
     /// <returns>This builder.</returns>
@@ -147,6 +171,8 @@ public sealed class PulumiDeploymentFactory<TContext>
     internal PulumiDeploymentFactory(PulumiDeploymentProjectionBuilder<TContext> owner,
         InfrastructureTargetDeploymentManifestBuilder deployment)
     { this.owner = owner; this.deployment = deployment; }
+
+    internal void EnsureAuthoringMutable() => owner.EnsureMutable();
 
     void EnsurePlacementsMutable()
     {

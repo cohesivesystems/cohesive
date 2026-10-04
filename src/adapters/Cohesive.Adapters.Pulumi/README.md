@@ -130,3 +130,37 @@ The corresponding Aspire-first convenience experience is a subsequent adapter de
 Executable tests cover canonical fingerprint equivalence between separate/inline authoring, deferred
 native execution, existing resources alongside unmodeled resources, conflicting implementation
 claims and missing factories. No callback or native object is serialized into the canonical manifests.
+
+### Named single-node authoring
+
+Single-node factories can use named placement operations. Import
+`Cohesive.Infra.InfrastructureTargetImplementation` with `using static` to declare
+`ResourceImplementation(id, evidence...)` or `WorkloadImplementation(id, evidence...)`
+without repeating the implementation type or node-kind enum. Evidence remains explicit,
+nonempty native or constrained evidence; requirements never supply evidence automatically.
+
+```csharp
+var store = ResourceImplementation(new("example/store"), storageEvidence);
+projection.Resource(storeNode)
+    .Using(store)
+    .At(new("example/native/store"))
+    .OwnedBy(new("pulumi/example"))
+    .SourcedFrom(stackSource)
+    .Create((native, context) =>
+    {
+        // Use ordinary Pulumi constructors and record the association through context.
+        return CreateStore(native, context);
+    });
+```
+
+Use `.UseExisting(native => native.Store)` for an existing native resource. A workload
+uses `projection.Workload(node)` and omits `OwnedBy`. `Group()` remains appropriate
+when one factory realizes multiple placements. All paths lower into the same canonical
+placement methods and native graph interpreter; no new provider model or traversal exists.
+
+Placement configuration is synchronous and invocation-scoped. Named fields may be refined
+until `Create` or `UseExisting`; the last explicitly supplied value wins. Finalization rejects
+unfinished placements before manifest construction, and retained builders cannot mutate a
+completed projection. Missing implementation, identity or resource ownership fails before
+native construction. These helpers change authoring only: canonical fingerprints and native
+resource ownership are unchanged, and capability evidence is still validated by the compiler.
