@@ -11,6 +11,9 @@ exercise the same semantic definitions, runtime evidence, and CLR DTO contracts.
 
 ## Benchmark groups
 
+- `TypedDocumentCanonicalizationBenchmarks` compares immutable typed strict JSON canonicalization
+  with mutable node expansion; see [evidence and contract](../../docs/performance/typed-document-canonicalization/README.md).
+
 - `ClrTypeRefMappingBenchmarks` measures traversal-scoped CLR reflection preparation across flat,
   nested, collection, and bounded large type graphs; see [evidence and lifetime contract](../../docs/performance/clr-type-mapping/README.md).
 

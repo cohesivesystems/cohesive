@@ -191,7 +191,7 @@ public sealed class CanonicalJsonWriterTests
                 ? CanonicalJsonArrayOrdering.ObjectSet("id")
                 : CanonicalJsonArrayOrdering.Sequence);
 
-    static IReadOnlyList<ObservationValue> CreateCanonicalObservationValueFixtures() =>
+    internal static IReadOnlyList<ObservationValue> CreateCanonicalObservationValueFixtures() =>
     [
         ObservationValue.Undefined,
         ObservationValue.Null,
@@ -236,7 +236,7 @@ public sealed class CanonicalJsonWriterTests
         ])
     ];
 
-    static ObservationValue CreateGeneratedObservationValue(Random random, int maximumDepth)
+    internal static ObservationValue CreateGeneratedObservationValue(Random random, int maximumDepth)
     {
         if (maximumDepth > 0)
         {

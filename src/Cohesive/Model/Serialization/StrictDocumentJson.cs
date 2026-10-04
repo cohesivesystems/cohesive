@@ -163,6 +163,11 @@ public static class StrictDocumentJson
     /// <summary>
     /// Gets the canonical UTF-8 JSON representation of one typed portable-document object.
     /// </summary>
+    /// <remarks>
+    /// Serialization is invocation-scoped: caller-owned values and returned bytes are not cached.
+    /// Temporary immutable JSON storage is disposed before return. Strict, case-sensitive contracts
+    /// reuse the exact-number canonical sequence writer without expanding a mutable JSON tree.
+    /// </remarks>
     /// <typeparam name="T">Closed object contract used for serialization.</typeparam>
     /// <param name="value">Typed object to encode.</param>
     /// <param name="options">
@@ -178,14 +183,24 @@ public static class StrictDocumentJson
     /// <typeparamref name="T"/> or one of its values has no serializer under <paramref name="options"/>.
     /// </exception>
     /// <exception cref="InvalidOperationException">The typed value has no canonical JSON representation.</exception>
+    /// <exception cref="ArgumentException">A converter writes colliding object property names.</exception>
     public static byte[] GetCanonicalBytes<T>(T value, JsonSerializerOptions options)
         where T : class
     {
         ArgumentNullException.ThrowIfNull(value);
         ArgumentNullException.ThrowIfNull(options);
-        var node = JsonSerializer.SerializeToNode(value, typeof(T), options)
-            ?? throw new InvalidOperationException($"Failed to materialize {typeof(T).Name} JSON.");
-        return GetCanonicalBytes(node, options);
+        // Non-strict options retain JsonNode's case-insensitive property collision behavior.
+        if (options.PropertyNameCaseInsensitive)
+        {
+            var node = JsonSerializer.SerializeToNode(value, typeof(T), options)
+                ?? throw new InvalidOperationException($"Failed to materialize {typeof(T).Name} JSON.");
+            return GetCanonicalBytes(node, options);
+        }
+
+        using var document = JsonSerializer.SerializeToDocument(value, typeof(T), options);
+        if (document.RootElement.ValueKind == JsonValueKind.Null)
+            throw new InvalidOperationException($"Failed to materialize {typeof(T).Name} JSON.");
+        return CanonicalJsonWriter.GetCanonicalSequenceBytes(document.RootElement);
     }
 
     /// <summary>

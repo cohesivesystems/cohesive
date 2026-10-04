@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Tests.Model;
@@ -129,6 +131,126 @@ public sealed class StrictDocumentJsonTests
         Assert.False(success);
         Assert.False(string.IsNullOrWhiteSpace(error.Message));
     }
+
+    [Fact]
+    public void TypedObjectApi_IsByteAndFingerprintEquivalentAcrossTheObservationDomain()
+    {
+        var options = StrictDocumentJson.CreateOptions();
+        options.Converters.Add(new ObservationValueJsonConverter(ObservationBytesJsonEncoding.Base64String));
+        var fixtures = CanonicalJsonWriterTests.CreateCanonicalObservationValueFixtures();
+        Assert.Equal(Enum.GetValues<ObservationValueKind>(),
+            fixtures.Select(x => x.Kind).Distinct().OrderBy(x => x).ToArray());
+        foreach (var value in fixtures)
+            AssertTypedEquivalence(new ObservationDocument(value), options);
+        Random random = new(0x51A1_2026);
+        for (var index = 0; index < 512; index++)
+            AssertTypedEquivalence(new ObservationDocument(
+                CanonicalJsonWriterTests.CreateGeneratedObservationValue(random, maximumDepth: 5)), options);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[3,1,null,true,false,\"<>&🙂\"]")]
+    [InlineData("{\"z\":-0.0,\"a\":1e300,\"nested\":{\"b\":1.2300,\"a\":1e-300}}")]
+    public void TypedObjectApi_PreservesNestedExactNumbersEscapingAndSequences(string json)
+    {
+        using var parsed = JsonDocument.Parse(json);
+        foreach (var formatting in Enum.GetValues<PortableDocumentJsonFormatting>())
+            AssertTypedEquivalence(new JsonDocumentValue(parsed.RootElement), StrictDocumentJson.CreateOptions(formatting));
+    }
+
+    [Theory]
+    [InlineData(false, "{\"a\":1,\"a\":2}")]
+    [InlineData(true, "{\"a\":1,\"A\":2}")]
+    public void TypedObjectApi_RetainsPropertyCollisionFailures(bool ignoreCase, string json)
+    {
+        using var parsed = JsonDocument.Parse(json);
+        var options = StrictDocumentJson.CreateOptions();
+        options.PropertyNameCaseInsensitive = ignoreCase;
+        var value = new JsonDocumentValue(parsed.RootElement);
+        var referenceFailure = Record.Exception(() => NodeReference(value, options));
+        var actualFailure = Record.Exception(() => StrictDocumentJson.GetCanonicalBytes(value, options));
+        Assert.NotNull(referenceFailure);
+        Assert.NotNull(actualFailure);
+        Assert.Equal(referenceFailure.GetType(), actualFailure.GetType());
+    }
+
+    [Fact]
+    public void TypedObjectApi_ReducesAllocationWithoutCachingCallerOwnedValues()
+    {
+        var value = new JsonDocumentValue(JsonSerializer.SerializeToElement(Enumerable.Range(0, 128)
+            .Select(x => new { z = x, a = "payload", nested = new { enabled = true, values = new[] { 3, 1, 2 } } })));
+        var options = StrictDocumentJson.CreateOptions();
+        AssertTypedEquivalence(value, options);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var reference = NodeReference(value, options);
+        var referenceAllocation = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var actual = StrictDocumentJson.GetCanonicalBytes(value, options);
+        var actualAllocation = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(reference, actual);
+        Assert.True(actualAllocation < referenceAllocation / 2,
+            $"Immutable path allocated {actualAllocation} bytes; node reference allocated {referenceAllocation}.");
+        var mutable = new MutableDocument { Name = "first" };
+        var first = StrictDocumentJson.GetCanonicalBytes(mutable, options);
+        mutable.Name = "second";
+        Assert.NotEqual(first, StrictDocumentJson.GetCanonicalBytes(mutable, options));
+    }
+
+    [Theory]
+    [InlineData("1e300")]
+    [InlineData("-0.0")]
+    [InlineData("\"<>&🙂\"")]
+    [InlineData("[3,1,2]")]
+    public void TypedObjectApi_RetainsCustomConverterRootShapes(string json)
+    {
+        using var parsed = JsonDocument.Parse(json);
+        AssertTypedEquivalence(new RawRoot(parsed.RootElement), StrictDocumentJson.CreateOptions());
+    }
+
+    [Fact]
+    public void TypedObjectApi_RetainsNullRootAndBinaryPolicyFailures()
+    {
+        using var parsed = JsonDocument.Parse("null");
+        var options = StrictDocumentJson.CreateOptions();
+        Assert.Throws<InvalidOperationException>(() => StrictDocumentJson.GetCanonicalBytes(new RawRoot(parsed.RootElement), options));
+        Assert.Throws<InvalidOperationException>(() => NodeReference(new RawRoot(parsed.RootElement), options));
+        options = StrictDocumentJson.CreateOptions();
+        options.Converters.Add(new ObservationValueJsonConverter(ObservationBytesJsonEncoding.Throw));
+        var binary = new ObservationDocument(ObservationValue.FromBytes(new byte[] { 1, 2, 3 }));
+        var before = Record.Exception(() => NodeReference(binary, options));
+        var after = Record.Exception(() => StrictDocumentJson.GetCanonicalBytes(binary, options));
+        Assert.NotNull(before);
+        Assert.NotNull(after);
+        Assert.Equal(before.GetType(), after.GetType());
+    }
+
+    [JsonConverter(typeof(RawRootConverter))]
+    sealed record RawRoot(JsonElement Value);
+    sealed class RawRootConverter : JsonConverter<RawRoot>
+    {
+        public override RawRoot Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+            throw new NotSupportedException();
+        public override void Write(Utf8JsonWriter writer, RawRoot value, JsonSerializerOptions options) => value.Value.WriteTo(writer);
+    }
+
+    static void AssertTypedEquivalence<T>(T value, JsonSerializerOptions options) where T : class
+    {
+        var reference = NodeReference(value, options);
+        var actual = StrictDocumentJson.GetCanonicalBytes(value, options);
+        Assert.Equal(reference, actual);
+        Assert.Equal(SHA256.HashData(reference), SHA256.HashData(actual));
+    }
+
+    static byte[] NodeReference<T>(T value, JsonSerializerOptions options) where T : class =>
+        CanonicalJsonWriter.GetCanonicalSequenceBytes(
+            JsonSerializer.SerializeToNode(value, typeof(T), options)
+                ?? throw new InvalidOperationException("Cannot materialize null JSON."), options,
+            CanonicalJsonNumberSemantics.ExactDecimalRational);
+
+    sealed record ObservationDocument(ObservationValue Value);
+    sealed record JsonDocumentValue(JsonElement Value);
+    sealed class MutableDocument { public string Name { get; set; } = string.Empty; }
 
     sealed record TestDocument(
         string Name,

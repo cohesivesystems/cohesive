@@ -298,6 +298,19 @@ public static class CanonicalJsonWriter
         return GetCanonicalBytesCore(node, options, getArrayOrdering: null, numberSemantics);
     }
 
+    // Typed strict documents use the same exact-number sequence profile as execution documents.
+    internal static byte[] GetCanonicalSequenceBytes(JsonElement element)
+    {
+        ArrayBufferWriter<byte> buffer = new();
+        using (Utf8JsonWriter writer = new(buffer, new JsonWriterOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            Indented = false
+        }))
+            WriteCanonicalSequence(writer, element);
+        return buffer.WrittenSpan.ToArray();
+    }
+
     // Execution documents already own immutable JSON. Traverse it directly instead of expanding
     // each property into a mutable JsonNode graph. Scalar spelling is shared with the node writer.
     internal static void WriteCanonicalSequence(Utf8JsonWriter writer, JsonElement element)
@@ -319,6 +332,8 @@ public static class CanonicalJsonWriter
                             static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
                         for (index = 0; index < count; index++)
                         {
+                            if (index > 0 && StringComparer.Ordinal.Equals(properties[index - 1].Key, properties[index].Key))
+                                throw new ArgumentException($"Duplicate JSON property '{properties[index].Key}'.");
                             writer.WritePropertyName(properties[index].Key);
                             WriteCanonicalSequence(writer, properties[index].Value);
                         }
