@@ -25,6 +25,72 @@ Command-line values, environment variables, and registered configuration provide
 `Cohesive.Configuration` before binding to the command configuration. The same command tree owns generated help,
 validation, middleware, output routing, cancellation, dynamic handler binding, and invocation diagnostics.
 
+## Explicit declarations and root commands
+
+Small tools can declare options directly without a reflected configuration class:
+
+```csharp
+using Cohesive.Cli;
+
+var app = new CliApplication(
+    description: "View historical bars from the Parquet data catalog");
+
+app.RootCommand(new Dictionary<string, CliOption>
+    {
+        ["instrument"] = CliOption.For(
+            defaultValue: "AMD.XNAS",
+            environmentVariable: "IB_INSTRUMENT",
+            description: "Instrument identifier to query"),
+        ["limit"] = CliOption.For(defaultValue: 20, description: "Number of bars to display")
+    })
+    .OnExecute(context =>
+    {
+        var instrument = context.Configuration.Get<string>("instrument");
+        var limit = context.Configuration.Get<int>("limit");
+        // Query the catalog.
+        return 0;
+    });
+
+return await app.RunAsync(args);
+```
+
+Invoke this program with `--instrument AMD.XNAS --limit 20`, or without arguments to use defaults.
+`--help` displays generated help without executing the handler. Typed configurations also support
+root execution through `app.RootCommand<ViewBarsOptions>()`.
+
+Use `app.Command("bars", options: declarations)` or `command.SubCommand("bars", options: declarations)`
+for named commands. Typed and explicit commands can coexist in the same tree. A declaration key is an
+unprefixed, flat CLI name (`limit` produces `--limit`). `command.Argument("instrument")` projects a
+parameter into a positional argument. `command.Parameters` exposes the effective descriptors for either
+surface. Explicit declarations support scalar conversion through `Cohesive.Configuration` and string arrays;
+other collection types are currently rejected. Set `Required`, `ShortName`, and `AllowedValues` using
+record initializers or `with` expressions. `CliOption.For<T>()` declares an option without a default.
+
+Both surfaces use the same command construction, conversion, validation, middleware, I/O, cancellation,
+and diagnostics. Explicit commands reuse `CliCommandBuilder<CliValues>`; property-selector mapping APIs
+are unavailable on that surface and fail explicitly. Typed validators can consume `CliValues` and use
+`Get<T>` to read declarations. Option dictionaries and mutable defaults are snapshotted at registration
+and authoring respectively. `Get<T>` requires the exact declared type, throws for unknown names or type
+mismatches, and returns the type's default for an absent optional value. String array reads are defensive copies.
+
+Explicit defaults apply only when a parameter is absent from all higher-priority sources. Precedence is:
+CLI values, explicit environment mappings, automatic environment configuration, command configuration,
+application configuration, then declaration defaults. Environment mappings are read per invocation;
+`WithoutEnvironmentVariables()` disables both automatic environment binding and explicit mappings.
+A supplied collection replaces its declaration default as a whole. Existing configuration-provider merging
+rules still apply between supplied sources. Empty or whitespace scalar values follow the existing
+configuration parser's absent-value semantics and do not restore a declaration default.
+
+Register at most one root command. With a root command, `RunAsync([])` executes its handler and
+`ShouldHandle` returns true for all arguments, including empty input. Without one, empty input still displays
+root help and `ShouldHandle` selects registered command names. Root options are local to root execution;
+child commands bind their own declarations.
+
+Reflection-based authoring and explicit declarations produce the same `ConfigurationParameterDescriptor`
+model. `ConfigurationParameterParser.ParseValues` validates and converts direct descriptors without creating
+synthetic CLR types; typed object binding consumes that same conversion mechanism. These are the current
+runtime declaration APIs, not a versioned portable command IR or serialization format.
+
 ## Standard streams and cancellation
 
 `CommandIo` is the single invocation-scoped authority for raw input and output streams, error output, UTF-8 text
@@ -52,7 +118,7 @@ app.Command<ImportCommand>("import")
     });
 ```
 
-`RunAsync` is the standard console entry point: empty arguments display root help, and `Console.CancelKeyPress` is
+`RunAsync` is the standard console entry point: empty arguments execute a registered root handler or display root help, and `Console.CancelKeyPress` is
 attached only while the application is running. `InvokeAsync` remains the embedding and test entry point and does not
 attach a process signal handler.
 

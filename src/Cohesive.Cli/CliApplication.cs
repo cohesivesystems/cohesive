@@ -21,6 +21,7 @@ public sealed class CliApplication(
     CommandIo? io = null)
 {
     readonly List<CliCommandNode> commands = [];
+    CliCommandNode? rootHandler;
     readonly Dictionary<Type, List<Delegate>> parameterPipelines = [];
     readonly Dictionary<Type, List<Delegate>> executionPipelines = [];
     readonly Dictionary<Type, List<Delegate>> validationPipelines = [];
@@ -172,7 +173,7 @@ public sealed class CliApplication(
     public CliCommandBuilder<TConfiguration> Command<TConfiguration>(string name, string? description = null, Delegate? execute = null, Delegate? validate = null)
     {
         var commandName = Guard.RequireNotNullOrWhiteSpace(name);
-        EnsureUniqueChildName(commands, commandName);
+        EnsureUniqueChildName(commands.Where(command => !ReferenceEquals(command, rootHandler)), commandName);
         var command = new CliCommandBuilder<TConfiguration>(commandName, description, ApplyRegisteredPipelines);
         ApplyRegisteredPipelines(command);
         commands.Add(command);
@@ -189,21 +190,77 @@ public sealed class CliApplication(
         return command;
     }
 
+    /// <summary>Registers a command from explicit option declarations.</summary>
+    /// <param name="name">Command name.</param>
+    /// <param name="options">Options keyed by unprefixed CLI name; declarations are snapshotted.</param>
+    /// <param name="description">Optional command help text.</param>
+    /// <returns>A builder using checked dictionary value access.</returns>
+    /// <exception cref="ArgumentNullException">Options or a declaration is null.</exception>
+    /// <exception cref="ArgumentException">An option key or alias is invalid or duplicated.</exception>
+    /// <exception cref="InvalidOperationException">A command with this name already exists.</exception>
+    public CliCommandBuilder<CliValues> Command(
+        string name, IReadOnlyDictionary<string, CliOption> options, string? description = null)
+    {
+        var commandName = Guard.RequireNotNullOrWhiteSpace(name);
+        EnsureUniqueChildName(commands.Where(command => !ReferenceEquals(command, rootHandler)), commandName);
+        var command = CliOption.CreateCommand(commandName, description, options, ApplyRegisteredPipelines);
+        commands.Add(command);
+        return command;
+    }
+
+    /// <summary>Registers typed options and execution directly on the application root.</summary>
+    /// <typeparam name="TConfiguration">Typed root configuration.</typeparam>
+    /// <returns>The root command builder.</returns>
+    /// <exception cref="InvalidOperationException">A root command is already registered.</exception>
+    public CliCommandBuilder<TConfiguration> RootCommand<TConfiguration>()
+    {
+        EnsureRootAvailable();
+        var command = new CliCommandBuilder<TConfiguration>("root", Description, ApplyRegisteredPipelines) { IsRoot = true };
+        ApplyRegisteredPipelines(command);
+        rootHandler = command;
+        commands.Add(command);
+        return command;
+    }
+
+    /// <summary>Registers explicit options and execution directly on the application root.</summary>
+    /// <param name="options">Options keyed by unprefixed CLI name; declarations are snapshotted.</param>
+    /// <returns>The root command builder.</returns>
+    /// <exception cref="ArgumentNullException">Options or a declaration is null.</exception>
+    /// <exception cref="ArgumentException">An option key or alias is invalid or duplicated.</exception>
+    /// <exception cref="InvalidOperationException">A root command is already registered.</exception>
+    public CliCommandBuilder<CliValues> RootCommand(IReadOnlyDictionary<string, CliOption> options)
+    {
+        EnsureRootAvailable();
+        var command = CliOption.CreateCommand("root", Description, options, ApplyRegisteredPipelines, isRoot: true);
+        rootHandler = command;
+        commands.Add(command);
+        return command;
+    }
+
+    void EnsureRootAvailable()
+    {
+        if (rootHandler is not null)
+            throw new InvalidOperationException("An application root command is already registered.");
+    }
+
     /// <summary>
     /// Returns <see langword="true"/> when the argument list should be handled by the registered CLI command tree.
     /// </summary>
     /// <param name="args">Program arguments.</param>
     /// <returns>
-    /// <see langword="true"/> when the first token matches a registered root command name; otherwise
-    /// <see langword="false"/>.
+    /// <see langword="true"/> when an application root is registered or the first token matches a
+    /// registered command name; otherwise <see langword="false"/>.
     /// </returns>
     /// <remarks>
     /// This method is intended for mixed CLI and host executables. Host-style invocations such as
-    /// <c>--urls http://localhost:5000</c> bypass the command tree and can fall through to the normal host startup.
+    /// <c>--urls http://localhost:5000</c> bypass the command tree when no application root is registered.
+    /// Registering a root makes the CLI responsible for every invocation.
     /// </remarks>
     public bool ShouldHandle(IReadOnlyList<string> args)
     {
         ArgumentNullException.ThrowIfNull(args);
+        if (rootHandler is not null)
+            return true;
         if (args.Count == 0)
         {
             return false;
@@ -239,7 +296,7 @@ public sealed class CliApplication(
     }
 
     /// <summary>Runs the application as a console entry point.</summary>
-    /// <param name="args">Program arguments; an empty list displays root help.</param>
+    /// <param name="args">Program arguments; an empty list executes a registered root handler or displays root help.</param>
     /// <param name="ct">Cancellation token linked with <see cref="Console.CancelKeyPress"/>.</param>
     /// <returns>The command exit code.</returns>
     /// <remarks>
@@ -249,7 +306,7 @@ public sealed class CliApplication(
     public async Task<int> RunAsync(IReadOnlyList<string> args, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(args);
-        IReadOnlyList<string> invocationArgs = args.Count == 0 ? ["--help"] : args;
+        IReadOnlyList<string> invocationArgs = args.Count == 0 && rootHandler is null ? ["--help"] : args;
         using CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
         ConsoleCancelEventHandler cancel = (_, eventArgs) =>
         {
@@ -394,9 +451,15 @@ public sealed class CliApplication(
 
     RootCommand BuildRootCommand(CommandIo io)
     {
-        var root = string.IsNullOrWhiteSpace(Description) ? new RootCommand() : new RootCommand(Description);
+        var root = rootHandler is null
+            ? new RootCommand(Description ?? string.Empty)
+            : (RootCommand)rootHandler.BuildCommand(this, io);
         foreach (var command in commands)
         {
+            if (ReferenceEquals(command, rootHandler))
+                continue;
+            if (root.Subcommands.Any(child => string.Equals(child.Name, command.Name, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"A command named '{command.Name}' is already registered at the root.");
             root.Subcommands.Add(command.BuildCommand(this, io));
         }
 

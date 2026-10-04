@@ -36,7 +36,83 @@ public static class ConfigurationParameterParser
         ArgumentNullException.ThrowIfNull(configuration);
 
         var parameters = BuildMetadata(options);
+        var parsedValues = ParseValuesCore(configuration, parameters, options);
         Dictionary<string, string?> values = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var parameter in parameters)
+        {
+            if (!parsedValues.TryGetValue(parameter.CanonicalKey, out var value))
+                continue;
+            if (value is ImmutableArray<string> collection)
+            {
+                for (var i = 0; i < collection.Length; i++)
+                    values[$"{parameter.CanonicalKey}:{i}"] = collection[i];
+            }
+            else
+                values[parameter.CanonicalKey] = value is null ? null : FormatForBinder(value, parameter.ParameterType);
+        }
+
+        try
+        {
+            var canonicalConfiguration = new ConfigurationBuilder()
+                .AddInMemoryCollection(values)
+                .Build();
+
+            var parsed = canonicalConfiguration.Get<T>(binderOptions => binderOptions.BindNonPublicProperties = true);
+            if (parsed is not null)
+                return parsed;
+
+            return Activator.CreateInstance<T>();
+        }
+        catch (ConfigurationParameterParseException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new ConfigurationParameterParseException(
+                $"Configuration binding failed for type '{typeof(T).FullName}'.",
+                errors: [$"Binding failed: {ex.Message}"]
+                );
+        }
+    }
+
+    /// <summary>Parses explicitly declared parameters without reflecting a configuration class.</summary>
+    /// <param name="configuration">Merged configuration sources to read.</param>
+    /// <param name="parameters">Resolved declarations; configuration keys must be unique ignoring case.</param>
+    /// <returns>Parsed values keyed by configuration key. Absent optional values are omitted.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">Declarations have duplicate configuration keys.</exception>
+    /// <exception cref="ConfigurationParameterParseException">A required value is missing or a value is invalid.</exception>
+    /// <remarks>Scalar conversion and validation are shared with typed binding. String collections are
+    /// returned as immutable arrays; authoring layers can project them into their declared collection type.</remarks>
+    public static IReadOnlyDictionary<string, object?> ParseValues(
+        IConfiguration configuration,
+        IReadOnlyList<ConfigurationParameterDescriptor> parameters)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(parameters);
+        HashSet<string> keys = new(StringComparer.OrdinalIgnoreCase);
+        var metadata = new ConfigurationParameterMetadata[parameters.Count];
+        for (var i = 0; i < parameters.Count; i++)
+        {
+            var parameter = parameters[i];
+            ArgumentNullException.ThrowIfNull(parameter);
+            if (!keys.Add(parameter.ConfigurationKey))
+                throw new ArgumentException($"Duplicate configuration key '{parameter.ConfigurationKey}'.", nameof(parameters));
+            metadata[i] = new(parameter.PropertyName, parameter.Path, parameter.ConfigurationKey,
+                parameter.ConfigurationKey, parameter.CliName, parameter.CliShortName, parameter.Description,
+                [.. parameter.AllowedValues], parameter.Required, parameter.TimeUnit, parameter.ParameterType);
+        }
+        return new System.Collections.ObjectModel.ReadOnlyDictionary<string, object?>(
+            ParseValuesCore<object>(configuration, metadata, options: null));
+    }
+
+    static Dictionary<string, object?> ParseValuesCore<T>(
+        IConfiguration configuration,
+        IReadOnlyList<ConfigurationParameterMetadata> parameters,
+        ConfigurationParameterOptions<T>? options)
+    {
+        Dictionary<string, object?> values = new(StringComparer.OrdinalIgnoreCase);
         List<string> errors = [];
 
         foreach (var parameter in parameters)
@@ -67,8 +143,7 @@ public static class ConfigurationParameterParser
                         continue;
                 }
 
-                for (var i = 0; i < collectionValues.Length; i++)
-                    values[$"{parameter.CanonicalKey}:{i}"] = collectionValues[i];
+                values[parameter.CanonicalKey] = collectionValues;
 
                 continue;
             }
@@ -93,37 +168,13 @@ public static class ConfigurationParameterParser
                 continue;
             }
 
-            values[parameter.CanonicalKey] = convertedValue is null
-                ? null
-                : FormatForBinder(convertedValue, parameter.ParameterType);
+            values[parameter.CanonicalKey] = convertedValue;
         }
 
         if (errors.Count > 0)
             throw new ConfigurationParameterParseException("Configuration parameters were invalid.", errors);
 
-        try
-        {
-            var canonicalConfiguration = new ConfigurationBuilder()
-                .AddInMemoryCollection(values)
-                .Build();
-
-            var parsed = canonicalConfiguration.Get<T>(binderOptions => binderOptions.BindNonPublicProperties = true);
-            if (parsed is not null)
-                return parsed;
-
-            return Activator.CreateInstance<T>();
-        }
-        catch (ConfigurationParameterParseException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            throw new ConfigurationParameterParseException(
-                $"Configuration binding failed for type '{typeof(T).FullName}'.",
-                errors: [$"Binding failed: {ex.Message}"]
-                );
-        }
+        return values;
     }
 
     /// <summary>
