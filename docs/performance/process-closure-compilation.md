@@ -83,7 +83,8 @@ Regression coverage compares direct and closure diagnostic JSON for omitted cano
 unknown imported members, preserves exact canonical bytes and child evidence, and checks that 16 KiB
 and 64 KiB Process payloads avoid repeated projection allocation after warmup. Full core qualification
 passed 4,194 tests with 33 existing skips before adding the two allocation cases; all 11 closure cases
-then passed.
+then passed. The final complete run, including both allocation cases, passed 4,196 tests with
+33 existing skips.
 
 Ari's full engine project passed 854 tests with 18 existing scheduler skips using the same local
 prototype assemblies. Temporary overrides were removed after qualification and are not part of either
