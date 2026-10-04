@@ -56,8 +56,8 @@ compiled graph, or be an explicit `After(node, reason)` native construction refi
 
 This is a provider-independent Pulumi adapter, not portable IR and not a provider-options wrapper.
 Existing Azure attachment adapters continue to validate physical names, scopes, classified outputs
-and authorization policy. Grouping does not authorize creation of undeclared logical resources.
-Provider-generated children remain native facility implementation detail.
+and authorization policy. Grouping validates the declared ownership set. Ordinary Pulumi-only resources and provider children
+may coexist without mandatory Cohesive registration.
 
 The result records primary logical/native associations and explicit references. It does not intercept
 arbitrary Pulumi constructors elsewhere in the program, prove provider output identity by itself,
@@ -79,3 +79,54 @@ global cache or backend call in the traversal itself.
 coverage, excluded nodes, cycles, external-reference policy, missing associations, dependency access
 and no-retry behavior. Consumer tests must additionally exercise real provider-specific attachments
 and the full stack against the authoritative manifest.
+
+## Coauthor placement and native realization
+
+`InfrastructureTargetImplementation` pairs an implementation family with attributable leaf capability
+assertions. The inline overload of `InfrastructureTargetDeployments.Define` collects the selected
+implementations into the existing facility/profile IR. A separate facility manifest remains supported
+for reusable target catalogs. Both paths use the same compilers and canonical wire formats.
+
+`PulumiDeploymentProjection<TContext>` joins each physical placement to its native factory. Its
+`Define` method takes the canonical manifest producer and a projection callback. For example, inside
+that callback (names below are illustrative):
+
+```csharp
+projection.Group()
+    .Resource(stateNode, cosmosImplementation, databaseIdentity, stackAuthority, sources)
+    .Create((native, context) =>
+    {
+        var database = new NativeDatabase("state", new NativeDatabaseArgs
+        {
+            AccountName = native.ExistingAccount.Name
+        });
+        context.Associate(stateNode, database);
+        return database;
+    });
+
+// In an existing native composition, associate the original object without recreating it:
+projection.Group()
+    .Resource(archiveNode, blobImplementation, archiveIdentity, stackAuthority, sources)
+    .UseExisting(native => native.Archive);
+```
+
+`TContext` supplies invocation-owned native configuration/resources. Define and compile can run
+without a Pulumi deployment or provider calls. Execute requires the exact compiled manifest and
+reuses `PulumiGraphProjection` for coverage, ordering, native dependency access and association checks.
+A group can co-locate multiple placements with a single factory. Factory code owns ordinary SDK
+arguments and options; existing Azure attachments still validate resolved physical identity.
+
+The immutable projection can describe multiple invocations; each Execute creates a fresh single-use
+graph interpreter. Callers must not re-execute against the same native deployment after a partial
+failure. There is no retry, resource import, rollback or lifecycle transfer. UseExisting resources have
+already been registered by their native owner, so preflight cannot undo their registration.
+
+Partial adoption is intentional. Additional resources may be constructed with ordinary Pulumi APIs,
+including prerequisites supplied through TContext. They need no synthetic Cohesive declarations.
+Coverage checks concern selected Cohesive nodes only; no claim is made about undeclared resources
+or capabilities. Capability assertions are target evidence, not observations of runtime readiness.
+The corresponding Aspire-first convenience experience is a subsequent adapter deliverable.
+
+Executable tests cover canonical fingerprint equivalence between separate/inline authoring, deferred
+native execution, existing resources alongside unmodeled resources, conflicting implementation
+claims and missing factories. No callback or native object is serialized into the canonical manifests.
