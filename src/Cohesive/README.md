@@ -180,3 +180,9 @@ metadata/reflection projection; longer converter type names in the regression fi
 or end-to-end latency claim. Cold preparation
 is measured separately and includes serializer/CLR metadata initialization, so its total is not retained
 cache size. No additional per-row cache or alternative semantic model was introduced.
+
+Execution documents retain their independently computed semantic fingerprint for their immutable lifetime.
+Imported documents compute from their own payload on first use; declared metadata and graph-dependent
+extension validation remain fresh on every admission. Only the digest is retained. See
+[fingerprint reuse qualification](../../docs/performance/execution-definition-fingerprint-reuse.md)
+for concurrency, exact-byte equivalence, cold/warm evidence, and cache scope.

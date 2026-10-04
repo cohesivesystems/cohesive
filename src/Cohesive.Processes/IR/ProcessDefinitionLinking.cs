@@ -366,20 +366,6 @@ public sealed record ProcessDefinitionLink
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(definition);
-        var dependencies = ImmutableArray.CreateBuilder<ExecutionDefinitionReference>();
-        HashSet<ExecutionDefinitionReference> observedDependencies = [];
-        foreach (var node in definition.Nodes)
-        {
-            var dependency = ProcessRequestSemantics.TryProjectChild(node, out var child)
-                ? child.Process
-                : null;
-            if (dependency is not null && observedDependencies.Add(dependency))
-                dependencies.Add(dependency);
-        }
-        dependencies.Sort(CompareReferences);
-        var normalizedDependencies = dependencies.Count == dependencies.Capacity
-            ? dependencies.MoveToImmutable()
-            : dependencies.ToImmutable();
 
         return new(
             new(
@@ -389,7 +375,7 @@ public sealed record ProcessDefinitionLink
             ProcessDefinitionLinkKind.Process,
             definition.Input,
             definition.Result,
-            document.Extensions.IsDefaultOrEmpty ? normalizedDependencies : null,
+            document.Extensions.IsDefaultOrEmpty ? definition.GetProcessDependencies() : null,
             definition.RecoveryPolicy);
     }
 
