@@ -1,12 +1,19 @@
 using Cohesive.Adapters.Postgres;
 using Cohesive.Adapters.Sql;
-using Cohesive.Model;
+using System.Text.Json.Serialization;
 using Cohesive.Storage;
 using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.Model;
 using Npgsql;
 
 namespace AspireFirst.Orders;
+
+/// <summary>POCO authoring source for the canonical order state.</summary>
+/// <param name="Id">Order identity, serialized under its stable canonical field name.</param>
+/// <param name="Partition">Storage partition, not an authorization boundary.</param>
+public sealed record Order(
+    [property: JsonPropertyName(OrderStorage.IdField)] string Id,
+    [property: JsonPropertyName(OrderStorage.PartitionField)] string Partition);
 
 /// <summary>Canonical order state and its explicit PostgreSQL realization for the local example.</summary>
 public static class OrderStorage
@@ -21,10 +28,7 @@ public static class OrderStorage
     public const string LocalPartition = "local";
 
     /// <summary>Semantic field authority; PostgreSQL bindings add only physical details.</summary>
-    public static EntityDefinition Entity { get; } = new EntityBuilder(new("example/order"))
-        .Field(IdField, new ScalarTypeRef(ScalarTypeKind.String))
-        .Field(PartitionField, new ScalarTypeRef(ScalarTypeKind.String))
-        .Build();
+    public static EntityDefinition Entity { get; } = ObjectEntityDefinition.For<Order>(new("example/order"));
 
     /// <summary>Complete physical field mapping; schema lifecycle is explicit in schema.sql.</summary>
     public static PostgresEntityRepositoryMapping Mapping { get; } = new(
@@ -47,10 +51,6 @@ public static class OrderStorage
     public static EntityWriteRequest Register(Guid id)
     {
         var identity = id.ToString("D");
-        return new(Entity.CreateState(identity, new Dictionary<string, ObservationValue>
-        {
-            [IdField] = ObservationValue.FromString(identity),
-            [PartitionField] = ObservationValue.FromString(LocalPartition)
-        }, version: 1).Snapshot);
+        return new(Entity.CreateState(identity, new Order(identity, LocalPartition), version: 1).Snapshot);
     }
 }

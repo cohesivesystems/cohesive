@@ -17,10 +17,13 @@ waits and volume configuration in native Aspire. It adds no second deployment in
 4. The existing target-deployment compiler matches requirements against evidence and
    checks canonical coverage. The AppHost refuses to start if the plan is incomplete.
 5. Once the user starts the AppHost, ordinary Aspire runs the database and application.
-   `OrderWorker/OrderStorage.cs` defines canonical order state with `EntityBuilder`, adds
+   `OrderWorker/OrderStorage.cs` authors an immutable `Order` record,
+   derives the canonical definition once with `ObjectEntityDefinition.For<Order>`, and adds
    an explicit PostgreSQL field mapping, and binds the Aspire-supplied data source through
    `PostgresNpgsqlRuntimeBinding`. The endpoints use `IEntityRepository.Upsert/TryGet`,
    implemented by the existing `Cohesive.Adapters.Postgres` repository.
+   `JsonPropertyName` preserves the canonical `id`/`partition` names; writes use the
+   record directly through `CreateState`. PostgreSQL mappings add physical details only.
 6. Schema lifecycle stays explicit: startup executes the embedded `schema.sql` once.
    Npgsql is used only for the native data source and schema bootstrap; the shared
    repository owns canonical validation and data reads/writes. The runtime binding is

@@ -17,6 +17,8 @@ public sealed class OrderStorageExampleTests
         IEntityRepository repository = OrderStorage.Bind(database);
         Assert.IsType<PostgresEntityRepository>(repository);
         Assert.Same(OrderStorage.Entity, repository.EntityDefinition);
+        Assert.Equal("example/order", OrderStorage.Entity.Name.Value);
+        Assert.Equal(new[] { "id", "partition" }, OrderStorage.Entity.Fields.Select(field => field.Name.Value));
         var write = OrderStorage.Register(Guid.Parse("00000000-0000-0000-0000-000000000001"));
         Assert.Equal("00000000-0000-0000-0000-000000000001", write.Entity.EntityId.Value);
         Assert.Equal(write.Entity.EntityId.Value, write.Entity.Observation.GetField(OrderStorage.IdField).GetRequiredString());
@@ -30,6 +32,13 @@ public sealed class OrderStorageExampleTests
     {
         Assert.Throws<SemanticRuleViolationException>(() => OrderStorage.Entity.CreateState("order-1",
             new Dictionary<string, ObservationValue> { [OrderStorage.IdField] = ObservationValue.FromString("order-1") }));
+    }
+
+    [Fact]
+    public void Poco_state_rejects_null_required_partition()
+    {
+        Assert.Throws<SemanticRuleViolationException>(() => OrderStorage.Entity.CreateState("order-1",
+            new Order("order-1", null!)));
     }
 
     [Fact]
