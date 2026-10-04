@@ -107,6 +107,25 @@ public sealed class ExecutionDefinitionDocumentProjection<TDefinition>
         return combined;
     }
 
+    // The caller must have projected this exact immutable document through the strict serializer.
+    // Reuse only the representation; envelope, canonical-wire, and semantic validation remain fresh.
+    internal DocumentValidationResult ValidatePrepared(
+        DocumentValidationResult envelopeValidation,
+        ExecutionDefinitionDocument document,
+        TDefinition definition,
+        Func<TDefinition, DocumentValidationResult> validateDefinition)
+    {
+        ArgumentNullException.ThrowIfNull(envelopeValidation);
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(validateDefinition);
+        var content = document.Kind != Kind
+            ? Error(kindMismatchCode,
+                $"Expected execution-definition kind '{Kind.Value}', but found '{document.Kind.Value}'.", "/kind")
+            : ValidateCandidate(document, definition, validateDefinition);
+        return WithSourceReferences(document, Combine(envelopeValidation, content));
+    }
+
     internal DocumentValidationResult ValidateAuthored(
         ExecutionDefinitionDocument document,
         TDefinition definition,
@@ -163,13 +182,18 @@ public sealed class ExecutionDefinitionDocumentProjection<TDefinition>
                 PrefixDefinitionLocation(JsonPathToPointer(sourcePath)));
         }
 
-        var validation = Combine(
-            ValidateCanonicalWire(document, candidate),
-            PrefixDefinitionLocations(validateDefinition(candidate)));
+        var validation = ValidateCandidate(document, candidate, validateDefinition);
         if (validation.IsValid)
             definition = candidate;
         return validation;
     }
+
+    DocumentValidationResult ValidateCandidate(
+        ExecutionDefinitionDocument document,
+        TDefinition definition,
+        Func<TDefinition, DocumentValidationResult> validateDefinition) => Combine(
+            ValidateCanonicalWire(document, definition),
+            PrefixDefinitionLocations(validateDefinition(definition)));
 
     DocumentValidationResult ValidateCanonicalWire(
         ExecutionDefinitionDocument document,
