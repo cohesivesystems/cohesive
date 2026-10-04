@@ -80,6 +80,9 @@ public sealed record ExecutionDefinitionExtension
 /// </remarks>
 public sealed record ExecutionDefinitionDocument
 {
+    ExecutionDefinitionFingerprint? semanticFingerprint;
+    object? semanticFingerprintLock;
+
     /// <summary>Current shared execution-definition document schema version.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-execution/v3");
 
@@ -117,7 +120,8 @@ public sealed record ExecutionDefinitionDocument
     ExecutionDefinitionDocument(
         ExecutionDefinitionKind kind,
         ExecutionDefinitionMetadata metadata,
-        (JsonElement Definition, ImmutableArray<ExecutionDefinitionExtension> Extensions) canonicalContent)
+        (JsonElement Definition, ImmutableArray<ExecutionDefinitionExtension> Extensions) canonicalContent,
+        ExecutionDefinitionFingerprint? computedFingerprint = null)
     {
         if (string.IsNullOrWhiteSpace(kind.Value))
             throw new ArgumentException("An execution definition requires a non-default kind.", nameof(kind));
@@ -126,6 +130,21 @@ public sealed record ExecutionDefinitionDocument
         Metadata = Guard.RequireNotNull(metadata);
         Definition = canonicalContent.Definition;
         Extensions = canonicalContent.Extensions;
+        semanticFingerprint = computedFingerprint;
+    }
+
+    // Semantic inputs are immutable. Imported documents compute their own digest; only Create's
+    // independently computed digest can seed this field. Contextual admission is never cached here.
+    internal ExecutionDefinitionFingerprint GetSemanticFingerprint()
+    {
+        var observed = Volatile.Read(ref semanticFingerprint);
+        if (observed is not null)
+            return observed;
+        return LazyInitializer.EnsureInitialized(
+            ref semanticFingerprint,
+            ref semanticFingerprintLock,
+            () => ExecutionDefinitionFingerprinter.ComputeNormalized(
+                Metadata.SchemaVersion, Kind, Definition, Extensions));
     }
 
     /// <summary>Stable semantic family of the definition payload.</summary>
@@ -204,7 +223,8 @@ public sealed record ExecutionDefinitionDocument
         return new(
             kind,
             metadata,
-            (Definition: definitionElement, Extensions: normalizedExtensions));
+            (Definition: definitionElement, Extensions: normalizedExtensions),
+            computedFingerprint: fingerprint);
     }
 
     /// <summary>Returns this canonical definition with replacement non-semantic retained diagnostics.</summary>
@@ -237,7 +257,8 @@ public sealed record ExecutionDefinitionDocument
         return new(
             Kind,
             metadata,
-            (Definition, Extensions));
+            (Definition, Extensions),
+            computedFingerprint: Volatile.Read(ref semanticFingerprint));
     }
 
     /// <summary>Deserializes the canonical payload as a block-specific definition type.</summary>
