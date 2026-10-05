@@ -39,7 +39,6 @@ public static class OrdersApp
     public static AspireInfrastructureAssociation Configure(IDistributedApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        // Ordinary native authoring remains authoritative for provider configuration and wiring.
         var postgres = builder.AddPostgres("postgres").WithDataVolume();
         var database = postgres.AddDatabase("orders");
         var worker = builder.AddProject<Projects.OrderWorker>("worker")
@@ -47,8 +46,7 @@ public static class OrdersApp
             .WithReference(database).WaitFor(database);
         _ = builder.AddContainer("native-only", "redis", "7.4");
 
-        // Declare which requirements these native implementations satisfy. This is author-supplied
-        // capability evidence, not a probe of the running database or application.
+        // Declare PostgreSQL as the implementation of relational storage.
         var postgresImplementation = ResourceImplementation(
             id: new("example/postgres"),
             evidence:
@@ -59,6 +57,7 @@ public static class OrdersApp
                     realization: CapabilityRealizationKind.Native,
                     sourceReferences: [Source])
             ]);
+        // Declare the .NET project as the implementation of application execution.
         var dotnetProjectImplementation = WorkloadImplementation(
             id: new("example/dotnet-project"),
             evidence:
@@ -70,6 +69,7 @@ public static class OrdersApp
                     sourceReferences: [Source])
             ]);
 
+        // Associate existing Aspire resources with the canonical requirements and implementations.
         return AspireInfrastructureAssociation.Attach(
             application: builder,
             definition: Definition,
