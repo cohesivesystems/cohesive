@@ -22,7 +22,10 @@ public static class OrdersApp
 
     /// <summary>Canonical requirements, independent of native Aspire resource names and provider options.</summary>
     public static InfrastructureAuthoringResult Definition { get; } = Infrastructure.Define(
-        new("example/orders"), new("1"), new("example/orders/bindings"), infra =>
+        id: new("example/orders"),
+        revision: new("1"),
+        bindingProfileId: new("example/orders/bindings"),
+        infra =>
         {
             infra.Resource(Store).Persistent().Requires(RelationalStorage);
             infra.Workload(Worker).Requires(ApplicationExecution).RequiresReady(Store);
