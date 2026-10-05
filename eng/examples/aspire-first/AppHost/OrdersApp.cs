@@ -47,16 +47,36 @@ public static class OrdersApp
             .WithReference(database).WaitFor(database);
         _ = builder.AddContainer("native-only", "redis", "7.4");
 
-        var storage = ResourceImplementation(new("example/postgres"),
-            [new(new("example/postgres/relational"), RelationalStorage, CapabilityRealizationKind.Native,
-                sourceReferences: [Source])]);
-        var process = WorkloadImplementation(new("example/dotnet-project"),
-            [new(new("example/dotnet/execution"), ApplicationExecution, CapabilityRealizationKind.Native,
-                sourceReferences: [Source])]);
+        // Declare which requirements these native implementations satisfy. This is author-supplied
+        // capability evidence, not a probe of the running database or application.
+        var postgresImplementation = ResourceImplementation(
+            id: new("example/postgres"),
+            evidence:
+            [
+                new InfrastructureCapabilityEvidence(
+                    id: new("example/postgres/relational"),
+                    capability: RelationalStorage,
+                    realization: CapabilityRealizationKind.Native,
+                    sourceReferences: [Source])
+            ]);
+        var dotnetProjectImplementation = WorkloadImplementation(
+            id: new("example/dotnet-project"),
+            evidence:
+            [
+                new InfrastructureCapabilityEvidence(
+                    id: new("example/dotnet/execution"),
+                    capability: ApplicationExecution,
+                    realization: CapabilityRealizationKind.Native,
+                    sourceReferences: [Source])
+            ]);
 
-        return AspireInfrastructureAssociation.Attach(builder, Definition,
-            new("example/orders/local"), new("development"), associations => associations
-                .Resource(Store, database, storage, new("aspire/example/orders"), [Source])
-                .Workload(Worker, worker, process, [Source]));
+        return AspireInfrastructureAssociation.Attach(
+            application: builder,
+            definition: Definition,
+            id: new("example/orders/local"),
+            variant: new("development"),
+            associations => associations
+                .Resource(Store, database, postgresImplementation, new("aspire/example/orders"), [Source])
+                .Workload(Worker, worker, dotnetProjectImplementation, [Source]));
     }
 }
