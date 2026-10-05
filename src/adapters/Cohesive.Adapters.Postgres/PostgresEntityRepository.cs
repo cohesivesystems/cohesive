@@ -51,6 +51,13 @@ public sealed record PostgresEntityRepositoryFieldBinding
 /// </remarks>
 public sealed record PostgresEntityRepositoryMapping
 {
+    /// <summary>Authors a physical mapping using POCO selectors and an authoritative canonical definition.</summary>
+    /// <typeparam name="T">POCO whose serialized property names address canonical fields.</typeparam>
+    /// <param name="definition">Canonical field authority; owned and reused by the caller.</param>
+    /// <returns>A new invocation-local mapping builder.</returns>
+    /// <exception cref="ArgumentNullException">Definition is null.</exception>
+    public static PostgresEntityRepositoryMappingBuilder<T> For<T>(EntityDefinition definition) where T : notnull => new(definition);
+
     /// <summary>Creates a normalized PostgreSQL entity mapping.</summary>
     /// <param name="table">Physical table containing the entity rows.</param>
     /// <param name="fields">Complete one-to-one bindings for every canonical entity field.</param>
@@ -454,7 +461,7 @@ public sealed class PostgresEntityRepository : IEntityRepository
         }
     }
 
-    static void ValidateMapping(EntityDefinition definition, PostgresEntityRepositoryMapping mapping)
+    internal static void ValidateMapping(EntityDefinition definition, PostgresEntityRepositoryMapping mapping)
     {
         HashSet<string> expected = definition.Fields
             .Select(static field => field.Name.Value)

@@ -11,6 +11,28 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class OrderStorageExampleTests
 {
     [Fact]
+    public void Fluent_mapping_preserves_names_encodings_and_rejects_invalid_declarations()
+    {
+        var mapping = OrderStorage.Mapping;
+        Assert.Equal("id", mapping.IdentityField);
+        Assert.Equal("partition", mapping.PartitionField);
+        Assert.Equal("order_id", mapping.Fields[0].Column.Value);
+        Assert.All(mapping.Fields, field => Assert.Equal(PostgresRelationQueryScalarType.Text, field.ScalarType));
+        var builder = PostgresEntityRepositoryMapping.For<Order>(OrderStorage.Entity)
+            .Table("public", "orders").Identity(order => order.Id, "id");
+        Assert.Throws<InvalidOperationException>(() => builder.Build());
+        Assert.Throws<ArgumentException>(() => builder.Column(order => order.Id.Length, "length"));
+        Assert.Throws<ArgumentException>(() => builder.Column(order => order.Id.ToUpper(), "upper"));
+        var snapshot = builder.Partition(order => order.Partition, "partition").Build();
+        builder.Column(order => order.Id, "duplicate");
+        Assert.Equal(2, snapshot.Fields.Length);
+        Assert.Throws<ArgumentException>(() => builder.Build());
+        Assert.Throws<ArgumentException>(() => PostgresEntityRepositoryMapping.For<Order>(OrderStorage.Entity)
+            .Table("public", "orders").Identity(order => order.Id, "same")
+            .Partition(order => order.Partition, "same").Build());
+    }
+
+    [Fact]
     public void Example_binds_shared_repository_to_the_canonical_entity_without_connecting()
     {
         using var database = NpgsqlDataSource.Create("Host=unreachable.invalid;Database=orders;Username=example;Pooling=false");

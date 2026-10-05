@@ -65,3 +65,24 @@ prove equivalence with one.
 - [Relations capability reference](../../Cohesive.Relations/docs/CAPABILITIES.md) is generated from the target
   profiles.
 - [`Cohesive.Storage`](../../Cohesive.Storage/README.md) owns the provider-neutral storage semantics.
+
+## POCO-first entity mappings
+
+Use the canonical entity definition as the field authority and attach physical names with selectors:
+
+```csharp
+var mapping = PostgresEntityRepositoryMapping.For<Order>(entity)
+    .Table("public", "cohesive_orders")
+    .Identity(order => order.Id, "order_id")
+    .Partition(order => order.Partition, "partition_key")
+    .Build();
+```
+
+`Column` maps additional fields. Selectors follow the shared `FieldPath` conventions, including
+`JsonPropertyName`; nested paths and computed expressions are rejected. Scalar encodings come from
+the supplied canonical definition, not a second CLR type catalog. Identity and partition must be
+required non-null text. `Build` reuses repository validation for complete coverage, required fields,
+scalar compatibility and key semantics; the mapping constructor rejects duplicate fields/columns.
+An immutable mapping snapshot is independent of subsequent builder edits. The builder is invocation-local
+and not thread-safe. Custom version columns and batch bounds are optional `Build` arguments.
+The existing constructor remains available; neither API owns schema creation or migration.

@@ -19,7 +19,7 @@ waits and volume configuration in native Aspire. It adds no second deployment in
 5. Once the user starts the AppHost, ordinary Aspire runs the database and application.
    `OrderWorker/OrderStorage.cs` authors an immutable `Order` record,
    derives the canonical definition once with `ObjectEntityDefinition.For<Order>`, and adds
-   an explicit PostgreSQL field mapping, and binds the Aspire-supplied data source through
+   a fluent PostgreSQL field mapping (`For<Order>().Table().Identity().Partition().Build()`), and binds the Aspire-supplied data source through
    `PostgresNpgsqlRuntimeBinding`. The endpoints use `IEntityRepository.Upsert/TryGet`,
    implemented by the existing `Cohesive.Adapters.Postgres` repository.
    `JsonPropertyName` preserves the canonical `id`/`partition` names; writes use the

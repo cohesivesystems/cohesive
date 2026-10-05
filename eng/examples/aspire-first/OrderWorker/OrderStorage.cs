@@ -1,5 +1,4 @@
 using Cohesive.Adapters.Postgres;
-using Cohesive.Adapters.Sql;
 using System.Text.Json.Serialization;
 using Cohesive.Storage;
 using Cohesive.Transitions.Authoring;
@@ -31,11 +30,11 @@ public static class OrderStorage
     public static EntityDefinition Entity { get; } = ObjectEntityDefinition.For<Order>(new("example/order"));
 
     /// <summary>Complete physical field mapping; schema lifecycle is explicit in schema.sql.</summary>
-    public static PostgresEntityRepositoryMapping Mapping { get; } = new(
-        new SqlQualifiedTable("public", "cohesive_orders"),
-        [new(IdField, "order_id", PostgresRelationQueryScalarType.Text),
-         new(PartitionField, "partition_key", PostgresRelationQueryScalarType.Text)],
-        identityField: IdField, partitionField: PartitionField);
+    public static PostgresEntityRepositoryMapping Mapping { get; } = PostgresEntityRepositoryMapping.For<Order>(Entity)
+        .Table("public", "cohesive_orders")
+        .Identity(order => order.Id, "order_id")
+        .Partition(order => order.Partition, "partition_key")
+        .Build();
 
     /// <summary>Binds the existing Aspire-supplied connection to the canonical repository.</summary>
     /// <param name="database">Caller-owned data source; must outlive the repository.</param>
