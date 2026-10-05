@@ -28,6 +28,9 @@ public sealed record CliOption
     /// <summary>Gets the allowed raw values, matched ignoring case.</summary>
     public ImmutableArray<string> AllowedValues { get; init; } = [];
 
+    /// <summary>Gets whether values must be redacted from explanations and diagnostics.</summary>
+    public bool Sensitive { get; init; }
+
     CliOption(Type valueType) => ValueType = valueType;
 
     /// <summary>Declares an option without a default.</summary>
@@ -98,13 +101,15 @@ public sealed record CliOption
                 (!alias.StartsWith('-') || alias.Any(char.IsWhiteSpace) || alias.Length < 2 || !symbols.Add(alias)))
                 throw new ArgumentException($"Invalid or duplicate alias '{alias}'.", nameof(options));
             descriptors[index++] = new(key, new([FieldPathSegment.ForField(key)]), key, $"--{key}",
-                option.ShortName, option.Description, option.AllowedValues, option.Required, null, option.ValueType);
+                option.ShortName, option.Description, option.AllowedValues, option.Required, null, option.ValueType, option.Sensitive);
         }
 
         var command = new CliCommandBuilder<CliValues>(name, description, applyPipelines)
         {
             IsRoot = isRoot,
             ExplicitDescriptors = descriptors,
+            ExplicitEnvironmentNames = snapshot.Where(pair => pair.Value.EnvironmentVariable is not null)
+                .ToDictionary(pair => pair.Key, pair => pair.Value.EnvironmentVariable!, StringComparer.OrdinalIgnoreCase),
             ExplicitParser = configuration => new CliValues(
                 ConfigurationParameterParser.ParseValues(configuration, descriptors), descriptors),
             ApplyDefaults = supplied =>
