@@ -21,11 +21,13 @@ public sealed class AuthoredTransitionBindingTests
     [Fact]
     public void Invalid_declaration_reports_diagnostics_before_any_request()
     {
-        var exception = Assert.Throws<InvalidOperationException>(() =>
+        var exception = Assert.Throws<TransitionApiPreparationException>(() =>
             EntityApiOperationBinding.Transition("Submit", Declare("set-status"),
                 (_, _) => true, (_, _) => Results.Ok()));
         Assert.Contains("transitions.ir.nodeIdentityDuplicate", exception.Message);
         Assert.Contains("Submit", exception.Message);
+        Assert.False(exception.Compilation.IsSuccessful);
+        Assert.Contains(exception.Compilation.Validation.Diagnostics, diagnostic => diagnostic.Code == "transitions.ir.nodeIdentityDuplicate");
     }
 
     static Transition<State, bool, string> Declare(string bodyId) => TransitionAuthoring.Create<State, bool, string>(

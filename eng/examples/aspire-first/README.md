@@ -75,16 +75,23 @@ constructs `SubmitOrder(OrderId)` from the route and receives canonical `SubmitO
 outcomes. The transition validates that the command targets the loaded order. It
 references that exact declaration in the canonical API and passes it to the shared ASP.NET binding.
 The binding compiles once during registration and retains the plan for requests; invalid declarations
-fail registration with diagnostics. No global compilation cache or per-request compilation is added.
+fail registration with a `TransitionApiPreparationException` retaining structured compiler diagnostics. No global compilation cache or per-request compilation is added.
 All three routes (create, get and submit) are declared as portable handles in `OrderApi`
 under one `Entity<Order>()` builder in a static constructor,
 and bound fluently in `OrderEndpoints` through `app.MapEntityApi<Order>(..., endpoints => ...)`. Callbacks receive
-typed order state and transition outcomes; the separate declarations contain no ASP.NET handlers.
+typed order state and transition outcomes; `.Input(request => ...)` uses the existing request context
+and its `RequiredEntityId`. The separate declarations contain no handlers; the example's HTTP error body
+is explicitly the native `ProblemDetails` type. Creation declares 201, lookup/submission declare 404,
+and submission declares the common 409 body.
 Combined declaration/binding is also supported by the same shared surface; `Program` only configures startup and middleware.
 The transition binding loads the order, evaluates the rule, and commits with the captured PostgreSQL concurrency
 token. Repeated submission returns 409 without a write; a stale concurrent write also returns 409 rather
-than retrying the domain decision. `AddCohesiveExceptionHandling` plus native `UseExceptionHandler`
-map storage concurrency exceptions to sanitized 409 Problem Details; domain rejection stays a typed result. An unknown ID returns 404. There is no authentication;
+than retrying the domain decision. Both cases use `application/problem+json`: domain rejection has
+code `orders.submit.rejected`, while a lost conditional commit has the shared code
+`services.concurrency.conflict` and a trace ID. The transition binding returns its concurrency result
+directly; `AddCohesiveExceptionHandling` plus native `UseExceptionHandler` provide the same sanitized
+fallback for storage conflicts outside that binding. Neither exposes backend identities or tokens.
+An unknown ID returns 404. There is no authentication;
 this sample is for a local developer environment. Stop with Ctrl+C. `WithDataVolume`
 retains PostgreSQL data across runs; deleting that volume is a separate deliberate action.
 No cloud provider, deployment credentials or Ari environment is involved.
@@ -111,8 +118,8 @@ and startup authority; association does not synthesize or certify those annotati
 The model tests build but never start Aspire. The opt-in `OrderStorageIntegrationTests` ran against a disposable local PostgreSQL 17 database:
 it used the example's embedded schema and binding, verified create/load and token-guarded writes,
 rejected a stale token and reloaded the winning version. It removes only its randomly identified row.
-Set `COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING` to a disposable database to run this test;
-without it the test is explicitly skipped. This is storage evidence, not an Aspire startup or cloud check.
+Set `COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING` to a disposable database to run these tests;
+without it the database tests are explicitly skipped. This is storage evidence, not an Aspire startup or cloud check.
 
 Portable authority is the ordinary Cohesive definition, manifest and compiler result.
 The native map is an immutable dictionary pointing at Aspire-owned mutable objects;
@@ -128,3 +135,10 @@ lookup (404), submit, reload as Submitted, repeated-submit 409 with
 an unchanged token, missing-order 404 and rejection of a pre-submit stale write. Pure transition tests
 run without PostgreSQL and verify admission and immutable input semantics. This establishes conditional
 state mutation, not sequential execution, event sourcing, audit history or orchestration.
+
+A deterministic HTTP race lets two submissions read the same PostgreSQL token before either writes.
+Exactly one returns 200 and one returns sanitized 409, with one persisted state-version increment and
+no retries. This test deliberately registers no exception middleware. A separate smoke test launches
+the built `OrderWorker` entry point and exercises schema bootstrap, request context, create/get/submit,
+and the domain Problem Details response. Child processes and randomly identified rows are cleaned up.
+These checks do not start the Aspire orchestrator or qualify a cloud deployment.

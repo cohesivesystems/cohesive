@@ -186,8 +186,7 @@ public abstract class EntityApiOperationBinding
         ArgumentNullException.ThrowIfNull(createResult);
         var compilation = transition.Compile();
         if (!compilation.IsSuccessful)
-            throw new InvalidOperationException($"Cannot prepare Transition '{transition.Reference.DefinitionId}' for API operation '{operationName}': "
-                + string.Join("; ", compilation.Validation.Diagnostics));
+            throw new TransitionApiPreparationException(operationName, compilation);
         return Transition(operationName, compilation.Plan!, createTransitionInput, createResult,
             getExpectedConcurrencyToken, interactionContracts, createEmissionPolicy);
     }
@@ -385,6 +384,10 @@ public sealed record EntityApiRequestContext(
     string? EntityId
     )
 {
+    /// <summary>Required route identity for operations targeting an existing entity.</summary>
+    /// <exception cref="InvalidOperationException">The operation has no route identity, such as creation.</exception>
+    public string RequiredEntityId => EntityId ?? throw new InvalidOperationException("This operation requires an entity identity.");
+
     /// <summary>
     /// Loaded snapshot for read and transition operations, when available.
     /// </summary>

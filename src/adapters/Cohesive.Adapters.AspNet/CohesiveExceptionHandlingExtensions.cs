@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Cohesive.Api;
 using Cohesive.Storage;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
@@ -34,16 +35,25 @@ sealed class CohesiveConcurrencyExceptionHandler(IProblemDetailsService problems
             return false;
 
         context.Response.StatusCode = StatusCodes.Status409Conflict;
-        var details = new ProblemDetails
-        {
-            Status = StatusCodes.Status409Conflict,
-            Title = "Concurrent modification",
-            Detail = "The resource changed concurrently. Reload its current state before trying again."
-        };
-        details.Extensions["code"] = "cohesive.storage.concurrency_conflict";
-        details.Extensions["traceId"] = Activity.Current?.Id ?? context.TraceIdentifier;
+        var details = CohesiveHttpProblems.ConcurrencyConflict(context);
         if (!await problems.TryWriteAsync(new ProblemDetailsContext { HttpContext = context, ProblemDetails = details }).ConfigureAwait(false))
             await context.Response.WriteAsJsonAsync(details, options: null, contentType: "application/problem+json", cancellationToken: cancellationToken).ConfigureAwait(false);
         return true;
     }
+}
+
+/// <summary>Sanitized HTTP projections of shared execution failures.</summary>
+static class CohesiveHttpProblems
+{
+    internal static ProblemDetails ConcurrencyConflict(HttpContext context) => new()
+    {
+        Status = StatusCodes.Status409Conflict,
+        Title = "Concurrent modification",
+        Detail = "The resource changed concurrently. Reload its current state before trying again.",
+        Extensions =
+        {
+            ["code"] = ApiProblemCodes.ConcurrencyConflict,
+            ["traceId"] = Activity.Current?.Id ?? context.TraceIdentifier
+        }
+    };
 }

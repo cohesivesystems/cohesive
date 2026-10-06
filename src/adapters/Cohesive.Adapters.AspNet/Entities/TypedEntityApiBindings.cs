@@ -7,6 +7,7 @@ using Cohesive.Transitions.Model;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Cohesive.Adapters.AspNet.Entities;
 
@@ -52,7 +53,7 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
     /// <summary>Declares and binds a read endpoint using the same handle-based path.</summary>
     public TypedEntityApiBindings<TEntity> Get<TResponse>(string name, string route, Func<TEntity, Ok<TResponse>> respond) =>
         Get(Cohesive.Api.Api.Define().Entity<TEntity>().Query(name).Route("GET", route)
-            .RouteParameter<string>("id").Returns<TResponse>().Build(), respond);
+            .RouteParameter<string>("id").Returns<TResponse>().Result(ApiResultKind.NotFound).Build(), respond);
 
     /// <summary>Binds creation with typed initial state and response; identity is selected explicitly from the new state.</summary>
     public TypedEntityApiBindings<TEntity> Create<TResponse>(ApiEndpoint endpoint,
@@ -61,7 +62,7 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
         ArgumentNullException.ThrowIfNull(initialize);
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(respond);
-        Validate<TResponse>(endpoint, ApiOperationKind.Command);
+        Validate<TResponse>(endpoint, ApiOperationKind.Command, ApiResultKind.Created);
         Add(endpoint, EntityApiOperationBinding.Create(endpoint,
             (_, _) => { var value = initialize(); return entity.CreateState(identity(value), value, version: 1); },
             (_, snapshot) => respond(Read(snapshot))));
@@ -71,7 +72,7 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
     /// <summary>Declares and binds creation using the same handle-based path.</summary>
     public TypedEntityApiBindings<TEntity> Create<TResponse>(string name, string route,
         Func<TEntity> initialize, Func<TEntity, string> identity, Func<TEntity, Created<TResponse>> respond) =>
-        Create(Cohesive.Api.Api.Define().Entity<TEntity>().Command(name).Route("POST", route).Returns<TResponse>().Build(),
+        Create(Cohesive.Api.Api.Define().Entity<TEntity>().Command(name).Route("POST", route).Returns<TResponse>(ApiResultKind.Created).Build(),
             initialize, identity, respond);
 
     /// <summary>Starts typed binding of a separately declared exact transition endpoint.</summary>
@@ -100,14 +101,14 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
 
     internal TEntity Read(EntitySnapshot snapshot) => materializer.Materialize(snapshot.Entity.Observation);
 
-    internal void Validate<TResponse>(ApiEndpoint endpoint, ApiOperationKind kind)
+    internal void Validate<TResponse>(ApiEndpoint endpoint, ApiOperationKind kind, ApiResultKind resultKind = ApiResultKind.Success)
     {
         EnsureMutable();
         ArgumentNullException.ThrowIfNull(endpoint);
         if (endpoint.Operation.Entity != EntityTypeName.From<TEntity>()
             || endpoint.Operation.Kind != kind || endpoint.Operation.ResponseType != typeof(TResponse)
-            || endpoint.Operation.RequestType != typeof(void))
-            throw new ArgumentException("Endpoint entity, kind, response type or body contract does not match the typed binding. These overloads accept bodyless endpoints.", nameof(endpoint));
+            || endpoint.Operation.RequestType != typeof(void) || endpoint.Operation.PrimaryResult.Kind != resultKind)
+            throw new ArgumentException("Endpoint entity, kind, primary result, response type or body contract does not match the typed binding. These overloads accept bodyless endpoints.", nameof(endpoint));
         if (bound.Contains(endpoint.Id)) throw new InvalidOperationException($"Endpoint '{endpoint.Id}' is already bound.");
     }
 
@@ -135,7 +136,7 @@ public sealed class TypedEntityTransitionBinding<TEntity, TInput, TOutcome> wher
     readonly ApiEndpoint? endpoint;
     readonly OperationBuilder<EntityApiBuilder<TEntity>>? declaration;
     readonly Transition<TEntity, TInput, TOutcome> transition;
-    Func<string, TInput>? input;
+    Func<EntityApiRequestContext, TInput>? input;
     Func<TEntity, TOutcome, IResult>? applied;
     ApiEndpoint? resolved;
     bool completed;
@@ -153,10 +154,11 @@ public sealed class TypedEntityTransitionBinding<TEntity, TInput, TOutcome> wher
     }
 
     /// <summary>Projects the required route identity into the exact transition input type.</summary>
-    public TypedEntityTransitionBinding<TEntity, TInput, TOutcome> Input(Func<string, TInput> create)
+    public TypedEntityTransitionBinding<TEntity, TInput, TOutcome> Input(Func<EntityApiRequestContext, TInput> create)
     {
         EnsureMutable();
         ArgumentNullException.ThrowIfNull(create);
+        if (input is not null) throw new InvalidOperationException("Input is already configured.");
         input = create;
         return this;
     }
@@ -183,19 +185,39 @@ public sealed class TypedEntityTransitionBinding<TEntity, TInput, TOutcome> wher
     /// <remarks>Only admission/domain rejection is routed here. Unexpected decisions fail, rather than masquerading as domain rejection.</remarks>
     public TypedEntityApiBindings<TEntity> OnRejected<TResponse>(Func<TOutcome, Conflict<TResponse>> respond)
     {
+        ArgumentNullException.ThrowIfNull(respond);
+        return Complete<TResponse>(outcome => respond(outcome));
+    }
+
+    /// <summary>Completes domain-rejection handling with a Problem Details response.</summary>
+    /// <remarks>The callback must return status 409. Concurrency conflicts use the same body shape.</remarks>
+    public TypedEntityApiBindings<TEntity> OnRejected(Func<TOutcome, ProblemHttpResult> respond)
+    {
+        ArgumentNullException.ThrowIfNull(respond);
+        return Complete<ProblemDetails>(outcome =>
+        {
+            var result = respond(outcome);
+            if (result.StatusCode != StatusCodes.Status409Conflict)
+                throw new InvalidOperationException("A domain rejection must return HTTP 409.");
+            return result;
+        });
+    }
+
+    TypedEntityApiBindings<TEntity> Complete<TResponse>(Func<TOutcome, IResult> respond)
+    {
         EnsureMutable();
         ArgumentNullException.ThrowIfNull(respond);
         var createInput = input ?? throw new InvalidOperationException("Configure Input before completing the binding.");
         var onApplied = applied ?? throw new InvalidOperationException("Configure OnApplied before completing the binding.");
-        resolved = endpoint ?? declaration!.Result<TResponse>(ApiResultKind.Conflict).Build();
+        resolved = endpoint ?? declaration!.Result<TResponse>(ApiResultKind.Conflict).Result(ApiResultKind.NotFound).Build();
         validate!(resolved);
         if (!resolved.Operation.Results.Any(result => result.Kind == ApiResultKind.Conflict && result.BodyType == typeof(TResponse)))
             throw new ArgumentException("Endpoint must declare the typed conflict response.");
         var compilation = transition.Compile();
         if (!compilation.IsSuccessful)
-            throw new InvalidOperationException(string.Join("; ", compilation.Validation.Diagnostics));
+            throw new TransitionApiPreparationException(resolved.Name, compilation);
         var binding = EntityApiOperationBinding.Transition(resolved!, compilation.Plan!,
-            (context, _) => createInput(context.EntityId ?? throw new InvalidOperationException("Route identity is required.")),
+            (context, _) => createInput(context),
             (context, snapshot) =>
             {
                 var decision = context.Decision ?? throw new InvalidOperationException("Transition decision is required.");

@@ -1,4 +1,5 @@
 using Cohesive.Api;
+using Microsoft.AspNetCore.Mvc;
 
 namespace AspireFirst.Orders;
 
@@ -9,13 +10,13 @@ public static class OrderApi
     {
         var orders = Api.Define().Entity<Order>();
         Create = orders.Command("Create")
-            .Route("POST", "/orders").Returns<OrderCreated>().Build();
+            .Route("POST", "/orders").Returns<OrderCreated>(ApiResultKind.Created).Build();
         Get = orders.Query("Get")
             .Route("GET", "/orders/{id:guid}").RouteParameter<string>("id")
-            .Returns<OrderSummary>().Build();
+            .Returns<OrderSummary>().Result(ApiResultKind.NotFound).Build();
         Submit = orders.Command("Submit")
             .Route("POST", "/orders/{id}/submit").RouteParameter<string>("id")
-            .Returns<OrderSummary>().Result<SubmitOrderResult>(ApiResultKind.Conflict)
+            .Returns<OrderSummary>().Result<ProblemDetails>(ApiResultKind.Conflict).Result(ApiResultKind.NotFound)
             .Transition(OrderTransitions.Submit.Reference).Build();
         Definition = orders.Build();
     }

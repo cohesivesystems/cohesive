@@ -37,7 +37,7 @@ public sealed class CohesiveExceptionHandlingTests
         Assert.DoesNotContain("private backend", body);
         using var json = JsonDocument.Parse(body);
         Assert.Equal(409, json.RootElement.GetProperty("status").GetInt32());
-        Assert.Equal("cohesive.storage.concurrency_conflict", json.RootElement.GetProperty("code").GetString());
+        Assert.Equal("services.concurrency.conflict", json.RootElement.GetProperty("code").GetString());
         Assert.False(string.IsNullOrEmpty(json.RootElement.GetProperty("traceId").GetString()));
         Assert.Equal(1, calls);
         await app.StopAsync();

@@ -11,6 +11,17 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class OrderStorageExampleTests
 {
     [Fact]
+    public void Declared_HTTP_contract_matches_creation_lookup_and_both_conflicts()
+    {
+        Assert.Equal(Cohesive.Api.ApiResultKind.Created, OrderApi.Create.Operation.PrimaryResult.Kind);
+        Assert.Equal(201, OrderApi.Create.Operation.PrimaryResult.Http!.StatusCode);
+        Assert.Contains(OrderApi.Get.Operation.Results, result => result.Kind == Cohesive.Api.ApiResultKind.NotFound);
+        Assert.Contains(OrderApi.Submit.Operation.Results, result => result.Kind == Cohesive.Api.ApiResultKind.NotFound);
+        var conflict = Assert.Single(OrderApi.Submit.Operation.Results, result => result.Kind == Cohesive.Api.ApiResultKind.Conflict);
+        Assert.Equal(typeof(Microsoft.AspNetCore.Mvc.ProblemDetails), conflict.BodyType);
+    }
+
+    [Fact]
     public void Example_binds_shared_repository_to_the_canonical_entity_without_connecting()
     {
         using var database = NpgsqlDataSource.Create("Host=unreachable.invalid;Database=orders;Username=example;Pooling=false");

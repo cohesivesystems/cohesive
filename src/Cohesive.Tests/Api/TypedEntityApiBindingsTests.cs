@@ -37,20 +37,20 @@ public sealed class TypedEntityApiBindingsTests
             retained = bindings;
             if (separate)
             {
-                var create = Cohesive.Api.Api.Define().Entity<Order>().Command("Create").Route("POST", "/orders").Returns<Order>().Build();
+                var create = Cohesive.Api.Api.Define().Entity<Order>().Command("Create").Route("POST", "/orders").Returns<Order>(ApiResultKind.Created).Build();
                 var get = Cohesive.Api.Api.Define().Entity<Order>().Query("Get").Route("GET", "/orders/{id}").RouteParameter<string>("id").Returns<Order>().Build();
                 var submit = Cohesive.Api.Api.Define().Entity<Order>().Command("Submit").Route("POST", "/orders/{id}/submit")
                     .RouteParameter<string>("id").Returns<Order>().Result<Outcome>(ApiResultKind.Conflict).Transition(SubmitTransition.Reference).Build();
                 bindings.Create(create, () => new Order("one", "local", "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
                     .Get(get, state => TypedResults.Ok(state))
-                    .Transition(submit, SubmitTransition).Input(id => new Submit(id))
+                    .Transition(submit, SubmitTransition).Input(request => new Submit(request.RequiredEntityId))
                     .OnApplied((state, outcome) => TypedResults.Ok(state)).OnRejected(outcome => TypedResults.Conflict(outcome));
             }
             else
             {
                 bindings.Create("Create", "/orders", () => new Order("one", "local", "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
                     .Get("Get", "/orders/{id}", state => TypedResults.Ok(state))
-                    .Transition("Submit", "/orders/{id}/submit", SubmitTransition).Input(id => new Submit(id))
+                    .Transition("Submit", "/orders/{id}/submit", SubmitTransition).Input(request => new Submit(request.RequiredEntityId))
                     .OnApplied((state, outcome) => TypedResults.Ok(state)).OnRejected(outcome => TypedResults.Conflict(outcome));
             }
         });
@@ -82,11 +82,13 @@ public sealed class TypedEntityApiBindingsTests
         Assert.Throws<ArgumentException>(() => bindings.Get(foreign, state => TypedResults.Ok(state)));
         var wrongTransition = Cohesive.Api.Api.Define().Entity<Order>().Command("Submit").Route("POST", "/orders/{id}/submit").Returns<Order>().Build();
         Assert.Throws<ArgumentException>(() => new TypedEntityApiBindings<Order>(Entity, repository, "local")
-            .Transition(wrongTransition, SubmitTransition).Input(id => new Submit(id))
+            .Transition(wrongTransition, SubmitTransition).Input(request => new Submit(request.RequiredEntityId))
             .OnApplied((state, outcome) => TypedResults.Ok(state)));
         bindings.Get(good, state => TypedResults.Ok(state));
         Assert.Throws<InvalidOperationException>(() => bindings.Get(good, state => TypedResults.Ok(state)));
-        bindings.Transition("Submit", "/orders/{id}/submit", SubmitTransition).Input(id => new Submit(id));
+        var incomplete = bindings.Transition("Submit", "/orders/{id}/submit", SubmitTransition)
+            .Input(request => new Submit(request.RequiredEntityId));
+        Assert.Throws<InvalidOperationException>(() => incomplete.Input(request => new Submit(request.RequiredEntityId)));
         await using var app = WebApplication.CreateBuilder().Build();
         Assert.Throws<InvalidOperationException>(() => bindings.Map(app));
     }

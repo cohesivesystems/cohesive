@@ -19,9 +19,11 @@ public static class OrderEndpoints
                     respond: order => TypedResults.Created($"/orders/{order.Id}", new OrderCreated(order.Id)))
                 .Get(OrderApi.Get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
                 .Transition(OrderApi.Submit, OrderTransitions.Submit)
-                    .Input(id => new SubmitOrder(id))
+                    .Input(request => new SubmitOrder(request.RequiredEntityId))
                     .OnApplied((order, outcome) => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
-                    .OnRejected(outcome => TypedResults.Conflict(outcome)));
+                    .OnRejected(outcome => TypedResults.Problem(statusCode: StatusCodes.Status409Conflict,
+                        title: "Order cannot be submitted", detail: outcome.Reason,
+                        extensions: new Dictionary<string, object?> { ["code"] = "orders.submit.rejected" })));
     }
 
 }
