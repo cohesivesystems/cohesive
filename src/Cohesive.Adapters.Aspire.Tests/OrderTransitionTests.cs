@@ -13,7 +13,9 @@ public sealed class OrderTransitionTests
     [InlineData("Submitted", TransitionDecisionKind.AdmissionRejected)]
     public void Submission_requires_draft_and_preserves_input(string status, TransitionDecisionKind expected)
     {
-        var plan = OrderTransitions.Submit;
+        var compilation = OrderTransitions.Submit.Compile();
+        Assert.True(compilation.IsSuccessful);
+        var plan = compilation.Plan!;
         var order = new Order("order-1", OrderStorage.LocalPartition, status);
         var decision = TransitionReferenceInterpreter.DecideFullState(plan, new("test/submit"),
             PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromBool(true)),

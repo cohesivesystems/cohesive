@@ -2,6 +2,7 @@ using Cohesive.Api;
 using Cohesive.Execution;
 using Cohesive.Storage;
 using Cohesive.Transitions.Compilation;
+using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.Execution;
 using Cohesive.Transitions.Model;
 using Microsoft.AspNetCore.Http;
@@ -153,6 +154,44 @@ public sealed class EntityApiEndpointOptions
 /// </summary>
 public abstract class EntityApiOperationBinding
 {
+    /// <summary>Prepares an authored Transition once when constructing the HTTP binding.</summary>
+    /// <typeparam name="TEntity">POCO or entity authoring type.</typeparam>
+    /// <typeparam name="TInput">Transition input type.</typeparam>
+    /// <typeparam name="TOutcome">Transition outcome type.</typeparam>
+    /// <param name="operationName">Declared API operation name.</param>
+    /// <param name="transition">Canonical authored declaration, compiled without an external shape graph.</param>
+    /// <param name="createTransitionInput">Optional request-to-input projection.</param>
+    /// <param name="createResult">HTTP projection of the decision and effective snapshot.</param>
+    /// <param name="getExpectedConcurrencyToken">Optional concurrency override; defaults to the loaded token.</param>
+    /// <param name="interactionContracts">Exact contracts required for emitting transitions.</param>
+    /// <param name="createEmissionPolicy">Request-scoped emission lowering policy.</param>
+    /// <returns>A binding retaining the prepared plan, with no compilation during request execution.</returns>
+    /// <exception cref="ArgumentNullException">Transition or result projection is null.</exception>
+    /// <exception cref="ArgumentException">Operation name is empty.</exception>
+    /// <exception cref="InvalidOperationException">Compilation fails; the message includes canonical diagnostics.</exception>
+    /// <remarks>Preparation is scoped to this binding construction, with no global cache. Reuse the binding
+    /// across requests. Call the compiled-plan overload for external shape graphs or explicit preparation control.</remarks>
+    public static EntityApiOperationBinding Transition<TEntity, TInput, TOutcome>(
+        string operationName,
+        Transition<TEntity, TInput, TOutcome> transition,
+        Func<EntityApiRequestContext, object?, object?>? createTransitionInput,
+        Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
+        Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken = null,
+        InteractionContractCatalog? interactionContracts = null,
+        Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? createEmissionPolicy = null)
+        where TEntity : notnull
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+        ArgumentNullException.ThrowIfNull(transition);
+        ArgumentNullException.ThrowIfNull(createResult);
+        var compilation = transition.Compile();
+        if (!compilation.IsSuccessful)
+            throw new InvalidOperationException($"Cannot prepare Transition '{transition.Reference.DefinitionId}' for API operation '{operationName}': "
+                + string.Join("; ", compilation.Validation.Diagnostics));
+        return Transition(operationName, compilation.Plan!, createTransitionInput, createResult,
+            getExpectedConcurrencyToken, interactionContracts, createEmissionPolicy);
+    }
+
     private protected EntityApiOperationBinding(string operationName)
     {
         OperationName = Guard.RequireNotNullOrWhiteSpace(operationName);

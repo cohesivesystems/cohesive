@@ -12,16 +12,16 @@ public static class OrderEndpoints
     /// <param name="orders">Caller-owned order repository.</param>
     public static void Map(WebApplication app, IEntityRepository orders)
     {
-        var plan = OrderTransitions.Submit;
+        var submit = OrderTransitions.Submit;
         var api = Api.Define().Entity<Order>()
             .Command("Submit").Route("POST", "/orders/{id}/submit")
-                .RouteParameter<string>("id").Returns<Order>().Transition(plan.DefinitionReference).Done().Build();
+                .RouteParameter<string>("id").Returns<Order>().Transition(submit.Reference).Done().Build();
         app.MapEntityApiDefinition(api, new EntityApiEndpointOptions
         {
             Entity = OrderStorage.Entity,
             RepositoryResolver = (_, _) => orders,
             ReadPartitionKeyResolver = _ => OrderStorage.LocalPartition
-        }.Bind(EntityApiOperationBinding.Transition("Submit", plan,
+        }.Bind(EntityApiOperationBinding.Transition("Submit", submit,
             createTransitionInput: (_, _) => true,
             createResult: (context, snapshot) => context.Decision!.GuaranteeDemands.CommitRequired
                 ? Results.Ok(new { id = snapshot.Entity.EntityId.Value, status = "Submitted" })

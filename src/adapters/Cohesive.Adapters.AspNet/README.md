@@ -275,3 +275,12 @@ response; failed evaluation uses the typed `queryEvaluationFailed` alternative. 
 use the separate standard `admissionValidationFailed` problem. Both validation alternatives are
 represented in generated API contracts. Provider exceptions and cancellation propagate normally;
 there is no hidden retry or result cache. The mapper adds no query execution algorithm.
+
+### Authored entity transitions
+
+`EntityApiOperationBinding.Transition(operationName, authoredTransition, createTransitionInput, createResult)`
+accepts a `Transition<TEntity, TInput, TOutcome>` directly. It compiles once at binding construction,
+fails registration with canonical diagnostics on invalid declarations, and reuses the prepared plan
+for request execution. Declare the API operation with `authoredTransition.Reference` to retain exact
+identity/revision/fingerprint checks. Preparation lifetime is the binding, not a global cache.
+The compiled-plan overload remains available for explicit preparation or external shape graphs.
