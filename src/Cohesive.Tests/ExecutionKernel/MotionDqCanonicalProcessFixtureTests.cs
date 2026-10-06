@@ -18,9 +18,7 @@ public sealed class MotionDqCanonicalProcessFixtureTests
 
         Assert.NotSame(first, second);
         Assert.NotSame(first.Authored, second.Authored);
-        Assert.Equal(
-            "15e4d0a9d32329cb9900e57e038e1408d09674b72e35a6d944101edae253ed26",
-            first.Document.Metadata.Fingerprint.Value);
+        Assert.Equal("3aa4849489a990410c92769d4c43cffefaf0f74feb69b73aa3e8d909d6394609", first.Document.Metadata.Fingerprint.Value);
         Assert.Equal(first.Definition, second.Definition);
         Assert.Equal(first.Reference, second.Reference);
         Assert.Equal(first.Document.Metadata.SourceMap, second.Document.Metadata.SourceMap);
