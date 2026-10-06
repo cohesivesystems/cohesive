@@ -69,6 +69,8 @@ POST creates a fresh server-generated ID in `Draft`; GET returns the ID and stat
 Creation no longer accepts a caller-selected ID, preventing the old upsert route from resetting a
 submitted order. Creation retries create distinct orders; this example does not promise idempotent creation.
 `OrderTransitions.Submit` declares the POCO-authored `Draft → Submitted` rule. `OrderEndpoints`
+constructs `SubmitOrder(OrderId)` from the route and receives canonical `SubmitOrderResult(Status, Reason)`
+outcomes. The transition validates that the command targets the loaded order. It
 references that exact declaration in the canonical API and passes it to the shared ASP.NET binding.
 The binding compiles once during registration and retains the plan for requests; invalid declarations
 fail registration with diagnostics. No global compilation cache or per-request compilation is added.

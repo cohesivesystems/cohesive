@@ -22,7 +22,7 @@ public static class OrderEndpoints
             RepositoryResolver = (_, _) => orders,
             ReadPartitionKeyResolver = _ => OrderStorage.LocalPartition
         }.Bind(EntityApiOperationBinding.Transition("Submit", submit,
-            createTransitionInput: (_, _) => true,
+            createTransitionInput: (context, _) => new SubmitOrder(context.EntityId),
             createResult: (context, snapshot) => context.Decision!.GuaranteeDemands.CommitRequired
                 ? Results.Ok(new { id = snapshot.Entity.EntityId.Value, status = "Submitted" })
                 : Results.Conflict(new { error = "Order must be Draft to submit." }))));
