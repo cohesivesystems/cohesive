@@ -9,10 +9,12 @@ namespace AspireFirst.Orders;
 
 /// <summary>POCO authoring source for the canonical order state.</summary>
 /// <param name="Id">Order identity, serialized under its stable canonical field name.</param>
+/// <param name="Status">Current lifecycle state.</param>
 /// <param name="Partition">Storage partition, not an authorization boundary.</param>
 public sealed record Order(
     [property: JsonPropertyName(OrderStorage.IdField)] string Id,
-    [property: JsonPropertyName(OrderStorage.PartitionField)] string Partition);
+    [property: JsonPropertyName(OrderStorage.PartitionField)] string Partition,
+    [property: JsonPropertyName("status")] string Status = "Draft");
 
 /// <summary>Canonical order state and its explicit PostgreSQL realization for the local example.</summary>
 public static class OrderStorage
@@ -34,6 +36,7 @@ public static class OrderStorage
         .Table("public", "cohesive_orders")
         .Identity(order => order.Id, "order_id")
         .Partition(order => order.Partition, "partition_key")
+        .Column(order => order.Status, "status")
         .Build();
 
     /// <summary>Binds the existing Aspire-supplied connection to the canonical repository.</summary>

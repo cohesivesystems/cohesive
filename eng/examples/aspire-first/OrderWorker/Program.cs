@@ -19,8 +19,19 @@ await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync
 
 var app = builder.Build();
 app.UseRequestOperationContext();
-app.MapPost("/orders/{id:guid}", async (Guid id, OperationContext context) =>
+// Report concurrent modification without retrying a domain decision against changed state.
+app.Use(async (http, next) =>
 {
+    try { await next(http); }
+    catch (ObservationConcurrencyConflictException)
+    {
+        await Results.Conflict(new { error = "Order changed concurrently; reload before submitting." }).ExecuteAsync(http);
+    }
+});
+OrderEndpoints.Map(app, orders);
+app.MapPost("/orders", async (OperationContext context) =>
+{
+    var id = Guid.NewGuid();
     var snapshot = await orders.Upsert(context, OrderStorage.Register(id));
     return Results.Created($"/orders/{id:D}", new { id = snapshot.Entity.EntityId.Value });
 });
@@ -28,6 +39,6 @@ app.MapGet("/orders/{id:guid}", async (Guid id, OperationContext context) =>
 {
     var snapshot = await orders.TryGet(context, id.ToString("D"),
         new EntityReadOptions(partitionKey: OrderStorage.LocalPartition));
-    return snapshot is null ? Results.NotFound() : Results.Ok(new { id = snapshot.Entity.EntityId.Value });
+    return snapshot is null ? Results.NotFound() : Results.Ok(new { id = snapshot.Entity.EntityId.Value, status = snapshot.Entity.Observation.GetField("status").GetRequiredString() });
 });
 app.Run();

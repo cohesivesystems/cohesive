@@ -18,7 +18,7 @@ public sealed class OrderStorageExampleTests
         Assert.IsType<PostgresEntityRepository>(repository);
         Assert.Same(OrderStorage.Entity, repository.EntityDefinition);
         Assert.Equal("example/order", OrderStorage.Entity.Name.Value);
-        Assert.Equal(new[] { "id", "partition" }, OrderStorage.Entity.Fields.Select(field => field.Name.Value));
+        Assert.Equal(new[] { "id", "partition", "status" }, OrderStorage.Entity.Fields.Select(field => field.Name.Value));
         var write = OrderStorage.Register(Guid.Parse("00000000-0000-0000-0000-000000000001"));
         Assert.Equal("00000000-0000-0000-0000-000000000001", write.Entity.EntityId.Value);
         Assert.Equal(write.Entity.EntityId.Value, write.Entity.Observation.GetField(OrderStorage.IdField).GetRequiredString());
