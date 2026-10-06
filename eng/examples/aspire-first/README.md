@@ -76,8 +76,10 @@ outcomes. The transition validates that the command targets the loaded order. It
 references that exact declaration in the canonical API and passes it to the shared ASP.NET binding.
 The binding compiles once during registration and retains the plan for requests; invalid declarations
 fail registration with diagnostics. No global compilation cache or per-request compilation is added.
-All three routes (create, get and submit) are declared and bound together in `OrderEndpoints`
-using shared entity API bindings; `Program` only configures startup and middleware.
+All three routes (create, get and submit) are declared as portable handles in `OrderApi`
+and bound fluently in `OrderEndpoints` through `TypedEntityApiBindings<Order>`. Callbacks receive
+typed order state and transition outcomes; the separate declarations contain no ASP.NET handlers.
+Combined declaration/binding is also supported by the same shared surface; `Program` only configures startup and middleware.
 The transition binding loads the order, evaluates the rule, and commits with the captured PostgreSQL concurrency
 token. Repeated submission returns 409 without a write; a stale concurrent write also returns 409 rather
 than retrying the domain decision. An unknown ID returns 404. There is no authentication;

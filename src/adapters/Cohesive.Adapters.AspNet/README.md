@@ -284,3 +284,49 @@ fails registration with canonical diagnostics on invalid declarations, and reuse
 for request execution. Declare the API operation with `authoredTransition.Reference` to retain exact
 identity/revision/fingerprint checks. Preparation lifetime is the binding, not a global cache.
 The compiled-plan overload remains available for explicit preparation or external shape graphs.
+
+### Typed entity endpoint bindings
+
+`TypedEntityApiBindings<T>` offers combined or separate declaration/binding over the same existing
+Create/Get/Transition handlers. The registration session prepares one entity materializer, and each
+completed transition binding prepares one plan. It does not implement another persistence or execution path.
+
+Separate declarations retain ordinary portable `ApiEndpoint` handles:
+
+```csharp
+var get = Api.Define().Entity<Order>().Query("Get")
+    .Route("GET", "/orders/{id}").RouteParameter<string>("id")
+    .Returns<OrderSummary>().Build();
+
+new TypedEntityApiBindings<Order>(entity, repository, "local")
+    .Get(get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
+    .Map(app);
+```
+
+The equivalent combined form creates that same endpoint representation:
+
+```csharp
+new TypedEntityApiBindings<Order>(entity, repository, "local")
+    .Get("Get", "/orders/{id}", order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
+    .Map(app);
+```
+
+Creation accepts a typed initializer, identity selector and `Created<T>` response. Transition bindings use
+`.Transition(endpoint, authored).Input(id => command).OnApplied((state, outcome) => TypedResults.Ok(response))`
+followed by `.OnRejected(outcome => TypedResults.Conflict(response))`; combined authoring accepts name/route
+instead of an endpoint. Response generic types are inferred from native TypedResults. Existing endpoint
+handles are checked at registration for entity, operation kind, request and primary response types; transition
+handles must reference the exact authored revision/fingerprint and declare the typed Conflict result.
+Combined transition authoring adds that result declaration automatically. Only admission/domain rejection
+reaches OnRejected; unexpected execution failures are not converted into domain rejection.
+
+The current convenience surface covers bodyless create/get commands and route-derived transition inputs,
+with an explicit fixed point-read partition and conventional `id` route key. It does not infer authentication
+or tenant policy. Use existing lower-level bindings for request bodies, custom route/partition policies,
+asynchronous result projections or emitting transitions. Native endpoint handles carry no ASP.NET delegates;
+CLR callback types are checked at compile time, while agreement with a supplied declaration is validated at
+registration. This is not compile-time certification of arbitrary serialized definitions.
+
+Sessions are registration-scoped and non-thread-safe, reject duplicates and unfinished transitions, and freeze
+after Map. Entity observations use a compiled materializer; structured transition outcomes use the existing
+ObservationValue conversion contract. Keep custom serialization conventions aligned with canonical authoring.
