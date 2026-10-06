@@ -68,7 +68,9 @@ curl -X POST "$WORKER_URL/orders/$ORDER_ID/submit"
 POST creates a fresh server-generated ID in `Draft`; GET returns the ID and status, or 404.
 Creation no longer accepts a caller-selected ID, preventing the old upsert route from resetting a
 submitted order. Creation retries create distinct orders; this example does not promise idempotent creation.
-`OrderTransitions.Submit` declares the POCO-authored `Draft → Submitted` rule. `OrderEndpoints`
+`OrderTransitions.Submit` uses conventional node IDs and provenance, keeping only the contract ID
+and revision explicit. Inserting or reordering implicit steps changes their IDs; explicit IDs remain
+available when editing stability is required. It declares the POCO-authored `Draft → Submitted` rule. `OrderEndpoints`
 constructs `SubmitOrder(OrderId)` from the route and receives canonical `SubmitOrderResult(Status, Reason)`
 outcomes. The transition validates that the command targets the loaded order. It
 references that exact declaration in the canonical API and passes it to the shared ASP.NET binding.

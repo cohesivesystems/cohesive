@@ -132,6 +132,14 @@ public class TransitionSequenceBuilder<TEntity, TInput, TOutcome>
             Context.Source(sourceFile, sourceLine, sourceMember, $"Set '{id.Value}'"));
     }
 
+    /// <summary>Adds a constant field update with a deterministic authoring-order node identity.</summary>
+    /// <remarks>Inserting or reordering implicit steps changes their identities. Use explicit IDs for edit-stable nodes.</remarks>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> Set<TValue>(
+        Expression<Func<TEntity, TValue>> field, TValue value,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "") =>
+        Set(Context.NextConventionId("set"), field, value, sourceFile, sourceLine, sourceMember);
+
     /// <summary>Adds a Set sparse patch containing a portable constant.</summary>
     /// <typeparam name="TValue">CLR value type of the target field.</typeparam>
     /// <param name="id">Stable update-node identity.</param>
@@ -811,6 +819,13 @@ public class TransitionSequenceBuilder<TEntity, TInput, TOutcome>
         return this;
     }
 
+    /// <summary>Returns an applied typed outcome with a deterministic authoring-order node identity.</summary>
+    /// <remarks>Use the explicit overload for other dispositions or edit-stable node identities.</remarks>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> Return(TOutcome value,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "") =>
+        Return(Context.NextConventionId("return"), TransitionOutcomeDisposition.Applied, value, sourceFile, sourceLine, sourceMember);
+
     /// <summary>Adds one typed terminal constant outcome.</summary>
     /// <param name="id">Stable outcome-node identity.</param>
     /// <param name="disposition">Applied, no-change, or domain-rejected disposition.</param>
@@ -940,6 +955,15 @@ public sealed class TransitionBuilder<TEntity, TInput, TOutcome>
             Context.Source(sourceFile, sourceLine, sourceMember, $"Subject creation '{id.Value}'"));
         return this;
     }
+
+    /// <summary>Adds an admission rule with a deterministic authoring-order node identity.</summary>
+    /// <remarks>Inserting or reordering implicit steps changes their identities. Explicit IDs remain available.</remarks>
+    public TransitionBuilder<TEntity, TInput, TOutcome> Requires(
+        Expression<Func<TEntity, TInput, bool>> predicate,
+        Expression<Func<TEntity, TInput, TOutcome>> rejection,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "") =>
+        Requires(Context.NextConventionId("requires"), predicate, rejection, sourceFile, sourceLine, sourceMember);
 
     /// <summary>Adds one ordered admission rule with a typed rejection outcome.</summary>
     /// <param name="id">Stable admission-rule identity.</param>
@@ -1278,6 +1302,11 @@ internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
     readonly TransitionExpressionTranslator<TEntity, TInput> translator;
     readonly IClrTypeRefMapper typeRefMapper;
     readonly Shape entityShape;
+    int conventionOrdinal;
+
+    internal ExecutionNodeId NextConventionId(string kind) =>
+        new($"{metadata.BodyId.Value}/auto/{kind}/{(++conventionOrdinal).ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+
     readonly TransitionAuthoringMetadata metadata;
     readonly Dictionary<Type, ValueContract> contracts = [];
     readonly Dictionary<object, AuthoredTransitionSource> sources = new(ReferenceEqualityComparer.Instance);
