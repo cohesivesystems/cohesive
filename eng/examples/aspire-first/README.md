@@ -87,8 +87,11 @@ The compiler validates **declared evidence**, not PostgreSQL configuration or a 
 service. A PostgreSQL resource type does not automatically assert a transaction, audit,
 ordering or durability guarantee. Native `WithReference`/`WaitFor` remain the wiring
 and startup authority; association does not synthesize or certify those annotations.
-The model tests build but never start Aspire. Live database round trips are a separate
-manual demonstration, not claimed by those tests.
+The model tests build but never start Aspire. The opt-in `OrderStorageIntegrationTests` ran against a disposable local PostgreSQL 17 database:
+it used the example's embedded schema and binding, verified create/load and token-guarded writes,
+rejected a stale token and reloaded the winning version. It removes only its randomly identified row.
+Set `COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING` to a disposable database to run this test;
+without it the test is explicitly skipped. This is storage evidence, not an Aspire startup or cloud check.
 
 Portable authority is the ordinary Cohesive definition, manifest and compiler result.
 The native map is an immutable dictionary pointing at Aspire-owned mutable objects;
