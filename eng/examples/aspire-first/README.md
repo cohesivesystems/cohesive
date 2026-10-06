@@ -76,7 +76,9 @@ outcomes. The transition validates that the command targets the loaded order. It
 references that exact declaration in the canonical API and passes it to the shared ASP.NET binding.
 The binding compiles once during registration and retains the plan for requests; invalid declarations
 fail registration with diagnostics. No global compilation cache or per-request compilation is added.
-That binding loads the order, evaluates the rule, and commits with the captured PostgreSQL concurrency
+All three routes (create, get and submit) are declared and bound together in `OrderEndpoints`
+using shared entity API bindings; `Program` only configures startup and middleware.
+The transition binding loads the order, evaluates the rule, and commits with the captured PostgreSQL concurrency
 token. Repeated submission returns 409 without a write; a stale concurrent write also returns 409 rather
 than retrying the domain decision. An unknown ID returns 404. There is no authentication;
 this sample is for a local developer environment. Stop with Ctrl+C. `WithDataVolume`
@@ -117,7 +119,8 @@ provider-options wrapper or native runtime readiness collector is introduced.
 ## Transition validation
 
 The opt-in PostgreSQL test also starts the actual shared HTTP transition binding on a local ephemeral
-port with request-context middleware. It verifies submit, reload as Submitted, repeated-submit 409 with
+port with request-context middleware. It verifies HTTP creation (201), lookup (Draft), missing-order
+lookup (404), submit, reload as Submitted, repeated-submit 409 with
 an unchanged token, missing-order 404 and rejection of a pre-submit stale write. Pure transition tests
 run without PostgreSQL and verify admission and immutable input semantics. This establishes conditional
 state mutation, not sequential execution, event sourcing, audit history or orchestration.

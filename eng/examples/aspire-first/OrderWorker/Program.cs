@@ -1,6 +1,5 @@
 using AspireFirst.Orders;
 using Cohesive.Adapters.AspNet;
-using Cohesive.Prelude;
 using Cohesive.Storage;
 using Npgsql;
 
@@ -29,16 +28,4 @@ app.Use(async (http, next) =>
     }
 });
 OrderEndpoints.Map(app, orders);
-app.MapPost("/orders", async (OperationContext context) =>
-{
-    var id = Guid.NewGuid();
-    var snapshot = await orders.Upsert(context, OrderStorage.Register(id));
-    return Results.Created($"/orders/{id:D}", new { id = snapshot.Entity.EntityId.Value });
-});
-app.MapGet("/orders/{id:guid}", async (Guid id, OperationContext context) =>
-{
-    var snapshot = await orders.TryGet(context, id.ToString("D"),
-        new EntityReadOptions(partitionKey: OrderStorage.LocalPartition));
-    return snapshot is null ? Results.NotFound() : Results.Ok(new { id = snapshot.Entity.EntityId.Value, status = snapshot.Entity.Observation.GetField("status").GetRequiredString() });
-});
 app.Run();

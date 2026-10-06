@@ -3,6 +3,7 @@ using Cohesive.Adapters.AspNet;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using System.Net;
+using System.Net.Http.Json;
 using Cohesive.Prelude;
 using Cohesive.Storage;
 using Npgsql;
@@ -45,6 +46,26 @@ public sealed class OrderStorageIntegrationTests
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+            var created = await client.PostAsync("/orders", null);
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+            var createdOrder = await created.Content.ReadFromJsonAsync<OrderCreated>();
+            Assert.NotNull(createdOrder);
+            Assert.True(Guid.TryParse(createdOrder.Id, out _));
+            try
+            {
+                var fetched = await client.GetFromJsonAsync<OrderSummary>($"/orders/{createdOrder.Id}");
+                Assert.Equal("Draft", fetched!.Status);
+                Assert.Equal(createdOrder.Id, fetched.Id);
+                Assert.Equal(HttpStatusCode.NotFound,
+                    (await client.GetAsync($"/orders/{Guid.NewGuid():D}")).StatusCode);
+            }
+            finally
+            {
+                await using var removeCreated = database.CreateCommand("DELETE FROM public.cohesive_orders WHERE partition_key = $1 AND order_id = $2");
+                removeCreated.Parameters.AddWithValue(OrderStorage.LocalPartition);
+                removeCreated.Parameters.AddWithValue(createdOrder.Id);
+                await removeCreated.ExecuteNonQueryAsync();
+            }
             var submitted = await client.PostAsync($"/orders/{id:D}/submit", null);
             Assert.Equal(HttpStatusCode.OK, submitted.StatusCode);
             var stored = await repository.TryGet(context, id.ToString("D"), new EntityReadOptions(partitionKey: OrderStorage.LocalPartition));
