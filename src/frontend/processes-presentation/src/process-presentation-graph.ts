@@ -30,7 +30,7 @@ export type { DeepReadonly } from './process-presentation-values'
 export const canonicalProcessPresentationCompatibility = Object.freeze({
   definitionKind: 'process',
   projectionVersion: 'cohesive-process-presentation/v1',
-  schemaVersions: Object.freeze(['cohesive-execution/v3'] as const),
+  schemaVersions: Object.freeze(['cohesive-execution/v4'] as const),
 })
 
 export type CanonicalProcessNodeKind = (typeof canonicalProcessNodeKinds)[number]
@@ -88,7 +88,7 @@ export interface ProcessPresentationDefinitionEvidence {
 }
 
 export interface ProcessPresentationValueContractEvidence {
-  readonly contract: DeepReadonly<ValueContract>
+  readonly contract: DeepReadonly<Omit<ValueContract, 'type'> & { type: ValueContract['type'] | number }>
   readonly role: string
 }
 
@@ -141,6 +141,8 @@ export interface ProcessPresentationDocumentEvidence {
   readonly kind: string
   readonly metadata: DeepReadonly<ExecutionDefinitionMetadata>
   readonly schemaVersion: string
+  /** Document-local type entries referenced by integer type uses in source evidence. */
+  readonly typeDefinitions: readonly unknown[]
 }
 
 export interface ProcessPresentationGraph {
@@ -357,6 +359,7 @@ export function projectCanonicalProcessDocument(
       kind,
       metadata: cloneWireValue(metadata),
       schemaVersion,
+      typeDefinitions: Array.isArray(definition.$types) ? cloneWireValue(definition.$types) : [],
     },
     edges: context.edges.map(freezeEdge),
     entryNodeId: entry && context.nodeIds.has(entryNodeId!) ? entryNodeId : null,
@@ -1181,7 +1184,7 @@ function addValueContract(owner: MutableNode, role: string, rawContract: unknown
     return
   }
   owner.details.valueContracts.push(deepFreeze({
-    contract: cloneWireValue(rawContract) as DeepReadonly<ValueContract>,
+    contract: cloneWireValue(rawContract) as ProcessPresentationValueContractEvidence['contract'],
     role,
   }))
 }

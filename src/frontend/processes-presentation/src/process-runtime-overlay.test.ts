@@ -546,7 +546,7 @@ function representativeDocument(): ExecutionDefinitionDocument {
         source: { reference: 'training-process.cs' },
       },
       revisionId: processReference.revisionId,
-      schemaVersion: 'cohesive-execution/v3',
+      schemaVersion: 'cohesive-execution/v4',
       sourceMap: { entries: [] },
     },
   } as unknown as ExecutionDefinitionDocument

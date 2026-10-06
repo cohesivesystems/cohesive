@@ -44,9 +44,7 @@ public sealed class CanonicalTransitionIrTests
         Assert.Equal(definition.Preconditions.Length, restoredDefinition.Preconditions.Length);
         Assert.Equal(definition.Invariants.Length, restoredDefinition.Invariants.Length);
         Assert.Equal(definition.Body.Steps.Length, restoredDefinition.Body.Steps.Length);
-        Assert.Equal(
-            "46a774479e211b1aa39fe664909797d95e24391f456f91b6be261a061b14cb4f",
-            document.Metadata.Fingerprint.Value);
+        Assert.Equal("ba1a74e7006b231fad2ea1bf4c92d79c3a6d52bf51052d1fb4ce31a5f3e809f9", document.Metadata.Fingerprint.Value);
     }
 
     [Fact]

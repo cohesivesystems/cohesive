@@ -84,7 +84,7 @@ public sealed record ExecutionDefinitionDocument
     object? semanticFingerprintLock;
 
     /// <summary>Current shared execution-definition document schema version.</summary>
-    public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-execution/v3");
+    public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-execution/v4");
 
     /// <summary>Creates a portable execution-definition document.</summary>
     /// <param name="kind">Stable semantic family of the definition payload.</param>
@@ -162,6 +162,11 @@ public sealed record ExecutionDefinitionDocument
     /// <summary>
     /// Projects a typed canonical definition into a current shared execution-definition document.
     /// </summary>
+    /// <remarks>
+    /// Structural types are interned in the definition's document-local $types table. Integer uses
+    /// have meaning only within this document; the table and uses both participate in its fingerprint.
+    /// Authors supply existing TypeRef values, never a hand-maintained $types property.
+    /// </remarks>
     /// <typeparam name="TDefinition">Portable block-specific definition type.</typeparam>
     /// <param name="kind">Stable semantic family of the definition.</param>
     /// <param name="definitionId">Stable identity shared by all revisions of the definition.</param>
@@ -201,9 +206,7 @@ public sealed record ExecutionDefinitionDocument
 
         var normalizedExtensions = NormalizeExtensions(extensions);
         var definitionElement = ExecutionDefinitionFingerprinter.NormalizeDefinition(
-            JsonSerializer.SerializeToElement(
-                definition,
-                ExecutionDefinitionJsonSerializer.GetReadOnlyOptions()));
+            ExecutionDefinitionTypes.Serialize(definition));
 
         var fingerprint = ExecutionDefinitionFingerprinter.ComputeNormalized(
             CurrentSchemaVersion,

@@ -247,7 +247,7 @@ public static class ExecutionDefinitionJsonSerializer
     /// <summary>Deserializes a document's canonical payload as a block-specific definition type.</summary>
     /// <typeparam name="TDefinition">Portable block-specific definition type.</typeparam>
     /// <param name="document">Document whose canonical definition payload is projected.</param>
-    /// <returns>The typed definition represented by the document payload.</returns>
+    /// <returns>The typed definition with document-local indices resolved to shared immutable TypeRef instances.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="document"/> is <see langword="null"/>.</exception>
     /// <exception cref="JsonException">
     /// The payload cannot be decoded as <typeparamref name="TDefinition"/> or produces a null value.
@@ -258,9 +258,7 @@ public static class ExecutionDefinitionJsonSerializer
     public static TDefinition DeserializeDefinition<TDefinition>(ExecutionDefinitionDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        return document.Definition.Deserialize<TDefinition>(GetReadOnlyOptions())
-            ?? throw new JsonException(
-                $"Execution definition payload deserialized to null for '{typeof(TDefinition).FullName}'.");
+        return ExecutionDefinitionTypes.Deserialize<TDefinition>(document.Definition);
     }
 
     static DocumentValidationResult TryDeserializeCore(

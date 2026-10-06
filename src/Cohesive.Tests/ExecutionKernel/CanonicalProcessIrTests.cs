@@ -58,9 +58,7 @@ public sealed class CanonicalProcessIrTests
                 $"Node {index} ({definition.Nodes[index].GetType().Name}) did not preserve structural equality.");
         }
         Assert.Equal(definition, restoredDefinition);
-        Assert.Equal(
-            "e3e5f9db7e4a5f1de252aebbb87f6317eb0371a76e1a7078f193454e4e9950b7",
-            document.Metadata.Fingerprint.Value);
+        Assert.Equal("2580b961eb03910672cb44fc2c0999795cd4a572b63312b9003f87928748f52e", document.Metadata.Fingerprint.Value);
     }
 
     [Fact]
