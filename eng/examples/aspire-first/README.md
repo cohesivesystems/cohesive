@@ -77,7 +77,8 @@ references that exact declaration in the canonical API and passes it to the shar
 The binding compiles once during registration and retains the plan for requests; invalid declarations
 fail registration with diagnostics. No global compilation cache or per-request compilation is added.
 All three routes (create, get and submit) are declared as portable handles in `OrderApi`
-and bound fluently in `OrderEndpoints` through `TypedEntityApiBindings<Order>`. Callbacks receive
+under one `Entity<Order>()` builder in a static constructor,
+and bound fluently in `OrderEndpoints` through `app.MapEntityApi<Order>(..., endpoints => ...)`. Callbacks receive
 typed order state and transition outcomes; the separate declarations contain no ASP.NET handlers.
 Combined declaration/binding is also supported by the same shared surface; `Program` only configures startup and middleware.
 The transition binding loads the order, evaluates the rule, and commits with the captured PostgreSQL concurrency

@@ -11,17 +11,17 @@ public static class OrderEndpoints
     /// <param name="orders">Caller-owned order repository.</param>
     public static void Map(WebApplication app, IEntityRepository orders)
     {
-        new TypedEntityApiBindings<Order>(OrderStorage.Entity, orders, OrderStorage.LocalPartition)
-            .Create(OrderApi.Create,
-                initialize: () => new Order(Guid.NewGuid().ToString("D"), OrderStorage.LocalPartition),
-                identity: order => order.Id,
-                respond: order => TypedResults.Created($"/orders/{order.Id}", new OrderCreated(order.Id)))
-            .Get(OrderApi.Get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
-            .Transition(OrderApi.Submit, OrderTransitions.Submit)
-                .Input(id => new SubmitOrder(id))
-                .OnApplied((order, outcome) => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
-                .OnRejected(outcome => TypedResults.Conflict(outcome))
-            .Map(app);
+        app.MapEntityApi<Order>(OrderStorage.Entity, orders, OrderStorage.LocalPartition,
+            endpoints => endpoints
+                .Create(OrderApi.Create,
+                    initialize: () => new Order(Guid.NewGuid().ToString("D"), OrderStorage.LocalPartition),
+                    identity: order => order.Id,
+                    respond: order => TypedResults.Created($"/orders/{order.Id}", new OrderCreated(order.Id)))
+                .Get(OrderApi.Get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
+                .Transition(OrderApi.Submit, OrderTransitions.Submit)
+                    .Input(id => new SubmitOrder(id))
+                    .OnApplied((order, outcome) => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
+                    .OnRejected(outcome => TypedResults.Conflict(outcome)));
     }
 
 }

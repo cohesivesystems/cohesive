@@ -298,17 +298,15 @@ var get = Api.Define().Entity<Order>().Query("Get")
     .Route("GET", "/orders/{id}").RouteParameter<string>("id")
     .Returns<OrderSummary>().Build();
 
-new TypedEntityApiBindings<Order>(entity, repository, "local")
-    .Get(get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
-    .Map(app);
+app.MapEntityApi<Order>(entity, repository, "local", endpoints => endpoints
+    .Get(get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status))));
 ```
 
 The equivalent combined form creates that same endpoint representation:
 
 ```csharp
-new TypedEntityApiBindings<Order>(entity, repository, "local")
-    .Get("Get", "/orders/{id}", order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
-    .Map(app);
+app.MapEntityApi<Order>(entity, repository, "local", endpoints => endpoints
+    .Get("Get", "/orders/{id}", order => TypedResults.Ok(new OrderSummary(order.Id, order.Status))));
 ```
 
 Creation accepts a typed initializer, identity selector and `Created<T>` response. Transition bindings use

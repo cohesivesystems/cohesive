@@ -27,31 +27,34 @@ public sealed class TypedEntityApiBindingsTests
     public async Task Combined_and_separate_declarations_share_typed_execution(bool separate)
     {
         var repository = new InMemoryEntityOutboxRepository(Entity, partitionKeyFieldName: "Partition");
-        var bindings = new TypedEntityApiBindings<Order>(Entity, repository, "local");
+        TypedEntityApiBindings<Order>? retained = null;
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddRequestOperationContext();
         await using var app = builder.Build();
         app.UseRequestOperationContext();
-        if (separate)
+        app.MapEntityApi<Order>(Entity, repository, "local", bindings =>
         {
-            var create = Cohesive.Api.Api.Define().Entity<Order>().Command("Create").Route("POST", "/orders").Returns<Order>().Build();
-            var get = Cohesive.Api.Api.Define().Entity<Order>().Query("Get").Route("GET", "/orders/{id}").RouteParameter<string>("id").Returns<Order>().Build();
-            var submit = Cohesive.Api.Api.Define().Entity<Order>().Command("Submit").Route("POST", "/orders/{id}/submit")
-                .RouteParameter<string>("id").Returns<Order>().Result<Outcome>(ApiResultKind.Conflict).Transition(SubmitTransition.Reference).Build();
-            bindings.Create(create, () => new Order("one", "local", "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
-                .Get(get, state => TypedResults.Ok(state))
-                .Transition(submit, SubmitTransition).Input(id => new Submit(id))
-                .OnApplied((state, outcome) => TypedResults.Ok(state)).OnRejected(outcome => TypedResults.Conflict(outcome));
-        }
-        else
-        {
-            bindings.Create("Create", "/orders", () => new Order("one", "local", "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
-                .Get("Get", "/orders/{id}", state => TypedResults.Ok(state))
-                .Transition("Submit", "/orders/{id}/submit", SubmitTransition).Input(id => new Submit(id))
-                .OnApplied((state, outcome) => TypedResults.Ok(state)).OnRejected(outcome => TypedResults.Conflict(outcome));
-        }
-        bindings.Map(app);
-        Assert.Throws<InvalidOperationException>(() => bindings.Map(app));
+            retained = bindings;
+            if (separate)
+            {
+                var create = Cohesive.Api.Api.Define().Entity<Order>().Command("Create").Route("POST", "/orders").Returns<Order>().Build();
+                var get = Cohesive.Api.Api.Define().Entity<Order>().Query("Get").Route("GET", "/orders/{id}").RouteParameter<string>("id").Returns<Order>().Build();
+                var submit = Cohesive.Api.Api.Define().Entity<Order>().Command("Submit").Route("POST", "/orders/{id}/submit")
+                    .RouteParameter<string>("id").Returns<Order>().Result<Outcome>(ApiResultKind.Conflict).Transition(SubmitTransition.Reference).Build();
+                bindings.Create(create, () => new Order("one", "local", "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
+                    .Get(get, state => TypedResults.Ok(state))
+                    .Transition(submit, SubmitTransition).Input(id => new Submit(id))
+                    .OnApplied((state, outcome) => TypedResults.Ok(state)).OnRejected(outcome => TypedResults.Conflict(outcome));
+            }
+            else
+            {
+                bindings.Create("Create", "/orders", () => new Order("one", "local", "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
+                    .Get("Get", "/orders/{id}", state => TypedResults.Ok(state))
+                    .Transition("Submit", "/orders/{id}/submit", SubmitTransition).Input(id => new Submit(id))
+                    .OnApplied((state, outcome) => TypedResults.Ok(state)).OnRejected(outcome => TypedResults.Conflict(outcome));
+            }
+        });
+        Assert.Throws<InvalidOperationException>(() => retained!.Map(app));
         app.Urls.Add("http://127.0.0.1:0");
         await app.StartAsync();
         using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
