@@ -29,10 +29,10 @@ public static class OrderStorage
     public const string LocalPartition = "local";
 
     /// <summary>Semantic field authority; PostgreSQL bindings add only physical details.</summary>
-    public static EntityDefinition Entity { get; } = ObjectEntityDefinition.For<Order>(new("example/order"));
+    public static EntityDefinition Entity { get; } = FulfillmentDomain.Orders.Definition;
 
     /// <summary>Complete physical field mapping; schema lifecycle is explicit in schema.sql.</summary>
-    public static PostgresEntityRepositoryMapping Mapping { get; } = PostgresEntityRepositoryMapping.For<Order>(Entity)
+    public static PostgresEntityRepositoryMapping Mapping { get; } = PostgresEntityRepositoryMapping.For(FulfillmentDomain.Orders)
         .Table("public", "cohesive_orders")
         .Identity(order => order.Id, "order_id")
         .Partition(order => order.Partition, "partition_key")

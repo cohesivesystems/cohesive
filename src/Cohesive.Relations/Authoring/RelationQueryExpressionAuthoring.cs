@@ -441,6 +441,7 @@ public sealed partial class RelationQueryExpressionAuthoring
                 nameof(from));
         }
 
+        var availableRelationship = RequireRelationshipAvailable(relationship);
         var relatedShape = clr.Shape<TRelated>(expectedRelated);
         TrackShape(relatedShape);
         var reference = sourceReference ?? $"traverse/{relationship.Id.Value}";
@@ -453,6 +454,7 @@ public sealed partial class RelationQueryExpressionAuthoring
             requirement,
             source: Source(reference, $"Traversal of relationship '{relationship.Id.Value}'."),
             bindingSource: Source(reference + "/binding", $"Related CLR binding '{StableTypeName(typeof(TRelated))}'."));
+        CommitRelationship(availableRelationship);
         return new(
             traversed.Node,
             new RelationQueryExpressionValueBinding<TRelated>(

@@ -1173,7 +1173,7 @@ public sealed class PostgresRelationQueryCompiler
             var combined = ProjectCombined(builder, left, leftEnvironment, right, rightEnvironment);
             if (contract.JoinKind == JoinKind.Left)
             {
-                AddOuterPresence(combined, right, rightEnvironment);
+                AddOuterPresence(combined, right);
             }
 
             decisions.Add(Decision(
@@ -1311,7 +1311,7 @@ public sealed class PostgresRelationQueryCompiler
             var combined = ProjectCombined(builder, left, leftEnvironment, right, rightEnvironment);
             if (join.Kind == JoinKind.Left)
             {
-                AddOuterPresence(combined, right, rightEnvironment);
+                AddOuterPresence(combined, right);
             }
 
             decisions.Add(Decision(PostgresRelationQueryLoweringDecisionKind.ExplicitJoin,
@@ -1355,7 +1355,7 @@ public sealed class PostgresRelationQueryCompiler
             var combined = ProjectCombined(builder, left, leftEnvironment, right, rightEnvironment);
             if (temporal.Kind == JoinKind.Left)
             {
-                AddOuterPresence(combined, right, rightEnvironment);
+                AddOuterPresence(combined, right);
             }
 
             decisions.Add(Decision(PostgresRelationQueryLoweringDecisionKind.TemporalJoin,
@@ -3044,16 +3044,12 @@ public sealed class PostgresRelationQueryCompiler
 
         static void AddOuterPresence(
             CombinedScope combined,
-            Scope right,
-            Environment rightEnvironment)
+            Scope right)
         {
+            // ProjectCombined already selected these markers. Carry only their output aliases;
+            // retaining an input expression leaks a previous subquery's alias into chained joins.
             foreach (var existing in right.OuterPresence)
-            {
-                var qualified = SqlExpression.Column(
-                    rightEnvironment.SourceAliasFor(existing.Value.Alias), existing.Value.Alias);
-                combined.OuterPresence[existing.Key] = existing.Value with { Expression = qualified };
                 combined.AddPresenceDependency(existing.Key);
-            }
         }
 
         CompiledExpression ResolveForwardReference(
@@ -3714,8 +3710,7 @@ public sealed class PostgresRelationQueryCompiler
 
     readonly record struct OuterPresence(
         string Alias,
-        RelationQuerySourcePlacementBindingId Placement,
-        SqlExpression? Expression = null);
+        RelationQuerySourcePlacementBindingId Placement);
 
     readonly record struct CompiledExpression(
         SqlExpression Expression,
@@ -3841,14 +3836,13 @@ public sealed class PostgresRelationQueryCompiler
             }
             foreach (var pair in scope.OuterPresence)
             {
-                var expression = pair.Value.Expression
-                                 ?? SqlExpression.Column(environment.SourceAliasFor(pair.Value.Alias), pair.Value.Alias);
+                var expression = SqlExpression.Column(environment.SourceAliasFor(pair.Value.Alias), pair.Value.Alias);
                 if (selectedAliases.Add(pair.Value.Alias))
                 {
                     builder.Select(expression, pair.Value.Alias);
                 }
 
-                OuterPresence.Add(pair.Key, pair.Value with { Expression = null });
+                OuterPresence.Add(pair.Key, pair.Value);
             }
         }
 

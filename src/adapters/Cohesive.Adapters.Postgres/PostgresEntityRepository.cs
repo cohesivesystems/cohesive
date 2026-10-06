@@ -58,6 +58,18 @@ public sealed record PostgresEntityRepositoryMapping
     /// <exception cref="ArgumentNullException">Definition is null.</exception>
     public static PostgresEntityRepositoryMappingBuilder<T> For<T>(EntityDefinition definition) where T : notnull => new(definition);
 
+    /// <summary>Starts physical mapping from a typed canonical domain entity.</summary>
+    /// <typeparam name="T">Canonical POCO state type.</typeparam>
+    /// <param name="entity">Typed handle retaining the authoritative entity definition.</param>
+    /// <returns>A new invocation-local mapping builder using that exact definition.</returns>
+    /// <exception cref="ArgumentNullException">The entity handle is null.</exception>
+    public static PostgresEntityRepositoryMappingBuilder<T> For<T>(Cohesive.Transitions.Authoring.DomainEntity<T> entity) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        return new(entity.Definition);
+    }
+
+
     /// <summary>Creates a normalized PostgreSQL entity mapping.</summary>
     /// <param name="table">Physical table containing the entity rows.</param>
     /// <param name="fields">Complete one-to-one bindings for every canonical entity field.</param>

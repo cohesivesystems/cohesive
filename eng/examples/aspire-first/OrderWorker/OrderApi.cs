@@ -18,6 +18,8 @@ public static class OrderApi
             .Route("POST", "/orders/{id}/submit").RouteParameter<string>("id")
             .Returns<OrderSummary>().Result<ProblemDetails>(ApiResultKind.Conflict).Result(ApiResultKind.NotFound)
             .Transition(OrderTransitions.Submit.Reference).Build();
+        Details = orders.Query("Details").Route("GET", "/orders/{id:guid}/details")
+            .RouteParameter<string>("id").Returns<OrderDetails>().Result(ApiResultKind.NotFound).Build();
         Definition = orders.Build();
     }
 
@@ -27,6 +29,8 @@ public static class OrderApi
     public static ApiEndpoint Get { get; }
     /// <summary>Submits an existing order using the exact declared transition.</summary>
     public static ApiEndpoint Submit { get; }
+    /// <summary>Queries order details through the canonical fulfillment relation.</summary>
+    public static ApiEndpoint Details { get; }
     /// <summary>The complete portable surface, suitable for other API projections.</summary>
     public static ApiDefinition Definition { get; }
 }

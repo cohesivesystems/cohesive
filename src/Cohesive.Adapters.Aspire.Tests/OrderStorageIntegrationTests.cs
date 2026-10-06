@@ -14,7 +14,7 @@ using Npgsql;
 
 namespace Cohesive.Adapters.Aspire.Tests;
 
-public sealed class OrderStorageIntegrationTests
+public sealed partial class OrderStorageIntegrationTests
 {
     const string ConnectionVariable = "COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING";
 
@@ -46,7 +46,7 @@ public sealed class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, repository);
+            OrderEndpoints.Map(app, repository, OrderDetailsQuery.Bind(database));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -112,7 +112,7 @@ public sealed class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, racing);
+            OrderEndpoints.Map(app, racing, OrderDetailsQuery.Bind(database));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -166,6 +166,7 @@ public sealed class OrderStorageIntegrationTests
             id = (await created.Content.ReadFromJsonAsync<OrderCreated>())!.Id;
             Assert.Equal($"/orders/{id}", created.Headers.Location!.OriginalString);
             Assert.Equal("Draft", (await client.GetFromJsonAsync<OrderSummary>($"/orders/{id}"))!.Status);
+            Assert.Empty((await client.GetFromJsonAsync<OrderDetails>($"/orders/{id}/details"))!.Reservations);
             Assert.Equal(HttpStatusCode.OK, (await client.PostAsync($"/orders/{id}/submit", null)).StatusCode);
             await AssertProblem(await client.PostAsync($"/orders/{id}/submit", null), "orders.submit.rejected");
             Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/orders/{Guid.NewGuid():D}")).StatusCode);

@@ -21,7 +21,11 @@ public sealed class RelationQueryExpressionRelationship<TSource, TTarget>
     where TSource : notnull
     where TTarget : notnull
 {
-    internal RelationQueryExpressionRelationship(RelationshipDefinition definition)
+    /// <summary>Wraps an existing canonical relationship for typed authoring without redefining its endpoints.</summary>
+    /// <param name="definition">Canonical relationship authority.</param>
+    /// <remarks>CLR/shape compatibility is validated when a query session traverses the handle.</remarks>
+    /// <exception cref="ArgumentNullException">The definition is null.</exception>
+    public RelationQueryExpressionRelationship(RelationshipDefinition definition)
     {
         Definition = Guard.RequireNotNull(definition);
     }

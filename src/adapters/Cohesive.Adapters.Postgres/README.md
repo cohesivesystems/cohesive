@@ -86,3 +86,24 @@ scalar compatibility and key semantics; the mapping constructor rejects duplicat
 An immutable mapping snapshot is independent of subsequent builder edits. The builder is invocation-local
 and not thread-safe. Custom version columns and batch bounds are optional `Build` arguments.
 The existing constructor remains available; neither API owns schema creation or migration.
+
+## Reuse repository mappings for native queries
+
+`PostgresEntityRepositoryMapping.For(domainEntity)` accepts a typed domain handle. Once a canonical
+query is compiled and its inputs placed, `.Table(placedInput, repositoryMapping)` projects the existing
+physical table and demanded columns into its native binding. No second column catalog is required.
+Text columns use explicit C-collation equality; this projection does not assert ordinal ordering,
+global identity uniqueness, foreign keys or partition isolation. Those remain explicit query/schema
+obligations. The [fulfillment example](../../../eng/examples/aspire-first/README.md) demonstrates the full pipeline.
+
+`PostgresQueryRowsReader` executes one compiled, unpaged native `QueryRows` branch against an explicitly
+attested `PostgresNpgsqlRuntimeBinding`. Prepare it once; concurrent calls own separate commands,
+parameter values and result budgets. The caller retains ownership of the data source. Presence markers
+reconstruct outer-join absence independently of SQL null. Positive row and decoded-scalar-byte bounds
+are mandatory; one overflow row detects truncation and fails the call rather than returning partial data.
+Cancellation/provider failures propagate, no retries occur, and ambient transactions are rejected.
+Native command timeout still bounds command duration; the result budget is not a database-work budget.
+
+This reader deliberately does not expose a complete canonical evaluation outcome, supplied-root
+execution, relation invariants, paging or temporal semantics. Such artifacts/values are rejected;
+use the existing source-acquisition path with explicit policies where those contracts are required.

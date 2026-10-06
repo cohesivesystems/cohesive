@@ -1,4 +1,4 @@
-# Aspire-first order storage
+# Aspire-first fulfillment domain
 
 Start with a native Aspire AppHost; attach Cohesive requirements to existing objects.
 The example keeps PostgreSQL options, project metadata, connection references, readiness
@@ -17,9 +17,11 @@ waits and volume configuration in native Aspire. It adds no second deployment in
 4. The existing target-deployment compiler matches requirements against evidence and
    checks canonical coverage. The AppHost refuses to start if the plan is incomplete.
 5. Once the user starts the AppHost, ordinary Aspire runs the database and application.
-   `OrderWorker/OrderStorage.cs` authors an immutable `Order` record,
-   derives the canonical definition once with `ObjectEntityDefinition.For<Order>`, and adds
-   a fluent PostgreSQL field mapping (`For<Order>().Table().Identity().Partition().Build()`), and binds the Aspire-supplied data source through
+   `OrderWorker/FulfillmentDomain.cs` declares `Order`, `InventoryItem` and `Reservation`
+   once with `DomainModelBuilder.Entity<T>()`. Typed handles retain those exact definitions
+   for relationships, storage and queries. `OrderStorage` and `FulfillmentStorage` attach
+   fluent PostgreSQL mappings (`For(entity).Table().Identity().Partition().Build()`)
+   and bind the Aspire-supplied data source through
    `PostgresNpgsqlRuntimeBinding`. The endpoints use `IEntityRepository.Upsert/TryGet`,
    implemented by the existing `Cohesive.Adapters.Postgres` repository.
    `JsonPropertyName` preserves the canonical `id`/`partition` names; writes use the
@@ -30,11 +32,12 @@ waits and volume configuration in native Aspire. It adds no second deployment in
    storage. If authentication is added, place context middleware after authentication
    so it captures the established principal.
 7. Schema lifecycle stays explicit: startup executes the embedded `schema.sql` once.
-   Npgsql is used only for the native data source and schema bootstrap; the shared
-   repository owns canonical validation and data reads/writes. The runtime binding is
+   Npgsql supplies the native data source and schema bootstrap; the shared repository
+   owns entity validation/writes and the shared native query reader executes the compiled join. The runtime binding is
    caller-attested affinity, not independent proof of database identity.
 
-The order endpoint demonstrates persistence and one guarded domain transition, not a CQRS/ES implementation.
+The example demonstrates persistence, one guarded domain transition and a joined query across three entities.
+It is not yet a CQRS/ES implementation.
 It does not claim sequential execution, event history, audit logging or orchestration.
 Those require additional explicit contracts, implementations and execution evidence.
 
@@ -76,9 +79,10 @@ outcomes. The transition validates that the command targets the loaded order. It
 references that exact declaration in the canonical API and passes it to the shared ASP.NET binding.
 The binding compiles once during registration and retains the plan for requests; invalid declarations
 fail registration with a `TransitionApiPreparationException` retaining structured compiler diagnostics. No global compilation cache or per-request compilation is added.
-All three routes (create, get and submit) are declared as portable handles in `OrderApi`
+All four routes (create, get, submit and details) are declared as portable handles in `OrderApi`
 under one `Entity<Order>()` builder in a static constructor,
-and bound fluently in `OrderEndpoints` through `app.MapEntityApi<Order>(..., endpoints => ...)`. Callbacks receive
+and bound in `OrderEndpoints`: entity operations use `app.MapEntityApi<Order>(..., endpoints => ...)`,
+while the joined read uses `app.MapApiEndpoint(OrderApi.Details, ...)`. Callbacks receive
 typed order state and transition outcomes; `.Input(request => ...)` uses the existing request context
 and its `RequiredEntityId`. The separate declarations contain no handlers; the example's HTTP error body
 is explicitly the native `ProblemDetails` type. Creation declares 201, lookup/submission declare 404,
@@ -117,9 +121,10 @@ ordering or durability guarantee. Native `WithReference`/`WaitFor` remain the wi
 and startup authority; association does not synthesize or certify those annotations.
 The model tests build but never start Aspire. The opt-in `OrderStorageIntegrationTests` ran against a disposable local PostgreSQL 17 database:
 it used the example's embedded schema and binding, verified create/load and token-guarded writes,
-rejected a stale token and reloaded the winning version. It removes only its randomly identified row.
+rejected a stale token and reloaded the winning version. Tests remove only their randomly identified rows.
 Set `COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING` to a disposable database to run these tests;
-without it the database tests are explicitly skipped. This is storage evidence, not an Aspire startup or cloud check.
+without it the database tests are explicitly skipped. CI supplies a disposable PostgreSQL 17 service
+and runs these tests, including the actual worker entry point and the chained join. This is storage evidence, not an Aspire startup or cloud check.
 
 Portable authority is the ordinary Cohesive definition, manifest and compiler result.
 The native map is an immutable dictionary pointing at Aspire-owned mutable objects;
@@ -142,3 +147,76 @@ no retries. This test deliberately registers no exception middleware. A separate
 the built `OrderWorker` entry point and exercises schema bootstrap, request context, create/get/submit,
 and the domain Problem Details response. Child processes and randomly identified rows are cleaned up.
 These checks do not start the Aspire orchestrator or qualify a cloud deployment.
+
+## Compose the domain, storage and query
+
+The declaration begins with entity authority, then connects entities:
+
+```csharp
+var domain = new DomainModelBuilder().Version("1");
+var orders = domain.Entity<Order>("example/order");
+var inventory = domain.Entity<InventoryItem>("example/inventory");
+var reservations = domain.Entity<Reservation>("example/reservation");
+var reservationOrder = reservations.References(reservation => reservation.OrderId, orders);
+var reservationItem = reservations.References(reservation => reservation.Sku, inventory);
+var definition = domain.Build();
+```
+
+`References` denotes the target observation identity. The domain owns these reusable relationship
+handles; the existing query author captures a relationship in its catalog when traversed. No separate
+query schema is inferred: `entity.QueryShape(author)` imports the entity's exact canonical state graph.
+The domain model itself remains the entity catalog, not a new orchestration or persistence engine.
+
+`OrderDetailsQuery` selects an order by a bound parameter and the local partition, traverses the
+inverse reservation/order relationship, then traverses reservation/inventory. Both traversals are
+left joins, so an order without reservations remains present. Its projection is compiled by the
+existing static, placement, feasibility and native PostgreSQL compilers. The three repository mappings
+supply the physical table/column bindings through `.Table(placedInput, repositoryMapping)`; column
+names and join predicates are not repeated in the endpoint.
+
+Preparation occurs once at registration, and each request executes one parameterized SQL statement.
+`PostgresQueryRowsReader` reconstructs canonical observations from native result aliases and presence
+markers. A missing joined row omits its fields. HTTP presentation nests the resulting reservation rows
+and sorts their IDs; it does not perform the joins. The reader rejects overflow rather than silently
+truncating: this example allows 1,000 rows and 1,000,000 decoded scalar bytes, with cancellation and
+native command timeout. It has no paging or retry policy, and is not a full canonical evaluation-outcome
+API. The current reader accepts non-temporal scalar results/parameters only.
+
+`GET /orders/{id}/details` returns `{ id, status, reservations: [...] }`, or 404. Each reservation includes
+its SKU, quantity and current available stock in the same PostgreSQL statement snapshot. These are
+current-state reads, not a materialized read model or event-sourced history. There is no stock reservation
+command yet: the next Process increment can orchestrate transitions using this domain foundation.
+
+Scope is explicit: the root query filters `partition = local`; inventory/reservation tables constrain
+rows to that partition, and foreign keys prevent orphan references. Their IDs are globally unique in
+this local demo; repository upserts additionally address `(partition, identity)`. This is not a general
+multi-tenant relationship policy or authorization mechanism. The mapping projection does not invent
+uniqueness, foreign-key or tenant guarantees. Native schema remains the authority for those constraints.
+
+### Try a joined response
+
+After starting the example, optionally load synthetic fixtures into its **local** database. Find the
+PostgreSQL container in the Aspire dashboard or `docker ps`, set `POSTGRES_CONTAINER` to its name, then:
+
+```sh
+docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d orders -v ON_ERROR_STOP=1 < eng/examples/aspire-first/demo-data.sql
+curl "$WORKER_URL/orders/11111111-1111-4111-8111-111111111111/details"
+curl "$WORKER_URL/orders/22222222-2222-4222-8222-222222222222/details"
+```
+
+The first order has no reservations; the second has two for `demo-book`, quantities 1 and 2, with
+available stock 8 on a fresh database. Fixtures run in a transaction and preserve existing rows on
+repeat execution. They do not simulate a successful reservation Process. The schema bootstrap adds
+the two tables explicitly and leaves earlier order data intact.
+
+The database-backed regression tests cover zero/multiple reservations, an identical order ID in a
+different partition, missing IDs, parameterized hostile input, cancellation, affinity mismatch and
+row/byte bounds. They execute the chained outer joins: that path exposed and now protects a compiler
+bug where presence markers retained an alias from an earlier subquery scope.
+
+Preparation measurement (local .NET 10 Release test process, macOS ARM64): the first artifact access
+**after domain setup** took 471–510 ms and allocated 45,989,336–46,150,752 bytes across two isolated runs. This includes the
+query compilation pipeline; it is not whole-host startup, retained memory or request latency. The
+artifact is retained and reused rather than compiling on each request; 10,000 warm artifact accesses
+allocated zero bytes in the measured loop (this excludes query execution). This small example does not
+establish the cost of a large query catalog; measure that separately before eager preparation at scale.
