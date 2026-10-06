@@ -124,9 +124,17 @@ public sealed class EphemeralProcessExecutorTests
     [Fact]
     public async Task DeadlineCancelsHostAndWaitsForItsExit()
     {
-        var host = new Host { WaitForCancellation = true };
-        var interrupted = await Assert.ThrowsAsync<EphemeralProcessInterruptedException>(() => Execute(new(Plan(mutation: true)), host,
-            timeout: TimeSpan.FromMilliseconds(20)));
+        var clock = new DeadlineClock();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = new Host { WaitForCancellation = true, OnEntered = () => entered.SetResult() };
+        var execution = Execute(new(Plan(mutation: true)), host,
+            OperationContext.Create(timeProvider: clock), TimeSpan.FromMilliseconds(20));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(execution.IsCompleted);
+        Assert.Equal(TimeSpan.FromMilliseconds(20), clock.DueTime);
+        // Expire the registered deadline after the operation is in flight, independent of runner speed.
+        clock.Expire();
+        var interrupted = await Assert.ThrowsAsync<EphemeralProcessInterruptedException>(() => execution);
         Assert.Equal(new ExecutionNodeId("write"), interrupted.Evidence.InterruptedOperation);
         Assert.Empty(interrupted.Evidence.CompletedOperations);
         Assert.True(host.Exited);
@@ -160,17 +168,42 @@ public sealed class EphemeralProcessExecutorTests
         return compilation.Plan!;
     }
 
+    sealed class DeadlineClock : TimeProvider
+    {
+        DeadlineTimer? timer;
+        internal TimeSpan DueTime { get; private set; }
+        internal void Expire() => timer!.Expire();
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            Assert.Null(timer);
+            Assert.Equal(Timeout.InfiniteTimeSpan, period);
+            DueTime = dueTime;
+            return timer = new DeadlineTimer(() => callback(state));
+        }
+
+        sealed class DeadlineTimer(Action callback) : ITimer
+        {
+            Action? pending = callback;
+            internal void Expire() => Interlocked.Exchange(ref pending, null)?.Invoke();
+            public bool Change(TimeSpan dueTime, TimeSpan period) => throw new NotSupportedException();
+            public void Dispose() => Interlocked.Exchange(ref pending, null);
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
+    }
+
     sealed class Host : IAsyncProcessReferenceHost
     {
         public int Writes { get; private set; }
         public Action? AfterWrite { get; init; }
         public PortableValue? Receipt { get; init; }
         public bool WaitForCancellation { get; init; }
+        public Action? OnEntered { get; init; }
         public bool Exited { get; private set; }
         public async ValueTask<ProcessOperationResult> InvokeTransitionAsync(OperationContext context, ProcessTransitionInvocation invocation)
         {
             try
             {
+                OnEntered?.Invoke();
                 if (WaitForCancellation)
                     await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken);
                 Writes++;
