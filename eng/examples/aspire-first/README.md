@@ -83,7 +83,8 @@ typed order state and transition outcomes; the separate declarations contain no 
 Combined declaration/binding is also supported by the same shared surface; `Program` only configures startup and middleware.
 The transition binding loads the order, evaluates the rule, and commits with the captured PostgreSQL concurrency
 token. Repeated submission returns 409 without a write; a stale concurrent write also returns 409 rather
-than retrying the domain decision. An unknown ID returns 404. There is no authentication;
+than retrying the domain decision. `AddCohesiveExceptionHandling` plus native `UseExceptionHandler`
+map storage concurrency exceptions to sanitized 409 Problem Details; domain rejection stays a typed result. An unknown ID returns 404. There is no authentication;
 this sample is for a local developer environment. Stop with Ctrl+C. `WithDataVolume`
 retains PostgreSQL data across runs; deleting that volume is a separate deliberate action.
 No cloud provider, deployment credentials or Ari environment is involved.

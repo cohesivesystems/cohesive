@@ -328,3 +328,22 @@ registration. This is not compile-time certification of arbitrary serialized def
 Sessions are registration-scoped and non-thread-safe, reject duplicates and unfinished transitions, and freeze
 after Map. Entity observations use a compiled materializer; structured transition outcomes use the existing
 ObservationValue conversion contract. Keep custom serialization conventions aligned with canonical authoring.
+
+### Exception-to-HTTP integration
+
+```csharp
+builder.Services.AddCohesiveExceptionHandling();
+// After Build, before request middleware and endpoints:
+app.UseExceptionHandler();
+```
+
+This registers a native `IExceptionHandler` and Problem Details services. An
+`ObservationConcurrencyConflictException` becomes HTTP 409 with `application/problem+json`, a stable
+`code` of `cohesive.storage.concurrency_conflict`, and a `traceId`. The response contains a safe reload
+instruction, never the exception message or backend identity/token. No request or decision is retried.
+A sanitized JSON fallback is used if no configured Problem Details writer accepts the response.
+
+Unknown exceptions and responses that have already started are not handled. Other application handlers
+and ASP.NET's normal fallback retain responsibility for them; registration order follows native ASP.NET
+conventions. Domain rejection is an ordinary `.OnRejected(...)` result and does not enter this mapping.
+The mapping does not change native server-side logging or application-supplied Problem Details customizers.
