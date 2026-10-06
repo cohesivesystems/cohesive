@@ -95,6 +95,47 @@ public sealed class StrictDocumentJsonTests
         Assert.Equal(expectedLocation, location);
     }
 
+    [Theory]
+    [InlineData("{\"name\":1,\"na\\u006de\":2}", "/name")]
+    [InlineData("{\"é\":1,\"\\u00e9\":2}", "/é")]
+    [InlineData("{\"outer\":{\"inner\":1,\"inner\":2},\"outer\":3}", "/outer/inner")]
+    public void DuplicatePropertyScan_UsesDecodedOrdinalNamesAndDepthFirstFailure(string json, string expected)
+    {
+        using var document = JsonDocument.Parse(json);
+        Assert.True(StrictDocumentJson.TryFindDuplicateProperty(document.RootElement, string.Empty, out var location));
+        Assert.Equal(expected, location);
+    }
+
+    [Fact]
+    public void DuplicatePropertyScan_WarmSuccessfulScansAllocateNoManagedMemory()
+    {
+        var wide = "{" + string.Join(",", Enumerable.Range(0, 128).Select(index => $"\"field{index}\":{index}")) + "}";
+        using var document = JsonDocument.Parse("{\"rows\":[" + string.Join(",", Enumerable.Repeat(wide, 32)) + "],\"unicode\":{\"é\":1,\"other\":2}}");
+        for (var warmup = 0; warmup < 4; warmup++)
+            Assert.False(StrictDocumentJson.TryFindDuplicateProperty(document.RootElement, string.Empty, out _));
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var duplicate = false;
+        for (var iteration = 0; iteration < 16; iteration++)
+            duplicate |= StrictDocumentJson.TryFindDuplicateProperty(document.RootElement, string.Empty, out _);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.False(duplicate);
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void DuplicatePropertyScan_ConcurrentLeasesRemainIsolatedAfterFailures()
+    {
+        Parallel.For(0, 32, index =>
+        {
+            using var invalid = JsonDocument.Parse($"{{\"item{index}\":1,\"item{index}\":2}}");
+            Assert.True(StrictDocumentJson.TryFindDuplicateProperty(invalid.RootElement, "/root", out var location));
+            Assert.Equal($"/root/item{index}", location);
+            using var valid = JsonDocument.Parse("{\"a\":1,\"b\":[{\"a\":2}]}");
+            Assert.False(StrictDocumentJson.TryFindDuplicateProperty(valid.RootElement, string.Empty, out location));
+            Assert.Equal(string.Empty, location);
+        });
+    }
+
     [Fact]
     public void TypedObjectApi_RoundTripsDeclaredJsonStringEnumWireMembers()
     {

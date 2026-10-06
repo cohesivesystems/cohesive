@@ -395,6 +395,15 @@ sealed class PooledByteBufferWriter : IBufferWriter<byte>, IDisposable
         writtenCount = 0;
     }
 
+    // Reopen an exclusively leased writer without retaining its previous payload buffer.
+    internal void Reset()
+    {
+        if (!disposed)
+            throw new InvalidOperationException("A pooled byte writer must be disposed before reuse.");
+        disposed = false;
+        buffer = ArrayPool<byte>.Shared.Rent(InitialCapacity);
+    }
+
     void EnsureCapacity(int sizeHint)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
