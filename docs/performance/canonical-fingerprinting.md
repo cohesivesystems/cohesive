@@ -70,6 +70,7 @@ or permanent source bridge changed. All 164 canonical catalog bodies matched exa
 
 Qualification passed all 4,249 Cohesive core tests (33 existing skips) and 34 focused fingerprint/serialization tests. No tests were excluded or timeouts increased.
 
-Complete input normalization, relation-specific fingerprints, nonscalar parent projection and
+Relation-specific fingerprints are addressed in [immutable relation fingerprinting](relation-definition-fingerprinting.md).
+Complete input normalization, nonscalar parent projection and
 CLR nullability metadata preparation remain separate targets. Nonempty extensions still use their
 existing semantic projection. This change introduces no additional retained canonical payload.

@@ -298,22 +298,55 @@ public static class CanonicalJsonWriter
         return GetCanonicalBytesCore(node, options, getArrayOrdering: null, numberSemantics);
     }
 
+    /// <summary>Canonicalizes immutable JSON using explicit structural array ordering.</summary>
+    /// <param name="element">Caller-owned JSON, borrowed only for this operation.</param>
+    /// <param name="getArrayOrdering">Classifies arrays using the same escaped structural paths as the node writer.</param>
+    /// <param name="numberSemantics">Numeric profile applied to JSON number tokens.</param>
+    /// <returns>Owned canonical UTF-8 bytes; the input is neither mutated nor retained.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="getArrayOrdering"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="numberSemantics"/> is unsupported.</exception>
+    /// <exception cref="InvalidOperationException">The element or a set item has no canonical encoding.</exception>
+    /// <exception cref="ArgumentException">An object contains duplicate properties.</exception>
+    public static byte[] GetCanonicalBytes(JsonElement element,
+        Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering> getArrayOrdering,
+        CanonicalJsonNumberSemantics numberSemantics = CanonicalJsonNumberSemantics.PortableObservation)
+    {
+        ArgumentNullException.ThrowIfNull(getArrayOrdering);
+        if (!Enum.IsDefined(numberSemantics))
+            throw new ArgumentOutOfRangeException(nameof(numberSemantics), numberSemantics, "Unsupported canonical JSON number semantics.");
+        ArrayBufferWriter<byte> buffer = new();
+        using (var writer = CreateElementWriter(buffer))
+            WriteCanonical(writer, element, getArrayOrdering, numberSemantics);
+        return buffer.WrittenSpan.ToArray();
+    }
+
     // Typed strict documents use the same exact-number sequence profile as execution documents.
     internal static byte[] GetCanonicalSequenceBytes(JsonElement element)
     {
         ArrayBufferWriter<byte> buffer = new();
-        using (Utf8JsonWriter writer = new(buffer, new JsonWriterOptions
-        {
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-            Indented = false
-        }))
+        using (var writer = CreateElementWriter(buffer))
             WriteCanonicalSequence(writer, element);
         return buffer.WrittenSpan.ToArray();
     }
 
-    // Execution documents already own immutable JSON. Traverse it directly instead of expanding
-    // each property into a mutable JsonNode graph. Scalar spelling is shared with the node writer.
-    internal static void WriteCanonicalSequence(Utf8JsonWriter writer, JsonElement element)
+    static Utf8JsonWriter CreateElementWriter(IBufferWriter<byte> output) => new(output, new JsonWriterOptions
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        Indented = false
+    });
+
+    internal static void WriteCanonicalSequence(Utf8JsonWriter writer, JsonElement element) =>
+        WriteCanonicalElement(writer, element, null, string.Empty, CanonicalJsonNumberSemantics.ExactDecimalRational);
+
+    // Semantic blocks can stream the same canonical profile into their existing digest writer.
+    internal static void WriteCanonical(Utf8JsonWriter writer, JsonElement element,
+        Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering> getArrayOrdering,
+        CanonicalJsonNumberSemantics numberSemantics = CanonicalJsonNumberSemantics.PortableObservation) =>
+        WriteCanonicalElement(writer, element, getArrayOrdering, string.Empty, numberSemantics);
+
+    static void WriteCanonicalElement(Utf8JsonWriter writer, JsonElement element,
+        Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering>? getArrayOrdering,
+        string path, CanonicalJsonNumberSemantics numberSemantics)
     {
         switch (element.ValueKind)
         {
@@ -332,10 +365,12 @@ public static class CanonicalJsonWriter
                             static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
                         for (index = 0; index < count; index++)
                         {
-                            if (index > 0 && StringComparer.Ordinal.Equals(properties[index - 1].Key, properties[index].Key))
-                                throw new ArgumentException($"Duplicate JSON property '{properties[index].Key}'.");
-                            writer.WritePropertyName(properties[index].Key);
-                            WriteCanonicalSequence(writer, properties[index].Value);
+                            var property = properties[index];
+                            if (index > 0 && StringComparer.Ordinal.Equals(properties[index - 1].Key, property.Key))
+                                throw new ArgumentException($"Duplicate JSON property '{property.Key}'.");
+                            writer.WritePropertyName(property.Key);
+                            WriteCanonicalElement(writer, property.Value, getArrayOrdering,
+                                getArrayOrdering is null ? string.Empty : AppendPropertyPath(path, property.Key), numberSemantics);
                         }
                     }
                     finally
@@ -347,18 +382,92 @@ public static class CanonicalJsonWriter
                 writer.WriteEndObject();
                 break;
             case JsonValueKind.Array:
-                writer.WriteStartArray();
-                foreach (var item in element.EnumerateArray())
-                    WriteCanonicalSequence(writer, item);
-                writer.WriteEndArray();
+                WriteCanonicalElementArray(writer, element, getArrayOrdering, path, numberSemantics);
                 break;
             case JsonValueKind.Number:
-                WriteExactDecimalRational(writer, element.GetRawText());
+                if (numberSemantics == CanonicalJsonNumberSemantics.ExactDecimalRational)
+                    WriteExactDecimalRational(writer, element.GetRawText());
+                else
+                    WriteCanonicalObservationValue(writer, ObservationValue.FromJsonElement(element));
                 break;
+            case JsonValueKind.Undefined:
+                throw new InvalidOperationException("Undefined JSON has no canonical encoding.");
             default:
                 element.WriteTo(writer);
                 break;
         }
+    }
+
+    static void WriteCanonicalElementArray(Utf8JsonWriter writer, JsonElement array,
+        Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering>? getArrayOrdering,
+        string path, CanonicalJsonNumberSemantics numberSemantics)
+    {
+        var ordering = getArrayOrdering is null ? CanonicalJsonArrayOrdering.Sequence : getArrayOrdering(new(path));
+        var itemPath = getArrayOrdering is null ? string.Empty : AppendArrayItemPath(path);
+        writer.WriteStartArray();
+        if (ordering.Kind == CanonicalJsonArrayOrderingKind.Sequence)
+        {
+            foreach (var item in array.EnumerateArray())
+                WriteCanonicalElement(writer, item, getArrayOrdering, itemPath, numberSemantics);
+        }
+        else
+        {
+            var property = ordering.Kind switch
+            {
+                CanonicalJsonArrayOrderingKind.StringSet => null,
+                CanonicalJsonArrayOrderingKind.ObjectSet => ordering.ObjectSortProperty
+                    ?? throw new InvalidOperationException("Object-set ordering requires a sort property."),
+                _ => throw new InvalidOperationException($"Unsupported canonical JSON array ordering '{ordering.Kind}' at '{path}'.")
+            };
+            var count = array.GetArrayLength();
+            var ordered = ArrayPool<KeyValuePair<string, JsonElement>>.Shared.Rent(count);
+            try
+            {
+                HashSet<string> seen = new(StringComparer.Ordinal);
+                var index = 0;
+                foreach (var item in array.EnumerateArray())
+                {
+                    var key = property is null ? GetCanonicalStringSortValue(item, path)
+                        : GetCanonicalObjectSortValue(item, path, property);
+                    ValidateSetKey(seen, key, path, property);
+                    ordered[index++] = new(key, item);
+                }
+                ordered.AsSpan(0, count).Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
+                for (index = 0; index < count; index++)
+                    WriteCanonicalElement(writer, ordered[index].Value, getArrayOrdering, itemPath, numberSemantics);
+            }
+            finally
+            {
+                ordered.AsSpan(0, count).Clear();
+                ArrayPool<KeyValuePair<string, JsonElement>>.Shared.Return(ordered);
+            }
+        }
+        writer.WriteEndArray();
+    }
+
+    static string GetCanonicalObjectSortValue(JsonElement item, string path, string propertyName)
+    {
+        if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty(propertyName, out var value)
+            || value.ValueKind != JsonValueKind.String)
+            throw ObjectSetItemError(path, propertyName);
+        return value.GetString()!;
+    }
+
+    static string GetCanonicalStringSortValue(JsonElement item, string path) =>
+        item.ValueKind == JsonValueKind.String ? item.GetString()! : throw StringSetItemError(path);
+
+    static InvalidOperationException ObjectSetItemError(string path, string propertyName) =>
+        new($"Every item in canonical object-set array '{path}' must contain string property '{propertyName}'.");
+
+    static InvalidOperationException StringSetItemError(string path) =>
+        new($"Canonical string-set array '{path}' can contain only JSON string values.");
+
+    static void ValidateSetKey(HashSet<string> seen, string key, string path, string? property)
+    {
+        if (!seen.Add(key))
+            throw new InvalidOperationException(property is null
+                ? $"Canonical string-set array '{path}' repeats value '{key}'."
+                : $"Canonical object-set array '{path}' repeats sort value '{key}' for property '{property}'.");
     }
 
     static byte[] GetCanonicalBytesCore(
@@ -521,12 +630,7 @@ public static class CanonicalJsonWriter
         foreach (var item in array)
         {
             var sortValue = GetCanonicalObjectSortValue(item, path, sortProperty);
-            if (!sortValues.Add(sortValue))
-            {
-                throw new InvalidOperationException(
-                    $"Canonical object-set array '{path}' repeats sort value '{sortValue}' " +
-                    $"for property '{sortProperty}'.");
-            }
+            ValidateSetKey(sortValues, sortValue, path, sortProperty);
 
             ordered.Add(new(sortValue, item));
         }
@@ -546,11 +650,7 @@ public static class CanonicalJsonWriter
         foreach (var item in array)
         {
             var value = GetCanonicalStringSortValue(item, path);
-            if (!values.Add(value))
-            {
-                throw new InvalidOperationException(
-                    $"Canonical string-set array '{path}' repeats value '{value}'.");
-            }
+            ValidateSetKey(values, value, path, null);
 
             ordered.Add(new(value, item));
         }
@@ -569,8 +669,7 @@ public static class CanonicalJsonWriter
             || obj[propertyName] is not JsonValue value
             || !value.TryGetValue<string>(out var text))
         {
-            throw new InvalidOperationException(
-                $"Every item in canonical object-set array '{path}' must contain string property '{propertyName}'.");
+            throw ObjectSetItemError(path, propertyName);
         }
 
         return text;
@@ -581,8 +680,7 @@ public static class CanonicalJsonWriter
         if (item is JsonValue value && value.TryGetValue<string>(out var text))
             return text;
 
-        throw new InvalidOperationException(
-            $"Canonical string-set array '{path}' can contain only JSON string values.");
+        throw StringSetItemError(path);
     }
 
     static string AppendPropertyPath(string path, string propertyName) =>
