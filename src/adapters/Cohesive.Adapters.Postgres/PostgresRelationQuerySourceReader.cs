@@ -339,12 +339,12 @@ public sealed class PostgresRelationQuerySourceReader : IRelationQuerySourceRead
             .Where(static binding => binding.Acquisition != RelationQuerySourceAcquisitionKind.Supplied)
             .OrderBy(static binding => binding.Id.Value, StringComparer.Ordinal)
             .ToArray();
-        // A source-scoped registration retains full plan/placement fingerprints while
-        // mapping only this reader's backend. Full-placement registrations remain valid.
-        var ownBindings = acquired.Where(binding => binding.Source == source.Id).ToArray();
-        if (storage.Tables.Length == ownBindings.Length
-            && storage.Tables.All(table => ownBindings.Any(binding => binding.Id == table.PlacementBinding)))
-            acquired = ownBindings;
+        if (storage.SourceScope is { } scope)
+        {
+            if (scope != source.Id)
+                throw new ArgumentException("Storage source scope does not match the reader source.", nameof(storage));
+            acquired = acquired.Where(binding => binding.Source == scope).ToArray();
+        }
         if (acquired.Length != storage.Tables.Length)
         {
             throw new ArgumentException(

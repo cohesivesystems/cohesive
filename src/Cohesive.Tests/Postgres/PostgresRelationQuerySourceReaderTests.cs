@@ -21,6 +21,48 @@ namespace Cohesive.Tests.Postgres;
 public sealed partial class PostgresRelationQuerySourceReaderTests
 {
     [Fact]
+    public void Partial_table_coverage_requires_explicit_scope()
+    {
+        var contracts = CreateContracts("public", "items");
+        var original = contracts.Storage;
+        var remote = new RelationQuerySourceInstance(new("second-source"), contracts.Source.ExecutionDomain,
+            contracts.Source.TargetProfile, contracts.Source.Limits);
+        var point = contracts.PointPlacement;
+        var moved = new RelationQuerySourcePlacementBinding(point.Id, point.Input, point.Node, point.Binding,
+            point.Shape, remote.Id, point.Kind, point.Acquisition, point.Origin, point.Identity,
+            point.Fields, point.RelationshipKeys, point.Partition);
+        var placement = new RelationQuerySourcePlacement(RelationQuerySourcePlacement.CurrentSchemaVersion,
+            contracts.Placement.Plan, contracts.Placement.ConventionSetVersion, [contracts.Source, remote],
+            [.. contracts.Placement.Bindings.Select(binding => binding.Id == point.Id ? moved : binding)]);
+        PostgresRelationQueryStorageBinding Partial(RelationQuerySourceInstanceId? scope) => new(
+            original.Id, original.Database, original.Target, original.TargetProfile,
+            [.. original.Tables.Where(table => table.PlacementBinding != point.Id)],
+            compiledPlanFingerprint: original.CompiledPlanFingerprint, placementFingerprint: placement.Fingerprint,
+            sourceScope: scope);
+        Assert.Throws<ArgumentException>(() => new PostgresRelationQuerySourceReader(PhysicalPlan, placement,
+            contracts.Source, Partial(null), new TableExecutor([]).ExecuteAsync, Policy));
+        _ = new PostgresRelationQuerySourceReader(PhysicalPlan, placement, contracts.Source,
+            Partial(contracts.Source.Id), new TableExecutor([]).ExecuteAsync, Policy);
+    }
+
+    [Fact]
+    public void Explicit_source_scope_is_checked_independently_of_table_coverage()
+    {
+        var contracts = CreateContracts("public", "items");
+        var original = contracts.Storage;
+        PostgresRelationQueryStorageBinding Scoped(RelationQuerySourceInstanceId scope) => new(
+            original.Id, original.Database, original.Target, original.TargetProfile, original.Tables,
+            original.Origin, original.ConventionSetVersion, original.ConfigurationDecisions,
+            original.CompiledPlanFingerprint, original.PlacementFingerprint, sourceScope: scope);
+        _ = new PostgresRelationQuerySourceReader(PhysicalPlan, contracts.Placement, contracts.Source,
+            Scoped(contracts.Source.Id), new TableExecutor([]).ExecuteAsync, Policy);
+        var error = Assert.Throws<ArgumentException>(() => new PostgresRelationQuerySourceReader(
+            PhysicalPlan, contracts.Placement, contracts.Source, Scoped(new("wrong-source")),
+            new TableExecutor([]).ExecuteAsync, Policy));
+        Assert.Contains("scope", error.Message);
+    }
+
+    [Fact]
     public async Task IdentityBatch_UsesOneTypedAnyCommandAndProjectsSqlNullAsMissing()
     {
         var executor = new TableExecutor(

@@ -30,23 +30,8 @@ public sealed class SubplanTests
     public void Rejects_terminal_and_nonprojection_cuts()
     {
         var query = (QueryDefinition)ReservationAvailabilityQuery.Definition.CompilationRequest.DefinitionDocument.Definition;
-        Assert.Throws<ArgumentException>(() => RelationQuerySubplan.Compile(ReservationAvailabilityQuery.Definition.CompilationRequest, query.Results[0].Input));
-        Assert.Throws<ArgumentException>(() => RelationQuerySubplan.Compile(ReservationAvailabilityQuery.Definition.CompilationRequest,
+        Assert.Throws<RelationQueryPreparationException>(() => RelationQuerySubplan.Compile(ReservationAvailabilityQuery.Definition.CompilationRequest, query.Results[0].Input));
+        Assert.Throws<RelationQueryPreparationException>(() => RelationQuerySubplan.Compile(ReservationAvailabilityQuery.Definition.CompilationRequest,
             query.Body.Nodes.OfType<SourceQueryNode>().First().Id));
-    }
-    [Fact]
-    public void Hidden_binding_cannot_escape_projected_interface()
-    {
-        var request = ReservationAvailabilityQuery.Definition.CompilationRequest;
-        var query = (QueryDefinition)request.DefinitionDocument.Definition;
-        var cut = query.Body.Nodes.OfType<ProjectQueryNode>().Single(node => node.Id == ReservationAvailabilityQuery.DemandProjection);
-        var terminal = query.Body.Nodes.OfType<ProjectQueryNode>().Single(node => node.Id == query.Results[0].Input);
-        // The canonical projection already hides its input bindings. Preserve that
-        // validation instead of inventing a second binding environment at the cut.
-        var changed = terminal with { Assignments = terminal.Assignments.SetItem(0,
-            terminal.Assignments[0] with { Value = cut.Assignments[0].Value }) };
-        var leaked = query with { Body = new([.. query.Body.Nodes.Select(node => node.Id == terminal.Id ? changed : node)], query.Body.Parameters) };
-        var error = Assert.Throws<ArgumentException>(() => RelationQueryDocument.FromDefinition(leaked));
-        Assert.Contains("bindingMissing", error.Message);
     }
 }

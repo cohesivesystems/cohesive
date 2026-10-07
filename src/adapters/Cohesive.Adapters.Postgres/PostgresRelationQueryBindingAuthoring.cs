@@ -360,7 +360,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
                         planFingerprint,
                         placementFingerprint,
                         effectiveConvention.Value,
-                        builtTables),
+                        builtTables, selectedSource),
                     EffectiveConfigurationOrigin.AdapterConvention,
                     DerivedIdAuthority));
         decisions.Add(Configuration(BindingIdSetting, effectiveId));
@@ -380,7 +380,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
                 effectiveConvention.Value,
                 [.. decisions],
                 planFingerprint,
-                placementFingerprint);
+                placementFingerprint, sourceScope: selectedSource);
             return new(artifact, [.. diagnostics]);
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
@@ -1183,13 +1183,13 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         RelationQueryPlanComponentFingerprint plan,
         RelationQuerySourcePlacementFingerprint placement,
         string conventionSetVersion,
-        IEnumerable<PostgresRelationQueryTableBinding> tables)
+        IEnumerable<PostgresRelationQueryTableBinding> tables, RelationQuerySourceInstanceId? sourceScope)
         => new("postgres-binding/" + PostgresRelationQueryBindingFingerprinter.ComputeDerivedIdentity(
             database,
             plan,
             placement,
             conventionSetVersion,
-            tables));
+            tables, sourceScope));
 
     static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))
         .ToLowerInvariant();

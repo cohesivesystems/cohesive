@@ -422,3 +422,18 @@ feasibility and exact contextual realization.
   Cohesive.Storage/Cohesive.Control workstream.
 - Ari's graph proposal UI and AI-specific proposal evidence remain Ari-owned producer concerns; Ari lowers accepted
   semantics into the same canonical relation/query documents.
+
+## Closed native subplan preparation
+
+`RelationQuerySubplan.Compile` derives a prefix and remainder from one canonical query and a closed
+projection boundary. Both get distinct deterministic query IDs; `Original` retains the authored request.
+Only source/filter/join/traversal/projection ancestors are supported. Interior branch leakage, unsupported
+operators, non-row/multiple results and partial demand fail before IO. Canonical document validation still
+rejects hidden bindings before a compilation request can be constructed.
+
+`RelationQueryPreparationException` retains semantic and optional physical compiler results rather than
+flattening diagnostics into strings. Cut rejections expose stable `relationQuery.subplan.*` codes.
+`RelationQuerySubplanReader` validates parameter-contract equivalence and prepares bounds, selected inputs,
+and runtime capabilities at construction. Each call validates its value once and retains its own rows and
+evidence; it never retries a prefix or hides incomplete remaining acquisition. Core compilation and execution
+regressions live in `Cohesive.Relations.Tests`, independently of provider examples.

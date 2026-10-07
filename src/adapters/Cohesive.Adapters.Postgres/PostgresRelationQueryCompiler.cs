@@ -619,6 +619,9 @@ public sealed class PostgresRelationQueryCompiler
             Error("The binding, realization report, and canonical PostgreSQL target profile are not the same snapshot.");
         }
 
+        if (storageBinding.SourceScope is { } scope && request.SelectedPlacements.Any(binding =>
+                binding.Acquisition != RelationQuerySourceAcquisitionKind.Supplied && binding.Source != scope))
+            Error("The explicit PostgreSQL source scope does not cover the selected placements.");
         var placements = request.SelectedPlacements.ToDictionary(static binding => binding.Input);
         if (request.SelectedPlacements.Any(static placement => placement.Partition is not null))
         {

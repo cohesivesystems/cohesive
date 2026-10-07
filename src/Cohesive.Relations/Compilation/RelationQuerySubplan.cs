@@ -34,7 +34,7 @@ public sealed class RelationQuerySubplan
     /// <param name="projection">Nonterminal projection defining the rowset interface.</param>
     /// <returns>Prepared semantic plans with exact original-to-derived provenance.</returns>
     /// <exception cref="ArgumentNullException">The request is null.</exception>
-    /// <exception cref="ArgumentException">The query/cut is unsupported, invalid or leaks a hidden binding.</exception>
+    /// <exception cref="RelationQueryPreparationException">The query/cut is unsupported, invalid or leaks an interior branch; evidence and a stable code are retained.</exception>
     public static RelationQuerySubplan Compile(RelationQueryCompilationRequest request, QueryNodeId projection)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -43,21 +43,26 @@ public sealed class RelationQuerySubplan
         if (request.DefinitionDocument.Definition is not QueryDefinition query
             || query.Results.Length != 1 || query.Results[0] is not RowsQueryResultDefinition
             || request.Demand.Kind != RelationQueryCompilationDemandKind.AllDeclaredOutputs)
-            throw new ArgumentException("Subplans require one row-result query with full output demand.", nameof(request));
+            throw new RelationQueryPreparationException("subplan cut", original,
+                code: "relationQuery.subplan.resultUnsupported", detail: "Subplans require one row-result query with full output demand.");
         var nodes = query.Body.Nodes.ToDictionary(node => node.Id);
         if (!nodes.TryGetValue(projection, out var selected) || selected is not ProjectQueryNode cut
             || query.Results[0].Input == projection)
-            throw new ArgumentException("Select a nonterminal projection as the subplan boundary.", nameof(projection));
+            throw new RelationQueryPreparationException("subplan cut", original,
+                code: "relationQuery.subplan.cutInvalid", detail: "Select a nonterminal projection as the subplan boundary.");
         HashSet<QueryNodeId> covered = [];
         Visit(cut.Id);
         foreach (var node in query.Body.Nodes.Where(node => !covered.Contains(node.Id)))
             if (node.Inputs.Any(input => covered.Contains(input) && input != cut.Id))
-                throw new ArgumentException("A subplan interior cannot feed another branch outside its projection.", nameof(projection));
+                throw new RelationQueryPreparationException("subplan cut", original,
+                code: "relationQuery.subplan.interiorEscapes", detail: "A subplan interior cannot feed another branch outside its projection.");
         var prefixDefinition = new QueryDefinition(new(query.Id.Value + "/subplan/" + projection.Value),
             new(query.Name.Value + "Subplan"), new([.. query.Body.Nodes.Where(node => covered.Contains(node.Id))], query.Body.Parameters),
             [new RowsQueryResultDefinition(new("subplan-rows"), cut.Id)]);
         var remainderDefinition = query with
         {
+            Id = new(query.Id.Value + "/remainder/" + projection.Value),
+            Name = new(query.Name.Value + "Remainder"),
             Body = new([new SourceQueryNode(cut.Id, cut.ResultBinding, cut.ResultShape),
                 .. query.Body.Nodes.Where(node => !covered.Contains(node.Id))], query.Body.Parameters)
         };
@@ -72,7 +77,8 @@ public sealed class RelationQuerySubplan
             if (!covered.Add(id)) return;
             var node = nodes[id];
             if (node is not (SourceQueryNode or FilterQueryNode or JoinQueryNode or TraverseRelationshipQueryNode or ProjectQueryNode))
-                throw new ArgumentException("This subplan boundary supports only sources, filters, joins, traversals and projections.", nameof(projection));
+                throw new RelationQueryPreparationException("subplan cut", original,
+                code: "relationQuery.subplan.ancestorUnsupported", detail: "This subplan boundary supports only sources, filters, joins, traversals and projections.");
             foreach (var input in node.Inputs) Visit(input);
         }
         RelationQueryCompilationResult CompileDerived(QueryDefinition definition) => RelationQueryStaticCompiler.Compile(
@@ -82,6 +88,6 @@ public sealed class RelationQuerySubplan
     static void Require(RelationQueryCompilationResult compilation, string phase)
     {
         if (!compilation.IsSuccessful)
-            throw new ArgumentException(phase + " is invalid: " + string.Join("; ", compilation.Diagnostics.Select(diagnostic => diagnostic.Code + ": " + diagnostic.Message)));
+            throw new RelationQueryPreparationException(phase, compilation);
     }
 }

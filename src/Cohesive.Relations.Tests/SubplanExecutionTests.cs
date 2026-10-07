@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using AspireFirst.Orders;
 using Cohesive.Model;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Authoring;
@@ -8,10 +7,20 @@ using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Physical;
 
-namespace Cohesive.Adapters.Aspire.Tests;
+namespace Cohesive.Relations.Tests;
 
 public sealed class SubplanExecutionTests
 {
+    [Fact]
+    public async Task Invalid_invocation_is_rejected_before_native_IO()
+    {
+        var fixture = new Fixture();
+        var reader = fixture.Prepare();
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => reader.ReadAsync(null!));
+        Assert.Equal(0, fixture.Prefix.Reads);
+        Assert.Equal(0, fixture.InventoryReads);
+    }
+
     [Fact]
     public async Task Preparation_is_once_rows_are_invocation_local_and_duplicate_occurrences_survive()
     {
@@ -85,7 +94,7 @@ public sealed class SubplanExecutionTests
     sealed class Fixture
     {
         public RelationQuerySubplan Cut { get; } = RelationQuerySubplan.Compile(
-            ReservationAvailabilityQuery.Definition.CompilationRequest, ReservationAvailabilityQuery.DemandProjection);
+            SubplanFixture.Definition.CompilationRequest, SubplanFixture.DemandProjection);
         public PrefixReader Prefix { get; }
         public int Registrations;
         public int InventoryReads;
@@ -117,11 +126,11 @@ public sealed class SubplanExecutionTests
                     placed.FieldsBySemanticPath();
                 }
                 else
-                    builder.Place(input, external).Identity(FieldPath.FromField(FulfillmentStorage.Inventory.IdentityField), "sku").FieldsBySemanticPath();
+                    builder.Place(input, external).Identity(FieldPath.FromField("Sku"), "sku").FieldsBySemanticPath();
             }
             var placement = builder.Build().RequireValue();
             var partition = new RelationQueryLogicalPartitionIdentity("test/local");
-            return new(ReservationAvailabilityQuery.Definition, Cut, Prefix, placement.Placement,
+            return new(SubplanFixture.Definition, Cut, Prefix, placement.Placement,
                 new(new("test/subplan"), "test/v1", 4, 4, 4, 4, 4, 1), _ =>
                 {
                     Registrations++;

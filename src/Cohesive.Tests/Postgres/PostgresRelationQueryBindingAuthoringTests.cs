@@ -31,6 +31,27 @@ public sealed class PostgresRelationQueryBindingAuthoringTests
         textSemantics: OrdinalText);
 
     [Fact]
+    public void Explicit_source_scope_is_fingerprinted_and_round_trips_even_when_coverage_is_identical()
+    {
+        var fixture = CreateFixture();
+        var id = new PostgresRelationQueryBindingId("scope-test");
+        var full = ConfigureTyped(fixture, id).Build().RequireValue();
+        var scope = fixture.Placed.Source.Id;
+        var scoped = ConfigureTyped(fixture, id).ForSource(scope).Build().RequireValue();
+        Assert.Null(full.SourceScope);
+        Assert.Equal(scope, scoped.SourceScope);
+        Assert.NotEqual(full.Fingerprint, scoped.Fingerprint);
+        Assert.Equal(JsonSerializer.Serialize(full.Tables, JsonOptions), JsonSerializer.Serialize(scoped.Tables, JsonOptions));
+        var json = JsonSerializer.Serialize(scoped, JsonOptions);
+        var restored = JsonSerializer.Deserialize<PostgresRelationQueryStorageBinding>(json, JsonOptions)!;
+        Assert.Equal(scope, restored.SourceScope);
+        Assert.Equal(scoped.Fingerprint, restored.Fingerprint);
+        var tampered = JsonNode.Parse(json)!.AsObject();
+        tampered["sourceScope"] = null;
+        Assert.Throws<ArgumentException>(() => JsonSerializer.Deserialize<PostgresRelationQueryStorageBinding>(tampered.ToJsonString(), JsonOptions));
+    }
+
+    [Fact]
     public void Build_TypedAndStructuralExactBindingsProduceEquivalentArtifacts()
     {
         var fixture = CreateFixture();

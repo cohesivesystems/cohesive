@@ -132,3 +132,20 @@ unconsumed attachments do not create SQL sources. Missing/duplicate attachments 
 the mutable registration on one thread during host setup, then retain its prepared readers/repositories;
 there is no global result cache or inferred tenant scope. The earlier `PostgresQueryRegistration.Register`
 name is replaced by `PostgresPersistenceRegistration.Query` in this unreleased surface.
+
+## Prepared native and composed queries
+
+`PostgresPersistenceRegistration` attaches canonical entities to native repository mappings once.
+`Query` prepares a native typed reader. `QueryComposed(query, projection, remote, policy)` prepares a
+closed native prefix and the remaining query over one remote PostgreSQL registration, reusing those
+same attachments. The policy declares acquisition bounds and a partition scope once. Remaining source
+and traversal mappings are selected from the remote registration; missing mappings or mismatched partition
+selectors fail during preparation. The native prefix must explicitly enforce the same authorized scope.
+This initial recipe uses sequential bounded acquisition, fails on overflow, and makes no distributed-snapshot
+claim. It opens no connection during preparation; caller-owned data sources must outlive the readers.
+
+Storage-binding schema v4 includes `SourceScope` in its fingerprint and convention-derived identity.
+Null means the full placement, while `ForSource` means exactly the declared source. Reader and compiler
+admission check that declared scope; table coverage cannot silently narrow it. Persisted v3 bindings are
+rejected and must be regenerated from their declarations. Semantic/native preparation errors retain their
+compiler results; cut/physical errors retain `RelationQueryPreparationException` evidence.

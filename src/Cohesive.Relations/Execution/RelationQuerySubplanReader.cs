@@ -58,6 +58,11 @@ public sealed class RelationQuerySubplanReader<TInput, TResult> : IRelationQuery
     readonly RelationQuery<TInput, TResult> remainderResult;
     readonly ShapeGraph cutGraph;
     readonly Shape cutShape;
+    readonly long maximumPrefixRows;
+    readonly bool prefixUsesParameter;
+    readonly HashSet<RelationQueryInputId> parameterInputs;
+    readonly ImmutableArray<RelationQueryCapabilityEvidence> capabilities;
+
 
     /// <summary>Prepares the remaining physical plan and its native source readers without performing IO.</summary>
     /// <param name="definition">Original typed declaration.</param>
@@ -89,6 +94,15 @@ public sealed class RelationQuerySubplanReader<TInput, TResult> : IRelationQuery
         this.prefix = prefix;
         this.placement = placement;
         var residual = plan.Remainder.Plan!;
+        var originalParameters = plan.Original.Plan!.Definition.Body.Parameters;
+        if (originalParameters.Length != 1 || originalParameters[0].Id != definition.Parameter)
+            throw new ArgumentException("Typed subplan execution requires one declared parameter.", nameof(plan));
+        foreach (var prepared in new[] { plan.Prefix.Plan!, residual })
+            if (!prepared.Definition.Body.Parameters.SequenceEqual(originalParameters)
+                || prepared.InputContract.Parameters.Any(parameter => parameter.Definition.Id != definition.Parameter))
+                throw new ArgumentException("Derived parameter contracts must match the original declaration.", nameof(plan));
+        prefixUsesParameter = !plan.Prefix.Plan!.InputContract.Parameters.IsEmpty;
+        parameterInputs = residual.InputContract.Parameters.Select(parameter => parameter.Input.Id).ToHashSet();
         var contract = residual.InputContract.Sources.Single(source => source.Node == plan.Cut.Id);
         cutBinding = placement.Bindings.Single(binding => binding.Input == contract.Input.Id);
         var source = placement.SourceInstances.Single(source => source.Id == cutBinding.Source);
@@ -102,7 +116,9 @@ public sealed class RelationQuerySubplanReader<TInput, TResult> : IRelationQuery
         realization = RelationQueryInMemoryInterpreter.Default.Realize(residual);
         physical = RelationQueryPhysicalPlanner.Compile(residual, realization, placement, policy);
         if (!physical.IsSuccessful)
-            throw new ArgumentException("Remaining physical plan is invalid: " + string.Join("; ", physical.Diagnostics.Select(d => d.Message)));
+            throw new RelationQueryPreparationException("remaining physical plan", plan.Remainder, physical);
+        maximumPrefixRows = Math.Min(physical.Plan!.Policy.MaximumBufferedRows, source.Limits.MaximumBufferedRows);
+        capabilities = RelationQueryRealizationRuntimeEvidence.ProjectCapabilities(residual, realization);
         readers = [.. remainingReaders(physical.Plan!)];
         if (readers.Any(reader => reader is null || reader.Descriptor.Source == source.Id || reader.Descriptor.LogicalPartition != logicalPartition)
             || readers.Select(reader => reader.Descriptor.Source).Distinct().Count() != readers.Length)
@@ -143,12 +159,11 @@ public sealed class RelationQuerySubplanReader<TInput, TResult> : IRelationQuery
     {
         cancellationToken.ThrowIfCancellationRequested();
         var value = ObservationValue.FromObject(input);
-        _ = Definition.CompilationRequest.Evaluate(evaluationId).Set(Definition.Parameter, value).Build();
         var evaluation = Plan.Remainder.Request.Evaluate(evaluationId).Set(Definition.Parameter, value).Build();
-        var parameters = Plan.Prefix.Plan!.InputContract.Parameters.ToDictionary(parameter => parameter.Definition.Id, _ => value);
+        var parameters = new Dictionary<QueryParameterId, ObservationValue>();
+        if (prefixUsesParameter) parameters.Add(Definition.Parameter, value);
         var rows = await prefix.ReadAsync(parameters, cancellationToken).ConfigureAwait(false);
-        if (rows.IsDefault || rows.Length > Math.Min(physical.Plan!.Policy.MaximumBufferedRows,
-                placement.SourceInstances.Single(source => source.Id == cutBinding.Source).Limits.MaximumBufferedRows))
+        if (rows.IsDefault || rows.Length > maximumPrefixRows)
             throw new InvalidOperationException("Native subplan exceeded the remaining rowset bound.");
         foreach (var row in rows)
         {
@@ -159,10 +174,9 @@ public sealed class RelationQuerySubplanReader<TInput, TResult> : IRelationQuery
         var rowReader = new ProjectedRowsReader(rows, cutDescriptor, cutBinding, physical.Plan!, Plan.Prefix.Request.DefinitionDocument.DefinitionFingerprint.Value);
         var executor = new RelationQueryPhysicalExecutor([rowReader, .. readers]);
         var residual = Plan.Remainder.Plan!;
-        var parameterInputs = residual.InputContract.Parameters.Select(parameter => parameter.Input.Id).ToHashSet();
         var execution = await executor.ExecuteAsync(new(residual, physical.Plan!, realization, evaluationId,
             parameters: [.. evaluation.Parameters.Where(parameter => parameterInputs.Contains(parameter.Input))],
-            capabilities: RelationQueryRealizationRuntimeEvidence.ProjectCapabilities(residual, realization)), cancellationToken).ConfigureAwait(false);
+            capabilities: capabilities), cancellationToken).ConfigureAwait(false);
         return new(Plan, rows, new(evaluation, Plan.Remainder, realization, placement, physical, execution));
     }
 

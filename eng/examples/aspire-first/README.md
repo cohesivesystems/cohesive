@@ -317,6 +317,11 @@ var composed = ReservationAvailabilityInfrastructure.BindComposed(ordersDatabase
 var availability = await composed.ReadAsync(orderId, cancellationToken);
 ```
 
+`BindComposed` delegates to the library's `PostgresPersistenceRegistration.QueryComposed`:
+the host supplies the query, cut, remote entity registration and one named acquisition policy with
+its partition scope. Placement construction, mapping selection and remaining-reader preparation belong
+to the adapter. Native and composed paths reuse the same entity attachments.
+
 The native path executes one SQL statement. The composed path compiles the closed demand projection into
 one PostgreSQL statement, then feeds its complete rowset into the existing physical executor for the
 remaining inventory join. Orders and reservations are not acquired or joined again. The host selects the
@@ -324,6 +329,8 @@ cut; the query does not declare a PostgreSQL implementation. The ordinary HTTP d
 all-native, and this companion binding is exercised by the two-database integration test.
 
 `RelationQuerySubplan.Compile` derives both plans from the original snapshot and retains their provenance.
+Prefix and remainder have distinct deterministic query identities, with the original request retained.
+`RelationQueryPreparationException` retains semantic/physical diagnostics and stable cut-rejection codes.
 It accepts a nonterminal closed projection whose ancestors are sources, filters, joins, relationship
 traversals or projections. It rejects interior branches escaping the projection, unsupported operators,
 multiple results and partial output demand. Existing canonical validation prevents hidden input bindings
@@ -331,11 +338,14 @@ from leaking through a projection. This is an explicit view boundary, not automa
 SQL join islands. No separately authored join definition or application compilation is needed.
 
 `RelationQuerySubplanReader.EvaluateAsync` retains the prefix rows, derived-plan relationship and full
-remaining evaluation. Row occurrences retain bag multiplicity; they do not acquire invented entity
+remaining evaluation. The single parameter contract, consumed parameter inputs, capability evidence and
+prefix row bound are prepared once; invocation values are validated once and remain local. Row occurrences retain bag multiplicity; they do not acquire invented entity
 identities. Missing fields remain distinct from null. Prefix errors/overflow stop before remaining IO;
 incomplete remaining acquisition cannot become a successful typed result. Preparation and native readers
 are retained at host lifetime, while rows, parameters and evidence are invocation-local. Source readers
-must match the remaining plan's source/domain/profile and declared logical partition. Host registration
+must match the remaining plan's source/domain/profile and declared logical partition. PostgreSQL binding
+schema v4 fingerprints the explicit `ForSource` scope; full-placement coverage is never inferred from
+which tables happen to be present. Persisted v3 bindings must be regenerated. Host registration
 is responsible for using the same authorized scope in the native prefix; the scope label does not prove
 backend authorization. There is no distributed snapshot across the two databases.
 

@@ -12,7 +12,7 @@ namespace Cohesive.Adapters.Postgres;
 /// <remarks>Configure this mutable builder at host composition, then retain its repositories and prepared query readers.
 /// Query prepares once per call; no invocation result cache is introduced. Do not mutate the registration concurrently.
 /// No connections are opened during preparation. No provider-neutral facade or global cache is introduced.</remarks>
-public sealed class PostgresPersistenceRegistration
+public sealed partial class PostgresPersistenceRegistration
 {
     readonly PostgresNpgsqlRuntimeBinding runtime;
     readonly Dictionary<QualifiedShapeId, (EntityDefinition Entity, PostgresEntityRepositoryMapping Mapping)> tables = [];
