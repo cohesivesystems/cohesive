@@ -27,9 +27,7 @@ public static class FulfillmentQueries
         var query = RelationQuery.Expression();
         var orderId = query.Parameter<string>("orderId");
 
-        var orders = query.Source(FulfillmentDomain.Orders)
-            .Where(order => order.Id == orderId.Value && order.Partition == FulfillmentDemo.LocalPartition);
-        var reservations = query.TraverseInverse(orders, FulfillmentDomain.ReservationOrder);
+        var (orders, reservations) = OrderReservations(query, orderId);
         var inventory = query.Traverse(reservations, FulfillmentDomain.ReservationItem);
         return query.SingleOrDefault<OrderDetails>()
             .From(inventory, orders, order => order.Id)
@@ -47,15 +45,12 @@ public static class FulfillmentQueries
     static (RelationQuery<string, ReservationAvailability[]> Query, QueryNodeId DemandProjection) DefineReservationAvailability()
     {
         var query = RelationQuery.Expression();
-        var orderShape = FulfillmentDomain.Orders.QueryShape(query);
-        var inventoryShape = FulfillmentDomain.Inventory.QueryShape(query);
         var orderId = query.Parameter<string>("orderId");
-        var orders = query.Source(orderShape).Where(order => order.Id == orderId.Value && order.Partition == FulfillmentDemo.LocalPartition);
-        var reservations = query.TraverseInverse(orders, FulfillmentDomain.ReservationOrder);
+        var (orders, reservations) = OrderReservations(query, orderId);
         var demand = query.Project(reservations.Node,
             (Order order, Reservation reservation) => new ReservationDemand(order.Id, reservation.Id, reservation.Sku, reservation.Quantity),
             orders.Binding, reservations.Binding);
-        var inventory = query.Source(inventoryShape).Where(item => item.Partition == FulfillmentDemo.LocalPartition);
+        var inventory = query.Source(FulfillmentDomain.Inventory).Where(item => item.Partition == FulfillmentDemo.LocalPartition);
         var joined = query.Join(demand.Node, inventory.Node, JoinKind.Left,
             (row, item) => row.Sku == item.Sku, demand.Binding, inventory.Binding);
         var result = query.Project(joined,
@@ -65,6 +60,16 @@ public static class FulfillmentQueries
             result, orderId, rows => rows.ToArray());
         return (definition, demand.Node.Id);
     }
+
+    static (RelationQueryExpressionBoundNode<FilterQueryNode, Order> Orders,
+        RelationQueryExpressionBoundNode<TraverseRelationshipQueryNode, Reservation> Reservations)
+        OrderReservations(RelationQueryExpressionAuthoring query, RelationQueryExpressionParameter<string> orderId)
+    {
+        var orders = query.Source(FulfillmentDomain.Orders)
+            .Where(order => order.Id == orderId.Value && order.Partition == FulfillmentDemo.LocalPartition);
+        return (orders, query.TraverseInverse(orders, FulfillmentDomain.ReservationOrder));
+    }
+
 }
 
 /// <summary>Joined order view with zero or more reservations.</summary>

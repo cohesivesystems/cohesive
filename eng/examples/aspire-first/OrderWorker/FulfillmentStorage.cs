@@ -10,14 +10,20 @@ public static class FulfillmentStorage
     public const string DatabaseName = "orders";
     /// <summary>Attaches each canonical entity once for repository and query dependency resolution.</summary>
     /// <param name="database">Caller-owned Aspire data source, retained by the resulting readers.</param>
-    /// <param name="databaseName">Explicit non-secret physical database identity for this registration.</param>
     /// <returns>A native persistence registration; query preparation selects only its consumed entities.</returns>
     /// <exception cref="ArgumentNullException">Database is null.</exception>
     /// <exception cref="ArgumentException">An entity attachment or runtime binding is invalid.</exception>
-    public static PostgresPersistenceRegistration Bind(NpgsqlDataSource database, string databaseName = DatabaseName) =>
-        new PostgresPersistenceRegistration(new(new(databaseName), database, "aspire-first/apphost"))
+    public static PostgresPersistenceRegistration Bind(NpgsqlDataSource database) =>
+        new PostgresPersistenceRegistration(new(new(DatabaseName), database, "aspire-first/apphost"))
             .Entity(FulfillmentDomain.Orders, Orders)
             .Entity(FulfillmentDomain.Reservations, Reservations)
+            .Entity(FulfillmentDomain.Inventory, Inventory);
+
+    /// <summary>Attaches only inventory to the separate remote database.</summary>
+    /// <param name="database">Caller-owned inventory data source.</param>
+    /// <returns>An inventory-only registration; order and reservation requests fail at setup.</returns>
+    public static PostgresPersistenceRegistration BindInventory(NpgsqlDataSource database) =>
+        new PostgresPersistenceRegistration(new(new("inventory"), database, "aspire-first/inventory"))
             .Entity(FulfillmentDomain.Inventory, Inventory);
 
     /// <summary>Physical stock mapping, also projected into native query bindings.</summary>

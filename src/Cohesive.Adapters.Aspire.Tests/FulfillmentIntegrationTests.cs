@@ -28,8 +28,8 @@ public sealed partial class OrderStorageIntegrationTests
         var persistence = FulfillmentStorage.Bind(database);
         var orders = persistence.Repository(FulfillmentDomain.Orders);
         var runtime = new PostgresNpgsqlRuntimeBinding(new("orders"), database, "tests/fulfillment");
-        var inventory = new PostgresEntityRepository(FulfillmentDomain.Inventory.Definition, runtime, FulfillmentStorage.Inventory);
-        var reservations = new PostgresEntityRepository(FulfillmentDomain.Reservations.Definition, runtime, FulfillmentStorage.Reservations);
+        var inventory = persistence.Repository(FulfillmentDomain.Inventory);
+        var reservations = persistence.Repository(FulfillmentDomain.Reservations);
         var id = Guid.NewGuid().ToString("D");
         var outsideId = Guid.NewGuid().ToString("D");
         var sku = "book-" + Guid.NewGuid().ToString("N");
@@ -56,13 +56,11 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.Empty(empty.Reservations);
             Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/orders/{outsideId}/details")).StatusCode);
             Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/orders/{Guid.NewGuid():D}/details")).StatusCode);
-            await inventory.Upsert(context, new(FulfillmentDomain.Inventory.Definition.CreateState(sku,
-                new InventoryItem(sku, "local", 8), 1).Snapshot));
+            await inventory.Upsert(context, new InventoryItem(sku, "local", 8));
             for (var index = 1; index <= 2; index++)
             {
                 var reservationId = Guid.NewGuid().ToString("D");
-                await reservations.Upsert(context, new(FulfillmentDomain.Reservations.Definition.CreateState(reservationId,
-                    new Reservation(reservationId, "local", id, sku, index), 1).Snapshot));
+                await reservations.Upsert(context, new Reservation(reservationId, "local", id, sku, index));
             }
             var joined = await client.GetFromJsonAsync<OrderDetails>($"/orders/{id}/details");
             Assert.Equal(2, joined!.Reservations.Count);

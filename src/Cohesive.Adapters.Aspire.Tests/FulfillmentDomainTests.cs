@@ -7,6 +7,17 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     [Fact]
+    public void Remote_inventory_registration_prepares_its_declared_key_without_an_Id_convention()
+    {
+        using var database = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
+        var remote = FulfillmentStorage.BindInventory(database);
+        Cohesive.Storage.IEntityRepository<InventoryItem> inventory = remote.Repository(FulfillmentDomain.Inventory);
+        Assert.Same(FulfillmentDomain.Inventory.Definition, inventory.EntityDefinition);
+        Assert.Throws<InvalidOperationException>(() => remote.Repository(FulfillmentDomain.Orders));
+        Assert.Throws<InvalidOperationException>(() => remote.Repository(FulfillmentDomain.Reservations));
+    }
+
+    [Fact]
     public void Query_uses_canonical_entity_graphs_and_compiles_two_native_joins()
     {
         var author = RelationQuery.Expression();

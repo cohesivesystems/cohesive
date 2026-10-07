@@ -1,7 +1,6 @@
 using AspireFirst.Orders;
 using Cohesive.Adapters.AspNet;
 using Cohesive.Storage;
-using Cohesive.Relations.Execution;
 using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,13 +18,10 @@ using (var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetMani
 await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync()))
     await initialize.ExecuteNonQueryAsync();
 
-// Compose once per host; request handlers borrow prepared contracts, not registration builders.
-builder.Services.AddSingleton(orders);
-builder.Services.AddSingleton<IRelationQueryReader<string, OrderDetails?>>(
-    persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000));
+// Prepare once and pass the contracts directly to their sole consumer.
+var details = persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
 var app = builder.Build();
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
-OrderEndpoints.Map(app, app.Services.GetRequiredService<IEntityRepository<Order>>(),
-    app.Services.GetRequiredService<IRelationQueryReader<string, OrderDetails?>>());
+OrderEndpoints.Map(app, orders, details);
 app.Run();

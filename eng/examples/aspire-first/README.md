@@ -313,7 +313,7 @@ order/reservation matching and inventory enrichment. `ReservationAvailabilityInf
 
 ```csharp
 var orders = FulfillmentStorage.Bind(ordersDatabase);
-var inventory = FulfillmentStorage.Bind(inventoryDatabase, databaseName: "inventory");
+var inventory = FulfillmentStorage.BindInventory(inventoryDatabase);
 var native = ReservationAvailabilityInfrastructure.BindNative(orders);
 var composed = ReservationAvailabilityInfrastructure.BindComposed(orders, inventory);
 var availability = await composed.ReadAsync(orderId, cancellationToken);
@@ -405,16 +405,25 @@ immutable typed declarations directly, without per-query `Definition` wrappers o
 
 Bind each database once at host composition. Repositories preserve the POCO contract:
 `IEntityRepository<Order> orders = persistence.Repository(FulfillmentDomain.Orders)`.
-This reuses `TypedEntityRepository<T>` and preserves native batch/concurrency capabilities. Typed writes
-use the existing Id/Key and Version/zero conventions unless selectors are supplied; for inventory use
-`selectEntityId: item => item.Sku`. The entity handle remains explicit so a CLR type cannot silently choose
-among different canonical definitions.
+This reuses `TypedEntityRepository<T>` and preserves native batch/concurrency capabilities. The default typed
+identity selector is compiled at registration from the mapping's canonical identity field, using the same
+`FieldPath`/JSON-name rules as mapping authoring. Inventory therefore uses `Sku` without a second selector.
+An unreadable, ambiguous or non-string identity fails at setup; explicit custom selectors remain available.
+Semantic version selection retains existing Version/zero conventions. The entity handle remains explicit
+so a CLR type cannot silently choose among different canonical definitions.
 
-`Program` registers the repository and prepared details reader as singleton contracts. Query binding helpers
-accept existing registrations instead of rebinding databases. No registration or compilation happens per
+`Program` prepares the repository and details reader once and passes them directly to their sole endpoint
+consumer. Query binding helpers accept existing registrations instead of rebinding databases. No registration or compilation happens per
 request, no global result cache is introduced, and the host owns the Npgsql data source lifetime. Tests may
 prepare a separate reader deliberately for a different bound (such as overflow testing).
 
 `MapEntityApi` declares the partition once. `Create` passes that value into `initialize: partition => ...`;
 it does not rewrite the entity or infer authorization. Both combined and separately declared API bindings
 exercise a non-default partition in their HTTP contract tests.
+
+Both query definition methods reuse the private `OrderReservations` authoring helper, which selects the order
+by ID and local partition and reverse-traverses its reservations within the caller's query session. Inventory
+uses the same fluent `Source(entity)` style. The static constructor only assigns the two definitions and cut
+identity. `BindInventory` attaches only inventory to the remote database; trying to acquire an order or
+reservation repository from it fails during registration. Both live join tests exercise typed repositories
+from persistence registration rather than manually constructing native repository instances.

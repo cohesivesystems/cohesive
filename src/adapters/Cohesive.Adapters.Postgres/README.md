@@ -152,6 +152,9 @@ compiler results; cut/physical errors retain `RelationQueryPreparationException`
 
 `Repository(entity)` preserves the `DomainEntity<T>` type as `IEntityRepository<T>`, using the existing
 `TypedEntityRepository<T>` over the native repository. Canonical writes, batching and concurrency fences
-continue to delegate unchanged. Typed writes use existing Id/Key and Version/zero conventions; pass
-`selectEntityId` or `selectVersion` for a different CLR convention (for example `item => item.Sku`). The
-registration remains PostgreSQL-specific; application consumers depend on the typed repository/read interfaces.
+continue to delegate unchanged. At registration, the default typed-write identity selector is compiled from
+`mapping.IdentityField` using the same `FieldPath.Capture` member naming rules as mapping authoring (including
+`JsonPropertyName`). An absent, ambiguous or non-string readable property fails before request execution;
+there is no Id/Key fallback or per-write reflection. Explicit `selectEntityId` remains an escape for custom
+CLR mappings. Semantic versions retain existing Version/zero conventions, or an explicit `selectVersion`.
+The registration remains PostgreSQL-specific; application consumers depend on typed repository/read interfaces.

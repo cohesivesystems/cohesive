@@ -25,10 +25,9 @@ public sealed partial class OrderStorageIntegrationTests
         var sku = "subplan-" + Guid.NewGuid().ToString("N");
         var context = OperationContext.Create();
         var persistence = FulfillmentStorage.Bind(orders);
-        var inventoryPersistence = FulfillmentStorage.Bind(inventoryDatabase, databaseName: "inventory");
+        var inventoryPersistence = FulfillmentStorage.BindInventory(inventoryDatabase);
         var orderRepository = persistence.Repository(FulfillmentDomain.Orders);
-        var reservations = new PostgresEntityRepository(FulfillmentDomain.Reservations.Definition,
-            new(new("orders"), orders, "test"), FulfillmentStorage.Reservations);
+        var reservations = persistence.Repository(FulfillmentDomain.Reservations);
         try
         {
             await orderRepository.Upsert(context, FulfillmentDemo.RegisterOrder(Guid.Parse(id)));
@@ -40,14 +39,14 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.Null(Assert.Single(emptyComposed).ReservationId);
             foreach (var registration in new[] { persistence, inventoryPersistence })
             {
-                var repository = registration.Repository(FulfillmentDomain.Inventory, selectEntityId: item => item.Sku);
+                var repository = registration.Repository(FulfillmentDomain.Inventory);
                 await repository.Upsert(context, new InventoryItem(sku, FulfillmentDemo.LocalPartition, 8));
             }
             for (var quantity = 1; quantity <= 2; quantity++)
             {
                 var reservationId = Guid.NewGuid().ToString("D");
-                await reservations.Upsert(context, new(FulfillmentDomain.Reservations.Definition.CreateState(reservationId,
-                    new Reservation(reservationId, FulfillmentDemo.LocalPartition, id, sku, quantity), 1).Snapshot));
+                await reservations.Upsert(context,
+                    new Reservation(reservationId, FulfillmentDemo.LocalPartition, id, sku, quantity));
             }
             var expected = await native.ReadAsync(id);
             var actual = await composed.ReadAsync(id);
