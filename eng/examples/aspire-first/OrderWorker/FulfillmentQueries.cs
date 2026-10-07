@@ -8,8 +8,19 @@ namespace AspireFirst.Orders;
 /// <summary>Immutable canonical fulfillment query declarations; backend preparation belongs to host composition.</summary>
 public static class FulfillmentQueries
 {
+    static FulfillmentQueries()
+    {
+        OrderDetails = DefineOrderDetails();
+        (ReservationAvailability, ReservationDemandProjection) = DefineReservationAvailability();
+    }
+
     /// <summary>Canonical query plus portable nested-result assembly; no compilation or PostgreSQL configuration.</summary>
-    public static RelationQuery<string, OrderDetails?> OrderDetails { get; } = DefineOrderDetails();
+    public static RelationQuery<string, OrderDetails?> OrderDetails { get; }
+
+    /// <summary>Canonical query shared by native and composed registrations.</summary>
+    public static RelationQuery<string, ReservationAvailability[]> ReservationAvailability { get; }
+    /// <summary>Closed logical view available as an optional physical subplan boundary.</summary>
+    public static QueryNodeId ReservationDemandProjection { get; }
 
     static RelationQuery<string, OrderDetails?> DefineOrderDetails()
     {
@@ -33,7 +44,7 @@ public static class FulfillmentQueries
             .Build(id: new("fulfillment/order-details"), name: new("OrderDetails"), parameter: orderId);
     }
 
-    static FulfillmentQueries()
+    static (RelationQuery<string, ReservationAvailability[]> Query, QueryNodeId DemandProjection) DefineReservationAvailability()
     {
         var query = RelationQuery.Expression();
         var orderShape = FulfillmentDomain.Orders.QueryShape(query);
@@ -44,21 +55,16 @@ public static class FulfillmentQueries
         var demand = query.Project(reservations.Node,
             (Order order, Reservation reservation) => new ReservationDemand(order.Id, reservation.Id, reservation.Sku, reservation.Quantity),
             orders.Binding, reservations.Binding);
-        ReservationDemandProjection = demand.Node.Id;
         var inventory = query.Source(inventoryShape).Where(item => item.Partition == FulfillmentDemo.LocalPartition);
         var joined = query.Join(demand.Node, inventory.Node, JoinKind.Left,
             (row, item) => row.Sku == item.Sku, demand.Binding, inventory.Binding);
         var result = query.Project(joined,
             (ReservationDemand row, InventoryItem item) => new ReservationAvailability(row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available),
             demand.Binding, inventory.Binding);
-        ReservationAvailability = query.BuildQuery(new("fulfillment/reservation-availability"), new("ReservationAvailability"),
+        var definition = query.BuildQuery(new("fulfillment/reservation-availability"), new("ReservationAvailability"),
             result, orderId, rows => rows.ToArray());
+        return (definition, demand.Node.Id);
     }
-
-    /// <summary>Canonical query shared by native and composed registrations.</summary>
-    public static RelationQuery<string, ReservationAvailability[]> ReservationAvailability { get; }
-    /// <summary>Closed logical view available as an optional physical subplan boundary.</summary>
-    public static QueryNodeId ReservationDemandProjection { get; }
 }
 
 /// <summary>Joined order view with zero or more reservations.</summary>
