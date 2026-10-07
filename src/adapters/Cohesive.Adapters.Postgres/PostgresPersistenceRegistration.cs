@@ -153,7 +153,7 @@ public sealed class PostgresQueryReader<TInput, TResult> : IRelationQueryReader<
     /// <returns>The query's typed result, including its declared empty-result policy.</returns>
     /// <remarks>No compilation or retry occurs here. Provider, validation and result-projection failures propagate.</remarks>
     public async Task<TResult> ReadAsync(TInput input, CancellationToken cancellationToken = default) =>
-        Definition.Project(await rows.ReadAsync(new Dictionary<Cohesive.Relations.IR.QueryParameterId, ObservationValue>
+        Definition.AssembleResult(await rows.ReadAsync(new Dictionary<Cohesive.Relations.IR.QueryParameterId, ObservationValue>
         { [Definition.Parameter] = ObservationValue.FromObject(input) }, cancellationToken).ConfigureAwait(false));
 }
 

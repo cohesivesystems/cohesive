@@ -91,7 +91,7 @@ public sealed partial class OrderStorageIntegrationTests
                 .Set(FulfillmentQueries.OrderDetails.Parameter, ObservationValue.FromString(id)).Build();
             var outcome = await evaluator.EvaluateAsync(evaluation);
             Assert.True(outcome.IsSuccessful, string.Join("; ", (outcome.PhysicalExecution?.Diagnostics.Select(diagnostic => diagnostic.Message) ?? []).Concat(outcome.Result?.Diagnostics.Select(diagnostic => diagnostic.Message) ?? []).Concat(outcome.Diagnostics.Select(diagnostic => diagnostic.Message))));
-            var composed = FulfillmentQueries.OrderDetails.Project(outcome)!;
+            var composed = FulfillmentQueries.OrderDetails.AssembleResult(outcome)!;
             Assert.Equal(joined.Id, composed.Id);
             Assert.Equal(joined.Status, composed.Status);
             Assert.Equal(joined.Reservations, composed.Reservations);
@@ -100,7 +100,7 @@ public sealed partial class OrderStorageIntegrationTests
                 .Evaluate(new("tests/nested-result/failed-parameter"))
                 .SetFailed(FulfillmentQueries.OrderDetails.Parameter, "tests/unavailable-parameter").Build());
             Assert.False(failed.IsSuccessful);
-            Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.Project(failed));
+            Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.AssembleResult(failed));
 
             void Place(RelationQueryPlacementInputBuilder input, QualifiedShapeId shape)
             {

@@ -17,16 +17,16 @@ public sealed class NestedResultTests
     [Fact]
     public void Single_declaration_handles_absence_distinct_children_ordering_and_conflicts()
     {
-        Assert.Null(FulfillmentQueries.OrderDetails.Project([]));
-        Assert.Empty(FulfillmentQueries.OrderDetails.Project([Row(null)])!.Reservations);
+        Assert.Null(FulfillmentQueries.OrderDetails.AssembleResult([]));
+        Assert.Empty(FulfillmentQueries.OrderDetails.AssembleResult([Row(null)])!.Reservations);
         var row = Row("b");
-        var result = FulfillmentQueries.OrderDetails.Project([row, Row("a"), row])!;
+        var result = FulfillmentQueries.OrderDetails.AssembleResult([row, Row("a"), row])!;
         Assert.Equal("order", result.Id);
         Assert.Equal(new[] { "a", "b" }, result.Reservations.Select(child => child.Id));
         Assert.All(result.Reservations, child => Assert.Equal(8, child.AvailableStock));
-        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.Project([row, Row("b", quantity: 99)]));
-        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.Project([row, Row("b", parent: "another")]));
-        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.Project([row, Row("a", status: "Submitted")]));
+        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.AssembleResult([row, Row("b", quantity: 99)]));
+        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.AssembleResult([row, Row("b", parent: "another")]));
+        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.AssembleResult([row, Row("a", status: "Submitted")]));
     }
 
     [Fact]
@@ -56,9 +56,9 @@ public sealed class NestedResultTests
         Assert.False(compilation.IsSuccessful);
         Assert.Contains(compilation.Diagnostics, diagnostic => diagnostic.Code == "relationQuery.query.assemblyInvalid");
         Assert.Throws<OperationCanceledException>(() => NestedQueryResultAssembler.Assemble(Assembly, [], new(true)));
-        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.Project(
+        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.AssembleResult(
             [Row("a").WithField(Assembly.Fields[1].Source, ObservationValue.Null)]));
-        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.Project(
+        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.AssembleResult(
             [Row("a").WithField(Assembly.Identity, ObservationValue.FromObject(42))]));
     }
 

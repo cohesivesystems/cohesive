@@ -32,7 +32,7 @@ public sealed class RelationQuery<TInput, TResult>
     /// <param name="rows">Complete rows from this query; adapters retain missing-field semantics until this boundary.</param>
     /// <returns>The declared application result.</returns>
     /// <remarks>The callback must be safe for concurrent invocations and must not perform backend work.</remarks>
-    public TResult Project(ImmutableArray<ObservationValue> rows) => project(rows);
+    public TResult AssembleResult(ImmutableArray<ObservationValue> rows) => project(rows);
 
     /// <summary>Projects a complete composed evaluation without discarding or replacing its retained evidence.</summary>
     /// <param name="outcome">Evaluation of this exact compilation request; the caller retains the full outcome.</param>
@@ -40,7 +40,7 @@ public sealed class RelationQuery<TInput, TResult>
     /// <exception cref="ArgumentNullException">The outcome is null.</exception>
     /// <exception cref="ArgumentException">The outcome belongs to another query snapshot.</exception>
     /// <exception cref="InvalidOperationException">Execution failed, was incomplete or suppressed, or returned unresolved rows.</exception>
-    public TResult Project(RelationQueryEvaluationOutcome outcome)
+    public TResult AssembleResult(RelationQueryEvaluationOutcome outcome)
     {
         ArgumentNullException.ThrowIfNull(outcome);
         if (!ReferenceEquals(outcome.Evaluation.Compilation, CompilationRequest))
@@ -74,8 +74,22 @@ public sealed partial class RelationQueryExpressionAuthoring
         RelationQueryExpressionParameter<TInput> parameter, Func<IReadOnlyList<TRow>, TResult> result)
         where TNode : LogicalQueryNode where TRow : notnull
     {
-        ArgumentNullException.ThrowIfNull(parameter);
         ArgumentNullException.ThrowIfNull(result);
+        return BuildProjectedQuery(id, name, rows, parameter, result);
+    }
+
+    internal RelationQuery<TInput, TRow[]> BuildArrayQuery<TNode, TRow, TInput>(
+        QueryId id, QueryName name, RelationQueryExpressionBoundNode<TNode, TRow> rows,
+        RelationQueryExpressionParameter<TInput> parameter)
+        where TNode : LogicalQueryNode where TRow : notnull =>
+        BuildProjectedQuery(id, name, rows, parameter, static (TRow[] values) => values);
+
+    RelationQuery<TInput, TResult> BuildProjectedQuery<TNode, TRow, TInput, TResult>(
+        QueryId id, QueryName name, RelationQueryExpressionBoundNode<TNode, TRow> rows,
+        RelationQueryExpressionParameter<TInput> parameter, Func<TRow[], TResult> result)
+        where TNode : LogicalQueryNode where TRow : notnull
+    {
+        ArgumentNullException.ThrowIfNull(parameter);
         if (!ReferenceEquals(parameter.Owner, this))
             throw new ArgumentException("The invocation parameter belongs to another query session.", nameof(parameter));
         var authored = BuildQuery(id, name, Rows(rows));

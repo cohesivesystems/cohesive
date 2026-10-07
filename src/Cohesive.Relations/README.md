@@ -142,3 +142,39 @@ PostgreSQL selection remains explicit; no automatic native-versus-federated disp
 accordingly. Explicit `relationQuery.subplan.*` codes retain their meanings, including `resultUnsupported`
 for a successfully compiled query whose result contract is not supported by subplans. Original semantic
 and physical compiler evidence stays available. No compatibility catch or code alias is introduced.
+
+
+### Fluent query rows and array results
+
+Focused nodes use `Where` and `Select`; joined nodes retain both bindings for a two-argument `Select`.
+`Join` means inner join and `LeftJoin` preserves unmatched left rows. Typed `Traverse` and
+`TraverseInverse` optionally accept a result selector over the starting and related rows, so application
+code need not manually carry `.Binding` values into a session-level projection.
+
+```csharp
+var demand = orders.TraverseInverse(reservationOrder,
+    (order, reservation) => new Demand(order.Id, reservation.Sku));
+var definition = demand
+    .LeftJoin(inventory, (row, item) => row.Sku == item.Sku)
+    .Select((row, item) => new Availability(row.OrderId, item.Available))
+    .BuildArrayQuery(id: new("availability"), name: new("Availability"), parameter: orderId);
+```
+
+This is expression authoring, not `IQueryable` or deferred backend execution. `BuildArrayQuery` captures a
+`RelationQuery<TInput, TRow[]>`; adapters still own compilation and execution. It returns an empty array
+for no complete rows and preserves declared ordering only. No allocation or throughput guarantee is
+claimed for result assembly. Traversal retains existing left/missing-value semantics; selectors lower to canonical IR
+rather than executing arbitrary CLR callbacks. Existing session ownership and visibility checks apply.
+
+Result assembly is explicitly named `RelationQuery<TInput,TResult>.AssembleResult(rowsOrOutcome)`.
+It consumes already acquired complete rows/outcomes and performs no IO. Session `Project` still authors
+canonical projection nodes; fluent `Select` is its typed row-chain surface. `BuildArrayQuery` constructs
+a definition, making the declaration/execution boundary visible at the call site.
+
+Consumer migration (Ari/Ito included when adopting a release containing this change): update fluent
+`Project` to `Select`, fluent left joins to `LeftJoin`, and typed-query `Project` to `AssembleResult`.
+Explicit session `Project`/`Join` remain available for structural/multi-binding work.
+The unshipped PR408 terminal `ToArray` is now `BuildArrayQuery`. These are source-breaking renames;
+no compatibility aliases are retained. Alpha.132 contains the previous surface (as does alpha.131 for
+APIs present there); publishing this PR and upgrading downstream consumers are separate steps. This PR
+updates in-repository consumers only and does not claim Ari or Ito have adopted the changes.

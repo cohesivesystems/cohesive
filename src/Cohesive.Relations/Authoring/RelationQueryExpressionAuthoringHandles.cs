@@ -235,7 +235,9 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     /// <typeparam name="TResult">Projected row type.</typeparam>
     /// <param name="projection">Canonical projection expression.</param>
     /// <returns>The projected branch.</returns>
-    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TResult>(Expression<Func<TValue, TResult>> projection) where TResult : notnull =>
+    /// <exception cref="ArgumentNullException">Projection is null.</exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Select<TResult>(Expression<Func<TValue, TResult>> projection) where TResult : notnull =>
         Binding.Owner.Project(this, projection);
 
     /// <summary>Traverses an incoming relationship from this focused branch.</summary>
@@ -252,22 +254,90 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     public RelationQueryExpressionBoundNode<TraverseRelationshipQueryNode, TRelated> Traverse<TRelated>(RelationQueryExpressionRelationship<TValue, TRelated> relationship) where TRelated : notnull =>
         Binding.Owner.Traverse(this, Binding, relationship);
 
-    /// <summary>Joins two focused branches using their existing session-owned bindings.</summary>
+    /// <summary>Traverses a relationship and selects from the starting and related rows.</summary>
+    /// <typeparam name="TRelated">Related entity type.</typeparam>
+    /// <typeparam name="TResult">Projected row type.</typeparam>
+    /// <param name="relationship">Canonical relationship in the requested direction.</param>
+    /// <param name="resultSelector">Canonical expression over the starting row and related row.</param>
+    /// <returns>A projected branch; traversal uses left semantics, preserving missing related values.</returns>
+    /// <exception cref="ArgumentNullException">Relationship or result selector is null.</exception>
+    /// <exception cref="ArgumentException">Relationship endpoint shapes are incompatible.</exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">The selector cannot be lowered exactly.</exception>
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Traverse<TRelated, TResult>(
+        RelationQueryExpressionRelationship<TValue, TRelated> relationship, Expression<Func<TValue, TRelated, TResult>> resultSelector)
+        where TRelated : notnull where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(resultSelector);
+        var related = Binding.Owner.Traverse(this, Binding, relationship);
+        var projected = Binding.Owner.Project(related.Node, resultSelector, Binding, related.Binding);
+        return new(projected.Node, projected.Binding, RelationRoot);
+    }
+
+    /// <summary>Traverses a relationship and selects from the starting and related rows.</summary>
+    /// <typeparam name="TSource">Related entity type.</typeparam>
+    /// <typeparam name="TResult">Projected row type.</typeparam>
+    /// <param name="relationship">Canonical relationship in the requested direction.</param>
+    /// <param name="resultSelector">Canonical expression over the starting row and related row.</param>
+    /// <returns>A projected branch; traversal uses left semantics, preserving missing related values.</returns>
+    /// <exception cref="ArgumentNullException">Relationship or result selector is null.</exception>
+    /// <exception cref="ArgumentException">Relationship endpoint shapes are incompatible.</exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">The selector cannot be lowered exactly.</exception>
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> TraverseInverse<TSource, TResult>(
+        RelationQueryExpressionRelationship<TSource, TValue> relationship, Expression<Func<TValue, TSource, TResult>> resultSelector)
+        where TSource : notnull where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(resultSelector);
+        var related = Binding.Owner.TraverseInverse(this, relationship);
+        var projected = Binding.Owner.Project(related.Node, resultSelector, Binding, related.Binding);
+        return new(projected.Node, projected.Binding, RelationRoot);
+    }
+
+    /// <summary>Inner-joins two focused branches using their existing session-owned bindings.</summary>
     /// <typeparam name="TRightNode">Right logical node type.</typeparam>
     /// <typeparam name="TRight">Right focused row type.</typeparam>
     /// <param name="right">Other branch from the same session.</param>
     /// <param name="predicate">Join predicate over the two focused rows.</param>
-    /// <param name="kind">Join semantics.</param>
     /// <returns>A joined branch retaining both typed bindings for fluent projection.</returns>
     /// <exception cref="ArgumentNullException">Right branch or predicate is null.</exception>
     public RelationQueryExpressionJoinedNode<TValue, TRight> Join<TRightNode, TRight>(RelationQueryExpressionBoundNode<TRightNode, TRight> right,
-        Expression<Func<TValue, TRight, bool>> predicate, JoinKind kind = JoinKind.Inner)
+        Expression<Func<TValue, TRight, bool>> predicate)
+        where TRightNode : LogicalQueryNode where TRight : notnull
+        => JoinCore(right, predicate, JoinKind.Inner);
+
+    /// <summary>Left-joins another branch, preserving rows with no matching right value.</summary>
+    /// <typeparam name="TRightNode">Right logical node type.</typeparam>
+    /// <typeparam name="TRight">Right focused row type.</typeparam>
+    /// <param name="right">Other branch from the same session.</param>
+    /// <param name="predicate">Canonical equality or join predicate.</param>
+    /// <returns>A joined branch retaining both bindings; missing right values remain canonical missing values.</returns>
+    /// <exception cref="ArgumentNullException">Right branch or predicate is null.</exception>
+    /// <exception cref="ArgumentException">The right branch belongs to another session.</exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">The predicate cannot be lowered exactly.</exception>
+    public RelationQueryExpressionJoinedNode<TValue, TRight> LeftJoin<TRightNode, TRight>(
+        RelationQueryExpressionBoundNode<TRightNode, TRight> right, Expression<Func<TValue, TRight, bool>> predicate)
+        where TRightNode : LogicalQueryNode where TRight : notnull
+        => JoinCore(right, predicate, JoinKind.Left);
+
+    RelationQueryExpressionJoinedNode<TValue, TRight> JoinCore<TRightNode, TRight>(
+        RelationQueryExpressionBoundNode<TRightNode, TRight> right, Expression<Func<TValue, TRight, bool>> predicate, JoinKind kind)
         where TRightNode : LogicalQueryNode where TRight : notnull
     {
         ArgumentNullException.ThrowIfNull(right);
         ArgumentNullException.ThrowIfNull(predicate);
         return new(Binding.Owner.Join(Node, right.Node, kind, predicate, Binding, right.Binding), Binding, right.Binding);
     }
+
+    /// <summary>Captures an array-result query definition; does not execute or compile the query.</summary>
+    /// <typeparam name="TInput">Invocation parameter type.</typeparam>
+    /// <param name="id">Stable canonical query identity.</param>
+    /// <param name="name">Human-readable query name.</param>
+    /// <param name="parameter">The single invocation parameter from this session.</param>
+    /// <returns>An immutable definition returning all complete rows, or an empty array for no rows. Ordering is only that declared by the query.</returns>
+    /// <exception cref="ArgumentNullException">Parameter is null.</exception>
+    /// <exception cref="ArgumentException">Parameter belongs to another session or the query has other parameters.</exception>
+    public RelationQuery<TInput, TValue[]> BuildArrayQuery<TInput>(QueryId id, QueryName name, RelationQueryExpressionParameter<TInput> parameter) =>
+        Binding.Owner.BuildArrayQuery(id, name, this, parameter);
+
 
     /// <summary>Structural handle for the canonical logical node.</summary>
     public RelationQueryNodeHandle<TNode> Node { get; }
@@ -448,6 +518,6 @@ public sealed class RelationQueryExpressionJoinedNode<TLeft, TRight> where TLeft
     /// <param name="projection">Canonical expression over left and right bindings.</param>
     /// <returns>The focused projected branch.</returns>
     /// <exception cref="ArgumentNullException">Projection is null.</exception>
-    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TResult>(Expression<Func<TLeft, TRight, TResult>> projection)
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Select<TResult>(Expression<Func<TLeft, TRight, TResult>> projection)
         where TResult : notnull => left.Owner.Project(Node, projection, left, right);
 }

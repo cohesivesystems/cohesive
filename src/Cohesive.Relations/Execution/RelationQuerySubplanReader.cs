@@ -137,7 +137,7 @@ public sealed class RelationQuerySubplanReader<TInput, TResult> : IRelationQuery
         }
         cutGraph = plan.Prefix.Request.ShapeDocuments.Single(document => document.Graph.Id == plan.Cut.ResultShape.GraphId).Graph;
         cutShape = cutGraph.GetShape(plan.Cut.ResultShape);
-        remainderResult = new(plan.Remainder.Request, definition.Parameter, definition.Project);
+        remainderResult = new(plan.Remainder.Request, definition.Parameter, definition.AssembleResult);
     }
 
     /// <inheritdoc />
@@ -184,7 +184,7 @@ public sealed class RelationQuerySubplanReader<TInput, TResult> : IRelationQuery
     public async Task<TResult> ReadAsync(TInput input, CancellationToken cancellationToken = default)
     {
         var outcome = await EvaluateAsync(input, new("subplan/" + Guid.NewGuid().ToString("N")), cancellationToken).ConfigureAwait(false);
-        return remainderResult.Project(outcome.Remainder);
+        return remainderResult.AssembleResult(outcome.Remainder);
     }
 
     sealed class ProjectedRowsReader(ImmutableArray<ObservationValue> rows, RelationQuerySourceReaderDescriptor descriptor,

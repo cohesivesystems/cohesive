@@ -284,7 +284,7 @@ are deduplicated and sorted by ordinal string identity; conflicting copies or mu
 The initial contract supports one parent with one level of child collections, direct scalar fields and string
 identities. It does not infer aggregates, arbitrary CLR callbacks or cross-source snapshot consistency.
 
-Native complete rows and complete composed outcomes use the same assembly. `typedQuery.Project(outcome)`
+Native complete rows and complete composed outcomes use the same assembly. `typedQuery.AssembleResult(outcome)`
 requires the exact compilation request, successful execution, an unsuppressed terminal and no unresolved
 row gaps. The original outcome remains available with its provenance and source traces. Raw interpreter
 outputs still carry the flat row shape; assembly does not relabel them as nested observations.
@@ -308,14 +308,14 @@ and the reference interpreter, using the same declaration and shared nested asse
 ### Native joins inside composed execution
 
 The companion `FulfillmentQueries.ReservationAvailability` declares a semantic `ReservationDemand` projection between
-order/reservation matching and inventory enrichment. `ReservationAvailabilityInfrastructure` can bind that
+order/reservation matching and inventory enrichment. `ReservationAvailabilityQueryBindings` can bind that
 **same graph** in either of two ways:
 
 ```csharp
 var orders = FulfillmentStorage.Bind(ordersDatabase);
 var inventory = FulfillmentStorage.BindInventory(inventoryDatabase);
-var native = ReservationAvailabilityInfrastructure.BindNative(orders);
-var composed = ReservationAvailabilityInfrastructure.BindComposed(orders, inventory);
+var native = ReservationAvailabilityQueryBindings.BindNative(orders);
+var composed = ReservationAvailabilityQueryBindings.BindComposed(orders, inventory);
 var availability = await composed.ReadAsync(orderId, cancellationToken);
 ```
 
@@ -456,7 +456,7 @@ Before extending this example to event sourcing and CQRS, follow up on two consu
 - Refine `FulfillmentQueries` authoring, evaluating LINQ-style `Where`, `Select` and joins against the
   existing typed query graph. Preserve one canonical query and explicit native/composed execution
   limits; syntax changes must not introduce a second evaluator or promise unrestricted LINQ support.
-- Give `ReservationAvailabilityInfrastructure` a running-program consumer. Select native versus
+- Give `ReservationAvailabilityQueryBindings` a running-program consumer. Select native versus
   composed placement in host configuration, bind the optional inventory database through Aspire,
   register the prepared reader once and expose a typed availability endpoint. Currently the composed
   recipe is exercised by integration tests; it is not wired into the running program.
@@ -464,3 +464,16 @@ Before extending this example to event sourcing and CQRS, follow up on two consu
 Then compose explicit guarantees: durable multi-entity orchestration, audited transition/event commits,
 and replayable read projections. State atomicity, concurrency, idempotency and cross-source consistency
 boundaries alongside each binding; the current relational example does not yet provide those guarantees.
+
+
+### Query authoring follow-up
+
+Availability now reads as `TraverseInverse(relationship, selector)`, `LeftJoin`, `Select`, `BuildArrayQuery`.
+The traversal selector sees both order and reservation without `.Binding` arguments. `BuildArrayQuery` captures
+the immutable definition; it does not run PostgreSQL. Both definitions reuse the same explicit order-ID
+and partition predicate. Nested order details retain explicit parent/child identity and empty-collection
+assembly. The demand projection still provides the same optional native-prefix boundary.
+
+This step refines the existing authoring API rather than adding a LINQ provider. Named intermediate views,
+earlier query-header declaration and constructor-based nested result syntax remain future refinements;
+running-program availability wiring and CQRS/event-sourcing guarantees are separate follow-ups.
