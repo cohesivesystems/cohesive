@@ -15,13 +15,13 @@ public static class ReservationAvailabilityQuery
         var orderShape = FulfillmentDomain.Orders.QueryShape(query);
         var inventoryShape = FulfillmentDomain.Inventory.QueryShape(query);
         var orderId = query.Parameter<string>("orderId");
-        var orders = query.Where(query.Source(orderShape), order => order.Id == orderId.Value && order.Partition == OrderStorage.LocalPartition);
+        var orders = query.Source(orderShape).Where(order => order.Id == orderId.Value && order.Partition == OrderStorage.LocalPartition);
         var reservations = query.TraverseInverse(orders, FulfillmentDomain.ReservationOrder);
         var demand = query.Project(reservations.Node,
             (Order order, Reservation reservation) => new ReservationDemand(order.Id, reservation.Id, reservation.Sku, reservation.Quantity),
             orders.Binding, reservations.Binding);
         DemandProjection = demand.Node.Id;
-        var inventory = query.Where(query.Source(inventoryShape), item => item.Partition == OrderStorage.LocalPartition);
+        var inventory = query.Source(inventoryShape).Where(item => item.Partition == OrderStorage.LocalPartition);
         var joined = query.Join(demand.Node, inventory.Node, JoinKind.Left,
             (row, item) => row.Sku == item.Sku, demand.Binding, inventory.Binding);
         var result = query.Project(joined,

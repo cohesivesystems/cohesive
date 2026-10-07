@@ -177,7 +177,7 @@ from that declaration; no `OrderDetailRow` DTO or handwritten result callback is
 Query authoring accepts domain entities and bound nodes directly:
 
 ```csharp
-var orders = query.Where(query.Source(FulfillmentDomain.Orders),
+var orders = query.Source(FulfillmentDomain.Orders).Where(
     order => order.Id == orderId.Value && order.Partition == OrderStorage.LocalPartition);
 // After the declared relationship traversals:
 query.SingleOrDefault<OrderDetails>()
@@ -391,3 +391,5 @@ query/shape/relationship documents. HostedQuery was considered, but its portable
 contract is a different responsibility from this local typed result projection. Anonymous rows use CLR
 shape conventions; use explicitly registered stable shapes when independently versioning a persisted row
 contract. Constructor and getter behavior must still pass the expression lowerer's direct-storage checks.
+
+Typed branches support source-first filtering: `query.Source(inventoryShape).Where(item => item.Partition == OrderStorage.LocalPartition)`. The extension uses the branch's owning session and the existing filter implementation; chained filters retain the same binding and foreign query parameters remain invalid.

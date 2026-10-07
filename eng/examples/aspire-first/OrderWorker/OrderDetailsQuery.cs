@@ -14,8 +14,8 @@ public static class OrderDetailsQuery
         var query = RelationQuery.Expression();
         var orderId = query.Parameter<string>("orderId");
 
-        var orders = query.Where(query.Source(FulfillmentDomain.Orders),
-            order => order.Id == orderId.Value && order.Partition == OrderStorage.LocalPartition);
+        var orders = query.Source(FulfillmentDomain.Orders)
+            .Where(order => order.Id == orderId.Value && order.Partition == OrderStorage.LocalPartition);
         var reservations = query.TraverseInverse(orders, FulfillmentDomain.ReservationOrder);
         var inventory = query.Traverse(reservations, FulfillmentDomain.ReservationItem);
         return query.SingleOrDefault<OrderDetails>()
