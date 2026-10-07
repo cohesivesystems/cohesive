@@ -54,6 +54,9 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
 
     /// <summary>Physical entity mapping; its migration must be applied separately from the auxiliary migration.</summary>
     public SqliteEntityRepositoryMapping Mapping => entities.Mapping;
+
+    /// <inheritdoc />
+    public string IdentityField => Mapping.IdentityField;
     /// <summary>Original version-one auxiliary migration; use <see cref="Migrations"/> to initialize or upgrade a repository.</summary>
     public SqliteMigration InitialMigration => sql.InitialMigration;
     /// <summary>Complete ordered auxiliary schema plan, including the explicit receipt-encoding revision.</summary>

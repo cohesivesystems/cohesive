@@ -137,6 +137,7 @@ public interface IRelationQueryBinding<T> where T : notnull
 {
     /// <summary>The exact focused binding, retaining its authoring session and semantic identity.</summary>
     RelationQueryExpressionValueBinding<T> Binding { get; }
+    internal RelationQueryExpressionAuthoring Owner { get; }
 }
 
 /// <summary>Typed CLR value binding used as a parameter in expression-authoring lambdas.</summary>
@@ -157,6 +158,7 @@ public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpres
     }
 
     RelationQueryExpressionValueBinding<T> IRelationQueryBinding<T>.Binding => this;
+    RelationQueryExpressionAuthoring IRelationQueryBinding<T>.Owner => Owner;
 
     internal override Type ClrType => typeof(T);
 }
@@ -192,6 +194,8 @@ public abstract class RelationQueryExpressionBoundNode<TValue> : IRelationQueryB
         RelationRoot = relationRoot;
     }
 
+    RelationQueryExpressionAuthoring IRelationQueryBinding<TValue>.Owner => Binding.Owner;
+
     internal RelationQueryNodeHandle<LogicalQueryNode> StructuralNode { get; }
 
     internal RelationQueryExpressionValueBinding? RelationRoot { get; }
@@ -220,6 +224,45 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     {
         Node = node;
     }
+
+    /// <summary>Filters this focused branch through its owning authoring session.</summary>
+    /// <param name="predicate">Canonical expression over the focused row.</param>
+    /// <returns>The filtered branch.</returns>
+    public RelationQueryExpressionBoundNode<FilterQueryNode, TValue> Where(Expression<Func<TValue, bool>> predicate) =>
+        Binding.Owner.Where(this, predicate);
+
+    /// <summary>Projects the focused row through the owning authoring session.</summary>
+    /// <typeparam name="TResult">Projected row type.</typeparam>
+    /// <param name="projection">Canonical projection expression.</param>
+    /// <returns>The projected branch.</returns>
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TResult>(Expression<Func<TValue, TResult>> projection) where TResult : notnull =>
+        Binding.Owner.Project(this, projection);
+
+    /// <summary>Traverses an incoming relationship from this focused branch.</summary>
+    /// <typeparam name="TSource">Related source entity type.</typeparam>
+    /// <param name="relationship">Canonical relationship ending at this row type.</param>
+    /// <returns>The related source branch using the default left traversal.</returns>
+    public RelationQueryExpressionBoundNode<TraverseRelationshipQueryNode, TSource> TraverseInverse<TSource>(RelationQueryExpressionRelationship<TSource, TValue> relationship) where TSource : notnull =>
+        Binding.Owner.TraverseInverse(this, relationship);
+
+    /// <summary>Traverses an outgoing relationship from this focused branch.</summary>
+    /// <typeparam name="TRelated">Related target entity type.</typeparam>
+    /// <param name="relationship">Canonical relationship starting at this row type.</param>
+    /// <returns>The related target branch using the default left traversal.</returns>
+    public RelationQueryExpressionBoundNode<TraverseRelationshipQueryNode, TRelated> Traverse<TRelated>(RelationQueryExpressionRelationship<TValue, TRelated> relationship) where TRelated : notnull =>
+        Binding.Owner.Traverse(this, Binding, relationship);
+
+    /// <summary>Joins two focused branches using their existing session-owned bindings.</summary>
+    /// <typeparam name="TRightNode">Right logical node type.</typeparam>
+    /// <typeparam name="TRight">Right focused row type.</typeparam>
+    /// <param name="right">Other branch from the same session.</param>
+    /// <param name="predicate">Join predicate over the two focused rows.</param>
+    /// <param name="kind">Join semantics.</param>
+    /// <returns>The structural join; both original bindings remain available for projection.</returns>
+    public RelationQueryNodeHandle<JoinQueryNode> Join<TRightNode, TRight>(RelationQueryExpressionBoundNode<TRightNode, TRight> right,
+        Expression<Func<TValue, TRight, bool>> predicate, JoinKind kind = JoinKind.Inner)
+        where TRightNode : LogicalQueryNode where TRight : notnull =>
+        Binding.Owner.Join(Node, right.Node, kind, predicate, Binding, right.Binding);
 
     /// <summary>Structural handle for the canonical logical node.</summary>
     public RelationQueryNodeHandle<TNode> Node { get; }

@@ -408,7 +408,7 @@ Bind each database once at host composition. Repositories preserve the POCO cont
 This reuses `TypedEntityRepository<T>` and preserves native batch/concurrency capabilities. The default typed
 identity selector is compiled at registration from the mapping's canonical identity field, using the same
 `FieldPath`/JSON-name rules as mapping authoring. Inventory therefore uses `Sku` without a second selector.
-An unreadable, ambiguous or non-string identity fails at setup; explicit custom selectors remain available.
+An unreadable or ambiguous identity fails at setup; explicit custom selectors remain available.
 Semantic version selection retains existing Version/zero conventions. The entity handle remains explicit
 so a CLR type cannot silently choose among different canonical definitions.
 
@@ -427,3 +427,23 @@ uses the same fluent `Source(entity)` style. The static constructor only assigns
 identity. `BindInventory` attaches only inventory to the remote database; trying to acquire an order or
 reservation repository from it fails during registration. Both live join tests exercise typed repositories
 from persistence registration rather than manually constructing native repository instances.
+
+Identity selection and invariant value formatting are owned by Storage. Native PostgreSQL and SQLite
+repositories expose their declared identity field; the typed facade prepares its selector at construction.
+`string`, `EntityId`, `Guid` and other formattable values retain their existing encoding. A native declaration
+wins over an incidental `Id`/`Key` property; repositories without a declaration retain that convention.
+Explicit selectors remain available. Composed registration accepts the existing physical planning policy
+separately from source-read policy: buffer, local-row and fan-out bounds and policy identity are explicit.
+The example retains fan-out 100 while allowing 1,000 buffered rows.
+
+Authoring boundaries: focused nodes expose fluent filtering, traversal, projection and joins, delegating
+into the same session compiler used by explicit structural authoring. The session operations remain
+available for branches with multiple visible bindings; this is not another execution path. The public
+binding interface is closed to external implementations. Child mapping callbacks retain a completion
+guard because C# callbacks can leak a builder reference; parent source selection is compile-time staged,
+while callback lifetime is enforced at definition time. Local-partition predicates remain explicit until
+native and composed acquisition can enforce scope uniformly, including outer-join sides.
+
+This shared CLR identity conversion does not broaden native key encodings: the PostgreSQL repository
+still requires required, non-null TEXT identity and partition mappings. Inferred UUID/native non-text
+keys remain rejected by mapping validation, as before this change.

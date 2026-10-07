@@ -12,6 +12,30 @@ public sealed class ApiQueryBindingTests
 {
     public sealed record Detail(string Id);
 
+    public sealed record Search(string Id);
+
+    [Fact]
+    public async Task Typed_query_request_is_bound_from_query_string()
+    {
+        await using var app = WebApplication.CreateBuilder().Build();
+        var endpoint = Cohesive.Api.Api.Define().Entity<Detail>().Query("Search")
+            .Route("GET", "/search").Result(ApiResultKind.NotFound).BuildQuery<Search, Detail>();
+        app.MapApiQuery(endpoint, new SearchReader()).OkOrNotFound();
+        app.Urls.Add("http://127.0.0.1:0");
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+        Assert.Equal("found", (await client.GetFromJsonAsync<Detail>("/search?id=found"))!.Id);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/search?id=missing")).StatusCode);
+        await app.StopAsync();
+    }
+
+    sealed class SearchReader : IRelationQueryReader<Search, Detail?>
+    {
+        public RelationQuery<Search, Detail?> Definition => throw new NotSupportedException("The transport never compiles the reader.");
+        public Task<Detail?> ReadAsync(Search input, CancellationToken cancellationToken = default) =>
+            Task.FromResult(input.Id == "found" ? new Detail(input.Id) : null);
+    }
+
     [Fact]
     public async Task Typed_query_binds_route_and_maps_success_missing_and_invalid_input()
     {

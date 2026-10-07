@@ -40,7 +40,9 @@ public sealed partial class OrderStorageIntegrationTests
             foreach (var registration in new[] { persistence, inventoryPersistence })
             {
                 var repository = registration.Repository(FulfillmentDomain.Inventory);
-                await repository.Upsert(context, new InventoryItem(sku, FulfillmentDemo.LocalPartition, 8));
+                var item = new InventoryItem(sku, FulfillmentDemo.LocalPartition, 8);
+                await repository.Upsert(context, item);
+                Assert.Equal(item, await repository.TryGetEntity(context, sku));
             }
             for (var quantity = 1; quantity <= 2; quantity++)
             {

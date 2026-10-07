@@ -16,6 +16,7 @@ public sealed partial class PostgresPersistenceRegistration
     /// <param name="projection">Closed nonterminal projection executed on this database.</param>
     /// <param name="remote">Entity mappings and caller-owned runtime for all remaining database inputs.</param>
     /// <param name="policy">Acquisition bounds and required logical partition, declared once for remote reads.</param>
+    /// <param name="physicalPolicy">Explicit independent buffer, local-row, fan-out and concurrency limits and policy identity.</param>
     /// <returns>A host-lifetime prepared reader; no IO occurs during registration.</returns>
     /// <remarks>The host attests that the prefix enforces the same logical partition. Independent reads do not
     /// establish a distributed snapshot. This recipe uses bounded enumeration and sequential acquisition.
@@ -27,17 +28,20 @@ public sealed partial class PostgresPersistenceRegistration
     /// <exception cref="PostgresQueryPreparationException">Native prefix compilation fails.</exception>
     public RelationQuerySubplanReader<TInput, TResult> QueryComposed<TInput, TResult>(
         RelationQuery<TInput, TResult> query, QueryNodeId projection,
-        PostgresPersistenceRegistration remote, PostgresRelationQuerySourcePolicy policy)
+        PostgresPersistenceRegistration remote, PostgresRelationQuerySourcePolicy policy,
+        RelationQueryPhysicalPlanningPolicy physicalPolicy)
     {
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(remote);
         ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(physicalPolicy);
         var scope = policy.PartitionScope ?? throw new ArgumentException("Composed registration requires an explicit partition scope.", nameof(policy));
         var cut = RelationQuerySubplan.Compile(query.CompilationRequest, projection);
         var prefix = Prepare(cut.Prefix.Request, policy.MaximumRowsPerRead, policy.MaximumPageBytes);
         var builder = RelationQueryPlacement.For(cut.Remainder.Plan!);
-        var limits = new RelationQuerySourcePlacementLimits(policy.MaximumBatchKeys, policy.MaximumRowsPerRead,
-            policy.MaximumRowsPerRead, 1);
+        var limits = new RelationQuerySourcePlacementLimits(
+            Math.Min(policy.MaximumBatchKeys, physicalPolicy.MaximumBatchSize), physicalPolicy.MaximumBufferedRows,
+            physicalPolicy.MaximumFanOut, physicalPolicy.MaximumConcurrency);
         var projected = builder.Source("postgres/composed/prefix", RelationQueryProjectedRowset.Profile,
             new(runtime.Database.Value), limits: limits);
         var external = builder.Source("postgres/composed/remote", PostgresRelationQuerySourceTargetProfile.Default,
@@ -55,10 +59,6 @@ public sealed partial class PostgresPersistenceRegistration
         foreach (var input in placement.Inputs.Where(input => input.Source.Id == external.Id))
             storage.Table(input, Mapping(input.Shape));
         var bound = storage.Build().RequireValue();
-        var physicalPolicy = new RelationQueryPhysicalPlanningPolicy(new("postgres/composed/v1"), "postgres/composed/v1",
-            maximumBatchSize: policy.MaximumBatchKeys, maximumBufferedRows: policy.MaximumRowsPerRead,
-            maximumLocalRows: policy.MaximumRowsPerRead, maximumFanOut: policy.MaximumRowsPerRead,
-            maximumReferenceKeysPerObservation: policy.MaximumBatchKeys, maximumConcurrency: 1);
         return new(query, cut, prefix, placement.Placement, physicalPolicy,
             physical => [new PostgresRelationQuerySourceReader(cut.Remainder.Plan, physical, external.Id,
                 bound, remote.runtime.DataSource, remote.runtime, policy)], scope.LogicalPartition);

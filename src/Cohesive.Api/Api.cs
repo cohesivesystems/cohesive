@@ -473,8 +473,17 @@ public abstract class OperationBuilder<TParent>
         ValidateRequestType<TRequest>();
         if (query is not null || endpoint is not null && endpoint.Operation.Http?.Body?.BodyType != typeof(TRequest))
             throw new ArgumentException("The existing endpoint does not have a compatible JSON body binding.");
-        if (endpoint is null) Body<TRequest>();
-        return Build<TRequest, TResponse>(kind);
+        var previous = (body, query, requestType, primaryResult);
+        try
+        {
+            if (endpoint is null) Body<TRequest>();
+            return Build<TRequest, TResponse>(kind);
+        }
+        catch
+        {
+            (body, query, requestType, primaryResult) = previous;
+            throw;
+        }
     }
 
     /// <summary>Declares a query DTO and primary response once, then completes their typed endpoint.</summary>
@@ -490,8 +499,17 @@ public abstract class OperationBuilder<TParent>
         ValidateRequestType<TRequest>();
         if (body is not null || endpoint is not null && endpoint.Operation.Http?.Query?.QueryType != typeof(TRequest))
             throw new ArgumentException("The existing endpoint does not have a compatible query DTO binding.");
-        if (endpoint is null) Query<TRequest>();
-        return Build<TRequest, TResponse>(kind);
+        var previous = (body, query, requestType, primaryResult);
+        try
+        {
+            if (endpoint is null) Query<TRequest>();
+            return Build<TRequest, TResponse>(kind);
+        }
+        catch
+        {
+            (body, query, requestType, primaryResult) = previous;
+            throw;
+        }
     }
 
     /// <summary>Rejects competing request authorities before changing transport configuration.</summary>

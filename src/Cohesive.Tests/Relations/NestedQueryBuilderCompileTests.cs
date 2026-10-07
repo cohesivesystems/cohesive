@@ -22,6 +22,19 @@ public sealed class NestedQueryBuilderCompileTests
         Assert.Empty(Compile("author.SingleOrDefault<Result>().From(rows, rows.Binding, row => row.Id).Identity(result => result.Id)"));
     }
 
+    [Fact]
+    public void External_binding_implementation_is_rejected()
+    {
+        var errors = CompileSource("""
+            using Cohesive.Relations.Authoring;
+            public sealed class Forged : IRelationQueryBinding<string>
+            {
+                public RelationQueryExpressionValueBinding<string> Binding => null!;
+            }
+            """);
+        Assert.Contains(errors, diagnostic => diagnostic.Id == "CS0535");
+    }
+
     static Diagnostic[] Compile(string expression)
     {
         var source = $$"""
@@ -34,6 +47,11 @@ public sealed class NestedQueryBuilderCompileTests
                     => {{expression}};
             }
             """;
+        return CompileSource(source);
+    }
+
+    static Diagnostic[] CompileSource(string source)
+    {
         var platform = (string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!;
         var references = platform.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
             .Append(typeof(RelationQuery).Assembly.Location)

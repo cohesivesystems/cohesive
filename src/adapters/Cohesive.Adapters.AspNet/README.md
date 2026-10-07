@@ -367,7 +367,7 @@ explicit domain body and Problem Details for concurrency. Use the Problem Detail
 Use `app.MapApiQuery(endpoint, preparedRead).FromRoute<Guid>("id", id => id.ToString("D")).OkOrNotFound()`
 when a separately declared, bodyless `ApiEndpoint<TResult>` returns a nullable typed result.
 Use `Build<TResult>()` on the declaration to retain the response type at the binding boundary. `preparedRead` is a
-`IRelationQueryReader<TInput, TResult>` retaining its canonical `Definition`; pass the object, not
+`IRelationQueryReader<TInput, TResult?>` retaining its canonical `Definition`; pass the object, not
 its `ReadAsync` method group. No database adapter dependency is required. Registration
 checks the endpoint's query kind and response type, route declaration and 404 policy. Invalid input returns
 400 before invocation, request cancellation propagates, and null returns the declared empty-body 404.
@@ -378,3 +378,9 @@ result assembly or retry policy.
 The typed reader is a complete-result convenience contract. For composed/cross-source evaluation with
 phase artifacts, requirement gaps and source-read traces, retain the existing `MapRelationQueryApiDefinition`
 and `IRelationQueryEvaluator` path. Do not turn a failed or partial evaluation into an ordinary typed success.
+
+The `OkOrNotFound` convenience requires a reference response type: absence is represented by null,
+not the default value of a struct. Request-typed `ApiEndpoint<TInput, TResult>` handles built with
+`BuildQuery<TInput, TResult>()` can be passed directly to `MapApiQuery`; their query DTO is bound by
+the existing HTTP query binder. Body requests remain outside this query convenience.
+`BuildBody` and `BuildQuery` restore declaration state if validation fails.

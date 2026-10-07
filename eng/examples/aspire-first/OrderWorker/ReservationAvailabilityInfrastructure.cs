@@ -1,11 +1,18 @@
 using Cohesive.Adapters.Postgres;
 using Cohesive.Relations.Execution;
+using Cohesive.Relations.Physical;
 
 namespace AspireFirst.Orders;
 
 /// <summary>Alternative native placements of the same reservation-availability declaration.</summary>
 public static class ReservationAvailabilityInfrastructure
 {
+    /// <summary>Independent bounds for this example’s composed execution.</summary>
+    public static RelationQueryPhysicalPlanningPolicy PlanningPolicy { get; } = new(
+        new("aspire-first/availability/v1"), "aspire-first/availability/v1",
+        maximumBatchSize: 100, maximumBufferedRows: 1000, maximumLocalRows: 1000,
+        maximumFanOut: 100, maximumReferenceKeysPerObservation: 100, maximumConcurrency: 1);
+
     /// <summary>Runs all joins in one native PostgreSQL statement.</summary>
     /// <param name="persistence">Existing registration containing all three entity mappings.</param>
     /// <returns>A prepared native reader; retain at host lifetime.</returns>
@@ -25,5 +32,6 @@ public static class ReservationAvailabilityInfrastructure
             policy: new PostgresRelationQuerySourcePolicy(
                 maximumBatchKeys: 100, maximumRowsPerRead: 1000,
                 maximumPageItems: 1000, maximumPageBytes: 1_000_000,
-                partitionScope: new(new("aspire-first/local"), FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition)));
+                partitionScope: new(new("aspire-first/local"), FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition)),
+            physicalPolicy: PlanningPolicy);
 }

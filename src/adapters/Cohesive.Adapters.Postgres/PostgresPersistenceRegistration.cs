@@ -1,5 +1,3 @@
-using System.Linq.Expressions;
-using System.Reflection;
 using Cohesive.Storage;
 using Cohesive.Model;
 using Cohesive.Transitions.Model;
@@ -49,7 +47,7 @@ public sealed partial class PostgresPersistenceRegistration
     /// <param name="selectVersion">Optional typed-write semantic version selector; otherwise existing Version/zero conventions apply.</param>
     /// <returns>A repository using the registered mapping and caller-owned native data source.</returns>
     /// <exception cref="ArgumentNullException">Entity is null.</exception>
-    /// <exception cref="InvalidOperationException">The exact entity definition has not been registered, or its identity cannot be mapped to one readable string property.</exception>
+    /// <exception cref="InvalidOperationException">The exact entity definition has not been registered, or its identity cannot be mapped to one readable property.</exception>
     public IEntityRepository<T> Repository<T>(DomainEntity<T> entity,
         Func<T, string>? selectEntityId = null, Func<T, long>? selectVersion = null) where T : notnull
     {
@@ -58,21 +56,7 @@ public sealed partial class PostgresPersistenceRegistration
             || !ReferenceEquals(attachment.Entity, entity.Definition))
             throw new InvalidOperationException("Register this exact entity before creating its repository.");
         return new TypedEntityRepository<T>(new PostgresEntityRepository(attachment.Entity, runtime, attachment.Mapping),
-            selectEntityId ?? CompileIdentitySelector<T>(attachment.Mapping.IdentityField), selectVersion);
-    }
-
-    static Func<T, string> CompileIdentitySelector<T>(string identityField) where T : notnull
-    {
-        var parameter = Expression.Parameter(typeof(T), "entity");
-        var matches = typeof(T).GetProperties(BindingFlags.Instance | BindingFlags.Public)
-            .Where(property => property.GetMethod is { IsPublic: true } && property.GetIndexParameters().Length == 0)
-            .Where(property => FieldPath.Capture(Expression.Lambda<Func<T, object?>>(
-                    Expression.Convert(Expression.Property(parameter, property), typeof(object)), parameter))
-                .TryGetDirectFieldName(out var name) && name == identityField)
-            .ToArray();
-        if (matches.Length != 1 || matches[0].PropertyType != typeof(string))
-            throw new InvalidOperationException($"Mapped identity '{identityField}' must resolve to one readable string property on '{typeof(T).Name}'. Supply an explicit identity selector for a custom CLR mapping.");
-        return Expression.Lambda<Func<T, string>>(Expression.Property(parameter, matches[0]), parameter).Compile();
+            selectEntityId, selectVersion);
     }
 
     /// <summary>Validates and prepares a typed query using the existing static, placement and native compilers.</summary>
@@ -174,10 +158,10 @@ public sealed class PostgresQueryReader<TInput, TResult> : IRelationQueryReader<
 }
 
 /// <summary>Registration failed to prepare a query, retaining exact compiler diagnostics.</summary>
-public sealed class PostgresQueryPreparationException : InvalidOperationException
+public sealed class PostgresQueryPreparationException : PreparationException
 {
     internal PostgresQueryPreparationException(RelationQueryCompilationResult compilation, PostgresRelationQueryCompilationResult? native)
-        : base("PostgreSQL query preparation failed: " + string.Join("; ", native is null
+        : base(native is null ? "semantic" : "native", native is null ? "postgres.preparation.semantic" : "postgres.preparation.native", "PostgreSQL query preparation failed: " + string.Join("; ", native is null
             ? compilation.Diagnostics.Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")
             : native.Diagnostics.Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")))
     {

@@ -117,9 +117,6 @@ public sealed class NestedResultTests
         Assert.Null(typeof(NestedQueryResultSource<OrderHeader>).GetMethod("Identity"));
         Assert.Null(typeof(NestedQueryResultSource<OrderHeader>).GetMethod("Build"));
         Assert.Null(typeof(NestedQueryResultBuilder<OrderHeader>).GetMethod("From"));
-        Assert.Single(typeof(NestedQueryResultSource<OrderHeader>).GetMethods().Where(method => method.Name == "From"));
-        Assert.Single(typeof(NestedQueryResultBuilder<OrderHeader>).GetMethods().Where(method => method.Name == "Field"));
-        Assert.Single(typeof(NestedQueryResultBuilder<OrderHeader>).GetMethods().Where(method => method.Name == "Collection"));
     }
 
     public sealed record OrderHeader(string Id, string Status, IReadOnlyList<ReservationHeader> Reservations);

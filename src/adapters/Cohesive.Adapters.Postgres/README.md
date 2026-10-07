@@ -136,7 +136,7 @@ name is replaced by `PostgresPersistenceRegistration.Query` in this unreleased s
 ## Prepared native and composed queries
 
 `PostgresPersistenceRegistration` attaches canonical entities to native repository mappings once.
-`Query` prepares a native typed reader. `QueryComposed(query, projection, remote, policy)` prepares a
+`Query` prepares a native typed reader. `QueryComposed(query, projection, remote, policy, physicalPolicy)` prepares a
 closed native prefix and the remaining query over one remote PostgreSQL registration, reusing those
 same attachments. The policy declares acquisition bounds and a partition scope once. Remaining source
 and traversal mappings are selected from the remote registration; missing mappings or mismatched partition
@@ -154,7 +154,19 @@ compiler results; cut/physical errors retain `RelationQueryPreparationException`
 `TypedEntityRepository<T>` over the native repository. Canonical writes, batching and concurrency fences
 continue to delegate unchanged. At registration, the default typed-write identity selector is compiled from
 `mapping.IdentityField` using the same `FieldPath.Capture` member naming rules as mapping authoring (including
-`JsonPropertyName`). An absent, ambiguous or non-string readable property fails before request execution;
+`JsonPropertyName`). An absent or ambiguous readable property fails before request execution;
 there is no Id/Key fallback or per-write reflection. Explicit `selectEntityId` remains an escape for custom
 CLR mappings. Semantic versions retain existing Version/zero conventions, or an explicit `selectVersion`.
 The registration remains PostgreSQL-specific; application consumers depend on typed repository/read interfaces.
+
+Identity selection and invariant value formatting are owned by Storage. Native PostgreSQL and SQLite
+repositories expose their declared identity field; the typed facade prepares its selector at construction.
+`string`, `EntityId`, `Guid` and other formattable values retain their existing encoding. A native declaration
+wins over an incidental `Id`/`Key` property; repositories without a declaration retain that convention.
+Explicit selectors remain available. Composed registration accepts the existing physical planning policy
+separately from source-read policy: buffer, local-row and fan-out bounds and policy identity are explicit.
+The example retains fan-out 100 while allowing 1,000 buffered rows.
+
+This shared CLR identity conversion does not broaden native key encodings: the PostgreSQL repository
+still requires required, non-null TEXT identity and partition mappings. Inferred UUID/native non-text
+keys remain rejected by mapping validation, as before this change.

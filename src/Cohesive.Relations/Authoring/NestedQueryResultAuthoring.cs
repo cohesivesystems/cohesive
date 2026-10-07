@@ -94,7 +94,7 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentNullException">Target is null.</exception>
     /// <exception cref="ArgumentException">Target is not a direct result property.</exception>
-    /// <exception cref="InvalidOperationException">The source is unset or this builder is complete.</exception>
+    /// <exception cref="InvalidOperationException">This builder is complete.</exception>
     public NestedQueryResultBuilder<TResult> Identity(Expression<Func<TResult, string>> target)
     {
         RequireMutable();
@@ -145,7 +145,7 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
     /// <param name="parameter">The branch's single invocation parameter.</param>
     /// <returns>A typed query returning null for no parent.</returns>
     /// <exception cref="ArgumentException">The parameter is foreign/additional, or assembly mappings conflict.</exception>
-    /// <exception cref="InvalidOperationException">The source is unset or the builder is complete.</exception>
+    /// <exception cref="InvalidOperationException">The builder is complete.</exception>
     public RelationQuery<TInput, TResult?> Build<TInput>(QueryId id, QueryName name, RelationQueryExpressionParameter<TInput> parameter)
     {
         RequireMutable();

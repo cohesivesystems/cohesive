@@ -14,6 +14,11 @@ public sealed class TypedEntityRepository<TEntity>(
     Action<ObservationMaterializerBuilder<TEntity>>? configureMaterializer = null
     ) : IEntityRepository<TEntity>, IEntityTransitionOperationRepository where TEntity : notnull
 {
+    readonly Func<TEntity, string> identitySelector = selectEntityId ?? EntityRepositoryMappingExtensions.PrepareIdentitySelector<TEntity>(repository.IdentityField);
+
+    /// <inheritdoc />
+    public string? IdentityField => repository.IdentityField;
+
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => repository.EntityDefinition;
 
@@ -37,7 +42,7 @@ public sealed class TypedEntityRepository<TEntity>(
     /// <returns>Committed snapshots in input order.</returns>
     public async Task<IReadOnlyList<EntitySnapshot>> UpsertBatch(OperationContext context, IReadOnlyList<TEntity> writes,
         EntityBatchAtomicity atomicity = EntityBatchAtomicity.None) =>
-        (await repository.UpsertBatch(context, writes, atomicity, selectEntityId, selectVersion).ConfigureAwait(false)).Snapshots;
+        (await repository.UpsertBatch(context, writes, atomicity, identitySelector, selectVersion).ConfigureAwait(false)).Snapshots;
 
     /// <summary>Maps typed candidates and their concurrency fences using this facade's selectors.</summary>
     /// <param name="context">Operation context and cancellation.</param>
@@ -52,7 +57,7 @@ public sealed class TypedEntityRepository<TEntity>(
     /// <exception cref="OperationCanceledException">Cancellation is observed during mapping or by the repository.</exception>
     public async Task<IReadOnlyList<EntitySnapshot>> UpsertBatch(OperationContext context,
         EntityBatchWriteRequest<TEntity> request) =>
-        (await repository.UpsertBatch(context, request, selectEntityId, selectVersion).ConfigureAwait(false)).Snapshots;
+        (await repository.UpsertBatch(context, request, identitySelector, selectVersion).ConfigureAwait(false)).Snapshots;
 
     /// <summary>Gets atomic Process Transition operation capabilities.</summary>
     public EntityTransitionOperationCapabilities TransitionOperationCapabilities =>
@@ -78,7 +83,7 @@ public sealed class TypedEntityRepository<TEntity>(
         repository.Upsert(context,
             entity,
             expectedConcurrencyToken,
-            selectEntityId,
+            identitySelector,
             selectVersion);
 
     /// <summary>Looks up one exact Process Transition operation receipt.</summary>
@@ -122,6 +127,9 @@ public sealed class TypedEntityOutboxRepository<TEntity>(
     IEntityOutboxRepository outboxRepository
     ) : IEntityOutboxRepository<TEntity>, IEntityTransitionOperationRepository where TEntity : notnull
 {
+    /// <inheritdoc />
+    public string? IdentityField => repository.IdentityField;
+
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => repository.EntityDefinition;
 

@@ -3,7 +3,7 @@ using Cohesive.Relations.Physical;
 namespace Cohesive.Relations.Compilation;
 
 /// <summary>Preparation failure retaining the original structured compiler evidence.</summary>
-public sealed class RelationQueryPreparationException : ArgumentException
+public sealed class RelationQueryPreparationException : PreparationException
 {
     /// <summary>Creates a semantic or physical preparation failure.</summary>
     /// <param name="phase">Preparation phase that failed.</param>
@@ -12,13 +12,9 @@ public sealed class RelationQueryPreparationException : ArgumentException
     /// <param name="code">Stable preparation diagnostic code.</param>
     /// <param name="detail">Optional explanation of a rejected preparation boundary.</param>
     public RelationQueryPreparationException(string phase, RelationQueryCompilationResult compilation,
-        RelationQueryPhysicalPlanningResult? physical = null, string code = "relationQuery.preparation.invalid",
-        string? detail = null) : base(detail ?? $"Relation query preparation failed during {phase}.")
-    { Phase = phase; Compilation = compilation; Physical = physical; Code = code; }
-    /// <summary>Stable machine-readable preparation failure code.</summary>
-    public string Code { get; }
-    /// <summary>Failed preparation phase.</summary>
-    public string Phase { get; }
+        RelationQueryPhysicalPlanningResult? physical = null, string? code = null,
+        string? detail = null) : base(phase, code ?? (physical is null ? "relationQuery.preparation.semantic" : "relationQuery.preparation.physical"), detail ?? $"Relation query preparation failed during {phase}.")
+    { Compilation = compilation; Physical = physical; }
     /// <summary>Semantic evidence including original diagnostics.</summary>
     public RelationQueryCompilationResult Compilation { get; }
     /// <summary>Physical evidence including original diagnostics, if available.</summary>

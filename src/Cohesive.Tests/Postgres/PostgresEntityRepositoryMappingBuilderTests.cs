@@ -13,6 +13,18 @@ public sealed class PostgresEntityRepositoryMappingBuilderTests
     static PostgresEntityRepositoryMapping Mapping() => PostgresEntityRepositoryMapping.For<Order>(Entity)
         .Table("public", "orders").Identity(order => order.Id, "order_id")
         .Partition(order => order.Partition, "partition_key").Build();
+    public sealed record GuidEntity(Guid Id, string Partition);
+
+    [Fact]
+    public void Native_uuid_key_remains_rejected_by_the_existing_mapping_boundary()
+    {
+        var entity = new DomainModelBuilder().Entity<GuidEntity>("test/guid-entity");
+        var error = Assert.Throws<ArgumentException>(() => PostgresEntityRepositoryMapping.For(entity)
+            .Table("public", "guid_entities").Identity(value => value.Id, "id")
+            .Partition(value => value.Partition, "partition").Build());
+        Assert.Contains("required non-null text", error.Message);
+    }
+
     [Fact]
     public void Fluent_mapping_preserves_names_encodings_and_rejects_invalid_declarations()
     {

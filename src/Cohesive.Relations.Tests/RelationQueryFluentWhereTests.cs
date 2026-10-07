@@ -25,10 +25,8 @@ public sealed class RelationQueryFluentWhereTests
     }
 
     [Fact]
-    public void Null_input_and_predicate_are_rejected()
+    public void Null_predicate_is_rejected()
     {
-        RelationQueryExpressionBoundNode<SourceQueryNode, Row> missing = null!;
-        Assert.Throws<ArgumentNullException>(() => missing.Where(row => row.Enabled));
         Assert.Throws<ArgumentNullException>(() => RelationQuery.Expression().Source<Row>().Where(null!));
     }
 

@@ -6,6 +6,23 @@ public sealed class TypedApiEndpointTests
 {
     public sealed record Detail(string Id);
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Failed_typed_build_does_not_retain_request_mutation(bool body)
+    {
+        var declaration = Cohesive.Api.Api.Define().Entity<Detail>().Query("Recovery").Route("GET", "/recover");
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            if (body) declaration.BuildBody<CreateDetail, Detail>(ApiResultKind.NotFound);
+            else declaration.BuildQuery<FindDetail, Detail>(ApiResultKind.NotFound);
+        });
+        var recovered = declaration.Build<Detail>();
+        Assert.Equal(typeof(void), recovered.Operation.RequestType);
+        Assert.Null(recovered.Operation.Http!.Body);
+        Assert.Null(recovered.Operation.Http.Query);
+    }
+
     [Fact]
     public void Typed_handle_retains_exact_operation_and_alternative_results()
     {

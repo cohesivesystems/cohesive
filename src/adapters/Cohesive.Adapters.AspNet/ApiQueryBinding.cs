@@ -22,14 +22,32 @@ public static class ApiQueryBindingExtensions
     /// <exception cref="ArgumentException">Operation kind, body or response contract differs.</exception>
     public static ApiQueryBinding<TInput, TResult> MapApiQuery<TInput, TResult>(this IEndpointRouteBuilder endpoints,
         ApiEndpoint<TResult> endpoint, IRelationQueryReader<TInput, TResult?> query,
-        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) =>
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TResult : class =>
         new(endpoints, endpoint, query, authorizationPolicyResolver);
+    /// <summary>Binds an explicitly typed query-string request to a prepared query with the same input contract.</summary>
+    /// <typeparam name="TInput">Declared query DTO and reader input.</typeparam>
+    /// <typeparam name="TResult">Reference response type; null means absent.</typeparam>
+    /// <param name="endpoints">Native endpoint builder.</param>
+    /// <param name="endpoint">Portable endpoint with an explicit query DTO.</param>
+    /// <param name="query">Prepared reader.</param>
+    /// <param name="authorizationPolicyResolver">Resolver for declared authorization.</param>
+    /// <returns>A binding with query input configured, ready for its response policy.</returns>
+    public static ApiQueryBinding<TInput, TResult> MapApiQuery<TInput, TResult>(this IEndpointRouteBuilder endpoints,
+        ApiEndpoint<TInput, TResult> endpoint, IRelationQueryReader<TInput, TResult?> query,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TResult : class
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        if (endpoint.Operation.Http?.Query?.QueryType != typeof(TInput))
+            throw new ArgumentException("A matching query-string request declaration is required.", nameof(endpoint));
+        return new(endpoints, endpoint, query, authorizationPolicyResolver);
+    }
+
 }
 
 /// <summary>Registration-local query binding. Complete once; it is not safe for concurrent mutation.</summary>
 /// <typeparam name="TInput">Query input type.</typeparam>
 /// <typeparam name="TResult">API response type.</typeparam>
-public sealed class ApiQueryBinding<TInput, TResult>
+public sealed class ApiQueryBinding<TInput, TResult> where TResult : class
 {
     readonly IEndpointRouteBuilder endpoints;
     readonly ApiEndpoint endpoint;
@@ -49,13 +67,15 @@ public sealed class ApiQueryBinding<TInput, TResult>
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(query);
-        if (endpoint.Operation.Kind != ApiOperationKind.Query || endpoint.Operation.RequestType != typeof(void) || endpoint.Operation.Http?.Body is not null
+        if (endpoint.Operation.Kind != ApiOperationKind.Query || (endpoint.Operation.RequestType != typeof(void) && endpoint.Operation.RequestType != typeof(TInput)) || endpoint.Operation.Http?.Body is not null
             || endpoint.Operation.ResponseType != typeof(TResult) || endpoint.Operation.PrimaryResult.Kind != ApiResultKind.Success)
             throw new ArgumentException("Query kind, body and primary response type must match the typed binding.", nameof(endpoint));
         this.endpoints = endpoints;
         this.endpoint = endpoint;
         this.query = query;
         this.authorizationPolicyResolver = authorizationPolicyResolver;
+        if (endpoint.Operation.Http?.Query?.QueryType == typeof(TInput))
+            input = HttpQueryRequestBinder.Bind<TInput>;
     }
 
     /// <summary>Parses one route value and maps it to the query input.</summary>

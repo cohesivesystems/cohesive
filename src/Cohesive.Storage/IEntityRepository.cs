@@ -14,6 +14,9 @@ public interface IEntityRepository
     /// </summary>
     EntityDefinition EntityDefinition { get; }
 
+    /// <summary>Declared semantic identity field for typed mapping, or null to use Id/Key conventions.</summary>
+    string? IdentityField => null;
+
     /// <summary>
     /// Logical observation/entity type handled by the repository.
     /// </summary>

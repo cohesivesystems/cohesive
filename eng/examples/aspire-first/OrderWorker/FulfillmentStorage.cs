@@ -8,6 +8,8 @@ public static class FulfillmentStorage
 {
     /// <summary>Native Aspire database reference.</summary>
     public const string DatabaseName = "orders";
+    /// <summary>Separate inventory database reference.</summary>
+    public const string InventoryDatabaseName = "inventory";
     /// <summary>Attaches each canonical entity once for repository and query dependency resolution.</summary>
     /// <param name="database">Caller-owned Aspire data source, retained by the resulting readers.</param>
     /// <returns>A native persistence registration; query preparation selects only its consumed entities.</returns>
@@ -23,7 +25,7 @@ public static class FulfillmentStorage
     /// <param name="database">Caller-owned inventory data source.</param>
     /// <returns>An inventory-only registration; order and reservation requests fail at setup.</returns>
     public static PostgresPersistenceRegistration BindInventory(NpgsqlDataSource database) =>
-        new PostgresPersistenceRegistration(new(new("inventory"), database, "aspire-first/inventory"))
+        new PostgresPersistenceRegistration(new(new(InventoryDatabaseName), database, "aspire-first/inventory"))
             .Entity(FulfillmentDomain.Inventory, Inventory);
 
     /// <summary>Physical stock mapping, also projected into native query bindings.</summary>

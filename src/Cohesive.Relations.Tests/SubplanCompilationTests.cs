@@ -18,6 +18,8 @@ public sealed class SubplanCompilationTests
         Assert.False(error.Compilation.IsSuccessful);
         Assert.NotEmpty(error.Compilation.Diagnostics);
         Assert.Null(error.Physical);
+        Assert.IsAssignableFrom<Cohesive.Prelude.PreparationException>(error);
+        Assert.Equal("relationQuery.preparation.semantic", error.Code);
     }
 
     [Fact]
@@ -77,10 +79,9 @@ public sealed class SubplanCompilationTests
         var aggregate = q.Aggregate<FilterQueryNode, CountRow>(source.Node, result => result.Count(row => row.Count));
         var cut = q.Project(aggregate.Node, (CountRow row) => new CountRow(row.Count), aggregate.Binding);
         var terminal = q.Project(cut.Node, (CountRow row) => new CountRow(row.Count), cut.Binding);
-        var definition = q.BuildQuery(new("count"), new("Count"), q.Aggregation(aggregate));
-        var request = new RelationQueryCompilationRequest(definition.CreateDocument(), q.ShapeDocuments);
-        var error = Assert.Throws<RelationQueryPreparationException>(() => RelationQuerySubplan.Compile(request, cut.Node.Id));
-        Assert.Equal("relationQuery.subplan.resultUnsupported", error.Code);
+        var error = Assert.Throws<ArgumentException>(() =>
+            q.BuildQuery(new("count"), new("Count"), terminal, id, rows => rows.ToArray()));
+        Assert.Contains("relationQuery.query.rowsResultNodeInvalid", error.Message);
     }
     public sealed record CountRow(long Count);
     [Fact]

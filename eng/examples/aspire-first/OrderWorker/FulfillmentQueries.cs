@@ -28,7 +28,7 @@ public static class FulfillmentQueries
         var orderId = query.Parameter<string>("orderId");
 
         var (orders, reservations) = OrderReservations(query, orderId);
-        var inventory = query.Traverse(reservations, FulfillmentDomain.ReservationItem);
+        var inventory = reservations.Traverse(FulfillmentDomain.ReservationItem);
         return query.SingleOrDefault<OrderDetails>()
             .From(inventory, orders, order => order.Id)
             .Identity(result => result.Id)
@@ -51,8 +51,7 @@ public static class FulfillmentQueries
             (Order order, Reservation reservation) => new ReservationDemand(order.Id, reservation.Id, reservation.Sku, reservation.Quantity),
             orders.Binding, reservations.Binding);
         var inventory = query.Source(FulfillmentDomain.Inventory).Where(item => item.Partition == FulfillmentDemo.LocalPartition);
-        var joined = query.Join(demand.Node, inventory.Node, JoinKind.Left,
-            (row, item) => row.Sku == item.Sku, demand.Binding, inventory.Binding);
+        var joined = demand.Join(inventory, (row, item) => row.Sku == item.Sku, JoinKind.Left);
         var result = query.Project(joined,
             (ReservationDemand row, InventoryItem item) => new ReservationAvailability(row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available),
             demand.Binding, inventory.Binding);
@@ -67,7 +66,7 @@ public static class FulfillmentQueries
     {
         var orders = query.Source(FulfillmentDomain.Orders)
             .Where(order => order.Id == orderId.Value && order.Partition == FulfillmentDemo.LocalPartition);
-        return (orders, query.TraverseInverse(orders, FulfillmentDomain.ReservationOrder));
+        return (orders, orders.TraverseInverse(FulfillmentDomain.ReservationOrder));
     }
 
 }

@@ -189,6 +189,9 @@ public sealed class PostgresEntityRepository : IEntityRepository
     public EntityDefinition EntityDefinition { get; }
 
     /// <inheritdoc />
+    public string IdentityField => mapping.IdentityField;
+
+    /// <inheritdoc />
     public string EntityType => EntityDefinition.Shape.Id.Value;
 
     /// <inheritdoc />

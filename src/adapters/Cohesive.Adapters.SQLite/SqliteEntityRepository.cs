@@ -41,6 +41,9 @@ public sealed class SqliteEntityRepository : IEntityRepository
     public SqliteEntityRepositoryMapping Mapping { get; }
     /// <inheritdoc />
     public EntityDefinition EntityDefinition => Mapping.EntityDefinition;
+
+    /// <inheritdoc />
+    public string IdentityField => Mapping.IdentityField;
     /// <inheritdoc />
     public string EntityType => EntityDefinition.Shape.Id.Value;
     /// <inheritdoc />
