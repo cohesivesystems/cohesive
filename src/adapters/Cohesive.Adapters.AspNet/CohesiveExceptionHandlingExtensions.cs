@@ -45,6 +45,20 @@ sealed class CohesiveConcurrencyExceptionHandler(IProblemDetailsService problems
 /// <summary>Sanitized HTTP projections of shared execution failures.</summary>
 static class CohesiveHttpProblems
 {
+    internal static ProblemDetails StatePreparationFailure(HttpContext context,
+        Cohesive.Transitions.Execution.TransitionStatePreparationException failure) => new()
+    {
+        Status = StatusCodes.Status500InternalServerError,
+        Title = "Entity state preparation failed",
+        Detail = "The operation could not prepare a valid entity state. No change was committed.",
+        Extensions =
+        {
+            ["code"] = failure.Code,
+            ["location"] = failure.Location,
+            ["traceId"] = Activity.Current?.Id ?? context.TraceIdentifier
+        }
+    };
+
     internal static ProblemDetails ConcurrencyConflict(HttpContext context) => new()
     {
         Status = StatusCodes.Status409Conflict,

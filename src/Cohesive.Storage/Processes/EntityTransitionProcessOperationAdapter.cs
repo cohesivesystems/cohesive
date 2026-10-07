@@ -32,9 +32,6 @@ public static class ProcessTransitionOperationAdapterDiagnosticCodes
     /// <summary>An authoritative entity already exists for a Transition that requires subject absence.</summary>
     public const string SubjectPresent = "storage.processes.transitionAdapter.subject.present";
 
-    /// <summary>The initialized subject violates the authoritative entity definition.</summary>
-    public const string SubjectInitializationInvalid = "storage.processes.transitionAdapter.subject.initializationInvalid";
-
     /// <summary>The Transition did not produce a committable typed decision.</summary>
     public const string DecisionNotCommittable = "storage.processes.transitionAdapter.decision.notCommittable";
 }

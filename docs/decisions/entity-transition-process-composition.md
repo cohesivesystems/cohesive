@@ -62,7 +62,7 @@ They do not establish event replay, distributed atomicity, or durable PostgreSQL
 Known preparation failures use `TransitionStatePreparationException` (a `PreparationException`)
 with a stable `Code` and `Location`. The process adapter retains these verbatim, including
 `/decision/evidence/initialObservation` for missing or invalid creation evidence. It does not catch
-arbitrary `InvalidOperationException` failures. Entity-validation causes are retained in `Cause`.
+arbitrary `InvalidOperationException` failures. Entity-validation causes are retained in `InnerException`.
 Null/empty programmer arguments retain standard argument exceptions.
 
 Preparation reads immutable snapshot fields directly, checks shape identity, and constructs and
@@ -75,3 +75,9 @@ Unreleased diagnostic change: process candidate-validation failures now expose t
 `transition.state.*` codes instead of adapter-specific initialization/not-committable codes.
 The lower-level `Apply` also uses typed patch failures; callers should catch the typed exception
 or `PreparationException`, rather than rely on exact built-in exception types.
+
+API preparation failures return sanitized 500 Problem Details with the shared code, location,
+and trace ID. Service invocation returns `InfrastructureError` with the same code and location.
+These are failed preparation guarantees, not automatically caller validation errors or retryable
+conflicts. Neither boundary commits or leaks validation messages. The process path retains its
+structured internal diagnostic. Unrelated exceptions continue to propagate.

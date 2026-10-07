@@ -36,6 +36,30 @@ public sealed class EntityApiEndpointTests
     static readonly InteractionContractCatalog NoteInteractionContracts = CreateInteractionCatalog(NoteRevisedEvent);
 
     [Fact]
+    public async Task Candidate_preparation_failure_returns_sanitized_problem_without_commit()
+    {
+        var entity = NoteEntity.Instance;
+        var repository = new InMemoryEntityOutboxRepository(entity.Definition,
+            partitionKeyFieldName: nameof(NoteState.Tenant));
+        var context = OperationContext.Create(new FixedTimeProvider());
+        var before = await repository.Upsert(context, new(entity.Definition.CreateState("note-1",
+            new NoteState("note-1", "tenant-a", "private-before", context.UtcNow), version: long.MaxValue).Snapshot));
+        var app = CreateApp(entity, repository, operationContext: context);
+        var response = await InvokeAsync(app, route: "/notes/{id}", method: "POST",
+            routeValues: new() { ["id"] = "note-1" }, body: new ReviseNoteRequest("private-after"));
+        Assert.Equal(StatusCodes.Status500InternalServerError, response.StatusCode);
+        var problem = ReadJson(response.Body);
+        Assert.Equal("transition.state.versionOverflow", problem.GetProperty("code").GetString());
+        Assert.Equal("/current/version", problem.GetProperty("location").GetString());
+        Assert.True(problem.TryGetProperty("traceId", out _));
+        Assert.DoesNotContain("private-", response.Body);
+        Assert.DoesNotContain("cannot be incremented", response.Body);
+        var after = await repository.TryGet(context, "note-1", EntityReadOptions.Full);
+        Assert.Equal(before.ConcurrencyToken, after!.ConcurrencyToken);
+        Assert.Empty(repository.OutboxEnvelopes);
+    }
+
+    [Fact]
     public void MapEntityApiDefinition_CanFilterSharedOperationNamesAndCustomizeEndpointNames()
     {
         var builder = WebApplication.CreateSlimBuilder();

@@ -330,7 +330,16 @@ public sealed partial class ServiceRuntime
 
                 return Complete(ApiResultKind.Success, snapshot, decision, []);
             }
-            var next = TransitionStateProjector.ApplyToEntity(repository.EntityDefinition, subject, decision, snapshot.Entity);
+            EntityState next;
+            try
+            {
+                next = TransitionStateProjector.ApplyToEntity(repository.EntityDefinition, subject, decision, snapshot.Entity);
+            }
+            catch (TransitionStatePreparationException exception)
+            {
+                return Reject(ApiResultKind.InfrastructureError, exception.Code, exception.Location,
+                    "The operation could not prepare a valid entity state. No change was committed.");
+            }
             context.ThrowIfCancellationRequested();
             try
             {

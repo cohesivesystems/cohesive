@@ -85,6 +85,38 @@ public sealed class PocoTransitionAuthoringTests
         Assert.Equal("/current/observation", error.Location);
     }
 
+    [Theory]
+    [InlineData("pathUnsupported", "/decision/patch/0/path")]
+    [InlineData("valueNotCommittable", "/decision/patch/0/after")]
+    [InlineData("decisionUnsupported", "/decision/kind")]
+    public void Malformed_decision_reports_precise_preparation_failure(string failure, string location)
+    {
+        var (entity, state, original) = PreparationScenario();
+        var patch = original.Patch[0];
+        var invalidPatch = new TransitionExecutedPatch(patch.Node,
+            failure == "pathUnsupported" ? patch.Path.Append(FieldPathSegment.Element()) : patch.Path,
+            patch.Operation, patch.Before,
+            failure == "valueNotCommittable" ? PortableValue.Unknown(patch.After.Contract) : patch.After);
+        // Deliberately malformed internal evidence tests the fail-closed preparation boundary.
+        var decision = new TransitionDecision(
+            failure == "decisionUnsupported" ? TransitionDecisionKind.InfrastructureFailure : original.Kind,
+            original.Outcome, [invalidPatch], original.Emissions, original.MachineMovements,
+            original.GuaranteeDemands, original.Conflicts, original.Diagnostics, original.Evidence);
+        var error = Assert.Throws<TransitionStatePreparationException>(() =>
+            TransitionStateProjector.ApplyToEntity(entity, "run-1", decision, state.Snapshot));
+        Assert.Equal("transition.state." + failure, error.Code);
+        Assert.Equal(location, error.Location);
+    }
+
+    [Fact]
+    public void Preparation_failure_retains_standard_exception_chain()
+    {
+        var original = new InvalidOperationException("underlying validation");
+        var failure = new TransitionStatePreparationException("test.code", "/candidate", "Preparation failed", original);
+        Assert.Same(original, failure.InnerException);
+        Assert.Same(original, failure.GetBaseException());
+    }
+
     static (Cohesive.Transitions.Model.EntityDefinition Entity, Cohesive.Transitions.Model.EntityState State,
         TransitionDecision Decision) PreparationScenario()
     {

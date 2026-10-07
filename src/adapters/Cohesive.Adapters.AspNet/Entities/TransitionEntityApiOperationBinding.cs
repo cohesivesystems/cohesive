@@ -104,9 +104,17 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
                     plan.Definition.Observation,
                     ObservationValue.FromObject(state.Fields)));
 
-            var newState = decision.GuaranteeDemands.CommitRequired
-                ? TransitionStateProjector.ApplyToEntity(options.Entity, entityId, decision, snapshot.Entity)
-                : state;
+            EntityState newState;
+            try
+            {
+                newState = decision.GuaranteeDemands.CommitRequired
+                    ? TransitionStateProjector.ApplyToEntity(options.Entity, entityId, decision, snapshot.Entity)
+                    : state;
+            }
+            catch (TransitionStatePreparationException exception)
+            {
+                return TypedResults.Problem(CohesiveHttpProblems.StatePreparationFailure(httpContext, exception));
+            }
             var commitContext = new EntityApiCommitContext(
                 operationContext,
                 httpContext,
