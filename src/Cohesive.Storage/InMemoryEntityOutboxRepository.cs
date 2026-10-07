@@ -74,25 +74,37 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     {
     }
 
-    /// <summary>Initializes a new instance of the in memory entity outbox repository type.</summary>
+    /// <summary>Imports POCO seeds and retains their serialized identity field for subsequent typed writes.</summary>
+    /// <param name="entityDefinition">Canonical entity authority.</param>
+    /// <param name="seedData">Initial rows; null or empty input does not alter the declared identity policy.</param>
+    /// <param name="partitionKeyFieldName">Serialized partition field used by every row.</param>
+    /// <param name="idFieldName">Optional explicit serialized identity field for seeds and typed writes, independent of seed count. Omission retains Id/Key typed conventions and imports seeds using Id.</param>
     public InMemoryEntityOutboxRepository(
         EntityDefinition entityDefinition,
         IEnumerable<object>? seedData,
         string partitionKeyFieldName,
-        string idFieldName = "Id")
+        string? idFieldName = null)
         : this(entityDefinition, partitionKeyFieldName)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(idFieldName);
+        // An explicit identity mapping is configuration, independent of imported row count.
+        if (idFieldName is not null)
+            ArgumentException.ThrowIfNullOrWhiteSpace(idFieldName);
+        IdentityField = idFieldName;
 
         if (seedData is null)
             return;
 
         foreach (var seed in seedData)
-            SeedSnapshot(CreateSeedSnapshot(entityDefinition, seed, idFieldName));
+        {
+            SeedSnapshot(CreateSeedSnapshot(entityDefinition, seed, idFieldName ?? "Id"));
+        }
     }
 
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => entityDefinition;
+
+    /// <inheritdoc />
+    public string? IdentityField { get; }
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => entityDefinition.Shape.Id.Value;

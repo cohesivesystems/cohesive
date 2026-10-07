@@ -75,3 +75,38 @@ vocabulary; requirements are declared per exposed operation. Native repositories
 routes are runtime/projection bindings, never stored callbacks. The optional `Cohesive.Api.Execution`
 package provides shared invocation and normalized authorization.
 See [declarative service runtime](../../docs/decisions/declarative-service-runtime.md).
+
+### Response-typed endpoint handles
+
+`declaration.Result(ApiResultKind.NotFound).Build<OrderDetails>()` produces an
+`ApiEndpoint<OrderDetails>`. The tag describes the primary body; 404 and other alternatives keep their
+own contracts. The handle shares the exact `ApiOperation` registered in the definition, and `WithHttp`
+retains the tag. A mismatched tag fails before registering an operation. Typed query bindings accept
+`ApiEndpoint<TResult>` alongside `IRelationQueryReader<TInput,TResult>`, so unrelated response types
+cannot be paired by type inference. Untyped handles remain available for heterogeneous API catalogs.
+
+`Build<OrderCreated>(ApiResultKind.Created)` declares a typed 201 response in one call. Omitting the kind
+defaults to Success, or retains an existing declaration. Explicit Returns declarations remain supported;
+typed Build validates them instead of silently replacing their type or result kind.
+
+### Request-and-response handles
+
+Use an explicit transport completion to declare both types once:
+
+```csharp
+ApiEndpoint<CreateOrder, OrderCreated> create = api.Command("Create")
+    .Route("POST", "/orders")
+    .BuildBody<CreateOrder, OrderCreated>(ApiResultKind.Created);
+
+ApiEndpoint<FindOrders, OrderList> find = api.Query("Find")
+    .Route("GET", "/orders")
+    .BuildQuery<FindOrders, OrderList>();
+```
+
+The request tag describes the API body/query DTO, not an internal transition input or route scalar.
+Route-only operations retain `ApiEndpoint<TResponse>`. For an already declared `Body<TRequest>()`,
+`Query<TRequest>()` or `Accepts<TRequest>()`, `Build<TRequest,TResponse>()` validates and retains that
+request contract. Conflicting types/transports fail before operation registration; repeated completion
+retains the same canonical operation. `WithHttp` retains both tags and rejects incompatible DTO bindings.
+Untyped endpoint catalogs and native delegate mapping remain available; the tags alone do not validate
+an arbitrary ASP.NET `Delegate` handler's signature or select request parsing implicitly.

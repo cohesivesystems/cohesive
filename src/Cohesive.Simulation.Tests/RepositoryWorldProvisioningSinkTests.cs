@@ -279,6 +279,7 @@ public sealed class RepositoryWorldProvisioningSinkTests
     {
         readonly Dictionary<string, EntitySnapshot> snapshots = new(StringComparer.Ordinal);
 
+        public string? IdentityField => null;
         public EntityDefinition EntityDefinition { get; } = entityDefinition;
 
         public EntityBatchCapabilities BatchCapabilities { get; } =

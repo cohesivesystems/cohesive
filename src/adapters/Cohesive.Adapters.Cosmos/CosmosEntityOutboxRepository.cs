@@ -98,6 +98,9 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
     public EntityDefinition EntityDefinition => entityDefinition;
 
     /// <inheritdoc />
+    public string? IdentityField => null;
+
+    /// <inheritdoc />
     public string EntityType => observationType;
 
     /// <inheritdoc />

@@ -173,6 +173,54 @@ public class ApiEndpoint
     public override string ToString() => Id.Value;
 }
 
+/// <summary>A response-typed view of the same canonical API operation.</summary>
+/// <typeparam name="TResponse">The operation's primary response body type; alternative results remain on the operation.</typeparam>
+/// <remarks>The type parameter tags the primary body, not every HTTP outcome. NotFound, Conflict and other
+/// alternatives retain their independent contracts. CLR nullable annotations do not change runtime type identity.</remarks>
+public sealed class ApiEndpoint<TResponse> : ApiEndpoint
+{
+    /// <summary>Tags an existing operation without copying or redefining its contract.</summary>
+    /// <param name="operation">Canonical operation whose primary response must match TResponse.</param>
+    /// <exception cref="ArgumentNullException">The operation is null.</exception>
+    /// <exception cref="ArgumentException">The primary response type does not match.</exception>
+    internal ApiEndpoint(ApiOperation operation) : base(operation)
+    {
+        if (operation.ResponseType != typeof(TResponse))
+            throw new ArgumentException("The endpoint's primary response does not match the requested type tag.", nameof(operation));
+    }
+
+    /// <summary>Attaches HTTP configuration while retaining the primary response type tag.</summary>
+    /// <param name="http">Native HTTP projection of the same semantic operation.</param>
+    /// <returns>A typed handle retaining identity, contracts, policies and authority references.</returns>
+    /// <exception cref="ArgumentNullException">The HTTP binding is null.</exception>
+    public new ApiEndpoint<TResponse> WithHttp(HttpBinding http) => new(Operation.WithHttp(http));
+}
+
+/// <summary>A request-and-response-typed view of one canonical API operation.</summary>
+/// <typeparam name="TRequest">API body or query DTO, not an internal transition input or route scalar.</typeparam>
+/// <typeparam name="TResponse">Primary response body; alternative results retain their own contracts.</typeparam>
+public sealed class ApiEndpoint<TRequest, TResponse> : ApiEndpoint
+{
+    /// <summary>Retains an operation whose request and primary response match both tags.</summary>
+    /// <param name="operation">Canonical operation authority.</param>
+    /// <exception cref="ArgumentNullException">The operation is null.</exception>
+    /// <exception cref="ArgumentException">The request or primary response type differs.</exception>
+    internal ApiEndpoint(ApiOperation operation) : base(operation)
+    {
+        if (operation.RequestType != typeof(TRequest) || operation.ResponseType != typeof(TResponse)
+            || operation.Http?.Body is { } body && body.BodyType != typeof(TRequest)
+            || operation.Http?.Query is { } query && query.QueryType != typeof(TRequest))
+            throw new ArgumentException("The endpoint's request or primary response differs from its type tags.", nameof(operation));
+    }
+
+    /// <summary>Attaches HTTP configuration while retaining both type tags.</summary>
+    /// <param name="http">HTTP projection of the same semantic operation.</param>
+    /// <returns>A typed handle with the same identity and contracts.</returns>
+    /// <exception cref="ArgumentNullException">The HTTP binding is null.</exception>
+    /// <exception cref="ArgumentException">The projection conflicts with the request contract.</exception>
+    public new ApiEndpoint<TRequest, TResponse> WithHttp(HttpBinding http) => new(Operation.WithHttp(http));
+}
+
 /// <summary>
 /// Logical API operation category.
 /// </summary>

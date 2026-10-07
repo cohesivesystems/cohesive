@@ -460,4 +460,9 @@ public sealed record QueryDefinition : RelationQueryDefinition
 
     /// <summary>Named row and aggregation result branches.</summary>
     public ImmutableArray<QueryResultDefinition> Results { get; init; }
+
+    /// <summary>Optional terminal nested-result assembly over the sole raw row branch.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public NestedQueryResultAssembly? Assembly { get; init; }
+
 }

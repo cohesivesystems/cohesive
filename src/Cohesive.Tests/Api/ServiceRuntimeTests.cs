@@ -483,6 +483,7 @@ public sealed class ServiceRuntimeTests
     {
         public IEntityRepository Inner => inner;
         public Cohesive.Transitions.Model.EntityDefinition EntityDefinition => inner.EntityDefinition;
+        public string? IdentityField => inner.IdentityField;
         public bool RejectWrite { get; set; }
         public bool ReturnPartial { get; set; }
         public int Reads { get; private set; }

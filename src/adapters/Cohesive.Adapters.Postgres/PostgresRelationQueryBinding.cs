@@ -1092,7 +1092,7 @@ public sealed record PostgresRelationQueryTableBinding
 public sealed class PostgresRelationQueryStorageBinding
 {
     /// <summary>Current PostgreSQL relation/query storage-binding schema.</summary>
-    public const string CurrentSchemaVersion = "cohesive.relations.postgres-binding/v3";
+    public const string CurrentSchemaVersion = "cohesive.relations.postgres-binding/v4";
 
     /// <summary>Default deterministic convention set for table-column binding.</summary>
     public const string SemanticPathConventionSet = "cohesive.adapters.postgres.sql/semantic-path-conventions/v1";
@@ -1119,6 +1119,7 @@ public sealed class PostgresRelationQueryStorageBinding
     /// <param name="compiledPlanFingerprint">Exact compiled-plan fingerprint, or <see langword="null"/> with placement fingerprint.</param>
     /// <param name="placementFingerprint">Exact source-placement fingerprint, or <see langword="null"/> with plan fingerprint.</param>
     /// <param name="ownedCollections">Decomposed owned-collection component tables keyed to root placements.</param>
+    /// <param name="sourceScope">Exact source covered by this binding; null explicitly means full placement.</param>
     /// <exception cref="ArgumentException">An identity, collection, provenance fact, or affinity pair is invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="origin"/> is unsupported.</exception>
     public PostgresRelationQueryStorageBinding(
@@ -1132,7 +1133,8 @@ public sealed class PostgresRelationQueryStorageBinding
         ImmutableArray<EffectiveConfigurationDecision> configurationDecisions = default,
         RelationQueryPlanComponentFingerprint? compiledPlanFingerprint = null,
         RelationQuerySourcePlacementFingerprint? placementFingerprint = null,
-        ImmutableArray<PostgresRelationQueryOwnedCollectionBinding> ownedCollections = default)
+        ImmutableArray<PostgresRelationQueryOwnedCollectionBinding> ownedCollections = default,
+        RelationQuerySourceInstanceId? sourceScope = null)
         : this(
             CurrentSchemaVersion,
             fingerprint: null,
@@ -1147,7 +1149,7 @@ public sealed class PostgresRelationQueryStorageBinding
             configurationDecisions,
             compiledPlanFingerprint,
             placementFingerprint,
-            ownedCollections)
+            ownedCollections, sourceScope)
     {
     }
 
@@ -1169,6 +1171,7 @@ public sealed class PostgresRelationQueryStorageBinding
     /// <param name="compiledPlanFingerprint">Exact compiled-plan fingerprint, or <see langword="null"/> with placement fingerprint.</param>
     /// <param name="placementFingerprint">Exact source-placement fingerprint, or <see langword="null"/> with plan fingerprint.</param>
     /// <param name="ownedCollections">Decomposed owned-collection component tables keyed to root placements.</param>
+    /// <param name="sourceScope">Exact source covered by this binding; null explicitly means full placement.</param>
     /// <exception cref="ArgumentException">The schema, persisted fingerprint, identity, collection, provenance, or affinity is invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="origin"/> is unsupported.</exception>
     [JsonConstructor]
@@ -1186,7 +1189,8 @@ public sealed class PostgresRelationQueryStorageBinding
         ImmutableArray<EffectiveConfigurationDecision> configurationDecisions,
         RelationQueryPlanComponentFingerprint? compiledPlanFingerprint,
         RelationQuerySourcePlacementFingerprint? placementFingerprint,
-        ImmutableArray<PostgresRelationQueryOwnedCollectionBinding> ownedCollections = default)
+        ImmutableArray<PostgresRelationQueryOwnedCollectionBinding> ownedCollections = default,
+        RelationQuerySourceInstanceId? sourceScope = null)
     {
         if (!string.Equals(schemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
             throw new ArgumentException($"Unsupported PostgreSQL binding schema '{schemaVersion}'.", nameof(schemaVersion));
@@ -1258,6 +1262,11 @@ public sealed class PostgresRelationQueryStorageBinding
             throw new ArgumentException("A convention-origin binding cannot retain explicit or scoped decisions.", nameof(configurationDecisions));
         }
 
+        if (sourceScope is { } scope && string.IsNullOrWhiteSpace(scope.Value))
+            throw new ArgumentException("Source scope requires a nonempty source identity.", nameof(sourceScope));
+        if (sourceScope is not null && compiledPlanFingerprint is null)
+            throw new ArgumentException("Source-scoped bindings require exact plan and placement affinity.", nameof(sourceScope));
+        SourceScope = sourceScope;
         SchemaVersion = CurrentSchemaVersion;
         DatabaseSemanticsProfile = CanonicalDatabaseSemanticsProfile;
         Id = id;
@@ -1281,6 +1290,9 @@ public sealed class PostgresRelationQueryStorageBinding
             throw new ArgumentException("Persisted PostgreSQL storage-binding fingerprint does not match normalized content.", nameof(fingerprint));
         Fingerprint = computed;
     }
+
+    /// <summary>Explicit source scope, or null for full placement; included in the verified fingerprint.</summary>
+    public RelationQuerySourceInstanceId? SourceScope { get; }
 
     /// <summary>Portable PostgreSQL storage-binding schema version.</summary>
     public string SchemaVersion { get; }
@@ -1367,8 +1379,8 @@ public sealed class PostgresRelationQueryStorageBinding
 static class PostgresRelationQueryBindingFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.postgres-binding/v3-c14n/v1";
-    const string DerivedIdentityCanonicalization = "cohesive.relations.postgres-binding-id/v3-c14n/v1";
+    const string Canonicalization = "cohesive.relations.postgres-binding/v4-c14n/v1";
+    const string DerivedIdentityCanonicalization = "cohesive.relations.postgres-binding-id/v4-c14n/v1";
 
     public static PostgresRelationQueryBindingFingerprint Compute(PostgresRelationQueryStorageBinding binding)
     {
@@ -1384,6 +1396,7 @@ static class PostgresRelationQueryBindingFingerprinter
         Append(canonical, binding.ConventionSetVersion);
         AppendFingerprint(canonical, binding.CompiledPlanFingerprint);
         AppendFingerprint(canonical, binding.PlacementFingerprint);
+        Append(canonical, binding.SourceScope?.Value);
         Append(canonical, binding.Tables.Length);
         foreach (var table in binding.Tables)
             AppendTable(canonical, table);
@@ -1405,7 +1418,7 @@ static class PostgresRelationQueryBindingFingerprinter
         RelationQueryPlanComponentFingerprint plan,
         RelationQuerySourcePlacementFingerprint placement,
         string conventionSetVersion,
-        IEnumerable<PostgresRelationQueryTableBinding> tables)
+        IEnumerable<PostgresRelationQueryTableBinding> tables, RelationQuerySourceInstanceId? sourceScope)
     {
         var normalizedTables = tables
             .OrderBy(static table => table.PlacementBinding.Value, StringComparer.Ordinal)
@@ -1420,6 +1433,7 @@ static class PostgresRelationQueryBindingFingerprinter
         Append(canonical, conventionSetVersion);
         AppendFingerprint(canonical, plan);
         AppendFingerprint(canonical, placement);
+        Append(canonical, sourceScope?.Value);
         Append(canonical, normalizedTables.Length);
         foreach (var table in normalizedTables)
             AppendTable(canonical, table);

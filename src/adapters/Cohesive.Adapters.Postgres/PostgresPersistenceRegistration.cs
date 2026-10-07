@@ -1,0 +1,175 @@
+using Cohesive.Storage;
+using Cohesive.Model;
+using Cohesive.Transitions.Model;
+using Cohesive.Relations.Authoring;
+using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Execution;
+using Cohesive.Relations.Realization;
+using Cohesive.Transitions.Authoring;
+
+namespace Cohesive.Adapters.Postgres;
+
+/// <summary>Native PostgreSQL entity attachments shared by repositories and queries on one explicitly bound database.</summary>
+/// <remarks>Configure this mutable builder at host composition, then retain its repositories and prepared query readers.
+/// Query prepares once per call; no invocation result cache is introduced. Do not mutate the registration concurrently.
+/// No connections are opened during preparation. No provider-neutral facade or global cache is introduced.</remarks>
+public sealed partial class PostgresPersistenceRegistration
+{
+    readonly PostgresNpgsqlRuntimeBinding runtime;
+    readonly Dictionary<QualifiedShapeId, (EntityDefinition Entity, PostgresEntityRepositoryMapping Mapping)> tables = [];
+
+    /// <summary>Creates a host-registration builder.</summary>
+    /// <param name="runtime">Explicit database identity and caller-owned native data source.</param>
+    /// <exception cref="ArgumentNullException">Runtime is null.</exception>
+    public PostgresPersistenceRegistration(PostgresNpgsqlRuntimeBinding runtime) =>
+        this.runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+
+    /// <summary>Attaches an existing physical mapping to its exact canonical entity graph.</summary>
+    /// <typeparam name="T">Entity state type.</typeparam>
+    /// <param name="entity">Canonical entity authority.</param>
+    /// <param name="mapping">Native table/column configuration, reused from repository registration.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">A shape is already mapped or the repository mapping is invalid.</exception>
+    public PostgresPersistenceRegistration Entity<T>(DomainEntity<T> entity, PostgresEntityRepositoryMapping mapping) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        ArgumentNullException.ThrowIfNull(mapping);
+        PostgresEntityRepository.ValidateMapping(entity.Definition, mapping);
+        tables.Add(entity.Definition.StateShape.QualifiedId, (entity.Definition, mapping));
+        return this;
+    }
+
+    /// <summary>Creates a repository from the same entity attachment used by query preparation.</summary>
+    /// <typeparam name="T">Canonical entity state type.</typeparam>
+    /// <param name="entity">Exact entity handle registered on this persistence binding.</param>
+    /// <param name="selectEntityId">Optional explicit typed-write identity selector; otherwise compiled from the registered canonical identity field at setup.</param>
+    /// <param name="selectVersion">Optional typed-write semantic version selector; otherwise existing Version/zero conventions apply.</param>
+    /// <returns>A repository using the registered mapping and caller-owned native data source.</returns>
+    /// <exception cref="ArgumentNullException">Entity is null.</exception>
+    /// <exception cref="InvalidOperationException">The exact entity definition has not been registered, or its identity cannot be mapped to one readable property.</exception>
+    public IEntityRepository<T> Repository<T>(DomainEntity<T> entity,
+        Func<T, string>? selectEntityId = null, Func<T, long>? selectVersion = null) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        if (!tables.TryGetValue(entity.Definition.StateShape.QualifiedId, out var attachment)
+            || !ReferenceEquals(attachment.Entity, entity.Definition))
+            throw new InvalidOperationException("Register this exact entity before creating its repository.");
+        return new TypedEntityRepository<T>(new PostgresEntityRepository(attachment.Entity, runtime, attachment.Mapping),
+            selectEntityId, selectVersion);
+    }
+
+    /// <summary>Validates and prepares a typed query using the existing static, placement and native compilers.</summary>
+    /// <typeparam name="TInput">Invocation type.</typeparam>
+    /// <typeparam name="TResult">Application result type.</typeparam>
+    /// <param name="query">Backend-independent query and local presentation projection.</param>
+    /// <param name="maximumRows">Complete-result row bound.</param>
+    /// <param name="maximumBytes">Decoded scalar byte bound.</param>
+    /// <returns>A reusable typed reader with an inspectable native artifact.</returns>
+    /// <exception cref="ArgumentNullException">Query is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A result bound is invalid.</exception>
+    /// <exception cref="NotSupportedException">The artifact requires unsupported temporal execution.</exception>
+    /// <exception cref="PostgresQueryPreparationException">Static or native compilation fails; original results are retained.</exception>
+    /// <exception cref="InvalidOperationException">An input shape has no registered native mapping.</exception>
+    /// <exception cref="RelationQueryArtifactAuthoringException">Placement or binding is invalid.</exception>
+    public PostgresQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query,
+        int maximumRows, long maximumBytes)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var rows = Prepare(query.CompilationRequest, maximumRows, maximumBytes);
+        return new(query, rows.Artifact, rows);
+    }
+
+    /// <summary>Prepares a canonical row query, including a derived subplan, using native PostgreSQL compilation.</summary>
+    /// <param name="request">Exact query and semantic snapshots.</param>
+    /// <param name="maximumRows">Complete-result row limit; overflow fails.</param>
+    /// <param name="maximumBytes">Complete decoded scalar-value byte limit.</param>
+    /// <returns>A plan-affine reader retaining its native artifact.</returns>
+    /// <exception cref="PostgresQueryPreparationException">Static or native compilation fails.</exception>
+    /// <exception cref="ArgumentNullException">Request is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A result bound is invalid.</exception>
+    /// <exception cref="NotSupportedException">The artifact requires unsupported temporal execution.</exception>
+    /// <exception cref="InvalidOperationException">An input shape has no registered mapping.</exception>
+    /// <exception cref="RelationQueryArtifactAuthoringException">Placement or storage binding is invalid.</exception>
+    /// <exception cref="ArgumentException">Runtime affinity is invalid.</exception>
+    public PostgresQueryRowsReader Prepare(RelationQueryCompilationRequest request, int maximumRows, long maximumBytes)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var compilation = RelationQueryStaticCompiler.Compile(request);
+        var plan = compilation.Plan ?? throw new PostgresQueryPreparationException(compilation, null);
+        var builder = RelationQueryPlacement.For(plan);
+        var source = builder.Source("postgres/query", PostgresRelationQuerySourceTargetProfile.Default, new(runtime.Database.Value));
+        foreach (var input in plan.InputContract.Sources)
+            Place(builder.Place(input, source), input.Shape);
+        foreach (var input in plan.InputContract.Traversals)
+            Place(builder.Place(input, source), input.ResultShape);
+        var placement = builder.Build().RequireValue();
+        var binding = PostgresRelationQueryBinding.For(placement).Database(runtime.Database);
+        foreach (var input in placement.Inputs) binding.Table(input, Mapping(input.Shape));
+        var storage = binding.Build().RequireValue();
+        var feasibility = RelationQueryRealizationCompiler.Compile(plan, PostgresRelationQueryTargetProfile.Default,
+            PostgresRelationQueryTargetProfile.Policy, RelationQueryResultObservability.NotRequested);
+        var compiler = new PostgresRelationQueryCompiler();
+        var bound = compiler.Realize(new(plan, feasibility, placement.Placement), storage);
+        var native = compiler.Compile(new RelationQueryNativeCompilationRequest(plan, bound, placement.Placement), storage);
+        if (!native.IsSuccessful) throw new PostgresQueryPreparationException(compilation, native);
+        var artifact = native.Artifacts.Single();
+        return new PostgresQueryRowsReader(artifact, runtime, maximumRows, maximumBytes);
+
+        PostgresEntityRepositoryMapping Mapping(QualifiedShapeId shape) => tables.TryGetValue(shape, out var mapping)
+            ? mapping.Mapping : throw new InvalidOperationException($"No PostgreSQL entity mapping is registered for query shape '{shape}'.");
+        void Place(RelationQueryPlacementInputBuilder input, QualifiedShapeId shape)
+        {
+            var mapping = Mapping(shape);
+            input.Identity(FieldPath.FromField(mapping.IdentityField), mapping.IdentityField).FieldsBySemanticPath();
+        }
+    }
+}
+
+/// <summary>A typed execution binding to one prepared native query; safe for concurrent reads.</summary>
+/// <typeparam name="TInput">Invocation parameter type.</typeparam>
+/// <typeparam name="TResult">Application result type.</typeparam>
+public sealed class PostgresQueryReader<TInput, TResult> : IRelationQueryReader<TInput, TResult>
+{
+    readonly IRelationQueryRowsReader rows;
+    /// <inheritdoc />
+    public RelationQuery<TInput, TResult> Definition { get; }
+    /// <summary>Retains the exact definition and execution artifacts produced together by registration.</summary>
+    /// <param name="query">Canonical query authority and local result projection.</param>
+    /// <param name="artifact">Native artifact compiled from that definition.</param>
+    /// <param name="rows">Complete-row execution binding prepared for the artifact.</param>
+    internal PostgresQueryReader(RelationQuery<TInput, TResult> query, PostgresRelationQueryCompiledArtifact artifact,
+        IRelationQueryRowsReader rows)
+    {
+        Definition = query;
+        Artifact = artifact;
+        this.rows = rows;
+    }
+    /// <summary>Prepared artifact, retained for inspection and provenance.</summary>
+    public PostgresRelationQueryCompiledArtifact Artifact { get; }
+    /// <summary>Executes the bounded native query and materializes its declared result.</summary>
+    /// <param name="input">Value for the declared canonical parameter.</param>
+    /// <param name="cancellationToken">Cancellation for native IO.</param>
+    /// <returns>The query's typed result, including its declared empty-result policy.</returns>
+    /// <remarks>No compilation or retry occurs here. Provider, validation and result-projection failures propagate.</remarks>
+    public async Task<TResult> ReadAsync(TInput input, CancellationToken cancellationToken = default) =>
+        Definition.Project(await rows.ReadAsync(new Dictionary<Cohesive.Relations.IR.QueryParameterId, ObservationValue>
+        { [Definition.Parameter] = ObservationValue.FromObject(input) }, cancellationToken).ConfigureAwait(false));
+}
+
+/// <summary>Registration failed to prepare a query, retaining exact compiler diagnostics.</summary>
+public sealed class PostgresQueryPreparationException : PreparationException
+{
+    internal PostgresQueryPreparationException(RelationQueryCompilationResult compilation, PostgresRelationQueryCompilationResult? native)
+        : base(native is null ? "semantic" : "native", native is null ? "postgres.preparation.semantic" : "postgres.preparation.native", "PostgreSQL query preparation failed: " + string.Join("; ", native is null
+            ? compilation.Diagnostics.Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")
+            : native.Diagnostics.Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")))
+    {
+        Compilation = compilation;
+        NativeCompilation = native;
+    }
+    /// <summary>Static compilation evidence and structured diagnostics.</summary>
+    public RelationQueryCompilationResult Compilation { get; }
+    /// <summary>Native compilation evidence when that phase was reached.</summary>
+    public PostgresRelationQueryCompilationResult? NativeCompilation { get; }
+}

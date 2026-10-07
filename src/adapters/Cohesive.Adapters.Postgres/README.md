@@ -86,3 +86,90 @@ scalar compatibility and key semantics; the mapping constructor rejects duplicat
 An immutable mapping snapshot is independent of subsequent builder edits. The builder is invocation-local
 and not thread-safe. Custom version columns and batch bounds are optional `Build` arguments.
 The existing constructor remains available; neither API owns schema creation or migration.
+
+## Reuse repository mappings for native queries
+
+`PostgresEntityRepositoryMapping.For(domainEntity)` accepts a typed domain handle. Once a canonical
+query is compiled and its inputs placed, `.Table(placedInput, repositoryMapping)` projects the existing
+physical table and demanded columns into its native binding. No second column catalog is required.
+Text columns use explicit C-collation equality; this projection does not assert ordinal ordering,
+global identity uniqueness, foreign keys or partition isolation. Those remain explicit query/schema
+obligations. The [fulfillment example](../../../eng/examples/aspire-first/README.md) demonstrates the full pipeline.
+
+`PostgresQueryRowsReader` implements the shared `IRelationQueryRowsReader` complete-result contract and executes one compiled, unpaged native `QueryRows` branch against an explicitly
+attested `PostgresNpgsqlRuntimeBinding`. Prepare it once; concurrent calls own separate commands,
+parameter values and result budgets. The caller retains ownership of the data source. Presence markers
+reconstruct outer-join absence independently of SQL null. Positive row and decoded-scalar-byte bounds
+are mandatory; one overflow row detects truncation and fails the call rather than returning partial data.
+Cancellation/provider failures propagate, no retries occur, and ambient transactions are rejected.
+Native command timeout still bounds command duration; the result budget is not a database-work budget.
+
+This reader deliberately does not expose a complete canonical evaluation outcome, supplied-root
+execution, relation invariants, paging or temporal semantics. Such artifacts/values are rejected;
+use the existing source-acquisition path with explicit policies where those contracts are required.
+
+## Register a typed query at host composition
+
+`PostgresPersistenceRegistration(runtime).Entity(domainEntity, mapping).Query(query, maximumRows, maximumBytes)`
+places all demanded entity sources/traversals in the explicitly selected database, projects the registered
+repository mappings and invokes the existing static/placement/feasibility/native compilers. It opens no
+connection. Missing mappings and invalid plans fail at registration; static/native compilation failures
+retain their result objects in `PostgresQueryPreparationException`, while placement/binding failures retain
+the existing artifact-authoring diagnostics. This convenience covers entity-backed inputs on one database;
+use the lower-level APIs for custom placement, acquisition or physical bindings.
+
+Keep the returned `PostgresQueryReader<TInput,TResult>` for the host lifetime. HTTP code consumes its
+`IRelationQueryReader<TInput,TResult>` contract and exact `Definition`, while native composition can inspect
+its PostgreSQL artifact. `ReadAsync` performs no
+compilation; it binds the input, reads bounded native rows and invokes the query's local typed result
+projection. Its `Artifact` remains inspectable. The builder is registration-local and mutable, while readers
+retain immutable prepared artifacts and require concurrency-safe projection callbacks. Native data-source
+ownership remains with the caller. PostgreSQL configuration stays outside the semantic query declaration.
+
+The persistence registration is shared: `.Repository(entity)` uses the same attached entity definition,
+mapping and runtime as `.Query(...)`. Query dependencies are resolved from the compiled input contract;
+unconsumed attachments do not create SQL sources. Missing/duplicate attachments fail before IO. Configure
+the mutable registration on one thread during host setup, then retain its prepared readers/repositories;
+there is no global result cache or inferred tenant scope. The earlier `PostgresQueryRegistration.Register`
+name is replaced by `PostgresPersistenceRegistration.Query` in this unreleased surface.
+
+## Prepared native and composed queries
+
+`PostgresPersistenceRegistration` attaches canonical entities to native repository mappings once.
+`Query` prepares a native typed reader. `QueryComposed(query, projection, remote, policy)` prepares a
+closed native prefix and the remaining query over one remote PostgreSQL registration, reusing those
+same attachments. The policy declares acquisition bounds and a partition scope once. Remaining source
+and traversal mappings are selected from the remote registration; missing mappings or mismatched partition
+selectors fail during preparation. The native prefix must explicitly enforce the same authorized scope.
+This initial recipe uses sequential bounded acquisition, fails on overflow, and makes no distributed-snapshot
+claim. It opens no connection during preparation; caller-owned data sources must outlive the readers.
+
+Storage-binding schema v4 includes `SourceScope` in its fingerprint and convention-derived identity.
+Null means the full placement, while `ForSource` means exactly the declared source. Reader and compiler
+admission check that declared scope; table coverage cannot silently narrow it. Persisted v3 bindings are
+rejected and must be regenerated from their declarations. Semantic/native preparation errors retain their
+compiler results; cut/physical errors retain `RelationQueryPreparationException` evidence.
+
+`Repository(entity)` preserves the `DomainEntity<T>` type as `IEntityRepository<T>`, using the existing
+`TypedEntityRepository<T>` over the native repository. Canonical writes, batching and concurrency fences
+continue to delegate unchanged. At registration, the default typed-write identity selector is compiled from
+`mapping.IdentityField` using the same `FieldPath.Capture` member naming rules as mapping authoring (including
+`JsonPropertyName`). An absent or ambiguous readable property fails before request execution;
+there is no Id/Key fallback for a declared field, and warm identity extraction performs no reflection
+(see the scoped allocation test in the Storage README). Explicit `selectEntityId` remains an escape for custom
+CLR mappings. Semantic versions retain existing Version/zero conventions, or an explicit `selectVersion`.
+The registration remains PostgreSQL-specific; application consumers depend on typed repository/read interfaces.
+
+
+This shared CLR identity conversion does not broaden native key encodings: the PostgreSQL repository
+still requires required, non-null TEXT identity and partition mappings. Inferred UUID/native non-text
+keys remain rejected by mapping validation, as before this change.
+
+For composed execution, construct `PostgresRelationQueryComposedPolicy(physicalPlanningPolicy, ...)`.
+It retains that required planning policy and derives `SourcePolicy.MaximumBatchKeys` from
+`MaximumBatchSize`; there is no second batch-size input. `QueryComposed` accepts only this composed
+policy type. Standalone readers retain `PostgresRelationQuerySourcePolicy` and its integer batch bound.
+The composed policy rejects a null partition scope at construction. Missing remote mappings or
+mismatched partition scopes raise `RelationQueryPreparationException`
+with a `postgres.composed.*` code and semantic compilation evidence. Identity caching and allocation
+boundaries are documented once in the [Storage README](../../Cohesive.Storage/README.md).

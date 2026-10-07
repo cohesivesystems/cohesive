@@ -139,3 +139,33 @@ with status `pending`, another writer changes it to `later`, and enrichment stil
 with the original token. Denied disclosure fails the Process while preserving the committed entity and
 its interaction; it does not roll back or repeat the Transition. This is in-memory integration evidence,
 not Cosmos conformance or deployed recovery qualification.
+
+### Typed identity preparation and migration (unreleased PR405)
+
+`IEntityRepository.IdentityField` is a required member. Decorators must forward it from their underlying
+repository; native implementations explicitly return their semantic mapped identity field, or null when
+choosing the legacy Id/Key convention. This source-breaking requirement prevents an omitted wrapper
+member from silently changing a Sku identity to an incidental Id property. Update custom repository and
+wrapper implementations before compiling against this change. A deliberately chosen null remains an
+explicit convention policy, not automatic metadata discovery.
+
+`PrepareIdentitySelector<T>` retains finite metadata and lazy delegates per closed CLR type/property.
+Both mapped-field and conventional selection return the same prepared delegate on warm lookup; no
+expression construction, reflection, property filtering or new closure occurs in that lookup. Untyped
+Upsert uses this path; typed batch mapping selects once per batch. Entity/request values are never cached.
+Initialization and compilation happen on first use, not per write. Identity formatting preserves existing
+EntityId/string/invariant formattable behavior; formatting non-string values may allocate their text.
+
+`EntityIdentitySelectorTests.Warm_selector_lookup_and_string_extraction_do_not_allocate_per_call` warms
+20,000 calls then measures 100,000 same-thread selector lookups plus string identity reads in Release.
+It requires at most 1 KB total measured allocation for each mapped/convention case, tolerating fixed runtime
+bookkeeping while rejecting even one byte per invocation. This isolates identity selection; it is not a
+zero-allocation claim for complete writes, version selection, canonical state construction or provider IO.
+
+Observation-based in-memory and Cosmos outbox repositories use shared Id/Key typed-write conventions
+unless a mapping or caller selector is supplied. The in-memory POCO seed constructor accepts an optional
+`idFieldName`: an explicit field is retained as `IdentityField` for both seeds and later typed writes,
+independent of whether seeds are null, empty or populated. Omission keeps typed conventions and the
+legacy `Id` seed-import field. Serialized field names, including `JsonPropertyName`, are authoritative;
+a POCO lacking an explicitly configured field fails during typed preparation. Snapshot imports already
+carry canonical envelope identities and do not infer a POCO mapping.

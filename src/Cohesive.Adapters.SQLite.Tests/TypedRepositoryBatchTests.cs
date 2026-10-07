@@ -51,6 +51,7 @@ public sealed class TypedRepositoryBatchTests
 
     sealed class NativeRepository : IEntityRepository<Record>
     {
+        public string? IdentityField => null;
         public EntityDefinition EntityDefinition { get; } = ObjectEntityDefinition.For<Record>(new("typed-batch"));
         public EntityBatchCapabilities BatchCapabilities { get; } = new(true, true, true, MaxItemsPerBatch: 2);
         public int BatchCalls { get; private set; }

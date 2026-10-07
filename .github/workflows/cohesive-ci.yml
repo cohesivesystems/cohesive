@@ -15,6 +15,18 @@ permissions:
 jobs:
   build-test-pack:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: cohesive-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Checkout
@@ -56,6 +68,7 @@ jobs:
         run: dotnet test Cohesive.sln -c Release --no-build
         env:
           COHESIVE_MIMESIS_PYTHON: python
+          COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING: Host=127.0.0.1;Port=5432;Database=postgres;Username=postgres;Password=cohesive-test-only
 
       - name: Validate NuGet package APIs
         run: bash ./eng/api-check.sh
@@ -109,6 +122,7 @@ jobs:
         run: bash ./eng/test-simulation-tool.sh 0.1.0-ci.${{ github.run_number }}
         env:
           COHESIVE_MIMESIS_PYTHON: python
+          COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING: Host=127.0.0.1;Port=5432;Database=postgres;Username=postgres;Password=cohesive-test-only
 
   notify-slack:
     if: ${{ always() && github.event_name == 'pull_request' }}

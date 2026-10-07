@@ -91,6 +91,7 @@ public sealed class EntityTransitionCapturedTokenTests
     sealed class ReadBoundaryRepository(InMemoryEntityOutboxRepository inner, bool ignoreReadPrecondition) : IEntityTransitionOperationRepository
     {
         public EntityDefinition EntityDefinition => inner.EntityDefinition;
+        public string? IdentityField => inner.IdentityField;
         public EntityTransitionOperationCapabilities TransitionOperationCapabilities => inner.TransitionOperationCapabilities;
         public Func<Task>? BeforeRead { get; set; }
         public async Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null)

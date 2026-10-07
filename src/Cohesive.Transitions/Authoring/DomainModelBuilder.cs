@@ -49,6 +49,20 @@ public sealed class DomainModelBuilder
         return this;
     }
 
+    /// <summary>Declares a POCO entity once and returns a typed reference for downstream bindings.</summary>
+    /// <typeparam name="T">Canonical state authoring type.</typeparam>
+    /// <param name="name">Stable semantic name, independent of the CLR type name.</param>
+    /// <returns>A handle retaining the exact definition included in Build.</returns>
+    /// <exception cref="ArgumentException">The entity name is already declared or invalid.</exception>
+    public DomainEntity<T> Entity<T>(string name) where T : notnull
+    {
+        if (entities.Any(entity => entity.Name.Value == name))
+            throw new ArgumentException($"Entity '{name}' is already declared.", nameof(name));
+        var definition = ObjectEntityDefinition.For<T>(new(name));
+        entities.Add(definition);
+        return new(definition);
+    }
+
     /// <summary>
     /// Materializes the immutable domain model definition.
     /// </summary>

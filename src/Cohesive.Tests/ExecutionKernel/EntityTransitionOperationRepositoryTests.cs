@@ -762,6 +762,7 @@ public sealed class EntityTransitionOperationRepositoryTests
     sealed class NonAtomicRepository(IEntityRepository inner) : IEntityRepository
     {
         public EntityDefinition EntityDefinition => inner.EntityDefinition;
+        public string? IdentityField => inner.IdentityField;
 
         public Task<EntitySnapshot?> TryGet(
             OperationContext context,

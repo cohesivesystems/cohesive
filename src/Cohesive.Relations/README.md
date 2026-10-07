@@ -105,3 +105,40 @@ Adapter-specific guides are available for
 [`Cohesive.Adapters.Postgres`](../adapters/Cohesive.Adapters.Postgres/README.md),
 [`Cohesive.Adapters.Cosmos`](../adapters/Cohesive.Adapters.Cosmos/README.md), and
 [`Cohesive.Adapters.Elastic`](../adapters/Cohesive.Adapters.Elastic/README.md).
+
+## Typed row-query results
+
+Expression authoring can retain a typed input and public application result with
+`BuildQuery(id, name, rows, parameter, result: values => ...)`. The returned
+`RelationQuery<TInput,TResult>` captures the existing canonical query, shape documents and relationship
+catalog without compiling or selecting a backend. Its row type is inferred and can be anonymous;
+constructor projections still require verified direct field initialization/getters. `Where` retains a
+focused binding for the existing typed traversal/projection overloads.
+
+The `result` callback is a local presentation projection of complete typed rows. It explicitly handles
+empty results and nesting; it is not serialized as portable query semantics. The shared boundary performs
+observation decoding, so consumers invoke a typed prepared query instead of maintaining intermediary
+DTO conversions. This convenience currently requires one exact invocation parameter and one row result;
+additional or foreign parameters fail closed. Existing structural query and HostedQuery APIs retain their
+separate responsibilities. See the [fulfillment example](../../eng/examples/aspire-first/README.md) for
+backend registration and fluent API binding.
+
+Prepared typed readers implement `IRelationQueryReader<TInput,TResult>` and retain the exact authored
+`Definition`; HTTP bindings can accept that object without taking a dependency on its backend. The narrower
+`IRelationQueryRowsReader` contract describes complete bounded rows before typed projection, including
+missing-field versus null semantics. Neither contract silently discards partiality or adds retry.
+These convenience contracts do not replace `IRelationQueryEvaluator`: the existing composed execution path
+supports cross-source joins and retains phase artifacts, requirement gaps and source-read traces. Native
+PostgreSQL selection remains explicit; no automatic native-versus-federated dispatcher is introduced.
+
+### Preparation exception migration (unreleased PR405)
+
+`RelationQueryPreparationException` now derives from `PreparationException`, which derives from
+`InvalidOperationException`; it no longer derives from `ArgumentException`. Callers previously using
+`catch (ArgumentException)` for preparation must catch `RelationQueryPreparationException` or the shared
+`PreparationException` instead. Argument validation errors remain separate. The previous default
+`relationQuery.preparation.invalid` code is replaced by `relationQuery.preparation.semantic` or
+`relationQuery.preparation.physical`, based on the failed preparation phase. Update code-based handlers
+accordingly. Explicit `relationQuery.subplan.*` codes retain their meanings, including `resultUnsupported`
+for a successfully compiled query whose result contract is not supported by subplans. Original semantic
+and physical compiler evidence stays available. No compatibility catch or code alias is introduced.

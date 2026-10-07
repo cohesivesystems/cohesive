@@ -15,7 +15,7 @@ public sealed record SubmitOrderResult(string Status, string Reason);
 public static class OrderTransitions
 {
     /// <summary>Only draft orders may be submitted; a rejected decision produces no commit.</summary>
-    public static Transition<Order, SubmitOrder, SubmitOrderResult> Submit { get; } = TransitionAuthoring.Create<Order, SubmitOrder, SubmitOrderResult>(OrderStorage.Entity.Shape,
+    public static Transition<Order, SubmitOrder, SubmitOrderResult> Submit { get; } = TransitionAuthoring.Create<Order, SubmitOrder, SubmitOrderResult>(FulfillmentDomain.Orders.Definition.Shape,
             id: new("example/order/submit"), revision: new("3"),
             transition => transition
                 .Requires((order, input) => order.Id == input.OrderId,

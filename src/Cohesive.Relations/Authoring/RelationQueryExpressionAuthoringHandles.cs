@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Cohesive.Model.Serialization;
 using System.Linq.Expressions;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
@@ -21,9 +22,40 @@ public sealed class RelationQueryExpressionRelationship<TSource, TTarget>
     where TSource : notnull
     where TTarget : notnull
 {
-    internal RelationQueryExpressionRelationship(RelationshipDefinition definition)
+    /// <summary>Wraps an existing canonical relationship for typed authoring without redefining its endpoints.</summary>
+    /// <param name="definition">Canonical relationship authority.</param>
+    /// <remarks>CLR/shape compatibility is validated when a query session traverses the handle.</remarks>
+    /// <exception cref="ArgumentNullException">The definition is null.</exception>
+    public RelationQueryExpressionRelationship(RelationshipDefinition definition)
     {
         Definition = Guard.RequireNotNull(definition);
+    }
+
+    /// <summary>Attaches authoritative endpoint documents for automatic import during traversal.</summary>
+    /// <param name="definition">Canonical relationship authority.</param>
+    /// <param name="source">Exact graph containing the source endpoint.</param>
+    /// <param name="target">Exact graph containing the target endpoint.</param>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">A document does not contain its declared endpoint.</exception>
+    public RelationQueryExpressionRelationship(RelationshipDefinition definition, ShapeGraphDocument source, ShapeGraphDocument target)
+        : this(definition)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(target);
+        if (source.Graph.Id != definition.SourceShape.GraphId || source.Graph.TryGetShape(definition.SourceShape) is null
+            || target.Graph.Id != definition.TargetShape.GraphId || target.Graph.TryGetShape(definition.TargetShape) is null)
+            throw new ArgumentException("Relationship documents must contain the exact declared endpoints.");
+        sourceDocument = source;
+        targetDocument = target;
+    }
+
+    readonly ShapeGraphDocument? sourceDocument;
+    readonly ShapeGraphDocument? targetDocument;
+
+    internal void ImportEndpoints(RelationQueryExpressionAuthoring author)
+    {
+        if (sourceDocument is not null) author.Clr.Shape<TSource>(sourceDocument, SourceShape);
+        if (targetDocument is not null) author.Clr.Shape<TTarget>(targetDocument, TargetShape);
     }
 
     /// <summary>Canonical portable relationship definition.</summary>
@@ -98,9 +130,19 @@ public abstract class RelationQueryExpressionValueBinding
     public override string ToString() => Id.ToString();
 }
 
+/// <summary>One typed binding seam shared by explicit bindings and focused query nodes.</summary>
+/// <typeparam name="T">Canonical CLR value type.</typeparam>
+/// <remarks>Implementations expose an existing session-owned binding; they cannot bypass visibility checks.</remarks>
+public interface IRelationQueryBinding<T> where T : notnull
+{
+    /// <summary>The exact focused binding, retaining its authoring session and semantic identity.</summary>
+    RelationQueryExpressionValueBinding<T> Binding { get; }
+    internal RelationQueryExpressionAuthoring Owner { get; }
+}
+
 /// <summary>Typed CLR value binding used as a parameter in expression-authoring lambdas.</summary>
 /// <typeparam name="T">CLR type represented by the binding.</typeparam>
-public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpressionValueBinding
+public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpressionValueBinding, IRelationQueryBinding<T>
     where T : notnull
 {
     internal RelationQueryExpressionValueBinding(
@@ -115,6 +157,9 @@ public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpres
     {
     }
 
+    RelationQueryExpressionValueBinding<T> IRelationQueryBinding<T>.Binding => this;
+    RelationQueryExpressionAuthoring IRelationQueryBinding<T>.Owner => Owner;
+
     internal override Type ClrType => typeof(T);
 }
 
@@ -124,7 +169,7 @@ public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpres
 /// The erased node and relation-root context are authoring conveniences only. Canonical definitions retain the
 /// exact logical node, binding, and root identities rather than this handle or its CLR type.
 /// </remarks>
-public abstract class RelationQueryExpressionBoundNode<TValue>
+public abstract class RelationQueryExpressionBoundNode<TValue> : IRelationQueryBinding<TValue>
     where TValue : notnull
 {
     private protected RelationQueryExpressionBoundNode(
@@ -148,6 +193,8 @@ public abstract class RelationQueryExpressionBoundNode<TValue>
         StructuralNode = node;
         RelationRoot = relationRoot;
     }
+
+    RelationQueryExpressionAuthoring IRelationQueryBinding<TValue>.Owner => Binding.Owner;
 
     internal RelationQueryNodeHandle<LogicalQueryNode> StructuralNode { get; }
 
@@ -176,6 +223,50 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
             relationRoot)
     {
         Node = node;
+    }
+
+    /// <summary>Filters this focused branch through its owning authoring session.</summary>
+    /// <param name="predicate">Canonical expression over the focused row.</param>
+    /// <returns>The filtered branch.</returns>
+    public RelationQueryExpressionBoundNode<FilterQueryNode, TValue> Where(Expression<Func<TValue, bool>> predicate) =>
+        Binding.Owner.Where(this, predicate);
+
+    /// <summary>Projects the focused row through the owning authoring session.</summary>
+    /// <typeparam name="TResult">Projected row type.</typeparam>
+    /// <param name="projection">Canonical projection expression.</param>
+    /// <returns>The projected branch.</returns>
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TResult>(Expression<Func<TValue, TResult>> projection) where TResult : notnull =>
+        Binding.Owner.Project(this, projection);
+
+    /// <summary>Traverses an incoming relationship from this focused branch.</summary>
+    /// <typeparam name="TSource">Related source entity type.</typeparam>
+    /// <param name="relationship">Canonical relationship ending at this row type.</param>
+    /// <returns>The related source branch using the default left traversal.</returns>
+    public RelationQueryExpressionBoundNode<TraverseRelationshipQueryNode, TSource> TraverseInverse<TSource>(RelationQueryExpressionRelationship<TSource, TValue> relationship) where TSource : notnull =>
+        Binding.Owner.TraverseInverse(this, relationship);
+
+    /// <summary>Traverses an outgoing relationship from this focused branch.</summary>
+    /// <typeparam name="TRelated">Related target entity type.</typeparam>
+    /// <param name="relationship">Canonical relationship starting at this row type.</param>
+    /// <returns>The related target branch using the default left traversal.</returns>
+    public RelationQueryExpressionBoundNode<TraverseRelationshipQueryNode, TRelated> Traverse<TRelated>(RelationQueryExpressionRelationship<TValue, TRelated> relationship) where TRelated : notnull =>
+        Binding.Owner.Traverse(this, Binding, relationship);
+
+    /// <summary>Joins two focused branches using their existing session-owned bindings.</summary>
+    /// <typeparam name="TRightNode">Right logical node type.</typeparam>
+    /// <typeparam name="TRight">Right focused row type.</typeparam>
+    /// <param name="right">Other branch from the same session.</param>
+    /// <param name="predicate">Join predicate over the two focused rows.</param>
+    /// <param name="kind">Join semantics.</param>
+    /// <returns>A joined branch retaining both typed bindings for fluent projection.</returns>
+    /// <exception cref="ArgumentNullException">Right branch or predicate is null.</exception>
+    public RelationQueryExpressionJoinedNode<TValue, TRight> Join<TRightNode, TRight>(RelationQueryExpressionBoundNode<TRightNode, TRight> right,
+        Expression<Func<TValue, TRight, bool>> predicate, JoinKind kind = JoinKind.Inner)
+        where TRightNode : LogicalQueryNode where TRight : notnull
+    {
+        ArgumentNullException.ThrowIfNull(right);
+        ArgumentNullException.ThrowIfNull(predicate);
+        return new(Binding.Owner.Join(Node, right.Node, kind, predicate, Binding, right.Binding), Binding, right.Binding);
     }
 
     /// <summary>Structural handle for the canonical logical node.</summary>
@@ -336,4 +427,27 @@ public sealed class RelationQueryExpressionAggregationResult<T> : RelationQueryE
         : base(owner, structural, shape)
     {
     }
+}
+
+/// <summary>Authoring handle retaining the two focused bindings of a join; no additional canonical model.</summary>
+/// <typeparam name="TLeft">Left focused row.</typeparam>
+/// <typeparam name="TRight">Right focused row.</typeparam>
+public sealed class RelationQueryExpressionJoinedNode<TLeft, TRight> where TLeft : notnull where TRight : notnull
+{
+    readonly RelationQueryExpressionValueBinding<TLeft> left;
+    readonly RelationQueryExpressionValueBinding<TRight> right;
+    internal RelationQueryExpressionJoinedNode(RelationQueryNodeHandle<JoinQueryNode> node,
+        RelationQueryExpressionValueBinding<TLeft> left, RelationQueryExpressionValueBinding<TRight> right)
+    { Node = node; this.left = left; this.right = right; }
+
+    /// <summary>Canonical structural join for explicit graph authoring.</summary>
+    public RelationQueryNodeHandle<JoinQueryNode> Node { get; }
+
+    /// <summary>Projects both joined rows through their existing authoring session.</summary>
+    /// <typeparam name="TResult">Projected row type.</typeparam>
+    /// <param name="projection">Canonical expression over left and right bindings.</param>
+    /// <returns>The focused projected branch.</returns>
+    /// <exception cref="ArgumentNullException">Projection is null.</exception>
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TResult>(Expression<Func<TLeft, TRight, TResult>> projection)
+        where TResult : notnull => left.Owner.Project(Node, projection, left, right);
 }

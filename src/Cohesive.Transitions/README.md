@@ -119,3 +119,26 @@ presented as ordinary syntax.
 - [Execution kernel guide](../../docs/EXECUTION_KERNEL_GUIDE.md) explains Transition linking and execution boundaries.
 - [`Cohesive.Storage`](../Cohesive.Storage/README.md) attaches repository and commit interpretations.
 - [`Cohesive.Processes`](../Cohesive.Processes/README.md) coordinates Transition invocations with other semantic work.
+
+## Start a multi-entity domain
+
+`DomainModelBuilder.Entity<T>(semanticName)` returns a typed `DomainEntity<T>` retaining the
+exact definition in the built entity catalog. Declare it once, then attach downstream concerns:
+
+```csharp
+var domain = new DomainModelBuilder().Version("1");
+var orders = domain.Entity<Order>("orders");
+var reservations = domain.Entity<Reservation>("reservations");
+var reservationOrder = reservations.References(reservation => reservation.OrderId, orders);
+var definition = domain.Build();
+```
+
+`entity.Definition` supplies transition/storage authority. `entity.QueryShape(author)` imports that
+exact graph into a Relations expression session, avoiding an independently inferred CLR query shape.
+`author.Source(entity)` combines that import with source creation when a separate shape handle is unnecessary.
+`References` uses an existing Relations relationship definition and names the target observation identity;
+it does not create a foreign key, establish tenant scope or enforce authorization. The typed handle carries
+both exact endpoint documents, imported automatically by forward and inverse traversal. Explicit imports
+remain valid; conflicting session registrations fail closed. A traversal retains
+the separately declared relationship in its authoring catalog. Entity handles contain no runtime state,
+persistence or workflow. See the [runnable fulfillment example](../../eng/examples/aspire-first/README.md).

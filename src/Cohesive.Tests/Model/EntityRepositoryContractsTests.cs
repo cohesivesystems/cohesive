@@ -2,6 +2,8 @@ using Cohesive.Adapters.Cosmos;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Storage;
+using Cohesive.Transitions.Authoring;
+using System.Text.Json.Serialization;
 using Microsoft.Azure.Cosmos;
 
 namespace Cohesive.Tests.Model;
@@ -9,6 +11,55 @@ namespace Cohesive.Tests.Model;
 public sealed class EntityRepositoryContractsTests
 {
     const string EmulatorMasterKey = "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==";
+
+    [Fact]
+    public async Task Outbox_stores_share_typed_identity_conventions_independent_of_seed_selector()
+    {
+        await Verify(new RenamedIdentity("renamed", "tenant"), "renamed");
+        await Verify(new KeyIdentity("key-only", "tenant"), "key-only");
+
+        static async Task Verify<T>(T value, string expected) where T : notnull
+        {
+            var definition = ObjectEntityDefinition.For<T>(new("outbox-identity"));
+            var memory = new InMemoryEntityOutboxRepository(definition, seedData: null, partitionKeyFieldName: "Partition");
+            using var client = new CosmosClient("https://localhost:8081/", EmulatorMasterKey,
+                new CosmosClientOptions { ConnectionMode = ConnectionMode.Gateway });
+            var cosmos = new CosmosEntityOutboxRepository(definition, client.GetContainer("tests", "entities"));
+            Assert.Null(memory.IdentityField);
+            Assert.Null(cosmos.IdentityField);
+            var typedMemory = new TypedEntityRepository<T>(memory);
+            _ = new TypedEntityRepository<T>(cosmos); // preparation only; no Cosmos IO
+            Assert.Equal(expected, EntityRepositoryMappingExtensions.PrepareIdentitySelector<T>(cosmos.IdentityField)(value));
+            var written = await typedMemory.Upsert(OperationContext.Create(), value);
+            Assert.Equal(expected, written.Entity.EntityId.Value);
+        }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Explicit_custom_identity_is_independent_of_seed_count(int seedMode)
+    {
+        var seed = new CustomerIdentity("incidental-id", "customer-1", "tenant");
+        var definition = ObjectEntityDefinition.For<CustomerIdentity>(new("customer-identity"));
+        var repository = new InMemoryEntityOutboxRepository(definition, seedMode switch { 0 => null, 1 => [], _ => [seed] }, "Partition", "customer_id");
+        Assert.Equal("customer_id", repository.IdentityField);
+        var context = OperationContext.Create();
+        if (seedMode == 2)
+            Assert.NotNull(await repository.TryGet(context, "customer-1"));
+        var typed = new TypedEntityRepository<CustomerIdentity>(repository);
+        var written = await typed.Upsert(context, seed with { Id = "another-incidental-id" });
+        Assert.Equal("customer-1", written.Entity.EntityId.Value);
+        Assert.Null(await repository.TryGet(context, "another-incidental-id"));
+        Assert.Throws<InvalidOperationException>(() => new TypedEntityRepository<KeyIdentity>(repository));
+    }
+
+    public sealed record CustomerIdentity(string Id,
+        [property: JsonPropertyName("customer_id")] string CustomerId, string Partition);
+
+    public sealed record RenamedIdentity([property: JsonPropertyName("id")] string Id, string Partition);
+    public sealed record KeyIdentity(string Key, string Partition);
 
     [Fact]
     public void EntityReadOptions_WithExpectedConcurrencyToken_StoresValue()

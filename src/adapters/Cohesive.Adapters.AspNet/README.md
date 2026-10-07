@@ -309,7 +309,7 @@ app.MapEntityApi<Order>(entity, repository, "local", endpoints => endpoints
     .Get("Get", "/orders/{id}", order => TypedResults.Ok(new OrderSummary(order.Id, order.Status))));
 ```
 
-Creation accepts a typed initializer, identity selector and `Created<T>` response. Its declaration uses
+Creation accepts a typed initializer receiving the effective binding partition, an identity selector and `Created<T>` response. Its declaration uses
 `.Returns<T>(ApiResultKind.Created)` (201); combined authoring supplies this automatically. Combined
 lookup and transition declarations include NotFound (404); separately declared handles should include it. Transition bindings use
 `.Transition(endpoint, authored).Input(request => command).OnApplied((state, outcome) => TypedResults.Ok(response))`
@@ -361,3 +361,27 @@ The mapping does not change native server-side logging or application-supplied P
 Applications choosing `Conflict<TDomain>` for domain rejection will have two 409 body shapes: their
 explicit domain body and Problem Details for concurrency. Use the Problem Details `OnRejected` overload
 (as the order example does) for one HTTP error shape; distinguish conditions by their stable `code`.
+
+## Bind a typed read operation
+
+Use `app.MapApiQuery(endpoint, preparedRead).FromRoute<Guid>("id", id => id.ToString("D")).OkOrNotFound()`
+when a separately declared, bodyless `ApiEndpoint<TResult>` returns a nullable typed result.
+Use `Build<TResult>()` on the declaration to retain the response type at the binding boundary. `preparedRead` is a
+`IRelationQueryReader<TInput, TResult?>` retaining its canonical `Definition`; pass the object, not
+its `ReadAsync` method group. No database adapter dependency is required. Registration
+checks the endpoint's query kind and response type, route declaration and 404 policy. Invalid input returns
+400 before invocation, request cancellation propagates, and null returns the declared empty-body 404.
+Other results use 200 JSON. The native route builder remains available for further configuration, and
+semantic authorization still requires the existing policy resolver. The binder owns no query compilation,
+result assembly or retry policy.
+
+The typed reader is a complete-result convenience contract. For composed/cross-source evaluation with
+phase artifacts, requirement gaps and source-read traces, retain the existing `MapRelationQueryApiDefinition`
+and `IRelationQueryEvaluator` path. Do not turn a failed or partial evaluation into an ordinary typed success.
+
+The `OkOrNotFound` convenience requires a reference response type: absence is represented by null,
+not the default value of a struct. Request-typed `ApiEndpoint<TInput, TResult>` handles built with
+`BuildQuery<TInput, TResult>()` can be passed directly to `MapApiQuery`; their query DTO is bound by
+the existing HTTP query binder. Body requests remain outside this query convenience.
+`BuildBody` and `BuildQuery` validate a prospective request/response/HTTP declaration before publishing it;
+failed preparation leaves the builder unchanged without rollback.

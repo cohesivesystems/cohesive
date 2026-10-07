@@ -146,7 +146,9 @@ public sealed class SqliteEntityRepositoryTests
         using var file = new DatabaseFixture();
         var native = Repository(file);
         var current = await native.Upsert(Context, Write(native, "existing"));
-        var typed = new TypedEntityRepository<StoredRun>(native);
+        // This fixture exercises canonical batch forwarding, not StoredRun mapping.
+        var typed = new TypedEntityRepository<StoredRun>(native,
+            selectEntityId: _ => throw new InvalidOperationException("Canonical writes must not invoke typed mapping."));
         IEntityRepository repository = facade switch
         {
             0 => native,
@@ -345,6 +347,7 @@ public sealed class SqliteEntityRepositoryTests
     sealed class OutboxStub(IEntityRepository repository) : IEntityOutboxRepository
     {
         public EntityDefinition EntityDefinition => repository.EntityDefinition;
+        public string? IdentityField => repository.IdentityField;
         public Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null) => repository.TryGet(context, id, options);
         public Task<EntitySnapshot> Upsert(OperationContext context, EntityWriteRequest write) => repository.Upsert(context, write);
         public Task<EntityCommitResult> UpsertWithOutbox(OperationContext context, EntityOutboxCommit commit) => throw new NotSupportedException("Outbox is not invoked by ordinary batch tests.");
