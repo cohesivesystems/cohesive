@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Compilation;
 
 namespace Cohesive.Relations.Execution;
 
@@ -38,6 +39,9 @@ public interface IRelationQueryReader<TInput, TResult>
 /// </remarks>
 public interface IRelationQueryRowsReader
 {
+    /// <summary>Exact compiled semantic plan implemented by this prepared reader.</summary>
+    RelationQueryCompiledPlanReference Plan { get; }
+
     /// <summary>Executes the already-prepared branch with invocation-local parameters.</summary>
     /// <param name="parameters">Canonical parameter identities and values validated by the prepared binding.</param>
     /// <param name="cancellationToken">Cancels all delegated reads.</param>

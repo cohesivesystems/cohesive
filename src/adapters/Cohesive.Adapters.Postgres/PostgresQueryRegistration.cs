@@ -54,7 +54,26 @@ public sealed class PostgresQueryRegistration
         int maximumRows, long maximumBytes)
     {
         ArgumentNullException.ThrowIfNull(query);
-        var compilation = RelationQueryStaticCompiler.Compile(query.CompilationRequest);
+        var rows = Prepare(query.CompilationRequest, maximumRows, maximumBytes);
+        return new(query, rows.Artifact, rows);
+    }
+
+    /// <summary>Prepares a canonical row query, including a derived subplan, using native PostgreSQL compilation.</summary>
+    /// <param name="request">Exact query and semantic snapshots.</param>
+    /// <param name="maximumRows">Complete-result row limit; overflow fails.</param>
+    /// <param name="maximumBytes">Complete decoded scalar-value byte limit.</param>
+    /// <returns>A plan-affine reader retaining its native artifact.</returns>
+    /// <exception cref="PostgresQueryPreparationException">Static or native compilation fails.</exception>
+    /// <exception cref="ArgumentNullException">Request is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A result bound is invalid.</exception>
+    /// <exception cref="NotSupportedException">The artifact requires unsupported temporal execution.</exception>
+    /// <exception cref="InvalidOperationException">An input shape has no registered mapping.</exception>
+    /// <exception cref="RelationQueryArtifactAuthoringException">Placement or storage binding is invalid.</exception>
+    /// <exception cref="ArgumentException">Runtime affinity is invalid.</exception>
+    public PostgresQueryRowsReader Prepare(RelationQueryCompilationRequest request, int maximumRows, long maximumBytes)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var compilation = RelationQueryStaticCompiler.Compile(request);
         var plan = compilation.Plan ?? throw new PostgresQueryPreparationException(compilation, null);
         var builder = RelationQueryPlacement.For(plan);
         var source = builder.Source("postgres/query", PostgresRelationQuerySourceTargetProfile.Default, new(runtime.Database.Value));
@@ -73,7 +92,7 @@ public sealed class PostgresQueryRegistration
         var native = compiler.Compile(new RelationQueryNativeCompilationRequest(plan, bound, placement.Placement), storage);
         if (!native.IsSuccessful) throw new PostgresQueryPreparationException(compilation, native);
         var artifact = native.Artifacts.Single();
-        return new(query, artifact, new PostgresQueryRowsReader(artifact, runtime, maximumRows, maximumBytes));
+        return new PostgresQueryRowsReader(artifact, runtime, maximumRows, maximumBytes);
 
         PostgresEntityRepositoryMapping Mapping(QualifiedShapeId shape) => tables.TryGetValue(shape, out var mapping)
             ? mapping : throw new InvalidOperationException($"No PostgreSQL entity mapping is registered for query shape '{shape}'.");

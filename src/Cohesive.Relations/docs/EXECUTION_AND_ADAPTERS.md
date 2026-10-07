@@ -78,6 +78,42 @@ Limits for rows, keys per batch, buffering, fan-out, and concurrency are part of
 planning policy. Exceeding a proven bound fails or chunks according to the explicit plan; it does not silently switch
 to unbounded or per-row acquisition.
 
+## Closed native subplans within composed execution
+
+A complete native row reader can implement a **closed projection** inside a larger query.
+`RelationQuerySubplan.Compile(request, projectionId)` derives a prefix ending at that projection and a
+remainder that replaces it with a source of its declared shape and binding. Both are compiled from the
+original document, shape snapshots and catalog; the original remains authoritative. The prefix's joins
+are absent from the remainder. Do not feed joined rows into the original entity sources and replay those joins.
+
+At host registration, compile the prefix with a native adapter (for example,
+`PostgresQueryRegistration.Prepare`). Place the remainder's cut source with
+`RelationQueryProjectedRowset.Profile`, and register remaining source readers against its exact physical
+plan. `RelationQuerySubplanReader<TInput,TResult>` prepares those readers once and runs one prefix read
+before delegating to the existing physical executor. `IRelationQueryRowsReader.Plan` is mandatory semantic
+plan affinity; PostgreSQL's implementation also retains its inspectable native artifact. A PostgreSQL
+binding inside a heterogeneous placement can select `.ForSource(sourceId)` while retaining the complete
+placement fingerprint. Its table coverage must be exact for that source.
+
+The split result retains the original/derived plans, complete prefix observations and the remainder's
+ordinary evaluation outcome. It is not a fabricated full-query `RelationQueryEvaluationOutcome`:
+prefix completion is vouched for by the complete-row contract, while remaining acquisition has its usual
+per-source traces and completeness evidence. Native provider exceptions propagate. Typed `ReadAsync`
+rejects incomplete remaining evidence. `EvaluateAsync` retains that evidence for inspection. No retry,
+ambient result cache, cross-source transaction or authorization inference is introduced. The host must
+bind both phases to the intended authorized scope; matching a logical partition label alone cannot prove it.
+
+Initial limits: one invocation parameter, one row terminal, full demand, one explicit projection cut,
+and source/filter/join/traversal/projection ancestors. Ordering, paging, aggregation and correlated cuts
+are rejected. Row occurrence identities preserve duplicates within one invocation; they are neither
+stable across executions nor domain entity identities. Missing and null remain distinct. The existing
+physical planner still applies its normal residual capability, identity and bounded-join restrictions.
+This does not automatically discover join islands or add a new arbitrary binding-environment checkpoint.
+
+See the [reservation availability example](../../../eng/examples/aspire-first/README.md#native-joins-inside-composed-execution)
+for one graph executed entirely in PostgreSQL or as a PostgreSQL order/reservation subplan joined with
+inventory from another database. Tests cover differential results, failure boundaries and concurrent calls.
+
 ## PostgreSQL native join versus Cosmos composed reads
 
 The physical difference is easiest to see with an independently acquired query. Author the Load-to-Customer

@@ -54,6 +54,11 @@ public sealed class PostgresQueryRowsReader : IRelationQueryRowsReader
             throw new NotSupportedException("This native row reader does not admit temporal fields; use the source reader with explicit temporal policy.");
     }
 
+    /// <summary>Exact native artifact retained for inspection and attribution.</summary>
+    public PostgresRelationQueryCompiledArtifact Artifact => artifact;
+    /// <inheritdoc />
+    public RelationQueryCompiledPlanReference Plan => artifact.Provenance.Plan;
+
     /// <summary>Executes exactly one parameterized SELECT, failing rather than returning a truncated result.</summary>
     /// <param name="parameters">Invocation values validated by the compiled artifact.</param>
     /// <param name="cancellationToken">Cancels connection, command and result reads.</param>

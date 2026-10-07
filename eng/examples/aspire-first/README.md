@@ -256,10 +256,49 @@ select federation. The example explicitly selects native PostgreSQL at registrat
 See [execution and adapters](../../../src/Cohesive.Relations/docs/EXECUTION_AND_ADAPTERS.md) for the
 composed join example and its no-N+1 regression. Its deterministic readers prove planning/correlation;
 the example here also compares live PostgreSQL native execution with bounded composed acquisition
-and the reference interpreter, using the same declaration and shared nested assembly. This does not yet
-execute native SQL join subplans inside federation. That requires a physical-plan cut preserving binding
-presence, keys and provenance, with only the remaining joins interpreted locally; simply wrapping a SQL
-reader as an ordinary source would repeat those joins.
+and the reference interpreter, using the same declaration and shared nested assembly.
+
+### Native joins inside composed execution
+
+The companion `ReservationAvailabilityQuery` declares a semantic `ReservationDemand` projection between
+order/reservation matching and inventory enrichment. `ReservationAvailabilityInfrastructure` can bind that
+**same graph** in either of two ways:
+
+```csharp
+var native = ReservationAvailabilityInfrastructure.BindNative(oneDatabase);
+var composed = ReservationAvailabilityInfrastructure.BindComposed(ordersDatabase, inventoryDatabase);
+var availability = await composed.ReadAsync(orderId, cancellationToken);
+```
+
+The native path executes one SQL statement. The composed path compiles the closed demand projection into
+one PostgreSQL statement, then feeds its complete rowset into the existing physical executor for the
+remaining inventory join. Orders and reservations are not acquired or joined again. The host selects the
+cut; the query does not declare a PostgreSQL implementation. The ordinary HTTP details endpoint remains
+all-native, and this companion binding is exercised by the two-database integration test.
+
+`RelationQuerySubplan.Compile` derives both plans from the original snapshot and retains their provenance.
+It accepts a nonterminal closed projection whose ancestors are sources, filters, joins, relationship
+traversals or projections. It rejects interior branches escaping the projection, unsupported operators,
+multiple results and partial output demand. Existing canonical validation prevents hidden input bindings
+from leaking through a projection. This is an explicit view boundary, not automatic discovery of arbitrary
+SQL join islands. No separately authored join definition or application compilation is needed.
+
+`RelationQuerySubplanReader.EvaluateAsync` retains the prefix rows, derived-plan relationship and full
+remaining evaluation. Row occurrences retain bag multiplicity; they do not acquire invented entity
+identities. Missing fields remain distinct from null. Prefix errors/overflow stop before remaining IO;
+incomplete remaining acquisition cannot become a successful typed result. Preparation and native readers
+are retained at host lifetime, while rows, parameters and evidence are invocation-local. Source readers
+must match the remaining plan's source/domain/profile and declared logical partition. Host registration
+is responsible for using the same authorized scope in the native prefix; the scope label does not prove
+backend authorization. There is no distributed snapshot across the two databases.
+
+The live test uses PostgreSQL 17 with two disposable databases. It covers no reservations, two reservations,
+missing orders, cancellation and independent inventory: updating only the second database to stock 11
+changes the composed result while the all-native result remains stock 8. Set both
+`COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING` and `COHESIVE_ORDER_EXAMPLE_INVENTORY_CONNECTION_STRING`
+to disposable databases to run it. Without both, this optional test skips. Deterministic tests additionally
+verify one prefix call and one remaining-source call per invocation, concurrent isolation, duplicate rows,
+invalid shape, overflow, failed native reads and partial remaining evidence.
 
 ### Try a joined response
 

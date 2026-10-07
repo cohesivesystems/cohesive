@@ -204,6 +204,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
     readonly string explicitAuthority;
     readonly List<TableDeclaration> tables = [];
     readonly List<RelationQueryArtifactAuthoringDiagnostic> diagnostics = [];
+    RelationQuerySourceInstanceId? selectedSource;
     Effective<PostgresRelationQueryDatabaseId>? database;
     Effective<PostgresRelationQueryBindingId>? bindingId;
     Effective<string>? conventionSetVersion;
@@ -220,6 +221,19 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
 
     /// <summary>Exact authored placement being bound.</summary>
     public RelationQueryAuthoredPlacement Placement => placement;
+
+    /// <summary>Restricts this native binding to one PostgreSQL source within a heterogeneous placement.</summary>
+    /// <param name="source">Exact source instance; the full placement fingerprint remains authoritative.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentException">The source is absent or another source was already selected.</exception>
+    public PostgresRelationQueryStorageBindingBuilder ForSource(RelationQuerySourceInstanceId source)
+    {
+        if (!placement.Placement.SourceInstances.Any(candidate => candidate.Id == source)
+            || selectedSource is { } previous && previous != source)
+            throw new ArgumentException("Select one source present in the exact placement.", nameof(source));
+        selectedSource = source;
+        return this;
+    }
 
     /// <summary>Overrides the convention-derived physical database identity.</summary>
     /// <param name="id">Stable non-secret physical database identity.</param>
@@ -864,7 +878,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
             Error(PostgresRelationQueryBindingAuthoringDiagnosticCodes.PlacementMismatch,
                 "PostgreSQL binding authoring requires one internally aligned authored placement.");
         }
-        foreach (var source in placement.Placement.SourceInstances)
+        foreach (var source in placement.Placement.SourceInstances.Where(source => selectedSource is null || source.Id == selectedSource))
         {
             if (!source.TargetProfile.HasSameSemantics(PostgresRelationQuerySourceTargetProfile.Default))
             {
@@ -877,7 +891,8 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
     void ValidateTableDeclarations()
     {
         var expected = placement.Inputs
-            .Where(static input => input.Binding.Acquisition != RelationQuerySourceAcquisitionKind.Supplied)
+            .Where(input => input.Binding.Acquisition != RelationQuerySourceAcquisitionKind.Supplied
+                && (selectedSource is null || input.Source.Id == selectedSource))
             .Select(static input => input.Binding.Input)
             .ToHashSet();
         foreach (var group in tables.GroupBy(static table => table.Input.Binding.Input))
@@ -897,6 +912,7 @@ public sealed class PostgresRelationQueryStorageBindingBuilder
         {
             var exact = placement.Inputs.SingleOrDefault(candidate => candidate.Binding.Input == declaration.Input.Binding.Input);
             if (exact is null
+                || selectedSource is { } scope && declaration.Input.Source.Id != scope
                 || !ReferenceEquals(exact.Plan, declaration.Input.Plan)
                 || !ReferenceEquals(exact.Placement, declaration.Input.Placement)
                 || exact.Binding.Id != declaration.Input.Binding.Id
