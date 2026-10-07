@@ -10,27 +10,27 @@ public static class OrderApi
     {
         var orders = Api.Define().Entity<Order>();
         Create = orders.Command("Create")
-            .Route("POST", "/orders").Returns<OrderCreated>(ApiResultKind.Created).Build();
+            .Route("POST", "/orders").Returns<OrderCreated>(ApiResultKind.Created).Build<OrderCreated>();
         Get = orders.Query("Get")
             .Route("GET", "/orders/{id:guid}").RouteParameter<string>("id")
-            .Returns<OrderSummary>().Result(ApiResultKind.NotFound).Build();
+            .Returns<OrderSummary>().Result(ApiResultKind.NotFound).Build<OrderSummary>();
         Submit = orders.Command("Submit")
             .Route("POST", "/orders/{id}/submit").RouteParameter<string>("id")
             .Returns<OrderSummary>().Result<ProblemDetails>(ApiResultKind.Conflict).Result(ApiResultKind.NotFound)
-            .Transition(OrderTransitions.Submit.Reference).Build();
+            .Transition(OrderTransitions.Submit.Reference).Build<OrderSummary>();
         Details = orders.Query("Details").Route("GET", "/orders/{id:guid}/details")
-            .RouteParameter<string>("id").Returns<OrderDetails>().Result(ApiResultKind.NotFound).Build();
+            .RouteParameter<string>("id").Returns<OrderDetails>().Result(ApiResultKind.NotFound).Build<OrderDetails>();
         Definition = orders.Build();
     }
 
     /// <summary>Creates a fresh order.</summary>
-    public static ApiEndpoint Create { get; }
+    public static ApiEndpoint<OrderCreated> Create { get; }
     /// <summary>Reads an existing order.</summary>
-    public static ApiEndpoint Get { get; }
+    public static ApiEndpoint<OrderSummary> Get { get; }
     /// <summary>Submits an existing order using the exact declared transition.</summary>
-    public static ApiEndpoint Submit { get; }
+    public static ApiEndpoint<OrderSummary> Submit { get; }
     /// <summary>Queries order details through the canonical fulfillment relation.</summary>
-    public static ApiEndpoint Details { get; }
+    public static ApiEndpoint<OrderDetails> Details { get; }
     /// <summary>The complete portable surface, suitable for other API projections.</summary>
     public static ApiDefinition Definition { get; }
 }

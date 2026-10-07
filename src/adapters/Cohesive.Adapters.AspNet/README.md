@@ -365,7 +365,8 @@ explicit domain body and Problem Details for concurrency. Use the Problem Detail
 ## Bind a typed read operation
 
 Use `app.MapApiQuery(endpoint, preparedRead).FromRoute<Guid>("id", id => id.ToString("D")).OkOrNotFound()`
-when a separately declared, bodyless query endpoint returns a nullable typed result. `preparedRead` is a
+when a separately declared, bodyless `ApiEndpoint<TResult>` returns a nullable typed result.
+Use `Build<TResult>()` on the declaration to retain the response type at the binding boundary. `preparedRead` is a
 `IRelationQueryReader<TInput, TResult>` retaining its canonical `Definition`; pass the object, not
 its `ReadAsync` method group. No database adapter dependency is required. Registration
 checks the endpoint's query kind and response type, route declaration and 404 policy. Invalid input returns

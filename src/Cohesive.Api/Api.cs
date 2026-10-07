@@ -423,6 +423,18 @@ public abstract class OperationBuilder<TParent>
         return this;
     }
 
+    /// <summary>Completes the operation and tags its primary response without creating another declaration.</summary>
+    /// <typeparam name="TResponse">Expected primary response type, previously declared through Returns.</typeparam>
+    /// <returns>A typed handle sharing the exact operation registered in the root definition.</returns>
+    /// <exception cref="ArgumentException">The primary response type differs from TResponse.</exception>
+    /// <remarks>Alternative results retain their own types. Normal declaration validation from Build also applies.</remarks>
+    public ApiEndpoint<TResponse> Build<TResponse>()
+    {
+        if (primaryResult?.BodyType != typeof(TResponse))
+            throw new ArgumentException("Declare a matching primary response before building a typed endpoint.");
+        return new(Build().Operation);
+    }
+
     /// <summary>
     /// Completes the operation, adds it to the root definition builder, and returns an endpoint handle.
     /// </summary>

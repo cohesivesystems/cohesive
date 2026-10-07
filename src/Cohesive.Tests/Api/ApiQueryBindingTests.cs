@@ -25,7 +25,7 @@ public sealed class ApiQueryBindingTests
         });
         var endpoint = Cohesive.Api.Api.Define().Entity<Detail>().Query("Details")
             .Route("GET", "/details/{id}").RouteParameter<string>("id")
-            .Returns<Detail>().Result(ApiResultKind.NotFound).Build();
+            .Returns<Detail>().Result(ApiResultKind.NotFound).Build<Detail>();
         var binding = app.MapApiQuery(endpoint, read).FromRoute<int>("id", id => id.ToString());
         binding.OkOrNotFound();
         Assert.Throws<InvalidOperationException>(() => binding.OkOrNotFound());
@@ -45,10 +45,10 @@ public sealed class ApiQueryBindingTests
         await using var app = WebApplication.CreateBuilder().Build();
         var read = new DetailReader((_, _) => Task.FromResult<Detail?>(null));
         var wrong = Cohesive.Api.Api.Define().Entity<Detail>().Query("Wrong")
-            .Route("GET", "/wrong/{id}").RouteParameter<string>("id").Returns<string>().Build();
-        Assert.Throws<ArgumentException>(() => app.MapApiQuery(wrong, read));
+            .Route("GET", "/wrong/{id}").RouteParameter<string>("id").Returns<string>();
+        Assert.Throws<ArgumentException>(() => wrong.Build<Detail>());
         var query = Cohesive.Api.Api.Define().Entity<Detail>().Query("Details")
-            .Route("GET", "/details/{id}").RouteParameter<string>("id").Returns<Detail>().Build();
+            .Route("GET", "/details/{id}").RouteParameter<string>("id").Returns<Detail>().Build<Detail>();
         Assert.Throws<ArgumentException>(() => app.MapApiQuery(query, read).FromRoute<int>("other", id => id.ToString()));
         Assert.Throws<InvalidOperationException>(() => app.MapApiQuery(query, read).OkOrNotFound());
         Assert.Throws<InvalidOperationException>(() => app.MapApiQuery(query, read)

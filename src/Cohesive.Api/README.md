@@ -75,3 +75,12 @@ vocabulary; requirements are declared per exposed operation. Native repositories
 routes are runtime/projection bindings, never stored callbacks. The optional `Cohesive.Api.Execution`
 package provides shared invocation and normalized authorization.
 See [declarative service runtime](../../docs/decisions/declarative-service-runtime.md).
+
+### Response-typed endpoint handles
+
+`declaration.Returns<OrderDetails>().Result(ApiResultKind.NotFound).Build<OrderDetails>()` produces an
+`ApiEndpoint<OrderDetails>`. The tag describes the primary body; 404 and other alternatives keep their
+own contracts. The handle shares the exact `ApiOperation` registered in the definition, and `WithHttp`
+retains the tag. A mismatched tag fails before registering an operation. Typed query bindings accept
+`ApiEndpoint<TResult>` alongside `IRelationQueryReader<TInput,TResult>`, so unrelated response types
+cannot be paired by type inference. Untyped handles remain available for heterogeneous API catalogs.

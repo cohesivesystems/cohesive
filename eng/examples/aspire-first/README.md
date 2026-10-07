@@ -191,7 +191,8 @@ or Cohesive.Infra responsible for implementing query compilation. Registration r
 for physical tables/columns, fails before IO for missing mappings, and retains structured compiler failures.
 There is no global cache: retain the returned reader at host lifetime and invoke it per request.
 
-The endpoint receives `IRelationQueryReader<string, OrderDetails?>` and binds the reader object directly
+`OrderApi.Details` is an `ApiEndpoint<OrderDetails>`; its primary response is visible in C# while
+NotFound remains a separate outcome. The endpoint receives `IRelationQueryReader<string, OrderDetails?>` and binds the reader object directly
 to the independently declared API. `Definition` retains the exact canonical query; no PostgreSQL type
 or extracted `ReadAsync` delegate crosses the HTTP boundary:
 
@@ -222,6 +223,18 @@ rows to that partition, and foreign keys prevent orphan references. Their IDs ar
 this local demo; repository upserts additionally address `(partition, identity)`. This is not a general
 multi-tenant relationship policy or authorization mechanism. The mapping projection does not invent
 uniqueness, foreign-key or tenant guarantees. Native schema remains the authority for those constraints.
+
+### Why there are two result-shaping steps
+
+`query.Project` declares the flat fields selected from joined rows and compiled into SQL. The `result`
+callback in `BuildQuery` assembles those rows into one `OrderDetails` with a sorted reservation collection,
+including the no-order/null and no-reservations/empty cases. These are different cardinalities, not the
+same mapping run twice. Today that nested assembly is explicitly local CLR presentation.
+
+A single nested-result declaration would need to express parent identity, child presence, child ordering
+and empty-result behavior canonically, with corresponding native and composed execution support. Combining
+both callbacks into one helper would hide this boundary without removing either mapping. This example
+therefore retains the two explicit phases rather than claiming portable nested-result support.
 
 ### Existing cross-source execution
 

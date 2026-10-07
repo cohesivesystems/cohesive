@@ -21,7 +21,7 @@ public static class ApiQueryBindingExtensions
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">Operation kind, body or response contract differs.</exception>
     public static ApiQueryBinding<TInput, TResult> MapApiQuery<TInput, TResult>(this IEndpointRouteBuilder endpoints,
-        ApiEndpoint endpoint, IRelationQueryReader<TInput, TResult> query,
+        ApiEndpoint<TResult> endpoint, IRelationQueryReader<TInput, TResult> query,
         AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) =>
         new(endpoints, endpoint, query, authorizationPolicyResolver);
 }

@@ -173,6 +173,29 @@ public class ApiEndpoint
     public override string ToString() => Id.Value;
 }
 
+/// <summary>A response-typed view of the same canonical API operation.</summary>
+/// <typeparam name="TResponse">The operation's primary response body type; alternative results remain on the operation.</typeparam>
+/// <remarks>The type parameter tags the primary body, not every HTTP outcome. NotFound, Conflict and other
+/// alternatives retain their independent contracts. CLR nullable annotations do not change runtime type identity.</remarks>
+public sealed class ApiEndpoint<TResponse> : ApiEndpoint
+{
+    /// <summary>Tags an existing operation without copying or redefining its contract.</summary>
+    /// <param name="operation">Canonical operation whose primary response must match TResponse.</param>
+    /// <exception cref="ArgumentNullException">The operation is null.</exception>
+    /// <exception cref="ArgumentException">The primary response type does not match.</exception>
+    internal ApiEndpoint(ApiOperation operation) : base(operation)
+    {
+        if (operation.ResponseType != typeof(TResponse))
+            throw new ArgumentException("The endpoint's primary response does not match the requested type tag.", nameof(operation));
+    }
+
+    /// <summary>Attaches HTTP configuration while retaining the primary response type tag.</summary>
+    /// <param name="http">Native HTTP projection of the same semantic operation.</param>
+    /// <returns>A typed handle retaining identity, contracts, policies and authority references.</returns>
+    /// <exception cref="ArgumentNullException">The HTTP binding is null.</exception>
+    public new ApiEndpoint<TResponse> WithHttp(HttpBinding http) => new(Operation.WithHttp(http));
+}
+
 /// <summary>
 /// Logical API operation category.
 /// </summary>
