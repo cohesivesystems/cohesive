@@ -239,7 +239,7 @@ public sealed class EntityApiEndpointTests
         var mismatched = state.WithField(
             FieldPath.FromField(nameof(NoteState.Text)),
             ObservationValue.FromString("changed-concurrently"));
-        Assert.Throws<InvalidOperationException>(() => TransitionStateProjector.Apply(mismatched, decision));
+        Assert.Throws<TransitionStatePreparationException>(() => TransitionStateProjector.Apply(mismatched, decision));
     }
 
     [Fact]

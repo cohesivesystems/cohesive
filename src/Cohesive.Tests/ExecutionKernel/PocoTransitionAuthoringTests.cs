@@ -30,15 +30,70 @@ public sealed class PocoTransitionAuthoringTests
         Assert.Equal(7, original.Version);
         Assert.Equal(status, original.Fields["Status"].GetString());
         Assert.Equal(eligible ? "approved" : status, candidate.Fields["Status"].GetString());
-        Assert.Throws<ArgumentException>(() => TransitionStateProjector.ApplyToEntity(entity, "another", decision, original.Snapshot));
-        Assert.Throws<InvalidOperationException>(() => TransitionStateProjector.ApplyToEntity(entity, "run-1", decision));
-        if (version == 8)
-        {
-            var changed = entity.CreateState("run-1", new Run(eligible, "changed"), version: 7);
-            Assert.Throws<InvalidOperationException>(() => TransitionStateProjector.ApplyToEntity(entity, "run-1", decision, changed.Snapshot));
-            var overflow = entity.CreateState("run-1", new Run(eligible, status), version: long.MaxValue);
-            Assert.Throws<OverflowException>(() => TransitionStateProjector.ApplyToEntity(entity, "run-1", decision, overflow.Snapshot));
-        }
+    }
+
+    [Fact]
+    public void Candidate_preparation_rejects_wrong_subject()
+    {
+        var (entity, state, decision) = PreparationScenario();
+        var error = Assert.Throws<TransitionStatePreparationException>(() =>
+            TransitionStateProjector.ApplyToEntity(entity, "another", decision, state.Snapshot));
+        Assert.Equal("transition.state.subjectMismatch", error.Code);
+        Assert.Equal("/current/entityId", error.Location);
+    }
+
+    [Fact]
+    public void Candidate_creation_requires_initial_observation_evidence()
+    {
+        var (entity, _, decision) = PreparationScenario();
+        var error = Assert.Throws<TransitionStatePreparationException>(() =>
+            TransitionStateProjector.ApplyToEntity(entity, "run-1", decision));
+        Assert.Equal("transition.state.creationEvidenceMissing", error.Code);
+        Assert.Equal("/decision/evidence/initialObservation", error.Location);
+    }
+
+    [Fact]
+    public void Candidate_preparation_rejects_stale_patch_evidence()
+    {
+        var (entity, _, decision) = PreparationScenario();
+        var changed = entity.CreateState("run-1", new Run(true, "changed"), version: 7);
+        var error = Assert.Throws<TransitionStatePreparationException>(() =>
+            TransitionStateProjector.ApplyToEntity(entity, "run-1", decision, changed.Snapshot));
+        Assert.Equal("transition.state.beforeMismatch", error.Code);
+        Assert.Equal("/decision/patch/0/before", error.Location);
+    }
+
+    [Fact]
+    public void Candidate_preparation_rejects_version_overflow()
+    {
+        var (entity, _, decision) = PreparationScenario();
+        var overflow = entity.CreateState("run-1", new Run(true, "pending"), version: long.MaxValue);
+        var error = Assert.Throws<TransitionStatePreparationException>(() =>
+            TransitionStateProjector.ApplyToEntity(entity, "run-1", decision, overflow.Snapshot));
+        Assert.Equal("transition.state.versionOverflow", error.Code);
+        Assert.Equal("/current/version", error.Location);
+    }
+
+    [Fact]
+    public void Candidate_preparation_rejects_wrong_entity_shape()
+    {
+        var (_, state, decision) = PreparationScenario();
+        var other = ObjectEntityDefinition.For<Run>(new("other-run"));
+        var error = Assert.Throws<TransitionStatePreparationException>(() =>
+            TransitionStateProjector.ApplyToEntity(other, "run-1", decision, state.Snapshot));
+        Assert.Equal("transition.state.shapeMismatch", error.Code);
+        Assert.Equal("/current/observation", error.Location);
+    }
+
+    static (Cohesive.Transitions.Model.EntityDefinition Entity, Cohesive.Transitions.Model.EntityState State,
+        TransitionDecision Decision) PreparationScenario()
+    {
+        var entity = ObjectEntityDefinition.For<Run>(new("run-control"));
+        var transition = TransitionAuthoring.Create<Run, Approve, string>(entity.Shape, Metadata(), t => t
+            .Set(new("approve"), state => state.Status, "approved")
+            .Return(new("result"), TransitionOutcomeDisposition.Applied, "approved"));
+        var state = entity.CreateState("run-1", new Run(true, "pending"), version: 7);
+        return (entity, state, Decide(Compile(transition), new Approve(true), ObservationValue.FromObject(state.Fields)));
     }
 
     [Fact]

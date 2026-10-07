@@ -377,21 +377,9 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             candidateState = TransitionStateProjector.ApplyToEntity(binding.Repository.EntityDefinition,
                 subject.EntityId.Value, decision, createsSubject ? null : snapshot!.Entity);
         }
-        catch (SemanticRuleViolationException exception)
+        catch (TransitionStatePreparationException exception)
         {
-            return Failure(
-                createsSubject
-                    ? ProcessTransitionOperationAdapterDiagnosticCodes.SubjectInitializationInvalid
-                    : ProcessTransitionOperationAdapterDiagnosticCodes.DecisionNotCommittable,
-                exception.Message,
-                createsSubject
-                    ? "/decision/evidence/initialObservation"
-                    : "/decision/candidateObservation");
-        }
-        catch (InvalidOperationException exception)
-        {
-            return Failure(ProcessTransitionOperationAdapterDiagnosticCodes.DecisionNotCommittable,
-                exception.Message, "/decision/candidateObservation");
+            return Failure(exception.Code, exception.Message, exception.Location);
         }
         var candidate = candidateState.Snapshot;
 

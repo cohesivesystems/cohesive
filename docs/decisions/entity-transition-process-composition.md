@@ -56,3 +56,22 @@ runtime is not reinstated.
 
 Tests exercise pure decision preparation and existing API, service, and process consumers.
 They do not establish event replay, distributed atomicity, or durable PostgreSQL execution.
+
+## Preparation diagnostics and work lifetime
+
+Known preparation failures use `TransitionStatePreparationException` (a `PreparationException`)
+with a stable `Code` and `Location`. The process adapter retains these verbatim, including
+`/decision/evidence/initialObservation` for missing or invalid creation evidence. It does not catch
+arbitrary `InvalidOperationException` failures. Entity-validation causes are retained in `Cause`.
+Null/empty programmer arguments retain standard argument exceptions.
+
+Preparation reads immutable snapshot fields directly, checks shape identity, and constructs and
+validates only the resulting candidate. It does not rebuild the current `EntityState` already
+constructed by API/service callers or introduce that construction into the process path. Patch
+before-value checks remain mandatory. Diagnostic path strings are allocated only on failure.
+This removes the redundant construction by inspection; no throughput benchmark claim is made.
+
+Unreleased diagnostic change: process candidate-validation failures now expose the shared
+`transition.state.*` codes instead of adapter-specific initialization/not-committable codes.
+The lower-level `Apply` also uses typed patch failures; callers should catch the typed exception
+or `PreparationException`, rather than rely on exact built-in exception types.
