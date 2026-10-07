@@ -187,11 +187,14 @@ query.SingleOrDefault<OrderDetails>()
 ```
 
 The result builder consumes each node's focused binding, preserving the same session/visibility checks
-as the explicit `.Binding` overloads. Parent and child `.Identity(...)` map the already-selected key to
+through the shared `IRelationQueryBinding<T>` contract. Nodes and explicit bindings implement that
+contract; `From`, `Field` and `Collection` each have one signature. Parent and child `.Identity(...)` map the already-selected key to
 a public property; they reuse its projection slot rather than repeat the key expression. The example
 therefore projects six scalar slots instead of eight. This is a representation reduction, not a claim
 of measured database latency improvement. Join direction, complete joined branch and partition filters
-remain explicit. Existing binding overloads are still available for lower-level authoring.
+remain explicit. `SingleOrDefault<T>()` exposes only `From`; the returned mapping stage exposes
+`Identity`, `Field`, `Collection` and `Build`. Calling a mapping method before `From` is a compile error.
+Completed-builder reuse and foreign-session/visibility checks remain runtime authoring checks.
 
 `FulfillmentStorage.Bind` attaches each entity and its native mapping once. The host uses that same
 registration for repositories and queries; there is no separate per-query infrastructure catalog:
@@ -252,6 +255,21 @@ rows to that partition, and foreign keys prevent orphan references. Their IDs ar
 this local demo; repository upserts additionally address `(partition, identity)`. This is not a general
 multi-tenant relationship policy or authorization mechanism. The mapping projection does not invent
 uniqueness, foreign-key or tenant guarantees. Native schema remains the authority for those constraints.
+
+### Remaining scope integration
+
+The example's explicit local-partition predicate remains required. Composed PostgreSQL source readers
+already support `PostgresRelationQuerySourcePolicy.PartitionScope`; native query compilation currently
+rejects any selected placement with a partition selector. Neither a registration helper nor a logical
+scope label closes that native capability gap.
+
+The next coherent scope change must attach an explicit scope once to persistence registration and
+propagate it to every source and relationship acquisition. Native compilation must filter acquired
+rowsets before joins (including optional outer-join sides), while composed readers enforce the same
+scope. Required-but-missing scope must fail before IO. Tests must include foreign-partition roots and
+related rows, matching keys across partitions, empty outer joins, and native/composed differential
+results. Only then can this example remove its handwritten predicate. Scope selection must remain
+explicit and must not be presented as authentication or authorization by itself.
 
 ### One result declaration, two execution phases
 

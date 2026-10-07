@@ -82,12 +82,14 @@ public sealed class NestedResultTests
                 : author.Source(FulfillmentDomain.Orders.QueryShape(author));
             var orders = author.Where(source, order => order.Id == id.Value);
             var reservations = author.TraverseInverse(orders, FulfillmentDomain.ReservationOrder);
-            var result = author.SingleOrDefault<OrderHeader>();
-            if (useNodes) result.From(reservations, orders, order => order.Id).Identity(header => header.Id)
+            var start = author.SingleOrDefault<OrderHeader>();
+            var result = useNodes ? start.From(reservations, orders, order => order.Id)
+                : start.From(reservations, orders.Binding, order => order.Id);
+            if (useNodes) result.Identity(header => header.Id)
                 .Field(header => header.Status, orders, order => order.Status)
                 .Collection(header => header.Reservations, reservations, reservation => reservation.Id,
                     child => child.Identity(item => item.Id));
-            else result.From(reservations, orders.Binding, order => order.Id).Identity(header => header.Id)
+            else result.Identity(header => header.Id)
                 .Field(header => header.Status, orders.Binding, order => order.Status)
                 .Collection(header => header.Reservations, reservations.Binding, reservation => reservation.Id,
                     child => child.Identity(item => item.Id));
@@ -112,7 +114,12 @@ public sealed class NestedResultTests
         Assert.Throws<ArgumentException>(() => author.SingleOrDefault<OrderHeader>().From(order, foreign, value => value.Id));
         var result = author.SingleOrDefault<OrderHeader>().From(order, order, value => value.Id);
         Assert.Throws<ArgumentException>(() => result.Field(header => header.Status, foreign, value => value.Status));
-        Assert.Throws<InvalidOperationException>(() => author.SingleOrDefault<OrderHeader>().Identity(header => header.Id));
+        Assert.Null(typeof(NestedQueryResultSource<OrderHeader>).GetMethod("Identity"));
+        Assert.Null(typeof(NestedQueryResultSource<OrderHeader>).GetMethod("Build"));
+        Assert.Null(typeof(NestedQueryResultBuilder<OrderHeader>).GetMethod("From"));
+        Assert.Single(typeof(NestedQueryResultSource<OrderHeader>).GetMethods().Where(method => method.Name == "From"));
+        Assert.Single(typeof(NestedQueryResultBuilder<OrderHeader>).GetMethods().Where(method => method.Name == "Field"));
+        Assert.Single(typeof(NestedQueryResultBuilder<OrderHeader>).GetMethods().Where(method => method.Name == "Collection"));
     }
 
     public sealed record OrderHeader(string Id, string Status, IReadOnlyList<ReservationHeader> Reservations);

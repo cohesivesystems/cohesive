@@ -130,9 +130,18 @@ public abstract class RelationQueryExpressionValueBinding
     public override string ToString() => Id.ToString();
 }
 
+/// <summary>One typed binding seam shared by explicit bindings and focused query nodes.</summary>
+/// <typeparam name="T">Canonical CLR value type.</typeparam>
+/// <remarks>Implementations expose an existing session-owned binding; they cannot bypass visibility checks.</remarks>
+public interface IRelationQueryBinding<T> where T : notnull
+{
+    /// <summary>The exact focused binding, retaining its authoring session and semantic identity.</summary>
+    RelationQueryExpressionValueBinding<T> Binding { get; }
+}
+
 /// <summary>Typed CLR value binding used as a parameter in expression-authoring lambdas.</summary>
 /// <typeparam name="T">CLR type represented by the binding.</typeparam>
-public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpressionValueBinding
+public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpressionValueBinding, IRelationQueryBinding<T>
     where T : notnull
 {
     internal RelationQueryExpressionValueBinding(
@@ -147,6 +156,8 @@ public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpres
     {
     }
 
+    RelationQueryExpressionValueBinding<T> IRelationQueryBinding<T>.Binding => this;
+
     internal override Type ClrType => typeof(T);
 }
 
@@ -156,7 +167,7 @@ public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpres
 /// The erased node and relation-root context are authoring conveniences only. Canonical definitions retain the
 /// exact logical node, binding, and root identities rather than this handle or its CLR type.
 /// </remarks>
-public abstract class RelationQueryExpressionBoundNode<TValue>
+public abstract class RelationQueryExpressionBoundNode<TValue> : IRelationQueryBinding<TValue>
     where TValue : notnull
 {
     private protected RelationQueryExpressionBoundNode(
