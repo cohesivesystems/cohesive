@@ -82,8 +82,8 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         string idFieldName = "Id")
         : this(entityDefinition, partitionKeyFieldName)
     {
+        // This selector imports seed data only; ordinary typed writes use shared Storage conventions.
         ArgumentException.ThrowIfNullOrWhiteSpace(idFieldName);
-        IdentityField = idFieldName;
 
         if (seedData is null)
             return;
@@ -96,7 +96,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     public EntityDefinition EntityDefinition => entityDefinition;
 
     /// <inheritdoc />
-    public string? IdentityField { get; }
+    public string? IdentityField => null;
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => entityDefinition.Shape.Id.Value;

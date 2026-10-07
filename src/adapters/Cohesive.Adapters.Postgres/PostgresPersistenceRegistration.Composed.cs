@@ -15,8 +15,7 @@ public sealed partial class PostgresPersistenceRegistration
     /// <param name="query">Canonical query authority, including native-prefix partition predicates.</param>
     /// <param name="projection">Closed nonterminal projection executed on this database.</param>
     /// <param name="remote">Entity mappings and caller-owned runtime for all remaining database inputs.</param>
-    /// <param name="policy">Acquisition bounds and required logical partition, declared once for remote reads.</param>
-    /// <param name="physicalPolicy">Explicit independent buffer, local-row, fan-out and concurrency limits and policy identity.</param>
+    /// <param name="policy">Source bounds, required partition and retained physical policy. Batch size is declared only in the physical policy.</param>
     /// <returns>A host-lifetime prepared reader; no IO occurs during registration.</returns>
     /// <remarks>The host attests that the prefix enforces the same logical partition. Independent reads do not
     /// establish a distributed snapshot. This recipe uses bounded enumeration and sequential acquisition.
@@ -28,17 +27,18 @@ public sealed partial class PostgresPersistenceRegistration
     /// <exception cref="PostgresQueryPreparationException">Native prefix compilation fails.</exception>
     public RelationQuerySubplanReader<TInput, TResult> QueryComposed<TInput, TResult>(
         RelationQuery<TInput, TResult> query, QueryNodeId projection,
-        PostgresPersistenceRegistration remote, PostgresRelationQuerySourcePolicy policy,
-        RelationQueryPhysicalPlanningPolicy physicalPolicy)
+        PostgresPersistenceRegistration remote, PostgresRelationQuerySourcePolicy policy)
     {
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(remote);
         ArgumentNullException.ThrowIfNull(policy);
-        ArgumentNullException.ThrowIfNull(physicalPolicy);
-        if (policy.MaximumBatchKeys != physicalPolicy.MaximumBatchSize)
-            throw new ArgumentException("Source MaximumBatchKeys must equal physical MaximumBatchSize; declare one consistent batch limit.", nameof(physicalPolicy));
-        var scope = policy.PartitionScope ?? throw new ArgumentException("Composed registration requires an explicit partition scope.", nameof(policy));
         var cut = RelationQuerySubplan.Compile(query.CompilationRequest, projection);
+        var physicalPolicy = policy.PhysicalPlanningPolicy ?? throw new RelationQueryPreparationException(
+            "composed policy", cut.Original, code: "postgres.composed.physicalPolicyMissing",
+            detail: "Construct the source policy with its physical planning policy for composed registration.");
+        var scope = policy.PartitionScope ?? throw new RelationQueryPreparationException(
+            "composed policy", cut.Original, code: "postgres.composed.partitionScopeMissing",
+            detail: "Composed registration requires an explicit partition scope.");
         var prefix = Prepare(cut.Prefix.Request, policy.MaximumRowsPerRead, policy.MaximumPageBytes);
         var builder = RelationQueryPlacement.For(cut.Remainder.Plan!);
         var limits = new RelationQuerySourcePlacementLimits(
@@ -71,7 +71,8 @@ public sealed partial class PostgresPersistenceRegistration
         {
             var mapping = Mapping(shape);
             if (mapping.PartitionField != scope.SourceSelector)
-                throw new ArgumentException("Remote entity partition selector differs from the declared scope.", nameof(policy));
+                throw new RelationQueryPreparationException("composed policy", cut.Original,
+                    code: "postgres.composed.partitionSelectorMismatch", detail: "Remote entity partition selector differs from the declared scope.");
             input.Identity(FieldPath.FromField(mapping.IdentityField), mapping.IdentityField)
                 .FieldsBySemanticPath().Partition(mapping.PartitionField);
         }

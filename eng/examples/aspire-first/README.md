@@ -428,13 +428,6 @@ identity. `BindInventory` attaches only inventory to the remote database; trying
 reservation repository from it fails during registration. Both live join tests exercise typed repositories
 from persistence registration rather than manually constructing native repository instances.
 
-Identity selection and invariant value formatting are owned by Storage. Native PostgreSQL and SQLite
-repositories expose their declared identity field; the typed facade prepares its selector at construction.
-`string`, `EntityId`, `Guid` and other formattable values retain their existing encoding. A native declaration
-wins over an incidental `Id`/`Key` property; repositories without a declaration retain that convention.
-Explicit selectors remain available. Composed registration accepts the existing physical planning policy
-separately from source-read policy: buffer, local-row and fan-out bounds and policy identity are explicit.
-The example retains fan-out 100 while allowing 1,000 buffered rows.
 
 Authoring boundaries: focused nodes expose fluent filtering, traversal, projection and joins, delegating
 into the same session compiler used by explicit structural authoring. The session operations remain
@@ -448,9 +441,9 @@ This shared CLR identity conversion does not broaden native key encodings: the P
 still requires required, non-null TEXT identity and partition mappings. Inferred UUID/native non-text
 keys remain rejected by mapping validation, as before this change.
 
-Review follow-up: identity preparation uses finite cached mapped/conventional delegates on both typed and
-untyped writes; batch identity metadata is selected once. The Storage README documents the warm allocation
-test and its boundaries. `IdentityField` is now required, so decorators must explicitly forward it rather
-than silently inheriting the Id/Key fallback. `QueryComposed` rejects disagreement between source
-`MaximumBatchKeys` and physical `MaximumBatchSize` during setup; it does not silently choose their minimum.
-Fluent Join retains both focused bindings for `.Join(...).Project((left, right) => ...)`.
+For shared identity preparation, cache/allocation guarantees and wrapper migration, see
+[Storage identity preparation](../../../src/Cohesive.Storage/README.md#typed-identity-preparation-and-migration-unreleased-pr405).
+For composed policy ownership and diagnostics, see the [PostgreSQL adapter](../../../src/adapters/Cohesive.Adapters.Postgres/README.md).
+
+The example’s composed policy declares batch size once in `PlanningPolicy`; source policy derives it.
+Fan-out remains 100 and buffered rows remain 1,000, independently of that batch limit.

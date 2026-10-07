@@ -1,6 +1,4 @@
 using System.Text.Json.Serialization;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using Cohesive.Storage;
 using Cohesive.Transitions.Model;
 using Cohesive.Transitions.Authoring;
@@ -60,34 +58,6 @@ public sealed class EntityIdentitySelectorTests
         await wrapped.UpsertBatch(context, new[] { new Stock("wrong", "first"), new Stock("wrong", "second") });
         Assert.Equal(new[] { "single", "first", "second" }, inner.Ids);
         Assert.Equal(1, inner.IdentityReads);
-    }
-
-    [Fact]
-    public void A_wrapper_cannot_omit_identity_metadata()
-    {
-        var source = """
-            using System.Threading.Tasks;
-            using Cohesive.Storage;
-            using Cohesive.Transitions.Model;
-            using Cohesive.Model;
-            using Cohesive.Prelude;
-            public sealed class MissingIdentity : IEntityRepository
-            {
-                public EntityDefinition EntityDefinition => throw new System.NotSupportedException();
-                public Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null) => throw new System.NotSupportedException();
-                public Task<EntitySnapshot> Upsert(OperationContext context, EntityWriteRequest write) => throw new System.NotSupportedException();
-            }
-            """;
-        var platform = (string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!;
-        var references = platform.Split(Path.PathSeparator).Append(typeof(IEntityRepository).Assembly.Location)
-            .Append(typeof(EntityDefinition).Assembly.Location).Append(typeof(OperationContext).Assembly.Location)
-            .Distinct().Select(path => MetadataReference.CreateFromFile(path));
-        var errors = CSharpCompilation.Create("MissingIdentity", [CSharpSyntaxTree.ParseText(source)], references,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)).GetDiagnostics()
-            .Where(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error).ToArray();
-        var error = Assert.Single(errors);
-        Assert.Equal("CS0535", error.Id);
-        Assert.Contains("IdentityField", error.GetMessage());
     }
 
     sealed class ForwardingRepository(IEntityRepository inner) : IEntityRepository

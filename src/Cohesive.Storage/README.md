@@ -161,3 +161,8 @@ EntityId/string/invariant formattable behavior; formatting non-string values may
 It requires at most 1 KB total measured allocation for each mapped/convention case, tolerating fixed runtime
 bookkeeping while rejecting even one byte per invocation. This isolates identity selection; it is not a
 zero-allocation claim for complete writes, version selection, canonical state construction or provider IO.
+
+Observation-based in-memory and Cosmos outbox repositories both explicitly use the shared typed-write
+Id/Key convention (or the caller’s selector). The in-memory `idFieldName` option governs seed import
+only; it does not declare a native identity mapping for later typed writes. Thus a JsonPropertyName-renamed
+Id or a Key-only POCO has the same typed preparation behavior in both stores.

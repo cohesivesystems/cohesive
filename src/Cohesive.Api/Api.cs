@@ -518,10 +518,10 @@ public abstract class OperationBuilder<TParent>
     /// </summary>
     public ApiEndpoint Build() => endpoint ?? BuildPrepared(FinalizeHttpBinding(body, query, requestType), requestType, primaryResult);
 
-    ApiEndpoint BuildPrepared(HttpBinding? http, Type? requestType, ApiResultDefinition? primaryResult)
+    ApiEndpoint BuildPrepared(HttpBinding? http, Type? preparedRequestType, ApiResultDefinition? preparedPrimaryResult)
     {
-        var finalizedRequestType = http?.Body?.BodyType ?? http?.Query?.QueryType ?? requestType ?? typeof(void);
-        var finalizedResults = FinalizeResults(hasHttpProjection: http is not null, primaryResult);
+        var finalizedRequestType = http?.Body?.BodyType ?? http?.Query?.QueryType ?? preparedRequestType ?? typeof(void);
+        var finalizedResults = FinalizeResults(hasHttpProjection: http is not null, preparedPrimaryResult);
         var finalizedResponseType = finalizedResults[0].BodyType;
         var finalizedTags = FinalizeTags(kind, entity, tags);
 
@@ -556,11 +556,11 @@ public abstract class OperationBuilder<TParent>
         return parent;
     }
 
-    HttpBinding? FinalizeHttpBinding(HttpBodyBinding? body, HttpQueryBinding? query, Type? requestType)
+    HttpBinding? FinalizeHttpBinding(HttpBodyBinding? preparedBody, HttpQueryBinding? preparedQuery, Type? preparedRequestType)
     {
         if (method is null && route is null)
         {
-            if (body is not null || query is not null || parameters.Count > 0)
+            if (preparedBody is not null || preparedQuery is not null || parameters.Count > 0)
             {
                 throw new InvalidOperationException(
                     $"Operation '{name}' declares HTTP request bindings but does not declare an HTTP route.");
@@ -581,35 +581,35 @@ public abstract class OperationBuilder<TParent>
             method: finalizedMethod,
             route: finalizedRoute,
             parameters: FinalizeParameters(finalizedRoute, parameters),
-            body: FinalizeBody(finalizedMethod, body, query, requestType),
-            query: query);
+            body: FinalizeBody(finalizedMethod, preparedBody, preparedQuery, preparedRequestType),
+            query: preparedQuery);
     }
 
-    HttpBodyBinding? FinalizeBody(string finalizedMethod, HttpBodyBinding? body, HttpQueryBinding? query, Type? requestType)
+    HttpBodyBinding? FinalizeBody(string finalizedMethod, HttpBodyBinding? preparedBody, HttpQueryBinding? preparedQuery, Type? preparedRequestType)
     {
-        if (query is not null)
+        if (preparedQuery is not null)
         {
-            if (body is not null)
+            if (preparedBody is not null)
                 throw new InvalidOperationException($"Operation '{name}' cannot declare both a query DTO and a JSON body.");
 
             return null;
         }
 
-        if (body is not null)
-            return body;
+        if (preparedBody is not null)
+            return preparedBody;
 
-        if (requestType is null)
+        if (preparedRequestType is null)
             return null;
 
         if (ShouldInferJsonBody(finalizedMethod))
-            return new(requestType);
+            return new(preparedRequestType);
 
         return null;
     }
 
-    IReadOnlyList<ApiResultDefinition> FinalizeResults(bool hasHttpProjection, ApiResultDefinition? primaryResult)
+    IReadOnlyList<ApiResultDefinition> FinalizeResults(bool hasHttpProjection, ApiResultDefinition? preparedPrimaryResult)
     {
-        var primary = primaryResult ?? CreateResult(
+        var primary = preparedPrimaryResult ?? CreateResult(
             kind: ApiResultKind.NoContent,
             bodyType: typeof(void),
             isPrimary: true,

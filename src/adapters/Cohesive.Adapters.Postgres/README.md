@@ -136,7 +136,7 @@ name is replaced by `PostgresPersistenceRegistration.Query` in this unreleased s
 ## Prepared native and composed queries
 
 `PostgresPersistenceRegistration` attaches canonical entities to native repository mappings once.
-`Query` prepares a native typed reader. `QueryComposed(query, projection, remote, policy, physicalPolicy)` prepares a
+`Query` prepares a native typed reader. `QueryComposed(query, projection, remote, policy)` prepares a
 closed native prefix and the remaining query over one remote PostgreSQL registration, reusing those
 same attachments. The policy declares acquisition bounds and a partition scope once. Remaining source
 and traversal mappings are selected from the remote registration; missing mappings or mismatched partition
@@ -160,21 +160,15 @@ there is no Id/Key fallback for a declared field, and warm identity extraction p
 CLR mappings. Semantic versions retain existing Version/zero conventions, or an explicit `selectVersion`.
 The registration remains PostgreSQL-specific; application consumers depend on typed repository/read interfaces.
 
-Identity selection and invariant value formatting are owned by Storage. Native PostgreSQL and SQLite
-repositories expose their declared identity field; the typed facade prepares its selector at construction.
-`string`, `EntityId`, `Guid` and other formattable values retain their existing encoding. A native declaration
-wins over an incidental `Id`/`Key` property; repositories without a declaration retain that convention.
-Explicit selectors remain available. Composed registration accepts the existing physical planning policy
-separately from source-read policy: buffer, local-row and fan-out bounds and policy identity are explicit.
-The example retains fan-out 100 while allowing 1,000 buffered rows.
 
 This shared CLR identity conversion does not broaden native key encodings: the PostgreSQL repository
 still requires required, non-null TEXT identity and partition mappings. Inferred UUID/native non-text
 keys remain rejected by mapping validation, as before this change.
 
-Review follow-up: identity preparation uses finite cached mapped/conventional delegates on both typed and
-untyped writes; batch identity metadata is selected once. The Storage README documents the warm allocation
-test and its boundaries. `IdentityField` is now required, so decorators must explicitly forward it rather
-than silently inheriting the Id/Key fallback. `QueryComposed` rejects disagreement between source
-`MaximumBatchKeys` and physical `MaximumBatchSize` during setup; it does not silently choose their minimum.
-Fluent Join retains both focused bindings for `.Join(...).Project((left, right) => ...)`.
+For composed execution, construct `PostgresRelationQuerySourcePolicy(physicalPlanningPolicy, ...)`.
+It retains that exact planning policy and derives `MaximumBatchKeys` from `MaximumBatchSize`; there is
+no second batch-size input. Pass the resulting source policy once to `QueryComposed`. The existing
+integer-based constructor remains for standalone source readers. Using a standalone policy for composition,
+or omitting/mismatching partition scope, raises `RelationQueryPreparationException` with the corresponding
+`postgres.composed.*` code and semantic compilation evidence. Identity caching and allocation boundaries
+are documented once in the [Storage README](../../Cohesive.Storage/README.md).
