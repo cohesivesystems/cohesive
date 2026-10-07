@@ -27,7 +27,8 @@ public static class FulfillmentQueries
         var query = RelationQuery.Expression();
         var orderId = query.Parameter<string>("orderId");
 
-        var (orders, reservations) = OrderReservations(query, orderId);
+        var orders = OrdersById(query, orderId);
+        var reservations = orders.TraverseInverse(FulfillmentDomain.ReservationOrder);
         var inventory = reservations.Traverse(FulfillmentDomain.ReservationItem);
         return query.SingleOrDefault<OrderDetails>()
             .From(inventory, orders, order => order.Id)
@@ -46,27 +47,23 @@ public static class FulfillmentQueries
     {
         var query = RelationQuery.Expression();
         var orderId = query.Parameter<string>("orderId");
-        var (orders, reservations) = OrderReservations(query, orderId);
-        var demand = query.Project(reservations.Node,
-            (Order order, Reservation reservation) => new ReservationDemand(order.Id, reservation.Id, reservation.Sku, reservation.Quantity),
-            orders.Binding, reservations.Binding);
+        var orders = OrdersById(query, orderId);
+        var demand = orders.TraverseInverse(FulfillmentDomain.ReservationOrder,
+            (order, reservation) => new ReservationDemand(order.Id, reservation.Id, reservation.Sku, reservation.Quantity));
         var inventory = query.Source(FulfillmentDomain.Inventory).Where(item => item.Partition == FulfillmentDemo.LocalPartition);
-        var joined = demand.Join(inventory, (row, item) => row.Sku == item.Sku, JoinKind.Left);
-        var result = joined.Project((row, item) =>
-            new ReservationAvailability(row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available));
-        var definition = query.BuildQuery(new("fulfillment/reservation-availability"), new("ReservationAvailability"),
-            result, orderId, rows => rows.ToArray());
+        var definition = demand
+            .LeftJoin(inventory, (row, item) => row.Sku == item.Sku)
+            .Select((row, item) => new ReservationAvailability(
+                row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available))
+            .ToArray(id: new("fulfillment/reservation-availability"),
+                name: new("ReservationAvailability"), parameter: orderId);
         return (definition, demand.Node.Id);
     }
 
-    static (RelationQueryExpressionBoundNode<FilterQueryNode, Order> Orders,
-        RelationQueryExpressionBoundNode<TraverseRelationshipQueryNode, Reservation> Reservations)
-        OrderReservations(RelationQueryExpressionAuthoring query, RelationQueryExpressionParameter<string> orderId)
-    {
-        var orders = query.Source(FulfillmentDomain.Orders)
+    static RelationQueryExpressionBoundNode<FilterQueryNode, Order> OrdersById(
+        RelationQueryExpressionAuthoring query, RelationQueryExpressionParameter<string> orderId) =>
+        query.Source(FulfillmentDomain.Orders)
             .Where(order => order.Id == orderId.Value && order.Partition == FulfillmentDemo.LocalPartition);
-        return (orders, orders.TraverseInverse(FulfillmentDomain.ReservationOrder));
-    }
 
 }
 

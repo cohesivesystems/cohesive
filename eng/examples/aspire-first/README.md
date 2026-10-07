@@ -464,3 +464,16 @@ Before extending this example to event sourcing and CQRS, follow up on two consu
 Then compose explicit guarantees: durable multi-entity orchestration, audited transition/event commits,
 and replayable read projections. State atomicity, concurrency, idempotency and cross-source consistency
 boundaries alongside each binding; the current relational example does not yet provide those guarantees.
+
+
+### Query authoring follow-up
+
+Availability now reads as `TraverseInverse(relationship, selector)`, `LeftJoin`, `Select`, `ToArray`.
+The traversal selector sees both order and reservation without `.Binding` arguments. `ToArray` captures
+the immutable definition; it does not run PostgreSQL. Both definitions reuse the same explicit order-ID
+and partition predicate. Nested order details retain explicit parent/child identity and empty-collection
+assembly. The demand projection still provides the same optional native-prefix boundary.
+
+This step refines the existing authoring API rather than adding a LINQ provider. Named intermediate views,
+earlier query-header declaration and constructor-based nested result syntax remain future refinements;
+running-program availability wiring and CQRS/event-sourcing guarantees are separate follow-ups.

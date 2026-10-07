@@ -74,8 +74,22 @@ public sealed partial class RelationQueryExpressionAuthoring
         RelationQueryExpressionParameter<TInput> parameter, Func<IReadOnlyList<TRow>, TResult> result)
         where TNode : LogicalQueryNode where TRow : notnull
     {
-        ArgumentNullException.ThrowIfNull(parameter);
         ArgumentNullException.ThrowIfNull(result);
+        return BuildProjectedQuery(id, name, rows, parameter, result);
+    }
+
+    internal RelationQuery<TInput, TRow[]> BuildArrayQuery<TNode, TRow, TInput>(
+        QueryId id, QueryName name, RelationQueryExpressionBoundNode<TNode, TRow> rows,
+        RelationQueryExpressionParameter<TInput> parameter)
+        where TNode : LogicalQueryNode where TRow : notnull =>
+        BuildProjectedQuery(id, name, rows, parameter, static (TRow[] values) => values);
+
+    RelationQuery<TInput, TResult> BuildProjectedQuery<TNode, TRow, TInput, TResult>(
+        QueryId id, QueryName name, RelationQueryExpressionBoundNode<TNode, TRow> rows,
+        RelationQueryExpressionParameter<TInput> parameter, Func<TRow[], TResult> result)
+        where TNode : LogicalQueryNode where TRow : notnull
+    {
+        ArgumentNullException.ThrowIfNull(parameter);
         if (!ReferenceEquals(parameter.Owner, this))
             throw new ArgumentException("The invocation parameter belongs to another query session.", nameof(parameter));
         var authored = BuildQuery(id, name, Rows(rows));
