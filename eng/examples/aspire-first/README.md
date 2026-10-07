@@ -447,3 +447,20 @@ For composed policy ownership and diagnostics, see the [PostgreSQL adapter](../.
 
 The example’s composed policy declares batch size once in `PlanningPolicy`; source policy derives it.
 Fan-out remains 100 and buffered rows remain 1,000, independently of that batch limit.
+
+
+### Next: architecture composition
+
+Before extending this example to event sourcing and CQRS, follow up on two consumer seams:
+
+- Refine `FulfillmentQueries` authoring, evaluating LINQ-style `Where`, `Select` and joins against the
+  existing typed query graph. Preserve one canonical query and explicit native/composed execution
+  limits; syntax changes must not introduce a second evaluator or promise unrestricted LINQ support.
+- Give `ReservationAvailabilityInfrastructure` a running-program consumer. Select native versus
+  composed placement in host configuration, bind the optional inventory database through Aspire,
+  register the prepared reader once and expose a typed availability endpoint. Currently the composed
+  recipe is exercised by integration tests; it is not wired into the running program.
+
+Then compose explicit guarantees: durable multi-entity orchestration, audited transition/event commits,
+and replayable read projections. State atomicity, concurrency, idempotency and cross-source consistency
+boundaries alongside each binding; the current relational example does not yet provide those guarantees.

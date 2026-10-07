@@ -169,6 +169,7 @@ For composed execution, construct `PostgresRelationQueryComposedPolicy(physicalP
 It retains that required planning policy and derives `SourcePolicy.MaximumBatchKeys` from
 `MaximumBatchSize`; there is no second batch-size input. `QueryComposed` accepts only this composed
 policy type. Standalone readers retain `PostgresRelationQuerySourcePolicy` and its integer batch bound.
-Missing remote mappings or omitted/mismatched partition scopes raise `RelationQueryPreparationException`
+The composed policy rejects a null partition scope at construction. Missing remote mappings or
+mismatched partition scopes raise `RelationQueryPreparationException`
 with a `postgres.composed.*` code and semantic compilation evidence. Identity caching and allocation
 boundaries are documented once in the [Storage README](../../Cohesive.Storage/README.md).

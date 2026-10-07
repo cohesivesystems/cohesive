@@ -162,9 +162,10 @@ It requires at most 1 KB total measured allocation for each mapped/convention ca
 bookkeeping while rejecting even one byte per invocation. This isolates identity selection; it is not a
 zero-allocation claim for complete writes, version selection, canonical state construction or provider IO.
 
-Unseeded observation-based in-memory and Cosmos outbox repositories use the shared typed-write
-Id/Key convention (or the caller’s explicit selector). Importing actual rows through the in-memory
-`seedData` constructor retains `idFieldName` as `IdentityField`: later typed preparation uses that same
-serialized field, including `JsonPropertyName`, instead of silently reverting to Id/Key. A POCO lacking
-that field fails during typed preparation. Null/empty seed input establishes no identity mapping.
-Snapshot imports already carry canonical envelope identities and do not infer a POCO mapping.
+Observation-based in-memory and Cosmos outbox repositories use shared Id/Key typed-write conventions
+unless a mapping or caller selector is supplied. The in-memory POCO seed constructor accepts an optional
+`idFieldName`: an explicit field is retained as `IdentityField` for both seeds and later typed writes,
+independent of whether seeds are null, empty or populated. Omission keeps typed conventions and the
+legacy `Id` seed-import field. Serialized field names, including `JsonPropertyName`, are authoritative;
+a POCO lacking an explicitly configured field fails during typed preparation. Snapshot imports already
+carry canonical envelope identities and do not infer a POCO mapping.

@@ -76,26 +76,27 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
 
     /// <summary>Imports POCO seeds and retains their serialized identity field for subsequent typed writes.</summary>
     /// <param name="entityDefinition">Canonical entity authority.</param>
-    /// <param name="seedData">Initial rows; null or empty input establishes no identity mapping.</param>
+    /// <param name="seedData">Initial rows; null or empty input does not alter the declared identity policy.</param>
     /// <param name="partitionKeyFieldName">Serialized partition field used by every row.</param>
-    /// <param name="idFieldName">Serialized seed identity field, retained when at least one row is imported.</param>
+    /// <param name="idFieldName">Optional explicit serialized identity field for seeds and typed writes, independent of seed count. Omission retains Id/Key typed conventions and imports seeds using Id.</param>
     public InMemoryEntityOutboxRepository(
         EntityDefinition entityDefinition,
         IEnumerable<object>? seedData,
         string partitionKeyFieldName,
-        string idFieldName = "Id")
+        string? idFieldName = null)
         : this(entityDefinition, partitionKeyFieldName)
     {
-        // Seeded rows establish the identity field for subsequent typed writes.
-        ArgumentException.ThrowIfNullOrWhiteSpace(idFieldName);
+        // An explicit identity mapping is configuration, independent of imported row count.
+        if (idFieldName is not null)
+            ArgumentException.ThrowIfNullOrWhiteSpace(idFieldName);
+        IdentityField = idFieldName;
 
         if (seedData is null)
             return;
 
         foreach (var seed in seedData)
         {
-            IdentityField = idFieldName;
-            SeedSnapshot(CreateSeedSnapshot(entityDefinition, seed, idFieldName));
+            SeedSnapshot(CreateSeedSnapshot(entityDefinition, seed, idFieldName ?? "Id"));
         }
     }
 

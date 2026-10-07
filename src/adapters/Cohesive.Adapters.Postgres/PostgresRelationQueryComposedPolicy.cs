@@ -13,14 +13,15 @@ public sealed record PostgresRelationQueryComposedPolicy
     /// <param name="partitionScope">Explicit logical partition and native selector.</param>
     /// <param name="temporalSemantics">Explicit native temporal execution mode.</param>
     /// <param name="maximumKeyBytes">Maximum encoded key size.</param>
-    /// <exception cref="ArgumentNullException">Physical policy is null.</exception>
+    /// <exception cref="ArgumentNullException">Physical policy or partition scope is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A bound is unsupported by the native source reader.</exception>
     public PostgresRelationQueryComposedPolicy(RelationQueryPhysicalPlanningPolicy physicalPlanningPolicy,
         int maximumRowsPerRead, int maximumPageItems, long maximumPageBytes,
-        PostgresRelationQueryPartitionScope? partitionScope,
+        PostgresRelationQueryPartitionScope partitionScope,
         PostgresNpgsqlTemporalSemantics temporalSemantics = PostgresNpgsqlTemporalSemantics.Unsupported,
         int maximumKeyBytes = 256)
     {
+        ArgumentNullException.ThrowIfNull(partitionScope);
         SourcePolicy = new(BatchLimit(physicalPlanningPolicy), maximumRowsPerRead, maximumPageItems,
             maximumPageBytes, temporalSemantics, maximumKeyBytes, partitionScope);
         PhysicalPlanningPolicy = physicalPlanningPolicy;
@@ -28,6 +29,9 @@ public sealed record PostgresRelationQueryComposedPolicy
 
     /// <summary>Required physical policy for composed registration.</summary>
     public RelationQueryPhysicalPlanningPolicy PhysicalPlanningPolicy { get; }
+
+    /// <summary>Required partition scope shared by the composed sources.</summary>
+    public PostgresRelationQueryPartitionScope PartitionScope => SourcePolicy.PartitionScope!;
 
     static int BatchLimit(RelationQueryPhysicalPlanningPolicy policy)
     {

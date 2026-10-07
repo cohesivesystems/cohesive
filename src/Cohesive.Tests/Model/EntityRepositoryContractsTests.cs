@@ -35,15 +35,19 @@ public sealed class EntityRepositoryContractsTests
         }
     }
 
-    [Fact]
-    public async Task Imported_custom_identity_is_reused_by_later_typed_writes()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Explicit_custom_identity_is_independent_of_seed_count(int seedMode)
     {
         var seed = new CustomerIdentity("incidental-id", "customer-1", "tenant");
         var definition = ObjectEntityDefinition.For<CustomerIdentity>(new("customer-identity"));
-        var repository = new InMemoryEntityOutboxRepository(definition, [seed], "Partition", "customer_id");
+        var repository = new InMemoryEntityOutboxRepository(definition, seedMode switch { 0 => null, 1 => [], _ => [seed] }, "Partition", "customer_id");
         Assert.Equal("customer_id", repository.IdentityField);
         var context = OperationContext.Create();
-        Assert.NotNull(await repository.TryGet(context, "customer-1"));
+        if (seedMode == 2)
+            Assert.NotNull(await repository.TryGet(context, "customer-1"));
         var typed = new TypedEntityRepository<CustomerIdentity>(repository);
         var written = await typed.Upsert(context, seed with { Id = "another-incidental-id" });
         Assert.Equal("customer-1", written.Entity.EntityId.Value);

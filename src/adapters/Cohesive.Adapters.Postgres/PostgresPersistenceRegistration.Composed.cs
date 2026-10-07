@@ -21,8 +21,7 @@ public sealed partial class PostgresPersistenceRegistration
     /// establish a distributed snapshot. This recipe uses bounded enumeration and sequential acquisition.
     /// No retry or invocation result caching is introduced.</remarks>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
-    /// <exception cref="ArgumentException">Scope, mapping or plan affinity is invalid.</exception>
-    /// <exception cref="RelationQueryPreparationException">Semantic or physical preparation fails.</exception>
+    /// <exception cref="RelationQueryPreparationException">Scope or mapping is invalid, or semantic or physical preparation fails.</exception>
     /// <exception cref="PostgresQueryPreparationException">Native prefix compilation fails.</exception>
     public RelationQuerySubplanReader<TInput, TResult> QueryComposed<TInput, TResult>(
         RelationQuery<TInput, TResult> query, QueryNodeId projection,
@@ -34,9 +33,7 @@ public sealed partial class PostgresPersistenceRegistration
         var policy = composedPolicy.SourcePolicy;
         var cut = RelationQuerySubplan.Compile(query.CompilationRequest, projection);
         var physicalPolicy = composedPolicy.PhysicalPlanningPolicy;
-        var scope = policy.PartitionScope ?? throw new RelationQueryPreparationException(
-            "composed policy", cut.Original, code: "postgres.composed.partitionScopeMissing",
-            detail: "Composed registration requires an explicit partition scope.");
+        var scope = composedPolicy.PartitionScope;
         var prefix = Prepare(cut.Prefix.Request, policy.MaximumRowsPerRead, policy.MaximumPageBytes);
         var builder = RelationQueryPlacement.For(cut.Remainder.Plan!);
         var limits = new RelationQuerySourcePlacementLimits(
