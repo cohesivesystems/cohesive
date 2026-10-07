@@ -2,6 +2,7 @@ using Cohesive.Adapters.AspNet.Entities;
 using Cohesive.Api;
 using Cohesive.Host.Configuration;
 using Cohesive.Transitions.Compilation;
+using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.IR;
 
 namespace Cohesive.Tests.ExecutionKernel;
@@ -18,11 +19,15 @@ public sealed class ExecutionAuthorityMigrationTests
             .Where(static method => method.Name == nameof(EntityApiOperationBinding.Transition))
             .ToArray();
         Assert.NotEmpty(bindings);
+        // The authored overload prepares its canonical document at registration. Both accepted
+        // forms retain exact authority; names and retired flat definitions remain forbidden.
         Assert.All(bindings, static binding =>
         {
             Assert.Contains(
                 binding.GetParameters(),
-                static parameter => parameter.ParameterType == typeof(CompiledTransitionPlan));
+                static parameter => parameter.ParameterType == typeof(CompiledTransitionPlan)
+                    || (parameter.ParameterType.IsGenericType
+                        && parameter.ParameterType.GetGenericTypeDefinition() == typeof(Transition<,,>)));
             Assert.DoesNotContain(
                 binding.GetParameters(),
                 static parameter => string.Equals(parameter.Name, "transitionName", StringComparison.Ordinal));
