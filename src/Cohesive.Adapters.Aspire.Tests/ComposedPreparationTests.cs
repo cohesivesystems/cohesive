@@ -11,7 +11,7 @@ public sealed class ComposedPreparationTests
     public void Missing_scope_fails_when_policy_is_declared()
     {
         var error = Assert.Throws<ArgumentNullException>(() => new PostgresRelationQueryComposedPolicy(
-            ReservationAvailabilityInfrastructure.PlanningPolicy, 1000, 1000, 1_000_000, null!));
+            ReservationAvailabilityQueryBindings.PlanningPolicy, 1000, 1000, 1_000_000, null!));
         Assert.Equal("partitionScope", error.ParamName);
     }
 
@@ -28,7 +28,7 @@ public sealed class ComposedPreparationTests
         var scope = new PostgresRelationQueryPartitionScope(new("local"),
             failure == "wrong-selector" ? "wrong" : FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition);
         var policy = new PostgresRelationQueryComposedPolicy(
-            ReservationAvailabilityInfrastructure.PlanningPolicy, 1000, 1000, 1_000_000, scope);
+            ReservationAvailabilityQueryBindings.PlanningPolicy, 1000, 1000, 1_000_000, scope);
         var error = Record.Exception(() => orders.QueryComposed(FulfillmentQueries.ReservationAvailability,
             FulfillmentQueries.ReservationDemandProjection, remote, policy));
         var preparation = Assert.IsType<RelationQueryPreparationException>(error);

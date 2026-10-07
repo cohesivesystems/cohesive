@@ -308,14 +308,14 @@ and the reference interpreter, using the same declaration and shared nested asse
 ### Native joins inside composed execution
 
 The companion `FulfillmentQueries.ReservationAvailability` declares a semantic `ReservationDemand` projection between
-order/reservation matching and inventory enrichment. `ReservationAvailabilityInfrastructure` can bind that
+order/reservation matching and inventory enrichment. `ReservationAvailabilityQueryBindings` can bind that
 **same graph** in either of two ways:
 
 ```csharp
 var orders = FulfillmentStorage.Bind(ordersDatabase);
 var inventory = FulfillmentStorage.BindInventory(inventoryDatabase);
-var native = ReservationAvailabilityInfrastructure.BindNative(orders);
-var composed = ReservationAvailabilityInfrastructure.BindComposed(orders, inventory);
+var native = ReservationAvailabilityQueryBindings.BindNative(orders);
+var composed = ReservationAvailabilityQueryBindings.BindComposed(orders, inventory);
 var availability = await composed.ReadAsync(orderId, cancellationToken);
 ```
 
@@ -456,7 +456,7 @@ Before extending this example to event sourcing and CQRS, follow up on two consu
 - Refine `FulfillmentQueries` authoring, evaluating LINQ-style `Where`, `Select` and joins against the
   existing typed query graph. Preserve one canonical query and explicit native/composed execution
   limits; syntax changes must not introduce a second evaluator or promise unrestricted LINQ support.
-- Give `ReservationAvailabilityInfrastructure` a running-program consumer. Select native versus
+- Give `ReservationAvailabilityQueryBindings` a running-program consumer. Select native versus
   composed placement in host configuration, bind the optional inventory database through Aspire,
   register the prepared reader once and expose a typed availability endpoint. Currently the composed
   recipe is exercised by integration tests; it is not wired into the running program.

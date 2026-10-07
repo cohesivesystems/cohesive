@@ -4,8 +4,8 @@ using Cohesive.Relations.Physical;
 
 namespace AspireFirst.Orders;
 
-/// <summary>Alternative native placements of the same reservation-availability declaration.</summary>
-public static class ReservationAvailabilityInfrastructure
+/// <summary>Binds the reservation-availability query to native SQL or composed cross-database execution.</summary>
+public static class ReservationAvailabilityQueryBindings
 {
     /// <summary>Independent bounds for this example’s composed execution.</summary>
     public static RelationQueryPhysicalPlanningPolicy PlanningPolicy { get; } = new(
