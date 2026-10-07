@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
-using Cohesive.Model;
+using System.Text.Json.Serialization;
+using System.Text.Json;
 using Cohesive.Model.Serialization;
+using Cohesive.Model;
 
 namespace Cohesive.Execution;
 
@@ -66,6 +66,7 @@ internal static class ExecutionDefinitionTypes
         internal TypeReferenceConverter Converter { get; } = new();
         internal JsonSerializerOptions Options { get; }
         readonly Dictionary<(Type Root, Type Concrete), JsonTypeInfo> roots = new();
+        readonly Dictionary<Type, RootDispatch> dispatches = new();
 
         internal Codec()
         {
@@ -79,10 +80,7 @@ internal static class ExecutionDefinitionTypes
                             info.PolymorphismOptions = null;
                         else if (Tags.TryGetValue(info.Type, out var tag))
                         {
-                            var discriminator = info.CreateJsonPropertyInfo(typeof(string), "$type");
-                            discriminator.Get = _ => tag;
-                            discriminator.Set = static (_, _) => { };
-                            info.Properties.Add(discriminator);
+                            AddMetadataProperty(info, typeof(string), "$type", _ => tag);
                         }
                     } }
                 }
@@ -91,64 +89,91 @@ internal static class ExecutionDefinitionTypes
             Options.MakeReadOnly();
         }
 
-        internal JsonTypeInfo RootInfo(Type root, JsonElement definition)
+        RootDispatch Dispatch(Type root)
         {
-            var polymorphism = Options.GetTypeInfo(root).PolymorphismOptions;
-            var concrete = root;
-            if (polymorphism is not null)
+            if (!dispatches.TryGetValue(root, out var dispatch))
             {
-                if (definition.TryGetProperty(polymorphism.TypeDiscriminatorPropertyName, out var discriminator))
-                {
-                    var value = discriminator.ValueKind == JsonValueKind.String ? (object?)discriminator.GetString()
-                        : discriminator.ValueKind == JsonValueKind.Number && discriminator.TryGetInt32(out var number) ? number : null;
-                    concrete = polymorphism.DerivedTypes.FirstOrDefault(derived => Equals(derived.TypeDiscriminator, value)).DerivedType
-                        ?? throw new JsonException($"Unknown execution definition discriminator '{discriminator}'.");
-                }
-                else if (root.IsAbstract)
-                    throw new JsonException($"Execution definition requires '{polymorphism.TypeDiscriminatorPropertyName}'.");
+                dispatch = new(root, Options.GetTypeInfo(root).PolymorphismOptions);
+                dispatches.Add(root, dispatch);
             }
-            return RootInfo(root, concrete);
+            return dispatch;
         }
+
+        internal JsonTypeInfo RootInfo(Type root, JsonElement definition) =>
+            RootInfo(root, Dispatch(root).Resolve(definition));
 
         internal JsonTypeInfo RootInfo(Type root, Type concrete)
         {
-            var polymorphism = Options.GetTypeInfo(root).PolymorphismOptions;
-            if (polymorphism is null)
+            var dispatch = Dispatch(root);
+            if (dispatch.DiscriminatorName is null)
                 concrete = root; // Preserve the declared contract for nonpolymorphic base types.
             if (roots.TryGetValue((root, concrete), out var cached))
                 return cached;
-            // Dispatch from the existing declared registry. Built-in polymorphic decoding rejects
-            // other '$' properties, so the root uses concrete metadata with explicit wire metadata.
-            var selected = polymorphism?.DerivedTypes.FirstOrDefault(derived => derived.DerivedType == concrete);
-            if (root != concrete && selected?.DerivedType is null)
+            var registered = dispatch.Tags.TryGetValue(concrete, out var tag);
+            if (root != concrete && !registered)
                 throw new JsonException($"Unsupported execution definition type '{concrete.FullName}'.");
             var info = Options.TypeInfoResolver!.GetTypeInfo(concrete, Options)
                 ?? throw new JsonException($"No serializer metadata for '{concrete.FullName}'.");
+            // Built-in polymorphic decoding reserves '$' properties. Dispatch uses that same
+            // declared registry and concrete metadata, with metadata fields projected directly.
             info.PolymorphismOptions = null;
-            if (selected?.TypeDiscriminator is { } tag)
-            {
-                var discriminator = info.CreateJsonPropertyInfo(tag.GetType(), polymorphism!.TypeDiscriminatorPropertyName);
-                discriminator.Get = _ => tag;
-                discriminator.Set = static (_, _) => { };
-                info.Properties.Add(discriminator);
-            }
-            AddTable(info);
+            if (tag is not null)
+                AddMetadataProperty(info, tag.GetType(), dispatch.DiscriminatorName!, _ => tag);
+            if (info.Kind != JsonTypeInfoKind.Object)
+                throw new JsonException("An execution definition must be an object.");
+            AddMetadataProperty(info, typeof(TypePool), TableProperty, _ => Converter.Pool, new TypeTableConverter());
             info.MakeReadOnly();
             roots.Add((root, concrete), info);
             return info;
         }
 
-        void AddTable(JsonTypeInfo info)
+        static void AddMetadataProperty(JsonTypeInfo info, Type type, string name,
+            Func<object, object?> get, JsonConverter? converter = null)
         {
-            if (info.Kind != JsonTypeInfoKind.Object)
-                throw new JsonException("An execution definition must be an object.");
-            if (info.Properties.Any(static property => property.Name == TableProperty))
-                throw new JsonException($"'{TableProperty}' is reserved for document-local type definitions.");
-            var table = info.CreateJsonPropertyInfo(typeof(TypePool), TableProperty);
-            table.Get = _ => Converter.Pool;
-            table.Set = static (_, _) => { };
-            table.CustomConverter = new TypeTableConverter();
-            info.Properties.Add(table);
+            foreach (var existing in info.Properties)
+                if (existing.Name == name)
+                    throw new JsonException($"'{name}' is reserved for execution metadata.");
+            var property = info.CreateJsonPropertyInfo(type, name);
+            property.Get = get;
+            property.Set = static (_, _) => { };
+            property.CustomConverter = converter;
+            info.Properties.Add(property);
+        }
+
+        // Only CLR dispatch metadata is retained. Successful resolution compares existing UTF-8
+        // tokens; it neither decodes a tag string nor boxes integer tags nor creates a predicate.
+        sealed class RootDispatch
+        {
+            readonly Type root;
+            internal string? DiscriminatorName { get; }
+            internal Dictionary<Type, object?> Tags { get; } = new();
+
+            internal RootDispatch(Type root, JsonPolymorphismOptions? polymorphism)
+            {
+                this.root = root;
+                DiscriminatorName = polymorphism?.TypeDiscriminatorPropertyName;
+                if (polymorphism is not null)
+                    foreach (var derived in polymorphism.DerivedTypes)
+                        Tags.Add(derived.DerivedType, derived.TypeDiscriminator);
+            }
+
+            internal Type Resolve(JsonElement definition)
+            {
+                if (DiscriminatorName is null)
+                    return root;
+                if (!definition.TryGetProperty(DiscriminatorName, out var discriminator))
+                {
+                    if (root.IsAbstract)
+                        throw new JsonException($"Execution definition requires '{DiscriminatorName}'.");
+                    return root;
+                }
+                foreach (var entry in Tags)
+                    if (entry.Value is string text && discriminator.ValueKind == JsonValueKind.String && discriminator.ValueEquals(text)
+                        || entry.Value is int integer && discriminator.ValueKind == JsonValueKind.Number
+                            && discriminator.TryGetInt32(out var number) && number == integer)
+                        return entry.Key;
+                throw new JsonException($"Unknown execution definition discriminator '{discriminator}'.");
+            }
         }
 
         public void Dispose()

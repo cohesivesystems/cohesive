@@ -97,7 +97,7 @@ public static class EntityFieldDefinitionExtensions
         public ImmutableArray<InvariantDefinition> GetEntityConstraints()
         {
             ArgumentNullException.ThrowIfNull(field);
-            if (!field.Annotations.TryGetValue(EntityInvariantsAnnotation, out var encoded) || encoded.Value is null)
+            if (!field.Annotations.TryGetValue(EntityInvariantsAnnotation, out var encoded) || encoded.Value.ValueKind == JsonValueKind.Null)
             {
                 return [];
             }

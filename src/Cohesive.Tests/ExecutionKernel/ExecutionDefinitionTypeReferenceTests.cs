@@ -1,10 +1,10 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
-using Cohesive.ExecutionKernel.TestFixtures.MotionDq;
-using Cohesive.Processes.IR;
+using System.Text.Json;
 using Cohesive.Execution;
-using Cohesive.Model;
+using Cohesive.ExecutionKernel.TestFixtures.MotionDq;
 using Cohesive.Model.Serialization;
+using Cohesive.Model;
+using Cohesive.Processes.IR;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
@@ -136,6 +136,67 @@ public sealed class ExecutionDefinitionTypeReferenceTests(Xunit.Abstractions.ITe
     public sealed record Nested(Leaf Value);
     public sealed record Leaf(string Text);
     public sealed record Reserved([property: System.Text.Json.Serialization.JsonPropertyName("$types")] int[] Values);
+
+    [Theory]
+    [InlineData("{\"$types\":[],\"$root\":\"unknown\"}", "Unknown")]
+    [InlineData("{\"$types\":[]}", "requires")]
+    [InlineData("{\"$types\":[],\"$root\":17}", "Unknown")]
+    public void RootDispatchRejectsMissingUnknownAndWrongKindTags(string json, string expected)
+    {
+        var original = Create<DispatchRoot>(new KnownRoot("value"));
+        using var parsed = JsonDocument.Parse(json);
+        var document = new ExecutionDefinitionDocument(original.Kind, original.Metadata, parsed.RootElement);
+        Assert.Contains(expected, Assert.Throws<JsonException>(() => document.GetDefinition<DispatchRoot>()).Message);
+    }
+
+    [Fact]
+    public void RootDispatchRejectsUnregisteredConcreteTypes()
+    {
+        Assert.Contains("Unsupported", Assert.Throws<JsonException>(() => Create<DispatchRoot>(new OtherRoot("value"))).Message);
+    }
+
+    [System.Text.Json.Serialization.JsonPolymorphic(TypeDiscriminatorPropertyName = "$root",
+        UnknownDerivedTypeHandling = System.Text.Json.Serialization.JsonUnknownDerivedTypeHandling.FallBackToBaseType)]
+    [System.Text.Json.Serialization.JsonDerivedType(typeof(KnownRoot), "known")]
+    public abstract record DispatchRoot;
+    public sealed record KnownRoot(string Text) : DispatchRoot;
+    public sealed record OtherRoot(string Text) : DispatchRoot;
+
+    [Theory]
+    [InlineData("{\"$types\":[]}", "requires")]
+    [InlineData("{\"$types\":[],\"$definition\":\"unknown\"}", "Unknown")]
+    public void RelationQueryRootRejectsMissingAndUnknownTags(string json, string expected)
+    {
+        var original = Create(new Types([]));
+        using var parsed = JsonDocument.Parse(json);
+        var document = new ExecutionDefinitionDocument(original.Kind, original.Metadata, parsed.RootElement);
+        Assert.Contains(expected, Assert.Throws<JsonException>(() =>
+            document.GetDefinition<Cohesive.Relations.IR.RelationQueryDefinition>()).Message);
+    }
+
+    [Fact]
+    public void CachedRootDispatchAllocatesNothingForStringAndIntegerTags()
+    {
+        var executionTypes = typeof(ExecutionDefinitionDocument).Assembly.GetType("Cohesive.Execution.ExecutionDefinitionTypes")!;
+        var codecType = executionTypes.GetNestedType("Codec", System.Reflection.BindingFlags.NonPublic)!;
+        using var codec = (IDisposable)Activator.CreateInstance(codecType, nonPublic: true)!;
+        var dispatchMethod = codecType.GetMethod("Dispatch", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        foreach (var (root, json) in new[] { (typeof(DispatchRoot), "{\"$root\":\"known\"}"), (typeof(IntegerDispatchRoot), "{\"$root\":17}") })
+        {
+            var dispatch = dispatchMethod.Invoke(codec, [root])!;
+            var resolve = dispatch.GetType().GetMethod("Resolve", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.CreateDelegate<Func<JsonElement, Type>>(dispatch);
+            using var parsed = JsonDocument.Parse(json);
+            for (var index = 0; index < 16; index++) _ = resolve(parsed.RootElement);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < 128; index++) _ = resolve(parsed.RootElement);
+            Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+    }
+
+    [System.Text.Json.Serialization.JsonPolymorphic(TypeDiscriminatorPropertyName = "$root")]
+    [System.Text.Json.Serialization.JsonDerivedType(typeof(IntegerKnownRoot), 17)]
+    public abstract record IntegerDispatchRoot;
+    public sealed record IntegerKnownRoot(string Text) : IntegerDispatchRoot;
 
     static ExecutionDefinitionDocument Create<T>(T value) => ExecutionDefinitionDocument.Create(
         new("test"), new("test/types"), new("revision/1"), value,

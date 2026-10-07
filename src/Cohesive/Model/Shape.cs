@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
-using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.Json;
 
 namespace Cohesive.Model;
 
@@ -199,9 +199,8 @@ public sealed record Shape
     static string? TryGetStringAnnotation(ImmutableDictionary<AnnotationKey, AnnotationValue> annotations, string key)
     {
         return annotations.TryGetValue(new(key), out var annotation)
-               && annotation.Value is JsonValue value
-               && value.TryGetValue<string>(out var text)
-            ? text
+               && annotation.Value.ValueKind == JsonValueKind.String
+            ? annotation.Value.GetString()
             : null;
     }
 

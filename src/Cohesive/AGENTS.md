@@ -16,6 +16,7 @@ materialization of core values require representative performance evidence when 
 - Add deterministic allocation or bounded-memory regression tests for claimed hot-path guarantees. Keep timing
   evidence in BenchmarkDotNet reports unless a controlled CI environment provides a reliable threshold.
 - Reuse decoded projections only under an explicit deep-immutability contract at the canonical document lifetime. Coordinate first use, retain no failed decoding, and keep contextual validation and physical admission fresh. Arbitrary mutable caller projections must remain independent.
+- When changing marked immutable definition graphs, extend the framework reflection conformance audit and ownership regressions. A marker alone does not prove consumer types immutable; never expose a mutable JSON node, array, or collection through a cached framework projection.
 - Handle JSON metadata directly through existing serializer contracts, converters, or token readers. Do not serialize, parse, and clone an existing JSON object merely to add or remove metadata properties. Account for every temporary full-payload representation, preserve strict unknown-member and integrity validation, and add representative allocation evidence when changing a hot serialization path.
 - Do not route the successful common path through JSON text, reflection, diagnostic strings, LINQ materialization,
   general-purpose object graphs, or repeated metadata discovery without evidence that the cost is acceptable.

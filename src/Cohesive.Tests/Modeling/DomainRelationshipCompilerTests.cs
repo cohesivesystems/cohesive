@@ -209,5 +209,5 @@ public sealed class DomainRelationshipCompilerTests
         Assert.Single(model.Entities, entity => string.Equals(entity.Name.Value, name, StringComparison.Ordinal));
 
     static string EntityTypeAnnotation(Shape shape) =>
-        shape.Annotations[new(ShapeAnnotationKeys.EntityType)].Value!.GetValue<string>();
+        shape.Annotations[new(ShapeAnnotationKeys.EntityType)].Value.GetString();
 }
