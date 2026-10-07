@@ -149,7 +149,8 @@ public sealed class PostgresRepositoryConformanceTests
         var context = OperationContext.Create();
         var creation = TransitionAuthoring.Create<RunControl, RunControl, string>(RunControlFixture.Entity.Shape,
             id: new("adoption/create-control"), revision: new("1"),
-            transition => transition.CreatesFrom(new("initial"), input => input).Return("created"));
+            transition => transition.CreatesFrom(new("initial"), input => new RunControl(input.Id, input.Tenant,
+                input.Status, input.Attempt, input.Enabled, input.Limit, input.ScheduledAt, input.InputDigest)).Return("created"));
         var plan = creation.Compile().Plan!;
         var operation = new ProcessOperationOccurrence(new(new("creation"), new("attempt/1")), new("activation/1"),
             new("token/1"), new("create"), 0);
