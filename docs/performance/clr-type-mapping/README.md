@@ -1,5 +1,8 @@
 # CLR type mapping reflection preparation
 
+The traversal-scoped fix below is extended by [shared property nullability](../shared-property-nullability.md),
+which reuses property-declared metadata across mapping invocations while retaining occurrence-scoped inference.
+
 `DefaultClrTypeRefMapper` owns projection from CLR reflection metadata into portable semantic contracts.
 Repeated child types previously created a new `NullabilityInfoContext` for every property occurrence,
 rebuilding nullable attribute metadata repeatedly. Ari's cold process catalog profile attributed roughly

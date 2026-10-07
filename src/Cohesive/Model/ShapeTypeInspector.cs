@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 
 namespace Cohesive.Model;
@@ -9,6 +10,14 @@ namespace Cohesive.Model;
 /// </summary>
 public static class ShapeTypeInspector
 {
+    // Cache only property-declared reflection facts. Values are internal read-only inputs;
+    // weak keys add no permanent retention of caller reflection properties or their types.
+    static readonly ConditionalWeakTable<PropertyInfo, Lazy<NullabilityInfo>> PropertyNullabilities = new();
+
+    internal static NullabilityInfo GetPropertyNullability(PropertyInfo property) =>
+        PropertyNullabilities.GetValue(property, static key =>
+            new(() => new NullabilityInfoContext().Create(key))).Value;
+
     static readonly ConcurrentDictionary<Type, PropertyInfo[]> ReadablePropertiesByType = new();
     static readonly ConcurrentDictionary<Type, ClrPropertyShapeMetadata[]> ShapePropertiesByType = new();
 
@@ -89,14 +98,11 @@ public static class ShapeTypeInspector
             if (properties.Length == 0)
                 return [];
 
-            // NullabilityInfoContext maintains mutable internal caches and is not thread-safe. The
-            // completed metadata array is cached, so keep the context local to this value factory.
-            NullabilityInfoContext nullabilityContext = new();
             var metadata = new ClrPropertyShapeMetadata[properties.Length];
             for (var i = 0; i < properties.Length; i++)
             {
                 var property = properties[i];
-                var nullability = nullabilityContext.Create(property);
+                var nullability = GetPropertyNullability(property);
                 metadata[i] = new ClrPropertyShapeMetadata(
                     property: property,
                     isOptional: IsOptional(property.PropertyType, nullability));

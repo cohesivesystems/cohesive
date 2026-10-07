@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Authoring;
@@ -155,15 +156,49 @@ public sealed class DefaultClrTypeRefMapperTests
     }
 
     [Fact]
+    public void Map_FreshMappersReusePropertyMetadataWithoutRetainingOccurrenceContracts()
+    {
+        _ = new DefaultClrTypeRefMapper().Map(typeof(Leaf), null);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var result = new DefaultClrTypeRefMapper().Map(typeof(Leaf), null);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        GC.KeepAlive(result);
+        Assert.InRange(allocated, 1, 4_096);
+    }
+
+    [Fact]
+    public void Map_CallerOccurrenceNullabilityRemainsIndependentOfSharedPropertyMetadata()
+    {
+        NullabilityInfoContext context = new();
+        var required = context.Create(typeof(RootOccurrences).GetProperty(nameof(RootOccurrences.Required))!);
+        var optional = context.Create(typeof(RootOccurrences).GetProperty(nameof(RootOccurrences.Optional))!);
+        for (var i = 0; i < 4; i++)
+        {
+            Assert.Equal(FieldNullability.Nullable, ValueNullability(optional));
+            Assert.Equal(FieldNullability.NonNullable, ValueNullability(required));
+        }
+
+        FieldNullability ValueNullability(NullabilityInfo occurrence)
+        {
+            var array = Assert.IsType<ArrayTypeRef>(mapper.Map(occurrence.Type, occurrence));
+            var pair = Assert.IsType<ObjectTypeRef>(array.ElementType);
+            return Assert.Single(pair.Fields, field => field.Name == "Value").Nullability;
+        }
+    }
+
+    sealed record RootOccurrences(IReadOnlyList<KeyValuePair<string, string>> Required,
+        IReadOnlyList<KeyValuePair<string, string?>> Optional);
+
+    [Fact]
     public void Map_RepeatedShapeBoundsTemporaryAllocations()
     {
-        // Warm shared property discovery; include the retained IR and all traversal-owned preparation.
+        // Warm shared property discovery and nullability; include retained IR and traversal-owned work.
         mapper.Map(typeof(LargeEnvelope), null);
         var before = GC.GetAllocatedBytesForCurrentThread();
         var result = mapper.Map(typeof(LargeEnvelope), null);
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         GC.KeepAlive(result);
-        Assert.InRange(allocated, 1, 160_000);
+        Assert.InRange(allocated, 1, 95_000);
     }
 
     sealed record Pairs(IReadOnlyList<KeyValuePair<string, string?>> Items);

@@ -46,9 +46,9 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     /// object fields use <see cref="JsonPropertyNameAttribute"/> when present and otherwise use the CLR property
     /// name. Fields are ordered ordinally by that semantic name. Unsupported, recursive, polymorphic, or ambiguous
     /// CLR shapes produce an <see cref="OpaqueRuntimeTypeRef"/> carrying a type-inference diagnostic.
-    /// Reflection nullability metadata is prepared once per property within this invocation and
-    /// released with the traversal. Concurrent invocations do not share mutable reflection state;
-    /// inferred contracts are not cached across occurrence nullability or recursion paths.
+    /// Property-declared nullability metadata is lazily shared through weak reflection-property keys.
+    /// Concurrent first use is coordinated; mutable reflection contexts are confined to preparation.
+    /// Inferred contracts, explicit mappings, occurrence nullability and recursion paths remain invocation-scoped.
     /// </remarks>
     /// <param name="clrType">CLR type to project into a portable semantic type reference.</param>
     /// <param name="nullability">Optional reflection nullability metadata for the mapped occurrence.</param>
@@ -521,31 +521,22 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
         return false;
     }
 
-    // Reflection preparation belongs to one traversal. Inferred contracts still depend on
-    // occurrence nullability, explicit mappings and the current recursion path.
+    // Only the recursion path belongs to this traversal. Shared property metadata does not
+    // contain inferred contracts or caller-supplied occurrence nullability.
     sealed class MappingContext
     {
-        NullabilityInfoContext? nullabilityContext;
-        Dictionary<PropertyInfo, NullabilityInfo?>? propertyNullabilities;
-
         public HashSet<Type> Path { get; } = [];
 
         public NullabilityInfo? PropertyNullability(PropertyInfo property)
         {
-            propertyNullabilities ??= [];
-            if (propertyNullabilities.TryGetValue(property, out var prepared))
-                return prepared;
-            nullabilityContext ??= new();
             try
             {
-                prepared = nullabilityContext.Create(property);
+                return ShapeTypeInspector.GetPropertyNullability(property);
             }
             catch (ArgumentException)
             {
-                prepared = null;
+                return null;
             }
-            propertyNullabilities.Add(property, prepared);
-            return prepared;
         }
     }
 

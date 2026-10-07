@@ -61,7 +61,8 @@ A paired run measured:
 
 These are cumulative allocated bytes, not retained heap or release-package measurements. All 164
 canonical catalog bodies remained byte-identical. No package pins changed; temporary test output
-overlays are restored after qualification. Remaining candidates include CLR nullability metadata,
+overlays are restored after qualification. CLR nullability reuse is addressed in [shared property nullability](shared-property-nullability.md).
+Remaining candidates include
 parent type projection, exact-number temporary strings and repeated property-name extraction.
 
 Qualification passed 4,265 Core tests (33 existing skips), 1,082 Relations tests, and 855 Ari engine

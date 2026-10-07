@@ -4,7 +4,7 @@ using Cohesive.Model.Authoring;
 
 namespace Cohesive.Relations.Benchmarks;
 
-/// <summary>Measures traversal-scoped reflection preparation across representative CLR contracts.</summary>
+/// <summary>Measures CLR contract mapping after shared property metadata preparation.</summary>
 [MemoryDiagnoser]
 public class ClrTypeRefMappingBenchmarks
 {
