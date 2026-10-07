@@ -1,6 +1,7 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
-using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Execution;
@@ -90,7 +91,7 @@ public sealed record ExecutionDefinitionDocument
 {
     ExecutionDefinitionFingerprint? semanticFingerprint;
     object? semanticFingerprintLock;
-    Dictionary<Type, object>? immutableProjections;
+    ConcurrentDictionary<Type, Lazy<object>>? immutableProjections;
 
     /// <summary>Current shared execution-definition document schema version.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-execution/v4");
@@ -292,14 +293,19 @@ public sealed record ExecutionDefinitionDocument
         if (!typeof(IImmutableExecutionDefinition).IsAssignableFrom(typeof(TDefinition)))
             return ExecutionDefinitionTypes.Deserialize<TDefinition>(Definition);
         var projections = LazyInitializer.EnsureInitialized(ref immutableProjections, static () => new());
-        lock (projections)
+        if (!projections.TryGetValue(typeof(TDefinition), out var slot))
+            slot = projections.GetOrAdd(typeof(TDefinition), static (_, document) =>
+                new Lazy<object>(() => ExecutionDefinitionTypes.Deserialize<TDefinition>(document.Definition)!,
+                    LazyThreadSafetyMode.ExecutionAndPublication), this);
+        try
         {
-            if (projections.TryGetValue(typeof(TDefinition), out var cached))
-                return (TDefinition)cached;
-            // Publish only successful strict decoding; failures remain retryable. Admission stays fresh.
-            var projected = ExecutionDefinitionTypes.Deserialize<TDefinition>(Definition);
-            projections.Add(typeof(TDefinition), projected!);
-            return projected;
+            return (TDefinition)slot.Value;
+        }
+        catch
+        {
+            // Remove only this failed slot; another caller may already have installed a retry.
+            projections.TryRemove(new KeyValuePair<Type, Lazy<object>>(typeof(TDefinition), slot));
+            throw;
         }
     }
 

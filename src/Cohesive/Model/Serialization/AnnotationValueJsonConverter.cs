@@ -1,6 +1,5 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.Json;
 
 namespace Cohesive.Model.Serialization;
 
@@ -12,7 +11,7 @@ public sealed class AnnotationValueJsonConverter : JsonConverter<AnnotationValue
     /// <inheritdoc />
     public override AnnotationValue Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        var node = JsonSerializer.Deserialize<JsonNode?>(ref reader, options);
+        var node = JsonSerializer.Deserialize<JsonElement>(ref reader, options);
         return new AnnotationValue(node);
     }
 
@@ -20,12 +19,6 @@ public sealed class AnnotationValueJsonConverter : JsonConverter<AnnotationValue
     public override void Write(Utf8JsonWriter writer, AnnotationValue value, JsonSerializerOptions options)
     {
         ArgumentNullException.ThrowIfNull(writer);
-        if (value.Value is null)
-        {
-            writer.WriteNullValue();
-            return;
-        }
-
-        value.Value.WriteTo(writer, options);
+        value.Value.WriteTo(writer);
     }
 }

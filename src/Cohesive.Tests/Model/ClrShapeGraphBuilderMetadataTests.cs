@@ -1,7 +1,7 @@
 using System.Collections;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.Json;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Tests.Model;
@@ -354,7 +354,7 @@ public sealed class ClrShapeGraphBuilderMetadataTests
         IReadOnlyDictionary<AnnotationKey, AnnotationValue> annotations,
         string key
         ) =>
-        annotations[new(key)].Value?.GetValue<string>();
+        annotations[new(key)].Value.GetString();
 
     sealed class TestMetadataProvider : IClrShapeMetadataProvider
     {

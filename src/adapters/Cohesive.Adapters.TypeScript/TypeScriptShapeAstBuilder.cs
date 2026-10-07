@@ -1,9 +1,9 @@
 using System.Collections.Immutable;
 using System.Globalization;
-using System.Text.Json.Nodes;
+using System.Text.Json;
 using Cohesive.Adapters.TypeScript.Ast;
-using Cohesive.Model;
 using Cohesive.Model.Serialization;
+using Cohesive.Model;
 
 namespace Cohesive.Adapters.TypeScript;
 
@@ -538,14 +538,15 @@ public sealed class TypeScriptShapeAstBuilder
             return false;
         }
 
-        if (annotation.Value is not JsonObject values
-            || values[value.Name] is not JsonValue jsonValue
-            || !jsonValue.TryGetValue<string>(out wireValue))
+        if (annotation.Value.ValueKind != JsonValueKind.Object
+            || !annotation.Value.TryGetProperty(value.Name, out var jsonValue)
+            || jsonValue.ValueKind != JsonValueKind.String)
         {
             throw new InvalidOperationException(
                 $"System.Text.Json enum metadata for '{@enum.Id.Value}' does not define string member '{value.Name}'.");
         }
 
+        wireValue = jsonValue.GetString();
         return true;
     }
 
@@ -588,9 +589,7 @@ public sealed class TypeScriptShapeAstBuilder
         IReadOnlyDictionary<AnnotationKey, AnnotationValue> annotations,
         string key) =>
         annotations.TryGetValue(new(key), out var annotation)
-        && annotation.Value is JsonValue value
-        && value.TryGetValue<bool>(out var result)
-        && result;
+        && annotation.Value.ValueKind == JsonValueKind.True;
 
     static bool HasAnnotation(
         IReadOnlyDictionary<AnnotationKey, AnnotationValue> annotations,
@@ -602,8 +601,8 @@ public sealed class TypeScriptShapeAstBuilder
         out string value)
     {
         if (annotations.TryGetValue(new(key), out var annotation)
-            && annotation.Value is JsonValue jsonValue
-            && jsonValue.TryGetValue<string>(out var text))
+            && annotation.Value.ValueKind == JsonValueKind.String
+            && annotation.Value.GetString() is { } text)
         {
             value = text;
             return true;

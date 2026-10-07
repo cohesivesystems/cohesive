@@ -1,9 +1,10 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
-using Cohesive.Model;
 using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
+using Cohesive.Model;
 
 namespace Cohesive.Execution;
 
@@ -1238,8 +1239,22 @@ public static class PortableExecutionValidator
         // ancestors remain intact. Error eagerly snapshots a pointer before traversal continues.
         public readonly struct Location(List<Segment> segments, int depth)
         {
+#if DEBUG
+            readonly Segment[] expectedPrefix = segments.Take(depth).ToArray();
+#endif
+            [Conditional("DEBUG")]
+            void AssertCurrent()
+            {
+#if DEBUG
+                for (var index = 0; index < depth; index++)
+                    Debug.Assert(segments[index] == expectedPrefix[index],
+                        "A validation location was reused after a sibling overwrote its cursor. Build and consume child locations in traversal order.");
+#endif
+            }
+
             public Location Append(Segment segment)
             {
+                AssertCurrent();
                 if (segments.Count == depth)
                     segments.Add(segment);
                 else
@@ -1249,6 +1264,7 @@ public static class PortableExecutionValidator
 
             public override string ToString()
             {
+                AssertCurrent();
                 if (depth == 0)
                     return "/";
                 var builder = new StringBuilder();

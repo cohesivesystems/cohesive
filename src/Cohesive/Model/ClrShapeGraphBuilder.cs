@@ -2,9 +2,9 @@ using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Linq.Expressions;
 using System.Reflection;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.Json;
 using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
 
@@ -619,28 +619,30 @@ public sealed class ClrShapeGraphBuilder
         var names = Enum.GetNames(clrType);
         if (useCanonicalClrEnumValues)
         {
-            JsonObject? wireValues = null;
+            JsonElement? wireValues = null;
             if (typeMetadata.Annotations.TryGetValue(
                     new(SystemTextJsonShapeAnnotations.EnumValues),
                     out var serializedMembers))
             {
-                wireValues = serializedMembers.Value as JsonObject
-                    ?? throw new InvalidOperationException(
+                if (serializedMembers.Value.ValueKind != JsonValueKind.Object)
+                    throw new InvalidOperationException(
                         $"CLR enum type '{clrType.FullName}' has an invalid System.Text.Json enum-values annotation.");
+                wireValues = serializedMembers.Value;
             }
 
             var stringValues = new EnumValue[names.Length];
             for (var i = 0; i < names.Length; i++)
             {
                 var wireName = names[i];
-                if (wireValues is not null
-                    && (!wireValues.TryGetPropertyValue(names[i], out var wireValue)
-                        || wireValue is not JsonValue jsonValue
-                        || !jsonValue.TryGetValue<string>(out wireName)))
+                if (wireValues is { } members
+                    && (!members.TryGetProperty(names[i], out var wireValue)
+                        || wireValue.ValueKind != JsonValueKind.String))
                 {
                     throw new InvalidOperationException(
                         $"CLR enum member '{clrType.FullName}.{names[i]}' has no canonical System.Text.Json wire name.");
                 }
+                if (wireValues is { } serializedValues)
+                    wireName = serializedValues.GetProperty(names[i]).GetString()!;
                 var field = clrType.GetField(names[i], BindingFlags.Public | BindingFlags.Static);
                 stringValues[i] = new(
                     Name: names[i],

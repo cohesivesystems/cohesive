@@ -1,5 +1,5 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Tests.Model;
@@ -63,7 +63,7 @@ public sealed class ShapeGraphDocumentTests
         Assert.Equal(DocumentOrigin.User, parsed.Metadata.Origin);
         Assert.Equal("Order Graph", parsed.Metadata.Name);
         Assert.Equal("graph.order", parsed.Graph.Id.Value);
-        Assert.Equal("order", parsed.Graph.Annotations[new("graph.kind")].Value!.GetValue<string>());
+        Assert.Equal("order", parsed.Graph.Annotations[new("graph.kind")].Value.GetString());
         Assert.True(parsed.Graph.TryGetShape(new ShapeId("shape.order"), out var shape));
         Assert.IsType<NamedTypeRef>(shape.GetField("address").Type);
         Assert.True(parsed.Graph.TryGetType(addressTypeId, out var addressType));

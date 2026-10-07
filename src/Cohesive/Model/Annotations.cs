@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
-using System.Text.Json;
-using System.Text.Json.Nodes;
+using System.Globalization;
 using System.Text.Json.Serialization;
+using System.Text.Json;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Model;
@@ -36,154 +36,70 @@ public readonly record struct AnnotationKey
 [JsonConverter(typeof(AnnotationValueJsonConverter))]
 public sealed record AnnotationValue
 {
+    int cachedHash;
     /// <summary>
     /// Creates an annotation value.
     /// </summary>
-    internal AnnotationValue(JsonNode? value)
+    internal AnnotationValue(JsonElement value)
     {
-        Value = value?.DeepClone();
-        ValidateNode(Value);
+        Value = value.Clone();
     }
 
-    /// <summary>
-    /// Raw annotation value.
-    /// </summary>
-    public JsonNode? Value { get; init; }
+    /// <summary>Owned, read-only JSON snapshot of the annotation.</summary>
+    public JsonElement Value { get; }
 
-    /// <summary>
-    /// Compares annotation values using structural JSON equality.
-    /// </summary>
-    public bool Equals(AnnotationValue? other)
+    /// <summary>Compares annotation values using structural JSON equality.</summary>
+    public bool Equals(AnnotationValue? other) => ReferenceEquals(this, other)
+        || other is not null && JsonElement.DeepEquals(Value, other.Value);
+
+    /// <summary>Computes a hash aligned with structural JSON equality, including exact numeric equivalence.</summary>
+    public override int GetHashCode()
     {
-        if (ReferenceEquals(this, other))
-            return true;
-        if (other is null)
-            return false;
-
-        return JsonNode.DeepEquals(Value, other.Value);
+        var cached = Volatile.Read(ref cachedHash);
+        if (cached != 0) return cached;
+        HashCode hash = new();
+        hash.AddBytes(CanonicalJsonWriter.GetCanonicalSequenceBytes(Value));
+        var computed = hash.ToHashCode();
+        // Zero is the unprepared sentinel; collapsing it to one preserves equality consistency.
+        if (computed == 0) computed = 1;
+        var previous = Interlocked.CompareExchange(ref cachedHash, computed, 0);
+        return previous != 0 ? previous : computed;
     }
 
-    /// <summary>
-    /// Computes a hash code aligned with structural JSON equality.
-    /// </summary>
-    public override int GetHashCode() => GetJsonNodeHashCode(Value);
+    /// <summary>Creates a string annotation value.</summary>
+    public static AnnotationValue FromString(string value) => new(JsonSerializer.SerializeToElement(value));
 
-    /// <summary>
-    /// Creates a string annotation value.
-    /// </summary>
-    public static AnnotationValue FromString(string value) => new(JsonValue.Create(value));
+    /// <summary>Creates a boolean annotation value.</summary>
+    public static AnnotationValue FromBool(bool value) => new(JsonSerializer.SerializeToElement(value));
 
-    /// <summary>
-    /// Creates a boolean annotation value.
-    /// </summary>
-    public static AnnotationValue FromBool(bool value) => new(JsonValue.Create(value));
+    /// <summary>Creates a numeric annotation value.</summary>
+    public static AnnotationValue FromNumber(decimal value) => new(JsonSerializer.SerializeToElement(value));
 
-    /// <summary>
-    /// Creates a numeric annotation value.
-    /// </summary>
-    public static AnnotationValue FromNumber(decimal value) => new(JsonValue.Create(value));
-
-    /// <summary>
-    /// Creates an array annotation value.
-    /// </summary>
+    /// <summary>Creates an array annotation value.</summary>
     public static AnnotationValue FromArray(IEnumerable<AnnotationValue> values)
     {
         ArgumentNullException.ThrowIfNull(values);
-        return new(new JsonArray([.. values.Select(x => x.Value?.DeepClone())]));
+        return new(JsonSerializer.SerializeToElement(values.Select(static value => value.Value)));
     }
 
-    /// <summary>
-    /// Creates an object annotation value.
-    /// </summary>
+    /// <summary>Creates an object annotation value.</summary>
     public static AnnotationValue FromObject(IEnumerable<KeyValuePair<AnnotationKey, AnnotationValue>> values)
     {
         ArgumentNullException.ThrowIfNull(values);
-        JsonObject json = [];
+        Dictionary<string, JsonElement> properties = new(StringComparer.Ordinal);
         foreach (var (key, value) in values)
-            json[key.Value] = value.Value?.DeepClone();
-        return new(json);
+            properties[key.Value] = value.Value;
+        return new(JsonSerializer.SerializeToElement(properties));
     }
 
-    /// <summary>
-    /// Creates an annotation value from an arbitrary CLR value by projecting it through <see cref="ObservationValue"/>.
-    /// </summary>
+    /// <summary>Creates an owned annotation snapshot by projecting through <see cref="ObservationValue"/>.</summary>
     public static AnnotationValue FromObject<TValue>(TValue value)
     {
         if (value is AnnotationValue annotationValue)
             return annotationValue;
-
-        var observed = ObservationValue.FromObject(value);
-        return new(JsonSerializer.SerializeToNode(observed));
+        return new(JsonSerializer.SerializeToElement(ObservationValue.FromObject(value)));
     }
 
-    static void ValidateNode(JsonNode? node)
-    {
-        if (node is null)
-            return;
-
-        switch (node)
-        {
-            case JsonValue:
-                return;
-
-            case JsonArray array:
-                foreach (var item in array)
-                    ValidateNode(item);
-                return;
-
-            case JsonObject obj:
-                foreach (var (_, value) in obj)
-                    ValidateNode(value);
-                return;
-        }
-
-        throw new ArgumentException(message: $"Annotation values support only JSON scalar/array/object nodes; found '{node.GetType().Name}'.");
-    }
-
-    static int GetJsonNodeHashCode(JsonNode? node)
-    {
-        if (node is null)
-            return 0;
-
-        switch (node)
-        {
-            case JsonValue value:
-                return StringComparer.Ordinal.GetHashCode(value.ToJsonString());
-
-            case JsonArray array:
-            {
-                HashCode hash = new();
-                hash.Add(array.Count);
-                foreach (var item in array)
-                    hash.Add(GetJsonNodeHashCode(item));
-                return hash.ToHashCode();
-            }
-
-            case JsonObject obj:
-            {
-                unchecked
-                {
-                    var xor = 0;
-                    var sum = 0;
-                    var product = 1;
-                    foreach (var (propertyName, propertyValue) in obj)
-                    {
-                        var entryHash = HashCode.Combine(
-                            StringComparer.Ordinal.GetHashCode(propertyName),
-                            GetJsonNodeHashCode(propertyValue));
-                        xor ^= entryHash;
-                        sum += entryHash;
-                        product *= (entryHash | 1);
-                    }
-
-                    return HashCode.Combine(obj.Count, xor, sum, product);
-                }
-            }
-
-            default:
-                return StringComparer.Ordinal.GetHashCode(node.ToJsonString());
-        }
-    }
 }
 
 /// <summary>
@@ -207,6 +123,51 @@ public static class AnnotationMap
                 builder[key] = value;
         }
         return [..builder];
+    }
+
+    /// <summary>Projects nonempty annotation scalars into dotted property and indexed array paths.</summary>
+    /// <param name="annotations">The canonical annotation values to traverse.</param>
+    /// <param name="comparer">Path identity policy; ordinal comparison is the default.</param>
+    /// <returns>An immutable scalar map. Nulls and empty strings are omitted; later traversal entries win path collisions.</returns>
+    public static ImmutableDictionary<string, string> FlattenScalars(
+        IEnumerable<KeyValuePair<AnnotationKey, AnnotationValue>> annotations, StringComparer? comparer = null)
+    {
+        ArgumentNullException.ThrowIfNull(annotations);
+        var scalars = ImmutableDictionary.CreateBuilder<string, string>(comparer ?? StringComparer.Ordinal);
+        foreach (var (key, value) in annotations) Flatten(key.Value, value.Value);
+        return scalars.ToImmutable();
+
+        void Flatten(string path, JsonElement value)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return;
+            switch (value.ValueKind)
+            {
+                case JsonValueKind.Null:
+                case JsonValueKind.Undefined:
+                    return;
+                case JsonValueKind.Object:
+                    foreach (var property in value.EnumerateObject())
+                        if (!string.IsNullOrWhiteSpace(property.Name)) Flatten($"{path}.{property.Name}", property.Value);
+                    return;
+                case JsonValueKind.Array:
+                    var index = 0;
+                    foreach (var item in value.EnumerateArray()) Flatten($"{path}[{(index++).ToString(CultureInfo.InvariantCulture)}]", item);
+                    return;
+                default:
+                    var text = value.ValueKind switch
+                    {
+                        JsonValueKind.String => value.GetString(),
+                        JsonValueKind.True => "true",
+                        JsonValueKind.False => "false",
+                        _ when value.TryGetDecimal(out var number) => number.ToString(CultureInfo.InvariantCulture),
+                        _ when value.TryGetInt64(out var integer) => integer.ToString(CultureInfo.InvariantCulture),
+                        _ when value.TryGetDouble(out var number) => number.ToString(CultureInfo.InvariantCulture),
+                        _ => value.GetRawText()
+                    };
+                    if (!string.IsNullOrWhiteSpace(text)) scalars[path] = text;
+                    return;
+            }
+        }
     }
 
     /// <summary>Creates an annotation dictionary containing one value.</summary>

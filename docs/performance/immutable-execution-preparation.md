@@ -6,8 +6,8 @@
 Relation/Query, and interaction-contract IRs declare `IImmutableExecutionDefinition`: their entire
 reachable graph is immutable and safe for concurrent reads. Both `GetDefinition<T>()` and
 `ExecutionDefinitionJsonSerializer.DeserializeDefinition<T>()` use the same document-owned preparation.
-One successful strict projection is retained per requested CLR type, coordinated under a document-local
-lock. Failed decoding is never published. There is no global document cache, fingerprint-keyed cache,
+One successful strict projection is retained per requested CLR type, coordinated by a per-type lazy slot. Warm reads take no document lock, and first reads of different
+types decode independently. Failed slots are removed so decoding remains retryable. There is no global document cache, fingerprint-keyed cache,
 tenant state, runtime result, or service in the retained projection. Arbitrary caller-defined types
 that do not declare this contract keep independent deserialization, including mutable arrays.
 
@@ -64,3 +64,44 @@ cancellation, and weak catalog retention.
 Final qualification passed 4,230 shared-core tests (33 existing skips), all 1,263 Ari .NET tests
 (18 existing skips), and full-solution NuGet API/package validation. No tests were excluded or
 timeouts raised. All 45 overlaid Ari output assemblies were restored to published dependencies.
+
+## Preparation review hardening
+
+A reflection conformance test walks every framework-marked root and its reachable property graph,
+including registered polymorphic cases. It rejects mutable setters, arrays, and unverified collection
+facades; init-only record properties and immutable collections remain allowed. `ObservationValue` is
+an explicit owned-snapshot boundary with separate recursive ownership and mutation tests. This is
+a framework regression check, not runtime proof for arbitrary consumer implementations of the marker.
+
+The audit found that `AnnotationValue.Value` exposed a mutable `JsonNode`. It now exposes an owned
+read-only `JsonElement`, and its hash is prepared once with the existing exact-number canonical writer.
+Original caller collections cannot mutate annotations. Annotation JSON and execution wire bytes remain
+the same; the CLR property change requires rebuilding consumers. Ari's EDI adapter materializes its
+local mutable parser input explicitly at that boundary.
+
+Root dispatch is prepared once per root and leased codec, using the serializer's existing derived-type
+registry. It compares string tags with `ValueEquals` and integer tags with `TryGetInt32`. Direct tests
+cover missing abstract-root tags, unknown/wrong-kind tags, unregistered concrete types, and zero bytes
+allocated by warm string/integer dispatch. One helper installs constant metadata properties.
+
+Validation cursors remain traversal-scoped. Debug builds snapshot the expected prefix and assert
+before a cursor is reused after a sibling has overwritten it; Release builds retain no guard allocation.
+
+Ari also exposed three equivalent annotation scalar traversal implementations. They now use
+`AnnotationMap.FlattenScalars`, passing their existing case-insensitive identity policy explicitly.
+This is a reusable projection of canonical annotations, not a second annotation model. Nested paths,
+invariant numeric text, omission of null/empty values, and path collision behavior are preserved.
+
+Review qualification uses local packages `0.1.0-alpha.130.review.2`, rebuilt consumer source, and
+the same admission harness boundary as above. It measured 153,707,904 B cold and 1,094,784 B warm.
+Cold allocation is 0.26% above the published preparation baseline with independent per-type slots;
+warm allocation remains approximately 1.1 MB. All 164 canonical catalog bodies matched exactly.
+These local qualification packages are not a published release.
+
+Final shared-core validation passed 4,246 tests with 33 existing skips. The focused Debug suite
+passed 18 tests, including cursor diagnostics and root dispatch. The regenerated presentation-contracts
+TypeScript package builds. A full run encountered an unchanged materializer allocation test at
+152,024 B against a 152,000 B reference; isolated and final full runs passed without changing its limits.
+
+The dependent Ari qualification passed all 1,263 .NET tests with 18 existing skips against the local
+review packages. The regenerated pinned corpus remained operationally accepted.

@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Cohesive.Execution;
-using Cohesive.Model;
 using Cohesive.Model.Serialization;
+using Cohesive.Model;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
@@ -22,6 +22,28 @@ public sealed class ExecutionPreparationReuseTests
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
         var independent = new ExecutionDefinitionDocument(document.Kind, document.Metadata, document.Definition);
         Assert.NotSame(results[0], independent.GetDefinition<ImmutablePayload>());
+    }
+
+    [Fact]
+    public async Task DifferentProjectionTypesDoNotBlockEachOther()
+    {
+        var document = Create(new MutablePayload(["original"]));
+        BlockingPayload.Entered.Reset();
+        BlockingPayload.Release.Reset();
+        var first = Task.Run(() => document.GetDefinition<BlockingPayload>());
+        try
+        {
+            Assert.True(BlockingPayload.Entered.Wait(TimeSpan.FromSeconds(5)));
+            var second = Task.Run(() => document.GetDefinition<IndependentPayload>());
+            var result = await second.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("original", result.Values[0]);
+            Assert.False(first.IsCompleted);
+        }
+        finally
+        {
+            BlockingPayload.Release.Set();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     [Fact]
@@ -98,4 +120,17 @@ public sealed class ExecutionPreparationReuseTests
         public ImmutablePayload(string text) { Text = text; Interlocked.Increment(ref Reads); }
         public string Text { get; }
     }
+    public sealed record BlockingPayload : IImmutableExecutionDefinition
+    {
+        public static readonly ManualResetEventSlim Entered = new();
+        public static readonly ManualResetEventSlim Release = new();
+        public BlockingPayload(System.Collections.Immutable.ImmutableArray<string> values)
+        {
+            Entered.Set();
+            if (!Release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("Test failed to release decoding.");
+            Values = values;
+        }
+        public System.Collections.Immutable.ImmutableArray<string> Values { get; }
+    }
+    public sealed record IndependentPayload(System.Collections.Immutable.ImmutableArray<string> Values) : IImmutableExecutionDefinition;
 }
