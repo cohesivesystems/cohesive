@@ -158,12 +158,12 @@ public static class ExecutionDefinitionFingerprinter
         }
         ValidateDefinitionProperties(definition);
 
-        ArrayBufferWriter<byte> buffer = new();
+        using PooledByteBufferWriter buffer = new();
         using (var writer = CreateCanonicalWriter(buffer))
             CanonicalJsonWriter.WriteCanonicalSequence(writer, definition);
-        var canonical = buffer.WrittenMemory;
-        using var document = JsonDocument.Parse(canonical);
-        return document.RootElement.Clone();
+        // ParseValue creates an owned element before the temporary pooled bytes are returned.
+        var reader = new Utf8JsonReader(buffer.WrittenSpan);
+        return JsonElement.ParseValue(ref reader);
     }
 
     static byte[] GetNormalizedSemanticBytesCore(

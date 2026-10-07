@@ -64,4 +64,5 @@ results. Ari package pins remain unchanged and temporary test-output overlays we
 Validation passed 4,262 Core tests (33 existing skips), 1,082 Relations tests, 855 Ari engine tests
 (18 existing skips), and solution package/API validation. No tests were excluded or timeouts increased.
 
-Input normalization, nonscalar parent projection and CLR nullability preparation remain separate targets.
+Input normalization is addressed in [owned execution normalization](owned-execution-normalization.md).
+Nonscalar parent projection and CLR nullability preparation remain separate targets.
