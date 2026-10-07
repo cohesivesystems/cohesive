@@ -335,7 +335,7 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     /// <returns>An immutable definition returning all complete rows, or an empty array for no rows. Ordering is only that declared by the query.</returns>
     /// <exception cref="ArgumentNullException">Parameter is null.</exception>
     /// <exception cref="ArgumentException">Parameter belongs to another session or the query has other parameters.</exception>
-    public RelationQuery<TInput, TValue[]> ToArray<TInput>(QueryId id, QueryName name, RelationQueryExpressionParameter<TInput> parameter) =>
+    public RelationQuery<TInput, TValue[]> BuildArrayQuery<TInput>(QueryId id, QueryName name, RelationQueryExpressionParameter<TInput> parameter) =>
         Binding.Owner.BuildArrayQuery(id, name, this, parameter);
 
 

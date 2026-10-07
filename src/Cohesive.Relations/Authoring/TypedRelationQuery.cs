@@ -32,7 +32,7 @@ public sealed class RelationQuery<TInput, TResult>
     /// <param name="rows">Complete rows from this query; adapters retain missing-field semantics until this boundary.</param>
     /// <returns>The declared application result.</returns>
     /// <remarks>The callback must be safe for concurrent invocations and must not perform backend work.</remarks>
-    public TResult Project(ImmutableArray<ObservationValue> rows) => project(rows);
+    public TResult AssembleResult(ImmutableArray<ObservationValue> rows) => project(rows);
 
     /// <summary>Projects a complete composed evaluation without discarding or replacing its retained evidence.</summary>
     /// <param name="outcome">Evaluation of this exact compilation request; the caller retains the full outcome.</param>
@@ -40,7 +40,7 @@ public sealed class RelationQuery<TInput, TResult>
     /// <exception cref="ArgumentNullException">The outcome is null.</exception>
     /// <exception cref="ArgumentException">The outcome belongs to another query snapshot.</exception>
     /// <exception cref="InvalidOperationException">Execution failed, was incomplete or suppressed, or returned unresolved rows.</exception>
-    public TResult Project(RelationQueryEvaluationOutcome outcome)
+    public TResult AssembleResult(RelationQueryEvaluationOutcome outcome)
     {
         ArgumentNullException.ThrowIfNull(outcome);
         if (!ReferenceEquals(outcome.Evaluation.Compilation, CompilationRequest))

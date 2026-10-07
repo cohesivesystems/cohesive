@@ -22,7 +22,7 @@ internal static class SubplanFixture
         var result = query.Project(joined, (ReservationDemand row, SubplanStock item) =>
             new ReservationAvailability(row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available),
             demand.Binding, stock.Binding);
-        Definition = query.BuildQuery(new("test/subplan"), new("Subplan"), result, id, rows => rows.ToArray());
+        Definition = result.BuildArrayQuery(id: new("test/subplan"), name: new("Subplan"), parameter: id);
     }
 }
 public sealed record ReservationDemand(string OrderId, string? ReservationId, string? Sku, int? Quantity);

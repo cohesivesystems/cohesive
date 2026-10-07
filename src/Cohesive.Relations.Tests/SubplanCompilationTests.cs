@@ -45,7 +45,7 @@ public sealed class SubplanCompilationTests
         var joined = q.Join(projected.Node, source.Node, JoinKind.Inner,
             (left, right) => left.Sku == right.Sku, projected.Binding, source.Binding);
         var result = q.Project(joined, (SubplanStock row) => new SubplanStock(row.Sku, row.Available), projected.Binding);
-        var definition = q.BuildQuery(new("branch"), new("Branch"), result, id, rows => rows.ToArray());
+        var definition = result.BuildArrayQuery(id: new("branch"), name: new("Branch"), parameter: id);
         var error = Assert.Throws<RelationQueryPreparationException>(() => RelationQuerySubplan.Compile(definition.CompilationRequest, projected.Node.Id));
         Assert.Equal("relationQuery.subplan.interiorEscapes", error.Code);
         Assert.True(error.Compilation.IsSuccessful);
@@ -80,7 +80,7 @@ public sealed class SubplanCompilationTests
         var cut = q.Project(aggregate.Node, (CountRow row) => new CountRow(row.Count), aggregate.Binding);
         var terminal = q.Project(cut.Node, (CountRow row) => new CountRow(row.Count), cut.Binding);
         var error = Assert.Throws<ArgumentException>(() =>
-            q.BuildQuery(new("count"), new("Count"), terminal, id, rows => rows.ToArray()));
+            terminal.BuildArrayQuery(id: new("count"), name: new("Count"), parameter: id));
         Assert.Contains("relationQuery.query.rowsResultNodeInvalid", error.Message);
     }
     [Fact]

@@ -50,8 +50,8 @@ public sealed class DomainEntityCompositionTests
         var rows = author.Project(filtered, parent => new { parent.Id });
         var typed = author.BuildQuery(new("typed"), new("Typed"), rows, parameter,
             result: values => values.Count == 0 ? null : values[0].Id);
-        Assert.Null(typed.Project([]));
-        Assert.Equal("one", typed.Project([Cohesive.Model.ObservationValue.FromObject(new { Id = "one" })]));
+        Assert.Null(typed.AssembleResult([]));
+        Assert.Equal("one", typed.AssembleResult([Cohesive.Model.ObservationValue.FromObject(new { Id = "one" })]));
         var foreign = RelationQuery.Expression().Parameter<string>("id");
         Assert.Throws<ArgumentException>(() => author.BuildQuery(new("foreign"), new("Foreign"), rows, foreign, values => values.Count));
         var extra = author.Parameter<string>("extra");

@@ -55,7 +55,7 @@ public static class FulfillmentQueries
             .LeftJoin(inventory, (row, item) => row.Sku == item.Sku)
             .Select((row, item) => new ReservationAvailability(
                 row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available))
-            .ToArray(id: new("fulfillment/reservation-availability"),
+            .BuildArrayQuery(id: new("fulfillment/reservation-availability"),
                 name: new("ReservationAvailability"), parameter: orderId);
         return (definition, demand.Node.Id);
     }

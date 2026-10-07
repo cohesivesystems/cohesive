@@ -100,7 +100,7 @@ public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper 
             var inventory = author.Traverse(reservation, FulfillmentDomain.ReservationItem);
             var result = author.Project(inventory.Node, (Order o, InventoryItem item) => new ImportResult(o.Id, item.Sku),
                 order.Binding, inventory.Binding);
-            return author.BuildQuery(new("test/import"), new("Import"), result, id, rows => rows.ToArray());
+            return result.BuildArrayQuery(id: new("test/import"), name: new("Import"), parameter: id);
         }
     }
 

@@ -55,7 +55,7 @@ public sealed class RelationQueryFluentWhereTests
                 ? (leftJoin ? left.LeftJoin(right, (a, b) => a.Id == b.Id) : left.Join(right, (a, b) => a.Id == b.Id)).Select((a, b) => new Row(a.Id, b.Enabled))
                 : query.Project(query.Join(left.Node, right.Node, leftJoin ? JoinKind.Left : JoinKind.Inner, (a, b) => a.Id == b.Id, left.Binding, right.Binding),
                     (Row a, Row b) => new Row(a.Id, b.Enabled), left.Binding, right.Binding);
-            return query.BuildQuery(new("joined"), new("Joined"), projected, id, rows => rows.ToArray());
+            return projected.BuildArrayQuery(id: new("joined"), name: new("Joined"), parameter: id);
         }
     }
 
@@ -68,10 +68,10 @@ public sealed class RelationQueryFluentWhereTests
         var fluent = Traversal(true, inverse);
         Assert.Equal(explicitQuery.CompilationRequest.DefinitionDocument.DefinitionFingerprint,
             fluent.CompilationRequest.DefinitionDocument.DefinitionFingerprint);
-        Assert.Empty(fluent.Project([]));
+        Assert.Empty(fluent.AssembleResult([]));
         var rows = System.Collections.Immutable.ImmutableArray.Create(
             Cohesive.Model.ObservationValue.FromObject(new Pair("parent", "child")));
-        Assert.Equal(explicitQuery.Project(rows), fluent.Project(rows));
+        Assert.Equal(explicitQuery.AssembleResult(rows), fluent.AssembleResult(rows));
     }
 
     static RelationQuery<string, Pair[]> Traversal(bool fluent, bool inverse)
@@ -104,7 +104,8 @@ public sealed class RelationQueryFluentWhereTests
                     children.Binding, parents.Binding);
             }
         }
-        return fluent ? result.ToArray(id: new("traversal"), name: new("Traversal"), parameter: id)
+        // The generic callback terminal is deliberately retained as the independent equivalence baseline.
+        return fluent ? result.BuildArrayQuery(id: new("traversal"), name: new("Traversal"), parameter: id)
             : query.BuildQuery(new("traversal"), new("Traversal"), result, id, rows => rows.ToArray());
     }
 
@@ -114,8 +115,8 @@ public sealed class RelationQueryFluentWhereTests
         var query = RelationQuery.Expression();
         var rows = query.Source<Row>();
         Assert.Throws<ArgumentNullException>(() => rows.Select<Row>(null!));
-        Assert.Throws<ArgumentNullException>(() => rows.ToArray<string>(new("q"), new("Q"), null!));
-        Assert.Throws<ArgumentException>(() => rows.ToArray(new("q"), new("Q"), RelationQuery.Expression().Parameter<string>("id")));
+        Assert.Throws<ArgumentNullException>(() => rows.BuildArrayQuery<string>(new("q"), new("Q"), null!));
+        Assert.Throws<ArgumentException>(() => rows.BuildArrayQuery(new("q"), new("Q"), RelationQuery.Expression().Parameter<string>("id")));
         var children = query.Source<Child>();
         var relationship = query.Relationship<Child, Parent>(child => child.ParentId);
         Assert.Throws<ArgumentNullException>(() => children.Traverse<Parent, Pair>(relationship, null!));
@@ -135,7 +136,7 @@ public sealed class RelationQueryFluentWhereTests
         var first = fluent ? source.Where(row => row.Id == id.Value) : query.Where(source, row => row.Id == id.Value);
         var second = fluent ? first.Where(row => row.Enabled) : query.Where(first, row => row.Enabled);
         Assert.Same(source.Binding, second.Binding);
-        return query.BuildQuery(new("fluent-filter"), new("FluentFilter"), second, id, rows => rows.ToArray());
+        return second.BuildArrayQuery(id: new("fluent-filter"), name: new("FluentFilter"), parameter: id);
     }
 
     public sealed record Row(string Id, bool Enabled);

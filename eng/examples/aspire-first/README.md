@@ -284,7 +284,7 @@ are deduplicated and sorted by ordinal string identity; conflicting copies or mu
 The initial contract supports one parent with one level of child collections, direct scalar fields and string
 identities. It does not infer aggregates, arbitrary CLR callbacks or cross-source snapshot consistency.
 
-Native complete rows and complete composed outcomes use the same assembly. `typedQuery.Project(outcome)`
+Native complete rows and complete composed outcomes use the same assembly. `typedQuery.AssembleResult(outcome)`
 requires the exact compilation request, successful execution, an unsuppressed terminal and no unresolved
 row gaps. The original outcome remains available with its provenance and source traces. Raw interpreter
 outputs still carry the flat row shape; assembly does not relabel them as nested observations.
@@ -468,8 +468,8 @@ boundaries alongside each binding; the current relational example does not yet p
 
 ### Query authoring follow-up
 
-Availability now reads as `TraverseInverse(relationship, selector)`, `LeftJoin`, `Select`, `ToArray`.
-The traversal selector sees both order and reservation without `.Binding` arguments. `ToArray` captures
+Availability now reads as `TraverseInverse(relationship, selector)`, `LeftJoin`, `Select`, `BuildArrayQuery`.
+The traversal selector sees both order and reservation without `.Binding` arguments. `BuildArrayQuery` captures
 the immutable definition; it does not run PostgreSQL. Both definitions reuse the same explicit order-ID
 and partition predicate. Nested order details retain explicit parent/child identity and empty-collection
 assembly. The demand projection still provides the same optional native-prefix boundary.
