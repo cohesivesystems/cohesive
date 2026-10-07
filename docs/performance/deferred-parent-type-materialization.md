@@ -69,7 +69,8 @@ A paired fresh-process source harness measured authoring separately from cold an
 These are cumulative local allocations, not retained heap or published-package measurements.
 All 164 canonical catalog bodies remained byte-identical. No Ari package pin or permanent source
 bridge changed. Temporary test-output dependency overlays are restored after qualification.
-Further candidates include repeated enum/property attribute inspection, exact-number intermediate
+Common integer normalization is addressed in [canonical integer normalization](canonical-integer-normalization.md).
+Further candidates include repeated enum/property attribute inspection, remaining exact-number intermediate
 representations, and the final serializer projection that still renumbers parents.
 
 Qualification passed 4,276 Core tests (33 existing skips), 1,082 Relations tests and 855 Ari engine

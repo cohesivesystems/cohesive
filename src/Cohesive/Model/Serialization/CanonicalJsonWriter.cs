@@ -386,7 +386,7 @@ public static class CanonicalJsonWriter
                 break;
             case JsonValueKind.Number:
                 if (numberSemantics == CanonicalJsonNumberSemantics.ExactDecimalRational)
-                    WriteExactDecimalRational(writer, element.GetRawText());
+                    WriteExactDecimalRational(writer, element);
                 else
                     WriteCanonicalObservationValue(writer, ObservationValue.FromJsonElement(element));
                 break;
@@ -541,7 +541,7 @@ public static class CanonicalJsonWriter
                          && element.ValueKind == JsonValueKind.Number)
                 {
                     if (numberSemantics == CanonicalJsonNumberSemantics.ExactDecimalRational)
-                        WriteExactDecimalRational(writer, element.GetRawText());
+                        WriteExactDecimalRational(writer, element);
                     else
                         WriteCanonicalObservationValue(writer, ObservationValue.FromJsonElement(element));
                 }
@@ -693,6 +693,16 @@ public static class CanonicalJsonWriter
             .Replace("~", "~0", StringComparison.Ordinal)
             .Replace("/", "~1", StringComparison.Ordinal)
             .Replace("*", "~2", StringComparison.Ordinal);
+
+    static void WriteExactDecimalRational(Utf8JsonWriter writer, JsonElement element)
+    {
+        // Every Int64 fits the profile's fixed-notation range. Preserve the exact fallback for
+        // fractional/exponential tokens and integers outside Int64, without coercion or rounding.
+        if (element.TryGetInt64(out var integer))
+            writer.WriteNumberValue(integer);
+        else
+            WriteExactDecimalRational(writer, element.GetRawText());
+    }
 
     static void WriteExactDecimalRational(Utf8JsonWriter writer, ReadOnlySpan<char> text)
     {
