@@ -6,6 +6,9 @@ using Cohesive.Adapters.Postgres;
 using Cohesive.Model;
 using Cohesive.Prelude;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Authoring;
+using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Physical;
 using Cohesive.Relations.Execution;
 using Cohesive.Storage;
 using Microsoft.AspNetCore.Builder;
@@ -38,7 +41,7 @@ public sealed partial class OrderStorageIntegrationTests
             IRelationQueryRowsReader nativeReader = new PostgresQueryRowsReader(queryReader.Artifact, runtime, maximumRows: 1000, maximumBytes: 1_000_000);
             var initialRows = await nativeReader.ReadAsync(new Dictionary<QueryParameterId, ObservationValue>
             { [OrderDetailsQuery.Definition.Parameter] = ObservationValue.FromString(id) });
-            Assert.False(Assert.Single(initialRows).TryGetField(FieldPath.FromField("ReservationId"), out _));
+            Assert.False(Assert.Single(initialRows).TryGetField(((Cohesive.Relations.IR.QueryDefinition)OrderDetailsQuery.Definition.CompilationRequest.DefinitionDocument.Definition).Assembly!.Collections[0].Identity, out _));
             var builder = WebApplication.CreateBuilder();
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
@@ -64,6 +67,52 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.Equal(2, joined!.Reservations.Count);
             Assert.Equal(new[] { 1, 2 }, joined.Reservations.Select(item => item.Quantity).Order());
             Assert.All(joined.Reservations, item => { Assert.Equal(sku, item.Sku); Assert.Equal(8, item.AvailableStock); });
+            var plan = RelationQueryStaticCompiler.Compile(OrderDetailsQuery.Definition.CompilationRequest).Plan!;
+            var placementBuilder = RelationQueryPlacement.For(plan);
+            var source = placementBuilder.Source("postgres/query", PostgresRelationQuerySourceTargetProfile.Default, new("orders"), limits: new(100, 1000, 100, 1));
+            foreach (var input in plan.InputContract.Sources)
+                Place(placementBuilder.Place(input, source), input.Shape);
+            foreach (var input in plan.InputContract.Traversals)
+                Place(placementBuilder.Place(input, source), input.ResultShape);
+            var authoredPlacement = placementBuilder.Build().RequireValue();
+            var placement = authoredPlacement.Placement;
+            var binding = PostgresRelationQueryBinding.For(authoredPlacement).Database(new("orders"));
+            foreach (var input in authoredPlacement.Inputs) binding.Table(input, Mapping(input.Shape));
+            var storage = binding.Build().RequireValue();
+            var policy = new RelationQueryPhysicalPlanningPolicy(new("tests/nested-result/v1"), "tests/v1",
+                maximumBatchSize: 100, maximumBufferedRows: 1000, maximumLocalRows: 1000,
+                maximumFanOut: 100, maximumReferenceKeysPerObservation: 100, maximumConcurrency: 1);
+            var physical = RelationQueryPhysicalPlanner.Compile(plan, RelationQueryInMemoryInterpreter.Default.Realize(plan), placement, policy);
+            Assert.True(physical.IsSuccessful, string.Join("; ", physical.Diagnostics.Select(diagnostic => diagnostic.Message)));
+            var sourceReader = new PostgresRelationQuerySourceReader(plan, physical.Plan!, source.Id,
+                storage, database, runtime, new(100, 1000, 1000, 1_000_000,
+                    partitionScope: new(new("tests/local"), OrderStorage.PartitionField, OrderStorage.LocalPartition)));
+            var evaluator = new RelationQueryEvaluator(_ => placement, policy, [sourceReader]);
+            var evaluation = OrderDetailsQuery.Definition.CompilationRequest.Evaluate(new("tests/nested-result"))
+                .Set(OrderDetailsQuery.Definition.Parameter, ObservationValue.FromString(id)).Build();
+            var outcome = await evaluator.EvaluateAsync(evaluation);
+            Assert.True(outcome.IsSuccessful, string.Join("; ", (outcome.PhysicalExecution?.Diagnostics.Select(diagnostic => diagnostic.Message) ?? []).Concat(outcome.Result?.Diagnostics.Select(diagnostic => diagnostic.Message) ?? []).Concat(outcome.Diagnostics.Select(diagnostic => diagnostic.Message))));
+            var composed = OrderDetailsQuery.Definition.Project(outcome)!;
+            Assert.Equal(joined.Id, composed.Id);
+            Assert.Equal(joined.Status, composed.Status);
+            Assert.Equal(joined.Reservations, composed.Reservations);
+            Assert.NotEmpty(outcome.PhysicalExecution!.SourceReads);
+            var failed = await evaluator.EvaluateAsync(OrderDetailsQuery.Definition.CompilationRequest
+                .Evaluate(new("tests/nested-result/failed-parameter"))
+                .SetFailed(OrderDetailsQuery.Definition.Parameter, "tests/unavailable-parameter").Build());
+            Assert.False(failed.IsSuccessful);
+            Assert.Throws<InvalidOperationException>(() => OrderDetailsQuery.Definition.Project(failed));
+
+            void Place(RelationQueryPlacementInputBuilder input, QualifiedShapeId shape)
+            {
+                var mapping = Mapping(shape);
+                input.Identity(FieldPath.FromField(mapping.IdentityField), mapping.IdentityField).FieldsBySemanticPath()
+                    .Partition(mapping.PartitionField);
+            }
+            PostgresEntityRepositoryMapping Mapping(QualifiedShapeId shape) =>
+                shape == FulfillmentDomain.Orders.Definition.StateShape.QualifiedId ? OrderStorage.Mapping
+                    : shape == FulfillmentDomain.Reservations.Definition.StateShape.QualifiedId ? FulfillmentStorage.Reservations
+                    : FulfillmentStorage.Inventory;
             var values = new Dictionary<QueryParameterId, ObservationValue> { [OrderDetailsQuery.Definition.Parameter] = ObservationValue.FromString(id) };
             await Assert.ThrowsAsync<InvalidOperationException>(() => OrderQueryInfrastructure.Bind(database, maximumRows: 1).ReadAsync(id));
             IRelationQueryRowsReader tiny = new PostgresQueryRowsReader(queryReader.Artifact, runtime, maximumRows: 10, maximumBytes: 1);

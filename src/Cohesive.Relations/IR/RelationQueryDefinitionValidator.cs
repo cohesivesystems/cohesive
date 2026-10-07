@@ -1000,6 +1000,27 @@ public static partial class RelationQueryDefinitionValidator
                     location: "/definition/results");
             }
 
+            if (query.Assembly is { } assembly)
+            {
+                try
+                {
+                    assembly.Validate();
+                    if (results.Length != 1 || results[0] is not RowsQueryResultDefinition rowResult || rowResult.Id != assembly.Result
+                        || !nodes.TryGetValue(rowResult.Input, out var rowInput) || rowInput is not ProjectQueryNode projection)
+                        throw new ArgumentException("Nested assembly requires one projected row result.");
+                    var slots = projection.Assignments.Where(assignment => assignment is not null).Select(assignment => assignment.Target).ToHashSet();
+                    var references = assembly.Fields.Select(field => field.Source)
+                        .Concat(assembly.Collections.SelectMany(collection => collection.Fields.Select(field => field.Source)))
+                        .Concat(assembly.Collections.Select(collection => collection.Identity)).Append(assembly.Identity);
+                    if (references.Any(path => !slots.Contains(path)))
+                        throw new ArgumentException("Nested assembly references an undeclared row slot.");
+                }
+                catch (ArgumentException exception)
+                {
+                    Add(code: "relationQuery.query.assemblyInvalid", message: exception.Message, location: "/definition/assembly");
+                }
+            }
+
             HashSet<QueryResultId> ids = [];
             for (var index = 0; index < results.Length; index++)
             {

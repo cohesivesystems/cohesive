@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Linq.Expressions;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Execution;
 
 namespace Cohesive.Relations.Authoring;
 
@@ -9,7 +10,7 @@ namespace Cohesive.Relations.Authoring;
 /// <typeparam name="TInput">Type of the single canonical invocation parameter.</typeparam>
 /// <typeparam name="TResult">Public application result, including its explicit empty-result policy.</typeparam>
 /// <remarks>The captured compilation request is the portable query authority. The result callback is a local CLR
-/// presentation projection, not portable query semantics. No compiler, backend or runtime is retained here.</remarks>
+/// presentation projection unless produced from canonical nested-result assembly metadata. No compiler, backend or runtime is retained here.</remarks>
 public sealed class RelationQuery<TInput, TResult>
 {
     readonly Func<ImmutableArray<ObservationValue>, TResult> project;
@@ -32,6 +33,25 @@ public sealed class RelationQuery<TInput, TResult>
     /// <returns>The declared application result.</returns>
     /// <remarks>The callback must be safe for concurrent invocations and must not perform backend work.</remarks>
     public TResult Project(ImmutableArray<ObservationValue> rows) => project(rows);
+
+    /// <summary>Projects a complete composed evaluation without discarding or replacing its retained evidence.</summary>
+    /// <param name="outcome">Evaluation of this exact compilation request; the caller retains the full outcome.</param>
+    /// <returns>The same application result produced from native complete rows.</returns>
+    /// <exception cref="ArgumentNullException">The outcome is null.</exception>
+    /// <exception cref="ArgumentException">The outcome belongs to another query snapshot.</exception>
+    /// <exception cref="InvalidOperationException">Execution failed, was incomplete or suppressed, or returned unresolved rows.</exception>
+    public TResult Project(RelationQueryEvaluationOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        if (!ReferenceEquals(outcome.Evaluation.Compilation, CompilationRequest))
+            throw new ArgumentException("The outcome must belong to this exact query compilation request.", nameof(outcome));
+        if (!outcome.IsSuccessful || outcome.Result is not { QueryResults.Length: 1 } result
+            || result.QueryResults[0].State != RelationQueryExecutionOutputState.Complete
+            || result.QueryResults[0].Rows.Any(row => !row.IsComplete))
+            throw new InvalidOperationException("Typed projection requires a complete, unsuppressed query outcome.");
+        return project([.. result.QueryResults[0].Rows.Select(row => row.Value)]);
+    }
+
 }
 
 public sealed partial class RelationQueryExpressionAuthoring

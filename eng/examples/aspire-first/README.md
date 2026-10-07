@@ -169,10 +169,10 @@ The domain model itself remains the entity catalog, not a new orchestration or p
 
 `OrderDetailsQuery` selects an order by a bound parameter and the local partition, traverses the
 inverse reservation/order relationship, then traverses reservation/inventory. Both traversals are
-left joins, so an order without reservations remains present. The declaration exposes `RelationQuery<string, OrderDetails?>` up front. Its flat row projection is
-inferred; no `OrderDetailRow` DTO or observation conversion is maintained in application code. The
-final `result:` callback defines the public nested response and empty-result policy. That callback
-is local CLR presentation code, not a claim that nested collection assembly is portable query IR.
+left joins, so an order without reservations remains present. The declaration exposes
+`RelationQuery<string, OrderDetails?>` and uses `SingleOrDefault<OrderDetails>()` to map each parent and
+reservation field once. The author derives flat SQL slots and a portable `NestedQueryResultAssembly`
+from that declaration; no `OrderDetailRow` DTO or handwritten result callback is maintained.
 
 `OrderQueryInfrastructure` owns the native attachment:
 
@@ -208,7 +208,7 @@ There are no joins, observation decoding or result nesting in the endpoint.
 
 Preparation occurs once at registration, and each request executes one parameterized SQL statement.
 `PostgresQueryRowsReader` implements `IRelationQueryRowsReader` and reconstructs canonical observations from native result aliases and presence
-markers. A missing joined row omits its fields. The query's typed presentation projection nests reservation rows and sorts their IDs; it does not perform the joins. The reader rejects overflow rather than silently
+markers. A missing joined row omits its fields. The shared canonical assembly nests reservation rows and sorts their IDs; it does not perform the joins. The reader rejects overflow rather than silently
 truncating: this example allows 1,000 rows and 1,000,000 decoded scalar bytes, with cancellation and
 native command timeout. It has no paging or retry policy, and is not a full canonical evaluation-outcome
 API. The current reader accepts non-temporal scalar results/parameters only.
@@ -224,17 +224,23 @@ this local demo; repository upserts additionally address `(partition, identity)`
 multi-tenant relationship policy or authorization mechanism. The mapping projection does not invent
 uniqueness, foreign-key or tenant guarantees. Native schema remains the authority for those constraints.
 
-### Why there are two result-shaping steps
+### One result declaration, two execution phases
 
-`query.Project` declares the flat fields selected from joined rows and compiled into SQL. The `result`
-callback in `BuildQuery` assembles those rows into one `OrderDetails` with a sorted reservation collection,
-including the no-order/null and no-reservations/empty cases. These are different cardinalities, not the
-same mapping run twice. Today that nested assembly is explicitly local CLR presentation.
+`SingleOrDefault<OrderDetails>().From(...).Field(...).Collection(...).Build(...)` declares parent identity,
+scalar fields and child collections. Flat row projection and nested assembly remain distinct execution
+phases, but both derive from one canonical mapping. The assembly is serialized and fingerprinted with the
+query; changing its mapping changes the query revision. Static compilation validates output coverage and
+scalar type compatibility against the result shape.
 
-A single nested-result declaration would need to express parent identity, child presence, child ordering
-and empty-result behavior canonically, with corresponding native and composed execution support. Combining
-both callbacks into one helper would hide this boundary without removing either mapping. This example
-therefore retains the two explicit phases rather than claiming portable nested-result support.
+Zero rows produce null. Missing/null child identities produce empty collections. Repeated identical children
+are deduplicated and sorted by ordinal string identity; conflicting copies or multiple parents fail closed.
+The initial contract supports one parent with one level of child collections, direct scalar fields and string
+identities. It does not infer aggregates, arbitrary CLR callbacks or cross-source snapshot consistency.
+
+Native complete rows and complete composed outcomes use the same assembly. `typedQuery.Project(outcome)`
+requires the exact compilation request, successful execution, an unsuppressed terminal and no unresolved
+row gaps. The original outcome remains available with its provenance and source traces. Raw interpreter
+outputs still carry the flat row shape; assembly does not relabel them as nested observations.
 
 ### Existing cross-source execution
 
@@ -249,7 +255,11 @@ select federation. The example explicitly selects native PostgreSQL at registrat
 `MapRelationQueryApiDefinition` binding exposes full evaluator outcomes when that richer contract is needed.
 See [execution and adapters](../../../src/Cohesive.Relations/docs/EXECUTION_AND_ADAPTERS.md) for the
 composed join example and its no-N+1 regression. Its deterministic readers prove planning/correlation;
-the example here separately tests live PostgreSQL native execution.
+the example here also compares live PostgreSQL native execution with bounded composed acquisition
+and the reference interpreter, using the same declaration and shared nested assembly. This does not yet
+execute native SQL join subplans inside federation. That requires a physical-plan cut preserving binding
+presence, keys and provenance, with only the remaining joins interpreted locally; simply wrapping a SQL
+reader as an ordinary source would repeat those joins.
 
 ### Try a joined response
 
@@ -274,7 +284,7 @@ bug where presence markers retained an alias from an earlier subquery scope.
 
 Preparation is measured in `FulfillmentDomainTests` separately from execution. It includes native
 registration and compilation after domain setup; it is not whole-host startup, retained memory or request
-latency. One isolated local .NET 10 Release run measured 483.7 ms and 48,190,888 allocated bytes; 10,000
+latency. One isolated local .NET 10 Release run measured 455.9 ms and 49,193,688 allocated bytes; 10,000
 warm artifact accesses allocated zero bytes (excluding query execution). The returned artifact is retained
 for requests. A large query catalog needs a separate scaling
 measurement before eager preparation; the example does not claim catalog-wide startup qualification.

@@ -35,6 +35,8 @@ public static class PostgresRepositoryQueryBindingExtensions
                 if (input.TryGetField(path, out _) || input.Plan.InputContract.Traversals.Any(traversal =>
                     traversal.Definition.SourceShape == input.Shape && traversal.Definition.SourceReference == path))
                     table.Column(path, field.Column.Value, options);
+                if (input.Binding.Partition is not null && field.FieldName == mapping.PartitionField)
+                    table.Partition(path, field.Column.Value, options);
                 if (field.FieldName == mapping.IdentityField)
                     table.Identity(FieldPath.FromField(field.FieldName), field.Column.Value, options);
             }

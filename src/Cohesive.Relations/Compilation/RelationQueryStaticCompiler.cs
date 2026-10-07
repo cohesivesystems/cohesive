@@ -146,6 +146,25 @@ public static class RelationQueryStaticCompiler
             }
         }
 
+        if (!diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+            && request.DefinitionDocument.Definition is QueryDefinition { Assembly: { } assembly } query)
+        {
+            try
+            {
+                var projection = (ProjectQueryNode)query.Body.Nodes.Single(node => node.Id == query.Results[0].Input);
+                var rowGraph = request.ShapeDocuments.SingleOrDefault(document => document.Graph.Id == projection.ResultShape.GraphId)?.Graph;
+                var resultGraph = request.ShapeDocuments.SingleOrDefault(document => document.Graph.Id == assembly.Shape.GraphId)?.Graph;
+                if (rowGraph is null || !rowGraph.TryGetShape(projection.ResultShape, out var rowShape) || resultGraph is null)
+                    throw new ArgumentException("Nested result source and output shapes must be supplied.");
+                assembly.Validate(rowShape, resultGraph);
+            }
+            catch (ArgumentException exception)
+            {
+                diagnostics.Add(new("relationQuery.query.assemblyInvalid", DiagnosticSeverity.Error,
+                    exception.Message, "/definition/assembly"));
+            }
+        }
+
         RelationQueryExpressionAnalysisResult? expressionAnalysis = null;
         if (!diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
             && request.DefinitionDocument.Definition is { } definition)
