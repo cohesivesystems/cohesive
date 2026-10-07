@@ -330,8 +330,7 @@ public sealed partial class ServiceRuntime
 
                 return Complete(ApiResultKind.Success, snapshot, decision, []);
             }
-            var candidate = TransitionStateProjector.Apply(ObservationValue.FromObject(state.Fields), decision);
-            var next = repository.EntityDefinition.CreateState(subject, candidate.Fields!, checked(state.Version + 1));
+            var next = TransitionStateProjector.ApplyToEntity(repository.EntityDefinition, subject, decision, snapshot.Entity);
             context.ThrowIfCancellationRequested();
             try
             {

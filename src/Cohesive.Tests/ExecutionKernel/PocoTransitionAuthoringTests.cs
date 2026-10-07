@@ -11,6 +11,36 @@ namespace Cohesive.Tests.ExecutionKernel;
 
 public sealed class PocoTransitionAuthoringTests
 {
+    [Theory]
+    [InlineData(true, "pending", 8)]
+    [InlineData(true, "approved", 7)]
+    [InlineData(false, "pending", 7)]
+    public void Entity_candidate_preparation_has_one_version_policy(bool eligible, string status, long version)
+    {
+        var entity = ObjectEntityDefinition.For<Run>(new("run-control"));
+        var transition = TransitionAuthoring.Create<Run, Approve, string>(entity.Shape, Metadata(), t => t
+            .Requires(new("eligible"), (state, input) => state.Eligible, (state, input) => "rejected")
+            .Set(new("approve"), state => state.Status, "approved")
+            .Return(new("result"), TransitionOutcomeDisposition.Applied, "approved"));
+        var original = entity.CreateState("run-1", new Run(eligible, status), version: 7);
+        var decision = Decide(Compile(transition), new Approve(true), ObservationValue.FromObject(original.Fields));
+        var candidate = TransitionStateProjector.ApplyToEntity(entity, "run-1", decision, original.Snapshot);
+        Assert.Equal(version, candidate.Version);
+        Assert.Equal("run-1", candidate.EntityId.Value);
+        Assert.Equal(7, original.Version);
+        Assert.Equal(status, original.Fields["Status"].GetString());
+        Assert.Equal(eligible ? "approved" : status, candidate.Fields["Status"].GetString());
+        Assert.Throws<ArgumentException>(() => TransitionStateProjector.ApplyToEntity(entity, "another", decision, original.Snapshot));
+        Assert.Throws<InvalidOperationException>(() => TransitionStateProjector.ApplyToEntity(entity, "run-1", decision));
+        if (version == 8)
+        {
+            var changed = entity.CreateState("run-1", new Run(eligible, "changed"), version: 7);
+            Assert.Throws<InvalidOperationException>(() => TransitionStateProjector.ApplyToEntity(entity, "run-1", decision, changed.Snapshot));
+            var overflow = entity.CreateState("run-1", new Run(eligible, status), version: long.MaxValue);
+            Assert.Throws<OverflowException>(() => TransitionStateProjector.ApplyToEntity(entity, "run-1", decision, overflow.Snapshot));
+        }
+    }
+
     [Fact]
     public void PocoAndExplicitEntityAuthoringProduceIdenticalCanonicalBytes()
     {

@@ -371,44 +371,11 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             return result;
         }
 
-        ObservationValue baseState;
-        if (createsSubject)
-        {
-            var initial = decision.Evidence.InitialObservation;
-            if (initial is null
-                || initial.State != PortableValueState.Concrete
-                || initial.Value is not { } initialValue
-                || initialValue.Fields is null)
-            {
-                return Failure(
-                    ProcessTransitionOperationAdapterDiagnosticCodes.DecisionNotCommittable,
-                    "A successful creation Transition did not retain a concrete complete initial observation.",
-                    "/decision/evidence/initialObservation");
-            }
-            baseState = initialValue;
-        }
-        else
-        {
-            baseState = ObservationValue.FromObject(snapshot!.Entity.Observation.Fields);
-        }
-
-        var projected = TransitionStateProjector.Apply(
-            baseState,
-            decision);
-        var candidateVersion = createsSubject
-            ? 0
-            : decision.Kind == TransitionDecisionKind.Applied
-                ? checked(snapshot!.Entity.Version + 1)
-                : snapshot!.Entity.Version;
         EntityState candidateState;
         try
         {
-            candidateState = binding.Repository.EntityDefinition.CreateState(
-                subject.EntityId.Value,
-                projected.Fields!,
-                candidateVersion);
-            if (createsSubject)
-                binding.Repository.EntityDefinition.ValidateState(candidateState);
+            candidateState = TransitionStateProjector.ApplyToEntity(binding.Repository.EntityDefinition,
+                subject.EntityId.Value, decision, createsSubject ? null : snapshot!.Entity);
         }
         catch (SemanticRuleViolationException exception)
         {
@@ -420,6 +387,11 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
                 createsSubject
                     ? "/decision/evidence/initialObservation"
                     : "/decision/candidateObservation");
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Failure(ProcessTransitionOperationAdapterDiagnosticCodes.DecisionNotCommittable,
+                exception.Message, "/decision/candidateObservation");
         }
         var candidate = candidateState.Snapshot;
 
