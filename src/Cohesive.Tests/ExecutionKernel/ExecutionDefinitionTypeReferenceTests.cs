@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json.Nodes;
 using System.Text.Json;
 using Cohesive.Execution;
@@ -60,6 +61,42 @@ public sealed class ExecutionDefinitionTypeReferenceTests(Xunit.Abstractions.ITe
         var formatted = Create(new Types([new ScalarTypeRef(ScalarTypeKind.String),
             new ScalarTypeRef(ScalarTypeKind.String, PrimitiveFormat.Uuid)]));
         Assert.Equal(2, formatted.Definition.GetProperty("$types").GetArrayLength());
+    }
+
+    [Fact]
+    public void ParentPreparationAvoidsProvisionalOwnedCanonicalDocuments()
+    {
+        var type = new ObjectTypeRef([.. Enumerable.Range(0, 128).Select(index =>
+            new ObjectFieldTypeDef($"field{index}", new ScalarTypeRef(ScalarTypeKind.String)))]);
+        var declaration = new Types([type, type]);
+        for (var i = 0; i < 16; i++) _ = Create(declaration);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var document = Create(declaration);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine($"128-field parent preparation: {allocated} B.");
+        Assert.Equal(2, document.Definition.GetProperty("$types").GetArrayLength());
+        Assert.InRange(allocated, 1, 425_000);
+    }
+
+    [Fact]
+    public void ParentKeysDeduplicateCanonicalNumericAnnotationsAndKeepFinalChildNumbers()
+    {
+        var firstAnnotation = JsonSerializer.Deserialize<AnnotationValue>("{\"z\":1.0000,\"a\":[0,2]}")!;
+        var secondAnnotation = JsonSerializer.Deserialize<AnnotationValue>("{\"a\":[0.0,2e0],\"z\":1e0}")!;
+        var first = new ObjectTypeRef([new("value", new ScalarTypeRef(ScalarTypeKind.String),
+            annotations: ImmutableDictionary<AnnotationKey, AnnotationValue>.Empty.Add(new("evidence"), firstAnnotation))]);
+        var second = new ObjectTypeRef([new("value", new ScalarTypeRef(ScalarTypeKind.String),
+            annotations: ImmutableDictionary<AnnotationKey, AnnotationValue>.Empty.Add(new("evidence"), secondAnnotation))]);
+        var document = Create(new Types([first, second, new ScalarTypeRef(ScalarTypeKind.Bool)]));
+        // Bool sorts ahead of String, forcing the parent to use a final child index different
+        // from its provisional one. Numeric annotation values are ordinary data, not references.
+        Assert.Equal(3, document.Definition.GetProperty("$types").GetArrayLength());
+        var decoded = document.GetDefinition<Types>();
+        Assert.Same(decoded.Values[0], decoded.Values[1]);
+        var field = Assert.Single(Assert.IsType<ObjectTypeRef>(decoded.Values[0]).Fields);
+        Assert.Equal(ScalarTypeKind.String, Assert.IsType<ScalarTypeRef>(field.Type).Kind);
+        Assert.Equal("{\"a\":[0,2],\"z\":1}", field.Annotations[new("evidence")].Value.GetRawText());
+        Assert.Equal(document.Definition.GetRawText(), Create(decoded).Definition.GetRawText());
     }
 
     [Theory]

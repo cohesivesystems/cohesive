@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Collections.Immutable;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -150,13 +151,7 @@ public static class ExecutionDefinitionFingerprinter
 
     internal static JsonElement NormalizeDefinition(JsonElement definition)
     {
-        if (definition.ValueKind != JsonValueKind.Object)
-        {
-            throw new ArgumentException(
-                "Canonical execution-definition content must be a JSON object.",
-                nameof(definition));
-        }
-        ValidateDefinitionProperties(definition);
+        ValidateDefinition(definition);
 
         using PooledByteBufferWriter buffer = new();
         using (var writer = CreateCanonicalWriter(buffer))
@@ -164,6 +159,24 @@ public static class ExecutionDefinitionFingerprinter
         // ParseValue creates an owned element before the temporary pooled bytes are returned.
         var reader = new Utf8JsonReader(buffer.WrittenSpan);
         return JsonElement.ParseValue(ref reader);
+    }
+
+    // Canonical content keys need owned text, but no parsed intermediate document. Use the same
+    // validation, number semantics and writer as owned document normalization.
+    internal static string GetCanonicalDefinitionKey(JsonElement definition)
+    {
+        ValidateDefinition(definition);
+        using PooledByteBufferWriter buffer = new();
+        using (var writer = CreateCanonicalWriter(buffer))
+            CanonicalJsonWriter.WriteCanonicalSequence(writer, definition);
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    static void ValidateDefinition(JsonElement definition)
+    {
+        if (definition.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("Canonical execution-definition content must be a JSON object.", nameof(definition));
+        ValidateDefinitionProperties(definition);
     }
 
     static byte[] GetNormalizedSemanticBytesCore(

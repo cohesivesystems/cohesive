@@ -60,7 +60,8 @@ local harness values are qualification observations, not a released-package or r
 Exports of all 164 canonical bodies matched exactly. No Ari package pins or source copies changed.
 A temporary test-output core overlay is restored after integration qualification.
 
-Parent-entry serialization, nonscalar content-key preparation, complete document normalization,
+Provisional parent ownership is addressed in [deferred parent materialization](deferred-parent-type-materialization.md).
+Final parent-entry serialization, nonscalar content-key preparation, complete document normalization,
 fingerprinting and CLR nullability metadata remain separate profiling targets. A broader reference-token
 rewrite prototype preserved bytes but increased allocation and was discarded. This change retains
 ordinary serializer projection for parents rather than adding another serialization mechanism.

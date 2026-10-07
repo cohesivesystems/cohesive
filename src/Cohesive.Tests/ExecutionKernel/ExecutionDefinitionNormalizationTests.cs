@@ -53,6 +53,34 @@ public sealed class ExecutionDefinitionNormalizationTests
         Assert.Equal("{\"a\":\"λ\",\"z\":1.23}", normalized.GetRawText());
     }
 
+    [Theory]
+    [InlineData("{\"z\":1.000e0,\"a\":[true,false,null,{},[],\"λ/\\\\<>&\",-0.0,1e999]}")]
+    [InlineData("{\"β\":{\"z\":1.2300,\"a\":12345678901234567890.123456789},\"a\":1e-7}")]
+    public void CanonicalKeyMatchesOwnedCanonicalText(string json)
+    {
+        var key = Key();
+        using var source = JsonDocument.Parse(json);
+        Assert.Equal(Normalize(source.RootElement).GetRawText(), key(source.RootElement));
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("{\"a\":1,\"a\":2}")]
+    [InlineData("{\"nested\":{\"a\":1,\"a\":2}}")]
+    public void CanonicalKeyPreservesNormalizationFailures(string json)
+    {
+        var key = Key();
+        using var source = JsonDocument.Parse(json);
+        var expected = Assert.Throws<ArgumentException>(() => Normalize(source.RootElement));
+        var actual = Assert.Throws<ArgumentException>(() => key(source.RootElement));
+        Assert.Equal(expected.Message, actual.Message);
+    }
+
+    static Func<JsonElement, string> Key() => typeof(ExecutionDefinitionFingerprinter)
+        .GetMethod("GetCanonicalDefinitionKey", BindingFlags.Static | BindingFlags.NonPublic)!
+        .CreateDelegate<Func<JsonElement, string>>();
+
     static JsonElement Previous(JsonElement input)
     {
         Validate(input);

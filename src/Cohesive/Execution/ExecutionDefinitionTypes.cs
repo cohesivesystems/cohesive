@@ -296,8 +296,10 @@ internal static class ExecutionDefinitionTypes
             childDepths.Push(0);
             var fields = JsonSerializer.SerializeToElement(value, value.GetType(), options);
             var depth = childDepths.Pop();
-            var entry = ExecutionDefinitionFingerprinter.NormalizeDefinition(fields);
-            var key = entry.GetRawText();
+            // Parents will be projected with final child numbers during Order. Their provisional
+            // canonical text is needed only for deduplication, not as another owned JSON document.
+            var entry = depth == 0 ? ExecutionDefinitionFingerprinter.NormalizeDefinition(fields) : default;
+            var key = depth == 0 ? entry.GetRawText() : ExecutionDefinitionFingerprinter.GetCanonicalDefinitionKey(fields);
             if (!byContent.TryGetValue(key, out index))
             {
                 index = Entries.Count;

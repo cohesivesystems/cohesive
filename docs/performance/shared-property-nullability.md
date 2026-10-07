@@ -73,7 +73,8 @@ Fresh-process Ari source qualification measured separate cumulative allocation b
 
 These measurements are cumulative allocated bytes, not retained heap or published-package claims.
 All 164 canonical catalog bodies remained byte-identical. No Ari package pins or permanent source
-bridge changed. Parent type projection, property-name/attribute preparation and exact-number temporary
+bridge changed. Provisional parent type ownership is addressed in [deferred parent materialization](deferred-parent-type-materialization.md).
+Final parent projection, property-name/attribute preparation and exact-number temporary
 representations remain separate performance targets.
 
 Qualification passed 4,268 Core tests (33 existing skips), 1,082 Relations tests, and 855 Ari engine
