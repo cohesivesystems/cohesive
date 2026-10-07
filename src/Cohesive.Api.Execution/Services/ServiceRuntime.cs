@@ -338,7 +338,7 @@ public sealed partial class ServiceRuntime
             catch (TransitionStatePreparationException exception)
             {
                 return Reject(ApiResultKind.InfrastructureError, exception.Code, exception.Location,
-                    "The operation could not prepare a valid entity state. No change was committed.");
+                    TransitionStatePreparationException.SafeMessage);
             }
             context.ThrowIfCancellationRequested();
             try

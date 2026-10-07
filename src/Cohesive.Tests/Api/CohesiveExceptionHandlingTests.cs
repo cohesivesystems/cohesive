@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using Cohesive.Adapters.AspNet;
 using Cohesive.Storage;
+using Cohesive.Transitions.Execution;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
@@ -12,9 +13,11 @@ namespace Cohesive.Tests.Api;
 public sealed class CohesiveExceptionHandlingTests
 {
     [Theory]
-    [InlineData("application/json")]
-    [InlineData("text/plain")]
-    public async Task Native_pipeline_reports_sanitized_conflict_without_retry(string accept)
+    [InlineData("application/json", false)]
+    [InlineData("text/plain", false)]
+    [InlineData("application/json", true)]
+    [InlineData("text/plain", true)]
+    public async Task Native_pipeline_reports_sanitized_failure_without_retry(string accept, bool preparation)
     {
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddCohesiveExceptionHandling();
@@ -24,6 +27,9 @@ public sealed class CohesiveExceptionHandlingTests
         app.MapGet("/conflict", (Func<IResult>)(() =>
         {
             calls++;
+            if (preparation)
+                throw new TransitionStatePreparationException("transition.state.versionOverflow", "/current/version",
+                    "private backend identity and token", new InvalidOperationException("private inner cause"));
             throw new ObservationConcurrencyConflictException("private backend identity and token");
         }));
         app.Urls.Add("http://127.0.0.1:0");
@@ -31,13 +37,19 @@ public sealed class CohesiveExceptionHandlingTests
         using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
         client.DefaultRequestHeaders.Accept.ParseAdd(accept);
         var response = await client.GetAsync("/conflict");
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(preparation ? HttpStatusCode.InternalServerError : HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType!.MediaType);
         var body = await response.Content.ReadAsStringAsync();
         Assert.DoesNotContain("private backend", body);
         using var json = JsonDocument.Parse(body);
-        Assert.Equal(409, json.RootElement.GetProperty("status").GetInt32());
-        Assert.Equal("services.concurrency.conflict", json.RootElement.GetProperty("code").GetString());
+        Assert.Equal(preparation ? 500 : 409, json.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(preparation ? "transition.state.versionOverflow" : "services.concurrency.conflict", json.RootElement.GetProperty("code").GetString());
+        if (preparation)
+        {
+            Assert.Equal("/current/version", json.RootElement.GetProperty("location").GetString());
+            Assert.Equal(TransitionStatePreparationException.SafeMessage, json.RootElement.GetProperty("detail").GetString());
+            Assert.DoesNotContain("private inner", body);
+        }
         Assert.False(string.IsNullOrEmpty(json.RootElement.GetProperty("traceId").GetString()));
         Assert.Equal(1, calls);
         await app.StopAsync();

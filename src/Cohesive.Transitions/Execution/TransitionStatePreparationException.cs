@@ -8,6 +8,9 @@ namespace Cohesive.Transitions.Execution;
 public sealed class TransitionStatePreparationException(string code, string location, string message,
     Exception? cause = null) : PreparationException("entityState", code, message, cause)
 {
+    /// <summary>Sanitized description for external result projections; excludes provider and entity values.</summary>
+    public const string SafeMessage = "The operation could not prepare a valid entity state. No change was committed.";
+
     /// <summary>Location of the rejected evidence or state.</summary>
     public string Location { get; } = location;
 }

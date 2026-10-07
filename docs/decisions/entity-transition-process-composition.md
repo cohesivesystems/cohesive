@@ -81,3 +81,9 @@ and trace ID. Service invocation returns `InfrastructureError` with the same cod
 These are failed preparation guarantees, not automatically caller validation errors or retryable
 conflicts. Neither boundary commits or leaks validation messages. The process path retains its
 structured internal diagnostic. Unrelated exceptions continue to propagate.
+
+`TransitionStatePreparationException.SafeMessage` owns the sanitized description used by service
+results and HTTP projections. `AddCohesiveExceptionHandling` also projects the same failure through
+the native ASP.NET pipeline, using the same Problem Details factory as direct endpoint bindings.
+Direct bindings remain self-contained when middleware is not registered. The two boundary catches
+remain intentional because they produce different result contracts, not separate error policies.
