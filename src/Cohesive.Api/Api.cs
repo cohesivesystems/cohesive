@@ -423,15 +423,24 @@ public abstract class OperationBuilder<TParent>
         return this;
     }
 
-    /// <summary>Completes the operation and tags its primary response without creating another declaration.</summary>
-    /// <typeparam name="TResponse">Expected primary response type, previously declared through Returns.</typeparam>
+    /// <summary>Declares the primary response and completes the operation with a typed handle.</summary>
+    /// <typeparam name="TResponse">Primary response body type.</typeparam>
+    /// <param name="kind">Success, Created or Accepted; null retains an existing primary kind or defaults to Success.</param>
     /// <returns>A typed handle sharing the exact operation registered in the root definition.</returns>
-    /// <exception cref="ArgumentException">The primary response type differs from TResponse.</exception>
-    /// <remarks>Alternative results retain their own types. Normal declaration validation from Build also applies.</remarks>
-    public ApiEndpoint<TResponse> Build<TResponse>()
+    /// <exception cref="ArgumentException">An existing or finalized primary response has a different type or kind.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The requested kind cannot carry a primary success body.</exception>
+    /// <remarks>Alternative results retain their own types. Existing response declarations are validated, not overwritten.
+    /// Normal declaration validation from Build also applies.</remarks>
+    public ApiEndpoint<TResponse> Build<TResponse>(ApiResultKind? kind = null)
     {
-        if (primaryResult?.BodyType != typeof(TResponse))
-            throw new ArgumentException("Declare a matching primary response before building a typed endpoint.");
+        var existing = endpoint?.Operation.PrimaryResult ?? primaryResult;
+        var responseKind = kind ?? existing?.Kind ?? ApiResultKind.Success;
+        if (responseKind is not (ApiResultKind.Success or ApiResultKind.Created or ApiResultKind.Accepted))
+            throw new ArgumentOutOfRangeException(nameof(kind), "A body-bearing primary response must be Success, Created or Accepted.");
+        if (existing is not null && (existing.BodyType != typeof(TResponse) || existing.Kind != responseKind))
+            throw new ArgumentException("The existing primary response differs from the requested type or kind.");
+        if (existing is null)
+            Returns<TResponse>(responseKind);
         return new(Build().Operation);
     }
 

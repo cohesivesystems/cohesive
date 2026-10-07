@@ -10,16 +10,16 @@ public static class OrderApi
     {
         var orders = Api.Define().Entity<Order>();
         Create = orders.Command("Create")
-            .Route("POST", "/orders").Returns<OrderCreated>(ApiResultKind.Created).Build<OrderCreated>();
+            .Route("POST", "/orders").Build<OrderCreated>(ApiResultKind.Created);
         Get = orders.Query("Get")
             .Route("GET", "/orders/{id:guid}").RouteParameter<string>("id")
-            .Returns<OrderSummary>().Result(ApiResultKind.NotFound).Build<OrderSummary>();
+            .Result(ApiResultKind.NotFound).Build<OrderSummary>();
         Submit = orders.Command("Submit")
             .Route("POST", "/orders/{id}/submit").RouteParameter<string>("id")
-            .Returns<OrderSummary>().Result<ProblemDetails>(ApiResultKind.Conflict).Result(ApiResultKind.NotFound)
+            .Result<ProblemDetails>(ApiResultKind.Conflict).Result(ApiResultKind.NotFound)
             .Transition(OrderTransitions.Submit.Reference).Build<OrderSummary>();
         Details = orders.Query("Details").Route("GET", "/orders/{id:guid}/details")
-            .RouteParameter<string>("id").Returns<OrderDetails>().Result(ApiResultKind.NotFound).Build<OrderDetails>();
+            .RouteParameter<string>("id").Result(ApiResultKind.NotFound).Build<OrderDetails>();
         Definition = orders.Build();
     }
 

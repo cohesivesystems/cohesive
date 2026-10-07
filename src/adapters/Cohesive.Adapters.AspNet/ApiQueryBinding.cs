@@ -21,7 +21,7 @@ public static class ApiQueryBindingExtensions
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">Operation kind, body or response contract differs.</exception>
     public static ApiQueryBinding<TInput, TResult> MapApiQuery<TInput, TResult>(this IEndpointRouteBuilder endpoints,
-        ApiEndpoint<TResult> endpoint, IRelationQueryReader<TInput, TResult> query,
+        ApiEndpoint<TResult> endpoint, IRelationQueryReader<TInput, TResult?> query,
         AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) =>
         new(endpoints, endpoint, query, authorizationPolicyResolver);
 }
@@ -33,7 +33,7 @@ public sealed class ApiQueryBinding<TInput, TResult>
 {
     readonly IEndpointRouteBuilder endpoints;
     readonly ApiEndpoint endpoint;
-    readonly IRelationQueryReader<TInput, TResult> query;
+    readonly IRelationQueryReader<TInput, TResult?> query;
     readonly AspNetAuthorizationPolicyResolver? authorizationPolicyResolver;
     Func<HttpContext, TInput>? input;
     bool completed;
@@ -44,7 +44,7 @@ public sealed class ApiQueryBinding<TInput, TResult>
     /// <param name="query">Prepared query, retained for concurrent request execution.</param>
     /// <param name="authorizationPolicyResolver">Optional semantic-to-native authorization policy resolver.</param>
     internal ApiQueryBinding(IEndpointRouteBuilder endpoints, ApiEndpoint endpoint,
-        IRelationQueryReader<TInput, TResult> query, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver)
+        IRelationQueryReader<TInput, TResult?> query, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(endpoint);
