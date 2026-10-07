@@ -454,7 +454,7 @@ sealed class Sha256BufferWriter : IBufferWriter<byte>, IDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         Flush();
         if (!hash.TryGetHashAndReset(destination, out var written) || written != SHA256.HashSizeInBytes)
-            throw new InvalidOperationException("The canonical observation fingerprint could not be completed.");
+            throw new InvalidOperationException("The canonical SHA-256 fingerprint could not be completed.");
     }
 
     public void Dispose()
