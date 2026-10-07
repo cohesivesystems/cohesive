@@ -110,7 +110,7 @@ use the existing source-acquisition path with explicit policies where those cont
 
 ## Register a typed query at host composition
 
-`PostgresQueryRegistration(runtime).Entity(domainEntity, mapping).Register(query, maximumRows, maximumBytes)`
+`PostgresPersistenceRegistration(runtime).Entity(domainEntity, mapping).Query(query, maximumRows, maximumBytes)`
 places all demanded entity sources/traversals in the explicitly selected database, projects the registered
 repository mappings and invokes the existing static/placement/feasibility/native compilers. It opens no
 connection. Missing mappings and invalid plans fail at registration; static/native compilation failures
@@ -125,3 +125,10 @@ compilation; it binds the input, reads bounded native rows and invokes the query
 projection. Its `Artifact` remains inspectable. The builder is registration-local and mutable, while readers
 retain immutable prepared artifacts and require concurrency-safe projection callbacks. Native data-source
 ownership remains with the caller. PostgreSQL configuration stays outside the semantic query declaration.
+
+The persistence registration is shared: `.Repository(entity)` uses the same attached entity definition,
+mapping and runtime as `.Query(...)`. Query dependencies are resolved from the compiled input contract;
+unconsumed attachments do not create SQL sources. Missing/duplicate attachments fail before IO. Configure
+the mutable registration on one thread during host setup, then retain its prepared readers/repositories;
+there is no global result cache or inferred tenant scope. The earlier `PostgresQueryRegistration.Register`
+name is replaced by `PostgresPersistenceRegistration.Query` in this unreleased surface.

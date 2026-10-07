@@ -9,7 +9,8 @@ builder.Services.AddCohesiveExceptionHandling();
 var connectionString = builder.Configuration.GetConnectionString(OrderStorage.DatabaseName)
     ?? throw new InvalidOperationException("The native Aspire orders database reference is required.");
 await using var database = NpgsqlDataSource.Create(connectionString);
-IEntityRepository orders = OrderStorage.Bind(database);
+var persistence = FulfillmentStorage.Bind(database);
+IEntityRepository orders = persistence.Repository(FulfillmentDomain.Orders);
 
 // The shared repository owns DML and validation, not schema lifecycle.
 using (var schema = new StreamReader(typeof(OrderStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")
@@ -20,5 +21,5 @@ await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync
 var app = builder.Build();
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
-OrderEndpoints.Map(app, orders, OrderQueryInfrastructure.Bind(database));
+OrderEndpoints.Map(app, orders, persistence.Query(OrderDetailsQuery.Definition, maximumRows: 1000, maximumBytes: 1_000_000));
 app.Run();

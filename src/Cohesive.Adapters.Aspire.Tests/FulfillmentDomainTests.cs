@@ -17,7 +17,7 @@ public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper 
         var allocated = GC.GetAllocatedBytesForCurrentThread();
         var started = System.Diagnostics.Stopwatch.StartNew();
         using var database = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
-        var reader = OrderQueryInfrastructure.Bind(database);
+        var reader = FulfillmentStorage.Bind(database).Query(OrderDetailsQuery.Definition, maximumRows: 1000, maximumBytes: 1_000_000);
         IRelationQueryReader<string, OrderDetails?> contract = reader;
         Assert.Same(OrderDetailsQuery.Definition, contract.Definition);
         var artifact = reader.Artifact;
@@ -37,9 +37,63 @@ public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper 
     public void Registration_rejects_missing_and_duplicate_native_mappings_without_opening_a_connection()
     {
         using var database = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
-        var registration = new Cohesive.Adapters.Postgres.PostgresQueryRegistration(new(new("orders"), database, "test"))
+        var registration = new Cohesive.Adapters.Postgres.PostgresPersistenceRegistration(new(new("orders"), database, "test"))
             .Entity(FulfillmentDomain.Orders, OrderStorage.Mapping);
         Assert.Throws<ArgumentException>(() => registration.Entity(FulfillmentDomain.Orders, OrderStorage.Mapping));
-        Assert.Throws<InvalidOperationException>(() => registration.Register(OrderDetailsQuery.Definition, 100, 10000));
+        Assert.Throws<InvalidOperationException>(() => registration.Query(OrderDetailsQuery.Definition, 100, 10000));
     }
+    [Fact]
+    public void Persistence_reuses_entity_authority_and_selects_only_consumed_mappings()
+    {
+        using var database = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
+        var persistence = FulfillmentStorage.Bind(database);
+        var repository = persistence.Repository(FulfillmentDomain.Orders);
+        Assert.Same(FulfillmentDomain.Orders.Definition, repository.EntityDefinition);
+        var prefix = Cohesive.Relations.Compilation.RelationQuerySubplan.Compile(
+            ReservationAvailabilityQuery.Definition.CompilationRequest, ReservationAvailabilityQuery.DemandProjection);
+        var rows = persistence.Prepare(prefix.Prefix.Request, 1000, 1_000_000);
+        Assert.DoesNotContain("cohesive_inventory", rows.Artifact.Statement.Text);
+        Assert.Contains("cohesive_reservations", rows.Artifact.Statement.Text);
+        var foreign = new Cohesive.Transitions.Authoring.DomainModelBuilder().Entity<Order>("example/order");
+        Assert.Throws<InvalidOperationException>(() => persistence.Repository(foreign));
+    }
+
+    [Fact]
+    public void Traversal_imports_exact_endpoint_documents_and_matches_explicit_imports()
+    {
+        var implicitQuery = Build(false);
+        var explicitQuery = Build(true);
+        Assert.Equal(explicitQuery.CompilationRequest.DefinitionDocument.DefinitionFingerprint,
+            implicitQuery.CompilationRequest.DefinitionDocument.DefinitionFingerprint);
+        Assert.Equal(explicitQuery.CompilationRequest.ShapeDocuments.Select(d => d.Graph.Id),
+            implicitQuery.CompilationRequest.ShapeDocuments.Select(d => d.Graph.Id));
+        Assert.Contains(implicitQuery.CompilationRequest.ShapeDocuments,
+            d => ReferenceEquals(d.Graph, FulfillmentDomain.Inventory.Definition.StateShape.Graph));
+
+        var author = RelationQuery.Expression();
+        var foreign = new Cohesive.Transitions.Authoring.DomainModelBuilder().Entity<Order>("example/order");
+        var order = author.Source(foreign.QueryShape(author));
+        Assert.Throws<ArgumentException>(() => author.TraverseInverse(order, FulfillmentDomain.ReservationOrder));
+
+        static RelationQuery<string, ImportResult[]> Build(bool explicitImports)
+        {
+            var author = RelationQuery.Expression();
+            var orderShape = FulfillmentDomain.Orders.QueryShape(author);
+            if (explicitImports)
+            {
+                FulfillmentDomain.Reservations.QueryShape(author);
+                FulfillmentDomain.Inventory.QueryShape(author);
+            }
+            var id = author.Parameter<string>("id");
+            var order = author.Where(author.Source(orderShape), value => value.Id == id.Value);
+            var reservation = author.TraverseInverse(order, FulfillmentDomain.ReservationOrder);
+            var inventory = author.Traverse(reservation, FulfillmentDomain.ReservationItem);
+            var result = author.Project(inventory.Node, (Order o, InventoryItem item) => new ImportResult(o.Id, item.Sku),
+                order.Binding, inventory.Binding);
+            return author.BuildQuery(new("test/import"), new("Import"), result, id, rows => rows.ToArray());
+        }
+    }
+
+    public sealed record ImportResult(string Order, string? Sku);
+
 }

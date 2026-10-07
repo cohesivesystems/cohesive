@@ -13,7 +13,6 @@ public static class ReservationAvailabilityQuery
     {
         var query = RelationQuery.Expression();
         var orderShape = FulfillmentDomain.Orders.QueryShape(query);
-        FulfillmentDomain.Reservations.QueryShape(query);
         var inventoryShape = FulfillmentDomain.Inventory.QueryShape(query);
         var orderId = query.Parameter<string>("orderId");
         var orders = query.Where(query.Source(orderShape), order => order.Id == orderId.Value && order.Partition == OrderStorage.LocalPartition);

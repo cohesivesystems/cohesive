@@ -25,7 +25,7 @@ public sealed partial class OrderStorageIntegrationTests
         using var schema = new StreamReader(typeof(OrderStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync())) await command.ExecuteNonQueryAsync();
         var context = OperationContext.Create();
-        var orders = OrderStorage.Bind(database);
+        var orders = FulfillmentStorage.Bind(database).Repository(FulfillmentDomain.Orders);
         var runtime = new PostgresNpgsqlRuntimeBinding(new("orders"), database, "tests/fulfillment");
         var inventory = new PostgresEntityRepository(FulfillmentDomain.Inventory.Definition, runtime, FulfillmentStorage.Inventory);
         var reservations = new PostgresEntityRepository(FulfillmentDomain.Reservations.Definition, runtime, FulfillmentStorage.Reservations);
@@ -37,7 +37,7 @@ public sealed partial class OrderStorageIntegrationTests
             await orders.Upsert(context, OrderStorage.Register(Guid.Parse(id)));
             await orders.Upsert(context, new(OrderStorage.Entity.CreateState(id, new Order(id, "outside", "Private"), 1).Snapshot));
             await orders.Upsert(context, new(OrderStorage.Entity.CreateState(outsideId, new Order(outsideId, "outside"), 1).Snapshot));
-            var queryReader = OrderQueryInfrastructure.Bind(database);
+            var queryReader = FulfillmentStorage.Bind(database).Query(OrderDetailsQuery.Definition, maximumRows: 1000, maximumBytes: 1_000_000);
             IRelationQueryRowsReader nativeReader = new PostgresQueryRowsReader(queryReader.Artifact, runtime, maximumRows: 1000, maximumBytes: 1_000_000);
             var initialRows = await nativeReader.ReadAsync(new Dictionary<QueryParameterId, ObservationValue>
             { [OrderDetailsQuery.Definition.Parameter] = ObservationValue.FromString(id) });
@@ -114,7 +114,7 @@ public sealed partial class OrderStorageIntegrationTests
                     : shape == FulfillmentDomain.Reservations.Definition.StateShape.QualifiedId ? FulfillmentStorage.Reservations
                     : FulfillmentStorage.Inventory;
             var values = new Dictionary<QueryParameterId, ObservationValue> { [OrderDetailsQuery.Definition.Parameter] = ObservationValue.FromString(id) };
-            await Assert.ThrowsAsync<InvalidOperationException>(() => OrderQueryInfrastructure.Bind(database, maximumRows: 1).ReadAsync(id));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => FulfillmentStorage.Bind(database).Query(OrderDetailsQuery.Definition, maximumRows: 1, maximumBytes: 1_000_000).ReadAsync(id));
             IRelationQueryRowsReader tiny = new PostgresQueryRowsReader(queryReader.Artifact, runtime, maximumRows: 10, maximumBytes: 1);
             await Assert.ThrowsAnyAsync<InvalidOperationException>(() => tiny.ReadAsync(values));
             Assert.Throws<ArgumentException>(() => new PostgresQueryRowsReader(queryReader.Artifact,

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Cohesive.Model.Serialization;
 using System.Linq.Expressions;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
@@ -28,6 +29,33 @@ public sealed class RelationQueryExpressionRelationship<TSource, TTarget>
     public RelationQueryExpressionRelationship(RelationshipDefinition definition)
     {
         Definition = Guard.RequireNotNull(definition);
+    }
+
+    /// <summary>Attaches authoritative endpoint documents for automatic import during traversal.</summary>
+    /// <param name="definition">Canonical relationship authority.</param>
+    /// <param name="source">Exact graph containing the source endpoint.</param>
+    /// <param name="target">Exact graph containing the target endpoint.</param>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">A document does not contain its declared endpoint.</exception>
+    public RelationQueryExpressionRelationship(RelationshipDefinition definition, ShapeGraphDocument source, ShapeGraphDocument target)
+        : this(definition)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(target);
+        if (source.Graph.Id != definition.SourceShape.GraphId || source.Graph.TryGetShape(definition.SourceShape) is null
+            || target.Graph.Id != definition.TargetShape.GraphId || target.Graph.TryGetShape(definition.TargetShape) is null)
+            throw new ArgumentException("Relationship documents must contain the exact declared endpoints.");
+        sourceDocument = source;
+        targetDocument = target;
+    }
+
+    readonly ShapeGraphDocument? sourceDocument;
+    readonly ShapeGraphDocument? targetDocument;
+
+    internal void ImportEndpoints(RelationQueryExpressionAuthoring author)
+    {
+        if (sourceDocument is not null) author.Clr.Shape<TSource>(sourceDocument, SourceShape);
+        if (targetDocument is not null) author.Clr.Shape<TTarget>(targetDocument, TargetShape);
     }
 
     /// <summary>Canonical portable relationship definition.</summary>

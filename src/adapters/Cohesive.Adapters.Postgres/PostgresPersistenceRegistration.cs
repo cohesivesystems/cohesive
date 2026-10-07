@@ -1,4 +1,5 @@
 using Cohesive.Model;
+using Cohesive.Transitions.Model;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Execution;
@@ -7,18 +8,19 @@ using Cohesive.Transitions.Authoring;
 
 namespace Cohesive.Adapters.Postgres;
 
-/// <summary>Native PostgreSQL registration for canonical entity queries on one explicitly bound database.</summary>
-/// <remarks>Configure at host composition. Register prepares once per call; retain the returned reader.
+/// <summary>Native PostgreSQL entity attachments shared by repositories and queries on one explicitly bound database.</summary>
+/// <remarks>Configure this mutable builder at host composition, then retain its repositories and prepared query readers.
+/// Query prepares once per call; no invocation result cache is introduced. Do not mutate the registration concurrently.
 /// No connections are opened during preparation. No provider-neutral facade or global cache is introduced.</remarks>
-public sealed class PostgresQueryRegistration
+public sealed class PostgresPersistenceRegistration
 {
     readonly PostgresNpgsqlRuntimeBinding runtime;
-    readonly Dictionary<QualifiedShapeId, PostgresEntityRepositoryMapping> tables = [];
+    readonly Dictionary<QualifiedShapeId, (EntityDefinition Entity, PostgresEntityRepositoryMapping Mapping)> tables = [];
 
-    /// <summary>Creates an invocation-local registration builder.</summary>
+    /// <summary>Creates a host-registration builder.</summary>
     /// <param name="runtime">Explicit database identity and caller-owned native data source.</param>
     /// <exception cref="ArgumentNullException">Runtime is null.</exception>
-    public PostgresQueryRegistration(PostgresNpgsqlRuntimeBinding runtime) =>
+    public PostgresPersistenceRegistration(PostgresNpgsqlRuntimeBinding runtime) =>
         this.runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
 
     /// <summary>Attaches an existing physical mapping to its exact canonical entity graph.</summary>
@@ -28,13 +30,28 @@ public sealed class PostgresQueryRegistration
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     /// <exception cref="ArgumentException">A shape is already mapped or the repository mapping is invalid.</exception>
-    public PostgresQueryRegistration Entity<T>(DomainEntity<T> entity, PostgresEntityRepositoryMapping mapping) where T : notnull
+    public PostgresPersistenceRegistration Entity<T>(DomainEntity<T> entity, PostgresEntityRepositoryMapping mapping) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(entity);
         ArgumentNullException.ThrowIfNull(mapping);
         PostgresEntityRepository.ValidateMapping(entity.Definition, mapping);
-        tables.Add(entity.Definition.StateShape.QualifiedId, mapping);
+        tables.Add(entity.Definition.StateShape.QualifiedId, (entity.Definition, mapping));
         return this;
+    }
+
+    /// <summary>Creates a repository from the same entity attachment used by query preparation.</summary>
+    /// <typeparam name="T">Canonical entity state type.</typeparam>
+    /// <param name="entity">Exact entity handle registered on this persistence binding.</param>
+    /// <returns>A repository using the registered mapping and caller-owned native data source.</returns>
+    /// <exception cref="ArgumentNullException">Entity is null.</exception>
+    /// <exception cref="InvalidOperationException">The exact entity definition has not been registered.</exception>
+    public PostgresEntityRepository Repository<T>(DomainEntity<T> entity) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        if (!tables.TryGetValue(entity.Definition.StateShape.QualifiedId, out var attachment)
+            || !ReferenceEquals(attachment.Entity, entity.Definition))
+            throw new InvalidOperationException("Register this exact entity before creating its repository.");
+        return new(attachment.Entity, runtime, attachment.Mapping);
     }
 
     /// <summary>Validates and prepares a typed query using the existing static, placement and native compilers.</summary>
@@ -50,7 +67,7 @@ public sealed class PostgresQueryRegistration
     /// <exception cref="PostgresQueryPreparationException">Static or native compilation fails; original results are retained.</exception>
     /// <exception cref="InvalidOperationException">An input shape has no registered native mapping.</exception>
     /// <exception cref="RelationQueryArtifactAuthoringException">Placement or binding is invalid.</exception>
-    public PostgresQueryReader<TInput, TResult> Register<TInput, TResult>(RelationQuery<TInput, TResult> query,
+    public PostgresQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query,
         int maximumRows, long maximumBytes)
     {
         ArgumentNullException.ThrowIfNull(query);
@@ -95,7 +112,7 @@ public sealed class PostgresQueryRegistration
         return new PostgresQueryRowsReader(artifact, runtime, maximumRows, maximumBytes);
 
         PostgresEntityRepositoryMapping Mapping(QualifiedShapeId shape) => tables.TryGetValue(shape, out var mapping)
-            ? mapping : throw new InvalidOperationException($"No PostgreSQL entity mapping is registered for query shape '{shape}'.");
+            ? mapping.Mapping : throw new InvalidOperationException($"No PostgreSQL entity mapping is registered for query shape '{shape}'.");
         void Place(RelationQueryPlacementInputBuilder input, QualifiedShapeId shape)
         {
             var mapping = Mapping(shape);

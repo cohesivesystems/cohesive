@@ -24,7 +24,7 @@ public sealed partial class OrderStorageIntegrationTests
         var id = Guid.NewGuid().ToString("D");
         var sku = "subplan-" + Guid.NewGuid().ToString("N");
         var context = OperationContext.Create();
-        var orderRepository = OrderStorage.Bind(orders);
+        var orderRepository = FulfillmentStorage.Bind(orders).Repository(FulfillmentDomain.Orders);
         var reservations = new PostgresEntityRepository(FulfillmentDomain.Reservations.Definition,
             new(new("orders"), orders, "test"), FulfillmentStorage.Reservations);
         try

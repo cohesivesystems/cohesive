@@ -16,8 +16,8 @@ public static class ReservationAvailabilityInfrastructure
     /// <param name="database">Caller-owned database containing all three entity tables.</param>
     /// <returns>A prepared native reader; retain at host lifetime.</returns>
     public static PostgresQueryReader<string, ReservationAvailability[]> BindNative(NpgsqlDataSource database) =>
-        Orders(database).Entity(FulfillmentDomain.Inventory, FulfillmentStorage.Inventory)
-            .Register(ReservationAvailabilityQuery.Definition, 1000, 1_000_000);
+        FulfillmentStorage.Bind(database)
+            .Query(ReservationAvailabilityQuery.Definition, 1000, 1_000_000);
 
     /// <summary>Runs the order/reservation join in PostgreSQL and enriches its rowset from a separate inventory database.</summary>
     /// <param name="orders">Caller-owned orders database.</param>
@@ -28,7 +28,7 @@ public static class ReservationAvailabilityInfrastructure
     {
         var cut = RelationQuerySubplan.Compile(ReservationAvailabilityQuery.Definition.CompilationRequest,
             ReservationAvailabilityQuery.DemandProjection);
-        var native = Orders(orders).Prepare(cut.Prefix.Request, 1000, 1_000_000);
+        var native = FulfillmentStorage.Bind(orders).Prepare(cut.Prefix.Request, 1000, 1_000_000);
         var builder = RelationQueryPlacement.For(cut.Remainder.Plan!);
         var projected = builder.Source("reservation-demand", RelationQueryProjectedRowset.Profile, new("orders"), limits: new(100, 1000, 100, 1));
         var external = builder.Source("inventory", PostgresRelationQuerySourceTargetProfile.Default, new("inventory"), limits: new(100, 1000, 100, 1));
@@ -54,7 +54,4 @@ public static class ReservationAvailabilityInfrastructure
                 new(100, 1000, 1000, 1_000_000, partitionScope: new(partition, OrderStorage.PartitionField, OrderStorage.LocalPartition)))], partition);
     }
 
-    static PostgresQueryRegistration Orders(NpgsqlDataSource database) => new PostgresQueryRegistration(new(new("orders"), database, "aspire-first/orders"))
-        .Entity(FulfillmentDomain.Orders, OrderStorage.Mapping)
-        .Entity(FulfillmentDomain.Reservations, FulfillmentStorage.Reservations);
 }

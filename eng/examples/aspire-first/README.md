@@ -174,15 +174,25 @@ left joins, so an order without reservations remains present. The declaration ex
 reservation field once. The author derives flat SQL slots and a portable `NestedQueryResultAssembly`
 from that declaration; no `OrderDetailRow` DTO or handwritten result callback is maintained.
 
-`OrderQueryInfrastructure` owns the native attachment:
+`FulfillmentStorage.Bind` attaches each entity and its native mapping once. The host uses that same
+registration for repositories and queries; there is no separate per-query infrastructure catalog:
 
 ```csharp
-new PostgresQueryRegistration(runtime)
-    .Entity(FulfillmentDomain.Orders, OrderStorage.Mapping)
-    .Entity(FulfillmentDomain.Reservations, FulfillmentStorage.Reservations)
-    .Entity(FulfillmentDomain.Inventory, FulfillmentStorage.Inventory)
-    .Register(OrderDetailsQuery.Definition, maximumRows: 1000, maximumBytes: 1_000_000);
+var persistence = FulfillmentStorage.Bind(database);
+var orders = persistence.Repository(FulfillmentDomain.Orders);
+var details = persistence.Query(
+    OrderDetailsQuery.Definition, maximumRows: 1000, maximumBytes: 1_000_000);
 ```
+
+Query preparation discovers consumed source and traversal shapes from the canonical plan and resolves
+only those mappings. An order/reservation subplan does not require inventory IO or an inventory table
+binding in its SQL artifact, even though the persistence registration also knows inventory. Connections,
+physical columns, scope and bounds remain explicit. Native versus composed placement is still a host choice.
+
+Relationship handles created by `DomainEntity.References` retain exact endpoint documents. Traversing
+one imports its endpoints automatically, so `OrderDetailsQuery` starts with the order shape and needs no
+standalone reservation/inventory `QueryShape` calls. Explicit imports remain supported; conflicting
+registrations fail rather than silently inferring another CLR schema.
 
 The adapter invokes the existing static, placement, feasibility and native PostgreSQL compilers during
 host registration, retaining the native artifact for inspection. The query contains no PostgreSQL imports,

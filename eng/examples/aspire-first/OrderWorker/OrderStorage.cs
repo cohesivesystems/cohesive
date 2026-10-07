@@ -3,7 +3,6 @@ using System.Text.Json.Serialization;
 using Cohesive.Storage;
 using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.Model;
-using Npgsql;
 
 namespace AspireFirst.Orders;
 
@@ -38,14 +37,6 @@ public static class OrderStorage
         .Partition(order => order.Partition, "partition_key")
         .Column(order => order.Status, "status")
         .Build();
-
-    /// <summary>Binds the existing Aspire-supplied connection to the canonical repository.</summary>
-    /// <param name="database">Caller-owned data source; must outlive the repository.</param>
-    /// <returns>The shared repository through the provider-neutral storage contract.</returns>
-    /// <exception cref="ArgumentNullException">Database is null.</exception>
-    /// <exception cref="ArgumentException">Runtime affinity or canonical mapping is invalid.</exception>
-    public static IEntityRepository Bind(NpgsqlDataSource database) => new PostgresEntityRepository(Entity,
-        new PostgresNpgsqlRuntimeBinding(new($"aspire/resource/{DatabaseName}"), database, "aspire-first/apphost"), Mapping);
 
     /// <summary>Creates validated order state for an ID-only order registration.</summary>
     /// <param name="id">Order identity, normalized to standard GUID text.</param>

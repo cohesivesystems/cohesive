@@ -87,7 +87,7 @@ original document, shape snapshots and catalog; the original remains authoritati
 are absent from the remainder. Do not feed joined rows into the original entity sources and replay those joins.
 
 At host registration, compile the prefix with a native adapter (for example,
-`PostgresQueryRegistration.Prepare`). Place the remainder's cut source with
+`PostgresPersistenceRegistration.Prepare`). Place the remainder's cut source with
 `RelationQueryProjectedRowset.Profile`, and register remaining source readers against its exact physical
 plan. `RelationQuerySubplanReader<TInput,TResult>` prepares those readers once and runs one prefix read
 before delegating to the existing physical executor. `IRelationQueryRowsReader.Plan` is mandatory semantic
@@ -233,7 +233,7 @@ test asserts a single artifact, a single statement, exact selected semantic fiel
 stage.
 
 The compiler and standalone SQL builder deliberately remain provider-neutral: a native artifact binds to
-`SqlStatement.Text` and ordered CLR parameter values. `PostgresQueryRegistration` prepares the explicit
+`SqlStatement.Text` and ordered CLR parameter values. `PostgresPersistenceRegistration` prepares the explicit
 native path, and `PostgresQueryRowsReader` dispatches a bounded unpaged row branch through Npgsql. The typed
 `IRelationQueryReader<TInput,TResult>` exposes the canonical definition and local result projection to HTTP
 without a provider-specific method group; `IRelationQueryRowsReader` is its complete-row execution seam.

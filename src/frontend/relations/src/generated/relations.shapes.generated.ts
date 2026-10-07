@@ -765,6 +765,7 @@ export interface QueryDefinition {
   id: QueryId;
   name: QueryName;
   results: QueryResultDefinition[];
+  assembly?: NestedQueryResultAssembly | null;
   body: LogicalQueryDefinition;
 }
 
@@ -1822,6 +1823,14 @@ export interface AggregationQueryResultDefinition {
   input: QueryNodeId;
 }
 
+export interface NestedQueryResultAssembly {
+  result: QueryResultId;
+  shape: QualifiedShapeId;
+  identity: FieldPath;
+  fields: QueryResultFieldMapping[];
+  collections: QueryResultCollectionAssembly[];
+}
+
 export interface RelationshipDefinition {
   id: RelationshipId;
   sourceShape: QualifiedShapeId;
@@ -2622,6 +2631,17 @@ export type QueryAssignmentId = string;
 export type RelationDraftCandidateId = string;
 
 export type QueryResultId = string;
+
+export interface QueryResultFieldMapping {
+  source: FieldPath;
+  target: FieldPath;
+}
+
+export interface QueryResultCollectionAssembly {
+  target: FieldPath;
+  identity: FieldPath;
+  fields: QueryResultFieldMapping[];
+}
 
 export type RelationshipId = string;
 

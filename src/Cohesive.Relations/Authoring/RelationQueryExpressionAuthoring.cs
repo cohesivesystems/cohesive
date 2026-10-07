@@ -503,6 +503,7 @@ public sealed partial class RelationQueryExpressionAuthoring
         where TRelated : notnull
     {
         ArgumentNullException.ThrowIfNull(relationship);
+        relationship.ImportEndpoints(this);
         return Traverse<TInput, TFrom, TRelated>(
             input,
             from,
@@ -714,6 +715,7 @@ public sealed partial class RelationQueryExpressionAuthoring
         where TTarget : notnull
     {
         ArgumentNullException.ThrowIfNull(relationship);
+        relationship.ImportEndpoints(this);
         return Traverse<TInput, TTarget, TSource>(
             input,
             from,

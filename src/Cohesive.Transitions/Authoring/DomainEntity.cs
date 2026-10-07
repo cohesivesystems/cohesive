@@ -33,7 +33,7 @@ public sealed class DomainEntity<T> where T : notnull
     {
         ArgumentNullException.ThrowIfNull(target);
         return new(Relationship.From<T>(Definition.StateShape.QualifiedId).Reference(reference)
-            .To(target.Definition.StateShape.QualifiedId));
+            .To(target.Definition.StateShape.QualifiedId), queryDocument.Value, target.queryDocument.Value);
     }
 
     /// <summary>Imports this entity's authoritative graph into a relation authoring session.</summary>

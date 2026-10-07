@@ -18,7 +18,7 @@ public sealed class SubplanTests
         Assert.Single(cut.Remainder.Plan.Definition.Body.Nodes.OfType<JoinQueryNode>());
         Assert.DoesNotContain(cut.Remainder.Plan.Definition.Body.Nodes, node => cut.CoveredNodes.Contains(node.Id) && node.Id != cut.Cut.Id);
         using var db = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
-        var native = new PostgresQueryRegistration(new(new("orders"), db, "test"))
+        var native = new PostgresPersistenceRegistration(new(new("orders"), db, "test"))
             .Entity(FulfillmentDomain.Orders, OrderStorage.Mapping)
             .Entity(FulfillmentDomain.Reservations, FulfillmentStorage.Reservations)
             .Prepare(cut.Prefix.Request, 1000, 1_000_000);

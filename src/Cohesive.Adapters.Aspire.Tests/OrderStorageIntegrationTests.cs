@@ -26,7 +26,7 @@ public sealed partial class OrderStorageIntegrationTests
         using var schema = new StreamReader(typeof(OrderStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync()))
             await command.ExecuteNonQueryAsync();
-        var repository = OrderStorage.Bind(database);
+        var repository = FulfillmentStorage.Bind(database).Repository(FulfillmentDomain.Orders);
         var context = OperationContext.Create();
         var id = Guid.NewGuid();
         try
@@ -46,7 +46,7 @@ public sealed partial class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, repository, OrderQueryInfrastructure.Bind(database));
+            OrderEndpoints.Map(app, repository, FulfillmentStorage.Bind(database).Query(OrderDetailsQuery.Definition, maximumRows: 1000, maximumBytes: 1_000_000));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -100,7 +100,7 @@ public sealed partial class OrderStorageIntegrationTests
         using var schema = new StreamReader(typeof(OrderStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync()))
             await command.ExecuteNonQueryAsync();
-        var repository = OrderStorage.Bind(database);
+        var repository = FulfillmentStorage.Bind(database).Repository(FulfillmentDomain.Orders);
         var context = OperationContext.Create();
         var id = Guid.NewGuid();
         var initial = await repository.Upsert(context, OrderStorage.Register(id));
@@ -112,7 +112,7 @@ public sealed partial class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, racing, OrderQueryInfrastructure.Bind(database));
+            OrderEndpoints.Map(app, racing, FulfillmentStorage.Bind(database).Query(OrderDetailsQuery.Definition, maximumRows: 1000, maximumBytes: 1_000_000));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };

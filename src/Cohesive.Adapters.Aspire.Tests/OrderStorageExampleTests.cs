@@ -25,7 +25,7 @@ public sealed class OrderStorageExampleTests
     public void Example_binds_shared_repository_to_the_canonical_entity_without_connecting()
     {
         using var database = NpgsqlDataSource.Create("Host=unreachable.invalid;Database=orders;Username=example;Pooling=false");
-        IEntityRepository repository = OrderStorage.Bind(database);
+        IEntityRepository repository = FulfillmentStorage.Bind(database).Repository(FulfillmentDomain.Orders);
         Assert.IsType<PostgresEntityRepository>(repository);
         Assert.Same(OrderStorage.Entity, repository.EntityDefinition);
         Assert.Equal("example/order", OrderStorage.Entity.Name.Value);
@@ -56,7 +56,7 @@ public sealed class OrderStorageExampleTests
     public async Task Repository_operations_observe_cancellation_before_opening_a_connection()
     {
         using var database = NpgsqlDataSource.Create("Host=unreachable.invalid;Database=orders;Username=example;Pooling=false");
-        var repository = OrderStorage.Bind(database);
+        var repository = FulfillmentStorage.Bind(database).Repository(FulfillmentDomain.Orders);
         var context = OperationContext.Create(cancellationToken: new CancellationToken(canceled: true));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => repository.Upsert(context, OrderStorage.Register(Guid.NewGuid())));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => repository.TryGet(context, "order-1",

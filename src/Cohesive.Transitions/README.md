@@ -132,6 +132,8 @@ var definition = domain.Build();
 `entity.Definition` supplies transition/storage authority. `entity.QueryShape(author)` imports that
 exact graph into a Relations expression session, avoiding an independently inferred CLR query shape.
 `References` uses an existing Relations relationship definition and names the target observation identity;
-it does not create a foreign key, establish tenant scope or enforce authorization. A traversal retains
+it does not create a foreign key, establish tenant scope or enforce authorization. The typed handle carries
+both exact endpoint documents, imported automatically by forward and inverse traversal. Explicit imports
+remain valid; conflicting session registrations fail closed. A traversal retains
 the separately declared relationship in its authoring catalog. Entity handles contain no runtime state,
 persistence or workflow. See the [runnable fulfillment example](../../eng/examples/aspire-first/README.md).
