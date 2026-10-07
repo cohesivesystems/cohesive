@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -27,24 +26,12 @@ internal static class ExecutionDefinitionTypes
         var pool = new TypePool();
         using var codec = Rent(pool);
         var options = codec.Options;
-        var body = JsonSerializer.SerializeToElement(definition, options);
+        // Discover child-first references without retaining an intermediate body document.
+        using (var writer = new Utf8JsonWriter(Stream.Null))
+            JsonSerializer.Serialize(writer, definition, options);
         if (pool.Entries.Count != 0)
-        {
             pool.Order(options);
-            body = JsonSerializer.SerializeToElement(definition, options);
-        }
-        if (body.ValueKind != JsonValueKind.Object)
-            throw new JsonException("An execution definition must be an object.");
-        return WriteObject(body, static name => name != TableProperty, writer =>
-        {
-            if (body.TryGetProperty(TableProperty, out _))
-                throw new JsonException($"'{TableProperty}' is reserved for document-local type definitions.");
-            writer.WritePropertyName(TableProperty);
-            writer.WriteStartArray();
-            foreach (var entry in pool.Entries)
-                entry.WriteTo(writer);
-            writer.WriteEndArray();
-        });
+        return JsonSerializer.SerializeToElement(definition, codec.RootInfo(typeof(T), definition!.GetType()));
     }
 
     internal static T Deserialize<T>(JsonElement definition)
@@ -58,8 +45,7 @@ internal static class ExecutionDefinitionTypes
         // behind an unused declaration; the round-trip gate rejects unused or noncanonical tables.
         for (var index = 0; index < table.GetArrayLength(); index++)
             pool.Resolve(index, options);
-        var body = WriteObject(definition, static name => name != TableProperty);
-        return body.Deserialize<T>(options)
+        return (T?)definition.Deserialize(codec.RootInfo(typeof(T), definition))
             ?? throw new JsonException($"Execution definition projected to null for '{typeof(T).FullName}'.");
     }
 
@@ -79,6 +65,7 @@ internal static class ExecutionDefinitionTypes
     {
         internal TypeReferenceConverter Converter { get; } = new();
         internal JsonSerializerOptions Options { get; }
+        readonly Dictionary<(Type Root, Type Concrete), JsonTypeInfo> roots = new();
 
         internal Codec()
         {
@@ -90,11 +77,78 @@ internal static class ExecutionDefinitionTypes
                     {
                         if (info.Type == typeof(TypeRef))
                             info.PolymorphismOptions = null;
+                        else if (Tags.TryGetValue(info.Type, out var tag))
+                        {
+                            var discriminator = info.CreateJsonPropertyInfo(typeof(string), "$type");
+                            discriminator.Get = _ => tag;
+                            discriminator.Set = static (_, _) => { };
+                            info.Properties.Add(discriminator);
+                        }
                     } }
                 }
             };
             Options.Converters.Insert(0, Converter);
             Options.MakeReadOnly();
+        }
+
+        internal JsonTypeInfo RootInfo(Type root, JsonElement definition)
+        {
+            var polymorphism = Options.GetTypeInfo(root).PolymorphismOptions;
+            var concrete = root;
+            if (polymorphism is not null)
+            {
+                if (definition.TryGetProperty(polymorphism.TypeDiscriminatorPropertyName, out var discriminator))
+                {
+                    var value = discriminator.ValueKind == JsonValueKind.String ? (object?)discriminator.GetString()
+                        : discriminator.ValueKind == JsonValueKind.Number && discriminator.TryGetInt32(out var number) ? number : null;
+                    concrete = polymorphism.DerivedTypes.FirstOrDefault(derived => Equals(derived.TypeDiscriminator, value)).DerivedType
+                        ?? throw new JsonException($"Unknown execution definition discriminator '{discriminator}'.");
+                }
+                else if (root.IsAbstract)
+                    throw new JsonException($"Execution definition requires '{polymorphism.TypeDiscriminatorPropertyName}'.");
+            }
+            return RootInfo(root, concrete);
+        }
+
+        internal JsonTypeInfo RootInfo(Type root, Type concrete)
+        {
+            var polymorphism = Options.GetTypeInfo(root).PolymorphismOptions;
+            if (polymorphism is null)
+                concrete = root; // Preserve the declared contract for nonpolymorphic base types.
+            if (roots.TryGetValue((root, concrete), out var cached))
+                return cached;
+            // Dispatch from the existing declared registry. Built-in polymorphic decoding rejects
+            // other '$' properties, so the root uses concrete metadata with explicit wire metadata.
+            var selected = polymorphism?.DerivedTypes.FirstOrDefault(derived => derived.DerivedType == concrete);
+            if (root != concrete && selected?.DerivedType is null)
+                throw new JsonException($"Unsupported execution definition type '{concrete.FullName}'.");
+            var info = Options.TypeInfoResolver!.GetTypeInfo(concrete, Options)
+                ?? throw new JsonException($"No serializer metadata for '{concrete.FullName}'.");
+            info.PolymorphismOptions = null;
+            if (selected?.TypeDiscriminator is { } tag)
+            {
+                var discriminator = info.CreateJsonPropertyInfo(tag.GetType(), polymorphism!.TypeDiscriminatorPropertyName);
+                discriminator.Get = _ => tag;
+                discriminator.Set = static (_, _) => { };
+                info.Properties.Add(discriminator);
+            }
+            AddTable(info);
+            info.MakeReadOnly();
+            roots.Add((root, concrete), info);
+            return info;
+        }
+
+        void AddTable(JsonTypeInfo info)
+        {
+            if (info.Kind != JsonTypeInfoKind.Object)
+                throw new JsonException("An execution definition must be an object.");
+            if (info.Properties.Any(static property => property.Name == TableProperty))
+                throw new JsonException($"'{TableProperty}' is reserved for document-local type definitions.");
+            var table = info.CreateJsonPropertyInfo(typeof(TypePool), TableProperty);
+            table.Get = _ => Converter.Pool;
+            table.Set = static (_, _) => { };
+            table.CustomConverter = new TypeTableConverter();
+            info.Properties.Add(table);
         }
 
         public void Dispose()
@@ -107,22 +161,23 @@ internal static class ExecutionDefinitionTypes
         }
     }
 
-    static JsonElement WriteObject(JsonElement source, Func<string, bool> include, Action<Utf8JsonWriter>? append = null)
+    // The table is validated by TypePool before root projection. Consume its tokens directly;
+    // serializing exposes the existing entries without a second body/tree representation.
+    sealed class TypeTableConverter : JsonConverter<TypePool>
     {
-        ArrayBufferWriter<byte> buffer = new();
-        using (var writer = new Utf8JsonWriter(buffer))
+        public override TypePool? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
-            writer.WriteStartObject();
-            foreach (var property in source.EnumerateObject())
-            {
-                if (include(property.Name))
-                    property.WriteTo(writer);
-            }
-            append?.Invoke(writer);
-            writer.WriteEndObject();
+            reader.Skip();
+            return null;
         }
-        using var parsed = JsonDocument.Parse(buffer.WrittenMemory);
-        return parsed.RootElement.Clone();
+
+        public override void Write(Utf8JsonWriter writer, TypePool value, JsonSerializerOptions options)
+        {
+            writer.WriteStartArray();
+            foreach (var entry in value.Entries)
+                entry.WriteTo(writer);
+            writer.WriteEndArray();
+        }
     }
 
     sealed class TypeReferenceConverter : JsonConverter<TypeRef>
@@ -179,9 +234,8 @@ internal static class ExecutionDefinitionTypes
             {
                 var entries = level.Select(index =>
                 {
-                    var fields = JsonSerializer.SerializeToElement(values[index], values[index].GetType(), options);
                     var entry = ExecutionDefinitionFingerprinter.NormalizeDefinition(
-                        WriteObject(fields, static _ => true, writer => writer.WriteString("$type", Tags[values[index].GetType()])));
+                        JsonSerializer.SerializeToElement(values[index], values[index].GetType(), options));
                     return (Index: index, Entry: entry, Key: entry.GetRawText());
                 }).OrderBy(item => item.Key, StringComparer.Ordinal).ToArray();
                 foreach (var entry in entries)
@@ -199,15 +253,14 @@ internal static class ExecutionDefinitionTypes
             if (byIdentity.TryGetValue(value, out var index))
                 return index >= 0 ? index : throw new JsonException("A portable structural type cannot contain a cycle.");
             byIdentity.Add(value, -1);
-            if (!Tags.TryGetValue(value.GetType(), out var tag))
+            if (!Tags.ContainsKey(value.GetType()))
                 throw new JsonException($"Unsupported portable type '{value.GetType().FullName}'.");
             // Child references are interned first. The canonical entry contains only local child indices,
             // so structural deduplication never repeatedly serializes a complete nested type tree.
             childDepths.Push(0);
             var fields = JsonSerializer.SerializeToElement(value, value.GetType(), options);
             var depth = childDepths.Pop();
-            var entry = WriteObject(fields, static _ => true, writer => writer.WriteString("$type", tag));
-            entry = ExecutionDefinitionFingerprinter.NormalizeDefinition(entry);
+            var entry = ExecutionDefinitionFingerprinter.NormalizeDefinition(fields);
             var key = entry.GetRawText();
             if (!byContent.TryGetValue(key, out index))
             {
@@ -236,8 +289,7 @@ internal static class ExecutionDefinitionTypes
                 if (entry.ValueKind != JsonValueKind.Object || !entry.TryGetProperty("$type", out var discriminator)
                     || discriminator.ValueKind != JsonValueKind.String || !Types.TryGetValue(discriminator.GetString()!, out var type))
                     throw new JsonException($"Document-local type entry '{index}' has an unknown type discriminator.");
-                var fields = WriteObject(entry, static name => name != "$type");
-                var value = fields.Deserialize(type, options) as TypeRef
+                var value = entry.Deserialize(type, options) as TypeRef
                     ?? throw new JsonException($"Document-local type entry '{index}' projected to null.");
                 decoded[index] = value;
                 return value;

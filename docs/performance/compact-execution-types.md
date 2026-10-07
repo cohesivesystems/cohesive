@@ -49,3 +49,46 @@ These are allocation qualification results, not CI or production latency claims.
 before the admission boundary is excluded, and these numbers are not retained heap size.
 The prototype uses local Cohesive assemblies; final package adoption must repeat qualification.
 The earlier prepared-projection fix is not included in this prototype's source baseline.
+
+## Direct metadata projection
+
+The compact codec handles `$type` and `$types` through exclusively leased, frozen serializer
+metadata. Type entries deserialize from their existing `JsonElement`; the definition body does
+likewise. The type table is validated completely before body projection, then its tokens are
+consumed without materializing another table. Unknown members remain disallowed. Root metadata
+is permitted only on the definition root; ordinary nested objects gain no metadata exceptions.
+Polymorphic roots dispatch from the existing declared serializer registry because the built-in
+polymorphic reader reserves `$` properties. No parallel discriminator catalog is introduced.
+
+Writing discovers references through a non-retained stream, orders entries as before, and emits
+the final body and table directly. Type-entry discriminators are ordinary projected metadata.
+The former `WriteObject` path—buffer, parse, clone, then project—is removed. Canonical normalization,
+exact re-projection, integrity checks, and immutable document ownership remain unchanged.
+
+Local Release qualification on macOS/.NET SDK 10.0.201 compared published alpha.129 with a temporary
+core-assembly overlay of this change, using Ari `f2f2c2b`. No package pins or source bridges changed.
+The standalone harness authored the catalog before measurement, constructed the same resolver and
+capabilities, and measured first and repeated `TrainingDurableTaskProcessDeploymentCatalog.Create`.
+EventPipe allocation ticks corroborated the call-stack attribution; per-thread counters supplied
+the totals. Harness setup differs slightly from the original xUnit measurement, so these are paired
+harness comparisons, not a comparison of unrelated test runs.
+
+| Boundary | Published codec | Direct metadata codec |
+| --- | ---: | ---: |
+| Cold admission | 298,636,976 B | 213,848,512 B |
+| Warm admission | 11,845,200 B | 7,042,680 B |
+| Warm projection: 100,000-character text, shared 128-field object | 541,448 B | 270,032 B |
+
+Allocations are cumulative, not retained heap. The projection regression allows 400,000 B,
+including the retained string and typed fields, and rejects the former filtered-tree implementation.
+These measurements do not establish CI or production latency. Repeated typed projection,
+whole-payload strings from document hashing, and successful diagnostic-path construction remain
+separate opportunities; this change does not claim to remove those costs.
+
+The final shared-core suite passed 4,224 tests (33 existing external-backend/scheduler skips).
+Ari's full .NET solution passed 1,263 tests (18 existing scheduler skips) with the temporary core
+overlay; every output assembly was restored afterward. Independently exporting all 164 Ari catalog
+definition bodies through the old and new codecs produced exactly equal canonical JSON bytes.
+Focused regressions cover a known scalar wire oracle, shared decoded identity, insertion-order
+independence, malformed/unused entries, reserved-property and nested-member rejection, concurrent
+codec isolation, compact growth, and bounded successful projection allocation.

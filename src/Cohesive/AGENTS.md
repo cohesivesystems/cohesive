@@ -15,6 +15,7 @@ materialization of core values require representative performance evidence when 
   compilation and cache population from warm execution.
 - Add deterministic allocation or bounded-memory regression tests for claimed hot-path guarantees. Keep timing
   evidence in BenchmarkDotNet reports unless a controlled CI environment provides a reliable threshold.
+- Handle JSON metadata directly through existing serializer contracts, converters, or token readers. Do not serialize, parse, and clone an existing JSON object merely to add or remove metadata properties. Account for every temporary full-payload representation, preserve strict unknown-member and integrity validation, and add representative allocation evidence when changing a hot serialization path.
 - Do not route the successful common path through JSON text, reflection, diagnostic strings, LINQ materialization,
   general-purpose object graphs, or repeated metadata discovery without evidence that the cost is acceptable.
 - Construct detailed paths and diagnostics lazily after failure is known. Optimize success and failure paths as
