@@ -250,6 +250,13 @@ public sealed class CanonicalTransitionAuthoringTests
         var initial = Assert.IsType<PortableValue>(created.Evidence.InitialObservation);
         var initialValue = Assert.IsType<ObservationValue>(initial.Value);
         Assert.Equal("pending", initialValue.Fields![nameof(ReviewEntity.Status)].GetString());
+        var prepared = TransitionStateProjector.ApplyToEntity(ReviewEntity.Instance.Definition, "new-review", created);
+        Assert.Equal(0, prepared.Version);
+        Assert.Equal("new-review", prepared.EntityId.Value);
+        var existingSubject = Assert.Throws<TransitionStatePreparationException>(() => TransitionStateProjector.ApplyToEntity(
+            ReviewEntity.Instance.Definition, "new-review", created, prepared.Snapshot));
+        Assert.Equal("transition.state.subjectAlreadyExists", existingSubject.Code);
+        Assert.Equal("/decision/evidence/initialObservation", existingSubject.Location);
         Assert.True(initialValue.Fields[nameof(ReviewEntity.Eligible)].GetBoolean());
         Assert.Equal(
             TransitionTraceEventKind.SubjectInitialized,

@@ -387,8 +387,9 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
 
         Assert.False(result.IsSuccessful);
         Assert.Equal(
-            ProcessTransitionOperationAdapterDiagnosticCodes.SubjectInitializationInvalid,
+            "transition.state.observationInvalid",
             result.Failure?.Code);
+        Assert.Equal("/decision/evidence/initialObservation", result.Failure?.Location);
         Assert.Null(await fixture.Repository.TryGet(fixture.Context, fixture.SubjectId, EntityReadOptions.Full));
         Assert.Equal(EntityTransitionOperationDisposition.NotFound, (
             await fixture.Repository.TryGetTransitionOperation(fixture.Context, fixture.Request)).Disposition);

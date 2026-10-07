@@ -32,9 +32,6 @@ public static class ProcessTransitionOperationAdapterDiagnosticCodes
     /// <summary>An authoritative entity already exists for a Transition that requires subject absence.</summary>
     public const string SubjectPresent = "storage.processes.transitionAdapter.subject.present";
 
-    /// <summary>The initialized subject violates the authoritative entity definition.</summary>
-    public const string SubjectInitializationInvalid = "storage.processes.transitionAdapter.subject.initializationInvalid";
-
     /// <summary>The Transition did not produce a committable typed decision.</summary>
     public const string DecisionNotCommittable = "storage.processes.transitionAdapter.decision.notCommittable";
 }
@@ -371,55 +368,15 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             return result;
         }
 
-        ObservationValue baseState;
-        if (createsSubject)
-        {
-            var initial = decision.Evidence.InitialObservation;
-            if (initial is null
-                || initial.State != PortableValueState.Concrete
-                || initial.Value is not { } initialValue
-                || initialValue.Fields is null)
-            {
-                return Failure(
-                    ProcessTransitionOperationAdapterDiagnosticCodes.DecisionNotCommittable,
-                    "A successful creation Transition did not retain a concrete complete initial observation.",
-                    "/decision/evidence/initialObservation");
-            }
-            baseState = initialValue;
-        }
-        else
-        {
-            baseState = ObservationValue.FromObject(snapshot!.Entity.Observation.Fields);
-        }
-
-        var projected = TransitionStateProjector.Apply(
-            baseState,
-            decision);
-        var candidateVersion = createsSubject
-            ? 0
-            : decision.Kind == TransitionDecisionKind.Applied
-                ? checked(snapshot!.Entity.Version + 1)
-                : snapshot!.Entity.Version;
         EntityState candidateState;
         try
         {
-            candidateState = binding.Repository.EntityDefinition.CreateState(
-                subject.EntityId.Value,
-                projected.Fields!,
-                candidateVersion);
-            if (createsSubject)
-                binding.Repository.EntityDefinition.ValidateState(candidateState);
+            candidateState = TransitionStateProjector.ApplyToEntity(binding.Repository.EntityDefinition,
+                subject.EntityId.Value, decision, createsSubject ? null : snapshot!.Entity);
         }
-        catch (SemanticRuleViolationException exception)
+        catch (TransitionStatePreparationException exception)
         {
-            return Failure(
-                createsSubject
-                    ? ProcessTransitionOperationAdapterDiagnosticCodes.SubjectInitializationInvalid
-                    : ProcessTransitionOperationAdapterDiagnosticCodes.DecisionNotCommittable,
-                exception.Message,
-                createsSubject
-                    ? "/decision/evidence/initialObservation"
-                    : "/decision/candidateObservation");
+            return Failure(exception.Code, exception.Message, exception.Location);
         }
         var candidate = candidateState.Snapshot;
 

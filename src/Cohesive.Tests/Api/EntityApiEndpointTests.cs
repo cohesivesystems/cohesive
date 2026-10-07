@@ -36,6 +36,30 @@ public sealed class EntityApiEndpointTests
     static readonly InteractionContractCatalog NoteInteractionContracts = CreateInteractionCatalog(NoteRevisedEvent);
 
     [Fact]
+    public async Task Candidate_preparation_failure_returns_sanitized_problem_without_commit()
+    {
+        var entity = NoteEntity.Instance;
+        var repository = new InMemoryEntityOutboxRepository(entity.Definition,
+            partitionKeyFieldName: nameof(NoteState.Tenant));
+        var context = OperationContext.Create(new FixedTimeProvider());
+        var before = await repository.Upsert(context, new(entity.Definition.CreateState("note-1",
+            new NoteState("note-1", "tenant-a", "private-before", context.UtcNow), version: long.MaxValue).Snapshot));
+        var app = CreateApp(entity, repository, operationContext: context);
+        var response = await InvokeAsync(app, route: "/notes/{id}", method: "POST",
+            routeValues: new() { ["id"] = "note-1" }, body: new ReviseNoteRequest("private-after"));
+        Assert.Equal(StatusCodes.Status500InternalServerError, response.StatusCode);
+        var problem = ReadJson(response.Body);
+        Assert.Equal("transition.state.versionOverflow", problem.GetProperty("code").GetString());
+        Assert.Equal("/current/version", problem.GetProperty("location").GetString());
+        Assert.True(problem.TryGetProperty("traceId", out _));
+        Assert.DoesNotContain("private-", response.Body);
+        Assert.DoesNotContain("cannot be incremented", response.Body);
+        var after = await repository.TryGet(context, "note-1", EntityReadOptions.Full);
+        Assert.Equal(before.ConcurrencyToken, after!.ConcurrencyToken);
+        Assert.Empty(repository.OutboxEnvelopes);
+    }
+
+    [Fact]
     public void MapEntityApiDefinition_CanFilterSharedOperationNamesAndCustomizeEndpointNames()
     {
         var builder = WebApplication.CreateSlimBuilder();
@@ -192,6 +216,29 @@ public sealed class EntityApiEndpointTests
     }
 
     [Fact]
+    public async Task Emission_only_transition_commits_outbox_without_advancing_state_version()
+    {
+        var entity = NoteEntity.Instance;
+        var repository = new InMemoryEntityOutboxRepository(
+            entity.Definition, partitionKeyFieldName: nameof(NoteState.Tenant));
+        var context = OperationContext.Create(new FixedTimeProvider());
+        var app = CreateApp(entity, repository, operationContext: context);
+        await InvokeAsync(app, route: "/notes", method: "POST",
+            body: new CreateNoteRequest("note-1", "unchanged"));
+        var before = await repository.TryGet(context, id: "note-1", options: EntityReadOptions.Full);
+
+        var response = await InvokeAsync(app, route: "/notes/{id}", method: "POST",
+            routeValues: new() { ["id"] = "note-1" }, body: new ReviseNoteRequest("unchanged"));
+
+        Assert.Equal(StatusCodes.Status200OK, response.StatusCode);
+        var after = await repository.TryGet(context, id: "note-1", options: EntityReadOptions.Full);
+        Assert.NotNull(before);
+        Assert.NotNull(after);
+        Assert.Equal(before.Entity.Version, after.Entity.Version);
+        Assert.Single(repository.OutboxEnvelopes);
+    }
+
+    [Fact]
     public void TransitionStateProjector_VerifiesDecisionEvidenceBeforeProjection()
     {
         var entity = NoteEntity.Instance;
@@ -216,7 +263,7 @@ public sealed class EntityApiEndpointTests
         var mismatched = state.WithField(
             FieldPath.FromField(nameof(NoteState.Text)),
             ObservationValue.FromString("changed-concurrently"));
-        Assert.Throws<InvalidOperationException>(() => TransitionStateProjector.Apply(mismatched, decision));
+        Assert.Throws<TransitionStatePreparationException>(() => TransitionStateProjector.Apply(mismatched, decision));
     }
 
     [Fact]
@@ -374,6 +421,11 @@ public sealed class EntityApiEndpointTests
         var resource = ReadJson(loaded.Body);
         Assert.Equal("tenant-b", resource.GetProperty(nameof(NoteResource.Tenant)).GetString());
         Assert.Equal("beta tenant", resource.GetProperty(nameof(NoteResource.Text)).GetString());
+    }
+
+    sealed class FixedTimeProvider : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
     }
 
     static WebApplication CreateApp(

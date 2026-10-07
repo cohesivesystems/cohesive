@@ -47,6 +47,14 @@ ordered patches produce a candidate observation, and invariants check that candi
 mutates the record. [POCO authoring and execution](POCO_AUTHORING.md) covers materialization, names, value-object
 contracts, and the supported subset.
 
+## Candidate state and composition
+
+`TransitionStateProjector.ApplyToEntity` prepares a validated entity candidate from a canonical
+`TransitionDecision`. API, service, and process transition consumers share its version and
+patch-before-value rules. Commit fences and emission ownership remain at their execution boundaries.
+See [entity/transition/process composition](../../docs/decisions/entity-transition-process-composition.md)
+for the implemented boundary and the remaining CRUD, history, and reconstitution work.
+
 ## Explicit entity declarations
 
 The C# entity surface discovers fields and produces the canonical observation shape. Ordinary field declarations do

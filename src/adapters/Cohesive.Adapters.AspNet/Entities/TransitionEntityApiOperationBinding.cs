@@ -104,7 +104,17 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
                     plan.Definition.Observation,
                     ObservationValue.FromObject(state.Fields)));
 
-            var newState = CreateCandidateState(options, snapshot, state, decision);
+            EntityState newState;
+            try
+            {
+                newState = decision.GuaranteeDemands.CommitRequired
+                    ? TransitionStateProjector.ApplyToEntity(options.Entity, entityId, decision, snapshot.Entity)
+                    : state;
+            }
+            catch (TransitionStatePreparationException exception)
+            {
+                return TypedResults.Problem(CohesiveHttpProblems.StatePreparationFailure(httpContext, exception));
+            }
             var commitContext = new EntityApiCommitContext(
                 operationContext,
                 httpContext,
@@ -167,26 +177,6 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
         throw new InvalidOperationException(
             $"Canonical Transition emission lowering failed with '{diagnostic.Code}' at "
             + $"'{diagnostic.Location}': {diagnostic.Message}");
-    }
-
-    static EntityState CreateCandidateState(
-        EntityApiEndpointOptions options,
-        EntitySnapshot snapshot,
-        EntityState state,
-        TransitionDecision decision)
-    {
-        if (!decision.GuaranteeDemands.CommitRequired)
-        {
-            return state;
-        }
-
-        var projected = TransitionStateProjector.Apply(
-            ObservationValue.FromObject(state.Fields),
-            decision);
-        return options.Entity.CreateState(
-            snapshot.Entity.EntityId.Value,
-            projected.Fields!,
-            snapshot.Entity.Version + 1);
     }
 
     static PortableValue ToPortableValue(object? value, ValueContract contract, bool isSupplied)

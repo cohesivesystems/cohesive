@@ -24,6 +24,19 @@ namespace Cohesive.Tests.Api;
 public sealed class ServiceRuntimeTests
 {
     [Fact]
+    public async Task Candidate_preparation_failure_returns_structured_service_error_without_write()
+    {
+        var fixture = await Fixture.Create(version: long.MaxValue);
+        var result = await fixture.Invoke();
+        Assert.Equal(ApiResultKind.InfrastructureError, result.Kind);
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("transition.state.versionOverflow", diagnostic.Code);
+        Assert.Equal("/current/version", diagnostic.Location);
+        Assert.Equal(0, fixture.Repository.Writes);
+        Assert.DoesNotContain(result.Trace.Events, item => item.Kind == "commitCompleted");
+    }
+
+    [Fact]
     public async Task DeclaredOperationLoadsOnceAndCommitsWithExactReviewedToken()
     {
         var fixture = await Fixture.Create();
@@ -434,7 +447,7 @@ public sealed class ServiceRuntimeTests
         public Task<ServiceInvocationResult> Invoke() => Runtime.InvokeAsync(OperationContext.Create(), "revise", "note-1",
             Initial.ConcurrencyToken, new("tests/services/revise"), Input);
 
-        public static async Task<Fixture> Create()
+        public static async Task<Fixture> Create(long version = 0)
         {
             var entity = Note.Instance.Definition;
             var authored = TransitionAuthoring.Create<Note, Note.ReviseInput, bool>(entity.Shape,
@@ -451,7 +464,7 @@ public sealed class ServiceRuntimeTests
                 new(new("tests"), new("tests/services"), DocumentOrigin.Generated));
             var inner = new InMemoryEntityOutboxRepository(entity, _ => "tenant-a");
             var initial = await inner.Upsert(OperationContext.Create(), new(entity.CreateState("note-1",
-                new { Id = "note-1", Tenant = "tenant-a", Text = "before" }).Snapshot));
+                new { Id = "note-1", Tenant = "tenant-a", Text = "before" }, version: version).Snapshot));
             var fixture = new Fixture { Plan = plan, Document = document, Repository = new(inner), Initial = initial };
             fixture.Runtime = new(document, [new ServiceTransitionBinding("revise", plan, entity, _ =>
             {

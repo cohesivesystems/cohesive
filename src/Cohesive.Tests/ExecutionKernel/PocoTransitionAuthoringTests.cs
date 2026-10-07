@@ -11,6 +11,123 @@ namespace Cohesive.Tests.ExecutionKernel;
 
 public sealed class PocoTransitionAuthoringTests
 {
+    [Theory]
+    [InlineData(true, "pending", 8)]
+    [InlineData(true, "approved", 7)]
+    [InlineData(false, "pending", 7)]
+    public void Entity_candidate_preparation_has_one_version_policy(bool eligible, string status, long version)
+    {
+        var entity = ObjectEntityDefinition.For<Run>(new("run-control"));
+        var transition = TransitionAuthoring.Create<Run, Approve, string>(entity.Shape, Metadata(), t => t
+            .Requires(new("eligible"), (state, input) => state.Eligible, (state, input) => "rejected")
+            .Set(new("approve"), state => state.Status, "approved")
+            .Return(new("result"), TransitionOutcomeDisposition.Applied, "approved"));
+        var original = entity.CreateState("run-1", new Run(eligible, status), version: 7);
+        var decision = Decide(Compile(transition), new Approve(true), ObservationValue.FromObject(original.Fields));
+        var candidate = TransitionStateProjector.ApplyToEntity(entity, "run-1", decision, original.Snapshot);
+        Assert.Equal(version, candidate.Version);
+        Assert.Equal("run-1", candidate.EntityId.Value);
+        Assert.Equal(7, original.Version);
+        Assert.Equal(status, original.Fields["Status"].GetString());
+        Assert.Equal(eligible ? "approved" : status, candidate.Fields["Status"].GetString());
+    }
+
+    [Fact]
+    public void Candidate_preparation_rejects_wrong_subject()
+    {
+        var (entity, state, decision) = PreparationScenario();
+        var error = Assert.Throws<TransitionStatePreparationException>(() =>
+            TransitionStateProjector.ApplyToEntity(entity, "another", decision, state.Snapshot));
+        Assert.Equal("transition.state.subjectMismatch", error.Code);
+        Assert.Equal("/current/entityId", error.Location);
+    }
+
+    [Fact]
+    public void Candidate_creation_requires_initial_observation_evidence()
+    {
+        var (entity, _, decision) = PreparationScenario();
+        var error = Assert.Throws<TransitionStatePreparationException>(() =>
+            TransitionStateProjector.ApplyToEntity(entity, "run-1", decision));
+        Assert.Equal("transition.state.creationEvidenceMissing", error.Code);
+        Assert.Equal("/decision/evidence/initialObservation", error.Location);
+    }
+
+    [Fact]
+    public void Candidate_preparation_rejects_stale_patch_evidence()
+    {
+        var (entity, _, decision) = PreparationScenario();
+        var changed = entity.CreateState("run-1", new Run(true, "changed"), version: 7);
+        var error = Assert.Throws<TransitionStatePreparationException>(() =>
+            TransitionStateProjector.ApplyToEntity(entity, "run-1", decision, changed.Snapshot));
+        Assert.Equal("transition.state.beforeMismatch", error.Code);
+        Assert.Equal("/decision/patch/0/before", error.Location);
+    }
+
+    [Fact]
+    public void Candidate_preparation_rejects_version_overflow()
+    {
+        var (entity, _, decision) = PreparationScenario();
+        var overflow = entity.CreateState("run-1", new Run(true, "pending"), version: long.MaxValue);
+        var error = Assert.Throws<TransitionStatePreparationException>(() =>
+            TransitionStateProjector.ApplyToEntity(entity, "run-1", decision, overflow.Snapshot));
+        Assert.Equal("transition.state.versionOverflow", error.Code);
+        Assert.Equal("/current/version", error.Location);
+    }
+
+    [Fact]
+    public void Candidate_preparation_rejects_wrong_entity_shape()
+    {
+        var (_, state, decision) = PreparationScenario();
+        var other = ObjectEntityDefinition.For<Run>(new("other-run"));
+        var error = Assert.Throws<TransitionStatePreparationException>(() =>
+            TransitionStateProjector.ApplyToEntity(other, "run-1", decision, state.Snapshot));
+        Assert.Equal("transition.state.shapeMismatch", error.Code);
+        Assert.Equal("/current/observation", error.Location);
+    }
+
+    [Theory]
+    [InlineData("pathUnsupported", "/decision/patch/0/path")]
+    [InlineData("valueNotCommittable", "/decision/patch/0/after")]
+    [InlineData("decisionUnsupported", "/decision/kind")]
+    public void Malformed_decision_reports_precise_preparation_failure(string failure, string location)
+    {
+        var (entity, state, original) = PreparationScenario();
+        var patch = original.Patch[0];
+        var invalidPatch = new TransitionExecutedPatch(patch.Node,
+            failure == "pathUnsupported" ? patch.Path.Append(FieldPathSegment.Element()) : patch.Path,
+            patch.Operation, patch.Before,
+            failure == "valueNotCommittable" ? PortableValue.Unknown(patch.After.Contract) : patch.After);
+        // Deliberately malformed internal evidence tests the fail-closed preparation boundary.
+        var decision = new TransitionDecision(
+            failure == "decisionUnsupported" ? TransitionDecisionKind.InfrastructureFailure : original.Kind,
+            original.Outcome, [invalidPatch], original.Emissions, original.MachineMovements,
+            original.GuaranteeDemands, original.Conflicts, original.Diagnostics, original.Evidence);
+        var error = Assert.Throws<TransitionStatePreparationException>(() =>
+            TransitionStateProjector.ApplyToEntity(entity, "run-1", decision, state.Snapshot));
+        Assert.Equal("transition.state." + failure, error.Code);
+        Assert.Equal(location, error.Location);
+    }
+
+    [Fact]
+    public void Preparation_failure_retains_standard_exception_chain()
+    {
+        var original = new InvalidOperationException("underlying validation");
+        var failure = new TransitionStatePreparationException("test.code", "/candidate", "Preparation failed", original);
+        Assert.Same(original, failure.InnerException);
+        Assert.Same(original, failure.GetBaseException());
+    }
+
+    static (Cohesive.Transitions.Model.EntityDefinition Entity, Cohesive.Transitions.Model.EntityState State,
+        TransitionDecision Decision) PreparationScenario()
+    {
+        var entity = ObjectEntityDefinition.For<Run>(new("run-control"));
+        var transition = TransitionAuthoring.Create<Run, Approve, string>(entity.Shape, Metadata(), t => t
+            .Set(new("approve"), state => state.Status, "approved")
+            .Return(new("result"), TransitionOutcomeDisposition.Applied, "approved"));
+        var state = entity.CreateState("run-1", new Run(true, "pending"), version: 7);
+        return (entity, state, Decide(Compile(transition), new Approve(true), ObservationValue.FromObject(state.Fields)));
+    }
+
     [Fact]
     public void PocoAndExplicitEntityAuthoringProduceIdenticalCanonicalBytes()
     {
