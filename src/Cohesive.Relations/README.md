@@ -101,3 +101,20 @@ Adapter-specific guides are available for
 [`Cohesive.Adapters.Postgres`](../adapters/Cohesive.Adapters.Postgres/README.md),
 [`Cohesive.Adapters.Cosmos`](../adapters/Cohesive.Adapters.Cosmos/README.md), and
 [`Cohesive.Adapters.Elastic`](../adapters/Cohesive.Adapters.Elastic/README.md).
+
+## Typed row-query results
+
+Expression authoring can retain a typed input and public application result with
+`BuildQuery(id, name, rows, parameter, result: values => ...)`. The returned
+`RelationQuery<TInput,TResult>` captures the existing canonical query, shape documents and relationship
+catalog without compiling or selecting a backend. Its row type is inferred and can be anonymous;
+constructor projections still require verified direct field initialization/getters. `Where` retains a
+focused binding for the existing typed traversal/projection overloads.
+
+The `result` callback is a local presentation projection of complete typed rows. It explicitly handles
+empty results and nesting; it is not serialized as portable query semantics. The shared boundary performs
+observation decoding, so consumers invoke a typed prepared query instead of maintaining intermediary
+DTO conversions. This convenience currently requires one exact invocation parameter and one row result;
+additional or foreign parameters fail closed. Existing structural query and HostedQuery APIs retain their
+separate responsibilities. See the [fulfillment example](../../eng/examples/aspire-first/README.md) for
+backend registration and fluent API binding.

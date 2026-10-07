@@ -33,15 +33,16 @@ public sealed partial class OrderStorageIntegrationTests
             await orders.Upsert(context, OrderStorage.Register(Guid.Parse(id)));
             await orders.Upsert(context, new(OrderStorage.Entity.CreateState(id, new Order(id, "outside", "Private"), 1).Snapshot));
             await orders.Upsert(context, new(OrderStorage.Entity.CreateState(outsideId, new Order(outsideId, "outside"), 1).Snapshot));
-            var queryReader = OrderDetailsQuery.Bind(database);
-            var initialRows = await queryReader.ReadAsync(new Dictionary<QueryParameterId, ObservationValue>
-            { [new(OrderDetailsQuery.OrderIdParameter)] = ObservationValue.FromString(id) });
+            var queryReader = OrderQueryInfrastructure.Bind(database);
+            var nativeReader = new PostgresQueryRowsReader(queryReader.Artifact, runtime, maximumRows: 1000, maximumBytes: 1_000_000);
+            var initialRows = await nativeReader.ReadAsync(new Dictionary<QueryParameterId, ObservationValue>
+            { [OrderDetailsQuery.Definition.Parameter] = ObservationValue.FromString(id) });
             Assert.False(Assert.Single(initialRows).TryGetField(FieldPath.FromField("ReservationId"), out _));
             var builder = WebApplication.CreateBuilder();
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, orders, OrderDetailsQuery.Bind(database));
+            OrderEndpoints.Map(app, orders, queryReader.ReadAsync);
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -62,15 +63,14 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.Equal(2, joined!.Reservations.Count);
             Assert.Equal(new[] { 1, 2 }, joined.Reservations.Select(item => item.Quantity).Order());
             Assert.All(joined.Reservations, item => { Assert.Equal(sku, item.Sku); Assert.Equal(8, item.AvailableStock); });
-            var values = new Dictionary<QueryParameterId, ObservationValue> { [new(OrderDetailsQuery.OrderIdParameter)] = ObservationValue.FromString(id) };
-            await Assert.ThrowsAsync<InvalidOperationException>(() => OrderDetailsQuery.Bind(database, maximumRows: 1).ReadAsync(values));
-            var tiny = new PostgresQueryRowsReader(OrderDetailsQuery.Artifact, runtime, maximumRows: 10, maximumBytes: 1);
+            var values = new Dictionary<QueryParameterId, ObservationValue> { [OrderDetailsQuery.Definition.Parameter] = ObservationValue.FromString(id) };
+            await Assert.ThrowsAsync<InvalidOperationException>(() => OrderQueryInfrastructure.Bind(database, maximumRows: 1).ReadAsync(id));
+            var tiny = new PostgresQueryRowsReader(queryReader.Artifact, runtime, maximumRows: 10, maximumBytes: 1);
             await Assert.ThrowsAnyAsync<InvalidOperationException>(() => tiny.ReadAsync(values));
-            Assert.Throws<ArgumentException>(() => new PostgresQueryRowsReader(OrderDetailsQuery.Artifact,
+            Assert.Throws<ArgumentException>(() => new PostgresQueryRowsReader(queryReader.Artifact,
                 new(new("wrong-database"), database, "tests/fulfillment"), 10, 1000));
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => OrderDetailsQuery.Bind(database).ReadAsync(values, new CancellationToken(true)));
-            values[new(OrderDetailsQuery.OrderIdParameter)] = ObservationValue.FromString("' OR true --");
-            Assert.Empty(await OrderDetailsQuery.Bind(database).ReadAsync(values));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queryReader.ReadAsync(id, new CancellationToken(true)));
+            Assert.Null(await queryReader.ReadAsync("' OR true --"));
             await app.StopAsync();
         }
         finally

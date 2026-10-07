@@ -107,3 +107,19 @@ Native command timeout still bounds command duration; the result budget is not a
 This reader deliberately does not expose a complete canonical evaluation outcome, supplied-root
 execution, relation invariants, paging or temporal semantics. Such artifacts/values are rejected;
 use the existing source-acquisition path with explicit policies where those contracts are required.
+
+## Register a typed query at host composition
+
+`PostgresQueryRegistration(runtime).Entity(domainEntity, mapping).Register(query, maximumRows, maximumBytes)`
+places all demanded entity sources/traversals in the explicitly selected database, projects the registered
+repository mappings and invokes the existing static/placement/feasibility/native compilers. It opens no
+connection. Missing mappings and invalid plans fail at registration; static/native compilation failures
+retain their result objects in `PostgresQueryPreparationException`, while placement/binding failures retain
+the existing artifact-authoring diagnostics. This convenience covers entity-backed inputs on one database;
+use the lower-level APIs for custom placement, acquisition or physical bindings.
+
+Keep the returned `PostgresQueryReader<TInput,TResult>` for the host lifetime. `ReadAsync` performs no
+compilation; it binds the input, reads bounded native rows and invokes the query's local typed result
+projection. Its `Artifact` remains inspectable. The builder is registration-local and mutable, while readers
+retain immutable prepared artifacts and require concurrency-safe projection callbacks. Native data-source
+ownership remains with the caller. PostgreSQL configuration stays outside the semantic query declaration.

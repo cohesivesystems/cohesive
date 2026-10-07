@@ -361,3 +361,14 @@ The mapping does not change native server-side logging or application-supplied P
 Applications choosing `Conflict<TDomain>` for domain rejection will have two 409 body shapes: their
 explicit domain body and Problem Details for concurrency. Use the Problem Details `OnRejected` overload
 (as the order example does) for one HTTP error shape; distinguish conditions by their stable `code`.
+
+## Bind a typed read operation
+
+Use `app.MapApiQuery(endpoint, preparedRead).FromRoute<Guid>("id", id => id.ToString("D")).OkOrNotFound()`
+when a separately declared, bodyless query endpoint returns a nullable typed result. `preparedRead` is a
+`Func<TInput, CancellationToken, Task<TResult>>`; no database adapter dependency is required. Registration
+checks the endpoint's query kind and response type, route declaration and 404 policy. Invalid input returns
+400 before invocation, request cancellation propagates, and null returns the declared empty-body 404.
+Other results use 200 JSON. The native route builder remains available for further configuration, and
+semantic authorization still requires the existing policy resolver. The binder owns no query compilation,
+result assembly or retry policy.

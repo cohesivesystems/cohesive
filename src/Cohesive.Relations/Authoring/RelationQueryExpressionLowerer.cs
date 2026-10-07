@@ -1818,6 +1818,27 @@ public sealed class RelationQueryExpressionLowerer
         }
     }
 
+    static FieldInfo? ConstructorProjectionField(PropertyInfo member)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        var owner = member.DeclaringType;
+        var field = owner?.GetField($"<{member.Name}>k__BackingField", flags);
+        if (field?.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false) == true) return field;
+
+        // Anonymous projections use readonly i__Field storage rather than auto-property metadata.
+        // Admit only a compiler-generated owner and an exact direct field getter; the constructor
+        // still goes through the same complete IL verification as named record projections.
+        field = owner?.GetField($"<{member.Name}>i__Field", flags);
+        var getter = member.GetMethod;
+        var il = getter?.GetMethodBody()?.GetILAsByteArray();
+        if (owner?.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false) != true
+            || field?.IsInitOnly != true || il is not { Length: 7 }
+            || il[0] != 0x02 || il[1] != 0x7B || il[6] != 0x2A) return null;
+        var offset = 2;
+        var actual = getter!.Module.ResolveField(ReadInt32(il, ref offset), owner.GetGenericArguments(), null);
+        return actual == field ? field : null;
+    }
+
     static bool TryVerifyDirectConstructorProjection(
         ConstructorInfo constructor,
         ImmutableArray<PropertyInfo> members,
@@ -1834,12 +1855,8 @@ public sealed class RelationQueryExpressionLowerer
         for (var index = 0; index < members.Length; index++)
         {
             var member = members[index];
-            var field = member.DeclaringType?.GetField(
-                $"<{member.Name}>k__BackingField",
-                BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-            if (field is null
-                || field.GetCustomAttribute<CompilerGeneratedAttribute>(inherit: false) is null
-                || field.FieldType != parameters[index].ParameterType)
+            var field = ConstructorProjectionField(member);
+            if (field is null || field.FieldType != parameters[index].ParameterType)
             {
                 reason = $"Member '{member.Name}' is not a directly type-compatible auto-property.";
                 return false;

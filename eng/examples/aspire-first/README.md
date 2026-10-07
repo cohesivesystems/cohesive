@@ -82,7 +82,7 @@ fail registration with a `TransitionApiPreparationException` retaining structure
 All four routes (create, get, submit and details) are declared as portable handles in `OrderApi`
 under one `Entity<Order>()` builder in a static constructor,
 and bound in `OrderEndpoints`: entity operations use `app.MapEntityApi<Order>(..., endpoints => ...)`,
-while the joined read uses `app.MapApiEndpoint(OrderApi.Details, ...)`. Callbacks receive
+while the joined read uses `app.MapApiQuery(OrderApi.Details, details).FromRoute<Guid>(...).OkOrNotFound()`. Callbacks receive
 typed order state and transition outcomes; `.Input(request => ...)` uses the existing request context
 and its `RequiredEntityId`. The separate declarations contain no handlers; the example's HTTP error body
 is explicitly the native `ProblemDetails` type. Creation declares 201, lookup/submission declare 404,
@@ -169,15 +169,43 @@ The domain model itself remains the entity catalog, not a new orchestration or p
 
 `OrderDetailsQuery` selects an order by a bound parameter and the local partition, traverses the
 inverse reservation/order relationship, then traverses reservation/inventory. Both traversals are
-left joins, so an order without reservations remains present. Its projection is compiled by the
-existing static, placement, feasibility and native PostgreSQL compilers. The three repository mappings
-supply the physical table/column bindings through `.Table(placedInput, repositoryMapping)`; column
-names and join predicates are not repeated in the endpoint.
+left joins, so an order without reservations remains present. The declaration exposes `RelationQuery<string, OrderDetails?>` up front. Its flat row projection is
+inferred; no `OrderDetailRow` DTO or observation conversion is maintained in application code. The
+final `result:` callback defines the public nested response and empty-result policy. That callback
+is local CLR presentation code, not a claim that nested collection assembly is portable query IR.
+
+`OrderQueryInfrastructure` owns the native attachment:
+
+```csharp
+new PostgresQueryRegistration(runtime)
+    .Entity(FulfillmentDomain.Orders, OrderStorage.Mapping)
+    .Entity(FulfillmentDomain.Reservations, FulfillmentStorage.Reservations)
+    .Entity(FulfillmentDomain.Inventory, FulfillmentStorage.Inventory)
+    .Register(OrderDetailsQuery.Definition, maximumRows: 1000, maximumBytes: 1_000_000);
+```
+
+The adapter invokes the existing static, placement, feasibility and native PostgreSQL compilers during
+host registration, retaining the native artifact for inspection. The query contains no PostgreSQL imports,
+placement or compiler calls. This is host infrastructure composition; it does not make the Aspire AppHost
+or Cohesive.Infra responsible for implementing query compilation. Registration reuses repository mappings
+for physical tables/columns, fails before IO for missing mappings, and retains structured compiler failures.
+There is no global cache: retain the returned reader at host lifetime and invoke it per request.
+
+The endpoint receives a typed delegate and binds it to the independently declared API:
+
+```csharp
+app.MapApiQuery(OrderApi.Details, details)
+    .FromRoute<Guid>("id", id => id.ToString("D"))
+    .OkOrNotFound();
+```
+
+Response type and query/body contracts are checked during registration. Invalid route input returns 400
+without executing the query, null maps to the declared 404, and request cancellation reaches PostgreSQL.
+There are no joins, observation decoding or result nesting in the endpoint.
 
 Preparation occurs once at registration, and each request executes one parameterized SQL statement.
 `PostgresQueryRowsReader` reconstructs canonical observations from native result aliases and presence
-markers. A missing joined row omits its fields. HTTP presentation nests the resulting reservation rows
-and sorts their IDs; it does not perform the joins. The reader rejects overflow rather than silently
+markers. A missing joined row omits its fields. The query's typed presentation projection nests reservation rows and sorts their IDs; it does not perform the joins. The reader rejects overflow rather than silently
 truncating: this example allows 1,000 rows and 1,000,000 decoded scalar bytes, with cancellation and
 native command timeout. It has no paging or retry policy, and is not a full canonical evaluation-outcome
 API. The current reader accepts non-temporal scalar results/parameters only.
@@ -214,9 +242,16 @@ different partition, missing IDs, parameterized hostile input, cancellation, aff
 row/byte bounds. They execute the chained outer joins: that path exposed and now protects a compiler
 bug where presence markers retained an alias from an earlier subquery scope.
 
-Preparation measurement (local .NET 10 Release test process, macOS ARM64): the first artifact access
-**after domain setup** took 471–510 ms and allocated 45,989,336–46,150,752 bytes across two isolated runs. This includes the
-query compilation pipeline; it is not whole-host startup, retained memory or request latency. The
-artifact is retained and reused rather than compiling on each request; 10,000 warm artifact accesses
-allocated zero bytes in the measured loop (this excludes query execution). This small example does not
-establish the cost of a large query catalog; measure that separately before eager preparation at scale.
+Preparation is measured in `FulfillmentDomainTests` separately from execution. It includes native
+registration and compilation after domain setup; it is not whole-host startup, retained memory or request
+latency. One isolated local .NET 10 Release run measured 483.7 ms and 48,190,888 allocated bytes; 10,000
+warm artifact accesses allocated zero bytes (excluding query execution). The returned artifact is retained
+for requests. A large query catalog needs a separate scaling
+measurement before eager preparation; the example does not claim catalog-wide startup qualification.
+
+The typed convenience currently admits one canonical invocation parameter and one row result. It adds
+no second semantic query model: its immutable compilation request retains the existing canonical
+query/shape/relationship documents. HostedQuery was considered, but its portable execution-implementation
+contract is a different responsibility from this local typed result projection. Anonymous rows use CLR
+shape conventions; use explicitly registered stable shapes when independently versioning a persisted row
+contract. Constructor and getter behavior must still pass the expression lowerer's direct-storage checks.

@@ -20,5 +20,5 @@ await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync
 var app = builder.Build();
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
-OrderEndpoints.Map(app, orders, OrderDetailsQuery.Bind(database));
+OrderEndpoints.Map(app, orders, OrderQueryInfrastructure.Bind(database).ReadAsync);
 app.Run();

@@ -39,4 +39,25 @@ public sealed class DomainEntityCompositionTests
         Assert.True(compilation.IsSuccessful, string.Join("; ", compilation.Diagnostics));
         Assert.Equal("parentId", relationship.Definition.SourceReference.ToString());
     }
+
+    [Fact]
+    public void Typed_query_captures_rows_and_rejects_foreign_or_additional_parameters()
+    {
+        var author = RelationQuery.Expression();
+        var source = author.Source(author.Clr.Shape<Parent>());
+        var parameter = author.Parameter<string>("id");
+        var filtered = author.Where(source, parent => parent.Id == parameter.Value);
+        var rows = author.Project(filtered, parent => new { parent.Id });
+        var typed = author.BuildQuery(new("typed"), new("Typed"), rows, parameter,
+            result: values => values.Count == 0 ? null : values[0].Id);
+        Assert.Null(typed.Project([]));
+        Assert.Equal("one", typed.Project([Cohesive.Model.ObservationValue.FromObject(new { Id = "one" })]));
+        var foreign = RelationQuery.Expression().Parameter<string>("id");
+        Assert.Throws<ArgumentException>(() => author.BuildQuery(new("foreign"), new("Foreign"), rows, foreign, values => values.Count));
+        var extra = author.Parameter<string>("extra");
+        Assert.Throws<ArgumentException>(() => author.BuildQuery(new("wrong"), new("Wrong"), rows, extra, values => values.Count));
+        var further = author.Where(filtered, parent => parent.Id == extra.Value);
+        var moreRows = author.Project(further, parent => new { parent.Id });
+        Assert.Throws<ArgumentException>(() => author.BuildQuery(new("extra"), new("Extra"), moreRows, parameter, values => values.Count));
+    }
 }
