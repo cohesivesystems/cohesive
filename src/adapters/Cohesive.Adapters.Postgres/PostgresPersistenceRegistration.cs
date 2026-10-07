@@ -1,3 +1,4 @@
+using Cohesive.Storage;
 using Cohesive.Model;
 using Cohesive.Transitions.Model;
 using Cohesive.Relations.Authoring;
@@ -42,16 +43,20 @@ public sealed partial class PostgresPersistenceRegistration
     /// <summary>Creates a repository from the same entity attachment used by query preparation.</summary>
     /// <typeparam name="T">Canonical entity state type.</typeparam>
     /// <param name="entity">Exact entity handle registered on this persistence binding.</param>
+    /// <param name="selectEntityId">Optional typed-write identity selector; otherwise existing Id/Key conventions apply.</param>
+    /// <param name="selectVersion">Optional typed-write semantic version selector; otherwise existing Version/zero conventions apply.</param>
     /// <returns>A repository using the registered mapping and caller-owned native data source.</returns>
     /// <exception cref="ArgumentNullException">Entity is null.</exception>
     /// <exception cref="InvalidOperationException">The exact entity definition has not been registered.</exception>
-    public PostgresEntityRepository Repository<T>(DomainEntity<T> entity) where T : notnull
+    public IEntityRepository<T> Repository<T>(DomainEntity<T> entity,
+        Func<T, string>? selectEntityId = null, Func<T, long>? selectVersion = null) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(entity);
         if (!tables.TryGetValue(entity.Definition.StateShape.QualifiedId, out var attachment)
             || !ReferenceEquals(attachment.Entity, entity.Definition))
             throw new InvalidOperationException("Register this exact entity before creating its repository.");
-        return new(attachment.Entity, runtime, attachment.Mapping);
+        return new TypedEntityRepository<T>(new PostgresEntityRepository(attachment.Entity, runtime, attachment.Mapping),
+            selectEntityId, selectVersion);
     }
 
     /// <summary>Validates and prepares a typed query using the existing static, placement and native compilers.</summary>

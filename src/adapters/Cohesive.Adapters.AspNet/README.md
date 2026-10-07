@@ -309,7 +309,7 @@ app.MapEntityApi<Order>(entity, repository, "local", endpoints => endpoints
     .Get("Get", "/orders/{id}", order => TypedResults.Ok(new OrderSummary(order.Id, order.Status))));
 ```
 
-Creation accepts a typed initializer, identity selector and `Created<T>` response. Its declaration uses
+Creation accepts a typed initializer receiving the effective binding partition, an identity selector and `Created<T>` response. Its declaration uses
 `.Returns<T>(ApiResultKind.Created)` (201); combined authoring supplies this automatically. Combined
 lookup and transition declarations include NotFound (404); separately declared handles should include it. Transition bindings use
 `.Transition(endpoint, authored).Input(request => command).OnApplied((state, outcome) => TypedResults.Ok(response))`

@@ -19,7 +19,7 @@ waits and volume configuration in native Aspire. It adds no second deployment in
 5. Once the user starts the AppHost, ordinary Aspire runs the database and application.
    `OrderWorker/FulfillmentDomain.cs` declares `Order`, `InventoryItem` and `Reservation`
    once with `DomainModelBuilder.Entity<T>()`. Typed handles retain those exact definitions
-   for relationships, storage and queries. `OrderStorage` and `FulfillmentStorage` attach
+   for relationships, storage and queries. `FulfillmentStorage` attaches
    fluent PostgreSQL mappings (`For(entity).Table().Identity().Partition().Build()`)
    and bind the Aspire-supplied data source through
    `PostgresNpgsqlRuntimeBinding`. The endpoints use `IEntityRepository.Upsert/TryGet`,
@@ -167,7 +167,7 @@ handles; the existing query author captures a relationship in its catalog when t
 query schema is inferred: `entity.QueryShape(author)` imports the entity's exact canonical state graph.
 The domain model itself remains the entity catalog, not a new orchestration or persistence engine.
 
-`OrderDetailsQuery` selects an order by a bound parameter and the local partition, traverses the
+`FulfillmentQueries.OrderDetails` selects an order by a bound parameter and the local partition, traverses the
 inverse reservation/order relationship, then traverses reservation/inventory. Both traversals are
 left joins, so an order without reservations remains present. The declaration exposes
 `RelationQuery<string, OrderDetails?>` and uses `SingleOrDefault<OrderDetails>()` to map each parent and
@@ -178,7 +178,7 @@ Query authoring accepts domain entities and bound nodes directly:
 
 ```csharp
 var orders = query.Source(FulfillmentDomain.Orders).Where(
-    order => order.Id == orderId.Value && order.Partition == OrderStorage.LocalPartition);
+    order => order.Id == orderId.Value && order.Partition == FulfillmentDemo.LocalPartition);
 // After the declared relationship traversals:
 query.SingleOrDefault<OrderDetails>()
     .From(inventory, orders, order => order.Id)
@@ -203,7 +203,7 @@ registration for repositories and queries; there is no separate per-query infras
 var persistence = FulfillmentStorage.Bind(database);
 var orders = persistence.Repository(FulfillmentDomain.Orders);
 var details = persistence.Query(
-    OrderDetailsQuery.Definition, maximumRows: 1000, maximumBytes: 1_000_000);
+    FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
 ```
 
 Query preparation discovers consumed source and traversal shapes from the canonical plan and resolves
@@ -212,7 +212,7 @@ binding in its SQL artifact, even though the persistence registration also knows
 physical columns, scope and bounds remain explicit. Native versus composed placement is still a host choice.
 
 Relationship handles created by `DomainEntity.References` retain exact endpoint documents. Traversing
-one imports its endpoints automatically, so `OrderDetailsQuery` starts with the order shape and needs no
+one imports its endpoints automatically, so `FulfillmentQueries.OrderDetails` starts with the order shape and needs no
 standalone reservation/inventory `QueryShape` calls. Explicit imports remain supported; conflicting
 registrations fail rather than silently inferring another CLR schema.
 
@@ -307,13 +307,15 @@ and the reference interpreter, using the same declaration and shared nested asse
 
 ### Native joins inside composed execution
 
-The companion `ReservationAvailabilityQuery` declares a semantic `ReservationDemand` projection between
+The companion `FulfillmentQueries.ReservationAvailability` declares a semantic `ReservationDemand` projection between
 order/reservation matching and inventory enrichment. `ReservationAvailabilityInfrastructure` can bind that
 **same graph** in either of two ways:
 
 ```csharp
-var native = ReservationAvailabilityInfrastructure.BindNative(oneDatabase);
-var composed = ReservationAvailabilityInfrastructure.BindComposed(ordersDatabase, inventoryDatabase);
+var orders = FulfillmentStorage.Bind(ordersDatabase);
+var inventory = FulfillmentStorage.Bind(inventoryDatabase, databaseName: "inventory");
+var native = ReservationAvailabilityInfrastructure.BindNative(orders);
+var composed = ReservationAvailabilityInfrastructure.BindComposed(orders, inventory);
 var availability = await composed.ReadAsync(orderId, cancellationToken);
 ```
 
@@ -392,4 +394,27 @@ contract is a different responsibility from this local typed result projection. 
 shape conventions; use explicitly registered stable shapes when independently versioning a persisted row
 contract. Constructor and getter behavior must still pass the expression lowerer's direct-storage checks.
 
-Typed branches support source-first filtering: `query.Source(inventoryShape).Where(item => item.Partition == OrderStorage.LocalPartition)`. The extension uses the branch's owning session and the existing filter implementation; chained filters retain the same binding and foreign query parameters remain invalid.
+Typed branches support source-first filtering: `query.Source(inventoryShape).Where(item => item.Partition == FulfillmentDemo.LocalPartition)`. The extension uses the branch's owning session and the existing filter implementation; chained filters retain the same binding and foreign query parameters remain invalid.
+
+### Composition and ownership
+
+`FulfillmentDomain` owns the entity definitions and POCOs, including `Order`; their canonical JSON names
+have no storage dependency. `FulfillmentStorage` owns all native table mappings and returns a concrete
+PostgreSQL registration. `FulfillmentDemo` owns the local partition policy. `FulfillmentQueries` exposes
+immutable typed declarations directly, without per-query `Definition` wrappers or an inheritance hierarchy.
+
+Bind each database once at host composition. Repositories preserve the POCO contract:
+`IEntityRepository<Order> orders = persistence.Repository(FulfillmentDomain.Orders)`.
+This reuses `TypedEntityRepository<T>` and preserves native batch/concurrency capabilities. Typed writes
+use the existing Id/Key and Version/zero conventions unless selectors are supplied; for inventory use
+`selectEntityId: item => item.Sku`. The entity handle remains explicit so a CLR type cannot silently choose
+among different canonical definitions.
+
+`Program` registers the repository and prepared details reader as singleton contracts. Query binding helpers
+accept existing registrations instead of rebinding databases. No registration or compilation happens per
+request, no global result cache is introduced, and the host owns the Npgsql data source lifetime. Tests may
+prepare a separate reader deliberately for a different bound (such as overflow testing).
+
+`MapEntityApi` declares the partition once. `Create` passes that value into `initialize: partition => ...`;
+it does not rewrite the entity or infer authorization. Both combined and separately declared API bindings
+exercise a non-default partition in their HTTP contract tests.

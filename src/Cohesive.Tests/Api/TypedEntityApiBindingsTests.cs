@@ -32,7 +32,7 @@ public sealed class TypedEntityApiBindingsTests
         builder.Services.AddRequestOperationContext();
         await using var app = builder.Build();
         app.UseRequestOperationContext();
-        app.MapEntityApi<Order>(Entity, repository, "local", bindings =>
+        app.MapEntityApi<Order>(Entity, repository, "configured-partition", bindings =>
         {
             retained = bindings;
             if (separate)
@@ -41,14 +41,14 @@ public sealed class TypedEntityApiBindingsTests
                 var get = Cohesive.Api.Api.Define().Entity<Order>().Query("Get").Route("GET", "/orders/{id}").RouteParameter<string>("id").Returns<Order>().Build();
                 var submit = Cohesive.Api.Api.Define().Entity<Order>().Command("Submit").Route("POST", "/orders/{id}/submit")
                     .RouteParameter<string>("id").Returns<Order>().Result<Outcome>(ApiResultKind.Conflict).Transition(SubmitTransition.Reference).Build();
-                bindings.Create(create, () => new Order("one", "local", "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
+                bindings.Create(create, partition => new Order("one", partition, "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
                     .Get(get, state => TypedResults.Ok(state))
                     .Transition(submit, SubmitTransition).Input(request => new Submit(request.RequiredEntityId))
                     .OnApplied((state, outcome) => TypedResults.Ok(state)).OnRejected(outcome => TypedResults.Conflict(outcome));
             }
             else
             {
-                bindings.Create("Create", "/orders", () => new Order("one", "local", "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
+                bindings.Create("Create", "/orders", partition => new Order("one", partition, "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
                     .Get("Get", "/orders/{id}", state => TypedResults.Ok(state))
                     .Transition("Submit", "/orders/{id}/submit", SubmitTransition).Input(request => new Submit(request.RequiredEntityId))
                     .OnApplied((state, outcome) => TypedResults.Ok(state)).OnRejected(outcome => TypedResults.Conflict(outcome));
@@ -59,7 +59,9 @@ public sealed class TypedEntityApiBindingsTests
         await app.StartAsync();
         using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
         Assert.Equal(HttpStatusCode.Created, (await client.PostAsync("/orders", null)).StatusCode);
-        Assert.Equal("Draft", (await client.GetFromJsonAsync<Order>("/orders/one"))!.Status);
+        var created = await client.GetFromJsonAsync<Order>("/orders/one");
+        Assert.Equal("Draft", created!.Status);
+        Assert.Equal("configured-partition", created.Partition);
         var submitted = await client.PostAsync("/orders/one/submit", null);
         Assert.Equal(HttpStatusCode.OK, submitted.StatusCode);
         Assert.Equal("Submitted", (await submitted.Content.ReadFromJsonAsync<Order>())!.Status);

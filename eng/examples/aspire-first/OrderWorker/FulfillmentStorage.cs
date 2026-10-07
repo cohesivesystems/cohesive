@@ -6,14 +6,17 @@ namespace AspireFirst.Orders;
 /// <summary>Native physical mappings attached to the canonical fulfillment entities.</summary>
 public static class FulfillmentStorage
 {
+    /// <summary>Native Aspire database reference.</summary>
+    public const string DatabaseName = "orders";
     /// <summary>Attaches each canonical entity once for repository and query dependency resolution.</summary>
     /// <param name="database">Caller-owned Aspire data source, retained by the resulting readers.</param>
+    /// <param name="databaseName">Explicit non-secret physical database identity for this registration.</param>
     /// <returns>A native persistence registration; query preparation selects only its consumed entities.</returns>
     /// <exception cref="ArgumentNullException">Database is null.</exception>
     /// <exception cref="ArgumentException">An entity attachment or runtime binding is invalid.</exception>
-    public static PostgresPersistenceRegistration Bind(NpgsqlDataSource database) =>
-        new PostgresPersistenceRegistration(new(new("orders"), database, "aspire-first/apphost"))
-            .Entity(FulfillmentDomain.Orders, OrderStorage.Mapping)
+    public static PostgresPersistenceRegistration Bind(NpgsqlDataSource database, string databaseName = DatabaseName) =>
+        new PostgresPersistenceRegistration(new(new(databaseName), database, "aspire-first/apphost"))
+            .Entity(FulfillmentDomain.Orders, Orders)
             .Entity(FulfillmentDomain.Reservations, Reservations)
             .Entity(FulfillmentDomain.Inventory, Inventory);
 
@@ -34,4 +37,12 @@ public static class FulfillmentStorage
         .Column(reservation => reservation.Sku, "sku")
         .Column(reservation => reservation.Quantity, "quantity")
         .Build();
+    /// <summary>Complete physical field mapping; schema lifecycle is explicit in schema.sql.</summary>
+    public static PostgresEntityRepositoryMapping Orders { get; } = PostgresEntityRepositoryMapping.For(FulfillmentDomain.Orders)
+        .Table("public", "cohesive_orders")
+        .Identity(order => order.Id, "order_id")
+        .Partition(order => order.Partition, "partition_key")
+        .Column(order => order.Status, "status")
+        .Build();
+
 }

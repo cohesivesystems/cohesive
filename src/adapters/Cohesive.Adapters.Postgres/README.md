@@ -149,3 +149,9 @@ Null means the full placement, while `ForSource` means exactly the declared sour
 admission check that declared scope; table coverage cannot silently narrow it. Persisted v3 bindings are
 rejected and must be regenerated from their declarations. Semantic/native preparation errors retain their
 compiler results; cut/physical errors retain `RelationQueryPreparationException` evidence.
+
+`Repository(entity)` preserves the `DomainEntity<T>` type as `IEntityRepository<T>`, using the existing
+`TypedEntityRepository<T>` over the native repository. Canonical writes, batching and concurrency fences
+continue to delegate unchanged. Typed writes use existing Id/Key and Version/zero conventions; pass
+`selectEntityId` or `selectVersion` for a different CLR convention (for example `item => item.Sku`). The
+registration remains PostgreSQL-specific; application consumers depend on the typed repository/read interfaces.

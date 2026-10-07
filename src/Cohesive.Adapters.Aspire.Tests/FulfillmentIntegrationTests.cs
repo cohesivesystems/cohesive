@@ -22,10 +22,11 @@ public sealed partial class OrderStorageIntegrationTests
     public async Task Declared_join_returns_empty_and_multiple_reservations_with_local_partition_isolation()
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
-        using var schema = new StreamReader(typeof(OrderStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+        using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync())) await command.ExecuteNonQueryAsync();
         var context = OperationContext.Create();
-        var orders = FulfillmentStorage.Bind(database).Repository(FulfillmentDomain.Orders);
+        var persistence = FulfillmentStorage.Bind(database);
+        var orders = persistence.Repository(FulfillmentDomain.Orders);
         var runtime = new PostgresNpgsqlRuntimeBinding(new("orders"), database, "tests/fulfillment");
         var inventory = new PostgresEntityRepository(FulfillmentDomain.Inventory.Definition, runtime, FulfillmentStorage.Inventory);
         var reservations = new PostgresEntityRepository(FulfillmentDomain.Reservations.Definition, runtime, FulfillmentStorage.Reservations);
@@ -34,14 +35,14 @@ public sealed partial class OrderStorageIntegrationTests
         var sku = "book-" + Guid.NewGuid().ToString("N");
         try
         {
-            await orders.Upsert(context, OrderStorage.Register(Guid.Parse(id)));
-            await orders.Upsert(context, new(OrderStorage.Entity.CreateState(id, new Order(id, "outside", "Private"), 1).Snapshot));
-            await orders.Upsert(context, new(OrderStorage.Entity.CreateState(outsideId, new Order(outsideId, "outside"), 1).Snapshot));
-            var queryReader = FulfillmentStorage.Bind(database).Query(OrderDetailsQuery.Definition, maximumRows: 1000, maximumBytes: 1_000_000);
+            await orders.Upsert(context, FulfillmentDemo.RegisterOrder(Guid.Parse(id)));
+            await orders.Upsert(context, new EntityWriteRequest(FulfillmentDomain.Orders.Definition.CreateState(id, new Order(id, "outside", "Private"), 1).Snapshot));
+            await orders.Upsert(context, new EntityWriteRequest(FulfillmentDomain.Orders.Definition.CreateState(outsideId, new Order(outsideId, "outside"), 1).Snapshot));
+            var queryReader = persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
             IRelationQueryRowsReader nativeReader = new PostgresQueryRowsReader(queryReader.Artifact, runtime, maximumRows: 1000, maximumBytes: 1_000_000);
             var initialRows = await nativeReader.ReadAsync(new Dictionary<QueryParameterId, ObservationValue>
-            { [OrderDetailsQuery.Definition.Parameter] = ObservationValue.FromString(id) });
-            Assert.False(Assert.Single(initialRows).TryGetField(((Cohesive.Relations.IR.QueryDefinition)OrderDetailsQuery.Definition.CompilationRequest.DefinitionDocument.Definition).Assembly!.Collections[0].Identity, out _));
+            { [FulfillmentQueries.OrderDetails.Parameter] = ObservationValue.FromString(id) });
+            Assert.False(Assert.Single(initialRows).TryGetField(((Cohesive.Relations.IR.QueryDefinition)FulfillmentQueries.OrderDetails.CompilationRequest.DefinitionDocument.Definition).Assembly!.Collections[0].Identity, out _));
             var builder = WebApplication.CreateBuilder();
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
@@ -67,7 +68,7 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.Equal(2, joined!.Reservations.Count);
             Assert.Equal(new[] { 1, 2 }, joined.Reservations.Select(item => item.Quantity).Order());
             Assert.All(joined.Reservations, item => { Assert.Equal(sku, item.Sku); Assert.Equal(8, item.AvailableStock); });
-            var plan = RelationQueryStaticCompiler.Compile(OrderDetailsQuery.Definition.CompilationRequest).Plan!;
+            var plan = RelationQueryStaticCompiler.Compile(FulfillmentQueries.OrderDetails.CompilationRequest).Plan!;
             var placementBuilder = RelationQueryPlacement.For(plan);
             var source = placementBuilder.Source("postgres/query", PostgresRelationQuerySourceTargetProfile.Default, new("orders"), limits: new(100, 1000, 100, 1));
             foreach (var input in plan.InputContract.Sources)
@@ -86,22 +87,22 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.True(physical.IsSuccessful, string.Join("; ", physical.Diagnostics.Select(diagnostic => diagnostic.Message)));
             var sourceReader = new PostgresRelationQuerySourceReader(plan, physical.Plan!, source.Id,
                 storage, database, runtime, new(100, 1000, 1000, 1_000_000,
-                    partitionScope: new(new("tests/local"), OrderStorage.PartitionField, OrderStorage.LocalPartition)));
+                    partitionScope: new(new("tests/local"), FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition)));
             var evaluator = new RelationQueryEvaluator(_ => placement, policy, [sourceReader]);
-            var evaluation = OrderDetailsQuery.Definition.CompilationRequest.Evaluate(new("tests/nested-result"))
-                .Set(OrderDetailsQuery.Definition.Parameter, ObservationValue.FromString(id)).Build();
+            var evaluation = FulfillmentQueries.OrderDetails.CompilationRequest.Evaluate(new("tests/nested-result"))
+                .Set(FulfillmentQueries.OrderDetails.Parameter, ObservationValue.FromString(id)).Build();
             var outcome = await evaluator.EvaluateAsync(evaluation);
             Assert.True(outcome.IsSuccessful, string.Join("; ", (outcome.PhysicalExecution?.Diagnostics.Select(diagnostic => diagnostic.Message) ?? []).Concat(outcome.Result?.Diagnostics.Select(diagnostic => diagnostic.Message) ?? []).Concat(outcome.Diagnostics.Select(diagnostic => diagnostic.Message))));
-            var composed = OrderDetailsQuery.Definition.Project(outcome)!;
+            var composed = FulfillmentQueries.OrderDetails.Project(outcome)!;
             Assert.Equal(joined.Id, composed.Id);
             Assert.Equal(joined.Status, composed.Status);
             Assert.Equal(joined.Reservations, composed.Reservations);
             Assert.NotEmpty(outcome.PhysicalExecution!.SourceReads);
-            var failed = await evaluator.EvaluateAsync(OrderDetailsQuery.Definition.CompilationRequest
+            var failed = await evaluator.EvaluateAsync(FulfillmentQueries.OrderDetails.CompilationRequest
                 .Evaluate(new("tests/nested-result/failed-parameter"))
-                .SetFailed(OrderDetailsQuery.Definition.Parameter, "tests/unavailable-parameter").Build());
+                .SetFailed(FulfillmentQueries.OrderDetails.Parameter, "tests/unavailable-parameter").Build());
             Assert.False(failed.IsSuccessful);
-            Assert.Throws<InvalidOperationException>(() => OrderDetailsQuery.Definition.Project(failed));
+            Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.Project(failed));
 
             void Place(RelationQueryPlacementInputBuilder input, QualifiedShapeId shape)
             {
@@ -110,11 +111,11 @@ public sealed partial class OrderStorageIntegrationTests
                     .Partition(mapping.PartitionField);
             }
             PostgresEntityRepositoryMapping Mapping(QualifiedShapeId shape) =>
-                shape == FulfillmentDomain.Orders.Definition.StateShape.QualifiedId ? OrderStorage.Mapping
+                shape == FulfillmentDomain.Orders.Definition.StateShape.QualifiedId ? FulfillmentStorage.Orders
                     : shape == FulfillmentDomain.Reservations.Definition.StateShape.QualifiedId ? FulfillmentStorage.Reservations
                     : FulfillmentStorage.Inventory;
-            var values = new Dictionary<QueryParameterId, ObservationValue> { [OrderDetailsQuery.Definition.Parameter] = ObservationValue.FromString(id) };
-            await Assert.ThrowsAsync<InvalidOperationException>(() => FulfillmentStorage.Bind(database).Query(OrderDetailsQuery.Definition, maximumRows: 1, maximumBytes: 1_000_000).ReadAsync(id));
+            var values = new Dictionary<QueryParameterId, ObservationValue> { [FulfillmentQueries.OrderDetails.Parameter] = ObservationValue.FromString(id) };
+            await Assert.ThrowsAsync<InvalidOperationException>(() => persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1, maximumBytes: 1_000_000).ReadAsync(id));
             IRelationQueryRowsReader tiny = new PostgresQueryRowsReader(queryReader.Artifact, runtime, maximumRows: 10, maximumBytes: 1);
             await Assert.ThrowsAnyAsync<InvalidOperationException>(() => tiny.ReadAsync(values));
             Assert.Throws<ArgumentException>(() => new PostgresQueryRowsReader(queryReader.Artifact,

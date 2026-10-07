@@ -8,6 +8,10 @@ namespace AspireFirst.Orders;
 /// <summary>One domain declaration; persistence and queries attach to these exact entity handles.</summary>
 public static class FulfillmentDomain
 {
+    /// <summary>Canonical order identity field.</summary>
+    public const string OrderIdField = "id";
+    /// <summary>Canonical partition field shared by the example entities.</summary>
+    public const string PartitionField = "partition";
     static FulfillmentDomain()
     {
         var domain = new DomainModelBuilder().Version("1");
@@ -54,3 +58,12 @@ public sealed record Reservation(
     [property: JsonPropertyName("orderId")] string OrderId,
     [property: JsonPropertyName("sku")] string Sku,
     [property: JsonPropertyName("quantity")] int Quantity);
+
+/// <summary>POCO authoring source for the canonical order state.</summary>
+/// <param name="Id">Order identity, serialized under its stable canonical field name.</param>
+/// <param name="Status">Current lifecycle state.</param>
+/// <param name="Partition">Storage partition, not an authorization boundary.</param>
+public sealed record Order(
+    [property: JsonPropertyName(FulfillmentDomain.OrderIdField)] string Id,
+    [property: JsonPropertyName(FulfillmentDomain.PartitionField)] string Partition,
+    [property: JsonPropertyName("status")] string Status = "Draft");

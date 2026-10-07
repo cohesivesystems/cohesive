@@ -17,37 +17,37 @@ public sealed partial class OrderStorageIntegrationTests
         await using var inventoryDatabase = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(InventoryConnectionVariable)!);
         foreach (var database in new[] { orders, inventoryDatabase })
         {
-            using var schema = new StreamReader(typeof(OrderStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+            using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
             await using var command = database.CreateCommand(await schema.ReadToEndAsync());
             await command.ExecuteNonQueryAsync();
         }
         var id = Guid.NewGuid().ToString("D");
         var sku = "subplan-" + Guid.NewGuid().ToString("N");
         var context = OperationContext.Create();
-        var orderRepository = FulfillmentStorage.Bind(orders).Repository(FulfillmentDomain.Orders);
+        var persistence = FulfillmentStorage.Bind(orders);
+        var inventoryPersistence = FulfillmentStorage.Bind(inventoryDatabase, databaseName: "inventory");
+        var orderRepository = persistence.Repository(FulfillmentDomain.Orders);
         var reservations = new PostgresEntityRepository(FulfillmentDomain.Reservations.Definition,
             new(new("orders"), orders, "test"), FulfillmentStorage.Reservations);
         try
         {
-            await orderRepository.Upsert(context, OrderStorage.Register(Guid.Parse(id)));
-            var native = ReservationAvailabilityInfrastructure.BindNative(orders);
-            var composed = ReservationAvailabilityInfrastructure.BindComposed(orders, inventoryDatabase);
+            await orderRepository.Upsert(context, FulfillmentDemo.RegisterOrder(Guid.Parse(id)));
+            var native = ReservationAvailabilityInfrastructure.BindNative(persistence);
+            var composed = ReservationAvailabilityInfrastructure.BindComposed(persistence, inventoryPersistence);
             var emptyNative = await native.ReadAsync(id);
             var emptyComposed = await composed.ReadAsync(id);
             Assert.Equal(emptyNative, emptyComposed);
             Assert.Null(Assert.Single(emptyComposed).ReservationId);
-            foreach (var database in new[] { orders, inventoryDatabase })
+            foreach (var registration in new[] { persistence, inventoryPersistence })
             {
-                var repository = new PostgresEntityRepository(FulfillmentDomain.Inventory.Definition,
-                    new(new("inventory"), database, "test"), FulfillmentStorage.Inventory);
-                await repository.Upsert(context, new(FulfillmentDomain.Inventory.Definition.CreateState(sku,
-                    new InventoryItem(sku, OrderStorage.LocalPartition, 8), 1).Snapshot));
+                var repository = registration.Repository(FulfillmentDomain.Inventory, selectEntityId: item => item.Sku);
+                await repository.Upsert(context, new InventoryItem(sku, FulfillmentDemo.LocalPartition, 8));
             }
             for (var quantity = 1; quantity <= 2; quantity++)
             {
                 var reservationId = Guid.NewGuid().ToString("D");
                 await reservations.Upsert(context, new(FulfillmentDomain.Reservations.Definition.CreateState(reservationId,
-                    new Reservation(reservationId, OrderStorage.LocalPartition, id, sku, quantity), 1).Snapshot));
+                    new Reservation(reservationId, FulfillmentDemo.LocalPartition, id, sku, quantity), 1).Snapshot));
             }
             var expected = await native.ReadAsync(id);
             var actual = await composed.ReadAsync(id);

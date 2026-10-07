@@ -12,27 +12,27 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class NestedResultTests
 {
-    static NestedQueryResultAssembly Assembly => ((QueryDefinition)OrderDetailsQuery.Definition.CompilationRequest.DefinitionDocument.Definition).Assembly!;
+    static NestedQueryResultAssembly Assembly => ((QueryDefinition)FulfillmentQueries.OrderDetails.CompilationRequest.DefinitionDocument.Definition).Assembly!;
 
     [Fact]
     public void Single_declaration_handles_absence_distinct_children_ordering_and_conflicts()
     {
-        Assert.Null(OrderDetailsQuery.Definition.Project([]));
-        Assert.Empty(OrderDetailsQuery.Definition.Project([Row(null)])!.Reservations);
+        Assert.Null(FulfillmentQueries.OrderDetails.Project([]));
+        Assert.Empty(FulfillmentQueries.OrderDetails.Project([Row(null)])!.Reservations);
         var row = Row("b");
-        var result = OrderDetailsQuery.Definition.Project([row, Row("a"), row])!;
+        var result = FulfillmentQueries.OrderDetails.Project([row, Row("a"), row])!;
         Assert.Equal("order", result.Id);
         Assert.Equal(new[] { "a", "b" }, result.Reservations.Select(child => child.Id));
         Assert.All(result.Reservations, child => Assert.Equal(8, child.AvailableStock));
-        Assert.Throws<InvalidOperationException>(() => OrderDetailsQuery.Definition.Project([row, Row("b", quantity: 99)]));
-        Assert.Throws<InvalidOperationException>(() => OrderDetailsQuery.Definition.Project([row, Row("b", parent: "another")]));
-        Assert.Throws<InvalidOperationException>(() => OrderDetailsQuery.Definition.Project([row, Row("a", status: "Submitted")]));
+        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.Project([row, Row("b", quantity: 99)]));
+        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.Project([row, Row("b", parent: "another")]));
+        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.Project([row, Row("a", status: "Submitted")]));
     }
 
     [Fact]
     public void Assembly_is_persisted_fingerprinted_and_rejects_unknown_slots()
     {
-        var document = OrderDetailsQuery.Definition.CompilationRequest.DefinitionDocument;
+        var document = FulfillmentQueries.OrderDetails.CompilationRequest.DefinitionDocument;
         var roundtrip = RelationQueryJsonSerializer.Deserialize(RelationQueryJsonSerializer.Serialize(document));
         Assert.Equal(document.DefinitionFingerprint, roundtrip.DefinitionFingerprint);
         var definition = (QueryDefinition)roundtrip.Definition;
@@ -48,7 +48,7 @@ public sealed class NestedResultTests
     [Fact]
     public void Assembly_rejects_incomplete_shapes_invalid_scalars_and_cancellation()
     {
-        var request = OrderDetailsQuery.Definition.CompilationRequest;
+        var request = FulfillmentQueries.OrderDetails.CompilationRequest;
         var definition = (QueryDefinition)request.DefinitionDocument.Definition;
         var invalid = definition with { Assembly = Assembly with { Fields = [Assembly.Fields[0]] } };
         var compilation = RelationQueryStaticCompiler.Compile(new(RelationQueryDocument.FromDefinition(invalid),
@@ -56,9 +56,9 @@ public sealed class NestedResultTests
         Assert.False(compilation.IsSuccessful);
         Assert.Contains(compilation.Diagnostics, diagnostic => diagnostic.Code == "relationQuery.query.assemblyInvalid");
         Assert.Throws<OperationCanceledException>(() => NestedQueryResultAssembler.Assemble(Assembly, [], new(true)));
-        Assert.Throws<InvalidOperationException>(() => OrderDetailsQuery.Definition.Project(
+        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.Project(
             [Row("a").WithField(Assembly.Fields[1].Source, ObservationValue.Null)]));
-        Assert.Throws<InvalidOperationException>(() => OrderDetailsQuery.Definition.Project(
+        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.Project(
             [Row("a").WithField(Assembly.Identity, ObservationValue.FromObject(42))]));
     }
 
@@ -105,7 +105,7 @@ public sealed class NestedResultTests
         Assert.Equal(Assembly.Identity, Assembly.Fields.Single(field => field.Target.ToString() == "Id").Source);
         var child = Assert.Single(Assembly.Collections);
         Assert.Equal(child.Identity, child.Fields.Single(field => field.Target.ToString() == "Id").Source);
-        var definition = (QueryDefinition)OrderDetailsQuery.Definition.CompilationRequest.DefinitionDocument.Definition;
+        var definition = (QueryDefinition)FulfillmentQueries.OrderDetails.CompilationRequest.DefinitionDocument.Definition;
         Assert.Equal(6, definition.Body.Nodes.OfType<ProjectQueryNode>().Single().Assignments.Length);
 
         var author = RelationQuery.Expression();

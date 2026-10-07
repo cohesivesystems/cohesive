@@ -18,6 +18,7 @@ namespace Cohesive.Adapters.AspNet.Entities;
 public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
 {
     readonly EntityDefinition entity;
+    readonly string partition;
     readonly ObservationMaterializer<TEntity> materializer;
     readonly EntityApiEndpointOptions options;
     readonly List<ApiEndpoint> endpoints = [];
@@ -37,6 +38,7 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
         if (!ReferenceEquals(entity, repository.EntityDefinition))
             throw new ArgumentException("Repository must use the supplied canonical entity definition.", nameof(repository));
         this.entity = entity;
+        this.partition = partition;
         materializer = ObservationMaterializer.For<TEntity>(entity.StateShape).Compile();
         options = new() { Entity = entity, RepositoryResolver = (_, _) => repository, ReadPartitionKeyResolver = _ => partition };
     }
@@ -73,7 +75,7 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
     /// <summary>Binds creation with typed initial state and response; identity is selected explicitly from the new state.</summary>
     /// <typeparam name="TResponse">Declared success body type.</typeparam>
     /// <param name="endpoint">Separately authored bodyless command declaring a Created response.</param>
-    /// <param name="initialize">Creates fresh initial state for each request; must not reuse mutable state across requests.</param>
+    /// <param name="initialize">Creates fresh state using the binding's effective partition; must not reuse mutable state across requests.</param>
     /// <param name="identity">Selects the new entity identity from that initial state.</param>
     /// <param name="respond">Maps materialized entity state to the declared success response, per request.</param>
     /// <returns>This registration session.</returns>
@@ -81,14 +83,14 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
     /// <exception cref="ArgumentException">The declaration does not match the entity, operation or response contract.</exception>
     /// <exception cref="InvalidOperationException">The session is mapped or the endpoint is already bound.</exception>
     public TypedEntityApiBindings<TEntity> Create<TResponse>(ApiEndpoint endpoint,
-        Func<TEntity> initialize, Func<TEntity, string> identity, Func<TEntity, Created<TResponse>> respond)
+        Func<string, TEntity> initialize, Func<TEntity, string> identity, Func<TEntity, Created<TResponse>> respond)
     {
         ArgumentNullException.ThrowIfNull(initialize);
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(respond);
         Validate<TResponse>(endpoint, ApiOperationKind.Command, ApiResultKind.Created);
         Add(endpoint, EntityApiOperationBinding.Create(endpoint,
-            (_, _) => { var value = initialize(); return entity.CreateState(identity(value), value, version: 1); },
+            (_, _) => { var value = initialize(partition); return entity.CreateState(identity(value), value, version: 1); },
             (_, snapshot) => respond(Read(snapshot))));
         return this;
     }
@@ -97,7 +99,7 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
     /// <typeparam name="TResponse">Declared success body type.</typeparam>
     /// <param name="name">Portable operation name.</param>
     /// <param name="route">POST route template for creation.</param>
-    /// <param name="initialize">Creates fresh initial state for each request; must not reuse mutable state across requests.</param>
+    /// <param name="initialize">Creates fresh state using the binding's effective partition; must not reuse mutable state across requests.</param>
     /// <param name="identity">Selects the new entity identity from that initial state.</param>
     /// <param name="respond">Maps materialized entity state to the declared success response, per request.</param>
     /// <returns>This registration session.</returns>
@@ -105,7 +107,7 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
     /// <exception cref="ArgumentException">The declaration does not match the entity, operation or response contract.</exception>
     /// <exception cref="InvalidOperationException">The session is mapped or the endpoint is already bound.</exception>
     public TypedEntityApiBindings<TEntity> Create<TResponse>(string name, string route,
-        Func<TEntity> initialize, Func<TEntity, string> identity, Func<TEntity, Created<TResponse>> respond) =>
+        Func<string, TEntity> initialize, Func<TEntity, string> identity, Func<TEntity, Created<TResponse>> respond) =>
         Create(Cohesive.Api.Api.Define().Entity<TEntity>().Command(name).Route("POST", route).Returns<TResponse>(ApiResultKind.Created).Build(),
             initialize, identity, respond);
 
