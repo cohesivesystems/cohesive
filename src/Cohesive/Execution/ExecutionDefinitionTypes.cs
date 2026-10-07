@@ -223,6 +223,8 @@ internal static class ExecutionDefinitionTypes
     {
         readonly Dictionary<TypeRef, int> byIdentity = new(ReferenceEqualityComparer.Instance);
         readonly Dictionary<string, int> byContent = new(StringComparer.Ordinal);
+        readonly Dictionary<ScalarTypeRef, int> scalars = new();
+        readonly List<string> keys = [];
         readonly List<TypeRef> values = [];
         readonly List<int> depths = [];
         readonly Stack<int> childDepths = new();
@@ -259,9 +261,11 @@ internal static class ExecutionDefinitionTypes
             {
                 var entries = level.Select(index =>
                 {
-                    var entry = ExecutionDefinitionFingerprinter.NormalizeDefinition(
+                    // Leaf entries contain no indices to remap; their canonical bytes and sort
+                    // keys are already final. Only parents require child-number projection.
+                    var entry = depths[index] == 0 ? Entries[index] : ExecutionDefinitionFingerprinter.NormalizeDefinition(
                         JsonSerializer.SerializeToElement(values[index], values[index].GetType(), options));
-                    return (Index: index, Entry: entry, Key: entry.GetRawText());
+                    return (Index: index, Entry: entry, Key: depths[index] == 0 ? keys[index] : entry.GetRawText());
                 }).OrderBy(item => item.Key, StringComparer.Ordinal).ToArray();
                 foreach (var entry in entries)
                 {
@@ -277,6 +281,13 @@ internal static class ExecutionDefinitionTypes
         {
             if (byIdentity.TryGetValue(value, out var index))
                 return index >= 0 ? index : throw new JsonException("A portable structural type cannot contain a cycle.");
+            // Scalar value equality covers its complete sealed serializer contract (kind/format).
+            // Keep this memo document-local; nested types still use canonical content and cycle checks.
+            if (value is ScalarTypeRef scalar && scalars.TryGetValue(scalar, out index))
+            {
+                byIdentity.Add(value, index);
+                return index;
+            }
             byIdentity.Add(value, -1);
             if (!Tags.ContainsKey(value.GetType()))
                 throw new JsonException($"Unsupported portable type '{value.GetType().FullName}'.");
@@ -291,11 +302,14 @@ internal static class ExecutionDefinitionTypes
             {
                 index = Entries.Count;
                 Entries.Add(entry);
+                keys.Add(key);
                 values.Add(value);
                 depths.Add(depth);
                 byContent.Add(key, index);
             }
             byIdentity[value] = index;
+            if (value is ScalarTypeRef scalarValue)
+                scalars.TryAdd(scalarValue, index);
             return index;
         }
 

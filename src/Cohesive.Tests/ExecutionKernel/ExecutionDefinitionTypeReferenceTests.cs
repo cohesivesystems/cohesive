@@ -35,6 +35,33 @@ public sealed class ExecutionDefinitionTypeReferenceTests(Xunit.Abstractions.ITe
         Assert.Equal(first.Metadata.Fingerprint, second.Metadata.Fingerprint);
     }
 
+    [Fact]
+    public void EqualScalarInstancesReusePreparationWithoutConflatingFormats()
+    {
+        var values = Enumerable.Range(0, 512).Select(_ => (TypeRef)new ScalarTypeRef(ScalarTypeKind.String)).ToArray();
+        var shared = new Types([.. Enumerable.Repeat(values[0], values.Length)]);
+        var distinct = new Types(values);
+        for (var iteration = 0; iteration < 16; iteration++)
+        {
+            _ = Create(shared);
+            _ = Create(distinct);
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var sharedDocument = Create(shared);
+        var sharedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var distinctDocument = Create(distinct);
+        var distinctBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine($"512 scalar uses: shared {sharedBytes} B, distinct equal instances {distinctBytes} B.");
+        Assert.Equal(sharedDocument.Definition.GetRawText(), distinctDocument.Definition.GetRawText());
+        Assert.Equal(sharedDocument.Metadata.Fingerprint, distinctDocument.Metadata.Fingerprint);
+        // New identities require dictionary slots, but must not each create a JSON entry/tree.
+        Assert.InRange(distinctBytes - sharedBytes, 0, 100_000);
+        var formatted = Create(new Types([new ScalarTypeRef(ScalarTypeKind.String),
+            new ScalarTypeRef(ScalarTypeKind.String, PrimitiveFormat.Uuid)]));
+        Assert.Equal(2, formatted.Definition.GetProperty("$types").GetArrayLength());
+    }
+
     [Theory]
     [InlineData("{\"values\":[0]}", "requires")]
     [InlineData("{\"$types\":[],\"values\":[0]}", "out of range")]

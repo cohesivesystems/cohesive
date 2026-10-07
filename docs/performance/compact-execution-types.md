@@ -96,3 +96,7 @@ codec isolation, compact growth, and bounded successful projection allocation.
 The subsequent [immutable execution preparation](immutable-execution-preparation.md) addresses repeated
 typed decoding, payload strings during hashing, and eager successful-validation paths before publishing
 the combined optimization. The earlier direct-codec-only numbers above remain a separate qualification.
+
+The subsequent [document-local scalar preparation and canonical leaf reuse](type-interning.md)
+avoids repeated equal-scalar serialization and the ordering pass for reference-free entries.
+It retains parent projection, canonical numbering and external validation.
