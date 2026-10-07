@@ -197,8 +197,11 @@ test asserts a single artifact, a single statement, exact selected semantic fiel
 stage.
 
 The compiler and standalone SQL builder deliberately remain provider-neutral: a native artifact binds to
-`SqlStatement.Text` and ordered CLR parameter values, and the application still owns dispatch of that native
-statement. The single adapter package also provides a separate Npgsql-backed canonical source path. See the
+`SqlStatement.Text` and ordered CLR parameter values. `PostgresQueryRegistration` prepares the explicit
+native path, and `PostgresQueryRowsReader` dispatches a bounded unpaged row branch through Npgsql. The typed
+`IRelationQueryReader<TInput,TResult>` exposes the canonical definition and local result projection to HTTP
+without a provider-specific method group; `IRelationQueryRowsReader` is its complete-row execution seam.
+Neither is a second join engine or a replacement for the full evaluation outcome. The single adapter package also provides a separate Npgsql-backed canonical source path. See the
 [PostgreSQL adapter guide](https://github.com/cohesivesystems/cohesive/blob/main/src/adapters/Cohesive.Adapters.Postgres/README.md)
 for complete placement, storage binding, standalone SQL construction, temporal domains, and runtime responsibilities.
 

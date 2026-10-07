@@ -1,5 +1,6 @@
 using AspireFirst.Orders;
 using Cohesive.Relations.Authoring;
+using Cohesive.Relations.Execution;
 
 namespace Cohesive.Adapters.Aspire.Tests;
 
@@ -17,6 +18,8 @@ public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper 
         var started = System.Diagnostics.Stopwatch.StartNew();
         using var database = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
         var reader = OrderQueryInfrastructure.Bind(database);
+        IRelationQueryReader<string, OrderDetails?> contract = reader;
+        Assert.Same(OrderDetailsQuery.Definition, contract.Definition);
         var artifact = reader.Artifact;
         var bytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
         output.WriteLine($"Query registration after domain setup: {started.Elapsed.TotalMilliseconds:F1} ms, {bytes} allocated bytes; cold only in an isolated test process.");

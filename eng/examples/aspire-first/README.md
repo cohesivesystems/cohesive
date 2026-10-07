@@ -191,7 +191,9 @@ or Cohesive.Infra responsible for implementing query compilation. Registration r
 for physical tables/columns, fails before IO for missing mappings, and retains structured compiler failures.
 There is no global cache: retain the returned reader at host lifetime and invoke it per request.
 
-The endpoint receives a typed delegate and binds it to the independently declared API:
+The endpoint receives `IRelationQueryReader<string, OrderDetails?>` and binds the reader object directly
+to the independently declared API. `Definition` retains the exact canonical query; no PostgreSQL type
+or extracted `ReadAsync` delegate crosses the HTTP boundary:
 
 ```csharp
 app.MapApiQuery(OrderApi.Details, details)
@@ -204,7 +206,7 @@ without executing the query, null maps to the declared 404, and request cancella
 There are no joins, observation decoding or result nesting in the endpoint.
 
 Preparation occurs once at registration, and each request executes one parameterized SQL statement.
-`PostgresQueryRowsReader` reconstructs canonical observations from native result aliases and presence
+`PostgresQueryRowsReader` implements `IRelationQueryRowsReader` and reconstructs canonical observations from native result aliases and presence
 markers. A missing joined row omits its fields. The query's typed presentation projection nests reservation rows and sorts their IDs; it does not perform the joins. The reader rejects overflow rather than silently
 truncating: this example allows 1,000 rows and 1,000,000 decoded scalar bytes, with cancellation and
 native command timeout. It has no paging or retry policy, and is not a full canonical evaluation-outcome
@@ -220,6 +222,21 @@ rows to that partition, and foreign keys prevent orphan references. Their IDs ar
 this local demo; repository upserts additionally address `(partition, identity)`. This is not a general
 multi-tenant relationship policy or authorization mechanism. The mapping projection does not invent
 uniqueness, foreign-key or tenant guarantees. Native schema remains the authority for those constraints.
+
+### Existing cross-source execution
+
+These joins use the existing Relations authoring, compilation and native realization machinery. Cohesive
+also already supports cross-source joins: `IRelationQueryEvaluator` uses bounded
+`IRelationQuerySourceReader` acquisition, batched related reads and local correlation. PostgreSQL and
+Cosmos source readers implement that acquisition contract. This preserves phase evidence, completeness,
+requirement gaps and source traces; separate reads do not imply an atomic cross-source snapshot.
+
+The complete-result reader contracts added for this example do not replace that evaluator or automatically
+select federation. The example explicitly selects native PostgreSQL at registration. The existing
+`MapRelationQueryApiDefinition` binding exposes full evaluator outcomes when that richer contract is needed.
+See [execution and adapters](../../../src/Cohesive.Relations/docs/EXECUTION_AND_ADAPTERS.md) for the
+composed join example and its no-N+1 regression. Its deterministic readers prove planning/correlation;
+the example here separately tests live PostgreSQL native execution.
 
 ### Try a joined response
 

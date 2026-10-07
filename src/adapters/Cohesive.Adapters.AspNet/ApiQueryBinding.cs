@@ -1,5 +1,6 @@
 using System.Globalization;
 using Cohesive.Api;
+using Cohesive.Relations.Execution;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -14,15 +15,15 @@ public static class ApiQueryBindingExtensions
     /// <typeparam name="TResult">Declared API response type.</typeparam>
     /// <param name="endpoints">Native endpoint builder.</param>
     /// <param name="endpoint">Portable query endpoint declaration.</param>
-    /// <param name="execute">Prepared query invocation; receives request cancellation.</param>
+    /// <param name="query">Prepared canonical query binding; receives request cancellation.</param>
     /// <param name="authorizationPolicyResolver">Required when semantic authorization is declared.</param>
     /// <returns>A binding completed by route input and response policy.</returns>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">Operation kind, body or response contract differs.</exception>
     public static ApiQueryBinding<TInput, TResult> MapApiQuery<TInput, TResult>(this IEndpointRouteBuilder endpoints,
-        ApiEndpoint endpoint, Func<TInput, CancellationToken, Task<TResult>> execute,
+        ApiEndpoint endpoint, IRelationQueryReader<TInput, TResult> query,
         AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) =>
-        new(endpoints, endpoint, execute, authorizationPolicyResolver);
+        new(endpoints, endpoint, query, authorizationPolicyResolver);
 }
 
 /// <summary>Registration-local query binding. Complete once; it is not safe for concurrent mutation.</summary>
@@ -32,23 +33,28 @@ public sealed class ApiQueryBinding<TInput, TResult>
 {
     readonly IEndpointRouteBuilder endpoints;
     readonly ApiEndpoint endpoint;
-    readonly Func<TInput, CancellationToken, Task<TResult>> execute;
+    readonly IRelationQueryReader<TInput, TResult> query;
     readonly AspNetAuthorizationPolicyResolver? authorizationPolicyResolver;
     Func<HttpContext, TInput>? input;
     bool completed;
 
+    /// <summary>Checks the portable endpoint against the prepared typed query contract.</summary>
+    /// <param name="endpoints">Caller-owned native endpoint builder.</param>
+    /// <param name="endpoint">Portable bodyless query declaration.</param>
+    /// <param name="query">Prepared query, retained for concurrent request execution.</param>
+    /// <param name="authorizationPolicyResolver">Optional semantic-to-native authorization policy resolver.</param>
     internal ApiQueryBinding(IEndpointRouteBuilder endpoints, ApiEndpoint endpoint,
-        Func<TInput, CancellationToken, Task<TResult>> execute, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver)
+        IRelationQueryReader<TInput, TResult> query, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(endpoint);
-        ArgumentNullException.ThrowIfNull(execute);
+        ArgumentNullException.ThrowIfNull(query);
         if (endpoint.Operation.Kind != ApiOperationKind.Query || endpoint.Operation.RequestType != typeof(void) || endpoint.Operation.Http?.Body is not null
             || endpoint.Operation.ResponseType != typeof(TResult) || endpoint.Operation.PrimaryResult.Kind != ApiResultKind.Success)
             throw new ArgumentException("Query kind, body and primary response type must match the typed binding.", nameof(endpoint));
         this.endpoints = endpoints;
         this.endpoint = endpoint;
-        this.execute = execute;
+        this.query = query;
         this.authorizationPolicyResolver = authorizationPolicyResolver;
     }
 
@@ -83,7 +89,7 @@ public sealed class ApiQueryBinding<TInput, TResult>
         var readInput = input;
         var route = endpoints.MapApiEndpoint(endpoint, async (HttpContext context) =>
         {
-            var result = await execute(readInput(context), context.RequestAborted).ConfigureAwait(false);
+            var result = await query.ReadAsync(readInput(context), context.RequestAborted).ConfigureAwait(false);
             return result is null ? Results.NotFound() : Results.Ok(result);
         }, authorizationPolicyResolver: authorizationPolicyResolver);
         completed = true;

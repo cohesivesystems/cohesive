@@ -1,6 +1,7 @@
 using Cohesive.Model;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Execution;
 using Cohesive.Relations.Realization;
 using Cohesive.Transitions.Authoring;
 
@@ -72,7 +73,7 @@ public sealed class PostgresQueryRegistration
         var native = compiler.Compile(new RelationQueryNativeCompilationRequest(plan, bound, placement.Placement), storage);
         if (!native.IsSuccessful) throw new PostgresQueryPreparationException(compilation, native);
         var artifact = native.Artifacts.Single();
-        return new(query, artifact, new(artifact, runtime, maximumRows, maximumBytes));
+        return new(query, artifact, new PostgresQueryRowsReader(artifact, runtime, maximumRows, maximumBytes));
 
         PostgresEntityRepositoryMapping Mapping(QualifiedShapeId shape) => tables.TryGetValue(shape, out var mapping)
             ? mapping : throw new InvalidOperationException($"No PostgreSQL entity mapping is registered for query shape '{shape}'.");
@@ -87,14 +88,19 @@ public sealed class PostgresQueryRegistration
 /// <summary>A typed execution binding to one prepared native query; safe for concurrent reads.</summary>
 /// <typeparam name="TInput">Invocation parameter type.</typeparam>
 /// <typeparam name="TResult">Application result type.</typeparam>
-public sealed class PostgresQueryReader<TInput, TResult>
+public sealed class PostgresQueryReader<TInput, TResult> : IRelationQueryReader<TInput, TResult>
 {
-    readonly RelationQuery<TInput, TResult> query;
-    readonly PostgresQueryRowsReader rows;
+    readonly IRelationQueryRowsReader rows;
+    /// <inheritdoc />
+    public RelationQuery<TInput, TResult> Definition { get; }
+    /// <summary>Retains the exact definition and execution artifacts produced together by registration.</summary>
+    /// <param name="query">Canonical query authority and local result projection.</param>
+    /// <param name="artifact">Native artifact compiled from that definition.</param>
+    /// <param name="rows">Complete-row execution binding prepared for the artifact.</param>
     internal PostgresQueryReader(RelationQuery<TInput, TResult> query, PostgresRelationQueryCompiledArtifact artifact,
-        PostgresQueryRowsReader rows)
+        IRelationQueryRowsReader rows)
     {
-        this.query = query;
+        Definition = query;
         Artifact = artifact;
         this.rows = rows;
     }
@@ -106,8 +112,8 @@ public sealed class PostgresQueryReader<TInput, TResult>
     /// <returns>The query's typed result, including its declared empty-result policy.</returns>
     /// <remarks>No compilation or retry occurs here. Provider, validation and result-projection failures propagate.</remarks>
     public async Task<TResult> ReadAsync(TInput input, CancellationToken cancellationToken = default) =>
-        query.Project(await rows.ReadAsync(new Dictionary<Cohesive.Relations.IR.QueryParameterId, ObservationValue>
-        { [query.Parameter] = ObservationValue.FromObject(input) }, cancellationToken).ConfigureAwait(false));
+        Definition.Project(await rows.ReadAsync(new Dictionary<Cohesive.Relations.IR.QueryParameterId, ObservationValue>
+        { [Definition.Parameter] = ObservationValue.FromObject(input) }, cancellationToken).ConfigureAwait(false));
 }
 
 /// <summary>Registration failed to prepare a query, retaining exact compiler diagnostics.</summary>

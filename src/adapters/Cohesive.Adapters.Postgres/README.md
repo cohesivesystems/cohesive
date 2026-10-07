@@ -96,7 +96,7 @@ Text columns use explicit C-collation equality; this projection does not assert 
 global identity uniqueness, foreign keys or partition isolation. Those remain explicit query/schema
 obligations. The [fulfillment example](../../../eng/examples/aspire-first/README.md) demonstrates the full pipeline.
 
-`PostgresQueryRowsReader` executes one compiled, unpaged native `QueryRows` branch against an explicitly
+`PostgresQueryRowsReader` implements the shared `IRelationQueryRowsReader` complete-result contract and executes one compiled, unpaged native `QueryRows` branch against an explicitly
 attested `PostgresNpgsqlRuntimeBinding`. Prepare it once; concurrent calls own separate commands,
 parameter values and result budgets. The caller retains ownership of the data source. Presence markers
 reconstruct outer-join absence independently of SQL null. Positive row and decoded-scalar-byte bounds
@@ -118,7 +118,9 @@ retain their result objects in `PostgresQueryPreparationException`, while placem
 the existing artifact-authoring diagnostics. This convenience covers entity-backed inputs on one database;
 use the lower-level APIs for custom placement, acquisition or physical bindings.
 
-Keep the returned `PostgresQueryReader<TInput,TResult>` for the host lifetime. `ReadAsync` performs no
+Keep the returned `PostgresQueryReader<TInput,TResult>` for the host lifetime. HTTP code consumes its
+`IRelationQueryReader<TInput,TResult>` contract and exact `Definition`, while native composition can inspect
+its PostgreSQL artifact. `ReadAsync` performs no
 compilation; it binds the input, reads bounded native rows and invokes the query's local typed result
 projection. Its `Artifact` remains inspectable. The builder is registration-local and mutable, while readers
 retain immutable prepared artifacts and require concurrency-safe projection callbacks. Native data-source

@@ -366,9 +366,14 @@ explicit domain body and Problem Details for concurrency. Use the Problem Detail
 
 Use `app.MapApiQuery(endpoint, preparedRead).FromRoute<Guid>("id", id => id.ToString("D")).OkOrNotFound()`
 when a separately declared, bodyless query endpoint returns a nullable typed result. `preparedRead` is a
-`Func<TInput, CancellationToken, Task<TResult>>`; no database adapter dependency is required. Registration
+`IRelationQueryReader<TInput, TResult>` retaining its canonical `Definition`; pass the object, not
+its `ReadAsync` method group. No database adapter dependency is required. Registration
 checks the endpoint's query kind and response type, route declaration and 404 policy. Invalid input returns
 400 before invocation, request cancellation propagates, and null returns the declared empty-body 404.
 Other results use 200 JSON. The native route builder remains available for further configuration, and
 semantic authorization still requires the existing policy resolver. The binder owns no query compilation,
 result assembly or retry policy.
+
+The typed reader is a complete-result convenience contract. For composed/cross-source evaluation with
+phase artifacts, requirement gaps and source-read traces, retain the existing `MapRelationQueryApiDefinition`
+and `IRelationQueryEvaluator` path. Do not turn a failed or partial evaluation into an ordinary typed success.

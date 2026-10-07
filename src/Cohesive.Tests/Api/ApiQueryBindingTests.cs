@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using Cohesive.Adapters.AspNet;
 using Cohesive.Api;
+using Cohesive.Relations.Authoring;
+using Cohesive.Relations.Execution;
 using Microsoft.AspNetCore.Builder;
 
 namespace Cohesive.Tests.Api;
@@ -15,12 +17,12 @@ public sealed class ApiQueryBindingTests
     {
         await using var app = WebApplication.CreateBuilder().Build();
         var calls = 0;
-        Func<string, CancellationToken, Task<Detail?>> read = (id, token) =>
+        var read = new DetailReader((id, token) =>
         {
             calls++;
             Assert.True(token.CanBeCanceled);
             return Task.FromResult(id == "1" ? new Detail(id) : null);
-        };
+        });
         var endpoint = Cohesive.Api.Api.Define().Entity<Detail>().Query("Details")
             .Route("GET", "/details/{id}").RouteParameter<string>("id")
             .Returns<Detail>().Result(ApiResultKind.NotFound).Build();
@@ -41,7 +43,7 @@ public sealed class ApiQueryBindingTests
     public async Task Registration_rejects_wrong_result_unknown_route_and_missing_response_policy()
     {
         await using var app = WebApplication.CreateBuilder().Build();
-        Func<string, CancellationToken, Task<Detail?>> read = (_, _) => Task.FromResult<Detail?>(null);
+        var read = new DetailReader((_, _) => Task.FromResult<Detail?>(null));
         var wrong = Cohesive.Api.Api.Define().Entity<Detail>().Query("Wrong")
             .Route("GET", "/wrong/{id}").RouteParameter<string>("id").Returns<string>().Build();
         Assert.Throws<ArgumentException>(() => app.MapApiQuery(wrong, read));
@@ -52,4 +54,20 @@ public sealed class ApiQueryBindingTests
         Assert.Throws<InvalidOperationException>(() => app.MapApiQuery(query, read)
             .FromRoute<int>("id", id => id.ToString()).OkOrNotFound());
     }
+    // The HTTP boundary depends only on the typed contract, not the PostgreSQL adapter or a method group.
+    sealed class DetailReader(Func<string, CancellationToken, Task<Detail?>> read) : IRelationQueryReader<string, Detail?>
+    {
+        public RelationQuery<string, Detail?> Definition { get; } = CreateDefinition();
+        public Task<Detail?> ReadAsync(string input, CancellationToken cancellationToken = default) => read(input, cancellationToken);
+
+        static RelationQuery<string, Detail?> CreateDefinition()
+        {
+            var author = RelationQuery.Expression();
+            var parameter = author.Parameter<string>("id");
+            var rows = author.Where(author.Source(author.Clr.Shape<Detail>()), detail => detail.Id == parameter.Value);
+            return author.BuildQuery(new("details"), new("Details"), rows, parameter,
+                result: values => values.Count == 0 ? null : values[0]);
+        }
+    }
+
 }

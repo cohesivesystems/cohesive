@@ -1,6 +1,7 @@
 using Cohesive.Adapters.AspNet.Entities;
 using Cohesive.Adapters.AspNet;
 using Cohesive.Storage;
+using Cohesive.Relations.Execution;
 
 namespace AspireFirst.Orders;
 
@@ -9,9 +10,9 @@ public static class OrderEndpoints
 {
     /// <summary>Maps entity operations and the joined read through shared API bindings.</summary>
     /// <param name="app">Application endpoint builder.</param>
-    /// <param name="details">Prepared native reader for the canonical joined query.</param>
+    /// <param name="details">Prepared canonical reader for the canonical joined query.</param>
     /// <param name="orders">Caller-owned order repository.</param>
-    public static void Map(WebApplication app, IEntityRepository orders, Func<string, CancellationToken, Task<OrderDetails?>> details)
+    public static void Map(WebApplication app, IEntityRepository orders, IRelationQueryReader<string, OrderDetails?> details)
     {
         app.MapEntityApi<Order>(OrderStorage.Entity, orders, OrderStorage.LocalPartition,
             endpoints => endpoints

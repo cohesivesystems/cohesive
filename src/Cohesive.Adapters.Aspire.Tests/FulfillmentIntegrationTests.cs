@@ -6,6 +6,7 @@ using Cohesive.Adapters.Postgres;
 using Cohesive.Model;
 using Cohesive.Prelude;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Execution;
 using Cohesive.Storage;
 using Microsoft.AspNetCore.Builder;
 using Npgsql;
@@ -34,7 +35,7 @@ public sealed partial class OrderStorageIntegrationTests
             await orders.Upsert(context, new(OrderStorage.Entity.CreateState(id, new Order(id, "outside", "Private"), 1).Snapshot));
             await orders.Upsert(context, new(OrderStorage.Entity.CreateState(outsideId, new Order(outsideId, "outside"), 1).Snapshot));
             var queryReader = OrderQueryInfrastructure.Bind(database);
-            var nativeReader = new PostgresQueryRowsReader(queryReader.Artifact, runtime, maximumRows: 1000, maximumBytes: 1_000_000);
+            IRelationQueryRowsReader nativeReader = new PostgresQueryRowsReader(queryReader.Artifact, runtime, maximumRows: 1000, maximumBytes: 1_000_000);
             var initialRows = await nativeReader.ReadAsync(new Dictionary<QueryParameterId, ObservationValue>
             { [OrderDetailsQuery.Definition.Parameter] = ObservationValue.FromString(id) });
             Assert.False(Assert.Single(initialRows).TryGetField(FieldPath.FromField("ReservationId"), out _));
@@ -42,7 +43,7 @@ public sealed partial class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, orders, queryReader.ReadAsync);
+            OrderEndpoints.Map(app, orders, queryReader);
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -65,7 +66,7 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.All(joined.Reservations, item => { Assert.Equal(sku, item.Sku); Assert.Equal(8, item.AvailableStock); });
             var values = new Dictionary<QueryParameterId, ObservationValue> { [OrderDetailsQuery.Definition.Parameter] = ObservationValue.FromString(id) };
             await Assert.ThrowsAsync<InvalidOperationException>(() => OrderQueryInfrastructure.Bind(database, maximumRows: 1).ReadAsync(id));
-            var tiny = new PostgresQueryRowsReader(queryReader.Artifact, runtime, maximumRows: 10, maximumBytes: 1);
+            IRelationQueryRowsReader tiny = new PostgresQueryRowsReader(queryReader.Artifact, runtime, maximumRows: 10, maximumBytes: 1);
             await Assert.ThrowsAnyAsync<InvalidOperationException>(() => tiny.ReadAsync(values));
             Assert.Throws<ArgumentException>(() => new PostgresQueryRowsReader(queryReader.Artifact,
                 new(new("wrong-database"), database, "tests/fulfillment"), 10, 1000));

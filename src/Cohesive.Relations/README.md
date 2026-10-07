@@ -118,3 +118,11 @@ DTO conversions. This convenience currently requires one exact invocation parame
 additional or foreign parameters fail closed. Existing structural query and HostedQuery APIs retain their
 separate responsibilities. See the [fulfillment example](../../eng/examples/aspire-first/README.md) for
 backend registration and fluent API binding.
+
+Prepared typed readers implement `IRelationQueryReader<TInput,TResult>` and retain the exact authored
+`Definition`; HTTP bindings can accept that object without taking a dependency on its backend. The narrower
+`IRelationQueryRowsReader` contract describes complete bounded rows before typed projection, including
+missing-field versus null semantics. Neither contract silently discards partiality or adds retry.
+These convenience contracts do not replace `IRelationQueryEvaluator`: the existing composed execution path
+supports cross-source joins and retains phase artifacts, requirement gaps and source-read traces. Native
+PostgreSQL selection remains explicit; no automatic native-versus-federated dispatcher is introduced.

@@ -46,7 +46,7 @@ public sealed partial class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, repository, OrderQueryInfrastructure.Bind(database).ReadAsync);
+            OrderEndpoints.Map(app, repository, OrderQueryInfrastructure.Bind(database));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -112,7 +112,7 @@ public sealed partial class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, racing, OrderQueryInfrastructure.Bind(database).ReadAsync);
+            OrderEndpoints.Map(app, racing, OrderQueryInfrastructure.Bind(database));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };

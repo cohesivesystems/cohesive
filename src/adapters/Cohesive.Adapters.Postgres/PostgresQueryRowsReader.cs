@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Transactions;
 using Cohesive.Model;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Execution;
 using Cohesive.Relations.Realization;
 using Cohesive.Relations.Compilation;
 using Npgsql;
@@ -13,7 +14,7 @@ namespace Cohesive.Adapters.Postgres;
 /// <remarks>Prepared once, safe for concurrent calls. Each call owns its parameters, connection, command and
 /// result budget. The caller owns the data source. This is native statement execution, not a complete canonical
 /// evaluation outcome or a paging API. It preserves outer-join absence separately from SQL null.</remarks>
-public sealed class PostgresQueryRowsReader
+public sealed class PostgresQueryRowsReader : IRelationQueryRowsReader
 {
     readonly PostgresRelationQueryCompiledArtifact artifact;
     readonly PostgresNpgsqlRuntimeBinding runtime;
