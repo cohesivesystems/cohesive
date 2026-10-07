@@ -73,6 +73,53 @@ public sealed class TypedEntityApiBindingsTests
     }
 
     [Fact]
+    public void Create_if_absent_requires_native_capability_during_registration()
+    {
+        var bindings = new TypedEntityApiBindings<Order>(Entity, new UnsupportedCreationRepository(), "local");
+        var endpoint = Cohesive.Api.Api.Define().Entity<Order>().Command("Create").Route("POST", "/orders")
+            .Returns<Order>(ApiResultKind.Created).Build();
+        Assert.Throws<NotSupportedException>(() => bindings.CreateIfAbsent(endpoint,
+            partition => new Order("one", partition, "Draft"), value => value.Id,
+            value => TypedResults.Created("/orders/one", value)));
+    }
+
+    sealed class UnsupportedCreationRepository : IEntityRepository
+    {
+        public Cohesive.Transitions.Model.EntityDefinition EntityDefinition => Entity;
+        public string? IdentityField => "Id";
+        public Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null) =>
+            throw new InvalidOperationException("Registration must not perform reads.");
+        public Task<EntitySnapshot> Upsert(OperationContext context, EntityWriteRequest write) =>
+            throw new InvalidOperationException("Registration must not perform writes.");
+    }
+
+    [Fact]
+    public async Task Create_if_absent_returns_conflict_without_overwriting_existing_state()
+    {
+        var repository = new InMemoryEntityOutboxRepository(Entity, partitionKeyFieldName: "Partition");
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddRequestOperationContext();
+        await using var app = builder.Build();
+        app.UseRequestOperationContext();
+        var endpoint = Cohesive.Api.Api.Define().Entity<Order>().Command("Create").Route("POST", "/orders")
+            .Returns<Order>(ApiResultKind.Created).Build();
+        app.MapEntityApi<Order>(Entity, repository, "local", bindings => bindings.CreateIfAbsent(endpoint,
+            partition => new Order("one", partition, "Draft"), value => value.Id,
+            value => TypedResults.Created("/orders/one", value)));
+        app.Urls.Add("http://127.0.0.1:0");
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+        Assert.Equal(HttpStatusCode.Created, (await client.PostAsync("/orders", null)).StatusCode);
+        var before = await repository.TryGet(OperationContext.Create(), "one", new(partitionKey: "local"));
+        var rejected = await client.PostAsync("/orders", null);
+        Assert.Equal(HttpStatusCode.Conflict, rejected.StatusCode);
+        Assert.Contains(ApiProblemCodes.ConcurrencyConflict, await rejected.Content.ReadAsStringAsync());
+        Assert.Equal(before, await repository.TryGet(OperationContext.Create(), "one", new(partitionKey: "local")));
+        Assert.Equal(0, before!.Entity.Version);
+        await app.StopAsync();
+    }
+
+    [Fact]
     public async Task Registration_rejects_mismatched_response_duplicate_and_incomplete_binding()
     {
         var repository = new InMemoryEntityOutboxRepository(Entity, partitionKeyFieldName: "Partition");

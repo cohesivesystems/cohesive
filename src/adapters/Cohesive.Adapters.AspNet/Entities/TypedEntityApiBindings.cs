@@ -18,6 +18,7 @@ namespace Cohesive.Adapters.AspNet.Entities;
 public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
 {
     readonly EntityDefinition entity;
+    readonly IEntityRepository repository;
     readonly string partition;
     readonly ObservationMaterializer<TEntity> materializer;
     readonly EntityApiEndpointOptions options;
@@ -38,6 +39,7 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
         if (!ReferenceEquals(entity, repository.EntityDefinition))
             throw new ArgumentException("Repository must use the supplied canonical entity definition.", nameof(repository));
         this.entity = entity;
+        this.repository = repository;
         this.partition = partition;
         materializer = ObservationMaterializer.For<TEntity>(entity.StateShape).Compile();
         options = new() { Entity = entity, RepositoryResolver = (_, _) => repository, ReadPartitionKeyResolver = _ => partition };
@@ -72,7 +74,8 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
         Get(Cohesive.Api.Api.Define().Entity<TEntity>().Query(name).Route("GET", route)
             .RouteParameter<string>("id").Returns<TResponse>().Result(ApiResultKind.NotFound).Build(), respond);
 
-    /// <summary>Binds creation with typed initial state and response; identity is selected explicitly from the new state.</summary>
+    /// <summary>Binds legacy upsert-backed creation with typed initial state and response.</summary>
+    /// <remarks>This method may replace existing state. Use CreateIfAbsent for an atomic absence guarantee.</remarks>
     /// <typeparam name="TResponse">Declared success body type.</typeparam>
     /// <param name="endpoint">Separately authored bodyless command declaring a Created response.</param>
     /// <param name="initialize">Creates fresh state using the binding's effective partition; must not reuse mutable state across requests.</param>
@@ -91,6 +94,30 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
         Validate<TResponse>(endpoint, ApiOperationKind.Command, ApiResultKind.Created);
         Add(endpoint, EntityApiOperationBinding.Create(endpoint,
             (_, _) => { var value = initialize(partition); return entity.CreateState(identity(value), value, version: 1); },
+            (_, snapshot) => respond(Read(snapshot))));
+        return this;
+    }
+
+    /// <summary>Binds an implied canonical creation transition with an atomic absence fence.</summary>
+    /// <typeparam name="TResponse">Declared created response.</typeparam>
+    /// <param name="endpoint">Separately declared bodyless creation endpoint.</param>
+    /// <param name="initialize">Materializes input state using the binding's trusted partition.</param>
+    /// <param name="identity">Selects the new subject identity.</param>
+    /// <param name="respond">Projects committed state onto the HTTP response.</param>
+    /// <returns>This registration session.</returns>
+    /// <exception cref="NotSupportedException">The repository cannot enforce absence atomically.</exception>
+    /// <exception cref="ArgumentException">The endpoint contract is incompatible.</exception>
+    public TypedEntityApiBindings<TEntity> CreateIfAbsent<TResponse>(ApiEndpoint endpoint,
+        Func<string, TEntity> initialize, Func<TEntity, string> identity, Func<TEntity, Created<TResponse>> respond)
+    {
+        ArgumentNullException.ThrowIfNull(initialize);
+        ArgumentNullException.ThrowIfNull(identity);
+        ArgumentNullException.ThrowIfNull(respond);
+        Validate<TResponse>(endpoint, ApiOperationKind.Command, ApiResultKind.Created);
+        if (!repository.SupportsCreateIfAbsent)
+            throw new NotSupportedException("Creation requires an atomic absence-fenced repository.");
+        Add(endpoint, new CreateIfAbsentEntityApiOperationBinding(endpoint,
+            (_, _) => { var value = initialize(partition); return entity.CreateState(identity(value), value); },
             (_, snapshot) => respond(Read(snapshot))));
         return this;
     }

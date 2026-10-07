@@ -169,3 +169,12 @@ independent of whether seeds are null, empty or populated. Omission keeps typed 
 legacy `Id` seed-import field. Serialized field names, including `JsonPropertyName`, are authoritative;
 a POCO lacking an explicitly configured field fails during typed preparation. Snapshot imports already
 carry canonical envelope identities and do not infer a POCO mapping.
+
+## Explicit creation versus upsert
+
+`IEntityRepository.CreateIfAbsent` is an optional atomic absence-fenced primitive. Check `SupportsCreateIfAbsent`
+at registration; unsupported providers fail without writing. PostgreSQL and the in-memory repository implement
+it, and typed wrappers preserve the capability. An existing identity/partition raises the shared concurrency
+conflict. `Upsert` continues to mean insert-or-replace; a pre-read followed by upsert is not an atomic create.
+The ASP.NET `CreateIfAbsent` binding prepares an implied canonical creation transition once and maps conflicts
+to sanitized 409 responses. This does not imply idempotent requests, emission delivery or event sourcing.

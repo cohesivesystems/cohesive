@@ -147,7 +147,7 @@ public sealed record PostgresEntityRepositoryMapping
 /// one database transaction and therefore support same-partition and cross-partition all-or-nothing semantics.
 /// The caller owns the bound <see cref="NpgsqlDataSource"/> and must keep it alive for the repository lifetime.
 /// </remarks>
-public sealed class PostgresEntityRepository : IEntityRepository
+public sealed partial class PostgresEntityRepository : IEntityTransitionOperationRepository
 {
     readonly PostgresNpgsqlRuntimeBinding runtime;
     readonly PostgresEntityRepositoryMapping mapping;
@@ -160,6 +160,7 @@ public sealed class PostgresEntityRepository : IEntityRepository
     /// <param name="entityDefinition">Canonical entity definition used to validate every read and write.</param>
     /// <param name="runtime">Exact attested Npgsql runtime that owns database access.</param>
     /// <param name="mapping">Explicit table, column, identity, partition, version, and batch mapping.</param>
+    /// <param name="transitionReceipts">Optional explicit receipt table and trusted partition; schema migration remains caller-owned.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">
     /// The mapping does not bind every semantic field exactly once, contains an extra field, uses an incompatible
@@ -168,11 +169,13 @@ public sealed class PostgresEntityRepository : IEntityRepository
     public PostgresEntityRepository(
         EntityDefinition entityDefinition,
         PostgresNpgsqlRuntimeBinding runtime,
-        PostgresEntityRepositoryMapping mapping)
+        PostgresEntityRepositoryMapping mapping,
+        PostgresTransitionReceiptOptions? transitionReceipts = null)
     {
         EntityDefinition = Guard.RequireNotNull(entityDefinition);
         this.runtime = Guard.RequireNotNull(runtime);
         this.mapping = Guard.RequireNotNull(mapping);
+        receipts = transitionReceipts;
         layout = ObservationLayout.Create(entityDefinition.StateShape, mapping.Fields.Select(static field => field.FieldName));
         identityOrdinal = layout.GetOrdinal(mapping.IdentityField);
         partitionOrdinal = layout.GetOrdinal(mapping.PartitionField);
@@ -224,6 +227,18 @@ public sealed class PostgresEntityRepository : IEntityRepository
 
         ValidateReadPreconditions(id, snapshot, options);
         return snapshot;
+    }
+
+    /// <inheritdoc />
+    public bool SupportsCreateIfAbsent => true;
+    /// <inheritdoc />
+    public async Task<EntitySnapshot> CreateIfAbsent(OperationContext context, EntityObservationSnapshot entity)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var write = new EntityWriteRequest(entity);
+        ValidateWrite(write);
+        await using var connection = await runtime.DataSource.OpenConnectionAsync(context.CancellationToken).ConfigureAwait(false);
+        return await UpsertCore(context, connection, transaction: null, write, createOnly: true).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -313,9 +328,10 @@ public sealed class PostgresEntityRepository : IEntityRepository
         OperationContext context,
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
-        EntityWriteRequest write)
+        EntityWriteRequest write, bool createOnly = false)
     {
-        var template = write.ExpectedConcurrencyToken is null ? sql.Upsert : sql.Replace;
+        var template = createOnly ? sql.CreateIfAbsent
+            : write.ExpectedConcurrencyToken is null ? sql.Upsert : sql.Replace;
         await using var command = new NpgsqlCommand(
             template.Text,
             connection,
@@ -609,6 +625,7 @@ internal sealed record PostgresEntityRepositorySql(
     SqlCommandTemplate ReadByIdentity,
     SqlCommandTemplate ReadByIdentityAndPartition,
     SqlCommandTemplate Upsert,
+    SqlCommandTemplate CreateIfAbsent,
     SqlCommandTemplate Replace,
     ImmutableDictionary<string, int> FieldIndexByBinding)
 {
@@ -626,30 +643,6 @@ internal sealed record PostgresEntityRepositorySql(
         var partition = mapping.FieldByName[mapping.PartitionField];
         var readByIdentity = CreateRead(mapping, identity, partition: null);
         var readByIdentityAndPartition = CreateRead(mapping, identity, partition);
-
-        SqlInsertBuilder insert = new(mapping.Table);
-        for (var index = 0; index < mapping.Fields.Length; index++)
-        {
-            insert.Value(
-                columnName: mapping.Fields[index].Column.Value,
-                value: SqlExpression.RuntimeParameter(FieldBinding(index)));
-        }
-        insert.Value(
-            columnName: mapping.VersionColumn.Value,
-            value: SqlExpression.RuntimeParameter(ObservationVersionBinding));
-        var conflictColumns = partition.Column == identity.Column
-            ? new[] { partition.Column.Value }
-            : [partition.Column.Value, identity.Column.Value];
-        insert.OnConflictDoUpdate(
-            conflictColumns: conflictColumns,
-            excludedUpdateColumns:
-            [
-                .. mapping.Fields.Select(static field => field.Column.Value),
-                mapping.VersionColumn.Value
-            ]);
-        insert.Returning(
-            expression: SqlExpression.UnqualifiedColumn(ConcurrencyColumn),
-            alias: ConcurrencyResultAlias);
 
         SqlUpdateBuilder replace = new(mapping.Table);
         for (var index = 0; index < mapping.Fields.Length; index++)
@@ -683,11 +676,45 @@ internal sealed record PostgresEntityRepositorySql(
         return new(
             readByIdentity,
             readByIdentityAndPartition,
-            insert.BuildTemplate(PostgresSqlDialect.Instance),
+            CreateInsert(mapping, createOnly: false),
+            CreateInsert(mapping, createOnly: true),
             replace.BuildTemplate(PostgresSqlDialect.Instance),
             mapping.Fields
                 .Select(static (_, index) => KeyValuePair.Create(FieldBinding(index), index))
                 .ToImmutableDictionary(StringComparer.Ordinal));
+    }
+
+    static SqlCommandTemplate CreateInsert(PostgresEntityRepositoryMapping mapping, bool createOnly)
+    {
+        var identity = mapping.FieldByName[mapping.IdentityField];
+        var partition = mapping.FieldByName[mapping.PartitionField];
+        SqlInsertBuilder insert = new(mapping.Table);
+        for (var index = 0; index < mapping.Fields.Length; index++)
+        {
+            insert.Value(
+                columnName: mapping.Fields[index].Column.Value,
+                value: SqlExpression.RuntimeParameter(FieldBinding(index)));
+        }
+        insert.Value(
+            columnName: mapping.VersionColumn.Value,
+            value: SqlExpression.RuntimeParameter(ObservationVersionBinding));
+        var conflictColumns = partition.Column == identity.Column
+            ? new[] { partition.Column.Value }
+            : [partition.Column.Value, identity.Column.Value];
+        if (createOnly)
+            insert.OnConflictDoNothing(conflictColumns);
+        else insert.OnConflictDoUpdate(
+            conflictColumns: conflictColumns,
+            excludedUpdateColumns:
+            [
+                .. mapping.Fields.Select(static field => field.Column.Value),
+                mapping.VersionColumn.Value
+            ]);
+        insert.Returning(
+            expression: SqlExpression.UnqualifiedColumn(ConcurrencyColumn),
+            alias: ConcurrencyResultAlias);
+
+        return insert.BuildTemplate(PostgresSqlDialect.Instance);
     }
 
     static SqlCommandTemplate CreateRead(

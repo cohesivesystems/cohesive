@@ -22,7 +22,7 @@ waits and volume configuration in native Aspire. It adds no second deployment in
    for relationships, storage and queries. `FulfillmentStorage` attaches
    fluent PostgreSQL mappings (`For(entity).Table().Identity().Partition().Build()`)
    and bind the Aspire-supplied data source through
-   `PostgresNpgsqlRuntimeBinding`. The endpoints use `IEntityRepository.Upsert/TryGet`,
+   `PostgresNpgsqlRuntimeBinding`. Creation uses atomic `CreateIfAbsent`; reads use `TryGet`,
    implemented by the existing `Cohesive.Adapters.Postgres` repository.
    `JsonPropertyName` preserves the canonical `id`/`partition` names; writes use the
    record directly through `CreateState`. PostgreSQL mappings add physical details only.
@@ -36,10 +36,9 @@ waits and volume configuration in native Aspire. It adds no second deployment in
    owns entity validation/writes and the shared native query reader executes the compiled join. The runtime binding is
    caller-attested affinity, not independent proof of database identity.
 
-The example demonstrates persistence, one guarded domain transition and a joined query across three entities.
-It is not yet a CQRS/ES implementation.
-It does not claim sequential execution, event history, audit logging or orchestration.
-Those require additional explicit contracts, implementations and execution evidence.
+The example demonstrates persistence, guarded transitions, joined queries, and a finite multi-entity Process.
+It is not yet a CQRS/ES implementation. Event-authoritative state, reconstitution, durable process recovery,
+and audit retention remain separate capabilities. See the [fulfillment walkthrough](FULFILLMENT.md).
 
 ## Build and run
 
@@ -74,12 +73,12 @@ submitted order. Creation retries create distinct orders; this example does not 
 `OrderTransitions.Submit` uses conventional node IDs and provenance, keeping only the contract ID
 and revision explicit. Inserting or reordering implicit steps changes their IDs; explicit IDs remain
 available when editing stability is required. It declares the POCO-authored `Draft → Submitted` rule. `OrderEndpoints`
-constructs `SubmitOrder(OrderId)` from the route and receives canonical `SubmitOrderResult(Status, Reason)`
+constructs `SubmitOrder(OrderId)` from the route and receives canonical `SubmitOrderResult(Status, Reason, Accepted)`
 outcomes. The transition validates that the command targets the loaded order. It
 references that exact declaration in the canonical API and passes it to the shared ASP.NET binding.
 The binding compiles once during registration and retains the plan for requests; invalid declarations
 fail registration with a `TransitionApiPreparationException` retaining structured compiler diagnostics. No global compilation cache or per-request compilation is added.
-All four routes (create, get, submit and details) are declared as portable handles in `OrderApi`
+All order routes (create, get, submit, details and availability) are declared as portable handles in `OrderApi`
 under one `Entity<Order>()` builder in a static constructor,
 and bound in `OrderEndpoints`: entity operations use `app.MapEntityApi<Order>(..., endpoints => ...)`,
 while the joined read uses `app.MapApiQuery(OrderApi.Details, details).FromRoute<Guid>(...).OkOrNotFound()`. Callbacks receive
@@ -477,3 +476,6 @@ assembly. The demand projection still provides the same optional native-prefix b
 This step refines the existing authoring API rather than adding a LINQ provider. Named intermediate views,
 earlier query-header declaration and constructor-based nested result syntax remain future refinements;
 running-program availability wiring and CQRS/event-sourcing guarantees are separate follow-ups.
+
+The running program also maps `/orders/{id}/availability` through `ReservationAvailabilityQueryBindings.BindNative`
+and `/fulfillment` through the canonical ephemeral Process. The former preserves the outer-join row with absent reservation fields when an order has no demand. Cross-database placement remains an alternate tested binding, not the default running configuration.

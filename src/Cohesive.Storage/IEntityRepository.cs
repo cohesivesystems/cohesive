@@ -40,6 +40,18 @@ public interface IEntityRepository
     /// </summary>
     Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null);
 
+    /// <summary>Whether an atomic absence-fenced creation is supported.</summary>
+    bool SupportsCreateIfAbsent => false;
+
+    /// <summary>Creates one observation only if its identity and partition are absent.</summary>
+    /// <param name="context">Invocation context and cancellation.</param>
+    /// <param name="entity">Complete initial observation; no existing concurrency token is accepted.</param>
+    /// <returns>The newly committed snapshot.</returns>
+    /// <exception cref="NotSupportedException">This repository lacks atomic creation.</exception>
+    /// <exception cref="ObservationConcurrencyConflictException">The subject already exists.</exception>
+    Task<EntitySnapshot> CreateIfAbsent(OperationContext context, EntityObservationSnapshot entity) =>
+        throw new NotSupportedException("This repository does not support atomic create-if-absent.");
+
     /// <summary>
     /// Upserts one observation snapshot.
     /// </summary>

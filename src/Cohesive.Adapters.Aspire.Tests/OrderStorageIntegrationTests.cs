@@ -2,6 +2,7 @@ using AspireFirst.Orders;
 using System.Diagnostics;
 using System.Text.Json;
 using Cohesive.Api;
+using Cohesive.Model;
 using Cohesive.Transitions.Model;
 using Cohesive.Adapters.AspNet;
 using Microsoft.AspNetCore.Builder;
@@ -14,6 +15,7 @@ using Npgsql;
 
 namespace Cohesive.Adapters.Aspire.Tests;
 
+[Collection("Order PostgreSQL schema")]
 public sealed partial class OrderStorageIntegrationTests
 {
     const string ConnectionVariable = "COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING";
@@ -50,7 +52,7 @@ public sealed partial class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, repository, persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000));
+            OrderEndpoints.Map(app, repository, persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000), ReservationAvailabilityQueryBindings.BindNative(persistence));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -117,7 +119,7 @@ public sealed partial class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, new TypedEntityRepository<Order>(racing), persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000));
+            OrderEndpoints.Map(app, new TypedEntityRepository<Order>(racing), persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000), ReservationAvailabilityQueryBindings.BindNative(persistence));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -163,6 +165,7 @@ public sealed partial class OrderStorageIntegrationTests
         });
         var errors = process.StandardError.ReadToEndAsync();
         string? id = null;
+        var fulfillmentSku = "http-" + Guid.NewGuid().ToString("N");
         try
         {
             using var client = new HttpClient { BaseAddress = new Uri(await address.Task.WaitAsync(TimeSpan.FromSeconds(30))) };
@@ -172,7 +175,16 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.Equal($"/orders/{id}", created.Headers.Location!.OriginalString);
             Assert.Equal("Draft", (await client.GetFromJsonAsync<OrderSummary>($"/orders/{id}"))!.Status);
             Assert.Empty((await client.GetFromJsonAsync<OrderDetails>($"/orders/{id}/details"))!.Reservations);
-            Assert.Equal(HttpStatusCode.OK, (await client.PostAsync($"/orders/{id}/submit", null)).StatusCode);
+            await using (var database = NpgsqlDataSource.Create(connection))
+            await using (var seed = database.CreateCommand("INSERT INTO public.cohesive_inventory VALUES ($1, 'local', 5, 0)"))
+            {
+                seed.Parameters.AddWithValue(fulfillmentSku);
+                await seed.ExecuteNonQueryAsync();
+            }
+            var fulfillment = await client.PostAsJsonAsync("/fulfillment", new FulfillOrder(id, fulfillmentSku, 2));
+            Assert.Equal(HttpStatusCode.OK, fulfillment.StatusCode);
+            Assert.Equal("Submitted", (await fulfillment.Content.ReadFromJsonAsync<FulfillmentResult>())!.Status);
+            Assert.Null(Assert.Single((await client.GetFromJsonAsync<ReservationAvailability[]>($"/orders/{id}/availability"))!).ReservationId);
             await AssertProblem(await client.PostAsync($"/orders/{id}/submit", null), "orders.submit.rejected");
             Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/orders/{Guid.NewGuid():D}")).StatusCode);
         }
@@ -186,6 +198,15 @@ public sealed partial class OrderStorageIntegrationTests
             {
                 await using var database = NpgsqlDataSource.Create(connection);
                 await DeleteOrder(database, id);
+                await using (var removeReceipts = database.CreateCommand("DELETE FROM public.cohesive_process_receipts WHERE subject_id=$1 OR subject_id=$2"))
+                {
+                    removeReceipts.Parameters.AddWithValue(id);
+                    removeReceipts.Parameters.AddWithValue(fulfillmentSku);
+                    await removeReceipts.ExecuteNonQueryAsync();
+                }
+                await using var removeStock = database.CreateCommand("DELETE FROM public.cohesive_inventory WHERE sku=$1");
+                removeStock.Parameters.AddWithValue(fulfillmentSku);
+                await removeStock.ExecuteNonQueryAsync();
             }
         }
     }
@@ -216,6 +237,8 @@ public sealed partial class OrderStorageIntegrationTests
         public int WriteCount => writes;
         public EntityDefinition EntityDefinition => inner.EntityDefinition;
         public string? IdentityField => inner.IdentityField;
+        public bool SupportsCreateIfAbsent => inner.SupportsCreateIfAbsent;
+        public Task<EntitySnapshot> CreateIfAbsent(OperationContext context, EntityObservationSnapshot entity) => inner.CreateIfAbsent(context, entity);
         public async Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null)
         {
             var result = await inner.TryGet(context, id, options);

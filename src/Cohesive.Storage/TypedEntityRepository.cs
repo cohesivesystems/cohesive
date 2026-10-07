@@ -22,6 +22,12 @@ public sealed class TypedEntityRepository<TEntity>(
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => repository.EntityDefinition;
 
+    /// <inheritdoc />
+    public bool SupportsCreateIfAbsent => repository.SupportsCreateIfAbsent;
+    /// <inheritdoc />
+    public Task<EntitySnapshot> CreateIfAbsent(OperationContext context, EntityObservationSnapshot entity) =>
+        repository.CreateIfAbsent(context, entity);
+
     /// <summary>Gets the entity type.</summary>
     public string EntityType => repository.EntityType;
 
@@ -132,6 +138,12 @@ public sealed class TypedEntityOutboxRepository<TEntity>(
 
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => repository.EntityDefinition;
+
+    /// <inheritdoc />
+    public bool SupportsCreateIfAbsent => repository.SupportsCreateIfAbsent;
+    /// <inheritdoc />
+    public Task<EntitySnapshot> CreateIfAbsent(OperationContext context, EntityObservationSnapshot entity) =>
+        repository.CreateIfAbsent(context, entity);
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => repository.EntityType;

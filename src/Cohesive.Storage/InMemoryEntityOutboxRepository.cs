@@ -150,6 +150,23 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         }
     }
 
+    /// <inheritdoc />
+    public bool SupportsCreateIfAbsent => true;
+    /// <inheritdoc />
+    public Task<EntitySnapshot> CreateIfAbsent(OperationContext context, EntityObservationSnapshot entity)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(entity);
+        context.ThrowIfCancellationRequested();
+        EnsureEntityType(entity);
+        lock (gate)
+        {
+            if (snapshotsByKey.ContainsKey(CreateKey(entity.EntityId.Value, GetPartitionKey(context, entity))))
+                throw new ObservationConcurrencyConflictException("Creation subject already exists.");
+            return Task.FromResult(UpsertUnderLock(context, new(entity)));
+        }
+    }
+
     /// <summary>Upserts the value.</summary>
     public Task<EntitySnapshot> Upsert(OperationContext context, EntityWriteRequest write)
     {

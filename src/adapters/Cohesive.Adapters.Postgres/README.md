@@ -173,3 +173,21 @@ The composed policy rejects a null partition scope at construction. Missing remo
 mismatched partition scopes raise `RelationQueryPreparationException`
 with a `postgres.composed.*` code and semantic compilation evidence. Identity caching and allocation
 boundaries are documented once in the [Storage README](../../Cohesive.Storage/README.md).
+
+## Atomic entity process receipts
+
+Opt in with `PostgresTransitionReceiptOptions(schema, table, partitionKey)` on the repository or
+`persistence.Repository(entity, transitionReceipts: options)`. Execute `options.SchemaSql` explicitly in your
+schema lifecycle before admitting operations. The DDL uses `IF NOT EXISTS`; it does not validate or migrate
+an existing table. Without options the repository advertises no atomic transition-receipt support.
+
+State and canonical receipt commit in one native transaction. Advisory transaction locks serialize the same
+occurrence/subject; the conditional SQL write still fences external writers. Exact replay returns original
+evidence even after later entity updates. Receipt size, format, hash, canonical encoding and identity are checked
+on read. Oversized receipt writes roll back entity state. No retry is hidden; an ambiguous COMMIT requires exact
+receipt resolution. Options choose a trusted physical partition, not an authorization grant. Application schema,
+retention and recovery remain explicit. Receipts do not imply an outbox or event-authoritative state.
+
+`CreateIfAbsent` uses `INSERT ... ON CONFLICT DO NOTHING` on the configured identity/partition key, independently
+of receipt configuration. `Upsert` retains its existing replacement behavior. Typed wrappers forward both the
+capability and the operation.

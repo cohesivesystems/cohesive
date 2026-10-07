@@ -81,6 +81,7 @@ public sealed class ProcessTransitionOperationBinding
     /// <param name="expectedConcurrencyTokenField">Optional required string input field containing the
     /// captured opaque storage token. Supported only for existing-subject transitions. Exact receipt replay
     /// precedes the current-state check; a fresh invocation fails when the subject changed.</param>
+    /// <param name="partitionKey">Optional trusted subject-read partition, fixed by host composition.</param>
     public ProcessTransitionOperationBinding(
         CompiledTransitionPlan plan,
         IEntityRepository repository,
@@ -88,7 +89,8 @@ public sealed class ProcessTransitionOperationBinding
         Func<ProcessTransitionInvocation, InteractionEntityReference>? resolveSubject = null,
         Func<ProcessTransitionInvocation, TransitionEmissionIntent, int, InteractionTarget?>?
             createRequestTarget = null,
-        string? expectedConcurrencyTokenField = null)
+        string? expectedConcurrencyTokenField = null,
+        string? partitionKey = null)
     {
         Plan = plan ?? throw new ArgumentNullException(nameof(plan));
         Repository = repository ?? throw new ArgumentNullException(nameof(repository));
@@ -105,8 +107,15 @@ public sealed class ProcessTransitionOperationBinding
                 || field.Nullability != FieldNullability.NonNullable)
                 throw new ArgumentException("A captured concurrency token requires an existing subject and a required non-null string input field.", nameof(expectedConcurrencyTokenField));
         }
+        if (partitionKey is not null) ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
+        PartitionKey = partitionKey;
+        SubjectReadOptions = partitionKey is null ? EntityReadOptions.Full : new(partitionKey: partitionKey);
         ExpectedConcurrencyTokenField = expectedConcurrencyTokenField;
     }
+
+    /// <summary>Trusted subject-read partition; no partition is inferred from client input.</summary>
+    public string? PartitionKey { get; }
+    internal EntityReadOptions SubjectReadOptions { get; }
 
     /// <summary>Exact compiled Transition plan.</summary>
     public CompiledTransitionPlan Plan { get; }
@@ -265,8 +274,8 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
         try
         {
             snapshot = await binding.Repository.TryGet(context, subject.EntityId.Value,
-                expectedConcurrencyToken is null ? EntityReadOptions.Full
-                    : new EntityReadOptions(expectedConcurrencyToken: expectedConcurrencyToken)).ConfigureAwait(false);
+                expectedConcurrencyToken is null ? binding.SubjectReadOptions
+                    : new EntityReadOptions(partitionKey: binding.PartitionKey, expectedConcurrencyToken: expectedConcurrencyToken)).ConfigureAwait(false);
         }
         catch (ObservationConcurrencyConflictException) when (expectedConcurrencyToken is not null)
         {
