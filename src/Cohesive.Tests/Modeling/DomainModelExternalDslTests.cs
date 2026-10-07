@@ -1,4 +1,4 @@
-using System.Text.Json.Nodes;
+using System.Text.Json;
 using Cohesive.Host.Configuration;
 using Cohesive.Transitions.Model;
 
@@ -66,8 +66,8 @@ public sealed class DomainModelExternalDslTests
                 .Field(name: "CarrierId", type: DomainTypes.String(), field => field.Optional())
                 .Field(name: "PlannedDistance", type: DomainTypes.Quantity("Distance"))));
 
-    static void AssertJsonEqual(string expectedJson, JsonNode? actualNode) =>
+    static void AssertJsonEqual(string expectedJson, JsonElement actualNode) =>
         Assert.True(
-            JsonNode.DeepEquals(JsonNode.Parse(expectedJson), actualNode),
-            $"Expected JSON-equivalent values.{Environment.NewLine}Expected: {expectedJson}{Environment.NewLine}Actual: {actualNode?.ToJsonString() ?? "null"}");
+            JsonElement.DeepEquals(JsonSerializer.Deserialize<JsonElement>(expectedJson), actualNode),
+            $"Expected JSON-equivalent values.{Environment.NewLine}Expected: {expectedJson}{Environment.NewLine}Actual: {actualNode.GetRawText()}");
 }

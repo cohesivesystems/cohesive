@@ -116,7 +116,7 @@ public sealed record InteractionValueSchema
 [JsonDerivedType(typeof(RequestContractDefinition), InteractionWireNames.Request)]
 [JsonDerivedType(typeof(SignalContractDefinition), InteractionWireNames.Signal)]
 [JsonDerivedType(typeof(ReplyContractDefinition), InteractionWireNames.Reply)]
-public abstract record InteractionContractDefinition
+public abstract record InteractionContractDefinition : IImmutableExecutionDefinition
 {
     /// <summary>Restricts the canonical interaction-contract family to this assembly's declared variants.</summary>
     private protected InteractionContractDefinition()

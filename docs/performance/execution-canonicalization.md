@@ -72,3 +72,9 @@ dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- \
 The deterministic allocation regression requires direct traversal to allocate less than half the
 reference for a repeated structured payload after warmup. Timing thresholds are excluded from CI.
 Existing known fingerprint, malformed input, extension and round-trip tests protect durable semantics.
+
+Execution schema v4 subsequently removes repeated inline type trees at the source; see
+[compact execution type references](compact-execution-types.md) for the wire contract and qualification.
+
+[Duplicate-property checks](duplicate-property-checks.md) subsequently remove successful warm
+scan allocations while preserving first-failure diagnostics and strict imported-document validation.

@@ -9,11 +9,15 @@ namespace Cohesive.Execution;
 /// </summary>
 /// <remarks>
 /// Persisted metadata diagnostics are retained producer observations, not current admission evidence. This
-/// validator reports only findings recomputed from the document and the supplied resolution context.
+/// validator reports only findings derived from the document and the supplied resolution context.
 /// </remarks>
 public static class ExecutionDefinitionDocumentValidator
 {
-    /// <summary>Recomputes extension portability and semantic fingerprint integrity.</summary>
+    /// <summary>Checks extension portability and semantic fingerprint integrity.</summary>
+    /// <remarks>
+    /// The immutable document's computed digest may be reused, but declared fingerprint metadata is compared
+    /// on every validation and extension portability is evaluated against the supplied graph each time.
+    /// </remarks>
     /// <param name="document">Portable execution-definition document to validate.</param>
     /// <param name="graph">
     /// Optional shared shape graph used to resolve named extension-payload types and graph-qualified shapes.

@@ -1,13 +1,13 @@
 using System.Reflection;
-using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 using System.Text.Json.Schema;
 using System.Text.Json.Serialization.Metadata;
-using Cohesive.Model.Serialization;
-using Cohesive.Api;
+using System.Text.Json.Serialization;
+using System.Text.Json;
 using Cohesive.Api.CodeGen;
+using Cohesive.Api;
 using Cohesive.CodeGen;
+using Cohesive.Model.Serialization;
 using Cohesive.Model;
 
 namespace Cohesive.Adapters.OpenApi;
@@ -684,7 +684,8 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
                         return portable;
                     var metadata = jsonMetadata!.GetMetadata(ClrShapeMetadataContext.ForType(type));
                     if (metadata.Annotations.TryGetValue(new(SystemTextJsonShapeAnnotations.Representation), out var representation)
-                        && representation.Value is JsonValue annotation && annotation.TryGetValue<string>(out var kind)
+                        && representation.Value.ValueKind == JsonValueKind.String
+                        && representation.Value.GetString() is { } kind
                         && kind is "string" or "number" or "boolean")
                         return new() { ["type"] = kind };
                     if (type.IsEnum)

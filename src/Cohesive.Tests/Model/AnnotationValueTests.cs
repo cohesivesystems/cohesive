@@ -1,4 +1,4 @@
-using System.Text.Json.Nodes;
+using System.Text.Json;
 
 namespace Cohesive.Tests.Model;
 
@@ -18,7 +18,7 @@ public sealed class AnnotationValueTests
             }
         });
 
-        var expected = JsonNode.Parse("""
+        using var expected = JsonDocument.Parse("""
             {
               "source": "dsl",
               "retryCount": 2,
@@ -29,7 +29,7 @@ public sealed class AnnotationValueTests
             }
             """);
 
-        Assert.True(JsonNode.DeepEquals(expected, annotation.Value));
+        Assert.True(JsonElement.DeepEquals(expected.RootElement, annotation.Value));
     }
 
     [Fact]
@@ -37,7 +37,7 @@ public sealed class AnnotationValueTests
     {
         var annotations = AnnotationMap.Create("sem.concept", "load-id");
 
-        Assert.Equal("load-id", annotations[new AnnotationKey("sem.concept")].Value?.GetValue<string>());
+        Assert.Equal("load-id", annotations[new AnnotationKey("sem.concept")].Value.GetString());
     }
 
     [Fact]
@@ -64,5 +64,49 @@ public sealed class AnnotationValueTests
         Assert.Equal(left, right);
         Assert.Equal(left.GetHashCode(), right.GetHashCode());
         Assert.NotEqual(left, different);
+    }
+    [Fact]
+    public void AnnotationOwnsSnapshotOfMutableSource()
+    {
+        var source = new Dictionary<string, object> { ["values"] = new[] { "original" } };
+        var annotation = AnnotationValue.FromObject(source);
+        ((string[])source["values"])[0] = "changed";
+        source.Clear();
+        Assert.Equal("original", annotation.Value.GetProperty("values")[0].GetString());
+        var roundTrip = JsonSerializer.Deserialize<AnnotationValue>(JsonSerializer.Serialize(annotation))!;
+        Assert.Equal(annotation, roundTrip);
+    }
+
+    [Theory]
+    [InlineData("1", "1.0")]
+    [InlineData("1e2", "100")]
+    [InlineData("{\"b\":2,\"a\":1}", "{\"a\":1.0,\"b\":2}")]
+    public void EquivalentJsonHasEqualHashes(string leftJson, string rightJson)
+    {
+        var left = JsonSerializer.Deserialize<AnnotationValue>(leftJson)!;
+        var right = JsonSerializer.Deserialize<AnnotationValue>(rightJson)!;
+        Assert.Equal(left, right);
+        Assert.Equal(left.GetHashCode(), right.GetHashCode());
+    }
+    [Fact]
+    public void AnnotationHashIsAllocationFreeAfterPreparation()
+    {
+        var annotation = AnnotationValue.FromObject(new { text = "original", values = new[] { 1, 2, 3 } });
+        _ = annotation.GetHashCode();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 128; index++) _ = annotation.GetHashCode();
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+    [Fact]
+    public void ScalarProjectionPreservesNestedPathsAndExplicitIdentityPolicy()
+    {
+        var annotations = AnnotationMap.Create("metadata", new { name = "sample", enabled = true,
+            values = new object?[] { 1.5m, null, "", "value" } });
+        var scalars = AnnotationMap.FlattenScalars(annotations, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal("sample", scalars["METADATA.NAME"]);
+        Assert.Equal("true", scalars["metadata.enabled"]);
+        Assert.Equal("1.5", scalars["metadata.values[0]"]);
+        Assert.Equal("value", scalars["metadata.values[3]"]);
+        Assert.Equal(4, scalars.Count);
     }
 }

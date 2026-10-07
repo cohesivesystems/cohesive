@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Expressions;
+using Cohesive.Execution;
 using Cohesive.Relations.Model;
 
 namespace Cohesive.Relations.IR;
@@ -249,7 +250,7 @@ public sealed record LogicalQueryDefinition
 [JsonPolymorphic(TypeDiscriminatorPropertyName = RelationQueryWireNames.DefinitionDiscriminator)]
 [JsonDerivedType(typeof(RelationDefinition), RelationQueryWireNames.RelationDefinition)]
 [JsonDerivedType(typeof(QueryDefinition), RelationQueryWireNames.QueryDefinition)]
-public abstract record RelationQueryDefinition
+public abstract record RelationQueryDefinition : IImmutableExecutionDefinition
 {
     /// <summary>Creates a relation/query definition.</summary>
     /// <param name="body">Portable logical query body.</param>

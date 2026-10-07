@@ -1,9 +1,18 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
-using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Execution;
+
+/// <summary>Declares a portable execution payload safe for shared immutable projection.</summary>
+/// <remarks>
+/// Implementations and their entire reachable graph must be immutable and safe for concurrent reads.
+/// Projection is owned by one document instance and CLR projection type. It conveys no validation or
+/// admission evidence and must contain no invocation, authorization, tenant, or runtime-service state.
+/// </remarks>
+public interface IImmutableExecutionDefinition;
 
 /// <summary>
 /// One exact-versioned semantic extension attached to a canonical execution definition.
@@ -80,8 +89,12 @@ public sealed record ExecutionDefinitionExtension
 /// </remarks>
 public sealed record ExecutionDefinitionDocument
 {
+    ExecutionDefinitionFingerprint? semanticFingerprint;
+    object? semanticFingerprintLock;
+    ConcurrentDictionary<Type, Lazy<object>>? immutableProjections;
+
     /// <summary>Current shared execution-definition document schema version.</summary>
-    public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-execution/v3");
+    public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } = new("cohesive-execution/v4");
 
     /// <summary>Creates a portable execution-definition document.</summary>
     /// <param name="kind">Stable semantic family of the definition payload.</param>
@@ -117,7 +130,8 @@ public sealed record ExecutionDefinitionDocument
     ExecutionDefinitionDocument(
         ExecutionDefinitionKind kind,
         ExecutionDefinitionMetadata metadata,
-        (JsonElement Definition, ImmutableArray<ExecutionDefinitionExtension> Extensions) canonicalContent)
+        (JsonElement Definition, ImmutableArray<ExecutionDefinitionExtension> Extensions) canonicalContent,
+        ExecutionDefinitionFingerprint? computedFingerprint = null)
     {
         if (string.IsNullOrWhiteSpace(kind.Value))
             throw new ArgumentException("An execution definition requires a non-default kind.", nameof(kind));
@@ -126,6 +140,21 @@ public sealed record ExecutionDefinitionDocument
         Metadata = Guard.RequireNotNull(metadata);
         Definition = canonicalContent.Definition;
         Extensions = canonicalContent.Extensions;
+        semanticFingerprint = computedFingerprint;
+    }
+
+    // Semantic inputs are immutable. Imported documents compute their own digest; only Create's
+    // independently computed digest can seed this field. Contextual admission is never cached here.
+    internal ExecutionDefinitionFingerprint GetSemanticFingerprint()
+    {
+        var observed = Volatile.Read(ref semanticFingerprint);
+        if (observed is not null)
+            return observed;
+        return LazyInitializer.EnsureInitialized(
+            ref semanticFingerprint,
+            ref semanticFingerprintLock,
+            () => ExecutionDefinitionFingerprinter.ComputeNormalized(
+                Metadata.SchemaVersion, Kind, Definition, Extensions));
     }
 
     /// <summary>Stable semantic family of the definition payload.</summary>
@@ -143,6 +172,11 @@ public sealed record ExecutionDefinitionDocument
     /// <summary>
     /// Projects a typed canonical definition into a current shared execution-definition document.
     /// </summary>
+    /// <remarks>
+    /// Structural types are interned in the definition's document-local $types table. Integer uses
+    /// have meaning only within this document; the table and uses both participate in its fingerprint.
+    /// Authors supply existing TypeRef values, never a hand-maintained $types property.
+    /// </remarks>
     /// <typeparam name="TDefinition">Portable block-specific definition type.</typeparam>
     /// <param name="kind">Stable semantic family of the definition.</param>
     /// <param name="definitionId">Stable identity shared by all revisions of the definition.</param>
@@ -182,9 +216,7 @@ public sealed record ExecutionDefinitionDocument
 
         var normalizedExtensions = NormalizeExtensions(extensions);
         var definitionElement = ExecutionDefinitionFingerprinter.NormalizeDefinition(
-            JsonSerializer.SerializeToElement(
-                definition,
-                ExecutionDefinitionJsonSerializer.GetReadOnlyOptions()));
+            ExecutionDefinitionTypes.Serialize(definition));
 
         var fingerprint = ExecutionDefinitionFingerprinter.ComputeNormalized(
             CurrentSchemaVersion,
@@ -204,7 +236,8 @@ public sealed record ExecutionDefinitionDocument
         return new(
             kind,
             metadata,
-            (Definition: definitionElement, Extensions: normalizedExtensions));
+            (Definition: definitionElement, Extensions: normalizedExtensions),
+            computedFingerprint: fingerprint);
     }
 
     /// <summary>Returns this canonical definition with replacement non-semantic retained diagnostics.</summary>
@@ -237,20 +270,44 @@ public sealed record ExecutionDefinitionDocument
         return new(
             Kind,
             metadata,
-            (Definition, Extensions));
+            (Definition, Extensions),
+            computedFingerprint: Volatile.Read(ref semanticFingerprint));
     }
 
     /// <summary>Deserializes the canonical payload as a block-specific definition type.</summary>
     /// <typeparam name="TDefinition">Portable block-specific definition type.</typeparam>
     /// <returns>The typed canonical definition represented by <see cref="Definition"/>.</returns>
+    /// <remarks>
+    /// Types declaring <see cref="IImmutableExecutionDefinition"/> share one successful projection per
+    /// document and CLR type, including concurrent first use. Other types deserialize independently.
+    /// Failed decoding is not retained. Reuse does not bypass envelope, canonical-wire, or semantic validation.
+    /// </remarks>
     /// <exception cref="JsonException">
     /// The payload cannot be decoded as <typeparamref name="TDefinition"/> or produces a null value.
     /// </exception>
     /// <exception cref="NotSupportedException">
     /// <typeparamref name="TDefinition"/> is not supported by the strict execution JSON contract.
     /// </exception>
-    public TDefinition GetDefinition<TDefinition>() =>
-        ExecutionDefinitionJsonSerializer.DeserializeDefinition<TDefinition>(this);
+    public TDefinition GetDefinition<TDefinition>()
+    {
+        if (!typeof(IImmutableExecutionDefinition).IsAssignableFrom(typeof(TDefinition)))
+            return ExecutionDefinitionTypes.Deserialize<TDefinition>(Definition);
+        var projections = LazyInitializer.EnsureInitialized(ref immutableProjections, static () => new());
+        if (!projections.TryGetValue(typeof(TDefinition), out var slot))
+            slot = projections.GetOrAdd(typeof(TDefinition), static (_, document) =>
+                new Lazy<object>(() => ExecutionDefinitionTypes.Deserialize<TDefinition>(document.Definition)!,
+                    LazyThreadSafetyMode.ExecutionAndPublication), this);
+        try
+        {
+            return (TDefinition)slot.Value;
+        }
+        catch
+        {
+            // Remove only this failed slot; another caller may already have installed a retry.
+            projections.TryRemove(new KeyValuePair<Type, Lazy<object>>(typeof(TDefinition), slot));
+            throw;
+        }
+    }
 
     /// <summary>Compares documents by normalized persisted content.</summary>
     /// <param name="other">Document to compare with this value.</param>
@@ -281,13 +338,18 @@ public sealed record ExecutionDefinitionDocument
     }
 
     /// <summary>Returns a structural hash code for normalized persisted content.</summary>
-    /// <returns>A hash code derived from metadata, canonical definition content, and extensions.</returns>
+    /// <returns>A hash code derived from kind, metadata (including its declared fingerprint), and extensions.</returns>
+    /// <remarks>
+    /// Payloads with the same metadata may collide. Equality still compares exact persisted content;
+    /// hashing neither validates nor trusts the declared fingerprint as integrity evidence.
+    /// </remarks>
     public override int GetHashCode()
     {
         var hash = new HashCode();
         hash.Add(Kind);
         hash.Add(Metadata);
-        hash.Add(Definition.GetRawText(), StringComparer.Ordinal);
+        // Metadata already contains the declared fingerprint. Different payloads sharing that
+        // fingerprint may collide; Equals still compares exact persisted content, including prose.
         foreach (var extension in Extensions)
             hash.Add(extension);
         return hash.ToHashCode();

@@ -10,6 +10,31 @@ namespace Cohesive.Tests.Analyzers;
 /// <summary>Compile-time coverage for C# Process computation-expression generation.</summary>
 public sealed class ProcessComputationGeneratorCompileTimeTests
 {
+    [Theory]
+    [InlineData("return process.Constant(input);", "cannot depend on runtime bindings")]
+    [InlineData("var result = await process.TransitionWithReceipt<bool, string>(Transition, input, input, receiptRole: \"result\"); return result.Receipt;", "distinct binding roles")]
+    [InlineData("object result = await process.TransitionWithReceipt<bool, string>(Transition, input, input); return input;", "retain the typed Transition result")]
+    [InlineData("var result = await process.TransitionWithReceipt<bool, string>(Transition, input, input); return result;", "select Outcome or Receipt")]
+    public void ReceiptAuthoringRejectsAmbiguousBindingsAndRuntimeConstants(string body, string expected)
+    {
+        var source = $$"""
+            using Cohesive.Execution;
+            using Cohesive.Processes.Authoring;
+            [GenerateProcessDefinition(nameof(Run))]
+            public static partial class InvalidReceiptProcess
+            {
+                static ExecutionDefinitionReference Transition => null!;
+                static async ProcessTask<string> Run(ProcessContext process, string input)
+                {
+                    {{body}}
+                }
+            }
+            """;
+        var result = RunGenerator(CreateCompilation(source), out _);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.GetMessage().Contains(expected));
+        Assert.All(result.Results, generator => Assert.Null(generator.Exception));
+    }
+
     [Fact]
     public void Generator_LowersNaturalAwaitFlowAndFusesPureLocals()
     {

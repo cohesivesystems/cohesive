@@ -3,6 +3,10 @@
 `Cohesive.Processes` describes typed workflows that coordinate Relations, Transitions, requests, events, signals,
 waits, parallel work, recurrence, and terminal outcomes without binding the workflow to one runtime.
 
+Canonical execution IR declares `IImmutableExecutionDefinition`, so repeated typed reads share
+document-owned immutable decoding. Integrity, canonical-wire, contextual semantics, and deployment
+admission remain independently validated. See [immutable execution preparation](../../docs/performance/immutable-execution-preparation.md).
+
 ## Install
 
 ```bash
@@ -134,7 +138,8 @@ is lazy and shared; the exact-plan realization report is prepared with the execu
 
 A Transition's domain result and its physical commit evidence are different contracts. An
 `InvokeTransitionProcessNode` may declare an optional `Receipt` output binding alongside the ordinary
-continuation output. Typed authoring uses `InvokeTransitionWithReceipt`. The binding becomes visible
+continuation output. Builder authoring uses `InvokeTransitionWithReceipt`; C# computation authoring
+uses `await process.TransitionWithReceipt<TOutcome, TReceipt>(...)`. The binding becomes visible
 on that continuation and persists through native checkpoints like any other portable bound value.
 Omission leaves older Process encodings and fingerprints unchanged.
 
@@ -151,3 +156,60 @@ resource authorization, and project the exact committed entity and token into th
 This avoids recovering a response by guessing an internal node name or reading a newer entity state.
 Storage-backed enrichment and Ari adoption are separate qualification gates; the core tests prove typed
 authoring equivalence, link admission, evidence preservation, wire round-trip and serialized-cut resumption.
+
+### Receipt-aware C# declarations
+
+The computation generator projects each member of the syntax-only result into a separate canonical
+binding. The pair itself cannot be stored or returned. Existing hosts, admission and observability
+consume the same Process IR; there is no additional workflow interpreter.
+
+```csharp
+var committed = await process.TransitionWithReceipt<bool, CommitReceipt>(
+    transitionReference, input.Id, prepared, id: new("commit"));
+if (!committed.Outcome)
+    return process.Constant(KnownRejections.Conflict);
+var response = await process.Query(enrichmentQuery, committed.Receipt, id: new("enrich"));
+return response;
+```
+
+The outcome remains the Transition's domain result. The receipt type comes from the host's separate
+attested contract. Returning false does not authorize success enrichment. Missing promised receipts
+fail execution even when the host may already have performed an effect.
+
+`process.RequireValue(nullablePayload)` emits the existing canonical present/non-null guard. Use it
+when a Result branch requires a payload; C# null suppression alone does not assert runtime presence.
+`process.Constant(declarationValue)` explicitly captures validated declaration-time data into a portable
+constant. It must be a complete Process value expression and cannot depend on invocation parameters or
+awaited outputs. No declaration delegate is retained for execution.
+
+Changing from manually authored nodes to generated nodes can change identities and fingerprints.
+Version the Process and retain old exact definitions for in-flight work, or drain old work before
+deployment. Stable step IDs do not by themselves make two different graphs replay-compatible.
+
+## Compile an authored dependency closure
+
+`ProcessDefinition.GetProcessDependencies()` derives unique, canonically ordered exact child references
+from the node table, including ordinary invocations, partitioned work, and cancellation finalizers.
+It does not add serialized data or change definition fingerprints. The same projection supplies
+validated `ProcessDefinitionLink` dependency evidence.
+
+Call `ProcessStaticCompiler.CompileClosure(roots, documents, externalContext)` to prepare selected roots
+without encoding their child order in application code. `documents` is the existing integrity-checked
+`ExecutionDefinitionDocumentCatalog`; it resolves exact identity, revision, and fingerprint. The caller
+selects deployment roots and provides non-Process links, interaction contracts, and optional shapes.
+Process links in external evidence are rejected: the canonical documents own that graph.
+
+Compilation traverses the authored closure iteratively, validates every reachable document through the
+ordinary compiler, and shares successful child plans within the call. A parent's evidence contains only
+its transitive children, not previously compiled siblings. Unselected documents are not compiled.
+Missing references, incompatible fingerprints, cycles, invalid definitions, unsupported extensions, and
+scope demands fail admission. `FailedDefinition` identifies the failed reference and `Validation`
+retains structured diagnostics. `Plans` is empty on failure and ordered bottom-up on success.
+No I/O, target qualification, global cache, or persisted dependency model is introduced. Callers own
+cross-call preparation lifetime and must still qualify plans for their physical target.
+
+For example, when two roots invoke the same child, callers previously supplied validated child links
+and arranged compilation manually. Closure compilation derives both edges and prepares the child once.
+`ProcessClosureCompilationTests` qualifies this diamond, root selection, duplicate calls, canonical
+plan equivalence, external-authority conflicts, and resolution/validation failures. The reusable graph
+operation belongs in Cohesive; product root policy and runtime adapter admission remain in Ari.

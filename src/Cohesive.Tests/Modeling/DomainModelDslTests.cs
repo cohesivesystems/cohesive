@@ -1,4 +1,4 @@
-using System.Text.Json.Nodes;
+using System.Text.Json;
 
 namespace Cohesive.Tests.Modeling;
 
@@ -67,14 +67,14 @@ public sealed class DomainModelDslTests
         var entity = Assert.Single(model.Entities);
         var field = Assert.Single(entity.Fields);
 
-        Assert.True(JsonNode.DeepEquals(
-            JsonNode.Parse("""{"source":"dsl","tags":["typed","object"]}"""),
+        Assert.True(JsonElement.DeepEquals(
+            JsonSerializer.Deserialize<JsonElement>("""{"source":"dsl","tags":["typed","object"]}"""),
             model.Annotations[new AnnotationKey("model.meta")].Value));
-        Assert.True(JsonNode.DeepEquals(
-            JsonNode.Parse("""{"replayable":true}"""),
+        Assert.True(JsonElement.DeepEquals(
+            JsonSerializer.Deserialize<JsonElement>("""{"replayable":true}"""),
             entity.Annotations[new AnnotationKey("entity.meta")].Value));
-        Assert.True(JsonNode.DeepEquals(
-            JsonNode.Parse("""{"table":"orders","key":"id"}"""),
+        Assert.True(JsonElement.DeepEquals(
+            JsonSerializer.Deserialize<JsonElement>("""{"table":"orders","key":"id"}"""),
             field.Annotations[new AnnotationKey("field.lookup")].Value));
     }
 }

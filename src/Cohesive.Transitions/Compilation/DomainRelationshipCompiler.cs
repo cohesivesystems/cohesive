@@ -1,5 +1,5 @@
 using System.Collections.Immutable;
-using System.Text.Json.Nodes;
+using System.Text.Json;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Model;
 using Cohesive.Transitions.Model;
@@ -219,8 +219,8 @@ public static class DomainRelationshipCompiler
     {
         var key = new AnnotationKey(ShapeAnnotationKeys.EntityType);
         if (!entity.Shape.Annotations.TryGetValue(key, out var annotation)
-            || annotation.Value is not JsonValue value
-            || !value.TryGetValue<string>(out var annotatedEntityType)
+            || annotation.Value.ValueKind != JsonValueKind.String
+            || annotation.Value.GetString() is not { } annotatedEntityType
             || string.IsNullOrWhiteSpace(annotatedEntityType))
         {
             Add(

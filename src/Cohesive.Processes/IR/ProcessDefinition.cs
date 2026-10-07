@@ -11,7 +11,7 @@ namespace Cohesive.Processes.IR;
 /// <see cref="ExecutionDefinitionDocument"/>. This payload contains only fingerprint-bearing Process semantics.
 /// It contains no callbacks, suspended host-language frames, runtime services, storage state, or compiled plans.
 /// </remarks>
-public sealed record ProcessDefinition
+public sealed record ProcessDefinition : IImmutableExecutionDefinition
 {
     /// <summary>Creates a normalized canonical Process definition.</summary>
     /// <param name="input">Typed Process invocation input contract.</param>
@@ -45,6 +45,26 @@ public sealed record ProcessDefinition
 
     /// <summary>Process node table in deterministic stable-identity order.</summary>
     public ImmutableArray<ProcessNode> Nodes { get; }
+
+    /// <summary>Derives the unique exact child Process references from the canonical node table.</summary>
+    /// <remarks>
+    /// References are ordered canonically and include lifecycle finalizers and partitioned invocations.
+    /// This is a projection of authored semantics, not an independently maintained dependency graph.
+    /// Semantic validation remains required before admitting the definition for execution.
+    /// </remarks>
+    /// <returns>The deterministic direct dependency set.</returns>
+    public ImmutableArray<ExecutionDefinitionReference> GetProcessDependencies()
+    {
+        HashSet<ExecutionDefinitionReference> observed = [];
+        foreach (var node in Nodes)
+        {
+            if (node is not null && ProcessRequestSemantics.TryProjectChild(node, out var child) && child.Process is { } reference)
+                observed.Add(reference);
+        }
+        return observed.OrderBy(static reference => reference,
+            Comparer<ExecutionDefinitionReference>.Create(ExecutionDefinitionReference.CompareCanonical))
+            .ToImmutableArray();
+    }
 
     /// <summary>Explicit behavior after a recoverable interruption.</summary>
     public ProcessRecoveryPolicy RecoveryPolicy { get; }

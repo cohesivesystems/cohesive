@@ -49,6 +49,26 @@ const requestContractReference: ExecutionDefinitionReference = {
 const expression = { $expr: 'parameter', parameter: 'input' } as const
 
 describe('canonical Process presentation projection', () => {
+  it('retains compact type uses and their document-owned table as source evidence', () => {
+    const document = representativeDocument()
+    const body = document.definition as Record<string, unknown>
+    function compact(value: unknown): void {
+      if (!value || typeof value !== 'object') return
+      if (Array.isArray(value)) { value.forEach(compact); return }
+      const object = value as Record<string, unknown>
+      if (object.type && typeof object.type === 'object') object.type = 0
+      Object.values(object).forEach(compact)
+    }
+    compact(body)
+    body.$types = [valueContract.type]
+    const result = projectCanonicalProcessDocument(document)
+    expect(result.diagnostics).toEqual([])
+    expect(result.graph!.document.typeDefinitions).toEqual([valueContract.type])
+    const contracts = result.graph!.nodes.flatMap(node => node.details.valueContracts)
+    expect(contracts.length).toBeGreaterThan(0)
+    expect(contracts.every(evidence => evidence.contract.type === 0)).toBe(true)
+  })
+
   it('accounts for the complete generated Process construct inventory', () => {
     expect(canonicalProcessPresentationDispositionKinds).toEqual(
       [...canonicalProcessNodeKinds].sort(),
@@ -229,7 +249,7 @@ describe('canonical Process presentation projection', () => {
     expect(schemaResult.graph).toBeNull()
     expect(schemaResult.diagnostics[0]?.code).toBe('PROCESS_DEFINITION_SCHEMA_UNSUPPORTED')
     expect(canonicalProcessPresentationCompatibility.schemaVersions).toEqual([
-      'cohesive-execution/v3',
+      'cohesive-execution/v4',
     ])
   })
 })
@@ -429,7 +449,7 @@ function createDocument(
         source: { reference: 'training-process.cs' },
       },
       revisionId: 'training-process/r5',
-      schemaVersion: 'cohesive-execution/v3',
+      schemaVersion: 'cohesive-execution/v4',
       sourceMap: { entries: sourceMapEntries },
     },
   } as unknown as ExecutionDefinitionDocument

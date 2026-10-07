@@ -2199,7 +2199,7 @@ export interface AnnotationKey {
 }
 
 export interface AnnotationValue {
-  Value?: unknown | null;
+  Value: unknown;
 }
 
 export interface AccessibilityContract {

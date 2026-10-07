@@ -48,6 +48,11 @@ public static class StrictDocumentJson
     }
 
     /// <summary>Finds the first duplicate JSON object property using ordinal property-name equality.</summary>
+    /// <remarks>
+    /// Successful warm scans reuse bounded writer leases and pooled UTF-8/name storage without
+    /// managed allocations. Cold pool misses and failure diagnostics can allocate. Ordinal decoded
+    /// name equality and the first depth-first duplicate location are preserved; inputs are not cached.
+    /// </remarks>
     /// <param name="element">JSON element to inspect recursively.</param>
     /// <param name="path">JSON Pointer path of <paramref name="element"/> without a trailing slash.</param>
     /// <param name="duplicateLocation">JSON Pointer location of the first duplicate property when found.</param>
@@ -57,93 +62,7 @@ public static class StrictDocumentJson
         string path,
         out string duplicateLocation)
     {
-        List<JsonPointerSegment> segments = [];
-        return TryFindDuplicateProperty(element, path, segments, out duplicateLocation);
-    }
-
-    static bool TryFindDuplicateProperty(
-        JsonElement element,
-        string rootPath,
-        List<JsonPointerSegment> segments,
-        out string duplicateLocation)
-    {
-        switch (element.ValueKind)
-        {
-            case JsonValueKind.Object:
-                HashSet<string> names = new(StringComparer.Ordinal);
-                foreach (var property in element.EnumerateObject())
-                {
-                    if (!names.Add(property.Name))
-                    {
-                        duplicateLocation = BuildJsonPointer(rootPath, segments, property.Name);
-                        return true;
-                    }
-
-                    segments.Add(JsonPointerSegment.Property(property.Name));
-                    if (TryFindDuplicateProperty(property.Value, rootPath, segments, out duplicateLocation))
-                    {
-                        return true;
-                    }
-                    segments.RemoveAt(segments.Count - 1);
-                }
-                break;
-            case JsonValueKind.Array:
-                var index = 0;
-                foreach (var item in element.EnumerateArray())
-                {
-                    segments.Add(JsonPointerSegment.ArrayIndex(index));
-                    if (TryFindDuplicateProperty(item, rootPath, segments, out duplicateLocation))
-                    {
-                        return true;
-                    }
-                    segments.RemoveAt(segments.Count - 1);
-
-                    index++;
-                }
-                break;
-        }
-
-        duplicateLocation = string.Empty;
-        return false;
-    }
-
-    static string BuildJsonPointer(
-        string rootPath,
-        IReadOnlyList<JsonPointerSegment> segments,
-        string duplicateProperty)
-    {
-        StringBuilder pointer = new(rootPath);
-        foreach (var segment in segments)
-        {
-            pointer.Append('/');
-            if (segment.PropertyName is { } propertyName)
-                AppendEscapedJsonPointerSegment(pointer, propertyName);
-            else
-                pointer.Append(segment.Index.ToString(CultureInfo.InvariantCulture));
-        }
-
-        pointer.Append('/');
-        AppendEscapedJsonPointerSegment(pointer, duplicateProperty);
-        return pointer.ToString();
-    }
-
-    static void AppendEscapedJsonPointerSegment(StringBuilder output, string value)
-    {
-        foreach (var character in value)
-        {
-            switch (character)
-            {
-                case '~':
-                    output.Append("~0");
-                    break;
-                case '/':
-                    output.Append("~1");
-                    break;
-                default:
-                    output.Append(character);
-                    break;
-            }
-        }
+        return JsonDuplicatePropertyScanner.Scan(element, path, out duplicateLocation);
     }
 
     /// <summary>Creates a one-error structured validation result.</summary>
@@ -356,12 +275,7 @@ public static class StrictDocumentJson
             or FormatException
             or OverflowException;
 
-    readonly record struct JsonPointerSegment(string? PropertyName, int Index)
-    {
-        public static JsonPointerSegment Property(string name) => new(name, 0);
 
-        public static JsonPointerSegment ArrayIndex(int index) => new(null, index);
-    }
 }
 
 /// <summary>Classification of a failed strict typed portable-document JSON read.</summary>

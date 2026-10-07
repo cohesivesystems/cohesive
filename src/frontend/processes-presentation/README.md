@@ -51,3 +51,10 @@ and exact definition references also produce stable diagnostics rather than disa
 Selected node details retain frozen source values, exact child/contract definition references, portable value
 contracts, canonical source paths, and the deepest matching source-map evidence. The graph is a deterministic derived
 artifact and should be regenerated from its exact source document rather than stored as another authority.
+
+Execution schema v4 retains document-local type references in source evidence rather than
+expanding shared types. `graph.document.typeDefinitions` carries the definition's `$types`
+entries; an integer `contract.type` indexes that table. These local indices are meaningful only
+within the exact document reference/fingerprint retained by the graph. Inline semantic TypeRef
+objects supplied by authoring/test callers remain inspectable source evidence, not an accepted
+older portable execution schema.

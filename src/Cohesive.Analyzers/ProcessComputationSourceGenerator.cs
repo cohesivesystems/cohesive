@@ -827,6 +827,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 "Query" => AwaitKind.Query,
                 "Read" => AwaitKind.Read,
                 "Transition" => AwaitKind.Transition,
+                "TransitionWithReceipt" => AwaitKind.TransitionWithReceipt,
                 "Effect" => AwaitKind.Effect,
                 _ => AwaitKind.Unsupported
             };
@@ -834,6 +835,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 return StatementFailure(declaration, $"awaited Process operation '{invocation.TargetMethod.Name}' is not supported");
             }
+
+            if (kind == AwaitKind.TransitionWithReceipt
+                && !SymbolEqualityComparer.Default.Equals(local.Type, awaited.Type))
+                return StatementFailure(declaration, "retain the typed Transition result before selecting Outcome or Receipt");
 
             var authored = new AwaitFlow(
                 NextIdentity(kind == AwaitKind.Read ? "read" : invocation.TargetMethod.Name.ToLowerInvariant(), structuralPath, local.Name),
@@ -3185,6 +3190,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly Dictionary<ISymbol, PatternOutput> patternOutputs;
         readonly IReadOnlyList<BranchObligation> requestObligations;
         readonly Dictionary<ISymbol, string> outputBySymbol;
+        readonly Dictionary<ISymbol, string> receiptOutputs = new(SymbolEqualityComparer.Default);
         readonly Dictionary<IParameterSymbol, string> obligationByParameter;
         readonly Dictionary<string, SyntaxNode> exactIdentities = new(StringComparer.Ordinal);
         readonly Dictionary<string, string> emittedExactTerminals = new(StringComparer.Ordinal);
@@ -3233,6 +3239,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 if (!outputBySymbol.ContainsKey(awaited.Local))
                 {
                     outputBySymbol.Add(awaited.Local, awaited.OutputVariable);
+                    if (awaited.Kind == AwaitKind.TransitionWithReceipt)
+                        receiptOutputs.Add(awaited.Local, awaited.OutputVariable + "_receipt");
                 }
             }
 
@@ -3414,7 +3422,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             }
 
             var outputDeclarations = ImmutableArray.CreateBuilder<string>(
-                awaits.Count + authoredOutputs.Count + requestObligations.Count);
+                awaits.Count + awaits.Count(item => item.Kind == AwaitKind.TransitionWithReceipt) + authoredOutputs.Count + requestObligations.Count);
             foreach (var awaited in awaits)
             {
                 if (!TryEmitRole(
@@ -3426,8 +3434,20 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 {
                     return false;
                 }
+                var outputType = awaited.Kind == AwaitKind.TransitionWithReceipt
+                    ? ((INamedTypeSymbol)awaited.Local.Type).TypeArguments[0] : awaited.Local.Type;
+                if (awaited.Kind == AwaitKind.TransitionWithReceipt)
+                {
+                    if (!TryEmitRole(awaited.Invocation, "receiptRole", "receipt", awaited.Syntax, out var receiptRole))
+                        return false;
+                    if (Argument(awaited.Invocation, "receiptRole")?.Value.ConstantValue is { HasValue: true, Value: string receiptName }
+                        && Argument(awaited.Invocation, "outputRole")?.Value.ConstantValue is { HasValue: true, Value: string outcomeName }
+                        && receiptName == outcomeName)
+                        return StatementFailure(awaited.Syntax, "Transition outcome and receipt require distinct binding roles");
+                    outputDeclarations.Add($"var {awaited.OutputVariable}_receipt = __builder.Output<{FormatType(((INamedTypeSymbol)awaited.Local.Type).TypeArguments[1])}>(owner: {awaited.Identity.Variable}, role: {receiptRole}, {SourceArguments(awaited.Source, method.Name)});");
+                }
                 outputDeclarations.Add(
-                    $"var {awaited.OutputVariable} = __builder.Output<{FormatType(awaited.Local.Type)}>(owner: {awaited.Identity.Variable}, role: {role}, {SourceArguments(awaited.Source, method.Name)});");
+                    $"var {awaited.OutputVariable} = __builder.Output<{FormatType(outputType)}>(owner: {awaited.Identity.Variable}, role: {role}, {SourceArguments(awaited.Source, method.Name)});");
             }
             foreach (var output in authoredOutputs)
             {
@@ -3495,6 +3515,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 pureLocals,
                 forkResultTuples,
                 outputBySymbol,
+                receiptOutputs,
                 patternOutputs,
                 resolvingPureLocals);
             foreach (var branch in body.Descendants()
@@ -4983,6 +5004,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 case AwaitKind.Read:
                     return TryEmitRelation(awaited, successor);
                 case AwaitKind.Transition:
+                case AwaitKind.TransitionWithReceipt:
                     return TryEmitTransition(awaited, successor);
                 case AwaitKind.Effect:
                     return TryEmitEffect(awaited, successor);
@@ -5052,8 +5074,11 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             if (IsTypedCanonicalTransitionHandle(transition.Parameter?.Type))
                 transitionReference = $"{transitionReference}.Reference";
 
+            var withReceipt = awaited.Kind == AwaitKind.TransitionWithReceipt;
+            var invocationMethod = withReceipt ? "InvokeTransitionWithReceipt" : "InvokeTransition";
+            var receiptArgument = withReceipt ? $"receipt: {awaited.OutputVariable}_receipt, " : string.Empty;
             builderStatements.Add(
-                $"__builder.InvokeTransition(id: {awaited.Identity.Variable}, transition: {transitionReference}, subject: {subjectValue}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: {nextRole}, target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)});");
+                $"__builder.{invocationMethod}(id: {awaited.Identity.Variable}, transition: {transitionReference}, subject: {subjectValue}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: {nextRole}, target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {receiptArgument}{SourceArguments(awaited.Source, method.Name)});");
             return true;
         }
 
@@ -5194,6 +5219,18 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 source = SourceLocation(initializer.Syntax);
             }
 
+            if (authoredOperation is IInvocationOperation constant
+                && constant.TargetMethod.Name == "Constant"
+                && constant.TargetMethod.ContainingType.ToDisplayString() == "Cohesive.Processes.Authoring.ProcessContext")
+            {
+                var argument = Argument(constant, "value");
+                if (argument is null || !TryEmitExactArgument(argument, operation.Syntax, out var literal))
+                    return false;
+                valueVariable = $"__value_{valueOrdinal++.ToString(CultureInfo.InvariantCulture)}";
+                builderStatements.Add($"var {valueVariable} = __builder.Constant<{FormatType(type)}>({literal}, {SourceArguments(source, method.Name)});");
+                return true;
+            }
+
             var translator = new PureExpressionEmitter(
                 compilation,
                 method,
@@ -5201,6 +5238,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 pureLocals,
                 forkResultTuples,
                 outputBySymbol,
+                receiptOutputs,
                 patternOutputs,
                 resolvingPureLocals,
                 projectedParameters);
@@ -5260,6 +5298,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals;
         readonly IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples;
         readonly IReadOnlyDictionary<ISymbol, string> outputs;
+        readonly IReadOnlyDictionary<ISymbol, string> receiptOutputs;
         readonly IReadOnlyDictionary<ISymbol, PatternOutput> patternOutputs;
         readonly HashSet<ILocalSymbol> resolving;
         readonly IReadOnlyDictionary<IParameterSymbol, IOperation>? projectedParameters;
@@ -5271,6 +5310,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             IReadOnlyDictionary<ILocalSymbol, IOperation> pureLocals,
             IReadOnlyDictionary<ILocalSymbol, ImmutableArray<IOperation>> forkResultTuples,
             IReadOnlyDictionary<ISymbol, string> outputs,
+            IReadOnlyDictionary<ISymbol, string> receiptOutputs,
             IReadOnlyDictionary<ISymbol, PatternOutput> patternOutputs,
             HashSet<ILocalSymbol> resolving,
             IReadOnlyDictionary<IParameterSymbol, IOperation>? projectedParameters = null)
@@ -5281,6 +5321,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             this.pureLocals = pureLocals;
             this.forkResultTuples = forkResultTuples;
             this.outputs = outputs;
+            this.receiptOutputs = receiptOutputs;
             this.patternOutputs = patternOutputs;
             this.resolving = resolving;
             this.projectedParameters = projectedParameters;
@@ -5292,6 +5333,19 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             if (TryResolveForkTupleElement(operation, out var tupleElement))
             {
                 return TryEmit(tupleElement, out expression, out failure);
+            }
+
+            if (operation is IInvocationOperation required
+                && required.TargetMethod.Name == "RequireValue"
+                && required.TargetMethod.ContainingType.ToDisplayString() == "Cohesive.Processes.Authoring.ProcessContext")
+            {
+                if (!TryEmit(required.Arguments[0].Value, out var value, out failure))
+                {
+                    expression = string.Empty;
+                    return false;
+                }
+                expression = $"new global::Cohesive.Model.CallExpr(global::Cohesive.Model.ExprFunctionNames.RequireValue, [{value}], {ReturnType(required.Type)})";
+                return true;
             }
 
             if (operation is IPropertyReferenceOperation pureMember
@@ -5334,6 +5388,11 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     expression = output + ".Expression";
                     failure = string.Empty;
                     return true;
+
+                case ILocalReferenceOperation local when receiptOutputs.ContainsKey(local.Local):
+                    expression = string.Empty;
+                    failure = "select Outcome or Receipt from the syntax-only Transition result";
+                    return false;
 
                 case ILocalReferenceOperation local when outputs.TryGetValue(local.Local, out var output):
                     expression = output + ".Expression";
@@ -5698,6 +5757,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 pureLocals,
                 forkResultTuples,
                 outputs,
+                receiptOutputs,
                 patternOutputs,
                 resolving,
                 projections)
@@ -6008,6 +6068,19 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                         segments.Reverse();
                         expression = BindingField(parameterOutput + ".Binding", segments);
                         return segments.Count != 0;
+                    case ILocalReferenceOperation local when receiptOutputs.TryGetValue(local.Local, out var receiptOutput)
+                        && outputs.TryGetValue(local.Local, out var domainOutput):
+                        segments.Reverse();
+                        if (segments.Count == 0 || segments[0] is not ("Outcome" or "Receipt"))
+                        {
+                            expression = string.Empty;
+                            return false;
+                        }
+                        var selectedOutput = segments[0] == "Outcome" ? domainOutput : receiptOutput;
+                        segments.RemoveAt(0);
+                        expression = segments.Count == 0 ? selectedOutput + ".Expression"
+                            : BindingField(selectedOutput + ".Binding", segments);
+                        return true;
                     case ILocalReferenceOperation local when outputs.TryGetValue(local.Local, out var output):
                         segments.Reverse();
                         expression = BindingField(output + ".Binding", segments);
@@ -6539,7 +6612,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         Query = 1,
         Read = 2,
         Transition = 3,
-        Effect = 4
+        Effect = 4,
+        TransitionWithReceipt = 5
     }
 
     enum RequestAuthoringKind
