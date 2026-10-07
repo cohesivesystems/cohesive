@@ -3,6 +3,10 @@
 `Cohesive.Transitions` models one entity change as portable, inspectable semantics: admission rules, branching,
 sparse updates, invariants, interactions, machine movements, and typed outcomes.
 
+Canonical execution IR declares `IImmutableExecutionDefinition`, so repeated typed reads share
+document-owned immutable decoding. Integrity, canonical-wire, contextual semantics, and deployment
+admission remain independently validated. See [immutable execution preparation](../../docs/performance/immutable-execution-preparation.md).
+
 ## Install
 
 ```bash

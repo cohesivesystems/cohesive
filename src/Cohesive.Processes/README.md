@@ -3,6 +3,10 @@
 `Cohesive.Processes` describes typed workflows that coordinate Relations, Transitions, requests, events, signals,
 waits, parallel work, recurrence, and terminal outcomes without binding the workflow to one runtime.
 
+Canonical execution IR declares `IImmutableExecutionDefinition`, so repeated typed reads share
+document-owned immutable decoding. Integrity, canonical-wire, contextual semantics, and deployment
+admission remain independently validated. See [immutable execution preparation](../../docs/performance/immutable-execution-preparation.md).
+
 ## Install
 
 ```bash

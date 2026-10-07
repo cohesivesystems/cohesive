@@ -10,6 +10,10 @@ be present and non-null. Explicit `single` requires exactly one selected item, a
 invariant text without rounding. Named enum literals are checked in their owning graph. Implicit
 element traversal and undeclared conversions remain unsupported.
 
+Canonical execution IR declares `IImmutableExecutionDefinition`, so repeated typed reads share
+document-owned immutable decoding. Integrity, canonical-wire, contextual semantics, and deployment
+admission remain independently validated. See [immutable execution preparation](../../docs/performance/immutable-execution-preparation.md).
+
 ## Install
 
 ```bash

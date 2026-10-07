@@ -8,7 +8,7 @@ using Cohesive.Model.Serialization;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
-public sealed class ExecutionDefinitionTypeReferenceTests
+public sealed class ExecutionDefinitionTypeReferenceTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     [Fact]
     public void SharedNestedTypesAreEncodedOnceAndDecodedAsSharedInstances()
@@ -76,6 +76,66 @@ public sealed class ExecutionDefinitionTypeReferenceTests
         var repeated = Create(new Types([.. Enumerable.Repeat<TypeRef>(nested, 1000)])).Definition.GetRawText().Length;
         Assert.True(repeated < single + 3000, $"Repeated wire size {repeated}, single {single}.");
     }
+
+    [Fact]
+    public void DirectMetadataPreservesCanonicalScalarWire()
+    {
+        var document = Create(new Types([new ScalarTypeRef(ScalarTypeKind.String)]));
+        Assert.Equal("{\"$types\":[{\"$type\":\"scalar\",\"format\":\"None\",\"kind\":\"String\"}],\"values\":[0]}",
+            document.Definition.GetRawText());
+    }
+
+    [Fact]
+    public void ConcurrentCodecLeasesKeepDocumentTablesIsolated()
+    {
+        Parallel.For(0, 32, index =>
+        {
+            var kind = index % 2 == 0 ? ScalarTypeKind.String : ScalarTypeKind.Int32;
+            var document = Create(new Payload(index.ToString(), [new ScalarTypeRef(kind)]));
+            var decoded = document.GetDefinition<Payload>();
+            Assert.Equal(index.ToString(), decoded.Text);
+            Assert.Equal(kind, Assert.IsType<ScalarTypeRef>(Assert.Single(decoded.Values)).Kind);
+        });
+    }
+
+    [Fact]
+    public void SuccessfulProjectionDoesNotMaterializeFilteredJsonTrees()
+    {
+        var nested = new ObjectTypeRef([.. Enumerable.Range(0, 128).Select(index =>
+            new ObjectFieldTypeDef($"field{index}", new ScalarTypeRef(ScalarTypeKind.String)))]);
+        var document = Create(new Payload(new string('x', 100_000), [nested, nested]));
+        // Warm every retained codec; another test may have populated the bounded lease pool.
+        for (var iteration = 0; iteration < 16; iteration++)
+            _ = document.GetDefinition<Payload>();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var decoded = document.GetDefinition<Payload>();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine($"Direct projection allocated {allocated} bytes.");
+        Assert.Equal(100_000, decoded.Text.Length);
+        Assert.Same(decoded.Values[0], decoded.Values[1]);
+        // Includes the retained 100 KB text and typed fields; the old filtered-tree path used 541 KB.
+        Assert.InRange(allocated, 0, 400_000);
+    }
+
+    [Fact]
+    public void MetadataAllowanceIsScopedToTheDefinitionRoot()
+    {
+        var original = Create(new Nested(new Leaf("value")));
+        using var parsed = JsonDocument.Parse("{\"$types\":[],\"value\":{\"text\":\"value\",\"$types\":[]}}");
+        var changed = new ExecutionDefinitionDocument(original.Kind, original.Metadata, parsed.RootElement);
+        Assert.Throws<JsonException>(() => changed.GetDefinition<Nested>());
+    }
+
+    [Fact]
+    public void AuthoredReservedTablePropertyIsRejected()
+    {
+        Assert.Throws<JsonException>(() => Create(new Reserved([])));
+    }
+
+    public sealed record Payload(string Text, TypeRef[] Values);
+    public sealed record Nested(Leaf Value);
+    public sealed record Leaf(string Text);
+    public sealed record Reserved([property: System.Text.Json.Serialization.JsonPropertyName("$types")] int[] Values);
 
     static ExecutionDefinitionDocument Create<T>(T value) => ExecutionDefinitionDocument.Create(
         new("test"), new("test/types"), new("revision/1"), value,

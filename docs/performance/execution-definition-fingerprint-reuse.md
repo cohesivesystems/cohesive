@@ -94,3 +94,7 @@ The combined local change removes the cold-allocation regression and allocates a
 than the manual-source sample. The fingerprint change alone reduces the derived-closure sample by about
 121 MB (18%). Single elapsed samples and a unit-suite run under concurrent benchmarking do not establish
 an end-to-end speedup. Publication, exact package adoption, and package qualification remain separate steps.
+
+Documents can also retain explicitly immutable typed projections through the separate
+[execution preparation contract](immutable-execution-preparation.md). That cache does not change
+the fingerprint-only cache described here or supply contextual admission evidence.

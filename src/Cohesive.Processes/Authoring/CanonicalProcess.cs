@@ -354,7 +354,7 @@ public sealed class Process<TInput, TResult>
     public bool IsValid => Validation.IsValid;
 
     /// <summary>Typed projection of the canonical Process definition payload.</summary>
-    /// <returns>The independently deserialized canonical Process definition.</returns>
+    /// <returns>The document-owned immutable canonical Process projection.</returns>
     /// <exception cref="System.Text.Json.JsonException">The canonical payload cannot be projected as Process IR.</exception>
     /// <exception cref="NotSupportedException">The strict execution serializer does not support a payload value.</exception>
     public CanonicalProcessDefinition Definition => Document.GetDefinition<CanonicalProcessDefinition>();
