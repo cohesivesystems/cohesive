@@ -74,7 +74,11 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     {
     }
 
-    /// <summary>Initializes a new instance of the in memory entity outbox repository type.</summary>
+    /// <summary>Imports POCO seeds and retains their serialized identity field for subsequent typed writes.</summary>
+    /// <param name="entityDefinition">Canonical entity authority.</param>
+    /// <param name="seedData">Initial rows; null or empty input establishes no identity mapping.</param>
+    /// <param name="partitionKeyFieldName">Serialized partition field used by every row.</param>
+    /// <param name="idFieldName">Serialized seed identity field, retained when at least one row is imported.</param>
     public InMemoryEntityOutboxRepository(
         EntityDefinition entityDefinition,
         IEnumerable<object>? seedData,
@@ -82,21 +86,24 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         string idFieldName = "Id")
         : this(entityDefinition, partitionKeyFieldName)
     {
-        // This selector imports seed data only; ordinary typed writes use shared Storage conventions.
+        // Seeded rows establish the identity field for subsequent typed writes.
         ArgumentException.ThrowIfNullOrWhiteSpace(idFieldName);
 
         if (seedData is null)
             return;
 
         foreach (var seed in seedData)
+        {
+            IdentityField = idFieldName;
             SeedSnapshot(CreateSeedSnapshot(entityDefinition, seed, idFieldName));
+        }
     }
 
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => entityDefinition;
 
     /// <inheritdoc />
-    public string? IdentityField => null;
+    public string? IdentityField { get; }
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => entityDefinition.Shape.Id.Value;

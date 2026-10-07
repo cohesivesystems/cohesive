@@ -35,6 +35,25 @@ public sealed class EntityRepositoryContractsTests
         }
     }
 
+    [Fact]
+    public async Task Imported_custom_identity_is_reused_by_later_typed_writes()
+    {
+        var seed = new CustomerIdentity("incidental-id", "customer-1", "tenant");
+        var definition = ObjectEntityDefinition.For<CustomerIdentity>(new("customer-identity"));
+        var repository = new InMemoryEntityOutboxRepository(definition, [seed], "Partition", "customer_id");
+        Assert.Equal("customer_id", repository.IdentityField);
+        var context = OperationContext.Create();
+        Assert.NotNull(await repository.TryGet(context, "customer-1"));
+        var typed = new TypedEntityRepository<CustomerIdentity>(repository);
+        var written = await typed.Upsert(context, seed with { Id = "another-incidental-id" });
+        Assert.Equal("customer-1", written.Entity.EntityId.Value);
+        Assert.Null(await repository.TryGet(context, "another-incidental-id"));
+        Assert.Throws<InvalidOperationException>(() => new TypedEntityRepository<KeyIdentity>(repository));
+    }
+
+    public sealed record CustomerIdentity(string Id,
+        [property: JsonPropertyName("customer_id")] string CustomerId, string Partition);
+
     public sealed record RenamedIdentity([property: JsonPropertyName("id")] string Id, string Partition);
     public sealed record KeyIdentity(string Key, string Partition);
 

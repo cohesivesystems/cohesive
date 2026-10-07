@@ -15,27 +15,25 @@ public sealed partial class PostgresPersistenceRegistration
     /// <param name="query">Canonical query authority, including native-prefix partition predicates.</param>
     /// <param name="projection">Closed nonterminal projection executed on this database.</param>
     /// <param name="remote">Entity mappings and caller-owned runtime for all remaining database inputs.</param>
-    /// <param name="policy">Source bounds, required partition and retained physical policy. Batch size is declared only in the physical policy.</param>
+    /// <param name="composedPolicy">Source bounds, required partition and retained physical policy. Batch size is declared only in the physical policy.</param>
     /// <returns>A host-lifetime prepared reader; no IO occurs during registration.</returns>
     /// <remarks>The host attests that the prefix enforces the same logical partition. Independent reads do not
     /// establish a distributed snapshot. This recipe uses bounded enumeration and sequential acquisition.
     /// No retry or invocation result caching is introduced.</remarks>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">Scope, mapping or plan affinity is invalid.</exception>
-    /// <exception cref="InvalidOperationException">A remote input has no registered entity mapping.</exception>
     /// <exception cref="RelationQueryPreparationException">Semantic or physical preparation fails.</exception>
     /// <exception cref="PostgresQueryPreparationException">Native prefix compilation fails.</exception>
     public RelationQuerySubplanReader<TInput, TResult> QueryComposed<TInput, TResult>(
         RelationQuery<TInput, TResult> query, QueryNodeId projection,
-        PostgresPersistenceRegistration remote, PostgresRelationQuerySourcePolicy policy)
+        PostgresPersistenceRegistration remote, PostgresRelationQueryComposedPolicy composedPolicy)
     {
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(remote);
-        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(composedPolicy);
+        var policy = composedPolicy.SourcePolicy;
         var cut = RelationQuerySubplan.Compile(query.CompilationRequest, projection);
-        var physicalPolicy = policy.PhysicalPlanningPolicy ?? throw new RelationQueryPreparationException(
-            "composed policy", cut.Original, code: "postgres.composed.physicalPolicyMissing",
-            detail: "Construct the source policy with its physical planning policy for composed registration.");
+        var physicalPolicy = composedPolicy.PhysicalPlanningPolicy;
         var scope = policy.PartitionScope ?? throw new RelationQueryPreparationException(
             "composed policy", cut.Original, code: "postgres.composed.partitionScopeMissing",
             detail: "Composed registration requires an explicit partition scope.");
@@ -66,7 +64,9 @@ public sealed partial class PostgresPersistenceRegistration
                 bound, remote.runtime.DataSource, remote.runtime, policy)], scope.LogicalPartition);
 
         PostgresEntityRepositoryMapping Mapping(QualifiedShapeId shape) => remote.tables.TryGetValue(shape, out var attachment)
-            ? attachment.Mapping : throw new InvalidOperationException($"No remote PostgreSQL mapping is registered for shape '{shape}'.");
+            ? attachment.Mapping : throw new RelationQueryPreparationException("composed mapping", cut.Original,
+                code: "postgres.composed.remoteMappingMissing",
+                detail: $"No remote PostgreSQL mapping is registered for shape '{shape}'.");
         void Place(RelationQueryPlacementInputBuilder input, QualifiedShapeId shape)
         {
             var mapping = Mapping(shape);

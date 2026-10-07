@@ -165,10 +165,10 @@ This shared CLR identity conversion does not broaden native key encodings: the P
 still requires required, non-null TEXT identity and partition mappings. Inferred UUID/native non-text
 keys remain rejected by mapping validation, as before this change.
 
-For composed execution, construct `PostgresRelationQuerySourcePolicy(physicalPlanningPolicy, ...)`.
-It retains that exact planning policy and derives `MaximumBatchKeys` from `MaximumBatchSize`; there is
-no second batch-size input. Pass the resulting source policy once to `QueryComposed`. The existing
-integer-based constructor remains for standalone source readers. Using a standalone policy for composition,
-or omitting/mismatching partition scope, raises `RelationQueryPreparationException` with the corresponding
-`postgres.composed.*` code and semantic compilation evidence. Identity caching and allocation boundaries
-are documented once in the [Storage README](../../Cohesive.Storage/README.md).
+For composed execution, construct `PostgresRelationQueryComposedPolicy(physicalPlanningPolicy, ...)`.
+It retains that required planning policy and derives `SourcePolicy.MaximumBatchKeys` from
+`MaximumBatchSize`; there is no second batch-size input. `QueryComposed` accepts only this composed
+policy type. Standalone readers retain `PostgresRelationQuerySourcePolicy` and its integer batch bound.
+Missing remote mappings or omitted/mismatched partition scopes raise `RelationQueryPreparationException`
+with a `postgres.composed.*` code and semantic compilation evidence. Identity caching and allocation
+boundaries are documented once in the [Storage README](../../Cohesive.Storage/README.md).

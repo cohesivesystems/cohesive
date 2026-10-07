@@ -29,7 +29,7 @@ public static class ReservationAvailabilityInfrastructure
             FulfillmentQueries.ReservationAvailability,
             FulfillmentQueries.ReservationDemandProjection,
             remote: inventory,
-            policy: new PostgresRelationQuerySourcePolicy(
+            composedPolicy: new PostgresRelationQueryComposedPolicy(
                 PlanningPolicy, maximumRowsPerRead: 1000,
                 maximumPageItems: 1000, maximumPageBytes: 1_000_000,
                 partitionScope: new(new("aspire-first/local"), FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition)));

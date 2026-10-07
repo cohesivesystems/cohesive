@@ -8,7 +8,6 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class ComposedPreparationTests
 {
     [Theory]
-    [InlineData("missing-physical-policy")]
     [InlineData("missing-scope")]
     [InlineData("wrong-selector")]
     [InlineData("missing-mapping")]
@@ -21,25 +20,16 @@ public sealed class ComposedPreparationTests
             : FulfillmentStorage.BindInventory(db);
         var scope = failure == "missing-scope" ? null : new PostgresRelationQueryPartitionScope(new("local"),
             failure == "wrong-selector" ? "wrong" : FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition);
-        var policy = failure == "missing-physical-policy"
-            ? new PostgresRelationQuerySourcePolicy(100, 1000, 1000, 1_000_000, partitionScope: scope)
-            : new PostgresRelationQuerySourcePolicy(ReservationAvailabilityInfrastructure.PlanningPolicy, 1000, 1000, 1_000_000, scope);
+        var policy = new PostgresRelationQueryComposedPolicy(
+            ReservationAvailabilityInfrastructure.PlanningPolicy, 1000, 1000, 1_000_000, scope);
         var error = Record.Exception(() => orders.QueryComposed(FulfillmentQueries.ReservationAvailability,
             FulfillmentQueries.ReservationDemandProjection, remote, policy));
-        if (failure == "missing-mapping")
-        {
-            Assert.IsType<InvalidOperationException>(error);
-            Assert.Contains("No remote", error!.Message);
-        }
-        else
-        {
-            var preparation = Assert.IsType<RelationQueryPreparationException>(error);
-            Assert.Equal(failure switch {
-                "missing-physical-policy" => "postgres.composed.physicalPolicyMissing",
-                "wrong-selector" => "postgres.composed.partitionSelectorMismatch",
-                _ => "postgres.composed.partitionScopeMissing" }, preparation.Code);
-            Assert.True(preparation.Compilation.IsSuccessful);
-        }
+        var preparation = Assert.IsType<RelationQueryPreparationException>(error);
+        Assert.Equal(failure switch {
+            "missing-mapping" => "postgres.composed.remoteMappingMissing",
+            "wrong-selector" => "postgres.composed.partitionSelectorMismatch",
+            _ => "postgres.composed.partitionScopeMissing" }, preparation.Code);
+        Assert.True(preparation.Compilation.IsSuccessful);
     }
     [Theory]
     [InlineData(7)]
@@ -50,10 +40,10 @@ public sealed class ComposedPreparationTests
             new("test/composed"), "test/composed", maximumBatchSize: batchSize,
             maximumBufferedRows: 1000, maximumLocalRows: 1000, maximumFanOut: 100,
             maximumReferenceKeysPerObservation: 100, maximumConcurrency: 1);
-        var policy = new PostgresRelationQuerySourcePolicy(physical, 1000, 1000, 1_000_000,
+        var policy = new PostgresRelationQueryComposedPolicy(physical, 1000, 1000, 1_000_000,
             new(new("local"), FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition));
         Assert.Same(physical, policy.PhysicalPlanningPolicy);
-        Assert.Equal(physical.MaximumBatchSize, policy.MaximumBatchKeys);
+        Assert.Equal(physical.MaximumBatchSize, policy.SourcePolicy.MaximumBatchKeys);
     }
 
 }
