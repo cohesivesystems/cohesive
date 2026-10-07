@@ -174,6 +174,25 @@ left joins, so an order without reservations remains present. The declaration ex
 reservation field once. The author derives flat SQL slots and a portable `NestedQueryResultAssembly`
 from that declaration; no `OrderDetailRow` DTO or handwritten result callback is maintained.
 
+Query authoring accepts domain entities and bound nodes directly:
+
+```csharp
+var orders = query.Where(query.Source(FulfillmentDomain.Orders),
+    order => order.Id == orderId.Value && order.Partition == OrderStorage.LocalPartition);
+// After the declared relationship traversals:
+query.SingleOrDefault<OrderDetails>()
+    .From(inventory, orders, order => order.Id)
+    .Identity(result => result.Id)
+    .Field(result => result.Status, orders, order => order.Status);
+```
+
+The result builder consumes each node's focused binding, preserving the same session/visibility checks
+as the explicit `.Binding` overloads. Parent and child `.Identity(...)` map the already-selected key to
+a public property; they reuse its projection slot rather than repeat the key expression. The example
+therefore projects six scalar slots instead of eight. This is a representation reduction, not a claim
+of measured database latency improvement. Join direction, complete joined branch and partition filters
+remain explicit. Existing binding overloads are still available for lower-level authoring.
+
 `FulfillmentStorage.Bind` attaches each entity and its native mapping once. The host uses that same
 registration for repositories and queries; there is no separate per-query infrastructure catalog:
 

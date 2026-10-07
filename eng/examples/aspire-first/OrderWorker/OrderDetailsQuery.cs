@@ -1,4 +1,5 @@
 using Cohesive.Relations.Authoring;
+using Cohesive.Transitions.Authoring;
 
 namespace AspireFirst.Orders;
 
@@ -11,23 +12,22 @@ public static class OrderDetailsQuery
     static RelationQuery<string, OrderDetails?> Define()
     {
         var query = RelationQuery.Expression();
-        var orderShape = FulfillmentDomain.Orders.QueryShape(query);
         var orderId = query.Parameter<string>("orderId");
 
-        var orders = query.Where(query.Source(orderShape),
+        var orders = query.Where(query.Source(FulfillmentDomain.Orders),
             order => order.Id == orderId.Value && order.Partition == OrderStorage.LocalPartition);
         var reservations = query.TraverseInverse(orders, FulfillmentDomain.ReservationOrder);
         var inventory = query.Traverse(reservations, FulfillmentDomain.ReservationItem);
         return query.SingleOrDefault<OrderDetails>()
-            .From(inventory, orders.Binding, order => order.Id)
-            .Field(result => result.Id, orders.Binding, order => order.Id)
-            .Field(result => result.Status, orders.Binding, order => order.Status)
-            .Collection(result => result.Reservations, reservations.Binding, reservation => reservation.Id,
+            .From(inventory, orders, order => order.Id)
+            .Identity(result => result.Id)
+            .Field(result => result.Status, orders, order => order.Status)
+            .Collection(result => result.Reservations, reservations, reservation => reservation.Id,
                 items => items
-                    .Field(result => result.Id, reservations.Binding, reservation => reservation.Id)
-                    .Field(result => result.Sku, inventory.Binding, item => item.Sku)
-                    .Field(result => result.Quantity, reservations.Binding, reservation => reservation.Quantity)
-                    .Field(result => result.AvailableStock, inventory.Binding, item => item.Available))
+                    .Identity(result => result.Id)
+                    .Field(result => result.Sku, inventory, item => item.Sku)
+                    .Field(result => result.Quantity, reservations, reservation => reservation.Quantity)
+                    .Field(result => result.AvailableStock, inventory, item => item.Available))
             .Build(id: new("fulfillment/order-details"), name: new("OrderDetails"), parameter: orderId);
     }
 }

@@ -131,6 +131,7 @@ var definition = domain.Build();
 
 `entity.Definition` supplies transition/storage authority. `entity.QueryShape(author)` imports that
 exact graph into a Relations expression session, avoiding an independently inferred CLR query shape.
+`author.Source(entity)` combines that import with source creation when a separate shape handle is unnecessary.
 `References` uses an existing Relations relationship definition and names the target observation identity;
 it does not create a foreign key, establish tenant scope or enforce authorization. The typed handle carries
 both exact endpoint documents, imported automatically by forward and inverse traversal. Explicit imports

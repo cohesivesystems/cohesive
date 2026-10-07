@@ -73,6 +73,48 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
         return this;
     }
 
+    /// <summary>Selects a joined branch and the focused identity of a visible parent node.</summary>
+    /// <typeparam name="TFocus">Joined branch focus.</typeparam>
+    /// <typeparam name="TParent">Parent source type.</typeparam>
+    /// <param name="rows">Complete joined branch.</param>
+    /// <param name="parent">Visible parent node; its focused binding is used.</param>
+    /// <param name="key">Required ordinal string parent identity.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">The parent is foreign or not visible.</exception>
+    /// <exception cref="InvalidOperationException">The source is already set or the builder is complete.</exception>
+    public NestedQueryResultBuilder<TResult> From<TFocus, TParent>(RelationQueryExpressionBoundNode<TFocus> rows,
+        RelationQueryExpressionBoundNode<TParent> parent, Expression<Func<TParent, string>> key)
+        where TFocus : notnull where TParent : notnull =>
+        From(rows, (parent ?? throw new ArgumentNullException(nameof(parent))).Binding, key);
+
+    /// <summary>Maps the already selected parent identity into its public result property without a second projection slot.</summary>
+    /// <param name="target">Direct string property receiving the identity selected by From.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException">Target is null.</exception>
+    /// <exception cref="ArgumentException">Target is not a direct result property.</exception>
+    /// <exception cref="InvalidOperationException">The source is unset or this builder is complete.</exception>
+    public NestedQueryResultBuilder<TResult> Identity(Expression<Func<TResult, string>> target)
+    {
+        RequireMutable();
+        fields.Add(new(identity, Target(shape, target)));
+        return this;
+    }
+
+    /// <summary>Maps a parent field from a bound node's focused value.</summary>
+    /// <typeparam name="TSource">Visible source type.</typeparam>
+    /// <typeparam name="TValue">Scalar value type.</typeparam>
+    /// <param name="target">Direct result property.</param>
+    /// <param name="source">Visible bound node.</param>
+    /// <param name="value">Canonical value expression.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">The source is foreign/not visible or a selector is invalid.</exception>
+    /// <exception cref="InvalidOperationException">The source is unset or this builder is complete.</exception>
+    public NestedQueryResultBuilder<TResult> Field<TSource, TValue>(Expression<Func<TResult, TValue>> target,
+        RelationQueryExpressionBoundNode<TSource> source, Expression<Func<TSource, TValue>> value) where TSource : notnull =>
+        Field(target, (source ?? throw new ArgumentNullException(nameof(source))).Binding, value);
+
     /// <summary>Maps one parent field once; native projection and assembly both derive from this declaration.</summary>
     /// <typeparam name="TSource">Visible source type.</typeparam>
     /// <typeparam name="TValue">Scalar field type.</typeparam>
@@ -103,11 +145,27 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
         ArgumentNullException.ThrowIfNull(configure);
         var path = Target(shape, target);
         var childKey = AddSlot(source, key);
-        var child = new NestedQueryChildBuilder<TResult, TChild>(this, author.ResultShape<TChild>());
+        var child = new NestedQueryChildBuilder<TResult, TChild>(this, author.ResultShape<TChild>(), childKey);
         configure(child);
         collections.Add(new(path, childKey, child.Complete()));
         return this;
     }
+
+    /// <summary>Declares a collection keyed by the focused value of a visible bound node.</summary>
+    /// <typeparam name="TChild">Child result type.</typeparam>
+    /// <typeparam name="TSource">Child source type.</typeparam>
+    /// <param name="target">Direct collection property.</param>
+    /// <param name="source">Visible child node.</param>
+    /// <param name="key">Child identity; missing/null means absent.</param>
+    /// <param name="configure">Child scalar mappings.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">A selector is invalid or the source is foreign/not visible.</exception>
+    /// <exception cref="InvalidOperationException">The source is unset or this builder is complete.</exception>
+    public NestedQueryResultBuilder<TResult> Collection<TChild, TSource>(Expression<Func<TResult, IReadOnlyList<TChild>>> target,
+        RelationQueryExpressionBoundNode<TSource> source, Expression<Func<TSource, string>> key,
+        Action<NestedQueryChildBuilder<TResult, TChild>> configure) where TChild : class where TSource : notnull =>
+        Collection(target, (source ?? throw new ArgumentNullException(nameof(source))).Binding, key, configure);
 
     /// <summary>Freezes the canonical raw query and its portable assembly metadata into one typed declaration.</summary>
     /// <typeparam name="TInput">Single invocation parameter type.</typeparam>
@@ -179,6 +237,7 @@ public sealed class NestedQueryChildBuilder<TResult, TChild> where TResult : cla
 {
     readonly NestedQueryResultBuilder<TResult> owner;
     readonly RelationQueryClrShape<TChild> shape;
+    readonly FieldPath identity;
     readonly List<QueryResultFieldMapping> fields = [];
     bool completed;
     internal ImmutableArray<QueryResultFieldMapping> Complete()
@@ -186,8 +245,35 @@ public sealed class NestedQueryChildBuilder<TResult, TChild> where TResult : cla
         completed = true;
         return fields.ToImmutableArray();
     }
-    internal NestedQueryChildBuilder(NestedQueryResultBuilder<TResult> owner, RelationQueryClrShape<TChild> shape)
-    { this.owner = owner; this.shape = shape; }
+    internal NestedQueryChildBuilder(NestedQueryResultBuilder<TResult> owner, RelationQueryClrShape<TChild> shape, FieldPath identity)
+    { this.owner = owner; this.shape = shape; this.identity = identity; }
+
+    /// <summary>Maps the collection's selected identity without repeating its expression or projection slot.</summary>
+    /// <param name="target">Direct string child property receiving the collection identity.</param>
+    /// <returns>This child builder.</returns>
+    /// <exception cref="ArgumentNullException">Target is null.</exception>
+    /// <exception cref="ArgumentException">Target is not a direct child property.</exception>
+    /// <exception cref="InvalidOperationException">Child configuration is complete.</exception>
+    public NestedQueryChildBuilder<TResult, TChild> Identity(Expression<Func<TChild, string>> target)
+    {
+        if (completed) throw new InvalidOperationException("Child mappings are already complete.");
+        fields.Add(new(identity, NestedQueryResultBuilder<TResult>.Target(shape, target)));
+        return this;
+    }
+
+    /// <summary>Maps a child field from a bound node's focused value.</summary>
+    /// <typeparam name="TSource">Visible source type.</typeparam>
+    /// <typeparam name="TValue">Scalar field type.</typeparam>
+    /// <param name="target">Direct child property.</param>
+    /// <param name="source">Visible bound node.</param>
+    /// <param name="value">Canonical source expression.</param>
+    /// <returns>This child builder.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">A selector is invalid or the source is foreign/not visible.</exception>
+    /// <exception cref="InvalidOperationException">Child configuration is complete.</exception>
+    public NestedQueryChildBuilder<TResult, TChild> Field<TSource, TValue>(Expression<Func<TChild, TValue>> target,
+        RelationQueryExpressionBoundNode<TSource> source, Expression<Func<TSource, TValue>> value) where TSource : notnull =>
+        Field(target, (source ?? throw new ArgumentNullException(nameof(source))).Binding, value);
 
     /// <summary>Maps a child field from a visible source expression.</summary>
     /// <typeparam name="TSource">Visible source type.</typeparam>

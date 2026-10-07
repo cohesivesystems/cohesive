@@ -5,6 +5,8 @@ using Cohesive.Relations.Execution;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Serialization;
+using Cohesive.Relations.Authoring;
+using Cohesive.Transitions.Authoring;
 
 namespace Cohesive.Adapters.Aspire.Tests;
 
@@ -59,6 +61,62 @@ public sealed class NestedResultTests
         Assert.Throws<InvalidOperationException>(() => OrderDetailsQuery.Definition.Project(
             [Row("a").WithField(Assembly.Identity, ObservationValue.FromObject(42))]));
     }
+
+    [Fact]
+    public void Bound_nodes_and_explicit_bindings_lower_to_the_same_query()
+    {
+        var nodes = Define(true);
+        var bindings = Define(false);
+        Assert.Equal(bindings.CompilationRequest.DefinitionDocument.DefinitionFingerprint,
+            nodes.CompilationRequest.DefinitionDocument.DefinitionFingerprint);
+        var definition = (QueryDefinition)nodes.CompilationRequest.DefinitionDocument.Definition;
+        var assembly = definition.Assembly!;
+        Assert.Equal(assembly.Identity, assembly.Fields[0].Source);
+        Assert.Equal(3, definition.Body.Nodes.OfType<ProjectQueryNode>().Single().Assignments.Length);
+
+        static RelationQuery<string, OrderHeader?> Define(bool useNodes)
+        {
+            var author = RelationQuery.Expression();
+            var id = author.Parameter<string>("id");
+            var source = useNodes ? author.Source(FulfillmentDomain.Orders)
+                : author.Source(FulfillmentDomain.Orders.QueryShape(author));
+            var orders = author.Where(source, order => order.Id == id.Value);
+            var reservations = author.TraverseInverse(orders, FulfillmentDomain.ReservationOrder);
+            var result = author.SingleOrDefault<OrderHeader>();
+            if (useNodes) result.From(reservations, orders, order => order.Id).Identity(header => header.Id)
+                .Field(header => header.Status, orders, order => order.Status)
+                .Collection(header => header.Reservations, reservations, reservation => reservation.Id,
+                    child => child.Identity(item => item.Id));
+            else result.From(reservations, orders.Binding, order => order.Id).Identity(header => header.Id)
+                .Field(header => header.Status, orders.Binding, order => order.Status)
+                .Collection(header => header.Reservations, reservations.Binding, reservation => reservation.Id,
+                    child => child.Identity(item => item.Id));
+            var query = result.Build(new("test/ergonomics"), new("Ergonomics"), id);
+            Assert.Throws<InvalidOperationException>(() => result.Identity(header => header.Id));
+            return query;
+        }
+    }
+
+    [Fact]
+    public void Identity_reuses_parent_and_child_slots_and_foreign_nodes_still_fail()
+    {
+        Assert.Equal(Assembly.Identity, Assembly.Fields.Single(field => field.Target.ToString() == "Id").Source);
+        var child = Assert.Single(Assembly.Collections);
+        Assert.Equal(child.Identity, child.Fields.Single(field => field.Target.ToString() == "Id").Source);
+        var definition = (QueryDefinition)OrderDetailsQuery.Definition.CompilationRequest.DefinitionDocument.Definition;
+        Assert.Equal(6, definition.Body.Nodes.OfType<ProjectQueryNode>().Single().Assignments.Length);
+
+        var author = RelationQuery.Expression();
+        var order = author.Source(FulfillmentDomain.Orders);
+        var foreign = RelationQuery.Expression().Source(FulfillmentDomain.Orders);
+        Assert.Throws<ArgumentException>(() => author.SingleOrDefault<OrderHeader>().From(order, foreign, value => value.Id));
+        var result = author.SingleOrDefault<OrderHeader>().From(order, order, value => value.Id);
+        Assert.Throws<ArgumentException>(() => result.Field(header => header.Status, foreign, value => value.Status));
+        Assert.Throws<InvalidOperationException>(() => author.SingleOrDefault<OrderHeader>().Identity(header => header.Id));
+    }
+
+    public sealed record OrderHeader(string Id, string Status, IReadOnlyList<ReservationHeader> Reservations);
+    public sealed record ReservationHeader(string Id);
 
     static ObservationValue Row(string? child, string parent = "order", string status = "Draft", int quantity = 2)
     {
